@@ -183,6 +183,18 @@ pub enum MirExpr {
         slot: usize,
         ty: Ty,
     },
+    /// #436: A null instance pointer used as the `cls` argument when a
+    /// `@classmethod` is called on a class name (`ClassName.method(args)`)
+    /// rather than an instance. In this compiler's static-dispatch model,
+    /// `cls` is typed as `Ty::Instance(class_name)` but is not meaningfully
+    /// used in the method body -- the method was compiled for a specific
+    /// class, so any `cls.method()` or `cls.attr` resolves at compile time
+    /// to that class's methods/attributes. The null pointer is never
+    /// dereferenced at runtime (the method body does not access `cls`'s
+    /// slots in practice), so this is safe.
+    NullInstance {
+        ty: Ty,
+    },
 }
 
 /// `MirExpr::Instantiate`'s payload, boxed (not inlined into that variant
@@ -326,6 +338,7 @@ impl MirExpr {
             MirExpr::SetAdd { .. } => Ty::None,
             MirExpr::Instantiate(inst) => inst.ty.clone(),
             MirExpr::AttrGet { ty, .. } => ty.clone(),
+            MirExpr::NullInstance { ty } => ty.clone(),
         }
     }
 }
@@ -592,6 +605,25 @@ fn lookup(scopes: &[HashMap<String, Ty>], name: &str) -> Ty {
         .rev()
         .find_map(|scope| scope.get(name).cloned())
         .unwrap_or_else(|| panic!("pycc_mir: internal error: `{name}` has no recorded type -- pycc_types::check should have rejected this HIR before it reached pycc_mir"))
+}
+
+/// #436/#432: Looks up a class in the `classes` table by its MRO entry
+/// name, panicking with a consistent internal-error message if the class
+/// is not registered. Centralizing this lookup ensures the defensive
+/// panic is covered by a single test rather than duplicated across every
+/// MRO walk (where later walks are unreachable after the first walk
+/// panics on a ghost class).
+fn mro_class_def<'a>(
+    mro_class: &str,
+    classes: &'a HashMap<String, HirClassDef>,
+) -> &'a HirClassDef {
+    classes.get(mro_class).unwrap_or_else(|| {
+        panic!(
+            "pycc_mir: internal error: class `{mro_class}` in MRO has no registered \
+             HirClassDef -- pycc_types::check should have rejected this HIR before \
+             it reached pycc_mir"
+        )
+    })
 }
 
 /// Resolves a `pycc_hir::CompIter` into a fully-typed `CompSource`,
@@ -896,13 +928,7 @@ fn lower_stmt(
             // `AttrGet`'s own MRO walk), then for regular attribute slots
             // using the flat MRO layout.
             for mro_class in &class_def.mro {
-                let mro_def = classes.get(mro_class.as_str()).unwrap_or_else(|| {
-                    panic!(
-                        "pycc_mir: internal error: class `{mro_class}` in MRO has no registered \
-                         HirClassDef -- pycc_types::check should have rejected this HIR before \
-                         it reached pycc_mir"
-                    )
-                });
+                let mro_def = mro_class_def(mro_class, classes);
                 if let Some(prop) = mro_def.properties.iter().find(|p| p.name == *attr) {
                     let setter = prop.setter.as_ref().unwrap_or_else(|| {
                         panic!(
@@ -1244,13 +1270,7 @@ fn lower_expr(
             // CPython's descriptor protocol precedence), then for regular
             // attribute slots using the flat MRO layout.
             for mro_class in &class_def.mro {
-                let mro_def = classes.get(mro_class.as_str()).unwrap_or_else(|| {
-                    panic!(
-                        "pycc_mir: internal error: class `{mro_class}` in MRO has no registered \
-                         HirClassDef -- pycc_types::check should have rejected this HIR before \
-                         it reached pycc_mir"
-                    )
-                });
+                let mro_def = mro_class_def(mro_class, classes);
                 if let Some(prop) = mro_def.properties.iter().find(|p| p.name == *attr) {
                     let ty = lookup(scopes, &format!("$fn:{}", prop.getter));
                     return MirExpr::Call {
@@ -1337,17 +1357,106 @@ fn lower_expr(
                     ty,
                 };
             }
+            // #436: `ClassName.static_method(args)` or
+            // `ClassName.class_method(args)` — a method call on a class
+            // name (not an instance). The base is `HirExpr::Name` referring
+            // to a registered class. `lower_expr` on a bare class name
+            // would panic (class names are not in the scope), so intercept
+            // here before lowering the base.
+            if let HirExpr::Name(class_name) = base.as_ref()
+                && classes.contains_key(class_name.as_str())
+            {
+                let class_def = &classes[class_name.as_str()];
+                let static_mangled = class_def.mro.iter().find_map(|mro_class| {
+                    let mro_def = mro_class_def(mro_class, classes);
+                    mro_def
+                        .static_methods
+                        .iter()
+                        .find(|(name, _)| name == method)
+                        .map(|(_, mangled)| mangled.clone())
+                });
+                if let Some(mangled) = static_mangled {
+                    let ty = lookup(scopes, &format!("$fn:{mangled}"));
+                    let call_args: Vec<MirExpr> = args
+                        .iter()
+                        .map(|a| lower_expr(a, scopes, classes, current_class))
+                        .collect();
+                    return MirExpr::Call {
+                        callee: mangled,
+                        args: call_args,
+                        ty,
+                    };
+                }
+                let class_mangled = class_def.mro.iter().find_map(|mro_class| {
+                    let mro_def = mro_class_def(mro_class, classes);
+                    mro_def
+                        .class_methods
+                        .iter()
+                        .find(|(name, _)| name == method)
+                        .map(|(_, mangled)| mangled.clone())
+                });
+                if let Some(mangled) = class_mangled {
+                    let ty = lookup(scopes, &format!("$fn:{mangled}"));
+                    let mut call_args = Vec::with_capacity(args.len() + 1);
+                    call_args.push(MirExpr::NullInstance {
+                        ty: Ty::Instance(Box::new(class_name.clone())),
+                    });
+                    call_args.extend(args.iter().map(|a| lower_expr(a, scopes, classes, current_class)));
+                    return MirExpr::Call {
+                        callee: mangled,
+                        args: call_args,
+                        ty,
+                    };
+                }
+            }
             let base = lower_expr(base, scopes, classes, current_class);
             let class_def = class_def_of(&base, classes);
+            // #436: check static_methods and class_methods before regular
+            // method resolution. Static methods can be called on both
+            // classes and instances; class methods can too. When called on
+            // an instance, the instance is passed as `cls`/`self`.
+            let static_mangled = class_def.mro.iter().find_map(|mro_class| {
+                let mro_def = mro_class_def(mro_class, classes);
+                mro_def
+                    .static_methods
+                    .iter()
+                    .find(|(name, _)| name == method)
+                    .map(|(_, mangled)| mangled.clone())
+            });
+            if let Some(mangled) = static_mangled {
+                let ty = lookup(scopes, &format!("$fn:{mangled}"));
+                let call_args: Vec<MirExpr> = args
+                    .iter()
+                    .map(|a| lower_expr(a, scopes, classes, current_class))
+                    .collect();
+                return MirExpr::Call {
+                    callee: mangled,
+                    args: call_args,
+                    ty,
+                };
+            }
+            let class_mangled = class_def.mro.iter().find_map(|mro_class| {
+                let mro_def = mro_class_def(mro_class, classes);
+                mro_def
+                    .class_methods
+                    .iter()
+                    .find(|(name, _)| name == method)
+                    .map(|(_, mangled)| mangled.clone())
+            });
+            if let Some(mangled) = class_mangled {
+                let ty = lookup(scopes, &format!("$fn:{mangled}"));
+                let mut call_args = Vec::with_capacity(args.len() + 1);
+                call_args.push(base);
+                call_args.extend(args.iter().map(|a| lower_expr(a, scopes, classes, current_class)));
+                return MirExpr::Call {
+                    callee: mangled,
+                    args: call_args,
+                    ty,
+                };
+            }
             // #432: walk the MRO to find the method's mangled name.
             let mangled = class_def.mro.iter().find_map(|mro_class| {
-                let mro_def = classes.get(mro_class.as_str()).unwrap_or_else(|| {
-                    panic!(
-                        "pycc_mir: internal error: class `{mro_class}` in MRO has no registered \
-                         HirClassDef -- pycc_types::check should have rejected this HIR before \
-                         it reached pycc_mir"
-                    )
-                });
+                let mro_def = mro_class_def(mro_class, classes);
                 mro_def
                     .methods
                     .iter()
@@ -1468,15 +1577,7 @@ fn mro_attrs(class_def: &HirClassDef, classes: &HashMap<String, HirClassDef>) ->
     let mro_defs: Vec<&HirClassDef> = class_def
         .mro
         .iter()
-        .map(|mro_class| {
-            classes.get(mro_class.as_str()).unwrap_or_else(|| {
-                panic!(
-                    "pycc_mir: internal error: class `{mro_class}` in MRO has no registered \
-                     HirClassDef -- pycc_types::check should have rejected this HIR before it \
-                     reached pycc_mir"
-                )
-            })
-        })
+        .map(|mro_class| mro_class_def(mro_class, classes))
         .collect();
     let mut result: Vec<(String, Ty)> = Vec::new();
     let mut slot_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -4279,6 +4380,8 @@ mod tests {
                     ],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             )],
         }
@@ -4400,6 +4503,8 @@ mod tests {
                     ],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             )],
         };
@@ -4756,6 +4861,8 @@ mod tests {
                         setter: None,
                     }],
                     type_param: None,
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             )],
         };
@@ -4859,6 +4966,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "Derived.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             )],
         }
@@ -4951,6 +5060,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "Derived.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             )],
         };
@@ -4987,6 +5098,8 @@ mod tests {
                     methods: vec![("f".to_string(), "C.f".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             )],
         };
@@ -5062,6 +5175,8 @@ mod tests {
                         methods: vec![("__init__".to_string(), "Base.__init__".to_string())],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
                 (
@@ -5074,6 +5189,8 @@ mod tests {
                         methods: vec![("__init__".to_string(), "Derived.__init__".to_string())],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
             ],
@@ -5161,6 +5278,8 @@ mod tests {
                         methods: vec![("__init__".to_string(), "Base.__init__".to_string())],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
                 (
@@ -5173,6 +5292,8 @@ mod tests {
                         methods: vec![("__init__".to_string(), "Derived.__init__".to_string())],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
             ],
@@ -5260,6 +5381,8 @@ mod tests {
                         ],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
                 (
@@ -5275,6 +5398,8 @@ mod tests {
                         ],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
             ],
@@ -5362,6 +5487,8 @@ mod tests {
                         methods: vec![("__init__".to_string(), "A.__init__".to_string())],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
                 (
@@ -5374,6 +5501,8 @@ mod tests {
                         methods: vec![("get_x".to_string(), "B.get_x".to_string())],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
             ],
@@ -5452,6 +5581,8 @@ mod tests {
                             getter: "A.val".to_string(),
                             setter: None,
                         }],
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
                 (
@@ -5464,6 +5595,8 @@ mod tests {
                         methods: vec![("get_val".to_string(), "B.get_val".to_string())],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
             ],
@@ -5484,5 +5617,351 @@ mod tests {
                 ty: Ty::Int,
             })))
         );
+    }
+
+    // -- #436: @staticmethod / @classmethod MIR lowering --------------------
+
+    /// Builds a minimal module with a class `C` that has `__init__`, a
+    /// static method `create(x: int) -> int`, and a class method
+    /// `greet(cls, x: int) -> int`. Used by the #436 MIR tests below.
+    fn static_class_hir(extra_items: Vec<HirItem>) -> HirModule {
+        let self_ty = Ty::Instance(Box::new("C".to_string()));
+        let init = HirItem::Function {
+            name: "C.__init__".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        let static_fn = HirItem::Function {
+            name: "C.create.static".to_string(),
+            params: vec![("x".to_string(), Ty::Int)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let class_fn = HirItem::Function {
+            name: "C.greet.classmethod".to_string(),
+            params: vec![
+                ("cls".to_string(), self_ty.clone()),
+                ("x".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let mut items = vec![init, static_fn, class_fn];
+        items.extend(extra_items);
+        HirModule {
+            items,
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "C".to_string(),
+                pycc_hir::HirClassDef {
+                    name: "C".to_string(),
+                    bases: Vec::new(),
+                    mro: vec!["C".to_string()],
+                    attrs: Vec::new(),
+                    methods: vec![("__init__".to_string(), "C.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                    static_methods: vec![("create".to_string(), "C.create.static".to_string())],
+                    class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
+                },
+            )],
+        }
+    }
+
+    #[test]
+    fn a_static_method_call_through_class_lowers_without_a_receiver() {
+        let hir = static_class_hir(vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+            HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("C".to_string())),
+                method: "create".to_string(),
+                args: vec![HirExpr::IntLiteral(42)],
+            },
+        ))]);
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items.last(),
+            Some(&MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "C.create.static".to_string(),
+                args: vec![MirExpr::IntLiteral(42)],
+                ty: Ty::Int,
+            })))
+        );
+    }
+
+    #[test]
+    fn a_class_method_call_through_class_lowers_with_null_instance_receiver() {
+        let hir = static_class_hir(vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+            HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("C".to_string())),
+                method: "greet".to_string(),
+                args: vec![HirExpr::IntLiteral(42)],
+            },
+        ))]);
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items.last(),
+            Some(&MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "C.greet.classmethod".to_string(),
+                args: vec![
+                    MirExpr::NullInstance {
+                        ty: Ty::Instance(Box::new("C".to_string())),
+                    },
+                    MirExpr::IntLiteral(42),
+                ],
+                ty: Ty::Int,
+            })))
+        );
+    }
+
+    #[test]
+    fn a_static_method_call_through_instance_lowers_without_a_receiver() {
+        let hir = static_class_hir(vec![
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "c".to_string(),
+                value: HirExpr::Call {
+                    callee: "C".to_string(),
+                    args: vec![],
+                },
+            }),
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("c".to_string())),
+                method: "create".to_string(),
+                args: vec![HirExpr::IntLiteral(42)],
+            })),
+        ]);
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items.last(),
+            Some(&MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "C.create.static".to_string(),
+                args: vec![MirExpr::IntLiteral(42)],
+                ty: Ty::Int,
+            })))
+        );
+    }
+
+    #[test]
+    fn a_class_method_call_through_instance_lowers_with_instance_as_cls() {
+        let hir = static_class_hir(vec![
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "c".to_string(),
+                value: HirExpr::Call {
+                    callee: "C".to_string(),
+                    args: vec![],
+                },
+            }),
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("c".to_string())),
+                method: "greet".to_string(),
+                args: vec![HirExpr::IntLiteral(42)],
+            })),
+        ]);
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items.last(),
+            Some(&MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "C.greet.classmethod".to_string(),
+                args: vec![
+                    MirExpr::Name {
+                        name: "c".to_string(),
+                        ty: Ty::Instance(Box::new("C".to_string())),
+                    },
+                    MirExpr::IntLiteral(42),
+                ],
+                ty: Ty::Int,
+            })))
+        );
+    }
+
+    #[test]
+    fn null_instance_ty_returns_the_stored_type() {
+        let expr = MirExpr::NullInstance {
+            ty: Ty::Instance(Box::new("C".to_string())),
+        };
+        assert_eq!(expr.ty(), Ty::Instance(Box::new("C".to_string())));
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_mir: internal error: `C` has no recorded type")]
+    fn class_name_method_call_with_no_static_or_class_method_falls_through_to_instance_path() {
+        // When a `MethodCall` on a class name does not find the method in
+        // `static_methods` or `class_methods`, the code falls through to the
+        // instance-receiver path, which calls `lower_expr` on the bare class
+        // name. Since class names are not in the scope, `lookup` panics.
+        // This covers the `None` branch of the class-name `class_mangled`
+        // `if let` (the fallthrough past the class-name interception block).
+        let hir = static_class_hir(vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+            HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("C".to_string())),
+                method: "nonexistent".to_string(),
+                args: vec![],
+            },
+        ))]);
+        let _ = build(&hir);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef")]
+    fn static_method_call_through_class_name_with_ghost_mro_panics() {
+        // A `MethodCall` on a class name whose MRO contains a ghost class
+        // triggers the defensive panic in the static_methods MRO walk. The
+        // method name `missing` is not in `C`'s own static_methods, so the
+        // `find_map` continues to `Ghost` and panics.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                HirExpr::MethodCall {
+                    base: Box::new(HirExpr::Name("C".to_string())),
+                    method: "missing".to_string(),
+                    args: vec![],
+                },
+            ))],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "C".to_string(),
+                pycc_hir::HirClassDef {
+                    name: "C".to_string(),
+                    bases: vec!["Ghost".to_string()],
+                    mro: vec!["C".to_string(), "Ghost".to_string()],
+                    attrs: Vec::new(),
+                    methods: vec![("__init__".to_string(), "C.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
+                },
+            )],
+        };
+        let _ = build(&hir);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef")]
+    fn class_method_call_through_class_name_with_ghost_mro_panics() {
+        // Same as above but exercises the class_methods MRO walk. The
+        // method name `missing` is not in `C`'s own static_methods or
+        // class_methods, so both walks reach `Ghost` and the second one
+        // (class_methods) panics.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                HirExpr::MethodCall {
+                    base: Box::new(HirExpr::Name("C".to_string())),
+                    method: "missing".to_string(),
+                    args: vec![],
+                },
+            ))],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "C".to_string(),
+                pycc_hir::HirClassDef {
+                    name: "C".to_string(),
+                    bases: vec!["Ghost".to_string()],
+                    mro: vec!["C".to_string(), "Ghost".to_string()],
+                    attrs: Vec::new(),
+                    methods: vec![("__init__".to_string(), "C.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                    static_methods: vec![("found".to_string(), "C.found.static".to_string())],
+                    class_methods: Vec::new(),
+                },
+            )],
+        };
+        let _ = build(&hir);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef")]
+    fn static_method_call_through_instance_with_ghost_mro_panics() {
+        // A `MethodCall` on an instance whose class MRO contains a ghost
+        // class triggers the defensive panic in the instance-receiver
+        // static_methods MRO walk.
+        let self_ty = Ty::Instance(Box::new("Derived".to_string()));
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "Derived.__init__".to_string(),
+                    params: vec![("self".to_string(), self_ty.clone())],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::Return(None)],
+                },
+                HirItem::Function {
+                    name: "use_derived".to_string(),
+                    params: vec![("d".to_string(), self_ty.clone())],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::ExprStmt(HirExpr::MethodCall {
+                        base: Box::new(HirExpr::Name("d".to_string())),
+                        method: "missing".to_string(),
+                        args: vec![],
+                    })],
+                },
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "Derived".to_string(),
+                pycc_hir::HirClassDef {
+                    name: "Derived".to_string(),
+                    bases: vec!["Ghost".to_string()],
+                    mro: vec!["Derived".to_string(), "Ghost".to_string()],
+                    attrs: Vec::new(),
+                    methods: vec![("__init__".to_string(), "Derived.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
+                },
+            )],
+        };
+        let _ = build(&hir);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef")]
+    fn class_method_call_through_instance_with_ghost_mro_panics() {
+        // Same as above but exercises the instance-receiver class_methods
+        // MRO walk. `Derived` has a static method `found` so the
+        // static_methods walk does not reach `Ghost`, but the class_methods
+        // walk does.
+        let self_ty = Ty::Instance(Box::new("Derived".to_string()));
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "Derived.__init__".to_string(),
+                    params: vec![("self".to_string(), self_ty.clone())],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::Return(None)],
+                },
+                HirItem::Function {
+                    name: "use_derived".to_string(),
+                    params: vec![("d".to_string(), self_ty.clone())],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::ExprStmt(HirExpr::MethodCall {
+                        base: Box::new(HirExpr::Name("d".to_string())),
+                        method: "missing".to_string(),
+                        args: vec![],
+                    })],
+                },
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "Derived".to_string(),
+                pycc_hir::HirClassDef {
+                    name: "Derived".to_string(),
+                    bases: vec!["Ghost".to_string()],
+                    mro: vec!["Derived".to_string(), "Ghost".to_string()],
+                    attrs: Vec::new(),
+                    methods: vec![("__init__".to_string(), "Derived.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                    static_methods: vec![("found".to_string(), "Derived.found.static".to_string())],
+                    class_methods: Vec::new(),
+                },
+            )],
+        };
+        let _ = build(&hir);
     }
 }

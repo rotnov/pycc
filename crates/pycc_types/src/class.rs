@@ -241,6 +241,73 @@ pub(crate) fn resolve_method_call(
     Err(t0044_unknown_member("method", class_name, method))
 }
 
+/// #436: Resolves a call to a `@staticmethod` or `@classmethod` through
+/// the MRO. `class_name` is the class to start the MRO walk from (either
+/// the class itself for `ClassName.method(args)`, or the instance's class
+/// for `instance.method(args)`). `is_class_call` is `true` when the call
+/// is made on the class name (`ClassName.method(args)`), `false` when on
+/// an instance. Both static and class methods can be called on either.
+///
+/// For a static method, the full parameter list is checked (no `self`/`cls`
+/// exclusion). For a class method, the first parameter (`cls`) is excluded
+/// from the argument check, matching how `resolve_method_call` excludes
+/// `self`.
+pub(crate) fn resolve_static_or_class_method_call(
+    env: &Environment,
+    class_name: &str,
+    method: &str,
+    arg_tys: &[Ty],
+) -> Result<Ty, Diagnostic> {
+    let class_def = expect_class(env, class_name);
+    // #436: walk the MRO in order, checking static_methods first, then
+    // class_methods. The first class that declares the method wins.
+    for mro_class in &class_def.mro {
+        let mro_def = expect_class(env, mro_class);
+        if let Some((_, mangled)) = mro_def.static_methods.iter().find(|(name, _)| name == method) {
+            let (param_tys, return_ty) = env.lookup_function(mangled).unwrap_or_else(|| {
+                panic!(
+                    "pycc_types: internal error: `{mangled}` is in class `{mro_class}`'s own \
+                     static_methods table but was not registered as an ordinary function"
+                )
+            });
+            check_call_args(method, arg_tys, param_tys)?;
+            return Ok(return_ty.clone());
+        }
+    }
+    for mro_class in &class_def.mro {
+        let mro_def = expect_class(env, mro_class);
+        if let Some((_, mangled)) = mro_def.class_methods.iter().find(|(name, _)| name == method) {
+            let (param_tys, return_ty) = env.lookup_function(mangled).unwrap_or_else(|| {
+                panic!(
+                    "pycc_types: internal error: `{mangled}` is in class `{mro_class}`'s own \
+                     class_methods table but was not registered as an ordinary function"
+                )
+            });
+            let method_param_tys = &param_tys[1..]; // exclude `cls`
+            check_call_args(method, arg_tys, method_param_tys)?;
+            return Ok(return_ty.clone());
+        }
+    }
+    Err(t0044_unknown_member("method", class_name, method))
+}
+
+/// #436: Checks whether `class_name` has a static or class method named
+/// `method` in its MRO. Used by `infer_expr_in`'s `MethodCall` arm to
+/// decide whether to intercept before the regular `resolve_method_call`
+/// fallback (which requires a `Ty::Instance` base).
+pub(crate) fn has_static_or_class_method(env: &Environment, class_name: &str, method: &str) -> bool {
+    let Some(class_def) = env.lookup_class(class_name) else {
+        return false;
+    };
+    class_def.mro.iter().any(|mro_class| {
+        let Some(mro_def) = env.lookup_class(mro_class) else {
+            return false;
+        };
+        mro_def.static_methods.iter().any(|(name, _)| name == method)
+            || mro_def.class_methods.iter().any(|(name, _)| name == method)
+    })
+}
+
 /// #433: Resolves `super().attr` — an attribute read through zero-arg
 /// `super()`. The resolution starts from the class *after* the current
 /// class in the MRO (not the current class itself), matching CPython's own
@@ -507,6 +574,8 @@ mod tests {
                     ],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             )],
         }
@@ -908,6 +977,8 @@ mod tests {
                     ],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             )],
         };
@@ -973,6 +1044,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "Point.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             )],
         };
@@ -1242,6 +1315,8 @@ mod tests {
                 ],
                 type_param: None,
                 properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             },
         ));
         check_and_resolve(&hir).expect(
@@ -1341,6 +1416,8 @@ mod tests {
                 methods: vec![("__init__".to_string(), "Ghost.__init__".to_string())],
                 type_param: None,
                 properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             },
         );
         let _ = super::resolve_instantiation(&env, "Ghost", &[]);
@@ -1380,6 +1457,8 @@ mod tests {
                 methods: vec![("f".to_string(), "Ghost.f".to_string())],
                 type_param: None,
                 properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             },
         );
         let _ = super::resolve_instantiation(&env, "Ghost", &[]);
@@ -1399,6 +1478,8 @@ mod tests {
                 methods: vec![("foo".to_string(), "Ghost.foo".to_string())],
                 type_param: None,
                 properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             },
         );
         let _ = super::resolve_method_call(
@@ -1434,6 +1515,8 @@ mod tests {
                     getter: "Ghost.x".to_string(),
                     setter: None,
                 }],
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             },
         );
         let _ = super::resolve_attr_get(
@@ -1469,6 +1552,8 @@ mod tests {
                     getter: "Ghost.x".to_string(),
                     setter: Some("Ghost.x.setter".to_string()),
                 }],
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             },
         );
         // `base` must infer as a `Ghost` instance so `check_attr_set`
@@ -1516,6 +1601,8 @@ mod tests {
                         getter: "A.val".to_string(),
                         setter: None,
                     }],
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
             env.bind_class(
@@ -1528,6 +1615,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "B.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
             env.bind_function(
@@ -1555,6 +1644,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "A.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
             env.bind_class(
@@ -1567,6 +1658,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "B.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
         });
@@ -1589,6 +1682,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "A.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
             env.bind_class(
@@ -1601,6 +1696,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "B.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
         });
@@ -1624,6 +1721,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "A.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
             env.bind_class(
@@ -1636,6 +1735,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "B.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
         });
@@ -1658,6 +1759,8 @@ mod tests {
                     methods: vec![("greet".to_string(), "A.greet".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
             env.bind_class(
@@ -1670,6 +1773,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "B.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
             env.bind_function(
@@ -1697,6 +1802,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "A.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
             env.bind_class(
@@ -1709,6 +1816,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "B.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
         });
@@ -1729,6 +1838,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "A.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
             env.bind_class(
@@ -1741,6 +1852,8 @@ mod tests {
                     methods: vec![("__init__".to_string(), "B.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             );
         });
@@ -1815,6 +1928,8 @@ mod tests {
                         setter: Some("Box.val.setter".to_string()),
                     }],
                     type_param: None,
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             )],
         }
@@ -1866,6 +1981,8 @@ mod tests {
                         setter: None,
                     }],
                     type_param: None,
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
                 },
             )],
         }
@@ -2211,6 +2328,8 @@ mod tests {
                         ],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
                 (
@@ -2226,6 +2345,8 @@ mod tests {
                         ],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
             ],
@@ -2343,6 +2464,8 @@ mod tests {
                         methods: vec![("__init__".to_string(), "Base.__init__".to_string())],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
                 (
@@ -2355,6 +2478,8 @@ mod tests {
                         methods: Vec::new(),
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
             ],
@@ -2474,6 +2599,8 @@ mod tests {
                         ],
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
                 (
@@ -2486,11 +2613,389 @@ mod tests {
                         methods: Vec::new(),
                         type_param: None,
                         properties: Vec::new(),
+                        static_methods: Vec::new(),
+                        class_methods: Vec::new(),
                     },
                 ),
             ],
         };
         let resolved = check_and_resolve(&hir).expect("check_and_resolve should succeed");
         let _mir = pycc_mir::build(&resolved);
+    }
+
+    // -- #436: @staticmethod / @classmethod type checking -------------------
+
+    /// Builds a module with a class `C` that has `__init__`, a static method
+    /// `create(x: int) -> int`, and a class method `greet(cls, x: int) ->
+    /// int`. `extra_items`/`extra_stmts` let each test append its own
+    /// call-site exercise.
+    fn static_class_module(extra_items: Vec<HirItem>) -> HirModule {
+        let self_ty = Ty::Instance(Box::new("C".to_string()));
+        let init = HirItem::Function {
+            name: "C.__init__".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        let static_fn = HirItem::Function {
+            name: "C.create.static".to_string(),
+            params: vec![("x".to_string(), Ty::Int)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let class_fn = HirItem::Function {
+            name: "C.greet.classmethod".to_string(),
+            params: vec![
+                ("cls".to_string(), self_ty.clone()),
+                ("x".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let mut items = vec![init, static_fn, class_fn];
+        items.extend(extra_items);
+        HirModule {
+            items,
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "C".to_string(),
+                HirClassDef {
+                    name: "C".to_string(),
+                    bases: Vec::new(),
+                    mro: vec!["C".to_string()],
+                    attrs: Vec::new(),
+                    methods: vec![("__init__".to_string(), "C.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                    static_methods: vec![("create".to_string(), "C.create.static".to_string())],
+                    class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
+                },
+            )],
+        }
+    }
+
+    #[test]
+    fn static_method_call_through_class_name_type_checks() {
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("C".to_string())),
+                method: "create".to_string(),
+                args: vec![HirExpr::IntLiteral(42)],
+            }],
+        }))]);
+        check(&hir).expect("a static method call through a class name should type-check");
+    }
+
+    #[test]
+    fn class_method_call_through_class_name_type_checks() {
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("C".to_string())),
+                method: "greet".to_string(),
+                args: vec![HirExpr::IntLiteral(42)],
+            }],
+        }))]);
+        check(&hir).expect("a class method call through a class name should type-check");
+    }
+
+    #[test]
+    fn static_method_call_through_instance_type_checks() {
+        let hir = static_class_module(vec![
+            top_level(HirStmt::Assign {
+                target: "c".to_string(),
+                value: HirExpr::Call {
+                    callee: "C".to_string(),
+                    args: vec![],
+                },
+            }),
+            top_level(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::MethodCall {
+                    base: Box::new(HirExpr::Name("c".to_string())),
+                    method: "create".to_string(),
+                    args: vec![HirExpr::IntLiteral(42)],
+                }],
+            })),
+        ]);
+        check(&hir).expect("a static method call through an instance should type-check");
+    }
+
+    #[test]
+    fn class_method_call_through_instance_type_checks() {
+        let hir = static_class_module(vec![
+            top_level(HirStmt::Assign {
+                target: "c".to_string(),
+                value: HirExpr::Call {
+                    callee: "C".to_string(),
+                    args: vec![],
+                },
+            }),
+            top_level(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::MethodCall {
+                    base: Box::new(HirExpr::Name("c".to_string())),
+                    method: "greet".to_string(),
+                    args: vec![HirExpr::IntLiteral(42)],
+                }],
+            })),
+        ]);
+        check(&hir).expect("a class method call through an instance should type-check");
+    }
+
+    #[test]
+    fn static_method_wrong_argument_type_is_rejected() {
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("C".to_string())),
+                method: "create".to_string(),
+                args: vec![HirExpr::StringLiteral("hi".to_string())],
+            }],
+        }))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn class_method_wrong_argument_type_is_rejected() {
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("C".to_string())),
+                method: "greet".to_string(),
+                args: vec![HirExpr::StringLiteral("hi".to_string())],
+            }],
+        }))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn static_method_wrong_argument_count_is_rejected() {
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("C".to_string())),
+                method: "create".to_string(),
+                args: vec![],
+            }],
+        }))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn class_method_excludes_cls_from_argument_count() {
+        // `greet` takes `(cls, x: int)` — the caller passes only `x`. The
+        // type checker excludes `cls` from the argument count check, so
+        // passing one argument is correct.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("C".to_string())),
+                method: "greet".to_string(),
+                args: vec![HirExpr::IntLiteral(42)],
+            }],
+        }))]);
+        check(&hir).expect("cls is excluded from the argument count check");
+    }
+
+    #[test]
+    fn unknown_static_or_class_method_on_class_name_falls_through() {
+        // A method call on a class name that is neither a static method nor
+        // a class method falls through to the regular resolution, which
+        // tries to infer the base expression (`HirExpr::Name("C")`). A bare
+        // class name is not a binding, so `infer_expr_in` rejects it with
+        // T0021 ("name `C` is not defined").
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("C".to_string())),
+                method: "nonexistent".to_string(),
+                args: vec![],
+            }],
+        }))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn attribute_access_on_a_class_name_is_rejected() {
+        // `C.x` — accessing an attribute on a class name (not an instance)
+        // is not supported. A static or class method must be called, not
+        // accessed as a bare attribute value.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("C".to_string())),
+                attr: "create".to_string(),
+            }],
+        }))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0044");
+    }
+
+    #[test]
+    fn resolve_static_or_class_method_call_with_unknown_method_returns_t0044() {
+        // Directly exercises the `Err(t0044_unknown_member(...))` fallback
+        // in `resolve_static_or_class_method_call` — unreachable from
+        // `infer_expr_in` (which calls `has_static_or_class_method` first),
+        // but the function is `pub(crate)` and can be called directly.
+        let mut env = crate::Environment::new();
+        env.bind_class(
+            "C".to_string(),
+            HirClassDef {
+                name: "C".to_string(),
+                bases: Vec::new(),
+                mro: vec!["C".to_string()],
+                attrs: Vec::new(),
+                methods: vec![("__init__".to_string(), "C.__init__".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+            },
+        );
+        let diagnostic = super::resolve_static_or_class_method_call(
+            &env,
+            "C",
+            "nonexistent",
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "T0044");
+    }
+
+    #[test]
+    fn has_static_or_class_method_returns_false_for_unknown_class() {
+        // Exercises the `env.lookup_class(class_name)` → `None` →
+        // `return false` path in `has_static_or_class_method`.
+        let env = crate::Environment::new();
+        assert!(!super::has_static_or_class_method(&env, "Nonexistent", "create"));
+    }
+
+    #[test]
+    fn has_static_or_class_method_returns_false_for_unknown_method() {
+        // Exercises the `mro_def.static_methods.iter().any(..)` → false
+        // and `mro_def.class_methods.iter().any(..)` → false path.
+        let mut env = crate::Environment::new();
+        env.bind_class(
+            "C".to_string(),
+            HirClassDef {
+                name: "C".to_string(),
+                bases: Vec::new(),
+                mro: vec!["C".to_string()],
+                attrs: Vec::new(),
+                methods: vec![("__init__".to_string(), "C.__init__".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: vec![("create".to_string(), "C.create.static".to_string())],
+                class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
+            },
+        );
+        assert!(!super::has_static_or_class_method(&env, "C", "nonexistent"));
+    }
+
+    #[test]
+    fn has_static_or_class_method_returns_false_for_ghost_mro_class() {
+        // Exercises the `env.lookup_class(mro_class)` → `None` →
+        // `return false` path inside the MRO walk of
+        // `has_static_or_class_method`.
+        let mut env = crate::Environment::new();
+        env.bind_class(
+            "Derived".to_string(),
+            HirClassDef {
+                name: "Derived".to_string(),
+                bases: vec!["Ghost".to_string()],
+                mro: vec!["Derived".to_string(), "Ghost".to_string()],
+                attrs: Vec::new(),
+                methods: vec![("__init__".to_string(), "Derived.__init__".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+            },
+        );
+        // `Ghost` is in the MRO but not registered — the defensive
+        // `return false` prevents a panic and the overall result is false.
+        assert!(!super::has_static_or_class_method(&env, "Derived", "create"));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "internal error: `C.create.static` is in class `C`'s own \
+                   static_methods table but was not registered as an ordinary function"
+    )]
+    fn resolve_static_method_call_panics_if_function_not_registered() {
+        // Exercises the defensive `unwrap_or_else(|| panic!(..))` in the
+        // static-method lookup path of `resolve_static_or_class_method_call`.
+        // This is unreachable from normal HIR (the HIR lowering always
+        // emits the function alongside the table entry), so a hand-built
+        // environment with a table entry but no registered function is needed.
+        let mut env = crate::Environment::new();
+        env.bind_class(
+            "C".to_string(),
+            HirClassDef {
+                name: "C".to_string(),
+                bases: Vec::new(),
+                mro: vec!["C".to_string()],
+                attrs: Vec::new(),
+                methods: vec![("__init__".to_string(), "C.__init__".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: vec![("create".to_string(), "C.create.static".to_string())],
+                class_methods: Vec::new(),
+            },
+        );
+        let _ = super::resolve_static_or_class_method_call(&env, "C", "create", &[Ty::Int]);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "internal error: `C.greet.classmethod` is in class `C`'s own \
+                   class_methods table but was not registered as an ordinary function"
+    )]
+    fn resolve_class_method_call_panics_if_function_not_registered() {
+        // Exercises the defensive `unwrap_or_else(|| panic!(..))` in the
+        // class-method lookup path of `resolve_static_or_class_method_call`.
+        let mut env = crate::Environment::new();
+        env.bind_class(
+            "C".to_string(),
+            HirClassDef {
+                name: "C".to_string(),
+                bases: Vec::new(),
+                mro: vec!["C".to_string()],
+                attrs: Vec::new(),
+                methods: vec![("__init__".to_string(), "C.__init__".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
+            },
+        );
+        let _ = super::resolve_static_or_class_method_call(&env, "C", "greet", &[Ty::Int]);
+    }
+
+    #[test]
+    fn class_name_static_method_call_propagates_arg_inference_error() {
+        // Exercises the `?` on argument inference at lib.rs:3289 inside the
+        // class-name static/class method call branch of `infer_expr_in`.
+        // `C.create(undefined_name)` — the class `C` is registered and has a
+        // static method `create`, so the class-name branch is entered, but
+        // the argument `undefined_name` fails inference (T0021 "name not
+        // defined"), which propagates through the `collect::<Result<..>>?`.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("C".to_string())),
+                method: "create".to_string(),
+                args: vec![HirExpr::Name("undefined_name".to_string())],
+            }],
+        }))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
     }
 }

@@ -105,6 +105,23 @@ pub struct HirClassDef {
     /// `MirExpr::Call`s to the getter/setter's mangled name, reusing the
     /// existing method-call infrastructure with no new MIR/codegen variant.
     pub properties: Vec<PropertyDef>,
+    /// `@staticmethod` definitions (#436): each entry is
+    /// `(method_name, mangled_name)`, where the mangled name uses a
+    /// `.static` suffix (e.g. `C.create.static`). Static methods are NOT
+    /// entered into `methods` -- they have their own table, and the
+    /// `.static` suffix prevents collision with a regular method of the
+    /// same name. Static methods can be called on both the class
+    /// (`C.create(args)`) and an instance (`instance.create(args)`).
+    pub static_methods: Vec<(String, String)>,
+    /// `@classmethod` definitions (#436): each entry is
+    /// `(method_name, mangled_name)`, where the mangled name uses a
+    /// `.classmethod` suffix (e.g. `C.create.classmethod`). Class methods
+    /// are NOT entered into `methods` -- they have their own table, and
+    /// the `.classmethod` suffix prevents collision with a regular method
+    /// of the same name. Class methods take an implicit `cls` parameter
+    /// (typed `Ty::Instance(class_name)`) as their first parameter, and
+    /// can be called on both the class and an instance.
+    pub class_methods: Vec<(String, String)>,
     /// PEP 695 (#387): the class's single type parameter name, if it is a
     /// generic class (`class C[T]:`). `None` for a non-generic class. At
     /// instantiation site (`C[int](args)`), this parameter is substituted
@@ -148,6 +165,17 @@ enum MethodKind {
     /// The method's own source name must match `prop_name` (this is
     /// validated in `classify_decorator`).
     PropertySetter { prop_name: String },
+    /// `@staticmethod` (#436): a static method. Takes no implicit `self`
+    /// or `cls` parameter -- the method's own parameter list is exactly
+    /// what the user wrote. Mangled name uses a `.static` suffix to avoid
+    /// colliding with a regular method of the same name.
+    StaticMethod,
+    /// `@classmethod` (#436): a class method. Takes an implicit `cls`
+    /// parameter (typed `Ty::Instance(class_name)`, matching `self`'s own
+    /// type in this compiler's static-dispatch model) as its first
+    /// parameter. Mangled name uses a `.classmethod` suffix to avoid
+    /// colliding with a regular method of the same name.
+    ClassMethod,
 }
 
 /// Classifies a method's decorator list (#377, #432). Returns:
@@ -190,6 +218,10 @@ fn classify_decorator(
         Expr::Name(name) if name.id.as_str() == "override" => {
             Ok(MethodKind::Regular { is_override: true })
         }
+        // `@staticmethod` (#436) -- a bare name `staticmethod`.
+        Expr::Name(name) if name.id.as_str() == "staticmethod" => Ok(MethodKind::StaticMethod),
+        // `@classmethod` (#436) -- a bare name `classmethod`.
+        Expr::Name(name) if name.id.as_str() == "classmethod" => Ok(MethodKind::ClassMethod),
         // `@<name>.setter` -- an attribute access on a bare name, where
         // the attribute is `"setter"`.
         Expr::Attribute(attr) => {
@@ -437,6 +469,8 @@ pub(crate) fn lower_class(
     let mut items: Vec<HirItem> = Vec::new();
     let mut attrs: Vec<(String, Ty)> = Vec::new();
     let mut properties: Vec<PropertyDef> = Vec::new();
+    let mut static_methods: Vec<(String, String)> = Vec::new();
+    let mut class_methods: Vec<(String, String)> = Vec::new();
     let mut init_seen = false;
     for stmt in &def.body {
         let Stmt::FunctionDef(method_def) = stmt else {
@@ -480,6 +514,17 @@ pub(crate) fn lower_class(
             &method_name,
             method_def.range.into(),
         )?;
+        // #436: `@staticmethod` and `@classmethod` on `__init__` are
+        // rejected -- a constructor must be a regular instance method.
+        if method_name == "__init__"
+            && matches!(kind, MethodKind::StaticMethod | MethodKind::ClassMethod)
+        {
+            return Err(unsupported(
+                "`@staticmethod` and `@classmethod` cannot decorate `__init__` -- \
+                 the constructor must be a regular instance method",
+                method_def.range,
+            ));
+        }
         let (item, params) = lower_method(
             method_def,
             &class_name,
@@ -544,6 +589,34 @@ pub(crate) fn lower_class(
                         format!(
                             "a `@property` named `{method_name}` is already defined in this \
                              class -- a method cannot shadow a property of the same name"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                // #436: reject a regular method whose name collides with an
+                // existing static or class method. Although the mangled
+                // names differ (`.static`/`.classmethod` suffix), allowing
+                // both would be confusing — the method-call syntax
+                // `obj.name()` would resolve to the regular method while
+                // `ClassName.name()` would resolve to the static/class
+                // method, with no clear indication to the user that these
+                // are different functions.
+                if static_methods.iter().any(|(name, _)| name == &method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@staticmethod` named `{method_name}` is already defined in \
+                             this class -- a regular method cannot share a name with a \
+                             `@staticmethod`"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                if class_methods.iter().any(|(name, _)| name == &method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@classmethod` named `{method_name}` is already defined in \
+                             this class -- a regular method cannot share a name with a \
+                             `@classmethod`"
                         ),
                         method_def.range,
                     ));
@@ -632,6 +705,94 @@ pub(crate) fn lower_class(
                 }
                 prop.setter = Some(format!("{class_name}.{prop_name}.setter"));
             }
+            // #436: a `@staticmethod`. Registered in `static_methods`
+            // (not `methods`) with a `.static` suffix mangled name. A
+            // duplicate static method name is a rebind, matching regular
+            // method rebind semantics (#386). A static method name must
+            // not collide with a regular method, property, or class
+            // method of the same name in the same class.
+            MethodKind::StaticMethod => {
+                if methods.iter().any(|(name, _)| name == &method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a method named `{method_name}` is already defined in this class \
+                             -- a `@staticmethod` cannot share a name with a regular method"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                if properties.iter().any(|p| p.name == method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@property` named `{method_name}` is already defined in this \
+                             class -- a `@staticmethod` cannot share a name with a property"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                if class_methods.iter().any(|(name, _)| name == &method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@classmethod` named `{method_name}` is already defined in \
+                             this class -- a `@staticmethod` cannot share a name with a \
+                             `@classmethod`"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                let mangled = format!("{class_name}.{method_name}.static");
+                if let Some(entry) =
+                    static_methods.iter_mut().find(|(name, _)| name == &method_name)
+                {
+                    *entry = (method_name.clone(), mangled.clone());
+                } else {
+                    static_methods.push((method_name.clone(), mangled));
+                }
+            }
+            // #436: a `@classmethod`. Registered in `class_methods`
+            // (not `methods`) with a `.classmethod` suffix mangled name.
+            // A duplicate class method name is a rebind, matching regular
+            // method rebind semantics (#386). A class method name must
+            // not collide with a regular method, property, or static
+            // method of the same name in the same class.
+            MethodKind::ClassMethod => {
+                if methods.iter().any(|(name, _)| name == &method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a method named `{method_name}` is already defined in this class \
+                             -- a `@classmethod` cannot share a name with a regular method"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                if properties.iter().any(|p| p.name == method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@property` named `{method_name}` is already defined in this \
+                             class -- a `@classmethod` cannot share a name with a property"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                if static_methods.iter().any(|(name, _)| name == &method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@staticmethod` named `{method_name}` is already defined in \
+                             this class -- a `@classmethod` cannot share a name with a \
+                             `@staticmethod`"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                let mangled = format!("{class_name}.{method_name}.classmethod");
+                if let Some(entry) =
+                    class_methods.iter_mut().find(|(name, _)| name == &method_name)
+                {
+                    *entry = (method_name.clone(), mangled.clone());
+                } else {
+                    class_methods.push((method_name.clone(), mangled));
+                }
+            }
         }
         items.push(item);
     }
@@ -664,6 +825,8 @@ pub(crate) fn lower_class(
             attrs,
             methods,
             properties,
+            static_methods,
+            class_methods,
             type_param,
         },
         items,
@@ -734,69 +897,118 @@ fn lower_method(
             parameters.range,
         ));
     }
-    let [self_param, rest @ ..] = parameters.args.as_slice() else {
-        return Err(unsupported(
-            "a method must take `self` as its first parameter",
-            def.range,
-        ));
-    };
-    if self_param.parameter.name.as_str() != "self" {
-        return Err(unsupported(
-            "a method's first parameter must be named `self`",
-            parameters.range,
-        ));
-    }
-    if self_param.default.is_some() {
-        return Err(unsupported(
-            "`self` cannot have a default value",
-            parameters.range,
-        ));
-    }
-    if self_param.parameter.annotation.is_some() {
-        return Err(unsupported(
-            "an explicit type annotation on `self` is not supported yet",
-            parameters.range,
-        ));
-    }
-    // #377: a `@property` getter takes only `self` (no additional
-    // parameters); a `@<name>.setter` setter takes exactly one additional
-    // parameter (the value to assign). A regular method has no arity
-    // constraint beyond the structural checks above.
-    match kind {
-        MethodKind::PropertyGetter { .. } => {
-            if !rest.is_empty() {
-                return Err(unsupported(
-                    "a `@property` getter must take only `self` (no additional parameters)",
-                    parameters.range,
-                ));
-            }
-        }
-        MethodKind::PropertySetter { .. } => {
-            if rest.len() != 1 {
-                return Err(unsupported(
-                    "a `@<name>.setter` setter must take exactly one parameter besides `self`",
-                    parameters.range,
-                ));
-            }
-        }
-        MethodKind::Regular { .. } => {}
-    }
     let method_name = def.name.as_str();
     let is_public = !method_name.starts_with('_'); // D-038
-    // See this function's own doc comment: `__init__`'s own parameters
-    // always require an annotation, regardless of D-038's usual
-    // public-name-only rule.
     let params_is_public = is_public || method_name == "__init__";
-    let self_ty = Ty::Instance(Box::new(class_name.to_string()));
-    let mut params = vec![("self".to_string(), self_ty)];
-    params.extend(lower_arg_list(
-        rest,
-        params_is_public,
-        method_name,
-        type_param,
-        Some(class_name),
-        aliases,
-    )?);
+    // #436: a `@staticmethod` takes no implicit `self`/`cls` -- the
+    // method's own parameter list is exactly what the user wrote. A
+    // `@classmethod` takes an implicit `cls` (typed
+    // `Ty::Instance(class_name)`, matching `self`'s own type in this
+    // compiler's static-dispatch model) as its first parameter. A
+    // regular/property method takes `self` as before.
+    let params = match kind {
+        MethodKind::StaticMethod => lower_arg_list(
+            &parameters.args,
+            params_is_public,
+            method_name,
+            type_param,
+            Some(class_name),
+            aliases,
+        )?,
+        MethodKind::ClassMethod => {
+            let [cls_param, rest @ ..] = parameters.args.as_slice() else {
+                return Err(unsupported(
+                    "a `@classmethod` must take `cls` as its first parameter",
+                    def.range,
+                ));
+            };
+            if cls_param.parameter.name.as_str() != "cls" {
+                return Err(unsupported(
+                    "a `@classmethod`'s first parameter must be named `cls`",
+                    parameters.range,
+                ));
+            }
+            if cls_param.default.is_some() {
+                return Err(unsupported(
+                    "`cls` cannot have a default value",
+                    parameters.range,
+                ));
+            }
+            if cls_param.parameter.annotation.is_some() {
+                return Err(unsupported(
+                    "an explicit type annotation on `cls` is not supported yet",
+                    parameters.range,
+                ));
+            }
+            let cls_ty = Ty::Instance(Box::new(class_name.to_string()));
+            let mut p = vec![("cls".to_string(), cls_ty)];
+            p.extend(lower_arg_list(
+                rest,
+                params_is_public,
+                method_name,
+                type_param,
+                Some(class_name),
+                aliases,
+            )?);
+            p
+        }
+        _ => {
+            let [self_param, rest @ ..] = parameters.args.as_slice() else {
+                return Err(unsupported(
+                    "a method must take `self` as its first parameter",
+                    def.range,
+                ));
+            };
+            if self_param.parameter.name.as_str() != "self" {
+                return Err(unsupported(
+                    "a method's first parameter must be named `self`",
+                    parameters.range,
+                ));
+            }
+            if self_param.default.is_some() {
+                return Err(unsupported(
+                    "`self` cannot have a default value",
+                    parameters.range,
+                ));
+            }
+            if self_param.parameter.annotation.is_some() {
+                return Err(unsupported(
+                    "an explicit type annotation on `self` is not supported yet",
+                    parameters.range,
+                ));
+            }
+            // #377: a `@property` getter takes only `self` (no additional
+            // parameters); a `@<name>.setter` setter takes exactly one
+            // additional parameter (the value to assign). A regular method
+            // has no arity constraint beyond the structural checks above.
+            match kind {
+                MethodKind::PropertyGetter { .. } if !rest.is_empty() => {
+                    return Err(unsupported(
+                        "a `@property` getter must take only `self` (no additional parameters)",
+                        parameters.range,
+                    ));
+                }
+                MethodKind::PropertySetter { .. } if rest.len() != 1 => {
+                    return Err(unsupported(
+                        "a `@<name>.setter` setter must take exactly one parameter besides `self`",
+                        parameters.range,
+                    ));
+                }
+                _ => {}
+            }
+            let self_ty = Ty::Instance(Box::new(class_name.to_string()));
+            let mut p = vec![("self".to_string(), self_ty)];
+            p.extend(lower_arg_list(
+                rest,
+                params_is_public,
+                method_name,
+                type_param,
+                Some(class_name),
+                aliases,
+            )?);
+            p
+        }
+    };
     let return_ty = crate::lower_return_annotation(
         def.returns.as_deref(),
         is_public,
@@ -806,12 +1018,14 @@ fn lower_method(
         aliases,
     )?;
     let body = crate::stmt::lower_body(&def.body, aliases, false, true, Some(class_name), type_param)?;
-    // #377: compute the mangled name based on the method kind. A regular
-    // method uses `<Class>.<name>`. A property getter uses the same
-    // `<Class>.<name>` (it is the property's primary mangled name). A
-    // property setter uses `<Class>.<name>.setter` (the `.setter` suffix
-    // prevents collision with the getter, since both share the same source
-    // method name).
+    // #377/#436: compute the mangled name based on the method kind. A
+    // regular method uses `<Class>.<name>`. A property getter uses the
+    // same `<Class>.<name>`. A property setter uses
+    // `<Class>.<name>.setter`. A static method uses
+    // `<Class>.<name>.static`. A class method uses
+    // `<Class>.<name>.classmethod`. The `.static`/`.classmethod` suffixes
+    // prevent collision with a regular method of the same name, since a
+    // real Python identifier can never contain a `.`.
     let mangled_name = match kind {
         MethodKind::Regular { .. } | MethodKind::PropertyGetter { .. } => {
             format!("{class_name}.{method_name}")
@@ -819,6 +1033,8 @@ fn lower_method(
         MethodKind::PropertySetter { prop_name } => {
             format!("{class_name}.{prop_name}.setter")
         }
+        MethodKind::StaticMethod => format!("{class_name}.{method_name}.static"),
+        MethodKind::ClassMethod => format!("{class_name}.{method_name}.classmethod"),
     };
     Ok((
         HirItem::Function {
@@ -1517,6 +1733,8 @@ mod tests {
                 methods: vec![("__init__".to_string(), "Point.__init__".to_string())],
                 properties: Vec::new(),
                 type_param: None,
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             }
         );
         // Direct value comparison, not a `let PATTERN = .. else { panic!(..) }`
@@ -1623,14 +1841,14 @@ mod tests {
     #[test]
     fn an_unrecognized_method_decorator_is_still_rejected() {
         assert_c0001(
-            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def f(self) -> None:\n        return\n",
+            "class C:\n    def __init__(self) -> None:\n        return\n    @foo\n    def f(self) -> None:\n        return\n",
         );
     }
 
     #[test]
     fn multiple_decorators_on_a_method_are_rejected() {
         assert_c0001(
-            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    @staticmethod\n    def f(self) -> None:\n        return\n",
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    @foo\n    def f(self) -> None:\n        return\n",
         );
     }
 
@@ -1728,6 +1946,118 @@ mod tests {
     }
 
     #[test]
+    fn a_method_shadowing_a_static_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def foo(x: int) -> int:\n        return x\n    def foo(self, x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a `@staticmethod`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_method_shadowing_a_class_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def foo(cls, x: int) -> int:\n        return x\n    def foo(self, x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a `@classmethod`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_static_method_shadowing_a_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    def foo(self, x: int) -> int:\n        return x\n    @staticmethod\n    def foo(x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a regular method"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_static_method_shadowing_a_property_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def foo(self) -> int:\n        return 1\n    @staticmethod\n    def foo(x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a property"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_static_method_shadowing_a_class_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def foo(cls, x: int) -> int:\n        return x\n    @staticmethod\n    def foo(x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a `@classmethod`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_class_method_shadowing_a_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    def foo(self, x: int) -> int:\n        return x\n    @classmethod\n    def foo(cls, x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a regular method"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_class_method_shadowing_a_property_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def foo(self) -> int:\n        return 1\n    @classmethod\n    def foo(cls, x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a property"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_class_method_shadowing_a_static_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def foo(x: int) -> int:\n        return x\n    @classmethod\n    def foo(cls, x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a `@staticmethod`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
     fn a_setter_decorator_name_not_matching_the_method_name_is_rejected() {
         let module = crate::pycc_parser_test_helper::parse(
             "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def x(self) -> int:\n        return 0\n    @x.setter\n    def y(self, v: int) -> None:\n        return\n",
@@ -1770,6 +2100,210 @@ mod tests {
         // which exercises the name-mismatch arm.
         assert_c0001(
             "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def x(self) -> int:\n        return 0\n    @a.b.setter\n    def x(self, v: int) -> None:\n        return\n",
+        );
+    }
+
+    // -- #436: @staticmethod / @classmethod lowering ------------------------
+
+    #[test]
+    fn a_static_method_lowers_into_the_static_methods_table() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def create(x: int) -> int:\n        return x\n",
+        );
+        let (_, class_def) = &hir.class_defs[0];
+        assert_eq!(
+            class_def.static_methods,
+            vec![("create".to_string(), "C.create.static".to_string())]
+        );
+        // The static method is NOT in the methods table.
+        assert!(!class_def.methods.iter().any(|(name, _)| name == "create"));
+    }
+
+    #[test]
+    fn a_class_method_lowers_into_the_class_methods_table() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def greet(cls, x: int) -> int:\n        return x\n",
+        );
+        let (_, class_def) = &hir.class_defs[0];
+        assert_eq!(
+            class_def.class_methods,
+            vec![("greet".to_string(), "C.greet.classmethod".to_string())]
+        );
+        // The class method is NOT in the methods table.
+        assert!(!class_def.methods.iter().any(|(name, _)| name == "greet"));
+    }
+
+    #[test]
+    fn a_static_method_function_is_emitted_with_the_static_mangled_name() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def create(x: int) -> int:\n        return x\n",
+        );
+        assert!(
+            hir.items.iter().any(|item| matches!(
+                item,
+                HirItem::Function { name, .. } if name == "C.create.static"
+            )),
+            "static method function `C.create.static` should be in items"
+        );
+    }
+
+    #[test]
+    fn a_class_method_function_is_emitted_with_the_classmethod_mangled_name() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def greet(cls, x: int) -> int:\n        return x\n",
+        );
+        assert!(
+            hir.items.iter().any(|item| matches!(
+                item,
+                HirItem::Function { name, .. } if name == "C.greet.classmethod"
+            )),
+            "class method function `C.greet.classmethod` should be in items"
+        );
+    }
+
+    #[test]
+    fn a_static_method_has_no_implicit_self_parameter() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def create(x: int) -> int:\n        return x\n",
+        );
+        let fn_item = hir
+            .items
+            .iter()
+            .find_map(|item| match item {
+                HirItem::Function { name, params, .. } if name == "C.create.static" => {
+                    Some(params)
+                }
+                _ => None,
+            })
+            .expect("C.create.static should be in items");
+        // No `self` — the parameter list is exactly what the user wrote.
+        assert_eq!(*fn_item, vec![("x".to_string(), Ty::Int)]);
+    }
+
+    #[test]
+    fn a_class_method_has_implicit_cls_typed_as_instance() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def greet(cls, x: int) -> int:\n        return x\n",
+        );
+        let fn_item = hir
+            .items
+            .iter()
+            .find_map(|item| match item {
+                HirItem::Function { name, params, .. } if name == "C.greet.classmethod" => {
+                    Some(params)
+                }
+                _ => None,
+            })
+            .expect("C.greet.classmethod should be in items");
+        assert_eq!(
+            *fn_item,
+            vec![
+                ("cls".to_string(), Ty::Instance(Box::new("C".to_string()))),
+                ("x".to_string(), Ty::Int),
+            ]
+        );
+    }
+
+    #[test]
+    fn staticmethod_on_init_is_rejected() {
+        assert_c0001(
+            "class C:\n    @staticmethod\n    def __init__(x: int) -> None:\n        return\n",
+        );
+    }
+
+    #[test]
+    fn classmethod_on_init_is_rejected() {
+        assert_c0001(
+            "class C:\n    @classmethod\n    def __init__(cls) -> None:\n        return\n",
+        );
+    }
+
+    #[test]
+    fn a_class_method_without_cls_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def f() -> int:\n        return 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("must take `cls`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_class_method_with_a_non_cls_first_parameter_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def f(self, x: int) -> int:\n        return x\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("must be named `cls`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_class_method_with_annotated_cls_is_rejected() {
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def f(cls: int, x: int) -> int:\n        return x\n",
+        );
+    }
+
+    #[test]
+    fn a_class_method_with_cls_default_is_rejected() {
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def f(cls = 1) -> int:\n        return 1\n",
+        );
+    }
+
+    #[test]
+    fn a_class_method_with_an_unsupported_parameter_annotation_is_rejected() {
+        // Exercises the `?` error propagation on `lower_arg_list` for the
+        // non-`cls` parameters of a `@classmethod` (distinct from the `cls`
+        // validation checks above, which run before `lower_arg_list`).
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def f(cls, x: Frobnicate) -> int:\n        return 1\n",
+        );
+    }
+
+    #[test]
+    fn a_static_method_with_an_unsupported_parameter_annotation_is_rejected() {
+        // Exercises the `?` error propagation on `lower_arg_list` for a
+        // `@staticmethod`'s parameter list (which has no `self`/`cls`
+        // preprocessing, so `lower_arg_list` is the only validation path).
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def f(x: Frobnicate) -> int:\n        return 1\n",
+        );
+    }
+
+    #[test]
+    fn a_static_method_redefinition_rebinds() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def f(x: int) -> int:\n        return x\n    @staticmethod\n    def f(x: int) -> int:\n        return x + 1\n",
+        );
+        let (_, class_def) = &hir.class_defs[0];
+        // Rebind: one entry, not two.
+        assert_eq!(class_def.static_methods.len(), 1);
+        assert_eq!(
+            class_def.static_methods[0],
+            ("f".to_string(), "C.f.static".to_string())
+        );
+    }
+
+    #[test]
+    fn a_class_method_redefinition_rebinds() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def f(cls, x: int) -> int:\n        return x\n    @classmethod\n    def f(cls, x: int) -> int:\n        return x + 1\n",
+        );
+        let (_, class_def) = &hir.class_defs[0];
+        assert_eq!(class_def.class_methods.len(), 1);
+        assert_eq!(
+            class_def.class_methods[0],
+            ("f".to_string(), "C.f.classmethod".to_string())
         );
     }
 
@@ -2268,6 +2802,8 @@ mod tests {
             methods: vec![("__init__".to_string(), "A.__init__".to_string())],
             type_param: None,
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let defined_classes = vec![("A".to_string(), fake_a)];
         let diagnostic = super::lower_class(def, &[], &defined_classes).unwrap_err();
