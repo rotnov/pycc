@@ -94,7 +94,7 @@
     {
       "path": "scripts/test_check_site_accessibility.rb",
       "source_path": "tests/fixtures/policy-successors/test_check_site_accessibility-d199-notapplicable.rb",
-      "sha256": "34381417bb8076cb070bd4e214de90ec61c20b7a93363d869ba242c36d196da5"
+      "sha256": "cfc6663991bbb8433b46fa601fadb2f79e299f1a242832fb239f57f2f22ccf1a"
     },
     {
       "path": "scripts/test_check_source_aware_perf_regression.rb",
