@@ -68,8 +68,8 @@
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",
-      "source_path": "scripts/test_check_search_visibility_audit.py",
-      "sha256": "d3703fdca7a82ca0a3405b77869a54f6422a469dce406492618a4e52108d5f14"
+      "source_path": "tests/fixtures/policy-successors/test_check_search_visibility_audit.py",
+      "sha256": "f493a8c4af08d9e0f84d42546fa76179192f20cf438ebf3efc0aea60ea166856"
     },
     {
       "path": "scripts/test_check_source_aware_perf_regression.rb",
@@ -175,6 +175,11 @@
       "path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-d229.rb",
       "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-d229.rb",
       "sha256": "e5c839bd545a8ad000ccd59e9d08f1926a18e194f2b9a76993f568b8b7bff3d2"
+    },
+    {
+      "path": "tests/fixtures/policy-successors/test_check_search_visibility_audit.py",
+      "source_path": "tests/fixtures/policy-successors/test_check_search_visibility_audit.py",
+      "sha256": "f493a8c4af08d9e0f84d42546fa76179192f20cf438ebf3efc0aea60ea166856"
     }
   ]
 }
