@@ -1015,12 +1015,16 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # test_tier1_workflow_authorization_is_the_active_d114_digest above);
   # D100/D112 remain accepted alongside it only as retained, no-longer-live
   # audit evidence.
-  def test_tier1_workflow_authorization_contains_exactly_d100_d112_and_d114
+  # Issue #229 (Phase 2): the D229 pages-performance digest is staged
+  # alongside D100/D112/D114 -- it authorizes the future ci.yml shape
+  # (Phase 3 activation) but is not yet the live ci.yml.
+  def test_tier1_workflow_authorization_contains_exactly_d100_d112_d114_and_d229
     assert_equal(
       [
         D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
         D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
-        D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
+        D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+        D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256
       ],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
@@ -1663,6 +1667,59 @@ class RoadmapEvidenceCliTest < Minitest::Test
       validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
     end
     assert_includes error.message, "reviewed source-aware comparison job"
+  end
+
+  # Issue #229 (Phase 2): validate_source_aware_perf_gate_lifecycle must
+  # accept either the pre-D229 six-element ci-gate shape
+  # (PAIRED_PERF_CI_GATE_JOB, without pages-performance) or the D229
+  # seven-element ci-gate shape (D229_PAIRED_PERF_CI_GATE_JOB, with
+  # pages-performance in needs and in the fail condition).  PR 5 adds
+  # pages-performance to ci-gate.needs, so the validator must recognize
+  # that new shape the moment it activates -- without retiring the old
+  # shape before that activation lands.
+
+  def test_d229_paired_perf_ci_gate_job_has_pages_performance_in_needs
+    assert_includes D229_PAIRED_PERF_CI_GATE_JOB.fetch("needs"),
+                    "pages-performance"
+  end
+
+  def test_d229_paired_perf_ci_gate_job_has_pages_performance_in_fail_condition
+    fail_step =
+      D229_PAIRED_PERF_CI_GATE_JOB.fetch("steps").find do |step|
+        step["name"] == "Fail unless every required job succeeded"
+      end
+    assert_includes fail_step.fetch("if"),
+                    "needs.pages-performance.result != 'success'"
+  end
+
+  def test_d229_paired_perf_ci_gate_job_has_seven_needs_entries
+    assert_equal 7, D229_PAIRED_PERF_CI_GATE_JOB.fetch("needs").length
+  end
+
+  def test_source_aware_perf_gate_lifecycle_accepts_the_pre_d229_ci_gate_shape
+    workflow = d114_raised_threshold_frontend_perf_workflow
+    assert validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+  end
+
+  def test_source_aware_perf_gate_lifecycle_accepts_the_d229_ci_gate_shape
+    workflow = d114_raised_threshold_frontend_perf_workflow do |jobs|
+      jobs["ci-gate"] =
+        Marshal.load(Marshal.dump(D229_PAIRED_PERF_CI_GATE_JOB))
+    end
+    assert validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+  end
+
+  def test_source_aware_perf_gate_lifecycle_rejects_an_unreviewed_ci_gate_shape
+    workflow = d114_raised_threshold_frontend_perf_workflow do |jobs|
+      jobs["ci-gate"] =
+        Marshal.load(Marshal.dump(D229_PAIRED_PERF_CI_GATE_JOB))
+      jobs["ci-gate"]["runs-on"] = "macos-14" # neither accepted ci-gate shape
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed fail-closed aggregate job"
   end
 
   def test_d84_throughput_floor_workflow_remains_a_retired_audit_fixture
@@ -2829,5 +2886,255 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_operator commands.index("cargo build --workspace"),
                     :<,
                     commands.index("cargo test --workspace -- --include-ignored")
+  end
+
+  # Issue #229 (Phase 2): tests for validate_pages_performance_lifecycle.
+  # These tests use synthetic ci.yml fixtures (not the live ci.yml) because
+  # the live ci.yml does not yet have a pages-performance job -- it will be
+  # added in Phase 3 (PR 5).  The lifecycle validator must fail closed when
+  # the job is absent, so testing against the live ci.yml would always fail
+  # until Phase 3 activation.  Using fixtures keeps these tests
+  # forward-compatible: they pass at both the intermediate state (after PR 3
+  # activation but before PR 5 ci.yml activation) and the final state.
+
+  # A minimal valid pages-performance job for lifecycle testing.  The
+  # lifecycle validator checks structural invariants (existence, ci-gate
+  # wiring, permissions, no continue-on-error, not push-only) -- not the
+  # exact step content, which is reviewed by
+  # check_pages_performance_budget.rb's own test suite.
+  def pages_perf_job_yaml(overrides = {})
+    job = {
+      "runs-on" => "ubuntu-latest",
+      "permissions" => { "contents" => "read" },
+      "steps" => [
+        { "uses" => "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+          "with" => { "persist-credentials" => false } },
+        { "name" => "Run hermetic Pages performance budget gate",
+          "run" => "ruby scripts/check_pages_performance_budget.rb\n" }
+      ]
+    }
+    job.merge!(overrides)
+    { "pages-performance" => job }.to_yaml
+  end
+
+  # A minimal ci-gate that requires pages-performance and checks its result.
+  def ci_gate_with_pages_perf_yaml(overrides = {})
+    gate = {
+      "needs" => ["build-test-coverage", "pages-performance"],
+      "if" => "always()",
+      "runs-on" => "ubuntu-latest",
+      "permissions" => {},
+      "steps" => [
+        { "name" => "Fail unless every required job succeeded",
+          "if" => "needs.build-test-coverage.result != 'success' || needs.pages-performance.result != 'success'",
+          "run" => "echo fail\nexit 1\n" }
+      ]
+    }
+    gate.merge!(overrides)
+    { "ci-gate" => gate }.to_yaml
+  end
+
+  # Build a complete workflow YAML with the given job and ci-gate YAML strings.
+  def pages_perf_workflow_yaml(pages_job: nil, ci_gate: nil)
+    jobs = {
+      "build-test-coverage" => {
+        "runs-on" => "macos-14",
+        "steps" => [{ "name" => "test", "run" => "echo hi\n" }]
+      }
+    }
+    jobs.merge!(Psych.load(pages_job)) if pages_job
+    jobs.merge!(Psych.load(ci_gate)) if ci_gate
+    {
+      "on" => { "push" => { "branches" => ["main"] }, "pull_request" => nil },
+      "permissions" => { "contents" => "read" },
+      "jobs" => jobs
+    }.to_yaml
+  end
+
+  def test_pages_performance_lifecycle_accepts_a_valid_workflow
+    workflow = pages_perf_workflow_yaml(
+      pages_job: pages_perf_job_yaml,
+      ci_gate: ci_gate_with_pages_perf_yaml
+    )
+    assert validate_pages_performance_lifecycle(workflow, "ci.yml")
+  end
+
+  def test_pages_performance_lifecycle_rejects_a_missing_job
+    workflow = pages_perf_workflow_yaml(
+      pages_job: nil,
+      ci_gate: ci_gate_with_pages_perf_yaml
+    )
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_pages_performance_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "pages-performance job is required"
+  end
+
+  def test_pages_performance_lifecycle_rejects_a_job_missing_from_ci_gate_needs
+    ci_gate = ci_gate_with_pages_perf_yaml(
+      "needs" => ["build-test-coverage"]
+    )
+    workflow = pages_perf_workflow_yaml(
+      pages_job: pages_perf_job_yaml,
+      ci_gate: ci_gate
+    )
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_pages_performance_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "ci-gate must require pages-performance"
+  end
+
+  def test_pages_performance_lifecycle_rejects_continue_on_error
+    pages_job = pages_perf_job_yaml("continue-on-error" => true)
+    workflow = pages_perf_workflow_yaml(
+      pages_job: pages_job,
+      ci_gate: ci_gate_with_pages_perf_yaml
+    )
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_pages_performance_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "pages-performance must propagate failures"
+  end
+
+  def test_pages_performance_lifecycle_rejects_a_push_only_job
+    pages_job = pages_perf_job_yaml("if" => "github.event_name == 'push'")
+    workflow = pages_perf_workflow_yaml(
+      pages_job: pages_job,
+      ci_gate: ci_gate_with_pages_perf_yaml
+    )
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_pages_performance_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "pages-performance must not be push-only"
+  end
+
+  def test_pages_performance_lifecycle_rejects_wrong_permissions
+    pages_job = pages_perf_job_yaml(
+      "permissions" => { "contents" => "write" }
+    )
+    workflow = pages_perf_workflow_yaml(
+      pages_job: pages_job,
+      ci_gate: ci_gate_with_pages_perf_yaml
+    )
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_pages_performance_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "pages-performance must have contents: read permission"
+  end
+
+  def test_pages_performance_lifecycle_rejects_missing_permissions
+    pages_job_hash = Psych.load(pages_perf_job_yaml)
+    pages_job_hash["pages-performance"].delete("permissions")
+    workflow = pages_perf_workflow_yaml(
+      pages_job: pages_job_hash.to_yaml,
+      ci_gate: ci_gate_with_pages_perf_yaml
+    )
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_pages_performance_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "pages-performance must declare explicit permissions"
+  end
+
+  def test_pages_performance_lifecycle_rejects_missing_fail_step_check
+    ci_gate = ci_gate_with_pages_perf_yaml(
+      "steps" => [
+        { "name" => "Fail unless every required job succeeded",
+          "if" => "needs.build-test-coverage.result != 'success'",
+          "run" => "echo fail\nexit 1\n" }
+      ]
+    )
+    workflow = pages_perf_workflow_yaml(
+      pages_job: pages_perf_job_yaml,
+      ci_gate: ci_gate
+    )
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_pages_performance_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "ci-gate fail step must check needs.pages-performance.result"
+  end
+
+  def test_pages_performance_lifecycle_rejects_extra_permissions
+    pages_job = pages_perf_job_yaml(
+      "permissions" => { "contents" => "read", "actions" => "read" }
+    )
+    workflow = pages_perf_workflow_yaml(
+      pages_job: pages_job,
+      ci_gate: ci_gate_with_pages_perf_yaml
+    )
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_pages_performance_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "pages-performance must have only contents: read permission"
+  end
+
+  # Issue #229 (Phase 2): the D229 pages-performance ci.yml digest is
+  # staged and accepted by the array, but is not yet the live ci.yml.
+  # This test verifies the digest constant is in the accepted array.
+  def test_d229_pages_performance_digest_is_staged
+    assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
+                    D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256
+  end
+
+  # Issue #229 (Phase 2): validate_pages_performance_lifecycle gates the
+  # pages-performance validation on the live ci.yml digest.  Between PR 3
+  # (checker activation) and PR 5 (ci.yml activation), the live ci.yml has
+  # a pre-D229 digest -- one of the other accepted digests in
+  # REVIEWED_PERF_CI_WORKFLOW_SHA256S.  The validator must SKIP the
+  # pages-performance lifecycle validation for those pre-D229 shapes
+  # (the job does not exist yet) and ENFORCE it only when the live ci.yml
+  # matches D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256.  For an unknown
+  # digest (not in the accepted array), the validator enforces fail-closed
+  # -- validate_evidence's own digest check rejects unknown digests before
+  # this function runs in production, so that default only matters for
+  # direct unit tests with synthetic workflows.
+
+  def test_pages_performance_lifecycle_skips_validation_for_a_pre_d229_digest
+    # The live D114 ci.yml fixture has a pre-D229 digest (no
+    # pages-performance job).  The validator must skip and return true
+    # rather than rejecting the missing job.
+    workflow_text = D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE.read
+    digest = Digest::SHA256.hexdigest(workflow_text)
+    assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S, digest
+    refute_equal D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256, digest
+    assert validate_pages_performance_lifecycle(workflow_text, "ci.yml")
+  end
+
+  def test_pages_performance_lifecycle_skips_validation_for_d100_digest
+    # The D100 fixture is another accepted pre-D229 digest.
+    workflow_text = D100_COMPOSED_WORKFLOW_FIXTURE.read
+    digest = Digest::SHA256.hexdigest(workflow_text)
+    assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S, digest
+    refute_equal D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256, digest
+    assert validate_pages_performance_lifecycle(workflow_text, "ci.yml")
+  end
+
+  def test_pages_performance_lifecycle_enforces_for_an_unknown_digest
+    # A synthetic workflow with no pages-performance job and a digest that
+    # matches no reviewed workflow.  The validator must enforce fail-closed
+    # (reject the missing job) rather than skipping.
+    workflow = pages_perf_workflow_yaml(
+      pages_job: nil,
+      ci_gate: ci_gate_with_pages_perf_yaml
+    )
+    digest = Digest::SHA256.hexdigest(workflow)
+    refute_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S, digest
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_pages_performance_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "pages-performance job is required"
+  end
+
+  def test_pages_performance_lifecycle_enforces_for_an_unknown_digest_with_valid_job
+    # A synthetic workflow WITH a valid pages-performance job but a digest
+    # that matches no reviewed workflow.  The validator must still enforce
+    # (and pass) the structural validation -- the digest gate only skips
+    # for known pre-D229 digests, not for all unknown digests.
+    workflow = pages_perf_workflow_yaml(
+      pages_job: pages_perf_job_yaml,
+      ci_gate: ci_gate_with_pages_perf_yaml
+    )
+    digest = Digest::SHA256.hexdigest(workflow)
+    refute_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S, digest
+    assert validate_pages_performance_lifecycle(workflow, "ci.yml")
   end
 end
