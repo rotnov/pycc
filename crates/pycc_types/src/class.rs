@@ -241,6 +241,74 @@ pub(crate) fn resolve_method_call(
     Err(t0044_unknown_member("method", class_name, method))
 }
 
+/// #433: Resolves `super().attr` — an attribute read through zero-arg
+/// `super()`. The resolution starts from the class *after* the current
+/// class in the MRO (not the current class itself), matching CPython's own
+/// `super().__getattribute__` semantics: `super()` skips the current
+/// class's own entries and searches the rest of the MRO. The `self`
+/// instance retains its actual (most-derived) type, so the slot index
+/// computed downstream by `pycc_mir` is still the full MRO's flat layout
+/// index — only the *resolution* (which class's declaration wins) is
+/// affected by the `super()` skip.
+///
+/// Properties are checked before regular attribute slots, matching
+/// `resolve_attr_get`'s own properties-first-across-full-MRO precedence.
+pub(crate) fn resolve_super_attr_get(
+    env: &Environment,
+    attr: &str,
+) -> Result<Ty, Diagnostic> {
+    let current_class = env.current_class().unwrap();
+    let class_def = expect_class(env, current_class);
+    // Find the current class's position in its own MRO, then search
+    // starting from the next position.
+    let current_pos = class_def.mro.iter().position(|c| c == current_class).unwrap();
+    let super_mro = &class_def.mro[current_pos + 1..];
+    // Properties first (matching `resolve_attr_get`'s precedence).
+    for mro_class in super_mro {
+        let mro_def = expect_class(env, mro_class);
+        if let Some(prop) = mro_def.properties.iter().find(|p| p.name == attr) {
+            let (_, return_ty) = env.lookup_function(&prop.getter).unwrap();
+            return Ok(return_ty.clone());
+        }
+    }
+    // Regular attribute slots.
+    for mro_class in super_mro {
+        let mro_def = expect_class(env, mro_class);
+        if let Some((_, ty)) = mro_def.attrs.iter().find(|(name, _)| name == attr) {
+            return Ok(ty.clone());
+        }
+    }
+    Err(t0044_unknown_member("attribute", current_class, attr))
+}
+
+/// #433: Resolves `super().method(args)` — a method call through zero-arg
+/// `super()`. The resolution starts from the class *after* the current
+/// class in the MRO, matching CPython's own `super()` semantics. The
+/// `self` instance (the most-derived object) is the implicit first
+/// argument, but the method's *signature* is checked against the caller's
+/// supplied arguments only (excluding `self`), exactly like
+/// `resolve_method_call`.
+pub(crate) fn resolve_super_method_call(
+    env: &Environment,
+    method: &str,
+    arg_tys: &[Ty],
+) -> Result<Ty, Diagnostic> {
+    let current_class = env.current_class().unwrap();
+    let class_def = expect_class(env, current_class);
+    let current_pos = class_def.mro.iter().position(|c| c == current_class).unwrap();
+    let super_mro = &class_def.mro[current_pos + 1..];
+    for mro_class in super_mro {
+        let mro_def = expect_class(env, mro_class);
+        if let Some((_, mangled)) = mro_def.methods.iter().find(|(name, _)| name == method) {
+            let (param_tys, return_ty) = env.lookup_function(mangled).unwrap();
+            let method_param_tys = &param_tys[1..]; // exclude `self`
+            check_call_args(method, arg_tys, method_param_tys)?;
+            return Ok(return_ty.clone());
+        }
+    }
+    Err(t0044_unknown_member("method", current_class, method))
+}
+
 /// Checks `base.attr = value` (`HirStmt::AttrSet`), shared between module
 /// scope (`check_stmt`, `local_names = &[]`) and function-body scope
 /// (`check_stmt_in_function`) -- mirroring how `check_dict_set` is already
@@ -1392,6 +1460,199 @@ mod tests {
             "x",
             &HirExpr::IntLiteral(42),
         );
+    }
+
+    // -- #433: super() type-checking tests ----------------------------------
+
+    /// Builds an `Environment` with `current_class` set to `"B"`, a base
+    /// class `"A"` in the MRO, and `extra_setup` to customize the class
+    /// definitions and function registrations per test.
+    fn super_env(extra_setup: impl FnOnce(&mut crate::Environment)) -> crate::Environment {
+        let mut env = crate::Environment::new();
+        env.current_class = Some("B".to_string());
+        extra_setup(&mut env);
+        env
+    }
+
+    #[test]
+    fn resolve_super_attr_get_returns_property_type() {
+        use pycc_hir::PropertyDef;
+        let env = super_env(|env| {
+            env.bind_class(
+                "A".to_string(),
+                HirClassDef {
+                    name: "A".to_string(),
+                    bases: vec![],
+                    mro: vec!["A".to_string()],
+                    attrs: vec![("_val".to_string(), Ty::Int)],
+                    methods: vec![("__init__".to_string(), "A.__init__".to_string())],
+                    type_param: None,
+                    properties: vec![PropertyDef {
+                        name: "val".to_string(),
+                        getter: "A.val".to_string(),
+                        setter: None,
+                    }],
+                },
+            );
+            env.bind_class(
+                "B".to_string(),
+                HirClassDef {
+                    name: "B".to_string(),
+                    bases: vec!["A".to_string()],
+                    mro: vec!["B".to_string(), "A".to_string()],
+                    attrs: vec![],
+                    methods: vec![("__init__".to_string(), "B.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+            env.bind_function(
+                "A.val".to_string(),
+                vec![Ty::Instance(Box::new("A".to_string()))],
+                Ty::Int,
+            );
+        });
+        assert_eq!(
+            super::resolve_super_attr_get(&env, "val"),
+            Ok(Ty::Int)
+        );
+    }
+
+    #[test]
+    fn resolve_super_attr_get_returns_attr_type() {
+        let env = super_env(|env| {
+            env.bind_class(
+                "A".to_string(),
+                HirClassDef {
+                    name: "A".to_string(),
+                    bases: vec![],
+                    mro: vec!["A".to_string()],
+                    attrs: vec![("x".to_string(), Ty::Int)],
+                    methods: vec![("__init__".to_string(), "A.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+            env.bind_class(
+                "B".to_string(),
+                HirClassDef {
+                    name: "B".to_string(),
+                    bases: vec!["A".to_string()],
+                    mro: vec!["B".to_string(), "A".to_string()],
+                    attrs: vec![],
+                    methods: vec![("__init__".to_string(), "B.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+        });
+        assert_eq!(
+            super::resolve_super_attr_get(&env, "x"),
+            Ok(Ty::Int)
+        );
+    }
+
+    #[test]
+    fn resolve_super_method_call_returns_return_type() {
+        let env = super_env(|env| {
+            env.bind_class(
+                "A".to_string(),
+                HirClassDef {
+                    name: "A".to_string(),
+                    bases: vec![],
+                    mro: vec!["A".to_string()],
+                    attrs: vec![],
+                    methods: vec![("greet".to_string(), "A.greet".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+            env.bind_class(
+                "B".to_string(),
+                HirClassDef {
+                    name: "B".to_string(),
+                    bases: vec!["A".to_string()],
+                    mro: vec!["B".to_string(), "A".to_string()],
+                    attrs: vec![],
+                    methods: vec![("__init__".to_string(), "B.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+            env.bind_function(
+                "A.greet".to_string(),
+                vec![Ty::Instance(Box::new("A".to_string()))],
+                Ty::Int,
+            );
+        });
+        assert_eq!(
+            super::resolve_super_method_call(&env, "greet", &[]),
+            Ok(Ty::Int)
+        );
+    }
+
+    #[test]
+    fn resolve_super_method_call_returns_t0044_for_unknown_method() {
+        let env = super_env(|env| {
+            env.bind_class(
+                "A".to_string(),
+                HirClassDef {
+                    name: "A".to_string(),
+                    bases: vec![],
+                    mro: vec!["A".to_string()],
+                    attrs: vec![],
+                    methods: vec![("__init__".to_string(), "A.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+            env.bind_class(
+                "B".to_string(),
+                HirClassDef {
+                    name: "B".to_string(),
+                    bases: vec!["A".to_string()],
+                    mro: vec!["B".to_string(), "A".to_string()],
+                    attrs: vec![],
+                    methods: vec![("__init__".to_string(), "B.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+        });
+        let err = super::resolve_super_method_call(&env, "nonexistent", &[]).unwrap_err();
+        assert_eq!(err.code, "T0044");
+    }
+
+    #[test]
+    fn resolve_super_attr_get_returns_t0044_for_unknown_attr() {
+        let env = super_env(|env| {
+            env.bind_class(
+                "A".to_string(),
+                HirClassDef {
+                    name: "A".to_string(),
+                    bases: vec![],
+                    mro: vec!["A".to_string()],
+                    attrs: vec![("x".to_string(), Ty::Int)],
+                    methods: vec![("__init__".to_string(), "A.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+            env.bind_class(
+                "B".to_string(),
+                HirClassDef {
+                    name: "B".to_string(),
+                    bases: vec!["A".to_string()],
+                    mro: vec!["B".to_string(), "A".to_string()],
+                    attrs: vec![],
+                    methods: vec![("__init__".to_string(), "B.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+        });
+        let err = super::resolve_super_attr_get(&env, "nonexistent").unwrap_err();
+        assert_eq!(err.code, "T0044");
     }
 
     // -- @property type checking (#377) -------------------------------------
