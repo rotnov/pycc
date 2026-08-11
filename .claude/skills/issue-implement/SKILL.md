@@ -373,10 +373,10 @@ Establish the monitoring checkpoint, then react only to real events: a new defau
 commit, a state, head, mergeability, review-thread, or required-check change on the task pull
 request. Before waiting on CI, query the pull request's current state; stop waiting the
 moment it closes, becomes conflicting, or its head is superseded. Use the
-`autopilot-async-monitoring` skill's mechanism for the wait itself — `scripts/ci-watch.sh
-<repo> <pr-number>` via a background poll that emits one line per terminal state and exits on
-its own, instead of a fixed `sleep`/`ScheduleWakeup` interval that can leave a ready-to-merge
-PR sitting idle for most of the interval.
+`gha-watch-ci-pr` skill's mechanism for the wait itself — its bundled
+`ci-watch.sh <repo> <pr-number>` via a background poll that emits one line per terminal state
+and exits on its own, instead of a fixed `sleep`/`ScheduleWakeup` interval that can leave a
+ready-to-merge PR sitting idle for most of the interval.
 
 Read every review comment, including inline pull-request comments, not just top-level reviews.
 For each: a confirmed finding is fixed through step 5's loop and pushed; a refuted finding
@@ -413,8 +413,9 @@ dependency jobs show `CANCELLED` rather than a genuine `FAILURE`/`TIMED_OUT` —
 a partial `--failed` rerun, or of GitHub cancelling in-flight jobs during a platform incident —
 that is not diff-attributable evidence either; rerun the full workflow run (not `--failed`) for
 every affected run so every dependency actually re-executes, rather than investigating the
-diff. `scripts/ci-watch.sh`'s `CHECK FAILED` line names every failing check (not just the
-first) and flags the all-`CANCELLED` case with this same hint.
+diff. The `gha-watch-ci-pr` skill's `ci-watch.sh` `CHECK FAILED` line names
+every failing check (not just the first) and flags the all-`CANCELLED` case with this same
+hint.
 
 Before spending the one-re-run allowance on any of the above, corroborate with
 `scripts/gh-status-check.sh Actions` (a single-shot, unauthenticated read of
