@@ -68,7 +68,7 @@
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",
-      "source_path": "tests/fixtures/policy-successors/test_check_search_visibility_audit.py",
+      "source_path": "scripts/test_check_search_visibility_audit.py",
       "sha256": "f493a8c4af08d9e0f84d42546fa76179192f20cf438ebf3efc0aea60ea166856"
     },
     {

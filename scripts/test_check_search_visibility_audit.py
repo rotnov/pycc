@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
@@ -1421,6 +1423,85 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         self.refresh_checkpoint()
         with self.assertRaisesRegex(AuditError, "timestamps must be nondecreasing"):
             validate(self.head, self.base, self.audited_at)
+
+
+class SearchVisibilityAuditEntrypointTests(unittest.TestCase):
+    """Exercise the real CLI entrypoint end-to-end through a subprocess.
+
+    The mutation tests above import and call ``validate()`` directly. These
+    tests execute the actual ``if __name__ == "__main__"`` wiring of
+    ``check_search_visibility_audit.py`` so that disabling ``main()`` would
+    leave at least one test red.
+    """
+
+    def setUp(self) -> None:
+        self.repository_root = Path(__file__).resolve().parent.parent
+
+    def _run_entrypoint(self, head_root: Path, base_root: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(AUDIT_PATH),
+                "--head-root",
+                str(head_root),
+                "--base-root",
+                str(base_root),
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_entrypoint_passes_against_the_clean_tree(self) -> None:
+        result = self._run_entrypoint(
+            self.repository_root, self.repository_root
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"audit exited {result.returncode}\nstdout:\n{result.stdout}"
+            f"\nstderr:\n{result.stderr}",
+        )
+        self.assertIn("Trusted search visibility audit passed.", result.stdout)
+
+    def test_entrypoint_fails_on_a_corrupted_bootstrap(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="pycc-search-entrypoint-"
+        ) as temporary:
+            root = Path(temporary)
+            docs = root / "docs"
+            docs.mkdir(parents=True)
+            for name in (
+                "SEARCH_VISIBILITY.md",
+                "SEARCH_QUERY_REGISTRY.json",
+                "SEARCH_VISIBILITY_CHECKPOINTS.json",
+                "ROADMAP.md",
+            ):
+                (docs / name).write_text(
+                    (self.repository_root / "docs" / name).read_text()
+                )
+            visibility = (docs / "SEARCH_VISIBILITY.md").read_text()
+            # Corrupt the first history row so the file's bootstrap digest no
+            # longer matches the bound checkpoint, breaking the audit.
+            original_row = (
+                "| 2026-07-24T23:02:03Z | `pycc` | >50 | — | 50 | — |"
+            )
+            corrupted_row = (
+                "| 2026-07-24T23:02:03Z | `pycc` | >50 | — | 49 | — |"
+            )
+            self.assertIn(original_row, visibility)
+            (docs / "SEARCH_VISIBILITY.md").write_text(
+                visibility.replace(original_row, corrupted_row, 1)
+            )
+            result = self._run_entrypoint(root, root)
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                "audit unexpectedly passed against a corrupted bootstrap",
+            )
+            self.assertIn(
+                "trusted search visibility audit failed:", result.stderr
+            )
 
 
 if __name__ == "__main__":
