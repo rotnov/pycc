@@ -18,8 +18,8 @@
     },
     {
       "path": "scripts/check_roadmap_evidence.rb",
-      "source_path": "scripts/check_roadmap_evidence.rb",
-      "sha256": "3cefc98fb77550948970484357ffdf83c6506d4d70776ff2811efdba2255a107"
+      "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence.rb",
+      "sha256": "a4b35a44ac554fdbb12973878804f6629c8811e7f250f74a6d0d87d82e6cfffa"
     },
     {
       "path": "scripts/check_search_visibility_audit.py",
@@ -43,8 +43,8 @@
     },
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
-      "source_path": "scripts/test_check_roadmap_evidence.rb",
-      "sha256": "df4745597a7bdfd74500a04b6973c8196684ecdd7ef0dd08618c8e8e74ad2f98"
+      "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence.rb",
+      "sha256": "d78c5414ce8c41cc8582e5c2e0852e7d30215d66b9f3769883f3b16f95024421"
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",
@@ -110,6 +110,16 @@
       "path": "tests/fixtures/workflow-policy-search-ledger.yml",
       "source_path": "tests/fixtures/workflow-policy-search-ledger.yml",
       "sha256": "f8d60936438c48362d0a5dc11ee709c9dd5354c3f697038bc36b620c266f0688"
+    },
+    {
+      "path": "tests/fixtures/policy-successors/check_roadmap_evidence.rb",
+      "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence.rb",
+      "sha256": "a4b35a44ac554fdbb12973878804f6629c8811e7f250f74a6d0d87d82e6cfffa"
+    },
+    {
+      "path": "tests/fixtures/policy-successors/test_check_roadmap_evidence.rb",
+      "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence.rb",
+      "sha256": "d78c5414ce8c41cc8582e5c2e0852e7d30215d66b9f3769883f3b16f95024421"
     }
   ]
 }
