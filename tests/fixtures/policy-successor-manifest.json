@@ -32,6 +32,21 @@
       "sha256": "5ca11c549b40b76ca4d33d61b2515572c44a9a5d3f79665983188db940f62586"
     },
     {
+      "path": "scripts/check_site_accessibility.rb",
+      "source_path": "scripts/check_site_accessibility.rb",
+      "sha256": "3458098e6a26099a1c65c3f72ae0ae8f2647fea234b2c9b8bbe4468ef2d561e4"
+    },
+    {
+      "path": "scripts/check_site_aria_conformance.py",
+      "source_path": "scripts/check_site_aria_conformance.py",
+      "sha256": "b2a38f9787e89a4325002d76f528539065b6433dabdb492a30472b2939e51998"
+    },
+    {
+      "path": "scripts/check_site_reduced_motion.js",
+      "source_path": "scripts/check_site_reduced_motion.js",
+      "sha256": "f0898d14e8ff16c6f7d516d90ead16cba688f15521e7d2c1d6d163b86f4eac0b"
+    },
+    {
       "path": "scripts/check_source_aware_perf_regression.rb",
       "source_path": "scripts/check_source_aware_perf_regression.rb",
       "sha256": "55ce7259ff164a43a98187cb7b611794a8417dc3dfddf3f4fb689776ab83adcb"
@@ -40,6 +55,11 @@
       "path": "scripts/run_pages_lighthouse.py",
       "source_path": "scripts/run_pages_lighthouse.py",
       "sha256": "47935ac1d2f3b0e23ef1e69fc8ce33e6e40d0a7d0a701a85374313316af41dce"
+    },
+    {
+      "path": "scripts/run_pages_lighthouse_accessibility.py",
+      "source_path": "scripts/run_pages_lighthouse_accessibility.py",
+      "sha256": "3b7db6789c6aafd4567d84363ec36a082a1d7c7b300ffa7adf1f83f38ffe882a"
     },
     {
       "path": "scripts/serve_pages_fixture.py",
@@ -70,6 +90,11 @@
       "path": "scripts/test_check_search_visibility_audit.py",
       "source_path": "scripts/test_check_search_visibility_audit.py",
       "sha256": "f493a8c4af08d9e0f84d42546fa76179192f20cf438ebf3efc0aea60ea166856"
+    },
+    {
+      "path": "scripts/test_check_site_accessibility.rb",
+      "source_path": "scripts/test_check_site_accessibility.rb",
+      "sha256": "34c0f8102d874dc030a83f42e8485660fe5e94bfa4b900700c93fddcfb6c3e97"
     },
     {
       "path": "scripts/test_check_source_aware_perf_regression.rb",
@@ -180,6 +205,26 @@
       "path": "tests/fixtures/policy-successors/test_check_search_visibility_audit.py",
       "source_path": "tests/fixtures/policy-successors/test_check_search_visibility_audit.py",
       "sha256": "f493a8c4af08d9e0f84d42546fa76179192f20cf438ebf3efc0aea60ea166856"
+    },
+    {
+      "path": "tests/fixtures/policy-successors/ci-d199.yml",
+      "source_path": "tests/fixtures/policy-successors/ci-d199.yml",
+      "sha256": "a4c34779e205b117702876e9461937386efa146ff1ed343ea094c82e5d0c6e1b"
+    },
+    {
+      "path": "tests/fixtures/policy-successors/check_roadmap_evidence-d199.rb",
+      "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence-d199.rb",
+      "sha256": "ff5091baa542e42aa4e18bec8088403c635e8d42109a852e6a11db2153b5276d"
+    },
+    {
+      "path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-d199.rb",
+      "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-d199.rb",
+      "sha256": "465549703931f6c43b28367f039b5d36de6138467ee4b303f6c99f7ec844df27"
+    },
+    {
+      "path": "tests/fixtures/policy-successors/pages-performance-manifest.json",
+      "source_path": "tests/fixtures/policy-successors/pages-performance-manifest.json",
+      "sha256": "3defd352810db9d6b7f1d12f98e5047f605d8b88dc4d39e08c5e88a6e4b706d0"
     }
   ]
 }

@@ -168,3 +168,4 @@ current.
 | [D-159](./D-159-ultra-review-cumulative-stats-and-model-attribution.md) | Add cumulative run statistics and per-model defect attribution to the `ultra-review` checkpoint | accepted |
 | [D-160](./D-160-super-static-dispatch-no-runtime-polymorphism.md) | super() uses static dispatch (no runtime polymorphism) | accepted |
 | [D-161](./D-161-pages-performance-budget-gate.md) | Pages performance budget gate | accepted |
+| [D-162](./D-162-site-accessibility-gate.md) | Site accessibility gate | accepted |
