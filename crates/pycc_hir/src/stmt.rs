@@ -348,7 +348,13 @@ pub(crate) fn lower_body(
     class_name: Option<&str>,
     type_param: Option<&str>,
 ) -> Result<Vec<HirStmt>, Diagnostic> {
+    // #435: `Stmt::Pass` is a no-op — filter it out rather than lowering it
+    // to a statement. This allows method bodies like `def __init_subclass__:
+    // pass` and `def __set_name__: pass` to compile, which is required for
+    // PEP 487/PEP 487 hook recognition. A body consisting solely of `pass`
+    // produces an empty `Vec<HirStmt>`, which is a valid no-op body.
     body.iter()
+        .filter(|stmt| !matches!(stmt, Stmt::Pass(_)))
         .map(|stmt| lower_stmt(stmt, aliases, in_loop, in_function, class_name, type_param))
         .collect()
 }

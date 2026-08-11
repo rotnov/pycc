@@ -1,4 +1,7 @@
-use pycc_hir::{CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirModule, HirStmt};
+use pycc_hir::{
+    CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirModule, HirStmt,
+    eval_isinstance_single, eval_issubclass_single, extract_class_names, is_builtin_type_name,
+};
 use std::collections::HashMap;
 
 // Re-exported (not just `use`d) because `pycc_codegen` doesn't depend on
@@ -989,6 +992,18 @@ fn lower_expr(
             ty: lookup(scopes, name),
         },
         HirExpr::Call { callee, args } => {
+            // #435: `isinstance`/`issubclass` are compile-time-evaluated
+            // builtins. They must be intercepted BEFORE the generic arg
+            // lowering below, because the class arguments are class names
+            // (not value expressions) and would fail to lower as ordinary
+            // MIR expressions. The object argument (isinstance's args[0])
+            // IS lowered normally to extract its type.
+            if callee == "isinstance" {
+                return lower_isinstance(args, scopes, classes, current_class);
+            }
+            if callee == "issubclass" {
+                return lower_issubclass(args, classes);
+            }
             let args: Vec<MirExpr> = args.iter().map(|a| lower_expr(a, scopes, classes, current_class)).collect();
             // D-154 (Part 1 of #375): `ClassName(args)` (instantiation)
             // reuses `HirExpr::Call` -- there is no dedicated HIR shape for
@@ -1622,6 +1637,81 @@ fn mro_attrs(class_def: &HirClassDef, classes: &HashMap<String, HirClassDef>) ->
 /// the correct number of slots.
 fn mro_attr_count(class_def: &HirClassDef, classes: &HashMap<String, HirClassDef>) -> usize {
     mro_attrs(class_def, classes).len()
+}
+
+// ---------------------------------------------------------------------------
+// Issue #435: compile-time `isinstance`/`issubclass` MIR lowering.
+//
+// Both builtins are evaluated at compile time (pycc's static dispatch model
+// means every variable's runtime type is exactly its declared type), emitting
+// `MirExpr::BoolLiteral(result)` constants. No runtime type tags or RTTI.
+// ---------------------------------------------------------------------------
+
+/// #435: Lowers `isinstance(obj, class_arg)` to a compile-time boolean
+/// constant. The object expression is lowered to MIR (to extract its type
+/// via `.ty()`), but the class argument is NOT lowered — it is a class
+/// reference, not a value. The result is computed using
+/// `eval_isinstance_single` with the object's class MRO.
+fn lower_isinstance(
+    args: &[HirExpr],
+    scopes: &[HashMap<String, Ty>],
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) -> MirExpr {
+    // The type checker already validated arg count and class names. If we
+    // reach here, args has exactly 2 elements and args[1] is a valid class
+    // name or tuple of class names.
+    let obj = lower_expr(&args[0], scopes, classes, current_class);
+    let obj_ty = obj.ty();
+    // Extract class names from the second argument.
+    let class_names = extract_class_names(&args[1])
+        .expect("pycc_mir: internal error: isinstance's second argument was not validated by pycc_types");
+    // Compute the result: true if any target class matches.
+    let obj_mro = match &obj_ty {
+        Ty::Instance(class_name) => classes
+            .get(class_name.as_str())
+            .map(|cd| cd.mro.as_slice())
+            .unwrap_or(&[]),
+        _ => &[],
+    };
+    let result = class_names
+        .iter()
+        .any(|target| eval_isinstance_single(&obj_ty, target, obj_mro));
+    MirExpr::BoolLiteral(result)
+}
+
+/// #435: Lowers `issubclass(cls_arg, class_arg)` to a compile-time boolean
+/// constant. Neither argument is lowered as a MIR expression — both are
+/// class references. The result is computed using `eval_issubclass_single`
+/// with the source class's MRO.
+fn lower_issubclass(
+    args: &[HirExpr],
+    classes: &HashMap<String, HirClassDef>,
+) -> MirExpr {
+    // The type checker already validated arg count and class names. If we
+    // reach here, args has exactly 2 elements, args[0] is a bare class name,
+    // and args[1] is a valid class name or tuple of class names.
+    let cls_name = match &args[0] {
+        HirExpr::Name(name) => name.as_str(),
+        _ => unreachable!(
+            "pycc_mir: internal error: issubclass's first argument was not validated by pycc_types"
+        ),
+    };
+    let target_names = extract_class_names(&args[1])
+        .expect("pycc_mir: internal error: issubclass's second argument was not validated by pycc_types");
+    // Get the source class's MRO (empty for builtin types).
+    let cls_mro = if is_builtin_type_name(cls_name) {
+        &[][..]
+    } else {
+        classes
+            .get(cls_name)
+            .map(|cd| cd.mro.as_slice())
+            .unwrap_or(&[])
+    };
+    let result = target_names
+        .iter()
+        .any(|target| eval_issubclass_single(cls_name, target, cls_mro));
+    MirExpr::BoolLiteral(result)
 }
 
 fn binop_result_ty(op: BinOpKind, left: Ty, right: Ty) -> Ty {
@@ -6010,6 +6100,215 @@ mod tests {
                     class_methods: Vec::new(),
                 },
             )],
+        };
+        let _ = build(&hir);
+    }
+
+    // -----------------------------------------------------------------------
+    // #435: isinstance/issubclass MIR lowering unit tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn isinstance_lowers_to_bool_literal_for_user_class() {
+        // `isinstance(D(), D)` — D is in D's MRO, so the result is `true`.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "isinstance".to_string(),
+                    args: vec![
+                        HirExpr::Call {
+                            callee: "D".to_string(),
+                            args: vec![],
+                        },
+                        HirExpr::Name("D".to_string()),
+                    ],
+                }],
+            }))],
+            type_aliases: vec![],
+            imports: vec![],
+            class_defs: vec![("D".to_string(), HirClassDef {
+                name: "D".to_string(),
+                bases: vec![],
+                mro: vec!["D".to_string()],
+                methods: vec![("__init__".to_string(), "D.__init__".to_string())],
+                attrs: vec![],
+                static_methods: vec![],
+                class_methods: vec![],
+                properties: vec![],
+                type_param: None,
+            })],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::BoolLiteral(true)],
+                ty: Ty::None,
+            }))
+        );
+    }
+
+    #[test]
+    fn issubclass_lowers_to_bool_literal_for_same_class() {
+        // `issubclass(D, D)` — D is in D's MRO, so the result is `true`.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "issubclass".to_string(),
+                    args: vec![
+                        HirExpr::Name("D".to_string()),
+                        HirExpr::Name("D".to_string()),
+                    ],
+                }],
+            }))],
+            type_aliases: vec![],
+            imports: vec![],
+            class_defs: vec![("D".to_string(), HirClassDef {
+                name: "D".to_string(),
+                bases: vec![],
+                mro: vec!["D".to_string()],
+                methods: vec![("__init__".to_string(), "D.__init__".to_string())],
+                attrs: vec![],
+                static_methods: vec![],
+                class_methods: vec![],
+                properties: vec![],
+                type_param: None,
+            })],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::BoolLiteral(true)],
+                ty: Ty::None,
+            }))
+        );
+    }
+
+    #[test]
+    fn isinstance_with_float_lowers_to_bool_literal_true() {
+        // `isinstance(1.5, float)` — covers the `Ty::Float` arm in
+        // `eval_isinstance_single` at the MIR level.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "isinstance".to_string(),
+                    args: vec![
+                        HirExpr::FloatLiteral(1.5),
+                        HirExpr::Name("float".to_string()),
+                    ],
+                }],
+            }))],
+            type_aliases: vec![],
+            imports: vec![],
+            class_defs: vec![],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::BoolLiteral(true)],
+                ty: Ty::None,
+            }))
+        );
+    }
+
+    #[test]
+    fn issubclass_with_int_int_lowers_to_bool_literal_true() {
+        // `issubclass(int, int)` — covers the `return cls == target_class`
+        // line in `eval_issubclass_single` at the MIR level.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "issubclass".to_string(),
+                    args: vec![
+                        HirExpr::Name("int".to_string()),
+                        HirExpr::Name("int".to_string()),
+                    ],
+                }],
+            }))],
+            type_aliases: vec![],
+            imports: vec![],
+            class_defs: vec![],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::BoolLiteral(true)],
+                ty: Ty::None,
+            }))
+        );
+    }
+
+    #[test]
+    fn issubclass_with_user_class_vs_builtin_lowers_to_false() {
+        // `issubclass(D, int)` — user class vs builtin target, covers the
+        // `return false` line in `eval_issubclass_single`.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "issubclass".to_string(),
+                    args: vec![
+                        HirExpr::Name("D".to_string()),
+                        HirExpr::Name("int".to_string()),
+                    ],
+                }],
+            }))],
+            type_aliases: vec![],
+            imports: vec![],
+            class_defs: vec![("D".to_string(), HirClassDef {
+                name: "D".to_string(),
+                bases: vec![],
+                mro: vec!["D".to_string()],
+                methods: vec![("__init__".to_string(), "D.__init__".to_string())],
+                attrs: vec![],
+                static_methods: vec![],
+                class_methods: vec![],
+                properties: vec![],
+                type_param: None,
+            })],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::BoolLiteral(false)],
+                ty: Ty::None,
+            }))
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "internal error: issubclass's first argument")]
+    fn issubclass_with_non_name_first_arg_panics() {
+        // This covers the `unreachable!` branch in `lower_issubclass`.
+        // In practice, the type checker rejects this before MIR lowering,
+        // but the MIR function must handle the case defensively.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "issubclass".to_string(),
+                    args: vec![
+                        HirExpr::IntLiteral(42),
+                        HirExpr::Name("int".to_string()),
+                    ],
+                }],
+            }))],
+            type_aliases: vec![],
+            imports: vec![],
+            class_defs: vec![],
         };
         let _ = build(&hir);
     }

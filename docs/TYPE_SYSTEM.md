@@ -128,7 +128,17 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 
 ## Narrowing & flow typing
 
-Flow-sensitive checker on HIR control-flow graph: `isinstance`, `is None`, truthiness of `Optional`, `match` patterns (PEP 634 — with exhaustiveness checking), `TypeGuard` (647), `TypeIs` (742), walrus bindings, `assert`.
+Flow-sensitive checker on HIR control-flow graph: `isinstance` (compile-time evaluated — see below), `is None`, truthiness of `Optional`, `match` patterns (PEP 634 — with exhaustiveness checking), `TypeGuard` (647), `TypeIs` (742), walrus bindings, `assert`.
+
+### Compile-time `isinstance`/`issubclass` (#435)
+
+pycc uses static dispatch (D-006): every variable's runtime type is exactly its declared static type, so `isinstance` and `issubclass` are always evaluable at compile time. Both builtins are intercepted before generic call inference — the class argument(s) are class references (bare names or tuples of bare names), not value expressions, and are never lowered to runtime values.
+
+- `isinstance(obj, cls)`: infers `obj`'s type, checks the class argument(s), and emits a compile-time `bool` constant. For user-defined classes, the result is `true` iff `cls` appears in `obj`'s class MRO. For builtin types, `bool` is a subtype of `int` (`isinstance(True, int)` is `True`); other cross-type checks are `False`.
+- `issubclass(cls, target)`: both arguments are compile-time class references. For user-defined classes, the result is `true` iff `target` appears in `cls`'s MRO. `issubclass(bool, int)` is `True`; other cross-builtin checks are `False`.
+- Tuple targets (`isinstance(x, (A, B))`): `true` if any member matches.
+- Wrong argument counts, non-class arguments, and unknown class names are rejected with `T0021`/`T0001` before codegen.
+- The MIR emits `MirExpr::BoolLiteral(result)` — no runtime RTTI, type tags, or calls.
 
 ## Annotation semantics
 
@@ -144,7 +154,7 @@ tracked by its own `py315/` conformance row in PYTHON_STANDARDS.md.
 
 ## Class model (compiled subset)
 
-Supported: single + multiple inheritance with C3 MRO resolved at compile time, `@property`, `classmethod`/`staticmethod`, `__init_subclass__`/`__set_name__` executed at compile time when statically evaluable, dataclasses (557) and `dataclass_transform` (681), `@override` (698) enforced, dunder protocol methods (`__len__`, `__iter__`, `__enter__`…) → static dispatch.
+Supported: single + multiple inheritance with C3 MRO resolved at compile time, `@property`, `classmethod`/`staticmethod`, `__init_subclass__` (PEP 487 — recognized as a regular method; if a base class defines it, a subclass's own `__init_subclass__` must be statically evaluable: only `pass` or a docstring body is accepted, since pycc has no mechanism to run side-effecting statements at class-creation time), `__set_name__` (PEP 487 — recognized as a valid method name; not triggerable yet because class-level attribute assignments are unsupported), `__class_getitem__` (PEP 560 — accepted as a static method; enables `ClassName[type_arg]` subscript syntax in annotations, resolving to `Ty::Instance(ClassName)` and ignoring the type argument for now), dataclasses (557) and `dataclass_transform` (681), `@override` (698) enforced, dunder protocol methods (`__len__`, `__iter__`, `__enter__`…) → static dispatch.
 
 Rejected (negative-tested, see DIAGNOSTICS.md): runtime class mutation, dynamic `type()` creation, metaclasses with runtime side effects beyond the statically evaluable subset (`E0105`), custom `__getattr__` catch-alls on non-interop types (`E0102`).
 

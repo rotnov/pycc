@@ -1,0 +1,698 @@
+use std::io::Write;
+use std::process::Command;
+
+fn pycc_bin() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_pycc"))
+}
+
+fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(source.as_bytes()).unwrap();
+    path
+}
+
+// ===========================================================================
+// Part A: isinstance — success cases (compile-time evaluation)
+// ===========================================================================
+
+/// #435: `isinstance(D(), D)` returns True — an object is an instance of
+/// its own class.
+#[test]
+fn isinstance_true_for_same_class() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_same_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "same.py",
+        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nr = isinstance(D(), D)\nprint(r)\n",
+    );
+    let out = dir.join("same");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for isinstance(D(), D)");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"True\n", "isinstance(D(), D) should be True");
+}
+
+/// #435: `isinstance(D(), B)` returns True when D extends B — the base
+/// class is in D's MRO.
+#[test]
+fn isinstance_true_for_base_class() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_base_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "base.py",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = isinstance(D(), B)\nprint(r)\n",
+    );
+    let out = dir.join("base");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for isinstance(D(), B)");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"True\n", "isinstance(D(), B) should be True");
+}
+
+/// #435: `isinstance(D(), C)` returns False when D and C are unrelated.
+#[test]
+fn isinstance_false_for_unrelated_class() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_unrelated_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "unrelated.py",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass C:\n    def __init__(self) -> None:\n        self.y = 2\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = isinstance(D(), C)\nprint(r)\n",
+    );
+    let out = dir.join("unrelated");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for isinstance(D(), C)");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"False\n", "isinstance(D(), C) should be False");
+}
+
+/// #435: `isinstance(B(), D)` returns False — a base class instance is not
+/// an instance of a derived class.
+#[test]
+fn isinstance_false_for_subclass() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_subclass_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "subclass.py",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = isinstance(B(), D)\nprint(r)\n",
+    );
+    let out = dir.join("subclass");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for isinstance(B(), D)");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"False\n", "isinstance(B(), D) should be False");
+}
+
+/// #435: `isinstance(5, int)` returns True.
+#[test]
+fn isinstance_with_int() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_int_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "int.py",
+        "r = isinstance(5, int)\nprint(r)\n",
+    );
+    let out = dir.join("int");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for isinstance(5, int)");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"True\n", "isinstance(5, int) should be True");
+}
+
+/// #435: `isinstance(True, int)` returns True — bool is a subtype of int.
+#[test]
+fn isinstance_with_bool_as_int() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_bool_int_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "bool_int.py",
+        "r = isinstance(True, int)\nprint(r)\n",
+    );
+    let out = dir.join("bool_int");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for isinstance(True, int)");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"True\n", "isinstance(True, int) should be True");
+}
+
+/// #435: `isinstance("hi", str)` returns True.
+#[test]
+fn isinstance_with_str() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_str_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "str.py",
+        "r = isinstance(\"hi\", str)\nprint(r)\n",
+    );
+    let out = dir.join("str");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for isinstance(\"hi\", str)");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"True\n", "isinstance(\"hi\", str) should be True");
+}
+
+/// #435: `isinstance(D(), (B, C))` returns True if D extends B — tuple of
+/// classes, any match.
+#[test]
+fn isinstance_with_tuple_of_classes() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_tuple_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "tuple.py",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass C:\n    def __init__(self) -> None:\n        self.y = 2\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = isinstance(D(), (B, C))\nprint(r)\n",
+    );
+    let out = dir.join("tuple");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for isinstance(D(), (B, C))");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"True\n", "isinstance(D(), (B, C)) should be True");
+}
+
+/// #435: `isinstance(D(), (C,))` returns False when D extends B, not C.
+#[test]
+fn isinstance_with_tuple_no_match() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_tuple_no_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "tuple_no.py",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass C:\n    def __init__(self) -> None:\n        self.y = 2\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = isinstance(D(), (C,))\nprint(r)\n",
+    );
+    let out = dir.join("tuple_no");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for isinstance(D(), (C,))");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"False\n", "isinstance(D(), (C,)) should be False");
+}
+
+// ===========================================================================
+// Part A: isinstance — error cases
+// ===========================================================================
+
+/// #435: `isinstance()` with wrong arg count is rejected with T0021.
+#[test]
+fn isinstance_wrong_arg_count() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_arity_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "arity.py",
+        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nr = isinstance(D())\n",
+    );
+    let out = dir.join("arity");
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "pycc build should fail for isinstance with wrong arg count");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("T0021"), "should report T0021 for wrong arg count, got: {stderr}");
+}
+
+/// #435: `isinstance(D(), UnknownClass)` is rejected with T0001.
+#[test]
+fn isinstance_unknown_class() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_unknown_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "unknown.py",
+        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nr = isinstance(D(), UnknownClass)\n",
+    );
+    let out = dir.join("unknown");
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "pycc build should fail for isinstance with unknown class");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("T0001"), "should report T0001 for unknown class, got: {stderr}");
+}
+
+/// #435: `isinstance(D(), 5)` — second arg is not a class name or tuple.
+#[test]
+fn isinstance_non_class_second_arg() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_nonclass_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "nonclass.py",
+        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nr = isinstance(D(), 5)\n",
+    );
+    let out = dir.join("nonclass");
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "pycc build should fail for isinstance with non-class second arg");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("T0021"), "should report T0021 for non-class second arg, got: {stderr}");
+}
+
+// ===========================================================================
+// Part A: issubclass — success cases (compile-time evaluation)
+// ===========================================================================
+
+/// #435: `issubclass(D, D)` returns True.
+#[test]
+fn issubclass_true_for_same_class() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_issubclass_same_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "same.py",
+        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nr = issubclass(D, D)\nprint(r)\n",
+    );
+    let out = dir.join("same");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for issubclass(D, D)");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"True\n", "issubclass(D, D) should be True");
+}
+
+/// #435: `issubclass(D, B)` returns True when D extends B.
+#[test]
+fn issubclass_true_for_base_class() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_issubclass_base_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "base.py",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = issubclass(D, B)\nprint(r)\n",
+    );
+    let out = dir.join("base");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for issubclass(D, B)");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"True\n", "issubclass(D, B) should be True");
+}
+
+/// #435: `issubclass(D, C)` returns False when D and C are unrelated.
+#[test]
+fn issubclass_false_for_unrelated() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_issubclass_unrelated_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "unrelated.py",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass C:\n    def __init__(self) -> None:\n        self.y = 2\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = issubclass(D, C)\nprint(r)\n",
+    );
+    let out = dir.join("unrelated");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for issubclass(D, C)");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"False\n", "issubclass(D, C) should be False");
+}
+
+/// #435: `issubclass(bool, int)` returns True — bool is a subtype of int.
+#[test]
+fn issubclass_bool_is_int() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_issubclass_bool_int_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "bool_int.py",
+        "r = issubclass(bool, int)\nprint(r)\n",
+    );
+    let out = dir.join("bool_int");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for issubclass(bool, int)");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"True\n", "issubclass(bool, int) should be True");
+}
+
+/// #435: `issubclass(D, (B, C))` returns True if D extends B.
+#[test]
+fn issubclass_with_tuple() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_issubclass_tuple_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "tuple.py",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass C:\n    def __init__(self) -> None:\n        self.y = 2\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = issubclass(D, (B, C))\nprint(r)\n",
+    );
+    let out = dir.join("tuple");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for issubclass(D, (B, C))");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"True\n", "issubclass(D, (B, C)) should be True");
+}
+
+// ===========================================================================
+// Part A: issubclass — error cases
+// ===========================================================================
+
+/// #435: `issubclass()` with wrong arg count is rejected with T0021.
+#[test]
+fn issubclass_wrong_arg_count() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_issubclass_arity_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "arity.py",
+        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nr = issubclass(D)\n",
+    );
+    let out = dir.join("arity");
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "pycc build should fail for issubclass with wrong arg count");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("T0021"), "should report T0021 for wrong arg count, got: {stderr}");
+}
+
+/// #435: `issubclass(5, int)` — first arg is not a class name.
+#[test]
+fn issubclass_non_class_first_arg() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_issubclass_nonclass_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "nonclass.py",
+        "r = issubclass(5, int)\n",
+    );
+    let out = dir.join("nonclass");
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "pycc build should fail for issubclass with non-class first arg");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("T0021"), "should report T0021 for non-class first arg, got: {stderr}");
+}
+
+/// #435: `issubclass(D, UnknownClass)` is rejected with T0001.
+#[test]
+fn issubclass_unknown_class() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_issubclass_unknown_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "unknown.py",
+        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nr = issubclass(D, UnknownClass)\n",
+    );
+    let out = dir.join("unknown");
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "pycc build should fail for issubclass with unknown class");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("T0001"), "should report T0001 for unknown class, got: {stderr}");
+}
+
+// ===========================================================================
+// Part B: __init_subclass__ (compile-time hook)
+// ===========================================================================
+
+/// #435 (Part B): a class with `__init_subclass__` that just has `pass`
+/// compiles and runs. In pycc's static-dispatch model, `__init_subclass__`
+/// is a regular method (the `cls` parameter from CPython's implicit
+/// classmethod protocol is not modeled — `self` is used instead).
+#[test]
+fn init_subclass_with_pass_body_is_accepted() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_init_subclass_pass_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "pass.py",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nprint(D().x)\n",
+    );
+    let out = dir.join("pass");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for __init_subclass__ with pass body");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"1\n", "program should run correctly");
+}
+
+/// #435 (Part B): `__init_subclass__` with a non-trivial body (a print
+/// statement) is rejected with C0001 when a base class also defines
+/// `__init_subclass__`.
+#[test]
+fn init_subclass_with_non_trivial_body_is_rejected() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_init_subclass_reject_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "reject.py",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        print(\"hello\")\n",
+    );
+    let out = dir.join("reject");
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "pycc build should fail for __init_subclass__ with non-trivial body");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("C0001"), "should report C0001 for non-trivial __init_subclass__, got: {stderr}");
+    assert!(stderr.contains("__init_subclass__"), "error should mention __init_subclass__, got: {stderr}");
+}
+
+/// #435 (Part B): a subclass of a class with `__init_subclass__` that does
+/// NOT redefine `__init_subclass__` compiles without re-defining it.
+#[test]
+fn init_subclass_inherited_from_base() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_init_subclass_inherit_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "inherit.py",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nprint(D().x)\n",
+    );
+    let out = dir.join("inherit");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for inherited __init_subclass__");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"1\n", "program should run correctly");
+}
+
+/// #435 (Part B): `__init_subclass__` with a docstring body is accepted
+/// (a docstring is a bare string-literal expression statement, which has
+/// no side effects).
+#[test]
+fn init_subclass_with_docstring_body_is_accepted() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_init_subclass_doc_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "doc.py",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\n    def __init_subclass__(self) -> None:\n        \"docstring\"\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nprint(D().x)\n",
+    );
+    let out = dir.join("doc");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for __init_subclass__ with docstring body");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"1\n", "program should run correctly");
+}
+
+// ===========================================================================
+// Part C: __set_name__ (recognition)
+// ===========================================================================
+
+/// #435 (Part C): a class with a `__set_name__` method compiles — it is
+/// accepted as a regular method (pycc does not support class-level
+/// attribute assignments, so `__set_name__` can never be triggered, but
+/// the method name is recognized as valid).
+#[test]
+fn set_name_method_is_accepted() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_set_name_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "set_name.py",
+        "class C:\n    def __init__(self) -> None:\n        self.x = 1\n    def __set_name__(self, owner: int, name: int) -> None:\n        pass\nprint(C().x)\n",
+    );
+    let out = dir.join("set_name");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for __set_name__ method");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"1\n", "program should run correctly");
+}
+
+// ===========================================================================
+// Part D: __class_getitem__ (recognition)
+// ===========================================================================
+
+/// #435 (Part D): a class with a `__class_getitem__` static method compiles.
+#[test]
+fn class_getitem_method_is_accepted() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_class_getitem_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "class_getitem.py",
+        "class C:\n    def __init__(self) -> None:\n        self.x = 1\n    @staticmethod\n    def __class_getitem__(key: int) -> int:\n        return 42\nprint(C().x)\n",
+    );
+    let out = dir.join("class_getitem");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for __class_getitem__ method");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"1\n", "program should run correctly");
+}
+
+/// #435 (Part D): `ClassName[int]` as a type annotation works — it resolves
+/// to `Ty::Instance(ClassName)`, ignoring the type argument. Used inside
+/// the class body where the class name is self-referential (the existing
+/// `annotation_to_ty` self-referential-class-name rule applies).
+#[test]
+fn class_getitem_allows_subscript_syntax() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_class_getitem_sub_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "subscript.py",
+        "class C:\n    def __init__(self) -> None:\n        self.x = 1\n    @staticmethod\n    def __class_getitem__(key: int) -> int:\n        return 42\n    def get_self(self) -> C[int]:\n        return self\nprint(C().get_self().x)\n",
+    );
+    let out = dir.join("subscript");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for ClassName[int] annotation");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"1\n", "program should run correctly");
+}
+
+// ===========================================================================
+// Part E: edge cases — empty tuple, container types
+// ===========================================================================
+
+/// #435: `isinstance(1, ())` — an empty tuple is rejected with T0021.
+/// `extract_class_names` rejects empty tuples because at least one class
+/// is required.
+#[test]
+fn isinstance_with_empty_tuple_is_rejected() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_empty_tuple_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "empty_tuple.py",
+        "r = isinstance(1, ())\nprint(r)\n",
+    );
+    let out = dir.join("empty_tuple");
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "pycc build should fail for isinstance with empty tuple");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("T0021"), "should report T0021 for empty tuple, got: {stderr}");
+}
+
+/// #435: `issubclass(int, ())` — an empty tuple is rejected with T0021.
+#[test]
+fn issubclass_with_empty_tuple_is_rejected() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_issubclass_empty_tuple_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "empty_tuple_sub.py",
+        "r = issubclass(int, ())\nprint(r)\n",
+    );
+    let out = dir.join("empty_tuple_sub");
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "pycc build should fail for issubclass with empty tuple");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("T0021"), "should report T0021 for empty tuple, got: {stderr}");
+}
+
+/// #435: `isinstance(1, list)` — `list` is not a valid class name for
+/// isinstance (pycc only supports `int`, `str`, `float`, `bool`, and
+/// user-defined classes), so this is rejected with T0001.
+#[test]
+fn isinstance_with_list_builtin_is_rejected() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_list_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "list_builtin.py",
+        "r = isinstance(1, list)\nprint(r)\n",
+    );
+    let out = dir.join("list_builtin");
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "pycc build should fail for isinstance with list builtin");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("T0001"), "should report T0001 for unknown class 'list', got: {stderr}");
+}

@@ -510,8 +510,6 @@ const KNOWN_CALLABLE_BUILTINS: &[&str] = &[
     "id",
     "input",
     "int",
-    "isinstance",
-    "issubclass",
     "iter",
     "list",
     "locals",
@@ -1093,6 +1091,16 @@ fn collect_expr_constraints(
                     ).with_help("pass a `list[T]`, `dict[K, V]`, or `set[T]` value"));
                 }
                 return Ok(Some(Ok(Ty::Int)));
+            }
+            // #435: `isinstance`/`issubclass` are compile-time-evaluated
+            // builtins that always return `Ty::Bool`. The constraint solver
+            // only needs the result type — the actual validation and
+            // compile-time evaluation happen in `infer_expr_in`'s own Call
+            // arm. The class arguments (bare names or tuples of bare names)
+            // produce `Ok(None)` terms in the solver (class names are not
+            // value bindings), which is harmless.
+            if callee == "isinstance" || callee == "issubclass" {
+                return Ok(Some(Ok(Ty::Bool)));
             }
             if let Some(symbol) = std_qualified_symbol(callee) {
                 // Post-review finding: see `std_receiver_shadowed`'s own
@@ -2523,6 +2531,21 @@ fn infer_expr_in(
             }
             if is_local(local_names, callee) {
                 return Err(unbound_local(callee));
+            }
+            // #435: `isinstance`/`issubclass` are compile-time-evaluated
+            // builtins. They must be intercepted BEFORE the generic arg
+            // inference loop below, because the class argument (args[1] for
+            // isinstance, both args for issubclass) is a class name or tuple
+            // of class names — not a value expression. Inferring a bare class
+            // name as a regular expression would fail with "name not defined"
+            // (class names are registered in `env.classes`, not
+            // `env.bindings`). The object argument (isinstance's args[0]) IS
+            // inferred normally.
+            if callee == "isinstance" {
+                return class::check_isinstance(env, local_names, args);
+            }
+            if callee == "issubclass" {
+                return class::check_issubclass(env, args);
             }
             // For a callee that survives D-110's binding gate above, preserve
             // the established diagnostic order by inferring every
@@ -13548,21 +13571,24 @@ mod tests {
     }
 
     #[test]
-    fn known_callable_builtins_table_has_137_entries() {
+    fn known_callable_builtins_table_has_135_entries() {
         assert_eq!(
             KNOWN_CALLABLE_BUILTINS.len(),
-            137,
-            "KNOWN_CALLABLE_BUILTINS should have 137 entries (139 builtins minus print/len/float, plus __import__)"
+            135,
+            "KNOWN_CALLABLE_BUILTINS should have 135 entries (139 builtins minus print/len/float/isinstance/issubclass, plus __import__)"
         );
     }
 
     #[test]
     fn known_callable_builtins_excludes_already_implemented() {
-        // `print`, `len`, and `float` are already hand-recognized and must
-        // not appear in the table -- they would never reach this fallback.
+        // `print`, `len`, `float`, `isinstance`, and `issubclass` are already
+        // hand-recognized and must not appear in the table -- they would never
+        // reach this fallback.
         assert!(!is_known_callable_builtin("print"));
         assert!(!is_known_callable_builtin("len"));
         assert!(!is_known_callable_builtin("float"));
+        assert!(!is_known_callable_builtin("isinstance"));
+        assert!(!is_known_callable_builtin("issubclass"));
     }
 
     #[test]
