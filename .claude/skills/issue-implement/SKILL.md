@@ -315,6 +315,13 @@ fixes whenever the previous findings may no longer describe the diff. The loop e
 round reports no actionable findings. The same finding surviving two genuine fix attempts is
 a stop condition, not a reason for a third identical attempt.
 
+As each round's verdicts land, append every finding — fixed and refuted alike — to
+`.harden/findings/issue-<N>.jsonl`, one JSON line per finding per round, append-only
+(schema and rationale: `.agents/skills/harden/references/batch.md`). This is collection
+only and must not interrupt the loop: refuted findings carry their refutation in `note`,
+because they accumulate into reviewer-error classes the batch pass below routes to the
+reviewer's own artefact.
+
 When a fix touches the implementation, resume step 4's own dispatched agent (`SendMessage` to
 its agent id, which resumes it with full context of the code it just wrote) rather than
 re-deriving the change in this session's own context or dispatching a stateless fresh one — a
@@ -329,6 +336,13 @@ fix (a cleared invariant that another consumer of the same state still needed, a
 on one path but not its mirror), and treat a many-round loop as the process working, not
 failing. When a fix touches state shared by two invariants, name both invariants in the fix's
 comment and pin each with its own test before calling the round done.
+
+Once the loop ends, run `/harden batch .harden/findings/issue-<N>.jsonl` — one pass over
+the pile: findings cluster into root-cause classes, recurrence is counted inside the batch
+and against `.harden/incidents/`, and only classes that clear the threshold earn an
+artefact (expected product is promotions to cheaper gates, not new prose; singletons seed
+counters). Artefacts and journal entries it lands are commits on this same branch and ride
+into the pull request below.
 
 ### 6. Pull request
 
