@@ -282,21 +282,21 @@ pub(crate) fn resolve_super_attr_get(
             // value. Reject this to avoid a type-safety violation.
             for before_class in &class_def.mro[..current_pos + 1] {
                 let before_def = expect_class(env, before_class);
-                if let Some((_, before_ty)) = before_def.attrs.iter().find(|(n, _)| n == attr) {
-                    if before_ty != ty {
-                        return Err(Diagnostic::error(
-                            "T0021",
-                            format!(
-                                "super().{attr} has type `{}` in class `{mro_class}` but is \
-                                 redeclared as `{}` in class `{before_class}` — the shared \
-                                 attribute slot will contain the redeclared type at runtime, \
-                                 so super().{attr} would read the wrong type",
-                                ty.name(),
-                                before_ty.name(),
-                            ),
-                            Span::new(0, 0),
-                        ));
-                    }
+                if let Some((_, before_ty)) = before_def.attrs.iter().find(|(n, _)| n == attr)
+                    && before_ty != ty
+                {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "super().{attr} has type `{}` in class `{mro_class}` but is \
+                             redeclared as `{}` in class `{before_class}` — the shared \
+                             attribute slot will contain the redeclared type at runtime, \
+                             so super().{attr} would read the wrong type",
+                            ty.name(),
+                            before_ty.name(),
+                        ),
+                        Span::new(0, 0),
+                    ));
                 }
             }
             return Ok(ty.clone());
