@@ -26,7 +26,7 @@ jobs:
 
       - name: Validate CI-monitoring tooling scripts
         run: |
-          sh scripts/test-ci-watch.sh
+          sh .claude/skills/gha-watch-ci-pr/scripts/test-ci-watch.sh
           sh scripts/test-gh-status-check.sh
 
       - uses: actions/setup-node@v4

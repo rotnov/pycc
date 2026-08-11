@@ -21,11 +21,10 @@ set -eu
 # for how to act on it (a full, non-`--failed` rerun, not a diff
 # investigation).
 #
-# Intended for `Monitor`-style background polling (see
-# .claude/skills/autopilot-async-monitoring/SKILL.md) instead of a fixed
-# wakeup interval, so a real terminal event (conflict, stale branch,
-# failed check, ready-to-merge) is reported the moment it happens rather
-# than up to a full wakeup interval later.
+# Intended for `Monitor`-style background polling (see this skill's
+# SKILL.md) instead of a fixed wakeup interval, so a real terminal event
+# (conflict, stale branch, failed check, ready-to-merge) is reported the
+# moment it happens rather than up to a full wakeup interval later.
 #
 # Usage: ci-watch.sh <repo> <pr-number> [<pr-number> ...]
 # Example: ci-watch.sh rotnov/pycc 324 325
