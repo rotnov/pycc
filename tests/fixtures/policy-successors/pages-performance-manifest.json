@@ -1,0 +1,82 @@
+{
+  "manifest_version": 1,
+  "project_path": "/pycc/",
+  "description": "Closed canonical performance manifest for the five production pages plus the 404 error-page cohort. SHA-256 digests are computed from the checked-in site/ tree and must match the served artifact bytes exactly. This manifest is the identity anchor for the non-browser HTTP preflight and the Lighthouse LHR page-identity binding (issue #229). This staged successor carries the post-fix digests from issue #199's accessibility source fix (Merge 2).",
+  "canonical_pages": [
+    {
+      "id": "home",
+      "production_route": "https://rotnov.github.io/pycc/",
+      "local_route": "/pycc/",
+      "expected_http_status": 200,
+      "source_artifact": "site/index.html",
+      "source_artifact_sha256": "73cd6c772440051bda6fa54d6782c7237386bc5278d87fd4d0de4f6209bb6e8b",
+      "expected_title": "pycc — AOT compiler for typed Python to native binaries",
+      "expected_h1": "Typed Python in. Autonomous artifacts out.",
+      "canonical_url": "https://rotnov.github.io/pycc/",
+      "redirect_policy": "no_redirect"
+    },
+    {
+      "id": "status",
+      "production_route": "https://rotnov.github.io/pycc/status/",
+      "local_route": "/pycc/status/",
+      "expected_http_status": 200,
+      "source_artifact": "site/status/index.html",
+      "source_artifact_sha256": "b05a8f45c3a5301187f81d9f8a7abb51ca03deaab994c317d9cfd1b637d01761",
+      "expected_title": "pycc status — what the Python AOT compiler can do today",
+      "expected_h1": "What pycc can do today.",
+      "canonical_url": "https://rotnov.github.io/pycc/status/",
+      "redirect_policy": "no_redirect"
+    },
+    {
+      "id": "architecture",
+      "production_route": "https://rotnov.github.io/pycc/architecture/",
+      "local_route": "/pycc/architecture/",
+      "expected_http_status": 200,
+      "source_artifact": "site/architecture/index.html",
+      "source_artifact_sha256": "5eb3813f66e829181832bda4373feaf8698f03395b4d4353bf61f9f6867dd380",
+      "expected_title": "pycc architecture — typed Python to LLVM native binaries",
+      "expected_h1": "Python source to native code.",
+      "canonical_url": "https://rotnov.github.io/pycc/architecture/",
+      "redirect_policy": "no_redirect"
+    },
+    {
+      "id": "python-aot-compilers",
+      "production_route": "https://rotnov.github.io/pycc/python-aot-compilers/",
+      "local_route": "/pycc/python-aot-compilers/",
+      "expected_http_status": 200,
+      "source_artifact": "site/python-aot-compilers/index.html",
+      "source_artifact_sha256": "e59618dd9ce74ef8dfcbd2dbe26d1ae58fa95e3993987da3959be7ca4e678ea7",
+      "expected_title": "Python AOT compilers compared — where pycc fits",
+      "expected_h1": "Python AOT tools solve different jobs.",
+      "canonical_url": "https://rotnov.github.io/pycc/python-aot-compilers/",
+      "redirect_policy": "no_redirect"
+    },
+    {
+      "id": "ai-native",
+      "production_route": "https://rotnov.github.io/pycc/ai-native/",
+      "local_route": "/pycc/ai-native/",
+      "expected_http_status": 200,
+      "source_artifact": "site/ai-native/index.html",
+      "source_artifact_sha256": "e78cd6a958ded3e151162befd4fffee0942b13e46d9d18de6d62d407517b8afc",
+      "expected_title": "pycc AI-native experiment — software built entirely by AI",
+      "expected_h1": "The project writes itself.",
+      "canonical_url": "https://rotnov.github.io/pycc/ai-native/",
+      "redirect_policy": "no_redirect"
+    }
+  ],
+  "error_pages": [
+    {
+      "id": "404",
+      "cohort": "error-page",
+      "production_route": "https://rotnov.github.io/pycc/nonexistent/",
+      "local_route": "/pycc/nonexistent/",
+      "expected_http_status": 404,
+      "source_artifact": "site/404.html",
+      "source_artifact_sha256": "48b8dc4e4961656ec69a4a3fd94907b28fa90bb6199f68881e21e25ce2c3acc3",
+      "expected_title": "Page not found — pycc",
+      "expected_h1": "Page not found",
+      "canonical_url": "https://rotnov.github.io/pycc/",
+      "redirect_policy": "no_redirect"
+    }
+  ]
+}
