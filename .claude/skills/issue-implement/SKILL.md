@@ -299,6 +299,11 @@ refuted twice on the same point is a stop condition.
 
 ### 5. Review loop (D-068, reviewer binding per D-155)
 
+Before any `git commit` in this step, verify the current branch is not the
+protected default branch. If it is, create a feature branch first. After a
+PR merge with `--delete-branch`, the session is left on the default branch
+— always check before committing review fixes or harden artefacts.
+
 Stage all changes, including new files — the pinned reviewer omits untracked files from
 working-tree review. Invoke the pinned deep reviewer from a structurally verified
 `ievo@ievo-skills` install (`scripts/check_claude_reviewer_binding.py`, per D-155); if
@@ -356,7 +361,9 @@ objects to the direction taken, that is a stop condition — do not open the pul
 Re-fetch. If the default branch moved, rebase the task branch — own committed work only,
 never over commits this session did not create — and rerun the local gates. Push and open the
 pull request: `Fixes #N` in the body, a summary of what was built, any plan deviations with
-their reasons, and the test evidence. For significant work, add a new dated file under
+their reasons, and the test evidence. Write the PR body to a temporary file and use
+`gh pr create --body-file <path>` — never inline a heredoc in `--body`, which fails on
+bodies containing apostrophes or backticks. For significant work, add a new dated file under
 `docs/sessions/` within the pull request per D-066/D-130, re-fetching immediately before
 that commit so every referenced remote state is current.
 
