@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/../../../.." && pwd)
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/pycc-ci-watch-test.XXXXXX")
 
 cleanup() {
@@ -25,7 +25,7 @@ JSON
 EOF
 chmod +x "$work_dir/fixture-fail/bin/gh"
 
-output=$(PATH="$work_dir/fixture-fail/bin:$PATH" POLL_INTERVAL=1 "$repo_root/scripts/ci-watch.sh" owner/repo 42)
+output=$(PATH="$work_dir/fixture-fail/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 42)
 case "$output" in
   *"PR #42: CHECK FAILED -- agent-assets (FAILURE), ci-gate (CANCELLED)"*) ;;
   *) fail "expected failed-check line naming both checks, got: $output" ;;
@@ -45,7 +45,7 @@ JSON
 EOF
 chmod +x "$work_dir/fixture-conflict/bin/gh"
 
-output=$(PATH="$work_dir/fixture-conflict/bin:$PATH" POLL_INTERVAL=1 "$repo_root/scripts/ci-watch.sh" owner/repo 43)
+output=$(PATH="$work_dir/fixture-conflict/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 43)
 case "$output" in
   *"PR #43: CONFLICTS"*) ;;
   *) fail "expected conflicts line, got: $output" ;;
@@ -61,7 +61,7 @@ JSON
 EOF
 chmod +x "$work_dir/fixture-stale/bin/gh"
 
-output=$(PATH="$work_dir/fixture-stale/bin:$PATH" POLL_INTERVAL=1 "$repo_root/scripts/ci-watch.sh" owner/repo 44)
+output=$(PATH="$work_dir/fixture-stale/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 44)
 case "$output" in
   *"PR #44: STALE"*) ;;
   *) fail "expected stale line, got: $output" ;;
@@ -88,7 +88,7 @@ fi
 EOF
 chmod +x "$work_dir/fixture-ready/bin/gh"
 
-output=$(PATH="$work_dir/fixture-ready/bin:$PATH" POLL_INTERVAL=1 "$repo_root/scripts/ci-watch.sh" owner/repo 45)
+output=$(PATH="$work_dir/fixture-ready/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 45)
 case "$output" in
   *"PR #45: READY"*) ;;
   *) fail "expected ready line after two polls, got: $output" ;;
@@ -106,7 +106,7 @@ JSON
 EOF
 chmod +x "$work_dir/fixture-merged/bin/gh"
 
-output=$(PATH="$work_dir/fixture-merged/bin:$PATH" POLL_INTERVAL=1 "$repo_root/scripts/ci-watch.sh" owner/repo 46)
+output=$(PATH="$work_dir/fixture-merged/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 46)
 [ "$output" = "PR #46: MERGED" ] || fail "expected exactly one MERGED line, got: $output"
 
 # --- Fixture 6: two PRs tracked at once, each reported exactly once -------
@@ -127,7 +127,7 @@ fi
 EOF
 chmod +x "$work_dir/fixture-multi/bin/gh"
 
-output=$(PATH="$work_dir/fixture-multi/bin:$PATH" POLL_INTERVAL=1 "$repo_root/scripts/ci-watch.sh" owner/repo 47 48)
+output=$(PATH="$work_dir/fixture-multi/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 47 48)
 line_count=$(printf '%s\n' "$output" | wc -l | tr -d ' ')
 [ "$line_count" = "2" ] || fail "expected exactly 2 lines for 2 PRs, got $line_count: $output"
 case "$output" in
@@ -150,7 +150,7 @@ JSON
 EOF
 chmod +x "$work_dir/fixture-all-cancelled/bin/gh"
 
-output=$(PATH="$work_dir/fixture-all-cancelled/bin:$PATH" POLL_INTERVAL=1 "$repo_root/scripts/ci-watch.sh" owner/repo 49)
+output=$(PATH="$work_dir/fixture-all-cancelled/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 49)
 case "$output" in
   *"PR #49: CHECK FAILED -- agent-assets (CANCELLED), audit (CANCELLED) -- all CANCELLED"*) ;;
   *) fail "expected all-CANCELLED infra hint, got: $output" ;;
@@ -168,7 +168,7 @@ JSON
 EOF
 chmod +x "$work_dir/fixture-blocked-clean-checks/bin/gh"
 
-output=$(PATH="$work_dir/fixture-blocked-clean-checks/bin:$PATH" POLL_INTERVAL=1 "$repo_root/scripts/ci-watch.sh" owner/repo 50)
+output=$(PATH="$work_dir/fixture-blocked-clean-checks/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 50)
 case "$output" in
   *"PR #50: BLOCKED -- all checks completed with no failures, but mergeStateStatus=BLOCKED"*) ;;
   *) fail "expected a terminal BLOCKED line for all-green-but-not-CLEAN checks, got: $output" ;;
