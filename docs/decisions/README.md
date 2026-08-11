@@ -167,3 +167,4 @@ current.
 | [D-158](./D-158-property-as-hir-level-attr-access-rewrite.md) | Property as HIR-level attribute-access rewrite (no new MIR/codegen variant) | accepted |
 | [D-159](./D-159-ultra-review-cumulative-stats-and-model-attribution.md) | Add cumulative run statistics and per-model defect attribution to the `ultra-review` checkpoint | accepted |
 | [D-160](./D-160-super-static-dispatch-no-runtime-polymorphism.md) | super() uses static dispatch (no runtime polymorphism) | accepted |
+| [D-161](./D-161-pages-performance-budget-gate.md) | Pages performance budget gate | accepted |
