@@ -59,7 +59,7 @@
     "images": {
       "max_bytes_total_per_page": 1572864,
       "current_bytes": 1437709,
-      "description": "Total image size per page (uncompressed). Current is site/og.png at 1,437,709 bytes (~1.4 MB). og.png is an Open Graph metadata image referenced via <meta property='og:image'>, not loading-critical for LCP or CLS — it is never rendered as a visible <img> on any page."
+      "description": "Total image size per page (uncompressed). The checker scans the entire site/ tree for all image files (png, jpg, jpeg, gif, svg, webp, avif) and sums their sizes. Current is site/og.png at 1,437,709 bytes (~1.4 MB). og.png is an Open Graph metadata image referenced via <meta property='og:image'>, not loading-critical for LCP or CLS — it is never rendered as a visible <img> on any page."
     },
     "third_party": {
       "max_requests": 0,

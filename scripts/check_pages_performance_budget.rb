@@ -39,6 +39,7 @@ require "uri"
 require "open3"
 require "fileutils"
 require "pathname"
+require "find"
 
 REPLICATE_COUNT = 5
 MANIFEST_DEFAULT =
@@ -137,26 +138,19 @@ def start_hermetic_server(site_dir)
   [Integer(port_line), wait_thr, stdout_stderr]
 end
 
-def http_get(uri, follow_redirect: false)
+def http_get(uri)
   uri = URI(uri)
   http = Net::HTTP.new(uri.host, uri.port)
   http.read_timeout = 10
   http.open_timeout = 5
   request = Net::HTTP::Get.new(uri.request_uri)
   response = http.request(request)
-  if follow_redirect && response.is_a?(Net::HTTPRedirection)
-    location = response["Location"]
-    return http_get(location, follow_redirect: true)
-  end
   {
     status: response.code.to_i,
     body: response.body || "",
     content_type: response["Content-Type"] || "",
     final_uri: uri.to_s
   }
-rescue Net::HTTPRedirection => e
-  # Should not reach here since we handle redirects above.
-  { status: 0, body: "", content_type: "", error: e.message }
 end
 
 def sha256_hex(body)
@@ -279,14 +273,22 @@ def check_resource_budgets(budget, repo_root)
     failures << "resource budget: JavaScript artifact missing: site.js"
   end
 
-  # Images: total per-page max
+  # Images: total per-page max — scan for all image files in the site
+  # directory so any added image is caught, not just the known og.png.
   img_budget = budget["resource_budgets"]["images"]["max_bytes_total_per_page"]
-  og_path = File.join(site_dir, "og.png")
-  if File.file?(og_path)
-    img_size = File.size(og_path)
-    if img_size > img_budget
-      failures << "resource budget: images total is #{img_size} bytes, exceeds #{img_budget} byte limit"
-    end
+  img_extensions = %w[.png .jpg .jpeg .gif .svg .webp .avif]
+  img_total = 0
+  img_files = []
+  Find.find(site_dir) do |path|
+    next unless File.file?(path)
+    ext = File.extname(path).downcase
+    next unless img_extensions.include?(ext)
+    img_files << path
+    img_total += File.size(path)
+  end
+  if img_total > img_budget
+    rel_files = img_files.map { |p| p.sub("#{site_dir}/", "") }
+    failures << "resource budget: images total is #{img_total} bytes across #{img_files.length} file(s) (#{rel_files.join(', ')}), exceeds #{img_budget} byte limit"
   end
 
   failures
@@ -321,7 +323,7 @@ def extract_canonical_from_html(html)
   match ? match[1].strip : nil
 end
 
-def validate_lhr_identity(lhr, page, replicate, base_url)
+def validate_lhr_identity(lhr, page, replicate, base_url, repo_root)
   failures = []
   page_id = page["id"]
   expected_url = "#{base_url}#{page["local_route"].sub(/^\//, '')}"
@@ -392,6 +394,30 @@ def validate_lhr_identity(lhr, page, replicate, base_url)
     end
   end
 
+  # 6. Rendered identity from source HTML: verify the effective <title>,
+  #    visible H1, and canonical mapping from the source artifact.  The
+  #    HTTP preflight already confirmed the served body matches this
+  #    artifact's SHA-256, so the source HTML is the authoritative
+  #    rendered-identity anchor.
+  source_path = File.join(repo_root, page["source_artifact"])
+  if File.file?(source_path)
+    html = File.read(source_path)
+    extracted_title = extract_title_from_html(html)
+    if extracted_title != page["expected_title"]
+      failures << "#{page_id} replicate #{replicate}: HTML <title> mismatch (expected #{page["expected_title"]}, got #{extracted_title})"
+    end
+    extracted_h1 = extract_h1_from_html(html)
+    if extracted_h1 != page["expected_h1"]
+      failures << "#{page_id} replicate #{replicate}: HTML <h1> mismatch (expected #{page["expected_h1"]}, got #{extracted_h1})"
+    end
+    extracted_canonical = extract_canonical_from_html(html)
+    if extracted_canonical != page["canonical_url"]
+      failures << "#{page_id} replicate #{replicate}: HTML canonical mismatch (expected #{page["canonical_url"]}, got #{extracted_canonical})"
+    end
+  else
+    failures << "#{page_id} replicate #{replicate}: source artifact not found: #{source_path}"
+  end
+
   failures
 end
 
@@ -420,7 +446,7 @@ def select_median(values)
   sorted[sorted.length / 2]
 end
 
-def validate_and_gate_lhrs(manifest, budget, lhr_dir, base_url)
+def validate_and_gate_lhrs(manifest, budget, lhr_dir, base_url, repo_root)
   failures = []
   used_lhr_files = {}
   # Track content digests per page to detect cross-page reuse only.
@@ -482,7 +508,7 @@ def validate_and_gate_lhrs(manifest, budget, lhr_dir, base_url)
       end
 
       # Validate identity
-      failures.concat(validate_lhr_identity(lhr, page, replicate, base_url))
+      failures.concat(validate_lhr_identity(lhr, page, replicate, base_url, repo_root))
 
       # Extract metrics
       lcp = extract_lhr_metric(lhr, "largest-contentful-paint")
@@ -644,7 +670,7 @@ def pages_perf_budget_main(arguments)
 
       puts "Phase 2: LHR validation and page-identity binding"
       puts "Phase 3: Threshold and resource budget enforcement"
-      lhr_failures = validate_and_gate_lhrs(manifest, budget, lhr_dir, base_url)
+      lhr_failures = validate_and_gate_lhrs(manifest, budget, lhr_dir, base_url, repo_root)
       resource_failures = check_resource_budgets(budget, repo_root)
 
       all_failures = lhr_failures + resource_failures

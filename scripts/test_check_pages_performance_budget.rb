@@ -132,7 +132,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       page = manifest["canonical_pages"].first
       lhr = healthy_lhr(page, base_url)
       lhr["requestedUrl"] = "http://127.0.0.1:9999/pycc/wrong/"
-      failures = validate_lhr_identity(lhr, page, 1, base_url)
+      failures = validate_lhr_identity(lhr, page, 1, base_url, REPO_ROOT)
       refute_empty failures
       assert(failures.any? { |f| f.include?("requestedUrl mismatch") })
     end
@@ -145,7 +145,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       page = manifest["canonical_pages"].first
       lhr = healthy_lhr(page, base_url)
       lhr["mainDocumentUrl"] = "http://127.0.0.1:9999/pycc/wrong/"
-      failures = validate_lhr_identity(lhr, page, 1, base_url)
+      failures = validate_lhr_identity(lhr, page, 1, base_url, REPO_ROOT)
       refute_empty failures
       assert(failures.any? { |f| f.include?("mainDocumentUrl mismatch") })
     end
@@ -157,7 +157,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     page = manifest["canonical_pages"].first
     lhr = healthy_lhr(page, base_url)
     lhr["finalDisplayedUrl"] = "http://127.0.0.1:9999/pycc/wrong/"
-    failures = validate_lhr_identity(lhr, page, 1, base_url)
+    failures = validate_lhr_identity(lhr, page, 1, base_url, REPO_ROOT)
     refute_empty failures
     assert(failures.any? { |f| f.include?("finalDisplayedUrl mismatch") })
   end
@@ -168,7 +168,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     page = manifest["canonical_pages"].first
     lhr = healthy_lhr(page, base_url)
     lhr["runtimeError"] = { "code" => "NO_FCP", "message" => "No FCP" }
-    failures = validate_lhr_identity(lhr, page, 1, base_url)
+    failures = validate_lhr_identity(lhr, page, 1, base_url, REPO_ROOT)
     refute_empty failures
     assert(failures.any? { |f| f.include?("runtimeError present") })
   end
@@ -179,7 +179,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     page = manifest["canonical_pages"].first
     lhr = healthy_lhr(page, base_url)
     lhr.delete("runWarnings")
-    failures = validate_lhr_identity(lhr, page, 1, base_url)
+    failures = validate_lhr_identity(lhr, page, 1, base_url, REPO_ROOT)
     refute_empty failures
     assert(failures.any? { |f| f.include?("runWarnings field missing") })
   end
@@ -190,7 +190,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     page = manifest["canonical_pages"].first
     lhr = healthy_lhr(page, base_url)
     lhr["configSettings"]["formFactor"] = "desktop"
-    failures = validate_lhr_identity(lhr, page, 1, base_url)
+    failures = validate_lhr_identity(lhr, page, 1, base_url, REPO_ROOT)
     refute_empty failures
     assert(failures.any? { |f| f.include?("formFactor") })
   end
@@ -202,7 +202,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     lhr = healthy_lhr(page, base_url)
     lhr["configSettings"]["screenEmulation"]["width"] = 1920
     lhr["configSettings"]["screenEmulation"]["height"] = 1080
-    failures = validate_lhr_identity(lhr, page, 1, base_url)
+    failures = validate_lhr_identity(lhr, page, 1, base_url, REPO_ROOT)
     refute_empty failures
     assert(failures.any? { |f| f.include?("screenEmulation") })
   end
@@ -213,7 +213,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     page = manifest["canonical_pages"].first
     lhr = healthy_lhr(page, base_url)
     lhr["configSettings"]["screenEmulation"]["deviceScaleFactor"] = 2.0
-    failures = validate_lhr_identity(lhr, page, 1, base_url)
+    failures = validate_lhr_identity(lhr, page, 1, base_url, REPO_ROOT)
     refute_empty failures
     assert(failures.any? { |f| f.include?("deviceScaleFactor") })
   end
@@ -224,7 +224,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     page = manifest["canonical_pages"].first
     lhr = healthy_lhr(page, base_url)
     lhr["audits"]["document-title"]["details"]["items"][0]["title"] = "Wrong title"
-    failures = validate_lhr_identity(lhr, page, 1, base_url)
+    failures = validate_lhr_identity(lhr, page, 1, base_url, REPO_ROOT)
     refute_empty failures
     assert(failures.any? { |f| f.include?("document-title mismatch") })
   end
@@ -235,7 +235,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     page = manifest["canonical_pages"].first
     lhr = healthy_lhr(page, base_url)
     lhr["runWarnings"] = ["A non-blocking warning"]
-    failures = validate_lhr_identity(lhr, page, 1, base_url)
+    failures = validate_lhr_identity(lhr, page, 1, base_url, REPO_ROOT)
     # Warnings are preserved and reviewed but do not cause failure.
     assert_empty failures
   end
@@ -261,7 +261,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
         File.write(path, JSON.generate(lhr))
       end
 
-      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url)
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
       refute_empty failures
       assert(failures.any? { |f| f.include?("LCP") && f.include?("exceeds") })
     end
@@ -283,7 +283,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
         File.write(path, JSON.generate(lhr))
       end
 
-      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url)
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
       refute_empty failures
       assert(failures.any? { |f| f.include?("CLS") && f.include?("exceeds") })
     end
@@ -305,7 +305,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
         File.write(path, JSON.generate(lhr))
       end
 
-      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url)
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
       refute_empty failures
       assert(failures.any? { |f| f.include?("TBT") && f.include?("exceeds") })
     end
@@ -327,7 +327,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
         File.write(path, JSON.generate(lhr))
       end
 
-      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url)
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
       refute_empty failures
       assert(failures.any? { |f| f.include?("Performance score") && f.include?("below") })
     end
@@ -351,7 +351,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
         File.write(path, JSON.generate(lhr))
       end
 
-      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url)
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
       # Median 1.1s = 1100ms is under 2000ms budget, so LCP should pass.
       # But the outlier 2.5s is preserved, not retried away.
       refute(failures.any? { |f| f.include?("#{page["id"]}: LCP") })
@@ -369,7 +369,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       page = manifest["canonical_pages"].first
       File.delete(File.join(tmp, page["id"], "replicate-3.json"))
 
-      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url)
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
       refute_empty failures
       assert(failures.any? { |f| f.include?("LHR file missing") })
     end
@@ -389,7 +389,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       lhr["audits"].delete("largest-contentful-paint")
       File.write(path, JSON.generate(lhr))
 
-      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url)
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
       refute_empty failures
       assert(failures.any? { |f| f.include?("LCP metric missing") })
     end
@@ -422,7 +422,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
         end
       end
 
-      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url)
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
       refute_empty failures
       assert(failures.any? { |f| f.include?("LHR file reused") || f.include?("LHR content identical") })
     end
@@ -651,6 +651,29 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     end
   end
 
+  def test_resource_budget_fails_when_unexpected_image_added
+    Dir.mktmpdir do |tmp|
+      budget = load_default_budget
+      site_dir = File.join(tmp, "site")
+      FileUtils.mkdir_p(site_dir)
+
+      real_site = File.join(REPO_ROOT, "site")
+      FileUtils.cp_r(File.join(real_site, "."), site_dir)
+
+      # Add an unexpected .jpg file large enough to push the total
+      # image payload over the budget.  The existing og.png is
+      # ~1.44 MB and the budget is 1.5 MB, so a 200 KB jpg exceeds it.
+      path = File.join(site_dir, "hero.jpg")
+      File.binwrite(path, "x" * 200_000)
+
+      failures = check_resource_budgets(budget, tmp)
+      refute_empty failures
+      assert(failures.any? { |f| f.include?("images") && f.include?("exceeds") })
+      # Verify the unexpected file is named in the failure message
+      assert(failures.any? { |f| f.include?("hero.jpg") })
+    end
+  end
+
   def test_resource_budget_passes_on_healthy_site
     budget = load_default_budget
     failures = check_resource_budgets(budget, REPO_ROOT)
@@ -826,7 +849,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       lhr["runtimeError"] = { "code" => "PAGE_HUNG", "message" => "hung" }
       File.write(path, JSON.generate(lhr))
 
-      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url)
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
       refute_empty failures
       assert(failures.any? { |f| f.include?("runtimeError present") })
     end
@@ -845,7 +868,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       lhr.delete("configSettings")
       File.write(path, JSON.generate(lhr))
 
-      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url)
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
       refute_empty failures
       assert(failures.any? { |f| f.include?("configSettings") })
     end
@@ -865,7 +888,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       page = manifest["canonical_pages"].first
       File.write(File.join(tmp, page["id"], "replicate-3.json"), "{invalid json")
 
-      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url)
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
       refute_empty failures
       assert(failures.any? { |f| f.include?("could not parse LHR JSON") })
     end
