@@ -432,3 +432,122 @@ fn class_method_without_cls_is_a_build_error() {
         "should report C0001 for a class method without cls, got: {stderr}"
     );
 }
+
+/// #436 review fix: a @staticmethod cannot share a name with a regular
+/// method in the same class.
+#[test]
+fn static_method_collides_with_regular_method_is_a_build_error() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_issue436_collide_sm_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "collide_sm.py",
+        "class C:\n    def __init__(self) -> None:\n        return\n    def foo(self, x: int) -> int:\n        return x\n    @staticmethod\n    def foo(x: int) -> int:\n        return x + 1\n",
+    );
+    let out = dir.join("collide_sm");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "pycc build should fail for @staticmethod colliding with a regular method"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("C0001") && stderr.contains("cannot share a name"),
+        "should report C0001 with collision message, got: {stderr}"
+    );
+}
+
+/// #436 review fix: a @classmethod cannot share a name with a regular
+/// method in the same class.
+#[test]
+fn class_method_collides_with_regular_method_is_a_build_error() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_issue436_collide_cm_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "collide_cm.py",
+        "class C:\n    def __init__(self) -> None:\n        return\n    def foo(self, x: int) -> int:\n        return x\n    @classmethod\n    def foo(cls, x: int) -> int:\n        return x + 1\n",
+    );
+    let out = dir.join("collide_cm");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "pycc build should fail for @classmethod colliding with a regular method"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("C0001") && stderr.contains("cannot share a name"),
+        "should report C0001 with collision message, got: {stderr}"
+    );
+}
+
+/// #436 review fix: a @staticmethod cannot share a name with a
+/// @classmethod in the same class.
+#[test]
+fn static_method_collides_with_class_method_is_a_build_error() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_issue436_collide_both_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "collide_both.py",
+        "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def foo(x: int) -> int:\n        return x\n    @classmethod\n    def foo(cls, x: int) -> int:\n        return x + 1\n",
+    );
+    let out = dir.join("collide_both");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "pycc build should fail for @staticmethod colliding with @classmethod"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("C0001") && stderr.contains("cannot share a name"),
+        "should report C0001 with collision message, got: {stderr}"
+    );
+}
+
+/// #436 review fix: a regular method defined after a @staticmethod with
+/// the same name is also rejected (reverse direction collision).
+#[test]
+fn regular_method_collides_with_static_method_is_a_build_error() {
+    let dir = std::env::temp_dir()
+        .join(format!(
+            "pycc_issue436_collide_rev_{}",
+            std::process::id()
+        ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "collide_rev.py",
+        "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def foo(x: int) -> int:\n        return x\n    def foo(self, x: int) -> int:\n        return x + 1\n",
+    );
+    let out = dir.join("collide_rev");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "pycc build should fail for a regular method colliding with @staticmethod"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("C0001") && stderr.contains("cannot share a name"),
+        "should report C0001 with collision message, got: {stderr}"
+    );
+}

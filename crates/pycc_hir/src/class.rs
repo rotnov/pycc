@@ -593,6 +593,34 @@ pub(crate) fn lower_class(
                         method_def.range,
                     ));
                 }
+                // #436: reject a regular method whose name collides with an
+                // existing static or class method. Although the mangled
+                // names differ (`.static`/`.classmethod` suffix), allowing
+                // both would be confusing — the method-call syntax
+                // `obj.name()` would resolve to the regular method while
+                // `ClassName.name()` would resolve to the static/class
+                // method, with no clear indication to the user that these
+                // are different functions.
+                if static_methods.iter().any(|(name, _)| name == &method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@staticmethod` named `{method_name}` is already defined in \
+                             this class -- a regular method cannot share a name with a \
+                             `@staticmethod`"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                if class_methods.iter().any(|(name, _)| name == &method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@classmethod` named `{method_name}` is already defined in \
+                             this class -- a regular method cannot share a name with a \
+                             `@classmethod`"
+                        ),
+                        method_def.range,
+                    ));
+                }
                 // #386: rebind semantics for non-`__init__` method
                 // redefinition. Both definitions share the same mangled
                 // `<ClassName>.<method>` name, so PR #358's function-
@@ -680,8 +708,38 @@ pub(crate) fn lower_class(
             // #436: a `@staticmethod`. Registered in `static_methods`
             // (not `methods`) with a `.static` suffix mangled name. A
             // duplicate static method name is a rebind, matching regular
-            // method rebind semantics (#386).
+            // method rebind semantics (#386). A static method name must
+            // not collide with a regular method, property, or class
+            // method of the same name in the same class.
             MethodKind::StaticMethod => {
+                if methods.iter().any(|(name, _)| name == &method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a method named `{method_name}` is already defined in this class \
+                             -- a `@staticmethod` cannot share a name with a regular method"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                if properties.iter().any(|p| p.name == method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@property` named `{method_name}` is already defined in this \
+                             class -- a `@staticmethod` cannot share a name with a property"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                if class_methods.iter().any(|(name, _)| name == &method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@classmethod` named `{method_name}` is already defined in \
+                             this class -- a `@staticmethod` cannot share a name with a \
+                             `@classmethod`"
+                        ),
+                        method_def.range,
+                    ));
+                }
                 let mangled = format!("{class_name}.{method_name}.static");
                 if let Some(entry) =
                     static_methods.iter_mut().find(|(name, _)| name == &method_name)
@@ -694,8 +752,38 @@ pub(crate) fn lower_class(
             // #436: a `@classmethod`. Registered in `class_methods`
             // (not `methods`) with a `.classmethod` suffix mangled name.
             // A duplicate class method name is a rebind, matching regular
-            // method rebind semantics (#386).
+            // method rebind semantics (#386). A class method name must
+            // not collide with a regular method, property, or static
+            // method of the same name in the same class.
             MethodKind::ClassMethod => {
+                if methods.iter().any(|(name, _)| name == &method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a method named `{method_name}` is already defined in this class \
+                             -- a `@classmethod` cannot share a name with a regular method"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                if properties.iter().any(|p| p.name == method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@property` named `{method_name}` is already defined in this \
+                             class -- a `@classmethod` cannot share a name with a property"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                if static_methods.iter().any(|(name, _)| name == &method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@staticmethod` named `{method_name}` is already defined in \
+                             this class -- a `@classmethod` cannot share a name with a \
+                             `@staticmethod`"
+                        ),
+                        method_def.range,
+                    ));
+                }
                 let mangled = format!("{class_name}.{method_name}.classmethod");
                 if let Some(entry) =
                     class_methods.iter_mut().find(|(name, _)| name == &method_name)
@@ -1852,6 +1940,118 @@ mod tests {
         assert_eq!(diagnostic.code, "C0001");
         assert!(
             diagnostic.message.contains("cannot shadow a property"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_method_shadowing_a_static_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def foo(x: int) -> int:\n        return x\n    def foo(self, x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a `@staticmethod`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_method_shadowing_a_class_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def foo(cls, x: int) -> int:\n        return x\n    def foo(self, x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a `@classmethod`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_static_method_shadowing_a_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    def foo(self, x: int) -> int:\n        return x\n    @staticmethod\n    def foo(x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a regular method"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_static_method_shadowing_a_property_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def foo(self) -> int:\n        return 1\n    @staticmethod\n    def foo(x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a property"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_static_method_shadowing_a_class_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def foo(cls, x: int) -> int:\n        return x\n    @staticmethod\n    def foo(x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a `@classmethod`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_class_method_shadowing_a_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    def foo(self, x: int) -> int:\n        return x\n    @classmethod\n    def foo(cls, x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a regular method"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_class_method_shadowing_a_property_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def foo(self) -> int:\n        return 1\n    @classmethod\n    def foo(cls, x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a property"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_class_method_shadowing_a_static_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def foo(x: int) -> int:\n        return x\n    @classmethod\n    def foo(cls, x: int) -> int:\n        return x + 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot share a name with a `@staticmethod`"),
             "unexpected message: {}",
             diagnostic.message
         );
