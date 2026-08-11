@@ -33,8 +33,8 @@
     },
     {
       "path": "scripts/check_site_accessibility.rb",
-      "source_path": "scripts/check_site_accessibility.rb",
-      "sha256": "3458098e6a26099a1c65c3f72ae0ae8f2647fea234b2c9b8bbe4468ef2d561e4"
+      "source_path": "tests/fixtures/policy-successors/check_site_accessibility-d199-notapplicable.rb",
+      "sha256": "a6c933c50aee32f4f0f42d3ac2c5834dff0d6523e3f1c218943a868f913dbf09"
     },
     {
       "path": "scripts/check_site_aria_conformance.py",
@@ -83,8 +83,8 @@
     },
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
-      "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-d199.rb",
-      "sha256": "465549703931f6c43b28367f039b5d36de6138467ee4b303f6c99f7ec844df27"
+      "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-d199-activation.rb",
+      "sha256": "552edb40c5c6f73132b7dbd370f2e563600e152f4b44b39d46fd7559f098c3d4"
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",
@@ -93,8 +93,8 @@
     },
     {
       "path": "scripts/test_check_site_accessibility.rb",
-      "source_path": "scripts/test_check_site_accessibility.rb",
-      "sha256": "34c0f8102d874dc030a83f42e8485660fe5e94bfa4b900700c93fddcfb6c3e97"
+      "source_path": "tests/fixtures/policy-successors/test_check_site_accessibility-d199-notapplicable.rb",
+      "sha256": "34381417bb8076cb070bd4e214de90ec61c20b7a93363d869ba242c36d196da5"
     },
     {
       "path": "scripts/test_check_source_aware_perf_regression.rb",
@@ -158,8 +158,8 @@
     },
     {
       "path": "tests/fixtures/pages-performance-manifest.json",
-      "source_path": "tests/fixtures/policy-successors/pages-performance-manifest.json",
-      "sha256": "3defd352810db9d6b7f1d12f98e5047f605d8b88dc4d39e08c5e88a6e4b706d0"
+      "source_path": "tests/fixtures/policy-successors/pages-performance-manifest-d199-combined.json",
+      "sha256": "12bc7b2d8ada46cdfe02d8a5a4e8c9e1e133e987f0ada99ca82bca47bfc0ee67"
     },
     {
       "path": "tests/fixtures/workflow-policy-search-ledger.yml",
