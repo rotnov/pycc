@@ -459,6 +459,10 @@ def validate_network_requests(lhr, page, replicate, base_url, budget, manifest)
   allowed_asset_paths.each do |asset|
     allowed_urls << normalize_request_url("#{base_url}#{project_prefix}#{asset}")
   end
+  # Browsers automatically request /favicon.ico from the site root
+  # (not the project path).  This is a browser-default request, not a
+  # site artifact, so allow it without requiring it in the asset list.
+  allowed_urls << normalize_request_url("#{base_url}favicon.ico")
 
   # Parse the base origin for third-party classification.  Compare
   # scheme + host only (not port): the hermetic server binds to a
@@ -657,10 +661,13 @@ def validate_and_gate_lhrs(manifest, budget, lhr_dir, base_url, repo_root)
     page_failures = failures.count { |f| f.start_with?("#{page_id}") }
     next if page_failures.positive? # Don't gate on metrics if we already have structural failures
 
-    # Select median and gate against thresholds
-    median_lcp_ms = select_median(lcp_values) * 1000.0
+    # Select median and gate against thresholds. Lighthouse reports LCP and
+    # TBT numericValue already in milliseconds, so no unit conversion is
+    # needed here (only the Performance score is a 0..1 fraction scaled to
+    # 0..100 and CLS is unitless).
+    median_lcp_ms = select_median(lcp_values)
     median_cls = select_median(cls_values)
-    median_tbt_ms = select_median(tbt_values) * 1000.0
+    median_tbt_ms = select_median(tbt_values)
     median_perf = select_median(perf_scores) * 100.0
 
     lcp_max = budget["metric_thresholds"]["lcp"]["max_ms"]
@@ -669,13 +676,13 @@ def validate_and_gate_lhrs(manifest, budget, lhr_dir, base_url, repo_root)
     perf_min = budget["metric_thresholds"]["performance_score"]["min"]
 
     if median_lcp_ms > lcp_max
-      failures << "#{page_id}: LCP median #{median_lcp_ms.round(1)}ms exceeds #{lcp_max}ms budget (values: #{lcp_values.map { |v| (v * 1000).round(1) }})"
+      failures << "#{page_id}: LCP median #{median_lcp_ms.round(1)}ms exceeds #{lcp_max}ms budget (values: #{lcp_values.map { |v| v.round(1) }})"
     end
     if median_cls > cls_max
       failures << "#{page_id}: CLS median #{median_cls} exceeds #{cls_max} budget (values: #{cls_values})"
     end
     if median_tbt_ms > tbt_max
-      failures << "#{page_id}: TBT median #{median_tbt_ms.round(1)}ms exceeds #{tbt_max}ms budget (values: #{tbt_values.map { |v| (v * 1000).round(1) }})"
+      failures << "#{page_id}: TBT median #{median_tbt_ms.round(1)}ms exceeds #{tbt_max}ms budget (values: #{tbt_values.map { |v| v.round(1) }})"
     end
     if median_perf < perf_min
       failures << "#{page_id}: Performance score median #{median_perf.round(1)} below #{perf_min} floor (values: #{perf_scores.map { |v| (v * 100).round(1) }})"
@@ -700,6 +707,30 @@ def stop_hermetic_server(wait_thr, stdout_stderr)
   stdout_stderr&.close
   Process.kill("TERM", wait_thr.pid) rescue nil
   wait_thr.wait rescue nil
+end
+
+# Derive the base_url for LHR validation from the LHR reports themselves
+# rather than from the preflight server.  The Lighthouse runner starts its
+# own server on a random port, so the URLs recorded in the LHR reports use
+# that runner's port -- not the preflight server's port.  Validating LHR
+# URLs against the preflight server's base_url would always fail with a
+# port mismatch.  This function reads the first LHR JSON file found in the
+# directory and returns the origin (scheme://host:port/) from its
+# requestedUrl field.
+def derive_base_url_from_lhrs(lhr_dir)
+  lhr_file = Dir.glob(File.join(lhr_dir, "**", "*.json")).first
+  raise "no LHR JSON files found in #{lhr_dir}" unless lhr_file
+
+  lhr = JSON.parse(File.read(lhr_file))
+  requested_url = lhr["requestedUrl"]
+  unless requested_url.is_a?(String) && !requested_url.empty?
+    raise "LHR #{lhr_file} has no usable requestedUrl: #{requested_url.inspect}"
+  end
+
+  uri = URI(requested_url)
+  "#{uri.scheme}://#{uri.host}:#{uri.port}/"
+rescue JSON::ParserError => e
+  raise "could not parse LHR #{lhr_file} to derive base_url: #{e.message}"
 end
 
 def pages_perf_budget_main(arguments)
@@ -765,9 +796,16 @@ def pages_perf_budget_main(arguments)
         throw :done, 2
       end
 
+      # Derive the base_url for LHR validation from the LHR reports
+      # themselves.  The Lighthouse runner starts its own server on a
+      # random port, so the URLs in the LHR reports use that runner's
+      # port -- not the preflight server's port.  The preflight
+      # server's base_url is only used for the HTTP identity preflight
+      # (Phase 1); LHR validation (Phase 2/3) uses the derived base_url.
+      lhr_base_url = derive_base_url_from_lhrs(lhr_dir)
       puts "Phase 2: LHR validation and page-identity binding"
       puts "Phase 3: Threshold and resource budget enforcement"
-      lhr_failures = validate_and_gate_lhrs(manifest, budget, lhr_dir, base_url, repo_root)
+      lhr_failures = validate_and_gate_lhrs(manifest, budget, lhr_dir, lhr_base_url, repo_root)
       resource_failures = check_resource_budgets(budget, repo_root)
 
       all_failures = lhr_failures + resource_failures
