@@ -84,6 +84,11 @@
 ## Protect main ([D-024](docs/decisions/D-024-protected-main-and-audited-emergency-bypass.md))
 
 - `main` accepts changes only through pull requests. Branch protection requires the current CI check, resolved conversations, and an up-to-date branch.
+- Before any `git commit`, verify the current branch is not the protected
+  default branch. If it is, create a feature branch from the current
+  commit first and commit there. A local commit on the protected branch
+  bypasses the PR-based review and CI gates that protect it, even when
+  the commit is not pushed.
 - While the repository has only one maintainer, require zero approving reviews so the PR path remains usable; enable an independent approving review when a second human maintainer is available.
 - Administrators and automation credentials do not bypass the rule for ordinary work. The emergency procedure, audit expectations, and recovery steps live in [REPOSITORY_GOVERNANCE.md](docs/REPOSITORY_GOVERNANCE.md).
 - A failed `main-history-audit` run is a release-blocking governance incident. Open an issue, identify the bypass and actor, and restore protection before further merges.
