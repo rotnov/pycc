@@ -315,6 +315,81 @@ The same ledger records Search Console URL Inspection, sitemap-processing, and
 performance-report states independently because none of those signals is a
 substitute for the others.
 
+## Pages performance budget gate
+
+The website is protected by a hermetic Pages performance budget gate
+(`scripts/check_pages_performance_budget.rb`) that runs in CI as the
+`pages-performance` job and is bound to `ci-gate` -- a pull request cannot
+merge unless the gate passes. The gate is a source-artifact check, not a
+field-data observation: it measures the published HTML/CSS/JS/image bytes
+under controlled lab conditions, not real-user field data.
+
+### Lighthouse configuration
+
+The gate runs Lighthouse 12.8.2 (pinned) in mobile emulation mode against
+a hermetic local server (`scripts/serve_pages_fixture.py`) that serves the
+checked-out `site/` directory. No external network requests are made during
+the check -- the server, Lighthouse, and Chrome are all local to the CI
+runner, making the gate fully reproducible.
+
+### Canonical pages and 404 cohort
+
+The gate checks the 5 canonical pages (landing, status, architecture,
+python-aot-compilers, AI-native experiment) plus the 404 error page. Each
+page is measured with 5 Lighthouse replicates, and the median of each
+metric across the replicates is compared against the budget thresholds.
+The 5-replicate median strategy dampens single-run variance inherent to
+lab-based browser performance measurement.
+
+### Performance thresholds
+
+Each page must meet all of the following Lighthouse metric thresholds:
+
+- **LCP** (Largest Contentful Paint): within budget
+- **CLS** (Cumulative Layout Shift): within budget
+- **TBT** (Total Blocking Time): within budget
+- **Performance** score: at or above the threshold
+
+TBT is a lab metric that measures main-thread blocking during page load.
+It is **not** INP (Interaction to Next Paint), which is a field-data metric
+measuring real user interaction latency. The gate enforces TBT as a
+source-artifact proxy for responsiveness, not as a claim about real-user
+interaction latency.
+
+### Resource budgets
+
+In addition to Lighthouse metrics, the gate enforces byte-count budgets
+for each resource type:
+
+- **HTML**: within budget per page
+- **CSS**: within budget per page
+- **JS**: within budget per page
+- **Image**: within budget per page
+
+These budgets are defined in `tests/fixtures/pages-performance-budget.json`
+and the page-to-URL mapping in
+`tests/fixtures/pages-performance-manifest.json`.
+
+### CI binding
+
+The `pages-performance` job runs on every pull request and push. It is
+listed in `ci-gate.needs`, so `ci-gate` fails unless `pages-performance`
+succeeds. The job has `contents: read` permission only, no
+`continue-on-error`, and is not push-only -- the
+`scripts/check_roadmap_evidence.rb` lifecycle validator enforces these
+structural invariants on every pull request.
+
+### Lab vs field distinction
+
+The Pages performance budget gate is a **lab** measurement: it runs
+Lighthouse in a controlled CI environment against the source artifacts.
+It is not **field** data from real users. Lighthouse scores can differ
+from Chrome User Experience Report (CrUX) field data because field data
+reflects real devices, networks, and usage patterns. The gate's purpose is
+to prevent regressions in the source artifacts, not to claim specific
+search ranking outcomes. Page experience is one of many signals search
+engines use; this gate does not directly affect search ranking.
+
 ## Publication
 
 Pull requests that change the website or either validator run the Pages build

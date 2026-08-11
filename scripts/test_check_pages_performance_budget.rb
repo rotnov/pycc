@@ -30,7 +30,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     File.join(REPO_ROOT, "tests/fixtures/pages-performance-budget.json")
 
   # A healthy LHR fixture for a given page and base URL.
-  def healthy_lhr(page, base_url, lcp_s: 1.1, cls: 0.0, tbt_s: 0.0, perf: 0.95)
+  def healthy_lhr(page, base_url, lcp_ms: 1100, cls: 0.0, tbt_ms: 0, perf: 0.95)
     expected_url = "#{base_url}#{page["local_route"].sub(/^\//, '')}"
     project_prefix = "pycc/"
     {
@@ -48,9 +48,9 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
         }
       },
       "audits" => {
-        "largest-contentful-paint" => { "numericValue" => lcp_s },
+        "largest-contentful-paint" => { "numericValue" => lcp_ms },
         "cumulative-layout-shift" => { "numericValue" => cls },
-        "total-blocking-time" => { "numericValue" => tbt_s },
+        "total-blocking-time" => { "numericValue" => tbt_ms },
         "document-title" => {
           "details" => { "items" => [{ "title" => page["expected_title"] }] }
         },
@@ -347,13 +347,13 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       base_url = "http://127.0.0.1:9999/"
       write_healthy_lhrs(tmp, manifest, base_url)
 
-      # Corrupt one page's LCP to exceed the 2.0s budget
+      # Corrupt one page's LCP to exceed the 2000ms budget
       page = manifest["canonical_pages"].first
       page_dir = File.join(tmp, page["id"])
       1.upto(REPLICATE_COUNT) do |replicate|
         path = File.join(page_dir, "replicate-#{replicate}.json")
         lhr = JSON.parse(File.read(path))
-        lhr["audits"]["largest-contentful-paint"]["numericValue"] = 2.5
+        lhr["audits"]["largest-contentful-paint"]["numericValue"] = 2500
         File.write(path, JSON.generate(lhr))
       end
 
@@ -397,7 +397,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       1.upto(REPLICATE_COUNT) do |replicate|
         path = File.join(page_dir, "replicate-#{replicate}.json")
         lhr = JSON.parse(File.read(path))
-        lhr["audits"]["total-blocking-time"]["numericValue"] = 0.3
+        lhr["audits"]["total-blocking-time"]["numericValue"] = 300
         File.write(path, JSON.generate(lhr))
       end
 
@@ -436,10 +436,10 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       base_url = "http://127.0.0.1:9999/"
       write_healthy_lhrs(tmp, manifest, base_url)
 
-      # Set LCP values: [0.9, 1.0, 2.5, 1.1, 1.2] — median is 1.1 (under budget)
+      # Set LCP values: [900, 1000, 2500, 1100, 1200] — median is 1100 (under budget)
       page = manifest["canonical_pages"].first
       page_dir = File.join(tmp, page["id"])
-      lcp_values = [0.9, 1.0, 2.5, 1.1, 1.2]
+      lcp_values = [900, 1000, 2500, 1100, 1200]
       lcp_values.each_with_index do |lcp, i|
         path = File.join(page_dir, "replicate-#{i + 1}.json")
         lhr = JSON.parse(File.read(path))
@@ -448,8 +448,8 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       end
 
       failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
-      # Median 1.1s = 1100ms is under 2000ms budget, so LCP should pass.
-      # But the outlier 2.5s is preserved, not retried away.
+      # Median 1100ms is under 2000ms budget, so LCP should pass.
+      # But the outlier 2500ms is preserved, not retried away.
       refute(failures.any? { |f| f.include?("#{page["id"]}: LCP") })
     end
   end
