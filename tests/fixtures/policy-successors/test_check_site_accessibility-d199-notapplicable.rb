@@ -18,7 +18,7 @@ require "minitest/autorun"
 require "tmpdir"
 require "fileutils"
 require "digest"
-require_relative "check_site_accessibility-d199-notapplicable"
+require_relative "check_site_accessibility"
 
 class TestCheckSiteAccessibility < Minitest::Test
   REPO_ROOT = File.expand_path("..", __dir__)
