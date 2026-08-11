@@ -33,8 +33,8 @@
     },
     {
       "path": "scripts/check_site_accessibility.rb",
-      "source_path": "scripts/check_site_accessibility.rb",
-      "sha256": "3458098e6a26099a1c65c3f72ae0ae8f2647fea234b2c9b8bbe4468ef2d561e4"
+      "source_path": "tests/fixtures/policy-successors/check_site_accessibility-d199-notapplicable.rb",
+      "sha256": "0641138283d95fc2807e7e38f967cd18a17a6596333d7bb1867467d4b80a6896"
     },
     {
       "path": "scripts/check_site_aria_conformance.py",
@@ -93,8 +93,8 @@
     },
     {
       "path": "scripts/test_check_site_accessibility.rb",
-      "source_path": "scripts/test_check_site_accessibility.rb",
-      "sha256": "34c0f8102d874dc030a83f42e8485660fe5e94bfa4b900700c93fddcfb6c3e97"
+      "source_path": "tests/fixtures/policy-successors/test_check_site_accessibility-d199-notapplicable.rb",
+      "sha256": "23033a3188486986fffe083c1a9fc880a3bfbc2dac28173f03a445e23a927b2b"
     },
     {
       "path": "scripts/test_check_source_aware_perf_regression.rb",
