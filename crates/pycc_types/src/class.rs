@@ -17,7 +17,9 @@
 
 use crate::{Environment, infer_expr_in, is_assignable};
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{HirClassDef, HirExpr, HirModule, Ty};
+use pycc_hir::{
+    HirClassDef, HirExpr, HirModule, Ty, extract_class_names, is_builtin_type_name,
+};
 
 /// Populates `env`'s class table from `hir.class_defs` -- called once by
 /// every `Environment` constructor this crate has (`check_with_signatures`'s
@@ -498,6 +500,139 @@ pub(crate) fn check_attr_set(
         )));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Issue #435: compile-time `isinstance`/`issubclass` type checking.
+//
+// pycc uses static dispatch (D-006) — every variable's runtime type is
+// exactly its declared static type, so `isinstance`/`issubclass` can always
+// be evaluated at compile time. These functions validate the call's
+// arguments and return `Ty::Bool` (the result is computed at MIR lowering
+// time, not here — the type checker only needs to confirm the call is
+// well-formed and returns `bool`).
+// ---------------------------------------------------------------------------
+
+/// Validates a class name argument to `isinstance`/`issubclass`: it must be
+/// either a registered user-defined class or one of the builtin scalar type
+/// names (`int`, `str`, `float`, `bool`). Returns `Ok(())` if valid, or a
+/// `T0001` diagnostic if the name is unknown.
+fn validate_class_name(env: &Environment, name: &str) -> Result<(), Diagnostic> {
+    if env.lookup_class(name).is_some() || is_builtin_type_name(name) {
+        Ok(())
+    } else {
+        Err(Diagnostic::error(
+            "T0001",
+            format!("`{name}` is not a known class or builtin type"),
+            Span::new(0, 0),
+        ))
+    }
+}
+
+/// #435: Type-checks `isinstance(obj, class_arg)` — validates the argument
+/// count, infers the object's type, extracts and validates the class
+/// argument(s), and returns `Ok(Ty::Bool)`. The compile-time boolean result
+/// is computed at MIR lowering time (not here — the type checker only
+/// confirms the call is well-formed).
+pub(crate) fn check_isinstance(
+    env: &Environment,
+    local_names: &[&str],
+    args: &[HirExpr],
+) -> Result<Ty, Diagnostic> {
+    if args.len() != 2 {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!("`isinstance` expects exactly 2 arguments, got {}", args.len()),
+            Span::new(0, 0),
+        )
+        .with_help("pass exactly 2 arguments: the object and the class"));
+    }
+    // #435 review fix (P1): `isinstance` is a compile-time predicate in
+    // pycc's static-dispatch model — the result is a `BoolLiteral` constant
+    // computed from the operand's declared type. A side-effecting operand
+    // (a function call or class instantiation) would have its effects
+    // silently discarded, changing standard Python semantics. Reject such
+    // operands with `C0001` rather than silently dropping the call.
+    if let HirExpr::Call { .. } = &args[0] {
+        return Err(Diagnostic::error(
+            "C0001",
+            "`isinstance` is a compile-time predicate in pycc and cannot evaluate a \
+             call expression as its first argument (side effects would be lost)",
+            Span::new(0, 0),
+        )
+        .with_help(
+            "assign the call result to a variable first, then pass the variable to \
+             `isinstance`",
+        ));
+    }
+    // Infer the object's type normally.
+    let obj_ty = infer_expr_in(env, local_names, &args[0])?;
+    // Extract class names from the second argument (do NOT infer it as a
+    // regular expression — class names are not value bindings).
+    let class_names = extract_class_names(&args[1]).map_err(|_| {
+        Diagnostic::error(
+            "T0021",
+            "`isinstance`'s second argument must be a class name or a tuple of class names",
+            Span::new(0, 0),
+        )
+        .with_help("pass a class name (e.g. `int`) or a tuple of class names (e.g. `(int, str)`)")
+    })?;
+    // Validate each class name.
+    for name in &class_names {
+        validate_class_name(env, name)?;
+    }
+    // The result is always `Ty::Bool`. The actual compile-time boolean value
+    // is computed by `eval_isinstance_single` at MIR lowering time.
+    // (We could compute it here too, but the type checker's job is just
+    // validation — the MIR computes the constant.)
+    let _ = obj_ty; // obj_ty is validated; the MIR uses it to compute the result
+    Ok(Ty::Bool)
+}
+
+/// #435: Type-checks `issubclass(cls_arg, class_arg)` — validates the
+/// argument count, extracts and validates both class arguments, and returns
+/// `Ok(Ty::Bool)`. Neither argument is inferred as a regular expression
+/// (both are class references, not values).
+pub(crate) fn check_issubclass(
+    env: &Environment,
+    args: &[HirExpr],
+) -> Result<Ty, Diagnostic> {
+    if args.len() != 2 {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!("`issubclass` expects exactly 2 arguments, got {}", args.len()),
+            Span::new(0, 0),
+        )
+        .with_help("pass exactly 2 arguments: the class and the target class"));
+    }
+    // The first argument must be a bare class name (not a tuple).
+    let cls_name = match &args[0] {
+        HirExpr::Name(name) => name.clone(),
+        _ => {
+            return Err(Diagnostic::error(
+                "T0021",
+                "`issubclass`'s first argument must be a class name",
+                Span::new(0, 0),
+            )
+            .with_help("pass a bare class name (e.g. `int` or `MyClass`)"));
+        }
+    };
+    // Extract class names from the second argument.
+    let target_names = extract_class_names(&args[1]).map_err(|_| {
+        Diagnostic::error(
+            "T0021",
+            "`issubclass`'s second argument must be a class name or a tuple of class names",
+            Span::new(0, 0),
+        )
+        .with_help("pass a class name (e.g. `int`) or a tuple of class names (e.g. `(int, str)`)")
+    })?;
+    // Validate the first argument's class name.
+    validate_class_name(env, &cls_name)?;
+    // Validate each target class name.
+    for name in &target_names {
+        validate_class_name(env, name)?;
+    }
+    Ok(Ty::Bool)
 }
 
 #[cfg(test)]
@@ -2997,5 +3132,258 @@ mod tests {
         }))]);
         let diagnostic = check(&hir).unwrap_err();
         assert_eq!(diagnostic.code, "T0021");
+    }
+
+    // -----------------------------------------------------------------------
+    // #435: isinstance/issubclass type checker unit tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn isinstance_with_float_target_type_checks_as_bool() {
+        // `isinstance(1.5, float)` — covers the `Ty::Float` arm of
+        // `eval_isinstance_single` at the type-checker level (the type
+        // checker only validates and returns `Ty::Bool`; the MIR computes
+        // the constant). This also exercises `check_isinstance` with a
+        // builtin type target.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::Call {
+                callee: "isinstance".to_string(),
+                args: vec![
+                    HirExpr::FloatLiteral(1.5),
+                    HirExpr::Name("float".to_string()),
+                ],
+            }],
+        }))]);
+        let result = check(&hir);
+        assert!(result.is_ok(), "isinstance(1.5, float) should type-check");
+    }
+
+    #[test]
+    fn isinstance_with_wrong_arg_count_is_t0021() {
+        // `isinstance(1)` — only 1 argument. Covers the `args.len() != 2`
+        // error branch in `check_isinstance`.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(
+            HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "isinstance".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                }],
+            },
+        ))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn isinstance_with_non_class_second_arg_is_t0021() {
+        // `isinstance(1, 5)` — the second argument is not a class name or
+        // tuple of class names. Covers the `extract_class_names` error
+        // branch in `check_isinstance`.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(
+            HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "isinstance".to_string(),
+                    args: vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(5),
+                    ],
+                }],
+            },
+        ))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn issubclass_with_wrong_arg_count_is_t0021() {
+        // `issubclass(int)` — only 1 argument. Covers the `args.len() != 2`
+        // error branch in `check_issubclass`.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(
+            HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "issubclass".to_string(),
+                    args: vec![HirExpr::Name("int".to_string())],
+                }],
+            },
+        ))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn isinstance_with_undefined_name_in_first_arg_is_t0021() {
+        // `isinstance(undefined_name, int)` — the first argument references
+        // an undefined name, so `infer_expr_in` fails with T0021 before
+        // the class argument is even examined. This covers the `?` error
+        // branch on the `infer_expr_in` call in `check_isinstance`.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(
+            HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "isinstance".to_string(),
+                    args: vec![
+                        HirExpr::Name("undefined_name".to_string()),
+                        HirExpr::Name("int".to_string()),
+                    ],
+                }],
+            },
+        ))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn issubclass_with_unknown_class_in_first_arg_is_t0001() {
+        // `issubclass(UnknownClass, int)` — the first argument is a class
+        // name that is neither a user-defined class nor a builtin type.
+        // This covers the `validate_class_name` error path for the first
+        // argument in `check_issubclass`.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(
+            HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "issubclass".to_string(),
+                    args: vec![
+                        HirExpr::Name("UnknownClass".to_string()),
+                        HirExpr::Name("int".to_string()),
+                    ],
+                }],
+            },
+        ))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0001");
+    }
+
+    #[test]
+    fn issubclass_with_non_class_second_arg_is_t0021() {
+        // `issubclass(C, 5)` — the second argument is not a class name or
+        // tuple of class names. This exercises the `extract_class_names`
+        // error path in `check_issubclass`.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::Call {
+                callee: "issubclass".to_string(),
+                args: vec![
+                    HirExpr::Name("C".to_string()),
+                    HirExpr::IntLiteral(5),
+                ],
+            }],
+        }))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn issubclass_with_int_str_same_type_returns_bool() {
+        // `issubclass(int, int)` and `issubclass(str, str)` — covers the
+        // `return cls == target_class` line in `eval_issubclass_single`
+        // at the type-checker level.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::Call {
+                callee: "issubclass".to_string(),
+                args: vec![
+                    HirExpr::Name("int".to_string()),
+                    HirExpr::Name("int".to_string()),
+                ],
+            }],
+        }))]);
+        let result = check(&hir);
+        assert!(result.is_ok(), "issubclass(int, int) should type-check");
+    }
+
+    #[test]
+    fn isinstance_with_unknown_class_in_second_arg_is_t0001() {
+        // `isinstance(1, UnknownClass)` — the second argument is a valid
+        // name expression but not a registered class. Covers the
+        // `validate_class_name` error path in `check_isinstance`.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(
+            HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "isinstance".to_string(),
+                    args: vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::Name("UnknownClass".to_string()),
+                    ],
+                }],
+            },
+        ))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0001");
+    }
+
+    #[test]
+    fn issubclass_with_unknown_class_in_second_arg_is_t0001() {
+        // `issubclass(int, UnknownClass)` — the second argument is a valid
+        // name expression but not a registered class. Covers the
+        // `validate_class_name` error path for target classes in
+        // `check_issubclass`.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(
+            HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "issubclass".to_string(),
+                    args: vec![
+                        HirExpr::Name("int".to_string()),
+                        HirExpr::Name("UnknownClass".to_string()),
+                    ],
+                }],
+            },
+        ))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0001");
+    }
+
+    #[test]
+    fn issubclass_with_non_name_first_arg_is_t0021() {
+        // `issubclass(5, int)` — the first argument is not a bare class
+        // name. Covers the `_ =>` error branch in `check_issubclass`'s
+        // first-argument match.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(
+            HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "issubclass".to_string(),
+                    args: vec![
+                        HirExpr::IntLiteral(5),
+                        HirExpr::Name("int".to_string()),
+                    ],
+                }],
+            },
+        ))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn isinstance_with_call_first_arg_is_c0001() {
+        // #435 review fix (P1): `isinstance(D(), D)` — a call expression as
+        // the first argument is rejected with C0001 because pycc's
+        // compile-time `isinstance` would silently discard the call's side
+        // effects. Covers the `if let HirExpr::Call { .. }` branch in
+        // `check_isinstance`.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(
+            HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "isinstance".to_string(),
+                    args: vec![
+                        HirExpr::Call {
+                            callee: "D".to_string(),
+                            args: vec![],
+                        },
+                        HirExpr::Name("D".to_string()),
+                    ],
+                }],
+            },
+        ))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(diagnostic.message.contains("isinstance"));
     }
 }

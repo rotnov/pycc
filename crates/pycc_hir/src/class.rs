@@ -817,6 +817,43 @@ pub(crate) fn lower_class(
             ));
         }
     }
+    // #435 (Part B, __init_subclass__): PEP 487's `__init_subclass__` hook
+    // is recognized as a valid method name. In CPython, `__init_subclass__`
+    // is called automatically when a class is subclassed. In pycc's
+    // compile-time model, class creation happens at HIR-lowering time, so
+    // the hook has no runtime effect — it is accepted as a regular method
+    // (it can be called explicitly by user code). However, if a base class
+    // in the MRO defines `__init_subclass__`, the current class's own
+    // `__init_subclass__` (if any) must be statically evaluable: only a
+    // `pass` body (or a body consisting solely of a docstring expression
+    // statement) is accepted, since any side-effecting statement would need
+    // to run at class-creation time, which pycc does not support.
+    if methods.iter().any(|(name, _)| name == "__init_subclass__") {
+        // Check if any base class in the MRO (excluding the current class)
+        // defines `__init_subclass__`.
+        let base_has_init_subclass = mro.iter().skip(1).any(|mro_class| {
+            defined_classes
+                .iter()
+                .find(|(name, _)| name == mro_class)
+                .map(|(_, cd)| cd.methods.iter().any(|(mn, _)| mn == "__init_subclass__"))
+                .unwrap_or(false)
+        });
+        if base_has_init_subclass {
+            // The current class's `__init_subclass__` must be statically
+            // evaluable. Find the last `__init_subclass__` def in the body
+            // (rebind semantics: the last definition is the one in the
+            // methods table) and validate its body.
+            for stmt in def.body.iter().rev() {
+                match stmt {
+                    Stmt::FunctionDef(fd) if fd.name.as_str() == "__init_subclass__" => {
+                        validate_init_subclass_body(&fd.body, fd.range)?;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
     Ok((
         HirClassDef {
             name: class_name,
@@ -1106,6 +1143,50 @@ fn collect_init_attrs(
         attrs.push((attr_name, ty));
     }
     Ok(attrs)
+}
+
+/// #435 (Part B): Validates that an `__init_subclass__` method body is
+/// statically evaluable — only a `pass` body, an empty body, or a body
+/// consisting solely of a docstring (a bare string-literal expression
+/// statement) is accepted. Any other statement (a `print` call, an
+/// assignment, a return, etc.) is rejected with `C0001`, since pycc's
+/// compile-time class-creation model has no mechanism to run side-effecting
+/// statements at class-definition time.
+fn validate_init_subclass_body<R>(
+    body: &[Stmt],
+    range: R,
+) -> Result<(), Diagnostic>
+where
+    std::ops::Range<u32>: From<R>,
+{
+    for stmt in body {
+        match stmt {
+            Stmt::Pass(_) => continue,
+            // A docstring: a bare string-literal expression statement. This
+            // is the only expression statement accepted in
+            // `__init_subclass__` — it has no side effects.
+            Stmt::Expr(expr_stmt) => {
+                if matches!(*expr_stmt.value, Expr::StringLiteral(_)) {
+                    continue;
+                }
+                return Err(unsupported(
+                    "`__init_subclass__` must be statically evaluable (only `pass` \
+                     or a docstring is supported in this version) — \
+                     side-effecting statements are not supported yet",
+                    range,
+                ));
+            }
+            _ => {
+                return Err(unsupported(
+                    "`__init_subclass__` must be statically evaluable (only `pass` \
+                     or a docstring is supported in this version) — \
+                     side-effecting statements are not supported yet",
+                    range,
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Resolves an instance attribute's slot `Ty` from its first-assignment RHS
@@ -2815,5 +2896,114 @@ mod tests {
             "unexpected message: {}",
             diagnostic.message
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // #435 (Part B): __init_subclass__ validation unit tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn init_subclass_with_pass_body_in_subclass_of_base_with_init_subclass_is_accepted() {
+        // A base class B defines `__init_subclass__` with `pass`, and a
+        // subclass D also defines `__init_subclass__` with `pass`. This
+        // exercises the `validate_init_subclass_body` path with a `pass`
+        // body (the `Stmt::Pass` arm).
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        pass\n",
+        );
+        let hir = lower_checked(&module);
+        assert!(hir.is_ok(), "pass body should be accepted");
+    }
+
+    #[test]
+    fn init_subclass_with_docstring_in_subclass_of_base_with_init_subclass_is_accepted() {
+        // A subclass D defines `__init_subclass__` with a docstring body.
+        // This exercises the `Stmt::Expr` + `StringLiteral` arm.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        \"docstring\"\n",
+        );
+        let hir = lower_checked(&module);
+        assert!(hir.is_ok(), "docstring body should be accepted");
+    }
+
+    #[test]
+    fn init_subclass_with_non_string_expr_in_subclass_of_base_with_init_subclass_is_rejected() {
+        // A subclass D defines `__init_subclass__` with a non-string
+        // expression statement (e.g. `42`). This exercises the
+        // `Stmt::Expr` + non-`StringLiteral` error path.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        42\n",
+        );
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("__init_subclass__"));
+    }
+
+    #[test]
+    fn init_subclass_with_return_in_subclass_of_base_with_init_subclass_is_rejected() {
+        // A subclass D defines `__init_subclass__` with a `return`
+        // statement. This exercises the `_ =>` catch-all error path.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        return\n",
+        );
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("__init_subclass__"));
+    }
+
+    #[test]
+    fn init_subclass_with_empty_body_in_subclass_of_base_is_accepted() {
+        // A subclass D defines `__init_subclass__` with an empty body
+        // (just a docstring at the parser level, but the body after
+        // docstring extraction is empty). This exercises the `Ok(())`
+        // return from `validate_init_subclass_body`.
+        // Actually, Python requires at least one statement in a body, so
+        // we use `pass` which is filtered by `lower_body` but still
+        // present in the AST for `validate_init_subclass_body`.
+        // The `pass` body exercises both `Stmt::Pass` continue and the
+        // final `Ok(())`.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        pass\n",
+        );
+        let hir = lower_checked(&module);
+        assert!(hir.is_ok(), "pass body should be accepted");
+    }
+
+    #[test]
+    fn init_subclass_without_base_having_init_subclass_is_not_validated() {
+    // A class defines `__init_subclass__` but no base class has it.
+    // The validation should NOT run (no base_has_init_subclass), so even
+    // a non-trivial body is accepted (it's just a regular method).
+    let module = crate::pycc_parser_test_helper::parse(
+            "class D:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        print(1)\n",
+        );
+        let hir = lower_checked(&module);
+        assert!(hir.is_ok(), "non-trivial body without base init_subclass should be accepted");
+    }
+
+    #[test]
+    fn subclass_without_own_init_subclass_inherits_from_base_without_validation() {
+        // A base class B defines `__init_subclass__`, and a subclass D
+        // does NOT define its own `__init_subclass__`. The outer `if` on
+        // line 831 is false (D's methods don't include `__init_subclass__`),
+        // so the validation block is skipped entirely.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n",
+        );
+        let hir = lower_checked(&module);
+        assert!(hir.is_ok(), "subclass without own __init_subclass should be accepted");
+    }
+
+    #[test]
+    fn init_subclass_before_init_in_body_validates_correctly() {
+        // A subclass D defines `__init_subclass__` BEFORE `__init__` in
+        // the body. The reverse iteration checks `__init__` first (not
+        // `__init_subclass__`), hitting the `_ => {}` branch, then finds
+        // `__init_subclass__` and validates it.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init_subclass__(self) -> None:\n        pass\n    def __init__(self) -> None:\n        super().__init__()\n",
+        );
+        let hir = lower_checked(&module);
+        assert!(hir.is_ok(), "init_subclass before init should be accepted");
     }
 }

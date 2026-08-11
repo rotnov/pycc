@@ -404,6 +404,111 @@ pub enum CompIter {
     Name(String),
 }
 
+// ---------------------------------------------------------------------------
+// Issue #435: compile-time `isinstance`/`issubclass` evaluation helpers.
+//
+// pycc uses static dispatch (D-006) — `is_assignable` does not allow
+// `Ty::Instance("D")` to be assigned to `Ty::Instance("B")`, so every
+// variable's runtime type is exactly its declared static type. Therefore
+// `isinstance` and `issubclass` can always be evaluated at compile time,
+// emitting constant boolean values. No runtime type tags or RTTI are needed.
+//
+// These helpers are shared by `pycc_types` (type checker) and `pycc_mir`
+// (MIR lowering) so both compute identical results from the same inputs.
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if `name` is one of the builtin scalar type names pycc
+/// recognizes as a valid class argument to `isinstance`/`issubclass`:
+/// `int`, `str`, `float`, `bool`.
+pub fn is_builtin_type_name(name: &str) -> bool {
+    matches!(name, "int" | "str" | "float" | "bool")
+}
+
+/// Computes the compile-time result of `isinstance(obj, target_class)`.
+///
+/// `obj_ty` is the inferred static type of the object expression.
+/// `target_class` is the class name from the second argument (already
+/// validated as either a user-defined class or a builtin type name).
+/// `obj_mro` is the MRO of the object's class (if `obj_ty` is
+/// `Ty::Instance`); for non-instance types it is unused.
+///
+/// Builtin subtype rules: `bool` is a subtype of `int` (matching CPython's
+/// own type hierarchy where `bool` inherits from `int`).
+pub fn eval_isinstance_single(obj_ty: &Ty, target_class: &str, obj_mro: &[String]) -> bool {
+    match obj_ty {
+        Ty::Instance(_) => obj_mro.iter().any(|c| c == target_class),
+        Ty::Int => target_class == "int",
+        Ty::Bool => target_class == "bool" || target_class == "int",
+        Ty::Str => target_class == "str",
+        Ty::Float => target_class == "float",
+        _ => false,
+    }
+}
+
+/// Computes the compile-time result of `issubclass(cls, target_class)`.
+///
+/// `cls` is the source class name from the first argument (already
+/// validated as either a user-defined class or a builtin type name).
+/// `target_class` is the class name from the second argument.
+/// `cls_mro` is the MRO of the source class (if it is a user-defined
+/// class); for builtin types it is unused.
+///
+/// Builtin subtype rules: `issubclass(bool, int)` is `true` (matching
+/// CPython's own type hierarchy). Same-builtin comparisons (`issubclass(int,
+/// int)`) are `true`.
+pub fn eval_issubclass_single(cls: &str, target_class: &str, cls_mro: &[String]) -> bool {
+    if is_builtin_type_name(cls) {
+        if cls == "bool" && target_class == "int" {
+            return true;
+        }
+        return cls == target_class;
+    }
+    // User class: check if target is in the source class's MRO.
+    // The MRO includes the class itself, so `issubclass(D, D)` is true.
+    if is_builtin_type_name(target_class) {
+        // A user class is not a subclass of a builtin type (pycc's MRO
+        // does not include `object` or any builtin).
+        return false;
+    }
+    cls_mro.iter().any(|c| c == target_class)
+}
+
+/// Extracts class names from an `isinstance`/`issubclass` class argument
+/// expression. The argument must be either:
+/// - `HirExpr::Name(name)` — a single class name
+/// - `HirExpr::TupleLiteral(elements)` — a tuple of class names, where each
+///   element is `HirExpr::Name(name)`
+///
+/// Returns `Ok(names)` if the expression matches one of these shapes,
+/// or `Err(ExtractClassNamesError)` if it doesn't (the caller produces the
+/// appropriate diagnostic). An empty tuple is rejected (at least one class
+/// is required).
+pub fn extract_class_names(arg: &HirExpr) -> Result<Vec<String>, ExtractClassNamesError> {
+    match arg {
+        HirExpr::Name(name) => Ok(vec![name.clone()]),
+        HirExpr::TupleLiteral(elements) => {
+            if elements.is_empty() {
+                return Err(ExtractClassNamesError);
+            }
+            let mut names = Vec::with_capacity(elements.len());
+            for elem in elements {
+                match elem {
+                    HirExpr::Name(name) => names.push(name.clone()),
+                    _ => return Err(ExtractClassNamesError),
+                }
+            }
+            Ok(names)
+        }
+        _ => Err(ExtractClassNamesError),
+    }
+}
+
+/// Error returned by [`extract_class_names`] when the argument is not a
+/// valid class name or tuple of class names. The caller is responsible for
+/// producing the appropriate diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtractClassNamesError;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirStmt {
     ExprStmt(HirExpr),
@@ -1248,6 +1353,27 @@ fn annotation_to_ty(
                     )
                 }),
         },
+        // Issue #435 (Part D, __class_getitem__): `ClassName[type_arg]` as a
+        // type annotation (PEP 560). A class that defines `__class_getitem__`
+        // allows subscript syntax in annotations. In pycc's static type
+        // system, this resolves to `Ty::Instance(ClassName)` — the class
+        // itself, ignoring the type argument for now (consistent with how
+        // generic classes are handled by PEP 695's `GenericClassInstantiate`
+        // for actual instantiation, not annotation). The base must be a bare
+        // name (a class name); any other subscript shape is rejected.
+        Expr::Subscript(sub) => {
+            let Expr::Name(base_name) = sub.value.as_ref() else {
+                return Err(unsupported(
+                    "a subscripted type annotation's base must be a bare class name",
+                    pycc_ast::expr_range(&sub.value),
+                ));
+            };
+            // The class name resolves the same way a bare-name annotation
+            // does — through the alias table or as a known class name. We
+            // reuse `annotation_to_ty` on the bare name so self-referential
+            // class names, aliases, and builtin types all resolve identically.
+            annotation_to_ty(&Expr::Name(base_name.clone()), type_param, class_name, aliases)
+        }
         other => Err(unsupported(
             format!("only a bare name type annotation is supported so far: {other:?}"),
             pycc_ast::expr_range(other),
@@ -1348,6 +1474,8 @@ mod tests {
         assert_eq!(Ty::Str.name(), "str");
         assert_eq!(Ty::None.name(), "None");
         assert_eq!(Ty::Infer.name(), "<inferred>");
+        assert_eq!(Ty::Param(Box::new("T".to_string())).name(), "T");
+        assert_eq!(Ty::Instance(Box::new("MyClass".to_string())).name(), "MyClass");
     }
 
     #[test]
@@ -1437,10 +1565,13 @@ mod tests {
 
     #[test]
     fn unsupported_statement_and_expression_return_spanned_capability_diagnostics() {
+        // #435: `pass` is now supported, so use `with` — a valid Python
+        // statement that is still unsupported — to exercise the C0001
+        // capability error path for statements.
         assert_capability_error(
-            "if True:\n    pass\n",
+            "with open(\"x\") as f:\n    pass\n",
             "statement kind not supported yet",
-            Span::new(13, 17),
+            Span::new(0, 29),
         );
         assert_capability_error(
             "x = lambda: 1\n",
@@ -1462,11 +1593,15 @@ mod tests {
         // requires it) takes over now, since `lower_expr` still has no
         // `Expr::Lambda` arm.
         let cases = [
-            ("function body", "def _f():\n    pass\n"),
+            // #435: `pass` is now supported (filtered as a no-op in
+            // `lower_body`), so use `with open("x") as f: pass` — a valid
+            // Python statement that is still unsupported — to exercise the
+            // C0001 capability error path in statement positions.
+            ("function body", "def _f():\n    with open(\"x\") as f:\n        pass\n"),
             ("if test", "if (lambda: 1):\n    print(1)\n"),
-            ("if else body", "if True:\n    print(1)\nelse:\n    pass\n"),
+            ("if else body", "if True:\n    print(1)\nelse:\n    with open(\"x\") as f:\n        pass\n"),
             ("while test", "while (lambda: 1):\n    print(1)\n"),
-            ("while body", "while True:\n    pass\n"),
+            ("while body", "while True:\n    with open(\"x\") as f:\n        pass\n"),
             (
                 "one-argument range stop",
                 "for i in range((lambda: 1)):\n    print(i)\n",
@@ -1491,7 +1626,7 @@ mod tests {
                 "three-argument range step",
                 "for i in range(0, 1, (lambda: 1)):\n    print(i)\n",
             ),
-            ("for body", "for i in range(1):\n    pass\n"),
+            ("for body", "for i in range(1):\n    with open(\"x\") as f:\n        pass\n"),
             ("return value", "def _f():\n    return (lambda: 1)\n"),
             (
                 "elif test",
@@ -1499,11 +1634,11 @@ mod tests {
             ),
             (
                 "elif body",
-                "if True:\n    print(1)\nelif True:\n    pass\n",
+                "if True:\n    print(1)\nelif True:\n    with open(\"x\") as f:\n        pass\n",
             ),
             (
                 "nested else body",
-                "if True:\n    print(1)\nelif True:\n    print(2)\nelse:\n    pass\n",
+                "if True:\n    print(1)\nelif True:\n    print(2)\nelse:\n    with open(\"x\") as f:\n        pass\n",
             ),
             ("binary left operand", "x = (lambda: 1) + 1\n"),
             ("binary right operand", "x = 1 + (lambda: 1)\n"),
@@ -1809,14 +1944,13 @@ mod tests {
     }
 
     #[test]
-    fn a_pass_statement_is_unsupported() {
-        // `if` itself is supported (Task 8); `pass` inside it is not -- no
-        // v0.1 grammar construct needs it (empty bodies aren't reachable
-        // through anything pycc lowers) and it exercises the same catch-all
-        // that `unsupported_statement_and_expression_return_spanned_capability_diagnostics`
-        // does for expressions (a tuple literal filled that role there
-        // until this task; a lambda does now, D-116).
-        assert_capability_error_message("if True:\n    pass\n", "statement kind not supported yet");
+    fn a_with_statement_is_unsupported() {
+        // `with` is valid Python but not implemented — it exercises the
+        // same catch-all that
+        // `unsupported_statement_and_expression_return_spanned_capability_diagnostics`
+        // does for expressions. (#435: `pass` was previously used here but
+        // is now supported as a no-op for PEP 487 hook bodies.)
+        assert_capability_error_message("with open(\"x\") as f:\n    pass\n", "statement kind not supported yet");
     }
 
     #[test]
@@ -2957,15 +3091,27 @@ mod tests {
     }
 
     #[test]
-    fn subscripted_type_annotation_is_still_rejected_on_purpose() {
-        // D-105: v0.2 adds no annotation-syntax support for list[T]. This test
-        // locks in that `x: list[int] = []` keeps failing today's existing
-        // "only a bare name type annotation" capability error, so a future
-        // change to `annotation_to_ty` doesn't silently start accepting this
-        // without its own deliberate decision.
+    fn subscripted_type_annotation_with_unknown_base_is_rejected() {
+        // #435 (Part D): subscripted type annotations (`ClassName[type_arg]`)
+        // are now supported for known class names (PEP 560
+        // `__class_getitem__`). `list[int]` is still rejected because `list`
+        // itself is not a recognized type annotation in pycc (only
+        // int/float/bool/str and user-defined class names are), not because
+        // subscript syntax is universally rejected.
         assert_capability_error_message(
             "x: list[int] = []\n",
-            "only a bare name type annotation is supported so far",
+            "type annotation `list` is not supported yet",
+        );
+    }
+
+    #[test]
+    fn subscripted_type_annotation_with_non_name_base_is_rejected() {
+        // #435 (Part D): a subscripted annotation whose base is not a bare
+        // name (e.g. `a.b[int]`) is rejected — only a bare class name is
+        // supported as the base of a subscripted type annotation.
+        assert_capability_error_message(
+            "x: a.b[int] = 1\n",
+            "a subscripted type annotation's base must be a bare class name",
         );
     }
 
@@ -4995,6 +5141,93 @@ mod tests {
             "should not use the bare-super() message, got: {}",
             err.message
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // #435: compile-time isinstance/issubclass helper unit tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn eval_isinstance_single_covers_all_builtin_types() {
+        // `float` target against `float` object — covers the `Ty::Float` arm.
+        assert!(eval_isinstance_single(&Ty::Float, "float", &[]));
+        assert!(!eval_isinstance_single(&Ty::Float, "int", &[]));
+        // `None` object against any target — covers the `_ => false` arm.
+        assert!(!eval_isinstance_single(&Ty::None, "int", &[]));
+        // `Ty::Int` arm — true for "int", false for others.
+        assert!(eval_isinstance_single(&Ty::Int, "int", &[]));
+        assert!(!eval_isinstance_single(&Ty::Int, "str", &[]));
+        // `Ty::Bool` arm — true for "bool" and "int" (subtype).
+        assert!(eval_isinstance_single(&Ty::Bool, "bool", &[]));
+        assert!(eval_isinstance_single(&Ty::Bool, "int", &[]));
+        assert!(!eval_isinstance_single(&Ty::Bool, "str", &[]));
+        // `Ty::Str` arm — true for "str", false for others.
+        assert!(eval_isinstance_single(&Ty::Str, "str", &[]));
+        assert!(!eval_isinstance_single(&Ty::Str, "int", &[]));
+        // `Ty::Instance` arm — checks MRO membership.
+        let mro = vec!["D".to_string(), "B".to_string(), "A".to_string()];
+        assert!(eval_isinstance_single(&Ty::Instance(Box::new("D".to_string())), "D", &mro));
+        assert!(eval_isinstance_single(&Ty::Instance(Box::new("D".to_string())), "B", &mro));
+        assert!(eval_isinstance_single(&Ty::Instance(Box::new("D".to_string())), "A", &mro));
+        assert!(!eval_isinstance_single(&Ty::Instance(Box::new("D".to_string())), "C", &mro));
+    }
+
+    #[test]
+    fn eval_issubclass_single_covers_builtin_same_type_and_user_vs_builtin() {
+        // Same builtin type — covers the `return cls == target_class` line.
+        assert!(eval_issubclass_single("int", "int", &[]));
+        assert!(eval_issubclass_single("str", "str", &[]));
+        assert!(!eval_issubclass_single("int", "str", &[]));
+        // User class vs builtin target — covers the `return false` line.
+        assert!(!eval_issubclass_single("D", "int", &["D".to_string()]));
+        // `bool` is a subtype of `int` — covers the `bool`/`int` special case.
+        assert!(eval_issubclass_single("bool", "int", &[]));
+        assert!(eval_issubclass_single("bool", "bool", &[]));
+        assert!(!eval_issubclass_single("bool", "str", &[]));
+        // User class MRO check — covers the `cls_mro.iter().any` line.
+        let mro = vec!["D".to_string(), "B".to_string(), "A".to_string()];
+        assert!(eval_issubclass_single("D", "D", &mro));
+        assert!(eval_issubclass_single("D", "B", &mro));
+        assert!(eval_issubclass_single("D", "A", &mro));
+        assert!(!eval_issubclass_single("D", "C", &mro));
+    }
+
+    #[test]
+    fn extract_class_names_rejects_empty_tuple_and_non_name_elements() {
+        // Empty tuple — covers the `elements.is_empty()` error path.
+        let result = extract_class_names(&HirExpr::TupleLiteral(vec![]));
+        assert!(result.is_err());
+
+        // Tuple with a non-name element — covers the `_ => return Err` path.
+        let result = extract_class_names(&HirExpr::TupleLiteral(vec![
+            HirExpr::IntLiteral(42),
+        ]));
+        assert!(result.is_err());
+
+        // Non-name, non-tuple expression — covers the top-level `_ => Err` path.
+        let result = extract_class_names(&HirExpr::IntLiteral(99));
+        assert!(result.is_err());
+
+        // Valid single name.
+        let result = extract_class_names(&HirExpr::Name("D".to_string()));
+        assert_eq!(result.unwrap(), vec!["D".to_string()]);
+
+        // Valid tuple of names.
+        let result = extract_class_names(&HirExpr::TupleLiteral(vec![
+            HirExpr::Name("B".to_string()),
+            HirExpr::Name("C".to_string()),
+        ]));
+        assert_eq!(result.unwrap(), vec!["B".to_string(), "C".to_string()]);
+    }
+
+    #[test]
+    fn is_builtin_type_name_recognizes_four_scalar_types() {
+        assert!(is_builtin_type_name("int"));
+        assert!(is_builtin_type_name("str"));
+        assert!(is_builtin_type_name("float"));
+        assert!(is_builtin_type_name("bool"));
+        assert!(!is_builtin_type_name("D"));
+        assert!(!is_builtin_type_name("object"));
     }
 }
 
