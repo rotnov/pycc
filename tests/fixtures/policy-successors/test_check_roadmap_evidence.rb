@@ -1669,6 +1669,59 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes error.message, "reviewed source-aware comparison job"
   end
 
+  # Issue #229 (Phase 2): validate_source_aware_perf_gate_lifecycle must
+  # accept either the pre-D229 six-element ci-gate shape
+  # (PAIRED_PERF_CI_GATE_JOB, without pages-performance) or the D229
+  # seven-element ci-gate shape (D229_PAIRED_PERF_CI_GATE_JOB, with
+  # pages-performance in needs and in the fail condition).  PR 5 adds
+  # pages-performance to ci-gate.needs, so the validator must recognize
+  # that new shape the moment it activates -- without retiring the old
+  # shape before that activation lands.
+
+  def test_d229_paired_perf_ci_gate_job_has_pages_performance_in_needs
+    assert_includes D229_PAIRED_PERF_CI_GATE_JOB.fetch("needs"),
+                    "pages-performance"
+  end
+
+  def test_d229_paired_perf_ci_gate_job_has_pages_performance_in_fail_condition
+    fail_step =
+      D229_PAIRED_PERF_CI_GATE_JOB.fetch("steps").find do |step|
+        step["name"] == "Fail unless every required job succeeded"
+      end
+    assert_includes fail_step.fetch("if"),
+                    "needs.pages-performance.result != 'success'"
+  end
+
+  def test_d229_paired_perf_ci_gate_job_has_seven_needs_entries
+    assert_equal 7, D229_PAIRED_PERF_CI_GATE_JOB.fetch("needs").length
+  end
+
+  def test_source_aware_perf_gate_lifecycle_accepts_the_pre_d229_ci_gate_shape
+    workflow = d114_raised_threshold_frontend_perf_workflow
+    assert validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+  end
+
+  def test_source_aware_perf_gate_lifecycle_accepts_the_d229_ci_gate_shape
+    workflow = d114_raised_threshold_frontend_perf_workflow do |jobs|
+      jobs["ci-gate"] =
+        Marshal.load(Marshal.dump(D229_PAIRED_PERF_CI_GATE_JOB))
+    end
+    assert validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+  end
+
+  def test_source_aware_perf_gate_lifecycle_rejects_an_unreviewed_ci_gate_shape
+    workflow = d114_raised_threshold_frontend_perf_workflow do |jobs|
+      jobs["ci-gate"] =
+        Marshal.load(Marshal.dump(D229_PAIRED_PERF_CI_GATE_JOB))
+      jobs["ci-gate"]["runs-on"] = "macos-14" # neither accepted ci-gate shape
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed fail-closed aggregate job"
+  end
+
   def test_d84_throughput_floor_workflow_remains_a_retired_audit_fixture
     assert_equal(
       D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
@@ -3020,5 +3073,68 @@ class RoadmapEvidenceCliTest < Minitest::Test
   def test_d229_pages_performance_digest_is_staged
     assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
                     D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256
+  end
+
+  # Issue #229 (Phase 2): validate_pages_performance_lifecycle gates the
+  # pages-performance validation on the live ci.yml digest.  Between PR 3
+  # (checker activation) and PR 5 (ci.yml activation), the live ci.yml has
+  # a pre-D229 digest -- one of the other accepted digests in
+  # REVIEWED_PERF_CI_WORKFLOW_SHA256S.  The validator must SKIP the
+  # pages-performance lifecycle validation for those pre-D229 shapes
+  # (the job does not exist yet) and ENFORCE it only when the live ci.yml
+  # matches D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256.  For an unknown
+  # digest (not in the accepted array), the validator enforces fail-closed
+  # -- validate_evidence's own digest check rejects unknown digests before
+  # this function runs in production, so that default only matters for
+  # direct unit tests with synthetic workflows.
+
+  def test_pages_performance_lifecycle_skips_validation_for_a_pre_d229_digest
+    # The live D114 ci.yml fixture has a pre-D229 digest (no
+    # pages-performance job).  The validator must skip and return true
+    # rather than rejecting the missing job.
+    workflow_text = D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE.read
+    digest = Digest::SHA256.hexdigest(workflow_text)
+    assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S, digest
+    refute_equal D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256, digest
+    assert validate_pages_performance_lifecycle(workflow_text, "ci.yml")
+  end
+
+  def test_pages_performance_lifecycle_skips_validation_for_d100_digest
+    # The D100 fixture is another accepted pre-D229 digest.
+    workflow_text = D100_COMPOSED_WORKFLOW_FIXTURE.read
+    digest = Digest::SHA256.hexdigest(workflow_text)
+    assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S, digest
+    refute_equal D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256, digest
+    assert validate_pages_performance_lifecycle(workflow_text, "ci.yml")
+  end
+
+  def test_pages_performance_lifecycle_enforces_for_an_unknown_digest
+    # A synthetic workflow with no pages-performance job and a digest that
+    # matches no reviewed workflow.  The validator must enforce fail-closed
+    # (reject the missing job) rather than skipping.
+    workflow = pages_perf_workflow_yaml(
+      pages_job: nil,
+      ci_gate: ci_gate_with_pages_perf_yaml
+    )
+    digest = Digest::SHA256.hexdigest(workflow)
+    refute_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S, digest
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_pages_performance_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "pages-performance job is required"
+  end
+
+  def test_pages_performance_lifecycle_enforces_for_an_unknown_digest_with_valid_job
+    # A synthetic workflow WITH a valid pages-performance job but a digest
+    # that matches no reviewed workflow.  The validator must still enforce
+    # (and pass) the structural validation -- the digest gate only skips
+    # for known pre-D229 digests, not for all unknown digests.
+    workflow = pages_perf_workflow_yaml(
+      pages_job: pages_perf_job_yaml,
+      ci_gate: ci_gate_with_pages_perf_yaml
+    )
+    digest = Digest::SHA256.hexdigest(workflow)
+    refute_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S, digest
+    assert validate_pages_performance_lifecycle(workflow, "ci.yml")
   end
 end

@@ -942,6 +942,51 @@ PAIRED_PERF_CI_GATE_JOB = {
     }
   ]
 }.freeze
+# Issue #229 (Phase 3): the D229 ci-gate shape adds pages-performance to the
+# needs list and to the fail step's failure condition, so the aggregate gate
+# stays fail-closed when the pages-performance job is required.  This is the
+# seven-element successor to PAIRED_PERF_CI_GATE_JOB's six-element shape --
+# validate_source_aware_perf_gate_lifecycle accepts either shape so the
+# checker recognizes the D229 ci.yml the moment PR 5 activates it, without
+# retiring the pre-D229 shape before that activation lands.
+D229_PAIRED_PERF_CI_GATE_NEEDS = [
+  "build-test-coverage",
+  "native-build-test",
+  "cross-compile-build",
+  "cross-compile-verify",
+  "frontend-perf-measure",
+  "frontend-perf-gate",
+  "pages-performance"
+].freeze
+D229_PAIRED_PERF_CI_GATE_FAILURE_CONDITION = [
+  "needs.build-test-coverage.result != 'success'",
+  "needs.native-build-test.result != 'success'",
+  "needs.cross-compile-build.result != 'success'",
+  "needs.cross-compile-verify.result != 'success'",
+  "needs.frontend-perf-measure.result != 'success'",
+  "needs.frontend-perf-gate.result != 'success'",
+  "needs.pages-performance.result != 'success'"
+].join(" || ").freeze
+D229_PAIRED_PERF_CI_GATE_JOB = {
+  "needs" => D229_PAIRED_PERF_CI_GATE_NEEDS,
+  "if" => "always()",
+  "runs-on" => "ubuntu-latest",
+  "permissions" => {},
+  "steps" => [
+    {
+      "name" => "Fail unless every required job succeeded",
+      "if" => D229_PAIRED_PERF_CI_GATE_FAILURE_CONDITION,
+      "run" => PAIRED_PERF_CI_GATE_RUN
+    }
+  ]
+}.freeze
+# Both the pre-D229 six-element ci-gate shape and the D229 seven-element
+# shape (with pages-performance) are accepted by
+# validate_source_aware_perf_gate_lifecycle.
+ACCEPTED_PERF_CI_GATE_JOBS = [
+  PAIRED_PERF_CI_GATE_JOB,
+  D229_PAIRED_PERF_CI_GATE_JOB
+].freeze
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
 COVERAGE_COMMAND =
@@ -1321,7 +1366,7 @@ def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
           "#{source}: source-aware performance jobs must be required by ci-gate"
   end
   ci_gate = yaml_value(ci_gate_node, "#{source} ci-gate job")
-  unless ci_gate == PAIRED_PERF_CI_GATE_JOB
+  unless ACCEPTED_PERF_CI_GATE_JOBS.include?(ci_gate)
     raise RoadmapEvidenceError,
           "#{source}: ci-gate must match the reviewed fail-closed aggregate job"
   end
@@ -1340,6 +1385,32 @@ end
 # this validator only enforces the structural invariants that keep it
 # fail-closed and unprivileged.
 def validate_pages_performance_lifecycle(workflow_text, source)
+  # Issue #229: the pages-performance job is added to ci.yml in Phase 3
+  # (PR 5).  Between PR 3 (checker activation, which copies this staged
+  # content to the live checker) and PR 5 (ci.yml activation, which adds
+  # the pages-performance job), the live ci.yml still has its pre-D229
+  # shape -- one of the other accepted digests in
+  # REVIEWED_PERF_CI_WORKFLOW_SHA256S.  Enforcing the pages-performance
+  # lifecycle validation against that pre-D229 shape would fail (the job
+  # does not exist yet), so gate the full validation on the D229 digest:
+  # enforce only when the live ci.yml matches
+  # D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256.  For any other accepted
+  # digest (the pre-D229 transition shape), skip the pages-performance
+  # lifecycle validation -- the workflow is in its pre-D229 shape, which
+  # is still accepted.  For an unknown digest (not in the accepted array),
+  # enforce fail-closed; validate_evidence's own digest check already
+  # rejects unknown digests before this function runs in production, so
+  # this default only matters for direct unit tests with synthetic
+  # workflows that do not match any reviewed digest.
+  digest = Digest::SHA256.hexdigest(workflow_text)
+  if digest != D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256 &&
+     REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
+    # Pre-D229 transition shape: the live ci.yml is still one of the
+    # accepted pre-pages-performance digests.  Skip the pages-performance
+    # lifecycle validation until PR 5 activates the D229 ci.yml shape.
+    return true
+  end
+
   stream = Psych.parse_stream(workflow_text, filename: source)
   root = yaml_mapping(stream.children.first.root, source)
   jobs = yaml_mapping(root["jobs"], "#{source} jobs")
