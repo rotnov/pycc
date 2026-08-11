@@ -4,7 +4,7 @@
     {
       "path": ".github/workflows/ci.yml",
       "source_path": "tests/fixtures/policy-successors/ci.yml",
-      "sha256": "6221bdb983b309bc0b1b44828a37ecdc9a91769812dfff86df693e10ea8d9297"
+      "sha256": "42a87e33aebc82ab316b0969a793fd5d4746c4d0bf324201c142e543b69f916f"
     },
     {
       "path": "scripts/check_ci_permissions.rb",
@@ -159,7 +159,7 @@
     {
       "path": "tests/fixtures/pages-performance-manifest.json",
       "source_path": "tests/fixtures/policy-successors/pages-performance-manifest-d199-combined.json",
-      "sha256": "12bc7b2d8ada46cdfe02d8a5a4e8c9e1e133e987f0ada99ca82bca47bfc0ee67"
+      "sha256": "a174821aaaa34e15ad79b841e4e47f8dc2fb6c79d109cc05b13eaa257abaac6b"
     },
     {
       "path": "tests/fixtures/workflow-policy-search-ledger.yml",
