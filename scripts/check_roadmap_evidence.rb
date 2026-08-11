@@ -212,11 +212,22 @@ D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256 =
 # this staging round.
 D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256 =
   "42a87e33aebc82ab316b0969a793fd5d4746c4d0bf324201c142e543b69f916f"
+# Issue #199: the D229-shaped ci.yml plus a new pages-accessibility job
+# (hermetic Lighthouse 12.8.2 accessibility gate + ARIA conformance +
+# reduced-motion evaluator) and its ci-gate.needs / fail-step wiring.
+# Coexists with D100/D112/D114/D229 until a later round retires them,
+# mirroring this array's own coexist-then-retire precedent.  Not yet
+# active: this array entry only authorizes the shape for a future ci.yml
+# activation (Merge 2 of #199) -- the live ci.yml is untouched by this
+# staging round.
+D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256 =
+  "b96af8b0aa4d3d7ce2509174f071a168dc53f2aac31372b75c0bdda20fc390b8"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
   D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
-  D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256
+  D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
+  D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -980,12 +991,54 @@ D229_PAIRED_PERF_CI_GATE_JOB = {
     }
   ]
 }.freeze
-# Both the pre-D229 six-element ci-gate shape and the D229 seven-element
-# shape (with pages-performance) are accepted by
+# Issue #199: the D229 seven-element ci-gate shape plus a new
+# pages-accessibility job (hermetic Lighthouse 12.8.2 accessibility
+# gate + ARIA conformance + reduced-motion evaluator).  This
+# eight-element shape coexists with the pre-D229 and D229 shapes
+# until a later round retires them.  Not yet active: this entry
+# only authorizes the shape for a future ci.yml activation (Merge 2
+# of #199) -- the live ci.yml is untouched by this staging round.
+D199_PAGES_ACCESSIBILITY_CI_GATE_NEEDS = [
+  "build-test-coverage",
+  "native-build-test",
+  "cross-compile-build",
+  "cross-compile-verify",
+  "frontend-perf-measure",
+  "frontend-perf-gate",
+  "pages-performance",
+  "pages-accessibility"
+].freeze
+D199_PAGES_ACCESSIBILITY_CI_GATE_FAILURE_CONDITION = [
+  "needs.build-test-coverage.result != 'success'",
+  "needs.native-build-test.result != 'success'",
+  "needs.cross-compile-build.result != 'success'",
+  "needs.cross-compile-verify.result != 'success'",
+  "needs.frontend-perf-measure.result != 'success'",
+  "needs.frontend-perf-gate.result != 'success'",
+  "needs.pages-performance.result != 'success'",
+  "needs.pages-accessibility.result != 'success'"
+].join(" || ").freeze
+D199_PAGES_ACCESSIBILITY_CI_GATE_JOB = {
+  "needs" => D199_PAGES_ACCESSIBILITY_CI_GATE_NEEDS,
+  "if" => "always()",
+  "runs-on" => "ubuntu-latest",
+  "permissions" => {},
+  "steps" => [
+    {
+      "name" => "Fail unless every required job succeeded",
+      "if" => D199_PAGES_ACCESSIBILITY_CI_GATE_FAILURE_CONDITION,
+      "run" => PAIRED_PERF_CI_GATE_RUN
+    }
+  ]
+}.freeze
+# The pre-D229 six-element ci-gate shape, the D229 seven-element
+# shape (with pages-performance), and the D199 eight-element shape
+# (with pages-accessibility) are all accepted by
 # validate_source_aware_perf_gate_lifecycle.
 ACCEPTED_PERF_CI_GATE_JOBS = [
   PAIRED_PERF_CI_GATE_JOB,
-  D229_PAIRED_PERF_CI_GATE_JOB
+  D229_PAIRED_PERF_CI_GATE_JOB,
+  D199_PAGES_ACCESSIBILITY_CI_GATE_JOB
 ].freeze
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
@@ -1507,6 +1560,16 @@ def validate_pages_performance_lifecycle(workflow_text, source)
   unless if_text.include?("needs.pages-performance.result != 'success'")
     raise RoadmapEvidenceError,
           "#{source}: ci-gate fail step must check needs.pages-performance.result"
+  end
+
+  # Issue #199: when the D199 eight-element shape is active (ci-gate
+  # needs includes pages-accessibility), the fail step must also check
+  # needs.pages-accessibility.result != 'success'.
+  if needs.include?("pages-accessibility")
+    unless if_text.include?("needs.pages-accessibility.result != 'success'")
+      raise RoadmapEvidenceError,
+            "#{source}: ci-gate fail step must check needs.pages-accessibility.result"
+    end
   end
 
   true

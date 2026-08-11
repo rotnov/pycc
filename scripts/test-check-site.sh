@@ -599,6 +599,88 @@ fi
 cp "$repo_root/site/3361fe03d0f44ab7cdbb1a3ce1461821.txt" \
   "$fixture_root/site/3361fe03d0f44ab7cdbb1a3ce1461821.txt"
 
+# <link rel="sitemap"> is not a registered IANA link relation and is not a
+# documented sitemap-discovery mechanism. The validator must reject any page
+# that re-introduces it, so a standards/Google/Bing-backed submission claim
+# cannot silently return as an HTML link relation.
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+canonical = '    <link rel="canonical" href="https://rotnov.github.io/pycc/">'
+assert canonical in content
+path.write_text(
+    content.replace(
+        canonical,
+        canonical + '\n    <link rel="sitemap" type="application/xml" '
+        'href="sitemap.xml">',
+        1,
+    )
+)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted the unregistered rel=sitemap link relation on the landing page" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+python3 - "$fixture_root/site/architecture/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+canonical = '    <link rel="canonical" href="https://rotnov.github.io/pycc/architecture/">'
+assert canonical in content
+path.write_text(
+    content.replace(
+        canonical,
+        canonical + '\n    <link rel="sitemap" type="application/xml" '
+        'href="../sitemap.xml">',
+        1,
+    )
+)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted the unregistered rel=sitemap link relation on a sub-page" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/architecture/index.html" \
+  "$fixture_root/site/architecture/index.html"
+
+# Case-insensitive rel=sitemap must also be rejected (HTML rel values are
+# case-insensitive per the HTML specification).
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+canonical = '    <link rel="canonical" href="https://rotnov.github.io/pycc/">'
+assert canonical in content
+path.write_text(
+    content.replace(
+        canonical,
+        canonical + '\n    <link rel="Sitemap" type="application/xml" '
+        'href="sitemap.xml">',
+        1,
+    )
+)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a case-variant rel=Sitemap link relation" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
 for content_page in \
   status/index.html \
   architecture/index.html \
@@ -1567,5 +1649,318 @@ if ! SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null
   echo "Validator rejected a complete sitemap solely because URL order changed" >&2
   exit 1
 fi
+
+# --- Favicon mutations ---
+
+rm "$fixture_root/site/favicon.svg"
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a site with a missing favicon.svg asset" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/favicon.svg" "$fixture_root/site/favicon.svg"
+
+python3 - "$fixture_root/site/favicon.svg" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text("<svg><rect></svg>")
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a malformed favicon.svg" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/favicon.svg" "$fixture_root/site/favicon.svg"
+
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+favicon = '<link rel="icon" type="image/svg+xml" href="favicon.svg">'
+assert favicon in content
+path.write_text(content.replace(favicon, "", 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a landing page without a favicon link" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+python3 - "$fixture_root/site/architecture/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+favicon = '<link rel="icon" type="image/svg+xml" href="../favicon.svg">'
+assert favicon in content
+path.write_text(content.replace(favicon, "", 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an evidence page without a favicon link" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/architecture/index.html" \
+  "$fixture_root/site/architecture/index.html"
+
+python3 - "$fixture_root/site/architecture/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+path.write_text(
+    content.replace(
+        'href="../favicon.svg"',
+        'href="favicon.svg"',
+        1,
+    )
+)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an evidence page with the wrong favicon path" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/architecture/index.html" \
+  "$fixture_root/site/architecture/index.html"
+
+# Wrong type attribute on favicon link
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+path.write_text(
+    content.replace(
+        'type="image/svg+xml"',
+        'type="image/png"',
+        1,
+    )
+)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a favicon link with the wrong type attribute" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# Extra attributes on favicon link
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+path.write_text(
+    content.replace(
+        '<link rel="icon" type="image/svg+xml" href="favicon.svg">',
+        '<link rel="icon" type="image/svg+xml" href="favicon.svg" sizes="any">',
+        1,
+    )
+)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a favicon link with extra attributes" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# Oversized favicon.svg
+python3 - "$fixture_root/site/favicon.svg" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+# Valid SVG root but exceeding the 1KB limit
+path.write_text(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">'
+    + '<text>' + 'x' * 2048 + '</text>'
+    + '</svg>'
+)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an oversized favicon.svg" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/favicon.svg" "$fixture_root/site/favicon.svg"
+
+# Valid XML but wrong root tag
+python3 - "$fixture_root/site/favicon.svg" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text('<html xmlns="http://www.w3.org/1999/xhtml"></html>')
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a favicon.svg with a non-SVG root element" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/favicon.svg" "$fixture_root/site/favicon.svg"
+
+# Duplicate favicon link on landing page
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+favicon = '<link rel="icon" type="image/svg+xml" href="favicon.svg">'
+assert favicon in content
+path.write_text(content.replace(favicon, favicon + "\n    " + favicon, 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a landing page with a duplicate favicon link" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# Wrong favicon path on landing page (using nested path)
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+path.write_text(
+    content.replace(
+        'href="favicon.svg"',
+        'href="../favicon.svg"',
+        1,
+    )
+)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a landing page with a nested favicon path" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# --- 404 page mutations ---
+
+cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
+
+printf '' > "$fixture_root/site/404.html"
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an empty 404.html" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
+python3 - "$fixture_root/site/404.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+required = '<meta name="robots" content="noindex">'
+assert required in content
+path.write_text(content.replace(required, "", 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a 404 page without the noindex robots directive" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
+python3 - "$fixture_root/site/404.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+required = "<h1 id=\"not-found-title\">Page not found</h1>"
+assert required in content
+path.write_text(content.replace(required, "<h1 id=\"not-found-title\">Welcome</h1>", 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a 404 page without a not-found heading" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
+python3 - "$fixture_root/site/404.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+assert content.count('href="/pycc/"') >= 2
+path.write_text(content.replace('href="/pycc/"', 'href="/pycc/status/"'))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a 404 page without a home link" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
+python3 - "$fixture_root/site/404.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+required = '<a href="/pycc/status/">Status</a>'
+assert required in content
+path.write_text(content.replace(required, "", 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a 404 page without an evidence page link" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
+python3 - "$fixture_root/site/404.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+required = 'href="/pycc/styles.css"'
+assert required in content
+path.write_text(content.replace(required, 'href="styles.css"', 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a 404 page with a relative asset URL" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
+python3 - "$fixture_root/site/404.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+required = '<a href="/pycc/architecture/">Architecture</a>'
+assert required in content
+path.write_text(content.replace(required, '<a href="architecture/">Architecture</a>', 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a 404 page with a relative navigation link" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
 
 echo "Website validator self-tests passed."

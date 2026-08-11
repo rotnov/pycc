@@ -75,8 +75,7 @@ Every canonical HTML page must provide:
 
 - a unique title, canonical URL, and plain-language meta description;
 - Open Graph and X card metadata;
-- page-level crawl permission with unlimited text, image, and video previews;
-- a sitemap reference.
+- page-level crawl permission with unlimited text, image, and video previews.
 
 The unsupported HTML `meta name="keywords"` field is forbidden on every
 canonical page. Google and Bing do not use it as a ranking booster, and a
@@ -113,7 +112,14 @@ The sitemap lists the landing page plus `/status/`, `/architecture/`,
 `/python-aot-compilers/`, and `/ai-native/`. Every sitemap URL entry contains
 exactly one `lastmod`, equal to that page's JSON-LD `WebPage.dateModified`, and
 both values advance when main content, structured data, or important links
-materially change. The social preview is `site/og.png`.
+materially change. The social preview is `site/og.png`. Each canonical page
+carries an SVG favicon (`site/favicon.svg`, `>_` brand mark) linked with
+`rel="icon"` and `type="image/svg+xml"`; the validator checks the SVG root
+element, size limit, and link attributes. The 404 error page
+(`site/404.html`) is a useful recovery page with the site's visual identity,
+a visible "Page not found" heading, and absolute `/pycc/`-prefixed links to
+the home page and three evidence pages; the validator checks its structure,
+noindex directive, recovery links, and absolute paths.
 
 The comparison page (`/python-aot-compilers/`) carries a structured
 claim/source model in `site/python-aot-compilers/claims.json`. This JSON file
@@ -321,15 +327,19 @@ that proposal. Both files link to the evidence pages, including the
 source-backed compiler comparison, and must preserve the landing page's status
 and AI-authorship disclosures.
 
-The sitemap carries the standards-based discovery signal. After a successful
-production deployment, `scripts/notify-indexnow.sh` parses that validated
-sitemap and submits its complete canonical URL set in one IndexNow batch POST
-so Bing and participating engines can discover material updates quickly. It
-rejects empty, duplicate, out-of-scope, query-bearing, or fragment-bearing URLs
-before making a request. Its public verification key is hosted below `/pycc/`,
-which limits that key to URLs in the project path. The notification is
-best-effort, has finite connection and request timeouts, and does not block a
-successful Pages deployment.
+The XML sitemap (`site/sitemap.xml`, referenced from `site/robots.txt`) is the
+standards-based discovery surface. The HTML `<link rel="sitemap">` link
+relation is not used: it is not a registered IANA link relation and is not a
+documented sitemap-discovery mechanism, so emitting it would create false
+confidence about discovery without any standards, Google, or Bing backing.
+After a successful production deployment, `scripts/notify-indexnow.sh` parses
+that validated sitemap and submits its complete canonical URL set in one
+IndexNow batch POST so Bing and participating engines can discover material
+updates quickly. It rejects empty, duplicate, out-of-scope, query-bearing, or
+fragment-bearing URLs before making a request. Its public verification key is
+hosted below `/pycc/`, which limits that key to URLs in the project path. The
+notification is best-effort, has finite connection and request timeouts, and
+does not block a successful Pages deployment.
 
 `scripts/test-notify-indexnow.py` points the production notifier at a local HTTP
 fixture and proves that the real non-dry-run path sends the expected JSON
@@ -442,10 +452,11 @@ engines use; this gate does not directly affect search ranking.
 
 The website is protected by a hermetic site accessibility gate that
 runs in CI as the `pages-accessibility` job and is bound to `ci-gate` --
-a pull request cannot merge unless the gate passes. The gate is being
-activated through a D-103 two-merge sequence: this section documents
-the design; the gate's CI binding and source fix are activated in a
-follow-up merge. The gate uses three evaluators, each targeting a
+a pull request cannot merge unless the gate passes. The gate was
+activated through a D-103 two-merge sequence: the first merge staged
+the CI workflow, checker, and tests as inert policy successors; the
+second merge activated them alongside the accessibility source fix.
+The gate uses three evaluators, each targeting a
 distinct accessibility surface:
 
 ### Lighthouse accessibility

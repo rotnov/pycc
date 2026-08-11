@@ -12,6 +12,7 @@ for required_file in \
   styles.css \
   site.js \
   og.png \
+  favicon.svg \
   robots.txt \
   sitemap.xml \
   llms.txt \
@@ -27,6 +28,19 @@ do
 done
 
 test -s "$site_dir/og.png"
+
+python3 - "$site_dir/favicon.svg" <<'PY'
+from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
+
+favicon_path = Path(sys.argv[1])
+if favicon_path.stat().st_size >= 1024:
+    raise SystemExit("favicon.svg must be under 1KB")
+root = ET.parse(favicon_path).getroot()
+if root.tag != "{http://www.w3.org/2000/svg}svg":
+    raise SystemExit("favicon.svg root element must be <svg>")
+PY
 
 python3 - "$site_dir/styles.css" <<'PY'
 from pathlib import Path
@@ -362,16 +376,32 @@ canonical_link = require_one(
 if canonical_link.get("href") != canonical:
     raise SystemExit("Canonical link does not match the canonical origin")
 
-sitemap_link = require_one(
+# `<link rel="sitemap">` is not a registered IANA link relation and is not a
+# documented sitemap-discovery mechanism. The XML sitemap referenced from
+# robots.txt is the standards-based discovery surface; the HTML link relation
+# must not be re-introduced as a discovery channel.
+if any(
+    "sitemap" in link.get("rel", "").lower().split() for link in parser.links
+):
+    raise SystemExit(
+        "Pages must not use the unregistered rel=sitemap link relation; "
+        "the XML sitemap referenced from robots.txt is the discovery surface"
+    )
+
+favicon_link = require_one(
     [
         link
         for link in parser.links
-        if "sitemap" in link.get("rel", "").split()
+        if "icon" in link.get("rel", "").lower().split()
     ],
-    "sitemap link",
+    "favicon link",
 )
-if sitemap_link.get("href") != "sitemap.xml":
-    raise SystemExit("Sitemap link must reference sitemap.xml")
+if favicon_link.get("href") != "favicon.svg":
+    raise SystemExit("Favicon link must reference favicon.svg relatively")
+if favicon_link.get("type") != "image/svg+xml":
+    raise SystemExit("Favicon link must use the image/svg+xml type")
+if set(favicon_link) != {"href", "rel", "type"}:
+    raise SystemExit("favicon.svg must use only href, rel, and type attributes")
 
 stylesheet_link = require_one(
     [
@@ -854,15 +884,30 @@ for path_value in sys.argv[1:]:
     if canonical.get("href") != spec["canonical"]:
         raise SystemExit(f"{slug} canonical link does not match its URL")
 
-    sitemap = require_one(
+    if any(
+        "sitemap" in link.get("rel", "").lower().split() for link in parser.links
+    ):
+        raise SystemExit(
+            f"{slug} must not use the unregistered rel=sitemap link "
+            "relation; the XML sitemap referenced from robots.txt is the "
+            "discovery surface"
+        )
+
+    favicon = require_one(
         [
             link for link in parser.links
-            if "sitemap" in link.get("rel", "").split()
+            if "icon" in link.get("rel", "").lower().split()
         ],
-        f"{slug} sitemap link",
+        f"{slug} favicon link",
     )
-    if sitemap.get("href") != "../sitemap.xml":
-        raise SystemExit(f"{slug} sitemap link must be ../sitemap.xml")
+    if favicon.get("href") != "../favicon.svg":
+        raise SystemExit(f"{slug} favicon link must be ../favicon.svg")
+    if favicon.get("type") != "image/svg+xml":
+        raise SystemExit(f"{slug} favicon link must use the image/svg+xml type")
+    if set(favicon) != {"href", "rel", "type"}:
+        raise SystemExit(
+            f"{slug} favicon link must use only href, rel, and type attributes"
+        )
 
     stylesheet = require_one(
         [
@@ -1463,6 +1508,223 @@ if payload != expected:
     raise SystemExit(
         "IndexNow notifier payload does not match the canonical sitemap set"
     )
+PY
+
+python3 - "$site_dir/404.html" <<'PY'
+from html.parser import HTMLParser
+from pathlib import Path
+import sys
+
+
+class NotFoundParser(HTMLParser):
+    void_tags = {
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+    }
+
+    def __init__(self):
+        super().__init__()
+        self.lang = None
+        self.in_title = False
+        self.titles = []
+        self.current_title = []
+        self.metas = []
+        self.links = []
+        self.stylesheets = []
+        self.in_body = False
+        self.hidden_body_depth = 0
+        self.body_element_stack = []
+        self.visible_headings = []
+        self.current_heading = []
+        self.in_heading = False
+        self.anchor_hrefs = []
+        self.in_anchor = False
+        self.charset_seen = False
+        self.viewport_seen = False
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "html":
+            self.lang = attributes.get("lang", "")
+        if tag == "meta" and attributes.get("charset", "").lower() == "utf-8":
+            self.charset_seen = True
+        if (
+            tag == "meta"
+            and attributes.get("name", "").lower() == "viewport"
+        ):
+            self.viewport_seen = True
+        if tag == "meta":
+            self.metas.append(attributes)
+        if tag == "link":
+            self.links.append(attributes)
+            if "stylesheet" in attributes.get("rel", "").lower().split():
+                self.stylesheets.append(attributes.get("href", ""))
+        if tag == "title":
+            self.in_title = True
+            self.current_title = []
+        if tag == "body":
+            self.in_body = True
+            return
+        if self.in_body:
+            inline_style = attributes.get("style", "").replace(" ", "").lower()
+            is_hidden = (
+                self.hidden_body_depth > 0
+                or tag in {"script", "style", "template", "noscript"}
+                or "hidden" in attributes
+                or attributes.get("aria-hidden", "").lower() == "true"
+                or "display:none" in inline_style
+                or "visibility:hidden" in inline_style
+            )
+            if tag not in self.void_tags:
+                self.body_element_stack.append((tag, is_hidden))
+                if is_hidden:
+                    self.hidden_body_depth += 1
+            if tag in {"h1", "h2", "h3"} and not is_hidden:
+                self.in_heading = True
+                self.current_heading = []
+            if tag == "a" and not is_hidden:
+                self.in_anchor = True
+                self.anchor_hrefs.append(attributes.get("href", ""))
+            return
+
+    def handle_startendtag(self, tag, attrs):
+        if tag not in self.void_tags:
+            raise SystemExit(f"<{tag}> must use an explicit closing tag")
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag):
+        if tag == "body":
+            self.in_body = False
+            self.body_element_stack = []
+            self.hidden_body_depth = 0
+            return
+        if self.in_body:
+            if tag == "a":
+                self.in_anchor = False
+            if tag in {"h1", "h2", "h3"} and self.in_heading:
+                self.visible_headings.append(
+                    "".join(self.current_heading).strip()
+                )
+                self.in_heading = False
+            if self.body_element_stack:
+                started_tag, was_hidden = self.body_element_stack.pop()
+                if started_tag != tag:
+                    raise SystemExit(
+                        f"Mismatched body tags: expected {started_tag}, found {tag}"
+                    )
+                if was_hidden:
+                    self.hidden_body_depth -= 1
+            return
+        if tag == "title" and self.in_title:
+            self.titles.append("".join(self.current_title).strip())
+            self.in_title = False
+
+    def handle_data(self, data):
+        if self.in_title:
+            self.current_title.append(data)
+        if self.in_body and self.hidden_body_depth == 0:
+            if self.in_heading:
+                self.current_heading.append(data)
+
+
+path = Path(sys.argv[1])
+content = path.read_text()
+if not content.strip():
+    raise SystemExit("404.html must not be empty")
+parser = NotFoundParser()
+parser.feed(content)
+
+if not parser.lang:
+    raise SystemExit("404.html must declare a lang attribute")
+if not parser.charset_seen:
+    raise SystemExit("404.html must declare a UTF-8 charset")
+if not parser.viewport_seen:
+    raise SystemExit("404.html must declare a viewport meta tag")
+
+if len(parser.titles) != 1:
+    raise SystemExit(
+        f"404.html must have exactly one title; found {len(parser.titles)}"
+    )
+title = parser.titles[0]
+if not title:
+    raise SystemExit("404.html title must not be empty")
+
+robots_metas = [
+    meta for meta in parser.metas
+    if meta.get("name", "").lower() == "robots"
+]
+if len(robots_metas) != 1:
+    raise SystemExit(
+        "404.html must have exactly one robots meta directive"
+    )
+if robots_metas[0].get("content", "").strip().lower() != "noindex":
+    raise SystemExit("404.html robots directive must be noindex")
+
+not_found_headings = [
+    heading for heading in parser.visible_headings
+    if "not found" in heading.lower()
+]
+if not not_found_headings:
+    raise SystemExit(
+        "404.html must have a visible not-found heading"
+    )
+
+stylesheet_hrefs = parser.stylesheets
+if len(stylesheet_hrefs) != 1:
+    raise SystemExit(
+        "404.html must link exactly one stylesheet"
+    )
+if stylesheet_hrefs[0] != "/pycc/styles.css":
+    raise SystemExit(
+        "404.html stylesheet must use the absolute /pycc/styles.css path"
+    )
+
+canonical_links = [
+    link for link in parser.links
+    if "canonical" in link.get("rel", "").split()
+]
+if len(canonical_links) != 1:
+    raise SystemExit("404.html must have exactly one canonical link")
+if canonical_links[0].get("href") != "https://rotnov.github.io/pycc/":
+    raise SystemExit("404.html canonical link must point to the pycc origin")
+
+required_recovery = {
+    "/pycc/": "home",
+    "/pycc/status/": "status",
+    "/pycc/architecture/": "architecture",
+    "/pycc/python-aot-compilers/": "python-aot-compilers",
+}
+recovery_hrefs = set(parser.anchor_hrefs)
+for href, label in required_recovery.items():
+    if href not in recovery_hrefs:
+        raise SystemExit(
+            f"404.html must link the {label} recovery route ({href})"
+        )
+
+evidence_routes = {
+    "/pycc/status/",
+    "/pycc/architecture/",
+    "/pycc/python-aot-compilers/",
+}
+if not evidence_routes <= recovery_hrefs:
+    raise SystemExit(
+        "404.html must link at least three evidence pages"
+    )
+
+for href in parser.anchor_hrefs:
+    if href.startswith("http"):
+        continue
+    if not href.startswith("/pycc/"):
+        raise SystemExit(
+            f"404.html navigation link must use an absolute /pycc/ path: {href}"
+        )
+for href in stylesheet_hrefs:
+    if href.startswith("http"):
+        continue
+    if not href.startswith("/pycc/"):
+        raise SystemExit(
+            f"404.html asset URL must use an absolute /pycc/ path: {href}"
+        )
 PY
 
 if grep -R -nE '(localhost|127\.0\.0\.1|file://)' "$site_dir"; then

@@ -21,7 +21,7 @@
     <meta name="theme-color" content="#101310">
     <meta name="color-scheme" content="dark">
     <link rel="canonical" href="https://rotnov.github.io/pycc/">
-    <link rel="sitemap" type="application/xml" href="sitemap.xml">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="pycc">
@@ -138,7 +138,7 @@
               Read the specification
             </a>
           </div>
-          <div class="command" aria-label="Planned pycc build command">
+          <div class="command">
             <code><span>$</span> pycc build hello.py -o hello</code>
             <button class="copy-button" type="button" data-copy="pycc build hello.py -o hello">
               Copy
@@ -147,7 +147,7 @@
           <p class="command-note">Planned CLI · the project is currently pre-alpha</p>
         </div>
 
-        <div class="hero-code" aria-label="Python compilation example">
+        <div class="hero-code">
           <div class="code-window">
             <div class="window-bar">
               <div class="window-dots" aria-hidden="true">
@@ -263,7 +263,7 @@
           <p id="comparison-title">The intended position</p>
           <span>Design targets, not release claims</span>
         </div>
-        <div class="table-scroll" tabindex="0" aria-label="Compiler comparison table">
+        <div class="table-scroll" tabindex="0" role="group" aria-labelledby="comparison-title">
           <table>
             <thead>
               <tr>
@@ -319,32 +319,32 @@
           <p class="eyebrow">03 · Compiler pipeline</p>
           <h2 id="pipeline-title">From source file to machine code.</h2>
         </div>
-        <div class="pipeline" role="list">
-          <article class="pipeline-step" role="listitem">
+        <ol class="pipeline">
+          <li class="pipeline-step">
             <span>01</span>
             <p class="step-input">.py</p>
             <h3>Parse</h3>
             <p>CPython 3.14 grammar, source spans preserved.</p>
-          </article>
-          <article class="pipeline-step" role="listitem">
+          </li>
+          <li class="pipeline-step">
             <span>02</span>
             <p class="step-input">HIR</p>
             <h3>Check</h3>
             <p>Resolve names and enforce the typed contract.</p>
-          </article>
-          <article class="pipeline-step" role="listitem">
+          </li>
+          <li class="pipeline-step">
             <span>03</span>
             <p class="step-input">MIR</p>
             <h3>Lower</h3>
             <p>Build typed IR for optimization and ownership analysis.</p>
-          </article>
-          <article class="pipeline-step" role="listitem">
+          </li>
+          <li class="pipeline-step">
             <span>04</span>
             <p class="step-input">LLVM</p>
             <h3>Compile</h3>
             <p>Emit the native binary, or package the planned pinned CPython closure when permitted interop requires it.</p>
-          </article>
-        </div>
+          </li>
+        </ol>
       </section>
 
       <section class="status-section" id="status" aria-labelledby="status-title">

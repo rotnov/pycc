@@ -1,7 +1,7 @@
 :root {
   --ink: #f4f0e8;
   --ink-soft: #abaea7;
-  --ink-faint: #747973;
+  --ink-faint: #7d827b;
   --ground: #101310;
   --surface: #171b17;
   --surface-2: #1d221d;
@@ -726,6 +726,8 @@ tbody tr:last-child td {
   grid-template-columns: repeat(4, 1fr);
   margin-top: 70px;
   border: 1px solid var(--line);
+  list-style: none;
+  padding-inline: 0;
 }
 
 .pipeline-step {
