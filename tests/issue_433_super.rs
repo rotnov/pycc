@@ -478,8 +478,8 @@ fn super_in_diamond_skips_sibling_classes() {
     let dir = std::env::temp_dir()
         .join(format!("pycc_issue433_diamond_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    // MRO for D is [D, B, C, A]. B.f calls super().f → resolves to C.f
-    // (B's super_mro is [C, A], and C has f, so C.f is found).
+    // MRO for D is [D, B, C, A]. B.f calls super().f → resolves to A.f
+    // (B's own MRO is [B, A], so B's super_mro is [A], and A.f is found).
     let src = write_fixture(
         &dir,
         "diamond.py",
