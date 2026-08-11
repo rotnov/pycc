@@ -815,6 +815,43 @@ jobs:
             "$EXECUTABLE_INPUTS_EQUAL" \
             "7.0"
 
+  # Issue #229: hermetic Pages performance budget gate.  Runs on every
+  # pull request and push to main, unprivileged (contents: read only).
+  # Uses a pinned Lighthouse 12.8.2 mobile profile against the hermetic
+  # local server to enforce LCP/CLS/TBT/performance-score thresholds and
+  # resource budgets.  No continue-on-error: failures propagate to
+  # ci-gate, which requires this job's literal 'success'.
+  pages-performance:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@b39b52d1212ce55f4d6def9d4d2e6c2f0c3b0b1b # v4
+        with:
+          node-version: 20
+
+      - name: Run hermetic Lighthouse pages performance budget gate
+        run: |
+          python3 scripts/run_pages_lighthouse.py \
+            --output-dir /tmp/lighthouse-results \
+            --site-dir site
+          ruby scripts/check_pages_performance_budget.rb \
+            --lhr-dir /tmp/lighthouse-results
+
+      - name: Upload Lighthouse reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lighthouse-reports
+          path: /tmp/lighthouse-results
+          if-no-files-found: error
+          retention-days: 90
+
   ci-gate:
     needs:
       - build-test-coverage
@@ -823,6 +860,7 @@ jobs:
       - cross-compile-verify
       - frontend-perf-measure
       - frontend-perf-gate
+      - pages-performance
     if: always()
     runs-on: ubuntu-latest
     # Overrides the workflow-level `contents: read` default: this job only
@@ -846,7 +884,8 @@ jobs:
           needs.cross-compile-build.result != 'success' ||
           needs.cross-compile-verify.result != 'success' ||
           needs.frontend-perf-measure.result != 'success' ||
-          needs.frontend-perf-gate.result != 'success'
+          needs.frontend-perf-gate.result != 'success' ||
+          needs.pages-performance.result != 'success'
         run: |
           echo "one or more required jobs did not succeed:"
           echo '${{ toJSON(needs) }}'
