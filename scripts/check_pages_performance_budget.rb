@@ -460,9 +460,14 @@ def validate_network_requests(lhr, page, replicate, base_url, budget, manifest)
     allowed_urls << normalize_request_url("#{base_url}#{project_prefix}#{asset}")
   end
 
-  # Parse the base origin for third-party classification.
+  # Parse the base origin for third-party classification.  Compare
+  # scheme + host only (not port): the hermetic server binds to a
+  # random localhost port, and Lighthouse may report request URLs with
+  # or without the explicit port depending on its URL normalization.
+  # All requests to 127.0.0.1 on any port are first-party by
+  # construction — the server only serves the checked-in site/ tree.
   base_uri = URI(base_url)
-  base_origin = "#{base_uri.scheme}://#{base_uri.host}:#{base_uri.port}"
+  base_host_key = "#{base_uri.scheme}://#{base_uri.host}"
 
   third_party_count = 0
   unexpected_count = 0
@@ -482,9 +487,9 @@ def validate_network_requests(lhr, page, replicate, base_url, budget, manifest)
       next # Skip unparseable URLs
     end
 
-    item_origin = "#{item_uri.scheme}://#{item_uri.host}:#{item_uri.port}"
+    item_host_key = "#{item_uri.scheme}://#{item_uri.host}"
 
-    if item_origin != base_origin
+    if item_host_key != base_host_key
       third_party_count += 1
       third_party_urls << url
     else
