@@ -404,15 +404,18 @@ def validate_lhr_identity(lhr, page, replicate, base_url, repo_root)
     html = File.read(source_path)
     extracted_title = extract_title_from_html(html)
     if extracted_title != page["expected_title"]
-      failures << "#{page_id} replicate #{replicate}: HTML <title> mismatch (expected #{page["expected_title"]}, got #{extracted_title})"
+      display_title = extracted_title.nil? ? "(not found)" : extracted_title
+      failures << "#{page_id} replicate #{replicate}: HTML <title> mismatch (expected #{page["expected_title"]}, got #{display_title})"
     end
     extracted_h1 = extract_h1_from_html(html)
     if extracted_h1 != page["expected_h1"]
-      failures << "#{page_id} replicate #{replicate}: HTML <h1> mismatch (expected #{page["expected_h1"]}, got #{extracted_h1})"
+      display_h1 = extracted_h1.nil? ? "(not found)" : extracted_h1
+      failures << "#{page_id} replicate #{replicate}: HTML <h1> mismatch (expected #{page["expected_h1"]}, got #{display_h1})"
     end
     extracted_canonical = extract_canonical_from_html(html)
     if extracted_canonical != page["canonical_url"]
-      failures << "#{page_id} replicate #{replicate}: HTML canonical mismatch (expected #{page["canonical_url"]}, got #{extracted_canonical})"
+      display_canonical = extracted_canonical.nil? ? "(not found)" : extracted_canonical
+      failures << "#{page_id} replicate #{replicate}: HTML canonical mismatch (expected #{page["canonical_url"]}, got #{display_canonical})"
     end
   else
     failures << "#{page_id} replicate #{replicate}: source artifact not found: #{source_path}"

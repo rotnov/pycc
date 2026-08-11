@@ -241,6 +241,92 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
   end
 
   # ------------------------------------------------------------------
+  # HTML identity verification from source artifact (mutation tests)
+  # ------------------------------------------------------------------
+
+  def test_lhr_fails_when_source_html_title_mismatches_manifest
+    Dir.mktmpdir do |tmp|
+      manifest = load_default_manifest
+      base_url = "http://127.0.0.1:9999/"
+      page = manifest["canonical_pages"].first
+
+      # Copy the real site to a tmp dir and mutate the <title>.
+      site_dir = File.join(tmp, "site")
+      FileUtils.mkdir_p(site_dir)
+      FileUtils.cp_r(File.join(REPO_ROOT, "site", "."), site_dir)
+
+      path = File.join(site_dir, "index.html")
+      content = File.read(path)
+      mutated = content.sub(/<title[^>]*>.*?<\/title>/im,
+                            "<title>Wrong Title</title>")
+      File.write(path, mutated)
+
+      lhr = healthy_lhr(page, base_url)
+      failures = validate_lhr_identity(lhr, page, 1, base_url, tmp)
+      refute_empty failures
+      assert(failures.any? { |f| f.include?("HTML <title> mismatch") })
+    end
+  end
+
+  def test_lhr_fails_when_source_html_h1_mismatches_manifest
+    Dir.mktmpdir do |tmp|
+      manifest = load_default_manifest
+      base_url = "http://127.0.0.1:9999/"
+      page = manifest["canonical_pages"].first
+
+      site_dir = File.join(tmp, "site")
+      FileUtils.mkdir_p(site_dir)
+      FileUtils.cp_r(File.join(REPO_ROOT, "site", "."), site_dir)
+
+      path = File.join(site_dir, "index.html")
+      content = File.read(path)
+      mutated = content.sub(/<h1[^>]*>.*?<\/h1>/im,
+                            '<h1 id="hero-title">Wrong H1</h1>')
+      File.write(path, mutated)
+
+      lhr = healthy_lhr(page, base_url)
+      failures = validate_lhr_identity(lhr, page, 1, base_url, tmp)
+      refute_empty failures
+      assert(failures.any? { |f| f.include?("HTML <h1> mismatch") })
+    end
+  end
+
+  def test_lhr_fails_when_source_html_canonical_mismatches_manifest
+    Dir.mktmpdir do |tmp|
+      manifest = load_default_manifest
+      base_url = "http://127.0.0.1:9999/"
+      page = manifest["canonical_pages"].first
+
+      site_dir = File.join(tmp, "site")
+      FileUtils.mkdir_p(site_dir)
+      FileUtils.cp_r(File.join(REPO_ROOT, "site", "."), site_dir)
+
+      path = File.join(site_dir, "index.html")
+      content = File.read(path)
+      mutated = content.sub(
+        /<link\s+rel=["']canonical["']\s+href=["'][^"']+["']/i,
+        '<link rel="canonical" href="https://wrong.example.com/">'
+      )
+      File.write(path, mutated)
+
+      lhr = healthy_lhr(page, base_url)
+      failures = validate_lhr_identity(lhr, page, 1, base_url, tmp)
+      refute_empty failures
+      assert(failures.any? { |f| f.include?("HTML canonical mismatch") })
+    end
+  end
+
+  def test_lhr_fails_when_source_artifact_file_missing
+    manifest = load_default_manifest
+    base_url = "http://127.0.0.1:9999/"
+    page = manifest["canonical_pages"].first
+    lhr = healthy_lhr(page, base_url)
+    failures = validate_lhr_identity(lhr, page, 1, base_url, "/nonexistent")
+    refute_empty failures
+    assert(failures.any? { |f| f.include?("source artifact not found") })
+  end
+
+  # ------------------------------------------------------------------
   # Threshold enforcement
   # ------------------------------------------------------------------
 
@@ -678,6 +764,31 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     budget = load_default_budget
     failures = check_resource_budgets(budget, REPO_ROOT)
     assert_empty failures
+  end
+
+  def test_resource_budget_fails_when_image_added_in_subdirectory
+    Dir.mktmpdir do |tmp|
+      budget = load_default_budget
+      site_dir = File.join(tmp, "site")
+      FileUtils.mkdir_p(site_dir)
+
+      real_site = File.join(REPO_ROOT, "site")
+      FileUtils.cp_r(File.join(real_site, "."), site_dir)
+
+      # Add an unexpected .jpg in a nested subdirectory to verify
+      # Find.find recursively scans.  The existing og.png is ~1.44 MB
+      # and the budget is 1.5 MB, so a 200 KB jpg exceeds it.
+      subdir = File.join(site_dir, "images")
+      FileUtils.mkdir_p(subdir)
+      path = File.join(subdir, "nested.jpg")
+      File.binwrite(path, "x" * 200_000)
+
+      failures = check_resource_budgets(budget, tmp)
+      refute_empty failures
+      assert(failures.any? { |f| f.include?("images") && f.include?("exceeds") })
+      # Verify the nested file is named in the failure message
+      assert(failures.any? { |f| f.include?("nested.jpg") })
+    end
   end
 
   # ------------------------------------------------------------------
