@@ -75,8 +75,7 @@ Every canonical HTML page must provide:
 
 - a unique title, canonical URL, and plain-language meta description;
 - Open Graph and X card metadata;
-- page-level crawl permission with unlimited text, image, and video previews;
-- a sitemap reference.
+- page-level crawl permission with unlimited text, image, and video previews.
 
 The unsupported HTML `meta name="keywords"` field is forbidden on every
 canonical page. Google and Bing do not use it as a ranking booster, and a
@@ -321,15 +320,19 @@ that proposal. Both files link to the evidence pages, including the
 source-backed compiler comparison, and must preserve the landing page's status
 and AI-authorship disclosures.
 
-The sitemap carries the standards-based discovery signal. After a successful
-production deployment, `scripts/notify-indexnow.sh` parses that validated
-sitemap and submits its complete canonical URL set in one IndexNow batch POST
-so Bing and participating engines can discover material updates quickly. It
-rejects empty, duplicate, out-of-scope, query-bearing, or fragment-bearing URLs
-before making a request. Its public verification key is hosted below `/pycc/`,
-which limits that key to URLs in the project path. The notification is
-best-effort, has finite connection and request timeouts, and does not block a
-successful Pages deployment.
+The XML sitemap (`site/sitemap.xml`, referenced from `site/robots.txt`) is the
+standards-based discovery surface. The HTML `<link rel="sitemap">` link
+relation is not used: it is not a registered IANA link relation and is not a
+documented sitemap-discovery mechanism, so emitting it would create false
+confidence about discovery without any standards, Google, or Bing backing.
+After a successful production deployment, `scripts/notify-indexnow.sh` parses
+that validated sitemap and submits its complete canonical URL set in one
+IndexNow batch POST so Bing and participating engines can discover material
+updates quickly. It rejects empty, duplicate, out-of-scope, query-bearing, or
+fragment-bearing URLs before making a request. Its public verification key is
+hosted below `/pycc/`, which limits that key to URLs in the project path. The
+notification is best-effort, has finite connection and request timeouts, and
+does not block a successful Pages deployment.
 
 `scripts/test-notify-indexnow.py` points the production notifier at a local HTTP
 fixture and proves that the real non-dry-run path sends the expected JSON

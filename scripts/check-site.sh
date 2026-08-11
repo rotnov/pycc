@@ -362,16 +362,17 @@ canonical_link = require_one(
 if canonical_link.get("href") != canonical:
     raise SystemExit("Canonical link does not match the canonical origin")
 
-sitemap_link = require_one(
-    [
-        link
-        for link in parser.links
-        if "sitemap" in link.get("rel", "").split()
-    ],
-    "sitemap link",
-)
-if sitemap_link.get("href") != "sitemap.xml":
-    raise SystemExit("Sitemap link must reference sitemap.xml")
+# `<link rel="sitemap">` is not a registered IANA link relation and is not a
+# documented sitemap-discovery mechanism. The XML sitemap referenced from
+# robots.txt is the standards-based discovery surface; the HTML link relation
+# must not be re-introduced as a discovery channel.
+if any(
+    "sitemap" in link.get("rel", "").lower().split() for link in parser.links
+):
+    raise SystemExit(
+        "Pages must not use the unregistered rel=sitemap link relation; "
+        "the XML sitemap referenced from robots.txt is the discovery surface"
+    )
 
 stylesheet_link = require_one(
     [
@@ -854,15 +855,14 @@ for path_value in sys.argv[1:]:
     if canonical.get("href") != spec["canonical"]:
         raise SystemExit(f"{slug} canonical link does not match its URL")
 
-    sitemap = require_one(
-        [
-            link for link in parser.links
-            if "sitemap" in link.get("rel", "").split()
-        ],
-        f"{slug} sitemap link",
-    )
-    if sitemap.get("href") != "../sitemap.xml":
-        raise SystemExit(f"{slug} sitemap link must be ../sitemap.xml")
+    if any(
+        "sitemap" in link.get("rel", "").lower().split() for link in parser.links
+    ):
+        raise SystemExit(
+            f"{slug} must not use the unregistered rel=sitemap link "
+            "relation; the XML sitemap referenced from robots.txt is the "
+            "discovery surface"
+        )
 
     stylesheet = require_one(
         [

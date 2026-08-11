@@ -599,6 +599,88 @@ fi
 cp "$repo_root/site/3361fe03d0f44ab7cdbb1a3ce1461821.txt" \
   "$fixture_root/site/3361fe03d0f44ab7cdbb1a3ce1461821.txt"
 
+# <link rel="sitemap"> is not a registered IANA link relation and is not a
+# documented sitemap-discovery mechanism. The validator must reject any page
+# that re-introduces it, so a standards/Google/Bing-backed submission claim
+# cannot silently return as an HTML link relation.
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+canonical = '    <link rel="canonical" href="https://rotnov.github.io/pycc/">'
+assert canonical in content
+path.write_text(
+    content.replace(
+        canonical,
+        canonical + '\n    <link rel="sitemap" type="application/xml" '
+        'href="sitemap.xml">',
+        1,
+    )
+)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted the unregistered rel=sitemap link relation on the landing page" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+python3 - "$fixture_root/site/architecture/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+canonical = '    <link rel="canonical" href="https://rotnov.github.io/pycc/architecture/">'
+assert canonical in content
+path.write_text(
+    content.replace(
+        canonical,
+        canonical + '\n    <link rel="sitemap" type="application/xml" '
+        'href="../sitemap.xml">',
+        1,
+    )
+)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted the unregistered rel=sitemap link relation on a sub-page" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/architecture/index.html" \
+  "$fixture_root/site/architecture/index.html"
+
+# Case-insensitive rel=sitemap must also be rejected (HTML rel values are
+# case-insensitive per the HTML specification).
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+canonical = '    <link rel="canonical" href="https://rotnov.github.io/pycc/">'
+assert canonical in content
+path.write_text(
+    content.replace(
+        canonical,
+        canonical + '\n    <link rel="Sitemap" type="application/xml" '
+        'href="sitemap.xml">',
+        1,
+    )
+)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a case-variant rel=Sitemap link relation" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
 for content_page in \
   status/index.html \
   architecture/index.html \
