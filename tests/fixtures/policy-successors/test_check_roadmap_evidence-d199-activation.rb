@@ -903,7 +903,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
       ### v0.1 acceptance checklist
 
-      - [x] `pycc check` processes 1k LOC in under 50 ms. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+      - [x] `pycc check` processes 1k LOC in under 75 ms. <!-- roadmap-evidence: check-throughput-1k-loc-75ms -->
     MARKDOWN
 
     stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
@@ -920,7 +920,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
       ### v0.1 acceptance checklist
 
-      - [x] `pycc check` processes 1k LOC in under 5 seconds. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+      - [x] `pycc check` processes 1k LOC in under 5 seconds. <!-- roadmap-evidence: check-throughput-1k-loc-75ms -->
     MARKDOWN
 
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
@@ -937,7 +937,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
       ### v0.1 acceptance checklist
 
-      - [x] `pycc check` processes 1k LOC in under 50 ms. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+      - [x] `pycc check` processes 1k LOC in under 75 ms. <!-- roadmap-evidence: check-throughput-1k-loc-75ms -->
     MARKDOWN
 
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)

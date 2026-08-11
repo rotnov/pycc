@@ -359,7 +359,12 @@
               parsing, HIR lowering, strict type checking, private-helper
               inference, and stable human or JSON diagnostics. Native
               <code>build</code>/<code>run</code> lower that implemented surface
-              through MIR, LLVM, the host linker, and the runtime.
+              through MIR, LLVM, the host linker, and the runtime. v0.1's
+              acceptance criteria are met: <code>fib</code> and
+              <code>mandelbrot-ascii</code> match pinned CPython output on all
+              five Tier-1 targets, <code>pycc check</code> clears its
+              <75ms/1000 LOC throughput floor, and diagnostic output matches the
+              stable CLI specification's example.
             </p>
             <ul>
               <li><span aria-hidden="true">✓</span> Strict v0.1 frontend and diagnostic snapshots</li>

@@ -337,12 +337,15 @@ on one path but not its mirror), and treat a many-round loop as the process work
 failing. When a fix touches state shared by two invariants, name both invariants in the fix's
 comment and pin each with its own test before calling the round done.
 
-Once the loop ends, run `/harden batch .harden/findings/issue-<N>.jsonl` — one pass over
-the pile: findings cluster into root-cause classes, recurrence is counted inside the batch
-and against `.harden/incidents/`, and only classes that clear the threshold earn an
-artefact (expected product is promotions to cheaper gates, not new prose; singletons seed
-counters). Artefacts and journal entries it lands are commits on this same branch and ride
-into the pull request below.
+### 5.5 Harden batch
+
+However step 5's review loop ended — a clean round with no actionable findings, or its
+stop condition — run `/harden batch .harden/findings/issue-<N>.jsonl` before opening the
+pull request: one pass over the pile. Findings cluster into root-cause classes, recurrence
+is counted inside the batch and against `.harden/incidents/`, and only classes that clear
+the threshold earn an artefact (expected product is promotions to cheaper gates, not new
+prose; singletons seed counters). Artefacts and journal entries it lands are commits on
+this same branch and ride into the pull request below.
 
 ### 6. Pull request
 

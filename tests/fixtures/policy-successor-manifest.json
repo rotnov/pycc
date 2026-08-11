@@ -3,8 +3,8 @@
   "targets": [
     {
       "path": ".github/workflows/ci.yml",
-      "source_path": "tests/fixtures/policy-successors/ci-d199.yml",
-      "sha256": "a4c34779e205b117702876e9461937386efa146ff1ed343ea094c82e5d0c6e1b"
+      "source_path": "tests/fixtures/policy-successors/ci.yml",
+      "sha256": "42a87e33aebc82ab316b0969a793fd5d4746c4d0bf324201c142e543b69f916f"
     },
     {
       "path": "scripts/check_ci_permissions.rb",
@@ -24,7 +24,7 @@
     {
       "path": "scripts/check_roadmap_evidence.rb",
       "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence-d199.rb",
-      "sha256": "ff5091baa542e42aa4e18bec8088403c635e8d42109a852e6a11db2153b5276d"
+      "sha256": "a3d5bae974f18b53019a513b5d093ee10a22e16d680c164e4fc84a25f6ddda9c"
     },
     {
       "path": "scripts/check_search_visibility_audit.py",
@@ -84,7 +84,7 @@
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
       "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-d199-activation.rb",
-      "sha256": "552edb40c5c6f73132b7dbd370f2e563600e152f4b44b39d46fd7559f098c3d4"
+      "sha256": "49c1b337fcf2e574ad7b82bbe09835bafeb47b6dce06eacc7598c9121600d074"
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",
@@ -189,7 +189,7 @@
     {
       "path": "tests/fixtures/policy-successors/ci.yml",
       "source_path": "tests/fixtures/policy-successors/ci.yml",
-      "sha256": "6221bdb983b309bc0b1b44828a37ecdc9a91769812dfff86df693e10ea8d9297"
+      "sha256": "42a87e33aebc82ab316b0969a793fd5d4746c4d0bf324201c142e543b69f916f"
     },
     {
       "path": "tests/fixtures/policy-successors/test_check_roadmap_evidence.rb",
@@ -214,7 +214,7 @@
     {
       "path": "tests/fixtures/policy-successors/check_roadmap_evidence-d199.rb",
       "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence-d199.rb",
-      "sha256": "ff5091baa542e42aa4e18bec8088403c635e8d42109a852e6a11db2153b5276d"
+      "sha256": "a3d5bae974f18b53019a513b5d093ee10a22e16d680c164e4fc84a25f6ddda9c"
     },
     {
       "path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-d199.rb",

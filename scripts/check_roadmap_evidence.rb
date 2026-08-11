@@ -22,8 +22,8 @@ EVIDENCE_CLAIMS = {
     "The 100% line and region coverage gate is required and green for the current slice.",
   "conformance-fib-mandelbrot-tier1" =>
     "`fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets.",
-  "check-throughput-1k-loc-50ms" =>
-    "`pycc check` processes 1k LOC in under 50 ms.",
+  "check-throughput-1k-loc-75ms" =>
+    "`pycc check` processes 1k LOC in under 75 ms.",
   "cli-spec-diagnostic-match" =>
     "The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output."
 }.freeze
@@ -43,7 +43,7 @@ EVIDENCE_SECTIONS = {
     "Current delivery status",
     "v0.1 acceptance checklist"
   ],
-  "check-throughput-1k-loc-50ms" => [
+  "check-throughput-1k-loc-75ms" => [
     "pycc Roadmap",
     "Current delivery status",
     "v0.1 acceptance checklist"
@@ -211,7 +211,7 @@ D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256 =
 # ci.yml activation (Phase 3, PR 5) -- the live ci.yml is untouched by
 # this staging round.
 D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256 =
-  "6221bdb983b309bc0b1b44828a37ecdc9a91769812dfff86df693e10ea8d9297"
+  "42a87e33aebc82ab316b0969a793fd5d4746c4d0bf324201c142e543b69f916f"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,

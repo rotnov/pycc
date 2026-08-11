@@ -129,10 +129,10 @@ class TestCheckFrontendThroughput < Minitest::Test
     end
   end
 
-  def test_main_defaults_to_a_50ms_threshold_when_omitted
+  def test_main_defaults_to_a_75ms_threshold_when_omitted
     # A deliberately slow binary makes this deterministic: any measured
-    # elapsed time comfortably exceeds 50ms, so the failure message only
-    # names "50.0ms" if the omitted third argument really did default to
+    # elapsed time comfortably exceeds 75ms, so the failure message only
+    # names "75.0ms" if the omitted third argument really did default to
     # it (rather than, say, silently defaulting to 0 or some other value).
     Dir.mktmpdir do |dir|
       slow_pycc = File.join(dir, "slow_pycc")
@@ -141,7 +141,7 @@ class TestCheckFrontendThroughput < Minitest::Test
       fixture = File.join(dir, "fixture.py")
       File.write(fixture, "x = 1\n")
       _stdout, stderr = capture_io { assert_equal 1, main([slow_pycc, fixture]) }
-      assert_includes stderr, "exceeded 50.0ms threshold"
+      assert_includes stderr, "exceeded 75.0ms threshold"
     end
   end
 

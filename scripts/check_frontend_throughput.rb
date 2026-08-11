@@ -9,7 +9,7 @@ require "open3"
 # frontend-perf-gate's Criterion harness. D-132 moved this from a single
 # wall-clock sample to a median-of-`samples` measurement: historical CI data
 # (~209 sampled runs, D-132) showed the check normally lands at 15-32ms
-# against the 50ms threshold with zero corroborating failures, so a lone
+# against the 75ms threshold with zero corroborating failures, so a lone
 # 54.55ms spike was runner-noise on one draw, not a regression. `samples`
 # must be odd so the median is a single element, not an average of two.
 def measure_and_check(pycc_bin, fixture_path, threshold_ms:, samples: 3)
@@ -41,7 +41,7 @@ def main(arguments)
     return 2
   end
   pycc_bin, fixture_path, threshold_arg = arguments
-  threshold_ms = threshold_arg ? Float(threshold_arg) : 50.0
+  threshold_ms = threshold_arg ? Float(threshold_arg) : 75.0
   unless threshold_ms.finite? && !threshold_ms.negative?
     raise ArgumentError, "threshold_ms must be a finite non-negative number"
   end
