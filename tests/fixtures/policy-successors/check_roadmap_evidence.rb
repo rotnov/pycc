@@ -203,10 +203,20 @@ D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256 =
 # later, separate round) -- the live ci.yml is untouched by this round.
 D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256 =
   "0176d030004f8be82c5148e86e93df27a1cb287a1b0f34aff1dd10aa36b986f2"
+# Issue #229 (Phase 3): the D114-shaped ci.yml plus a new pages-performance
+# job (hermetic Lighthouse 12.8.2 budget gate) and its ci-gate.needs /
+# fail-step wiring. Coexists with D100/D112/D114 until a later round
+# retires them, mirroring this array's own coexist-then-retire precedent.
+# Not yet active: this array entry only authorizes the shape for a future
+# ci.yml activation (Phase 3, PR 5) -- the live ci.yml is untouched by
+# this staging round.
+D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256 =
+  "624ecc2e47a80996113e6ec67b2ef2b6026a087add30f27e2121269c69506113"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
-  D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
+  D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+  D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -1319,6 +1329,118 @@ def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
   true
 end
 
+# Issue #229: validate the pages-performance job's lifecycle in the live
+# ci.yml.  This checks that the job exists, is required by ci-gate, is
+# checked in ci-gate's fail step, has no continue-on-error, is not
+# push-only, and has unprivileged (contents: read) permissions.  Unlike
+# the paired-perf lifecycle validators above, this one does NOT compare
+# the job against a frozen constant -- the pages-performance job's own
+# steps (Lighthouse version, thresholds, artifact uploads) are reviewed
+# separately by check_pages_performance_budget.rb's own test suite, so
+# this validator only enforces the structural invariants that keep it
+# fail-closed and unprivileged.
+def validate_pages_performance_lifecycle(workflow_text, source)
+  stream = Psych.parse_stream(workflow_text, filename: source)
+  root = yaml_mapping(stream.children.first.root, source)
+  jobs = yaml_mapping(root["jobs"], "#{source} jobs")
+
+  pages_job_node = jobs["pages-performance"]
+  unless pages_job_node
+    raise RoadmapEvidenceError,
+          "#{source}: pages-performance job is required by issue #229"
+  end
+  pages_job = yaml_mapping(pages_job_node, "#{source} pages-performance job")
+
+  # The job must not be push-only (no if: guard restricting to push).
+  if pages_job.key?("if")
+    if_value = yaml_scalar(pages_job["if"], "#{source} pages-performance if").strip
+    if if_value.include?("github.event_name == 'push'") ||
+       if_value.include?("github.ref == 'refs/heads/main'")
+      raise RoadmapEvidenceError,
+            "#{source}: pages-performance must not be push-only"
+    end
+  end
+
+  # The job must not have continue-on-error (must propagate failures).
+  continue_on_error = pages_job["continue-on-error"]
+  if continue_on_error
+    coe_value = yaml_scalar(continue_on_error, "#{source} pages-performance continue-on-error").strip
+    if coe_value != "false"
+      raise RoadmapEvidenceError,
+            "#{source}: pages-performance must propagate failures"
+    end
+  end
+
+  # The job must have unprivileged permissions (contents: read only).
+  permissions_node = pages_job["permissions"]
+  unless permissions_node
+    raise RoadmapEvidenceError,
+          "#{source}: pages-performance must declare explicit permissions"
+  end
+  permissions = yaml_mapping(permissions_node, "#{source} pages-performance permissions")
+  contents_perm = permissions["contents"]
+  unless contents_perm
+    raise RoadmapEvidenceError,
+          "#{source}: pages-performance must declare contents permission"
+  end
+  unless yaml_scalar(contents_perm, "#{source} pages-performance contents permission") == "read"
+    raise RoadmapEvidenceError,
+          "#{source}: pages-performance must have contents: read permission"
+  end
+  unless permissions.keys.length == 1
+    raise RoadmapEvidenceError,
+          "#{source}: pages-performance must have only contents: read permission"
+  end
+
+  # ci-gate must require pages-performance.
+  ci_gate_node = jobs["ci-gate"]
+  unless ci_gate_node
+    raise RoadmapEvidenceError,
+          "#{source}: pages-performance must be required by ci-gate"
+  end
+  ci_gate = yaml_mapping(ci_gate_node, "#{source} ci-gate job")
+  needs_node = ci_gate["needs"]
+  unless needs_node && needs_node.is_a?(Psych::Nodes::Sequence)
+    raise RoadmapEvidenceError,
+          "#{source}: ci-gate must have a needs sequence"
+  end
+  needs = needs_node.children.map do |need|
+    yaml_scalar(need, "#{source} ci-gate needs entry")
+  end
+  unless needs.include?("pages-performance")
+    raise RoadmapEvidenceError,
+          "#{source}: ci-gate must require pages-performance"
+  end
+
+  # ci-gate's fail step must check needs.pages-performance.result != 'success'.
+  steps = ci_gate["steps"]
+  unless steps && steps.is_a?(Psych::Nodes::Sequence)
+    raise RoadmapEvidenceError,
+          "#{source}: ci-gate must have a steps sequence"
+  end
+  fail_step = steps.children.find do |step_node|
+    step = yaml_mapping(step_node, "#{source} ci-gate step")
+    step["name"] && yaml_scalar(step["name"], "#{source} ci-gate step name") =~ /Fail unless/
+  end
+  unless fail_step
+    raise RoadmapEvidenceError,
+          "#{source}: ci-gate must have a fail step"
+  end
+  fail_step_mapping = yaml_mapping(fail_step, "#{source} ci-gate fail step")
+  if_cond = fail_step_mapping["if"]
+  unless if_cond
+    raise RoadmapEvidenceError,
+          "#{source}: ci-gate fail step must have an if condition"
+  end
+  if_text = yaml_scalar(if_cond, "#{source} ci-gate fail step if").strip
+  unless if_text.include?("needs.pages-performance.result != 'success'")
+    raise RoadmapEvidenceError,
+          "#{source}: ci-gate fail step must check needs.pages-performance.result"
+  end
+
+  true
+end
+
 def opening_fence(line)
   match = /\A {0,3}(?<marker>`{3,}|~{3,})(?<info>[^\r\n]*)(?:\r?\n)?\z/.match(line)
   return unless match
@@ -1546,6 +1668,7 @@ def validate_evidence(root, _evidence_ids)
           "#{workflow}: does not match a reviewed active-or-staged performance CI workflow"
   end
   validate_source_aware_perf_gate_lifecycle(workflow_text, workflow.to_s)
+  validate_pages_performance_lifecycle(workflow_text, workflow.to_s)
 end
 
 def main(arguments)
