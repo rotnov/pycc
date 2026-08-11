@@ -438,6 +438,70 @@ to prevent regressions in the source artifacts, not to claim specific
 search ranking outcomes. Page experience is one of many signals search
 engines use; this gate does not directly affect search ranking.
 
+## Site accessibility gate
+
+The website is protected by a hermetic site accessibility gate that
+runs in CI as the `pages-accessibility` job and is bound to `ci-gate` --
+a pull request cannot merge unless the gate passes. The gate is being
+activated through a D-103 two-merge sequence: this section documents
+the design; the gate's CI binding and source fix are activated in a
+follow-up merge. The gate uses three evaluators, each targeting a
+distinct accessibility surface:
+
+### Lighthouse accessibility
+
+The gate runs Lighthouse 12.8.2 (pinned) in mobile emulation mode
+(412×823 CSS pixels, device scale factor 1.75) with
+`--only-categories=accessibility` against the hermetic local server
+(`scripts/serve_pages_fixture.py`). One Lighthouse Result (LHR) JSON
+is collected per canonical page. The checker
+(`scripts/check_site_accessibility.rb`) validates that the
+`aria-allowed-role` and `color-contrast` audits each pass with score 1
+and zero failing items, and that expected audits are present and not
+`notApplicable`.
+
+### W3C Nu ARIA conformance
+
+The ARIA conformance evaluator (`scripts/check_site_aria_conformance.py`)
+parses each served HTML body and rejects any `<div>` element carrying
+`aria-label` or `aria-labelledby` without an explicit non-generic
+`role` that permits naming. This catches the W3C Nu validator's
+prohibition on naming generic-role elements without requiring a
+network request to validator.w3.org.
+
+### Reduced-motion computed-style
+
+The reduced-motion evaluator (`scripts/check_site_reduced_motion.js`)
+uses Puppeteer to emulate `prefers-reduced-motion: reduce` and
+`no-preference`, reading computed `scroll-behavior` (root) and
+`transition-duration` (skip-link, nav-link) to assert that
+reduced-motion suppresses nonessential motion to ≤ 0.02ms while normal
+motion remains available under no-preference. Puppeteer is a CI tool
+(like `npx lighthouse`), not a site dependency; it uses the system
+Chrome via `PUPPETEER_EXECUTABLE_PATH`.
+
+### CI binding
+
+The `pages-accessibility` job runs on every pull request and push. It
+has `contents: read` permission only, no `continue-on-error`, and is
+listed in `ci-gate.needs` alongside `pages-performance`. The
+`ci-gate` fail-closed aggregate condition requires
+`needs.pages-accessibility.result == 'success'`.
+
+### Scope and limitations
+
+The three evaluators are deliberately separate: Lighthouse
+accessibility scoring, Nu ARIA conformance, and reduced-motion
+computed-style checks each cover a distinct surface and must not be
+collapsed into a single check. The ARIA conformance evaluator uses
+Python's `html.parser` rather than a full browser parser, so it
+catches structural ARIA violations but not computed-style or
+rendering-dependent issues. The reduced-motion evaluator checks the
+documented motion surfaces but does not enumerate every animated
+element; the CSS `@media (prefers-reduced-motion: reduce)` block with
+universal selector provides the global override that the evaluator
+verifies.
+
 ## Publication
 
 Pull requests that change the website or either validator run the Pages build
