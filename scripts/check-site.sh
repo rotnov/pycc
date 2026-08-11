@@ -1055,10 +1055,12 @@ class LandingTableParser(HTMLParser):
         self.in_tr = False
         self.in_th = False
         self.in_td = False
+        self.in_col_header = False
         self.in_mini_mark = False
         self.current_cell_text = []
         self.current_row_header = None
         self.table_rows = {}
+        self.column_headers = []
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
@@ -1071,6 +1073,9 @@ class LandingTableParser(HTMLParser):
             scope = attributes.get("scope", "")
             if scope == "row":
                 self.in_th = True
+                self.current_cell_text = []
+            elif scope == "col":
+                self.in_col_header = True
                 self.current_cell_text = []
         elif tag == "td" and self.in_tr:
             self.in_td = True
@@ -1090,6 +1095,13 @@ class LandingTableParser(HTMLParser):
                 self.current_cell_text
             ).strip()
             self.current_cell_text = []
+        elif tag == "th" and self.in_col_header:
+            self.in_col_header = False
+            header_text = " ".join(
+                "".join(self.current_cell_text).split()
+            )
+            self.column_headers.append(header_text)
+            self.current_cell_text = []
         elif tag == "td" and self.in_td:
             self.in_td = False
             cell_text = " ".join(
@@ -1105,6 +1117,8 @@ class LandingTableParser(HTMLParser):
 
     def handle_data(self, data):
         if self.in_th and not self.in_mini_mark:
+            self.current_cell_text.append(data)
+        if self.in_col_header:
             self.current_cell_text.append(data)
         if self.in_td:
             self.current_cell_text.append(data)
@@ -1140,6 +1154,14 @@ for column, field in column_sources.items():
 parser = LandingTableParser()
 parser.feed(landing_path.read_text())
 landing_rows = parser.table_rows
+
+expected_headers = ["Tool", "Static model", "Output artifact", "Language contract"]
+if parser.column_headers != expected_headers:
+    raise SystemExit(
+        f"landing table column headers mismatch: "
+        f"expected {expected_headers!r}, "
+        f"found {parser.column_headers!r}"
+    )
 
 landing_keys = set(landing_rows.keys())
 label_keys = set(labels.keys())
@@ -1191,6 +1213,11 @@ for entity_name in labels:
     )
     for column in columns:
         anchor = anchors[entity_name][column]
+        if not anchor or not anchor.strip():
+            raise SystemExit(
+                f"landing_projection.anchors.{entity_name}.{column} "
+                f"must be a non-empty, non-whitespace token"
+            )
         field = column_sources[column]
         claim_value = entity_record[field]
         if anchor.lower() not in claim_value.lower():

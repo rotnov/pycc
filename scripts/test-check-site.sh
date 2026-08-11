@@ -1403,6 +1403,32 @@ expect_accept_landing(
     "minor whitespace change in landing cell",
     landing_whitespace_tolerant,
 )
+
+# J: claims.json anchors.pycc.output_artifact set to empty string (blank anchor)
+def landing_blank_anchor():
+    data = json.loads(original_claims)
+    data["landing_projection"]["anchors"]["pycc"]["output_artifact"] = ""
+    claims_json.write_text(json.dumps(data, indent=2))
+
+expect_reject_landing(
+    "claims.json anchors.pycc.output_artifact set to empty string",
+    landing_blank_anchor,
+)
+
+# K: Landing HTML swap Static model and Output artifact column headers (header order)
+def landing_swap_col_headers():
+    landing_html.write_text(
+        original_landing.replace(
+            '<th scope="col">Static model</th>\n                <th scope="col">Output artifact</th>',
+            '<th scope="col">Output artifact</th>\n                <th scope="col">Static model</th>',
+            1,
+        )
+    )
+
+expect_reject_landing(
+    "landing HTML column headers swapped (Static model <-> Output artifact)",
+    landing_swap_col_headers,
+)
 PY
 
 cp "$repo_root/site/python-aot-compilers/index.html" \

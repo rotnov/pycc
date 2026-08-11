@@ -147,13 +147,16 @@ The landing table is a curated subset: it lists pycc, LPython, Codon, Nuitka,
 and mypyc, and intentionally omits Cython (the page caption reads "Design
 targets, not release claims"). `scripts/check-site.sh` parses the landing
 table (keying rows by `<th scope="row">` text, skipping the pycc row header's
-`mini-mark` span so the key is `"pycc"` not `">_ pycc"`), verifies that the
-landing row keys exactly equal `labels`'s entity set and that this set is a
-subset of the model entities, checks that each row has exactly three `<td>`
-cells whose whitespace-normalized text equals the corresponding `labels`
-value, and enforces cross-projection anchor consistency: for each entity and
-column, `anchors[entity][column]` must be a case-insensitive substring of the
-entity's `column_sources[column]` claim field. This anchor rule is a
+`mini-mark` span so the key is `"pycc"` not `">_ pycc"`, and validating the
+`<th scope="col">` column headers against the expected names and order),
+verifies that the landing row keys exactly equal `labels`'s entity set and
+that this set is a subset of the model entities, checks that each row has
+exactly three `<td>` cells whose whitespace-normalized text equals the
+corresponding `labels` value, and enforces cross-projection anchor
+consistency: for each entity and
+column, `anchors[entity][column]` must be a non-empty, non-whitespace token
+that appears as a case-insensitive substring of the entity's
+`column_sources[column]` claim field. This anchor rule is a
 structural token-presence invariant, not semantic content analysis: it catches
 claim-side drift (a detailed claim field edited to drop the anchor token while
 the landing projection keeps its label) and landing-side drift (an HTML cell or
@@ -200,8 +203,13 @@ the detailed HTML cell to match, so both HTML tables still agree with their
 model fields but the landing projection and the detailed claim now contradict
 and the anchor rule catches it; and a mini-mark mutation removes the
 `mini-mark` class from the pycc row-header span so the row key becomes
-`">_ pycc"` and the entity-set check rejects. A positive control verifies
-that minor whitespace changes in landing cells do not break validation. The
+`">_ pycc"` and the entity-set check rejects. A blank-anchor mutation sets
+an anchor to the empty string, which would otherwise be a substring of every
+claim field and bypass the cross-projection check. A column-header mutation
+swaps two `scope="col"` headers while leaving the cells in place, catching a
+reordered table that presents every validated value under the wrong meaning.
+A positive control verifies that minor whitespace changes in landing cells do
+not break validation. The
 landing-page contract also requires
 exactly one
 relative `styles.css` stylesheet link and exactly one deferred, executable
