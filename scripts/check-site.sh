@@ -562,7 +562,7 @@ ROBOTS = (
 PAGE_SPECS = {
     "status": {
         "canonical": f"{ROOT}status/",
-        "date_modified": "2026-08-07",
+        "date_modified": "2026-08-12",
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
@@ -589,7 +589,7 @@ PAGE_SPECS = {
     },
     "architecture": {
         "canonical": f"{ROOT}architecture/",
-        "date_modified": "2026-08-02",
+        "date_modified": "2026-08-12",
         "title": "pycc architecture — typed Python to LLVM native binaries",
         "description": (
             "Explore pycc's implemented Rust and LLVM compiler pipeline, "
@@ -611,7 +611,7 @@ PAGE_SPECS = {
     },
     "python-aot-compilers": {
         "canonical": f"{ROOT}python-aot-compilers/",
-        "date_modified": "2026-08-07",
+        "date_modified": "2026-08-12",
         "title": "Python AOT compilers compared — where pycc fits",
         "description": (
             "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from "
@@ -656,7 +656,7 @@ PAGE_SPECS = {
     },
     "ai-native": {
         "canonical": f"{ROOT}ai-native/",
-        "date_modified": "2026-07-30",
+        "date_modified": "2026-08-12",
         "title": (
             "pycc AI-native experiment — software built entirely by AI"
         ),
