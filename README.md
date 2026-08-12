@@ -112,11 +112,11 @@ argument instead:
 
 ```
 error[T0021]: argument 1 of `fib` expects `int`, got `str`
- --> hello.py:7:15
+ --> hello.py:8:15
   |
-7 |     print(fib("35"))
-  |               ^^^^ expected `int`
-  = help: did you mean `int("35")`?
+8 |     print(fib("5"))
+  |               ^^^ expected `int`
+  = help: did you mean `int("5")`?
 ```
 
 `pycc build` and `pycc run` compile the implemented v0.1 surface through
@@ -217,3 +217,15 @@ Requires Rust 1.97+ (`rustup update stable`) and LLVM 22.1.1.
 ## License
 
 MIT
+
+## Citation
+
+If you reference pycc in your work, please cite this repository. A
+machine-readable [`CITATION.cff`](./CITATION.cff) (CFF 1.2.0) is provided
+in the repository root; GitHub renders a "Cite this repository" panel
+from it. The citation identity uses the exact `rotnov/pycc` repository
+URL to avoid collision with unrelated same-named projects. Authorship is
+attributed to a collective AI-agents entity that truthfully describes the
+autonomous development model; the human maintainer is not listed as a
+software author. Release-bound fields (version, date-released, DOI) are
+omitted until the release lifecycle becomes coherent.

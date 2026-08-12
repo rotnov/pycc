@@ -42,6 +42,12 @@ jobs:
           ./scripts/check-site.sh
           ./scripts/test-check-site.sh
           python3 ./scripts/test-notify-indexnow.py
+          ruby scripts/check_pages_workflow.rb
+          ruby scripts/test_check_pages_workflow.rb
+          ruby scripts/check_citation_cff.rb
+          ruby scripts/test_check_citation_cff.rb
+          ruby scripts/check_readme_claims.rb
+          ruby scripts/test_check_readme_claims.rb
 
       - name: Upload website
         uses: actions/upload-pages-artifact@v4
@@ -77,12 +83,17 @@ jobs:
       - name: Notify IndexNow
         id: notify-indexnow
         continue-on-error: true
+        env:
+          GITHUB_STEP_SUMMARY: ${{ github.workspace }}/indexnow-summary.md
         run: ./scripts/notify-indexnow.sh
 
       - name: Report IndexNow outcome
         if: always()
         run: |
           echo "IndexNow notification outcome: ${{ steps.notify-indexnow.outcome }}"
+          if [ -f indexnow-summary.md ]; then
+            cat indexnow-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [ "${{ steps.notify-indexnow.outcome }}" != "success" ]; then
             echo "::warning::IndexNow notification failed (outcome=${{ steps.notify-indexnow.outcome }}). Pages deployment is unaffected."
           fi
