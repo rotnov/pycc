@@ -94,18 +94,229 @@
       "language_contract": "input_contract"
     },
     "labels": {
-      "pycc":     { "static_model": "Hard annotations",      "output_artifact": "Standalone target",    "language_contract": "CPython 3.14 target" },
-      "LPython":  { "static_model": "Typed subset",          "output_artifact": "AOT executable",       "language_contract": "CPython-compatible subset" },
-      "Codon":    { "static_model": "Static language",       "output_artifact": "Native code",          "language_contract": "Python-like language" },
-      "Nuitka":   { "static_model": "None required",         "output_artifact": "Executable",           "language_contract": "Standard Python" },
-      "mypyc":    { "static_model": "Strict subset",         "output_artifact": "C extension",          "language_contract": "Standard Python subset" }
+      "pycc": {
+        "static_model": "Hard annotations",
+        "output_artifact": "Standalone target",
+        "language_contract": "CPython 3.14 target"
+      },
+      "LPython": {
+        "static_model": "Typed subset",
+        "output_artifact": "AOT executable",
+        "language_contract": "CPython-compatible subset"
+      },
+      "Codon": {
+        "static_model": "Static language",
+        "output_artifact": "Native code",
+        "language_contract": "Python-like language"
+      },
+      "Nuitka": {
+        "static_model": "None required",
+        "output_artifact": "Executable",
+        "language_contract": "Standard Python"
+      },
+      "mypyc": {
+        "static_model": "Strict subset",
+        "output_artifact": "C extension",
+        "language_contract": "Standard Python subset"
+      }
     },
     "anchors": {
-      "pycc":     { "static_model": "Typed",            "output_artifact": "Standalone",       "language_contract": "3.14" },
-      "LPython":  { "static_model": "subset",          "output_artifact": "AOT",              "language_contract": "CPython-compatible" },
-      "Codon":    { "static_model": "statically",      "output_artifact": "Native",           "language_contract": "Python" },
-      "Nuitka":   { "static_model": "compatibility",   "output_artifact": "Executable",       "language_contract": "Python" },
-      "mypyc":    { "static_model": "strict",          "output_artifact": "C extension",      "language_contract": "subset" }
+      "pycc": {
+        "static_model": "Typed",
+        "output_artifact": "Standalone",
+        "language_contract": "3.14"
+      },
+      "LPython": {
+        "static_model": "subset",
+        "output_artifact": "AOT",
+        "language_contract": "CPython-compatible"
+      },
+      "Codon": {
+        "static_model": "statically",
+        "output_artifact": "Native",
+        "language_contract": "Python"
+      },
+      "Nuitka": {
+        "static_model": "compatibility",
+        "output_artifact": "Executable",
+        "language_contract": "Python"
+      },
+      "mypyc": {
+        "static_model": "strict",
+        "output_artifact": "C extension",
+        "language_contract": "subset"
+      }
     }
-  }
+  },
+  "readme_projection": {
+    "column_sources": {
+      "type_enforcement": "type_enforcement",
+      "native_executable": "native_executable",
+      "standard_python": "standard_python"
+    },
+    "labels": {
+      "pycc": {
+        "type_enforcement": "hard compile error",
+        "native_executable": "native/--pure; CPython bundled only for permitted interop",
+        "standard_python": "CPython 3.14 target"
+      },
+      "LPython": {
+        "type_enforcement": "typed subset",
+        "native_executable": "AOT executable",
+        "standard_python": "CPython-compatible subset"
+      },
+      "Codon": {
+        "type_enforcement": "static language",
+        "native_executable": "",
+        "standard_python": "Python-like language with documented differences"
+      },
+      "Nuitka": {
+        "type_enforcement": "",
+        "native_executable": "packages CPython runtime components",
+        "standard_python": "compatibility-focused"
+      },
+      "mypyc": {
+        "type_enforcement": "strict compiled subset",
+        "native_executable": "CPython C extension",
+        "standard_python": "type-annotated Python subset"
+      },
+      "Cython": {
+        "type_enforcement": "optional",
+        "native_executable": "extension or embedded CPython",
+        "standard_python": "Python superset"
+      },
+      "mypy": {
+        "type_enforcement": "",
+        "native_executable": "checker only",
+        "standard_python": ""
+      },
+      "pyright": {
+        "type_enforcement": "",
+        "native_executable": "checker only",
+        "standard_python": ""
+      }
+    },
+    "row_order": [
+      "pycc",
+      "LPython",
+      "Codon",
+      "Nuitka",
+      "mypyc",
+      "Cython",
+      "mypy",
+      "pyright"
+    ]
+  },
+  "readme_entities": [
+    {
+      "name": "pycc",
+      "input_contract": "Typed, standard Python 3.14 is the v1 design target",
+      "html_output_cell": "Standalone native executable without CPython for native and pure builds; planned permitted interop bundles a pinned CPython runtime",
+      "positioning": "Pre-alpha; v0.1 frontend and native backend implemented with documented gaps; not production-ready",
+      "maturity": "pre-alpha",
+      "sources": [
+        {
+          "url": "https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md",
+          "description": "Commit-relative implementation status and binary acceptance gates."
+        }
+      ]
+    },
+    {
+      "name": "LPython",
+      "input_contract": "Type-annotated Python subset; accepted programs are intended to remain CPython-compatible",
+      "html_output_cell": "AOT binary via LLVM; C, C++, and WASM are also documented backends, with optional CPython interop",
+      "positioning": "Alpha; focused on numerical and array-oriented typed Python",
+      "maturity": "alpha",
+      "sources": [
+        {
+          "url": "https://lpython.org/",
+          "description": "Typed Python subset, AOT compilation, supported backends, project maturity, and CPython interoperability."
+        },
+        {
+          "url": "https://github.com/lcompilers/lpython",
+          "description": "Supported platforms, subset compatibility goal, compiler architecture, and current examples."
+        }
+      ]
+    },
+    {
+      "name": "Codon",
+      "input_contract": "A statically compiled language close to Python, with documented differences and additions",
+      "html_output_cell": "Native machine code without interpreter runtime overhead",
+      "positioning": "High-performance applications that can adopt Codon's language model",
+      "maturity": "unknown",
+      "sources": [
+        {
+          "url": "https://docs.exaloop.io/language/overview/",
+          "description": "Python differences, static compilation constraints, and native-code model."
+        }
+      ]
+    },
+    {
+      "name": "Nuitka",
+      "input_contract": "Python applications with a compatibility-first model",
+      "html_output_cell": "Executable or extension; standalone and onefile modes package required runtime dependencies",
+      "positioning": "Application compilation, distribution, and CPython ecosystem compatibility",
+      "maturity": "unknown",
+      "sources": [
+        {
+          "url": "https://nuitka.net/user-documentation/use-cases.html",
+          "description": "Executable, extension, standalone, and onefile deployment modes."
+        }
+      ]
+    },
+    {
+      "name": "mypyc",
+      "input_contract": "Standard Python type hints with a strict, gradually typed compiled subset",
+      "html_output_cell": "Native C extension imported and run by CPython",
+      "positioning": "Alpha; accelerating typed Python modules while keeping CPython interoperability",
+      "maturity": "alpha",
+      "sources": [
+        {
+          "url": "https://mypyc.readthedocs.io/en/stable/introduction.html",
+          "description": "Type-hint compilation, strict compiled subset, C extensions, and CPython runtime."
+        }
+      ]
+    },
+    {
+      "name": "Cython",
+      "input_contract": "A Python superset with optional static type declarations",
+      "html_output_cell": "Generated C or C++; commonly a CPython extension, with a documented CPython-embedding executable path",
+      "positioning": "Extension development, native-library integration, and targeted acceleration",
+      "maturity": "unknown",
+      "sources": [
+        {
+          "url": "https://docs.cython.org/en/latest/src/quickstart/overview.html",
+          "description": "Python-superset language, optional static declarations, and extension-module output."
+        },
+        {
+          "url": "https://docs.cython.org/en/latest/src/tutorial/embedding.html",
+          "description": "The CPython-initializing executable path supported by cython --embed."
+        }
+      ]
+    },
+    {
+      "name": "mypy",
+      "input_contract": "Standard Python with optional type annotations",
+      "html_output_cell": "Checker only; no native artifact",
+      "positioning": "Static type checker for Python; no compilation",
+      "maturity": "stable",
+      "sources": [
+        {
+          "url": "https://mypy.readthedocs.io/en/stable/"
+        }
+      ]
+    },
+    {
+      "name": "pyright",
+      "input_contract": "Standard Python with optional type annotations",
+      "html_output_cell": "Checker only; no native artifact",
+      "positioning": "Static type checker for Python; no compilation",
+      "maturity": "stable",
+      "sources": [
+        {
+          "url": "https://github.com/microsoft/pyright"
+        }
+      ]
+    }
+  ]
 }

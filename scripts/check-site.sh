@@ -1727,6 +1727,151 @@ for href in stylesheet_hrefs:
         )
 PY
 
+# --- README comparison table binding (Part 2 of #162) ---
+# Validate the root README's compiler comparison table against the
+# readme_projection block in claims.json.
+
+readme_path="${site_dir%/site}/README.md"
+if [ ! -f "$readme_path" ]; then
+  readme_path="README.md"
+fi
+
+python3 - \
+  "$readme_path" \
+  "$site_dir/python-aot-compilers/claims.json" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+
+readme_path = Path(sys.argv[1])
+claims_path = Path(sys.argv[2])
+claims = json.loads(claims_path.read_text())
+
+if "readme_projection" not in claims:
+    raise SystemExit("claims.json must contain a 'readme_projection' block")
+
+projection = claims["readme_projection"]
+column_sources = projection.get("column_sources", {})
+labels = projection.get("labels", {})
+row_order = projection.get("row_order", [])
+
+if not column_sources or not labels or not row_order:
+    raise SystemExit(
+        "readme_projection.column_sources, .labels, and .row_order "
+        "must be present and non-empty"
+    )
+
+readme_text = readme_path.read_text()
+
+# Find the comparison table. It starts with a header row containing
+# "Enforces types at compile time" and ends at the next blank line.
+table_lines = []
+in_table = False
+for line in readme_text.splitlines():
+    if "Enforces types at compile time" in line:
+        in_table = True
+        table_lines.append(line)
+        continue
+    if in_table:
+        if not line.strip() or not line.strip().startswith("|"):
+            break
+        table_lines.append(line)
+
+if not table_lines:
+    raise SystemExit("README comparison table not found")
+
+# Parse the table. Skip header and separator rows.
+# Expected columns: empty first col (entity name), type_enforcement, native_executable, standard_python
+readme_rows = {}
+for line in table_lines:
+    if "Enforces types at compile time" in line:
+        continue
+    if re.match(r"^\|[\s\-|]+\|$", line):
+        continue
+    cells = [c.strip() for c in line.split("|")]
+    # Remove empty leading/trailing cells from | ... | format
+    cells = [c for c in cells if c != ""]
+    if len(cells) < 4:
+        continue
+    entity_name = cells[0].rstrip(".")
+    # Remove markdown bold markers
+    entity_name = entity_name.replace("**", "")
+    # Handle "pycc (v1.0 design target)" -> "pycc"
+    entity_name = entity_name.split("(")[0].strip()
+    # Handle "mypy / pyright" -> split into two entities
+    if "/" in entity_name and entity_name not in labels:
+        parts = [p.strip() for p in entity_name.split("/")]
+        for part in parts:
+            readme_rows[part] = cells[1:]
+    else:
+        readme_rows[entity_name] = cells[1:]
+
+# Check row order matches
+readme_names = list(readme_rows.keys())
+expected_names = row_order
+
+# The README may combine mypy/pyright into one row; allow that
+if set(readme_names) != set(expected_names):
+    # Check if mypy and pyright are combined
+    if "mypy" in readme_names and "pyright" not in readme_names:
+        # The combined row covers both
+        if set(readme_names) | {"pyright"} == set(expected_names) or set(readme_names) == set(expected_names) - {"pyright"}:
+            pass  # Acceptable
+        else:
+            missing = set(expected_names) - set(readme_names)
+            extra = set(readme_names) - set(expected_names)
+            detail = []
+            if missing:
+                detail.append(f"missing from README: {sorted(missing)}")
+            if extra:
+                detail.append(f"extra in README: {sorted(extra)}")
+            raise SystemExit(
+                f"README comparison entity set mismatch: {'; '.join(detail)}"
+            )
+    else:
+        missing = set(expected_names) - set(readme_names)
+        extra = set(readme_names) - set(expected_names)
+        detail = []
+        if missing:
+            detail.append(f"missing from README: {sorted(missing)}")
+        if extra:
+            detail.append(f"extra in README: {sorted(extra)}")
+        raise SystemExit(
+            f"README comparison entity set mismatch: {'; '.join(detail)}"
+        )
+
+# Check each cell matches the projection labels
+columns = ["type_enforcement", "native_executable", "standard_python"]
+for entity_name in readme_names:
+    if entity_name not in labels:
+        # If this is a combined mypy/pyright row, check against mypy
+        if entity_name == "mypy":
+            continue
+        raise SystemExit(
+            f"README comparison row {entity_name!r} has no "
+            f"readme_projection.labels entry"
+        )
+    expected_labels = labels[entity_name]
+    actual_cells = readme_rows[entity_name]
+    for i, column in enumerate(columns):
+        if i >= len(actual_cells):
+            raise SystemExit(
+                f"README comparison row {entity_name!r} has too few cells"
+            )
+        expected = expected_labels[column]
+        actual = actual_cells[i]
+        # Normalize: remove emoji indicators for comparison
+        actual_normalized = re.sub(r"[✅❌⚠️`]", "", actual).strip()
+        if actual_normalized != expected:
+            raise SystemExit(
+                f"README comparison cell mismatch for {entity_name} "
+                f"{column!r}: expected {expected!r}, "
+                f"found {actual_normalized!r}"
+            )
+PY
+
 if grep -R -nE '(localhost|127\.0\.0\.1|file://)' "$site_dir"; then
   echo "Website contains a local-only URL" >&2
   exit 1
