@@ -39,6 +39,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
   D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent /
     "tests/fixtures/d114-frontend-perf-threshold-ci.yml"
+  D229_PAGES_PERFORMANCE_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent /
+    "tests/fixtures/policy-successors/ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -897,7 +900,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
       ### v0.1 acceptance checklist
 
-      - [x] `pycc check` processes 1k LOC in under 50 ms. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+      - [x] `pycc check` processes 1k LOC in under 75 ms. <!-- roadmap-evidence: check-throughput-1k-loc-75ms -->
     MARKDOWN
 
     stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
@@ -914,7 +917,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
       ### v0.1 acceptance checklist
 
-      - [x] `pycc check` processes 1k LOC in under 5 seconds. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+      - [x] `pycc check` processes 1k LOC in under 5 seconds. <!-- roadmap-evidence: check-throughput-1k-loc-75ms -->
     MARKDOWN
 
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
@@ -931,7 +934,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
       ### v0.1 acceptance checklist
 
-      - [x] `pycc check` processes 1k LOC in under 50 ms. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+      - [x] `pycc check` processes 1k LOC in under 75 ms. <!-- roadmap-evidence: check-throughput-1k-loc-75ms -->
     MARKDOWN
 
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
@@ -993,14 +996,14 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
-  # ci.yml now matches D114 (this round's own activation) -- D100/D112
+  # ci.yml now matches D229 (Phase 3 activation, issue #229) -- D100/D112/D114
   # remain in the accepted array below only because retiring them is a
   # separate, later propose-then-activate round for
   # check_roadmap_evidence.rb's own bytes (the same self-authorization
   # boundary this whole array already exists to enforce).
-  def test_tier1_workflow_authorization_is_the_active_d114_digest
+  def test_tier1_workflow_authorization_is_the_active_d229_digest
     assert_equal(
-      D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+      D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
       Digest::SHA256.hexdigest(
         (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
       )
@@ -1010,14 +1013,13 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # D100/D112's own retirement (later, separate propose-then-activate
   # rounds for check_roadmap_evidence.rb's own bytes) will shrink this
   # array further -- until then all three coexist, mirroring D-090's own
-  # coexist-then-retire precedent for this exact array. D-114 is now the
+  # coexist-then-retire precedent for this exact array. D229 is now the
   # live `.github/workflows/ci.yml` shape (see
-  # test_tier1_workflow_authorization_is_the_active_d114_digest above);
-  # D100/D112 remain accepted alongside it only as retained, no-longer-live
-  # audit evidence.
-  # Issue #229 (Phase 2): the D229 pages-performance digest is staged
-  # alongside D100/D112/D114 -- it authorizes the future ci.yml shape
-  # (Phase 3 activation) but is not yet the live ci.yml.
+  # test_tier1_workflow_authorization_is_the_active_d229_digest above);
+  # D100/D112/D114 remain accepted alongside it only as retained,
+  # no-longer-live audit evidence.
+  # Issue #229 (Phase 3 activation): the D229 pages-performance digest
+  # is now the live ci.yml shape.
   def test_tier1_workflow_authorization_contains_exactly_d100_d112_d114_and_d229
     assert_equal(
       [
@@ -1032,9 +1034,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   # D-114 (round 5/6): this reviewed successor fixture -- identical to
   # the D112 shape except the gate job's own comparison step gains an
-  # explicit "7.0" threshold_percent argument -- is now the live
+  # explicit "7.0" threshold_percent argument -- is now retained audit
+  # evidence only. D229 is now the live
   # `.github/workflows/ci.yml` shape (see
-  # test_tier1_workflow_authorization_is_the_active_d114_digest above).
+  # test_tier1_workflow_authorization_is_the_active_d229_digest above);
+  # D114 remains accepted alongside it only as retained, no-longer-live
+  # audit evidence.
   def test_d114_frontend_perf_threshold_workflow_fixture_matches_its_own_digest
     assert_equal(
       D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
@@ -1047,17 +1052,21 @@ class RoadmapEvidenceCliTest < Minitest::Test
                     D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
   end
 
-  def test_d114_frontend_perf_threshold_workflow_is_active_and_reviewed
+  # Issue #229 (Phase 3 activation): D229 is now the live ci.yml shape.
+  # This test verifies the D229 pages-performance ci.yml fixture matches
+  # its own digest, matches the live ci.yml, and passes the lifecycle
+  # validators (source-aware perf gate and pages-performance lifecycle).
+  def test_d229_pages_performance_workflow_is_active_and_reviewed
     assert_equal(
-      D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE).hexdigest
+      D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D229_PAGES_PERFORMANCE_WORKFLOW_FIXTURE).hexdigest
     )
     assert_equal(
-      D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+      D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
       Digest::SHA256.file(ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW).hexdigest
     )
     assert_equal(
-      D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE.read,
+      D229_PAGES_PERFORMANCE_WORKFLOW_FIXTURE.read,
       ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
     )
     assert validate_source_aware_perf_gate_lifecycle(
@@ -1065,6 +1074,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
       ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.to_s
     )
     assert coverage_gate_present?(
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read,
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.to_s
+    )
+    assert validate_pages_performance_lifecycle(
       ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read,
       ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.to_s
     )
@@ -1533,8 +1546,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   # D100's own digest remains in REVIEWED_PERF_CI_WORKFLOW_SHA256S (see
   # the coexist test above), but the live ci.yml file itself now matches
-  # D114, not D100 (see
-  # test_tier1_workflow_authorization_is_the_active_d114_digest above) --
+  # D229, not D100 (see
+  # test_tier1_workflow_authorization_is_the_active_d229_digest above) --
   # D100's retirement from the checker's array is a separate, later round.
   def test_d100_composed_workflow_fixture_matches_its_own_digest
     assert_equal(
@@ -1565,8 +1578,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  # D-112 is no longer the live shape once D114 activates (see
-  # test_d114_frontend_perf_threshold_workflow_is_active_and_reviewed
+  # D-112 is no longer the live shape once D229 activates (see
+  # test_d229_pages_performance_workflow_is_active_and_reviewed
   # above) -- its remaining, still-true facts (fixture digest,
   # array membership, structural recognition) stay covered by
   # test_d112_ubuntu_frontend_perf_workflow_digest_matches_the_fixture,
@@ -1575,8 +1588,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # below, so this test (which asserted D112 == the live file) is
   # removed rather than left asserting something now false.
 
-  # D112 is no longer the live shape once D114 activates (see
-  # test_d114_frontend_perf_threshold_workflow_is_active_and_reviewed
+  # D112 is no longer the live shape once D229 activates (see
+  # test_d229_pages_performance_workflow_is_active_and_reviewed
   # above), but the checker still recognizes and accepts it (this fixture
   # is identical to the live D91/REPLICATED frontend-perf-measure/gate
   # shape except runs-on: ubuntu-latest and the macOS brew-based LLVM
@@ -1616,8 +1629,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # D-114: the same D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB measure job
   # authorizes either gate-job shape (D-112's 2.0%-implicit-threshold shape,
   # still covered by the tests above, or this 7.0%-explicit-threshold
-  # shape, now the live `.github/workflows/ci.yml` shape -- see
-  # test_tier1_workflow_authorization_is_the_active_d114_digest above).
+  # shape, now retained audit evidence -- see
+  # test_tier1_workflow_authorization_is_the_active_d229_digest above).
   def test_d114_raised_threshold_frontend_perf_gate_job_structure_is_recognized
     workflow = d114_raised_threshold_frontend_perf_workflow
     assert validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
@@ -2888,14 +2901,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
                     commands.index("cargo test --workspace -- --include-ignored")
   end
 
-  # Issue #229 (Phase 2): tests for validate_pages_performance_lifecycle.
-  # These tests use synthetic ci.yml fixtures (not the live ci.yml) because
-  # the live ci.yml does not yet have a pages-performance job -- it will be
-  # added in Phase 3 (PR 5).  The lifecycle validator must fail closed when
-  # the job is absent, so testing against the live ci.yml would always fail
-  # until Phase 3 activation.  Using fixtures keeps these tests
-  # forward-compatible: they pass at both the intermediate state (after PR 3
-  # activation but before PR 5 ci.yml activation) and the final state.
+  # Issue #229 (Phase 3 activation): tests for validate_pages_performance_lifecycle.
+  # These tests use synthetic ci.yml fixtures (not the live ci.yml) to test
+  # the lifecycle validator's structural invariants in isolation.  The live
+  # ci.yml now has a pages-performance job (activated in this round), and
+  # test_d229_pages_performance_workflow_is_active_and_reviewed above
+  # verifies the live ci.yml passes the lifecycle validator.
 
   # A minimal valid pages-performance job for lifecycle testing.  The
   # lifecycle validator checks structural invariants (existence, ci-gate
@@ -3067,26 +3078,24 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes error.message, "pages-performance must have only contents: read permission"
   end
 
-  # Issue #229 (Phase 2): the D229 pages-performance ci.yml digest is
-  # staged and accepted by the array, but is not yet the live ci.yml.
-  # This test verifies the digest constant is in the accepted array.
+  # Issue #229 (Phase 3 activation): the D229 pages-performance ci.yml
+  # digest is now the live ci.yml.  This test verifies the digest
+  # constant is in the accepted array.
   def test_d229_pages_performance_digest_is_staged
     assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
                     D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256
   end
 
-  # Issue #229 (Phase 2): validate_pages_performance_lifecycle gates the
-  # pages-performance validation on the live ci.yml digest.  Between PR 3
-  # (checker activation) and PR 5 (ci.yml activation), the live ci.yml has
-  # a pre-D229 digest -- one of the other accepted digests in
-  # REVIEWED_PERF_CI_WORKFLOW_SHA256S.  The validator must SKIP the
-  # pages-performance lifecycle validation for those pre-D229 shapes
-  # (the job does not exist yet) and ENFORCE it only when the live ci.yml
-  # matches D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256.  For an unknown
-  # digest (not in the accepted array), the validator enforces fail-closed
-  # -- validate_evidence's own digest check rejects unknown digests before
-  # this function runs in production, so that default only matters for
-  # direct unit tests with synthetic workflows.
+  # Issue #229 (Phase 3 activation): validate_pages_performance_lifecycle
+  # gates the pages-performance validation on the live ci.yml digest.
+  # Now that the live ci.yml matches D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
+  # the validator ENFORCES the pages-performance lifecycle validation.
+  # For pre-D229 accepted digests (D100/D112/D114), the validator SKIPS
+  # the pages-performance lifecycle validation (the job does not exist in
+  # those shapes).  For an unknown digest (not in the accepted array), the
+  # validator enforces fail-closed -- validate_evidence's own digest check
+  # rejects unknown digests before this function runs in production, so
+  # that default only matters for direct unit tests with synthetic workflows.
 
   def test_pages_performance_lifecycle_skips_validation_for_a_pre_d229_digest
     # The live D114 ci.yml fixture has a pre-D229 digest (no
