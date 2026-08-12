@@ -2272,4 +2272,75 @@ fi
 
 cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
 
+# --- Issue #39: table-driven mutation tests for required files ---
+
+# For each required file, remove it and verify the validator rejects.
+for required_file in \
+  index.html \
+  index.html.md \
+  styles.css \
+  site.js \
+  og.png \
+  favicon.svg \
+  robots.txt \
+  sitemap.xml \
+  llms.txt \
+  404.html \
+  status/index.html \
+  architecture/index.html \
+  python-aot-compilers/index.html \
+  python-aot-compilers/claims.json \
+  ai-native/index.html
+do
+  cp -R "$repo_root/site" "$fixture_root/site/"
+  rm -f "$fixture_root/site/$required_file"
+  if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+    echo "Validator accepted missing required file: $required_file (issue #39)" >&2
+    exit 1
+  fi
+done
+
+# --- Issue #39: table-driven mutation tests for required metadata ---
+
+# For each required metadata key, remove it from index.html and verify
+# the validator rejects.
+for meta_key in \
+  og:url \
+  og:title \
+  og:description \
+  og:image \
+  og:image:alt \
+  twitter:card \
+  twitter:title \
+  twitter:description \
+  twitter:image \
+  twitter:image:alt
+do
+  cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+  python3 - "$fixture_root/site/index.html" "$meta_key" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+meta_key = sys.argv[2]
+content = path.read_text()
+# Remove the meta tag with this property/name.
+import re
+# Match <meta property="meta_key" ...> or <meta name="meta_key" ...>
+pattern = re.compile(
+    r'<meta\s+(?:property|name)="' + re.escape(meta_key) + r'"[^>]*/?>',
+    re.IGNORECASE
+)
+content, count = pattern.subn("", content)
+if count == 0:
+    print(f"WARNING: could not find meta tag for {meta_key}", file=sys.stderr)
+path.write_text(content)
+PY
+  if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+    echo "Validator accepted missing required metadata: $meta_key (issue #39)" >&2
+    exit 1
+  fi
+done
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
 echo "Website validator self-tests passed."
