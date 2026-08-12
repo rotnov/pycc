@@ -48,6 +48,8 @@ jobs:
           ruby scripts/test_check_citation_cff.rb
           ruby scripts/check_readme_claims.rb
           ruby scripts/test_check_readme_claims.rb
+          ruby scripts/check_readme_coverage_badge.rb
+          ruby scripts/test_check_readme_coverage_badge.rb
 
       - name: Upload website
         uses: actions/upload-pages-artifact@v4
