@@ -1,4 +1,3 @@
-
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::OptimizationLevel;
@@ -502,10 +501,7 @@ fn declare_rt_functions<'ctx>(
         ),
         dict_get_or_default: declare(
             "pycc_rt_dict_get_or_default",
-            i64_type.fn_type(
-                &[ptr_type.into(), ptr_type.into(), i64_type.into()],
-                false,
-            ),
+            i64_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false),
         ),
         dict_len: declare(
             "pycc_rt_dict_len",
@@ -1226,7 +1222,11 @@ fn build_int_set_get<'ctx>(
     raw_index: IntValue<'ctx>,
 ) -> IntValue<'ctx> {
     builder
-        .build_call(rt.int_set_get, &[set_ptr.into(), raw_index.into()], "set_get")
+        .build_call(
+            rt.int_set_get,
+            &[set_ptr.into(), raw_index.into()],
+            "set_get",
+        )
         .expect("build_call should not fail for a well-formed set read")
         .try_as_basic_value()
         .expect_basic("pycc_rt_int_set_get returns a non-void i64")
@@ -1579,7 +1579,10 @@ fn emit_expr<'ctx>(
         // is Rust's own IEEE-754 double-precision constant for pi, bit-for-bit
         // the same value CPython's `math.pi` uses (both are the nearest
         // representable `f64`/C `double` to the true mathematical constant).
-        MirExpr::Name { name, ty: Ty::Float } if name == "math.pi" => {
+        MirExpr::Name {
+            name,
+            ty: Ty::Float,
+        } if name == "math.pi" => {
             Scalar::Float(context.f64_type().const_float(std::f64::consts::PI))
         }
         MirExpr::Name { name, ty } => {
@@ -2558,12 +2561,7 @@ fn emit_expr<'ctx>(
                 let value_scalar =
                     emit_expr(context, builder, module, rt, user_functions, locals, value);
                 let encoded = to_encoded_int(context, builder, value_scalar);
-                let _ = build_untag_checked(
-                    builder,
-                    rt,
-                    encoded,
-                    "dict_validate_literal_value",
-                );
+                let _ = build_untag_checked(builder, rt, encoded, "dict_validate_literal_value");
                 build_dict_set(builder, rt, dict_ptr, key_ptr, encoded);
             }
             Scalar::Dict(dict_ptr)
@@ -2578,8 +2576,7 @@ fn emit_expr<'ctx>(
         // not something this crate can check -- the key is only known at
         // runtime.
         MirExpr::DictGet { dict, key } => {
-            let dict_scalar =
-                emit_expr(context, builder, module, rt, user_functions, locals, dict);
+            let dict_scalar = emit_expr(context, builder, module, rt, user_functions, locals, dict);
             let dict_ptr = expect_dict_pointer(dict_scalar, "the dict subscripted value");
             let key_scalar = emit_expr(context, builder, module, rt, user_functions, locals, key);
             let Scalar::Str(key_ptr) = key_scalar else {
@@ -2660,8 +2657,15 @@ fn emit_expr<'ctx>(
                 .into_struct_type();
             let mut aggregate = struct_ty.get_undef();
             for (index, element) in elements.iter().enumerate() {
-                let scalar =
-                    emit_expr(context, builder, module, rt, user_functions, locals, element);
+                let scalar = emit_expr(
+                    context,
+                    builder,
+                    module,
+                    rt,
+                    user_functions,
+                    locals,
+                    element,
+                );
                 let field_value: inkwell::values::BasicValueEnum = match scalar {
                     Scalar::Int(v) => v.into(),
                     Scalar::Bool(v) => v.into(),
@@ -2735,8 +2739,7 @@ fn emit_expr<'ctx>(
 
             let start_i64 = match start {
                 Some(e) => {
-                    let scalar =
-                        emit_expr(context, builder, module, rt, user_functions, locals, e);
+                    let scalar = emit_expr(context, builder, module, rt, user_functions, locals, e);
                     let encoded = to_numeric_encoded_int(context, builder, scalar);
                     build_untag_checked(builder, rt, encoded, "slice_untag_start")
                 }
@@ -2744,17 +2747,20 @@ fn emit_expr<'ctx>(
             };
             let stop_raw = match stop {
                 Some(e) => {
-                    let scalar =
-                        emit_expr(context, builder, module, rt, user_functions, locals, e);
+                    let scalar = emit_expr(context, builder, module, rt, user_functions, locals, e);
                     let encoded = to_numeric_encoded_int(context, builder, scalar);
-                    Some(build_untag_checked(builder, rt, encoded, "slice_untag_stop"))
+                    Some(build_untag_checked(
+                        builder,
+                        rt,
+                        encoded,
+                        "slice_untag_stop",
+                    ))
                 }
                 None => None,
             };
             let step_i64 = match step {
                 Some(e) => {
-                    let scalar =
-                        emit_expr(context, builder, module, rt, user_functions, locals, e);
+                    let scalar = emit_expr(context, builder, module, rt, user_functions, locals, e);
                     let encoded = to_numeric_encoded_int(context, builder, scalar);
                     build_untag_checked(builder, rt, encoded, "slice_untag_step")
                 }
@@ -2838,10 +2844,7 @@ fn emit_expr<'ctx>(
         // `dict_get_or_default_nested_in_its_own_default_argument_resolves_correctly`
         // end-to-end test below.
         MirExpr::DictGetOrDefault {
-            dict,
-            key,
-            default,
-            ..
+            dict, key, default, ..
         } => {
             let dict_ptr =
                 emit_dict_name_read(context, builder, module, rt, user_functions, locals, dict);
@@ -2852,15 +2855,17 @@ fn emit_expr<'ctx>(
                      pycc_types::check (T0021) should have rejected this before codegen"
                 )
             };
-            let default_scalar =
-                emit_expr(context, builder, module, rt, user_functions, locals, default);
-            let encoded_default = to_encoded_int(context, builder, default_scalar);
-            let _ = build_untag_checked(
+            let default_scalar = emit_expr(
+                context,
                 builder,
+                module,
                 rt,
-                encoded_default,
-                "dict_get_validate_default",
+                user_functions,
+                locals,
+                default,
             );
+            let encoded_default = to_encoded_int(context, builder, default_scalar);
+            let _ = build_untag_checked(builder, rt, encoded_default, "dict_get_validate_default");
             let encoded =
                 build_dict_get_or_default(builder, rt, dict_ptr, key_ptr, encoded_default);
             Scalar::Int(encoded)
@@ -2906,9 +2911,7 @@ fn emit_expr<'ctx>(
                 args,
                 ..
             } = inst.as_ref();
-            let count = context
-                .i64_type()
-                .const_int(*attr_count as u64, false);
+            let count = context.i64_type().const_int(*attr_count as u64, false);
             let instance_ptr = builder
                 .build_call(rt.instance_new, &[count.into()], "instance_new")
                 .expect("build_call should not fail for a well-formed instance allocation")
@@ -3232,11 +3235,7 @@ fn build_call_to_with_leading_args<'ctx>(
         .expect("non-monomorphized user function has a fn_ptr_global");
     let fn_ptr_type = context.ptr_type(inkwell::AddressSpace::default());
     let fn_ptr = builder
-        .build_load(
-            fn_ptr_type,
-            fn_ptr_global.as_pointer_value(),
-            "load_fnptr",
-        )
+        .build_load(fn_ptr_type, fn_ptr_global.as_pointer_value(), "load_fnptr")
         .expect("build_load should not fail for a global function-pointer slot")
         .into_pointer_value();
     let null_ptr = fn_ptr_type.const_null();
@@ -3940,7 +3939,9 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
             elt,
             ..
         } => {
-            bindings.entry(var.clone()).or_insert_with(|| var_ty.clone());
+            bindings
+                .entry(var.clone())
+                .or_insert_with(|| var_ty.clone());
             bindings
                 .entry(target.clone())
                 .or_insert(pycc_mir::Ty::List(Box::new(elt.ty())));
@@ -3962,7 +3963,9 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
             value,
             ..
         } => {
-            bindings.entry(var.clone()).or_insert_with(|| var_ty.clone());
+            bindings
+                .entry(var.clone())
+                .or_insert_with(|| var_ty.clone());
             bindings
                 .entry(target.clone())
                 .or_insert(pycc_mir::Ty::Dict(Box::new((key.ty(), value.ty()))));
@@ -3977,7 +3980,9 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
             elt,
             ..
         } => {
-            bindings.entry(var.clone()).or_insert_with(|| var_ty.clone());
+            bindings
+                .entry(var.clone())
+                .or_insert_with(|| var_ty.clone());
             bindings
                 .entry(target.clone())
                 .or_insert(pycc_mir::Ty::Set(Box::new(elt.ty())));
@@ -3991,6 +3996,23 @@ fn collect_module_bindings(mir: &MirModule) -> BTreeMap<String, pycc_mir::Ty> {
     for item in &mir.items {
         if let MirItem::TopLevelStmt(stmt) = item {
             collect_stmt_bindings(stmt, &mut bindings);
+        }
+    }
+    // #379 (PR-19): declare a module global for each enum member singleton.
+    // Each member gets a synthetic global named `<Class>.<Member>.enum_member`
+    // (the `.enum_member` suffix ensures no collision with real Python names,
+    // which cannot contain `.`). The global's type is `Ty::Instance(class)`,
+    // so `declare_module_globals` allocates it as an opaque pointer (null
+    // until the module-init sequence stores the singleton into it). The init
+    // sequence is emitted in `compile_to_object_with_observer` after the
+    // top-level statement loop, mirroring how top-level `Assign` already
+    // emits init code.
+    for (class_name, class_def) in &mir.class_defs {
+        for (member_name, _) in &class_def.enum_members {
+            bindings.insert(
+                format!("{class_name}.{member_name}.enum_member"),
+                pycc_mir::Ty::Instance(Box::new(class_name.clone())),
+            );
         }
     }
     bindings
@@ -4291,11 +4313,8 @@ fn compile_to_object_with_observer(
                     }
                 } else {
                     let fn_ptr_type = context.ptr_type(inkwell::AddressSpace::default());
-                    let fn_ptr_global = module.add_global(
-                        fn_ptr_type,
-                        None,
-                        &format!("fnptr_{name}"),
-                    );
+                    let fn_ptr_global =
+                        module.add_global(fn_ptr_type, None, &format!("fnptr_{name}"));
                     fn_ptr_global.set_initializer(&fn_ptr_type.const_null());
                     let name_global = module.add_global(
                         context.i8_type().array_type(name.len() as u32 + 1),
@@ -4336,6 +4355,75 @@ fn compile_to_object_with_observer(
         .iter()
         .map(|(name, binding)| (name.clone(), binding.clone()))
         .collect();
+    // #379 (PR-19): emit per-enum-member singleton init sequences BEFORE
+    // the top-level statement loop. Each enum member is a compile-time
+    // singleton instance that must be alive before any top-level code reads
+    // it (`print(Color.RED.value)` is a top-level statement that runs in
+    // the loop below). For each enum class with members, and each member
+    // in source order, allocate a fresh 2-slot instance
+    // (`pycc_rt_instance_new(2)`), set slot 0 to the integer member value,
+    // set slot 1 to a string pointer containing the member name, and store
+    // the instance pointer into the synthetic global
+    // `<Class>.<Member>.enum_member`. The singleton's `name` string slot
+    // is alive for the program's lifetime (leak-only, matching
+    // `Ty::Instance`'s own leak-only policy, D-154). The member's integer
+    // value is a compile-time literal, so `tag_smallint_const` folds it at
+    // compile time. The `name` string is emitted via
+    // `emit_string_literal`, which calls `pycc_rt_str_from_literal` to
+    // allocate a `PyStrObj` -- the resulting pointer is stored into slot 1
+    // via `scalar_to_slot_word` (which `ptrtoint`s it to an `i64` word,
+    // the same encoding `slot_word_to_scalar` decodes on read).
+    for (class_name, class_def) in &mir.class_defs {
+        for (member_name, member_value) in &class_def.enum_members {
+            let global_name = format!("{class_name}.{member_name}.enum_member");
+            let slot = &module_globals[&global_name];
+            // Allocate a fresh 2-slot instance.
+            let count = context.i64_type().const_int(2, false);
+            let instance_ptr = builder
+                .build_call(rt.instance_new, &[count.into()], "enum_instance_new")
+                .expect("build_call should not fail for a well-formed enum member allocation")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_instance_new returns a non-void pointer")
+                .into_pointer_value();
+            // Set slot 0 to the integer member value. The value is the
+            // actual `i64` literal from the source (`RED = 1` → 1), carried
+            // in `HirClassDef.enum_members` from HIR through MIR to here.
+            // `tag_smallint_const` folds it at compile time into the
+            // tagged-pointer representation `pycc_rt` uses for small ints.
+            let value_scalar = Scalar::Int(tag_smallint_const(&context, *member_value));
+            let value_word = scalar_to_slot_word(&context, &builder, value_scalar);
+            let slot0_index = context.i64_type().const_int(0, false);
+            builder
+                .build_call(
+                    rt.instance_set_slot,
+                    &[instance_ptr.into(), slot0_index.into(), value_word.into()],
+                    "enum_set_value",
+                )
+                .expect("build_call should not fail for a well-formed enum value slot write");
+            // Set slot 1 to a string pointer containing the member name.
+            let name_ptr = emit_string_literal(&context, &builder, &module, &rt, member_name);
+            let name_scalar = Scalar::Str(name_ptr);
+            let name_word = scalar_to_slot_word(&context, &builder, name_scalar);
+            let slot1_index = context.i64_type().const_int(1, false);
+            builder
+                .build_call(
+                    rt.instance_set_slot,
+                    &[instance_ptr.into(), slot1_index.into(), name_word.into()],
+                    "enum_set_name",
+                )
+                .expect("build_call should not fail for a well-formed enum name slot write");
+            // Store the instance pointer into the synthetic global and
+            // mark it initialized.
+            builder
+                .build_store(slot.ptr, instance_ptr)
+                .expect("build_store should not fail for a declared enum member global");
+            if let Some(initialized_ptr) = slot.initialized {
+                builder
+                    .build_store(initialized_ptr, context.i8_type().const_int(1, false))
+                    .expect("build_store should not fail for a declared enum member init flag");
+            }
+        }
+    }
     // Issue #22: iterate over ALL items in source order, not just
     // top-level statements. A `MirItem::Function` at its source position
     // represents a `def` statement's runtime binding effect: store the
@@ -5892,7 +5980,11 @@ fn emit_stmt<'ctx>(
                     let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
                     emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
 
-                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                    (
+                        test_bb,
+                        after_bb,
+                        CompLoopTail::Indexed { induction, current },
+                    )
                 }
                 CompSource::Dict(name) => {
                     // Mirrors `MirStmt::ForDict`'s own shape exactly,
@@ -5962,15 +6054,15 @@ fn emit_stmt<'ctx>(
                         .expect_basic("pycc_rt_dict_key_at returns a non-void pointer")
                         .into_pointer_value();
                     builder
-                        .build_call(
-                            rt.str_incref,
-                            &[key_ptr.into()],
-                            "listcomp_dict_key_incref",
-                        )
+                        .build_call(rt.str_incref, &[key_ptr.into()], "listcomp_dict_key_incref")
                         .expect("build_call should not fail for a well-formed incref");
                     emit_assign(context, builder, locals, var, Scalar::Str(key_ptr));
 
-                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                    (
+                        test_bb,
+                        after_bb,
+                        CompLoopTail::Indexed { induction, current },
+                    )
                 }
                 CompSource::Set(name) => {
                     // Mirrors `MirStmt::ForSet`'s own shape exactly.
@@ -6013,7 +6105,11 @@ fn emit_stmt<'ctx>(
                     let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
                     emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
 
-                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                    (
+                        test_bb,
+                        after_bb,
+                        CompLoopTail::Indexed { induction, current },
+                    )
                 }
             };
 
@@ -6031,8 +6127,15 @@ fn emit_stmt<'ctx>(
             //    duplicated inside each branch of the match above.
             match cond {
                 Some(cond_expr) => {
-                    let cond_scalar =
-                        emit_expr(context, builder, module, rt, user_functions, locals, cond_expr);
+                    let cond_scalar = emit_expr(
+                        context,
+                        builder,
+                        module,
+                        rt,
+                        user_functions,
+                        locals,
+                        cond_expr,
+                    );
                     let cond_i1 = truthy(context, builder, rt, cond_scalar);
                     let if_taken_bb = context.append_basic_block(function, "listcomp_if_taken");
                     let if_skip_bb = context.append_basic_block(function, "listcomp_if_skip");
@@ -6048,12 +6151,7 @@ fn emit_stmt<'ctx>(
                     let elt_scalar =
                         emit_expr(context, builder, module, rt, user_functions, locals, elt);
                     let elt_encoded = to_encoded_int(context, builder, elt_scalar);
-                    let _ = build_untag_checked(
-                        builder,
-                        rt,
-                        elt_encoded,
-                        "listcomp_validate_elt",
-                    );
+                    let _ = build_untag_checked(builder, rt, elt_encoded, "listcomp_validate_elt");
                     build_int_list_append(builder, rt, new_list, elt_encoded);
                     builder.build_unconditional_branch(if_skip_bb).expect(
                         "build_unconditional_branch should not fail on a block with no terminator yet",
@@ -6064,12 +6162,7 @@ fn emit_stmt<'ctx>(
                     let elt_scalar =
                         emit_expr(context, builder, module, rt, user_functions, locals, elt);
                     let elt_encoded = to_encoded_int(context, builder, elt_scalar);
-                    let _ = build_untag_checked(
-                        builder,
-                        rt,
-                        elt_encoded,
-                        "listcomp_validate_elt",
-                    );
+                    let _ = build_untag_checked(builder, rt, elt_encoded, "listcomp_validate_elt");
                     build_int_list_append(builder, rt, new_list, elt_encoded);
                 }
             }
@@ -6084,7 +6177,11 @@ fn emit_stmt<'ctx>(
                     step_v,
                 } => {
                     let next = builder
-                        .build_call(rt.int_add, &[current.into(), step_v.into()], "listcomp_next")
+                        .build_call(
+                            rt.int_add,
+                            &[current.into(), step_v.into()],
+                            "listcomp_next",
+                        )
                         .expect("build_call should not fail for a well-formed int add")
                         .try_as_basic_value()
                         .expect_basic("pycc_rt_int_add returns a non-void i64")
@@ -6293,7 +6390,11 @@ fn emit_stmt<'ctx>(
                     let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
                     emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
 
-                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                    (
+                        test_bb,
+                        after_bb,
+                        CompLoopTail::Indexed { induction, current },
+                    )
                 }
                 CompSource::Dict(name) => {
                     // `set[int]`'s own element type is always `Ty::Int`
@@ -6353,15 +6454,15 @@ fn emit_stmt<'ctx>(
                         .expect_basic("pycc_rt_dict_key_at returns a non-void pointer")
                         .into_pointer_value();
                     builder
-                        .build_call(
-                            rt.str_incref,
-                            &[key_ptr.into()],
-                            "setcomp_dict_key_incref",
-                        )
+                        .build_call(rt.str_incref, &[key_ptr.into()], "setcomp_dict_key_incref")
                         .expect("build_call should not fail for a well-formed incref");
                     emit_assign(context, builder, locals, var, Scalar::Str(key_ptr));
 
-                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                    (
+                        test_bb,
+                        after_bb,
+                        CompLoopTail::Indexed { induction, current },
+                    )
                 }
                 CompSource::Set(name) => {
                     let set_ptr = emit_set_name_read(
@@ -6403,7 +6504,11 @@ fn emit_stmt<'ctx>(
                     let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
                     emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
 
-                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                    (
+                        test_bb,
+                        after_bb,
+                        CompLoopTail::Indexed { induction, current },
+                    )
                 }
             };
 
@@ -6415,8 +6520,15 @@ fn emit_stmt<'ctx>(
             //    one, unconditionally, with no extra logic needed here.
             match cond {
                 Some(cond_expr) => {
-                    let cond_scalar =
-                        emit_expr(context, builder, module, rt, user_functions, locals, cond_expr);
+                    let cond_scalar = emit_expr(
+                        context,
+                        builder,
+                        module,
+                        rt,
+                        user_functions,
+                        locals,
+                        cond_expr,
+                    );
                     let cond_i1 = truthy(context, builder, rt, cond_scalar);
                     let if_taken_bb = context.append_basic_block(function, "setcomp_if_taken");
                     let if_skip_bb = context.append_basic_block(function, "setcomp_if_skip");
@@ -6429,12 +6541,7 @@ fn emit_stmt<'ctx>(
                     let elt_scalar =
                         emit_expr(context, builder, module, rt, user_functions, locals, elt);
                     let elt_encoded = to_encoded_int(context, builder, elt_scalar);
-                    let _ = build_untag_checked(
-                        builder,
-                        rt,
-                        elt_encoded,
-                        "setcomp_validate_elt",
-                    );
+                    let _ = build_untag_checked(builder, rt, elt_encoded, "setcomp_validate_elt");
                     build_int_set_add(builder, rt, new_set, elt_encoded);
                     builder.build_unconditional_branch(if_skip_bb).expect(
                         "build_unconditional_branch should not fail on a block with no terminator yet",
@@ -6445,12 +6552,7 @@ fn emit_stmt<'ctx>(
                     let elt_scalar =
                         emit_expr(context, builder, module, rt, user_functions, locals, elt);
                     let elt_encoded = to_encoded_int(context, builder, elt_scalar);
-                    let _ = build_untag_checked(
-                        builder,
-                        rt,
-                        elt_encoded,
-                        "setcomp_validate_elt",
-                    );
+                    let _ = build_untag_checked(builder, rt, elt_encoded, "setcomp_validate_elt");
                     build_int_set_add(builder, rt, new_set, elt_encoded);
                 }
             }
@@ -6667,7 +6769,11 @@ fn emit_stmt<'ctx>(
                     let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
                     emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
 
-                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                    (
+                        test_bb,
+                        after_bb,
+                        CompLoopTail::Indexed { induction, current },
+                    )
                 }
                 CompSource::Dict(name) => {
                     // The one `source` kind this arm's own `key`/`value`
@@ -6733,15 +6839,15 @@ fn emit_stmt<'ctx>(
                         .expect_basic("pycc_rt_dict_key_at returns a non-void pointer")
                         .into_pointer_value();
                     builder
-                        .build_call(
-                            rt.str_incref,
-                            &[key_ptr.into()],
-                            "dictcomp_dict_key_incref",
-                        )
+                        .build_call(rt.str_incref, &[key_ptr.into()], "dictcomp_dict_key_incref")
                         .expect("build_call should not fail for a well-formed incref");
                     emit_assign(context, builder, locals, var, Scalar::Str(key_ptr));
 
-                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                    (
+                        test_bb,
+                        after_bb,
+                        CompLoopTail::Indexed { induction, current },
+                    )
                 }
                 CompSource::Set(name) => {
                     let set_ptr = emit_set_name_read(
@@ -6783,7 +6889,11 @@ fn emit_stmt<'ctx>(
                     let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
                     emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
 
-                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                    (
+                        test_bb,
+                        after_bb,
+                        CompLoopTail::Indexed { induction, current },
+                    )
                 }
             };
 
@@ -6796,8 +6906,15 @@ fn emit_stmt<'ctx>(
             //    `SetCompAssign` share.
             match cond {
                 Some(cond_expr) => {
-                    let cond_scalar =
-                        emit_expr(context, builder, module, rt, user_functions, locals, cond_expr);
+                    let cond_scalar = emit_expr(
+                        context,
+                        builder,
+                        module,
+                        rt,
+                        user_functions,
+                        locals,
+                        cond_expr,
+                    );
                     let cond_i1 = truthy(context, builder, rt, cond_scalar);
                     let if_taken_bb = context.append_basic_block(function, "dictcomp_if_taken");
                     let if_skip_bb = context.append_basic_block(function, "dictcomp_if_skip");
@@ -6820,12 +6937,7 @@ fn emit_stmt<'ctx>(
                     let value_scalar =
                         emit_expr(context, builder, module, rt, user_functions, locals, value);
                     let encoded = to_encoded_int(context, builder, value_scalar);
-                    let _ = build_untag_checked(
-                        builder,
-                        rt,
-                        encoded,
-                        "dictcomp_validate_value",
-                    );
+                    let _ = build_untag_checked(builder, rt, encoded, "dictcomp_validate_value");
                     build_dict_set(builder, rt, new_dict, key_ptr, encoded);
                     builder.build_unconditional_branch(if_skip_bb).expect(
                         "build_unconditional_branch should not fail on a block with no terminator yet",
@@ -6846,12 +6958,7 @@ fn emit_stmt<'ctx>(
                     let value_scalar =
                         emit_expr(context, builder, module, rt, user_functions, locals, value);
                     let encoded = to_encoded_int(context, builder, value_scalar);
-                    let _ = build_untag_checked(
-                        builder,
-                        rt,
-                        encoded,
-                        "dictcomp_validate_value",
-                    );
+                    let _ = build_untag_checked(builder, rt, encoded, "dictcomp_validate_value");
                     build_dict_set(builder, rt, new_dict, key_ptr, encoded);
                 }
             }
@@ -6866,7 +6973,11 @@ fn emit_stmt<'ctx>(
                     step_v,
                 } => {
                     let next = builder
-                        .build_call(rt.int_add, &[current.into(), step_v.into()], "dictcomp_next")
+                        .build_call(
+                            rt.int_add,
+                            &[current.into(), step_v.into()],
+                            "dictcomp_next",
+                        )
                         .expect("build_call should not fail for a well-formed int add")
                         .try_as_basic_value()
                         .expect_basic("pycc_rt_int_add returns a non-void i64")
@@ -6980,12 +7091,11 @@ mod tests {
         // `initialized` guard flag every module global gets, not a panic.
         let context = Context::create();
         let module = context.create_module("dict_global");
-        let bindings = BTreeMap::from([(
-            "x".to_string(),
-            Ty::Dict(Box::new((Ty::Str, Ty::Int))),
-        )]);
+        let bindings = BTreeMap::from([("x".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))))]);
         let globals = declare_module_globals(&context, &module, &bindings);
-        let slot = globals.get("x").expect("declare_module_globals should bind `x`");
+        let slot = globals
+            .get("x")
+            .expect("declare_module_globals should bind `x`");
         assert_eq!(slot.ty, Ty::Dict(Box::new((Ty::Str, Ty::Int))));
         assert!(slot.initialized.is_some());
     }
@@ -7003,7 +7113,9 @@ mod tests {
         let module = context.create_module("set_global");
         let bindings = BTreeMap::from([("x".to_string(), Ty::Set(Box::new(Ty::Int)))]);
         let globals = declare_module_globals(&context, &module, &bindings);
-        let slot = globals.get("x").expect("declare_module_globals should bind `x`");
+        let slot = globals
+            .get("x")
+            .expect("declare_module_globals should bind `x`");
         assert_eq!(slot.ty, Ty::Set(Box::new(Ty::Int)));
         assert!(slot.initialized.is_some());
     }
@@ -7021,6 +7133,7 @@ mod tests {
                 return_ty: Ty::None,
                 body: vec![call_print(42)],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice0_uncalled_main");
         let obj_path = dir.join("slice0_uncalled_main.o");
@@ -7043,6 +7156,7 @@ mod tests {
                 },
                 MirItem::TopLevelStmt(call_user_fn("main")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice0");
         let obj_path = dir.join("slice0.o");
@@ -7081,6 +7195,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("monomorphized_direct_dispatch");
         let obj_path = dir.join("monomorphized_direct_dispatch.o");
@@ -7095,6 +7210,7 @@ mod tests {
     fn compiles_top_level_statement_with_no_main() {
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(call_print(42))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice0_toplevel");
         let obj_path = dir.join("slice0_toplevel.o");
@@ -7116,6 +7232,7 @@ mod tests {
                 MirItem::TopLevelStmt(MirStmt::NoOp),
                 MirItem::TopLevelStmt(call_print(1)),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice0_no_op");
         let obj_path = dir.join("slice0_no_op.o");
@@ -7144,6 +7261,7 @@ mod tests {
                 },
                 MirItem::TopLevelStmt(call_user_fn("main")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice0_combined");
         let obj_path = dir.join("slice0_combined.o");
@@ -7158,6 +7276,7 @@ mod tests {
     fn calling_an_undefined_function_at_top_level_is_rejected() {
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(call_user_fn("does_not_exist"))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice0_undefined_fn");
         let obj_path = dir.join("slice0_undefined_fn.o");
@@ -7177,6 +7296,7 @@ mod tests {
                 return_ty: Ty::None,
                 body: vec![call_user_fn("also_does_not_exist")],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice0_undefined_fn_nested");
         let obj_path = dir.join("slice0_undefined_fn_nested.o");
@@ -7198,6 +7318,7 @@ mod tests {
                 return_ty: Ty::None,
                 body: vec![],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice0_any_fn_name");
         let obj_path = dir.join("slice0_any_fn_name.o");
@@ -7214,6 +7335,7 @@ mod tests {
         // mode, Target::from_triple.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(call_print(42))],
+            class_defs: Vec::new(),
         };
         let bad_path = std::env::temp_dir()
             .join(format!(
@@ -7288,6 +7410,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         }
     }
 
@@ -7350,6 +7473,7 @@ mod tests {
         // error.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(call_print(42))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("cross_x64");
         let obj_path = dir.join("cross_x64.o");
@@ -7384,6 +7508,7 @@ mod tests {
     fn an_unknown_target_triple_is_a_clean_error() {
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(call_print(42))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bad_triple");
         let obj_path = dir.join("bad_triple.o");
@@ -7400,6 +7525,7 @@ mod tests {
                 args: vec![],
                 ty: Ty::None,
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("print_zero_args");
         let obj_path = dir.join("print_zero_args.o");
@@ -7424,6 +7550,7 @@ mod tests {
                 ],
                 ty: Ty::None,
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("print_mixed_multi");
         let obj_path = dir.join("print_mixed_multi.o");
@@ -7442,6 +7569,7 @@ mod tests {
                 args: vec![MirExpr::BoolLiteral(false)],
                 ty: Ty::None,
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("print_false");
         let obj_path = dir.join("print_false.o");
@@ -7473,6 +7601,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("print_none_from_call");
         let obj_path = dir.join("print_none_from_call.o");
@@ -7518,6 +7647,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("print_eval_order_side_effect");
         let obj_path = dir.join("print_eval_order_side_effect.o");
@@ -7566,6 +7696,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("print_eval_order_fail_later");
         let obj_path = dir.join("print_eval_order_fail_later.o");
@@ -7617,6 +7748,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("return_none_call");
         let obj_path = dir.join("return_none_call.o");
@@ -7666,6 +7798,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("print_none_typed_parameter");
         let obj_path = dir.join("print_none_typed_parameter.o");
@@ -7714,6 +7847,7 @@ mod tests {
                 })),
                 MirItem::TopLevelStmt(call_print(1)),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bare_return_none");
         let obj_path = dir.join("bare_return_none.o");
@@ -7757,6 +7891,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("locals_arith");
         let obj_path = dir.join("locals_arith.o");
@@ -7786,6 +7921,7 @@ mod tests {
                     ty: Ty::Bool,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bool_local");
         let obj_path = dir.join("bool_local.o");
@@ -7816,6 +7952,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("reassign_local");
         let obj_path = dir.join("reassign_local.o");
@@ -7852,6 +7989,7 @@ mod tests {
                 MirItem::TopLevelStmt(print_binop(BinOpKind::Mod, 7, 2)),
                 MirItem::TopLevelStmt(print_binop(BinOpKind::Pow, 2, 5)),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("int_binops");
         let obj_path = dir.join("int_binops.o");
@@ -7887,6 +8025,7 @@ mod tests {
                     ty: Ty::Int,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("true_div_panics");
         let obj_path = dir.join("true_div_panics.o");
@@ -7916,6 +8055,7 @@ mod tests {
                 MirItem::TopLevelStmt(assign_compare("d", CmpOpKind::Gt)),
                 MirItem::TopLevelStmt(assign_compare("e", CmpOpKind::GtE)),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("remaining_cmp_ops");
         let obj_path = dir.join("remaining_cmp_ops.o");
@@ -7948,6 +8088,7 @@ mod tests {
                 MirItem::TopLevelStmt(print_compare(CmpOpKind::NotEq, 5, 5)),
                 MirItem::TopLevelStmt(print_compare(CmpOpKind::NotEq, 5, 6)),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("ge_ne_values");
         let obj_path = dir.join("ge_ne_values.o");
@@ -7992,6 +8133,7 @@ mod tests {
                     orelse: vec![],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("nan_comparisons");
         let obj_path = dir.join("nan_comparisons.o");
@@ -8026,6 +8168,7 @@ mod tests {
                     },
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("read_bool_local");
         let obj_path = dir.join("read_bool_local.o");
@@ -8065,6 +8208,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("binop_bool_left_promotes");
         let obj_path = dir.join("binop_bool_left_promotes.o");
@@ -8100,6 +8244,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("binop_bool_right_promotes");
         let obj_path = dir.join("binop_bool_right_promotes.o");
@@ -8132,6 +8277,7 @@ mod tests {
                     ty: Ty::Bool,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("compare_bool_left_promotes");
         let obj_path = dir.join("compare_bool_left_promotes.o");
@@ -8151,6 +8297,7 @@ mod tests {
                     ty: Ty::Bool,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("compare_bool_right_promotes");
         let obj_path = dir.join("compare_bool_right_promotes.o");
@@ -8168,6 +8315,7 @@ mod tests {
                 args: vec![MirExpr::IntLiteral(i64::MAX)],
                 ty: Ty::None,
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("oversized_int_literal_panics");
         let obj_path = dir.join("oversized_int_literal_panics.o");
@@ -8204,6 +8352,7 @@ mod tests {
                 target: "x".to_string(),
                 value: MirExpr::FString(vec![]),
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("fstring_zero_parts_panics");
         let obj_path = dir.join("fstring_zero_parts_panics.o");
@@ -8246,6 +8395,7 @@ mod tests {
                 }],
                 ty: Ty::None,
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("print_mistyped_compare_prints_actual_value");
         let obj_path = dir.join("print_mistyped_compare_prints_actual_value.o");
@@ -8265,6 +8415,7 @@ mod tests {
             items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(
                 MirExpr::IntLiteral(5),
             ))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bare_expr_stmt");
         let obj_path = dir.join("bare_expr_stmt.o");
@@ -8395,6 +8546,7 @@ mod tests {
                     },
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("read_float_local");
         let obj_path = dir.join("read_float_local.o");
@@ -8451,6 +8603,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("param_reference_reads_back");
         let obj_path = dir.join("param_reference_reads_back.o");
@@ -8502,6 +8655,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("function_reads_module_global");
         let obj_path = dir.join("function_reads_module_global.o");
@@ -8543,6 +8697,7 @@ mod tests {
                     })],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("if_else");
         let obj_path = dir.join("if_else.o");
@@ -8580,6 +8735,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("if_both_branches_return");
         let obj_path = dir.join("if_both_branches_return.o");
@@ -8602,6 +8758,7 @@ mod tests {
                 })],
                 orelse: vec![],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("if_no_else");
         let obj_path = dir.join("if_no_else.o");
@@ -8655,6 +8812,7 @@ mod tests {
                     ],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("while_countdown");
         let obj_path = dir.join("while_countdown.o");
@@ -8710,6 +8868,7 @@ mod tests {
                     ],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("while_int_truthy");
         let obj_path = dir.join("while_int_truthy.o");
@@ -8761,6 +8920,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("while_body_always_returns");
         let obj_path = dir.join("while_body_always_returns.o");
@@ -8789,6 +8949,7 @@ mod tests {
                     ty: Ty::None,
                 })],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_range_pos");
         let obj_path = dir.join("for_range_pos.o");
@@ -8838,6 +8999,7 @@ mod tests {
                     })],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_range_reused_loop_var");
         let obj_path = dir.join("for_range_reused_loop_var.o");
@@ -8866,6 +9028,7 @@ mod tests {
                     ty: Ty::None,
                 })],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_range_neg");
         let obj_path = dir.join("for_range_neg.o");
@@ -8889,6 +9052,7 @@ mod tests {
                 step: MirExpr::IntLiteral(1),
                 body: vec![],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_range_bad_start_panics");
         let obj_path = dir.join("for_range_bad_start_panics.o");
@@ -8907,6 +9071,7 @@ mod tests {
                 step: MirExpr::IntLiteral(1),
                 body: vec![],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_range_bad_stop_panics");
         let obj_path = dir.join("for_range_bad_stop_panics.o");
@@ -8925,6 +9090,7 @@ mod tests {
                 step: MirExpr::FloatLiteral(1.0),
                 body: vec![],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_range_bad_step_panics");
         let obj_path = dir.join("for_range_bad_step_panics.o");
@@ -8963,6 +9129,7 @@ mod tests {
                     ty: Ty::None,
                 })],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_range_bool_start_stop_step");
         let obj_path = dir.join("for_range_bool_start_stop_step.o");
@@ -8994,6 +9161,7 @@ mod tests {
                     ty: Ty::None,
                 })],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_range_bool_stop");
         let obj_path = dir.join("for_range_bool_stop.o");
@@ -9053,6 +9221,7 @@ mod tests {
                     })],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_range_encoded_bool_markers");
         let obj_path = dir.join("for_range_encoded_bool_markers.o");
@@ -9113,6 +9282,7 @@ mod tests {
                     }),
                 ],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("nested_control_flow_resume");
         let obj_path = dir.join("nested_control_flow_resume.o");
@@ -9141,6 +9311,7 @@ mod tests {
                 body: vec![call_user_fn("does_not_exist_in_if_then")],
                 orelse: vec![],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("if_then_undefined_fn");
         let obj_path = dir.join("if_then_undefined_fn.o");
@@ -9159,6 +9330,7 @@ mod tests {
                 body: vec![],
                 orelse: vec![call_user_fn("does_not_exist_in_if_orelse")],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("if_orelse_undefined_fn");
         let obj_path = dir.join("if_orelse_undefined_fn.o");
@@ -9176,6 +9348,7 @@ mod tests {
                 test: MirExpr::BoolLiteral(true),
                 body: vec![call_user_fn("does_not_exist_in_while")],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("while_undefined_fn");
         let obj_path = dir.join("while_undefined_fn.o");
@@ -9196,6 +9369,7 @@ mod tests {
                 step: MirExpr::IntLiteral(1),
                 body: vec![call_user_fn("does_not_exist_in_for_range")],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_range_undefined_fn");
         let obj_path = dir.join("for_range_undefined_fn.o");
@@ -9238,6 +9412,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("call_with_args");
         let obj_path = dir.join("call_with_args.o");
@@ -9287,6 +9462,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("call_arg_order");
         let obj_path = dir.join("call_arg_order.o");
@@ -9360,6 +9536,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("recursive_fact");
         let obj_path = dir.join("recursive_fact.o");
@@ -9413,6 +9590,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("if_else_both_return");
         let obj_path = dir.join("if_else_both_return.o");
@@ -9436,6 +9614,7 @@ mod tests {
                 return_ty: Ty::Int,
                 body: vec![],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("fallthrough_internal_error");
         let obj_path = dir.join("fallthrough_internal_error.o");
@@ -9462,6 +9641,7 @@ mod tests {
             items: vec![MirItem::TopLevelStmt(MirStmt::Return(Some(
                 MirExpr::IntLiteral(0),
             )))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("top_level_return_internal_error");
         let obj_path = dir.join("top_level_return_internal_error.o");
@@ -9497,6 +9677,7 @@ mod tests {
                     ty: Ty::Int,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("undefined_fn_nested_expr_panics");
         let obj_path = dir.join("undefined_fn_nested_expr_panics.o");
@@ -9534,6 +9715,7 @@ mod tests {
                     },
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("call_returns_bool");
         let obj_path = dir.join("call_returns_bool.o");
@@ -9579,6 +9761,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("none_typed_call_result_storage");
         let obj_path = dir.join("none_typed_call_result_storage.o");
@@ -9621,6 +9804,7 @@ mod tests {
                     },
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("infer_typed_call_result_panics");
         let obj_path = dir.join("infer_typed_call_result_panics.o");
@@ -9659,6 +9843,7 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("infer_return_panics");
         let obj_path = dir.join("infer_return_panics.o");
@@ -9721,7 +9906,10 @@ mod tests {
         let context = Context::create();
         let basic_type = ty_to_basic_type(
             &context,
-            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Tuple(Box::new(vec![Ty::Float]))])),
+            Ty::Tuple(Box::new(vec![
+                Ty::Int,
+                Ty::Tuple(Box::new(vec![Ty::Float])),
+            ])),
         );
         let struct_ty = basic_type.into_struct_type();
         assert_eq!(struct_ty.count_fields(), 2);
@@ -10009,7 +10197,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_codegen: truthiness of a dict[K, V] value is not supported yet")]
+    #[should_panic(
+        expected = "pycc_codegen: truthiness of a dict[K, V] value is not supported yet"
+    )]
     fn truthiness_of_a_dict_value_panics_honestly() {
         // The `dict[K, V]` counterpart of `truthiness_of_a_list_value_
         // panics_honestly` above (D-107's reasoning, per D-124): `pycc_types`
@@ -10287,6 +10477,7 @@ mod tests {
                     },
                 }],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("binop_list_result_panics");
         let obj_path = dir.join("binop_list_result_panics.o");
@@ -10333,6 +10524,7 @@ mod tests {
                     ty: Ty::List(Box::new(Ty::Int)),
                 }))],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("list_int_param_and_return");
         let obj_path = dir.join("list_int_param_and_return.o");
@@ -10405,6 +10597,7 @@ mod tests {
                     }))],
                 },
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("list_int_passed_as_argument");
         let obj_path = dir.join("list_int_passed_as_argument.o");
@@ -10485,6 +10678,7 @@ mod tests {
                 },
                 MirItem::TopLevelStmt(call_user_fn("f")),
             ],
+            class_defs: Vec::new(),
         }
     }
 
@@ -10551,6 +10745,7 @@ mod tests {
                 args: vec![],
                 ty: Ty::Float,
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("math_sqrt_wrong_arity_panics");
         let _ = compile_to_object(
@@ -10574,14 +10769,10 @@ mod tests {
                 args: vec![MirExpr::IntLiteral(1)],
                 ty: Ty::Float,
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("math_sqrt_non_float_panics");
-        let _ = compile_to_object(
-            &mir,
-            &dir.join("math_sqrt_non_float_panics.o"),
-            None,
-            false,
-        );
+        let _ = compile_to_object(&mir, &dir.join("math_sqrt_non_float_panics.o"), None, false);
     }
 
     #[test]
@@ -10691,8 +10882,14 @@ mod tests {
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "x".to_string(),
                     value: MirExpr::DictLiteral(vec![
-                        (MirExpr::StringLiteral("a".to_string()), MirExpr::IntLiteral(1)),
-                        (MirExpr::StringLiteral("b".to_string()), MirExpr::IntLiteral(2)),
+                        (
+                            MirExpr::StringLiteral("a".to_string()),
+                            MirExpr::IntLiteral(1),
+                        ),
+                        (
+                            MirExpr::StringLiteral("b".to_string()),
+                            MirExpr::IntLiteral(2),
+                        ),
                     ]),
                 }),
                 MirItem::TopLevelStmt(print_expr(MirExpr::Call {
@@ -10701,6 +10898,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_literal_and_len");
         let obj_path = dir.join("dict_literal_and_len.o");
@@ -10841,6 +11039,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("class_instantiation_attribute_and_method_call");
         let obj_path = dir.join("class_instantiation_attribute_and_method_call.o");
@@ -10962,6 +11161,7 @@ mod tests {
                     ty: Ty::Str,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bool_float_str_attribute_slots");
         let obj_path = dir.join("bool_float_str_attribute_slots.o");
@@ -11101,6 +11301,7 @@ mod tests {
                     ty: Ty::Str,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_attribute_read_twice_and_reassigned");
         let obj_path = dir.join("str_attribute_read_twice_and_reassigned.o");
@@ -11112,9 +11313,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "an instance attribute of type `list[int]` is not supported yet"
-    )]
+    #[should_panic(expected = "an instance attribute of type `list[int]` is not supported yet")]
     fn slot_word_to_scalar_rejects_an_unsupported_attribute_type() {
         // `pycc_hir::class::slot_ty_from_init_rhs` structurally restricts
         // every attribute slot to `int`/`float`/`bool`/`str` (D-154), so a
@@ -11126,7 +11325,12 @@ mod tests {
         let module = context.create_module("test");
         let builder = context.create_builder();
         let raw = context.i64_type().const_int(0, false);
-        slot_word_to_scalar(&context, &builder, raw, &pycc_mir::Ty::List(Box::new(pycc_mir::Ty::Int)));
+        slot_word_to_scalar(
+            &context,
+            &builder,
+            raw,
+            &pycc_mir::Ty::List(Box::new(pycc_mir::Ty::Int)),
+        );
         let _ = module;
     }
 
@@ -11158,6 +11362,7 @@ mod tests {
                 slot: 0,
                 ty: Ty::Int,
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("attribute_read_over_a_non_instance_base");
         let obj_path = dir.join("attribute_read_over_a_non_instance_base.o");
@@ -11181,6 +11386,7 @@ mod tests {
                     ty: instance_ty("Ghost"),
                 })),
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("instantiation_of_an_unregistered_constructor");
         let obj_path = dir.join("instantiation_of_an_unregistered_constructor.o");
@@ -11265,6 +11471,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("a_function_returning_an_instance");
         let obj_path = dir.join("a_function_returning_an_instance.o");
@@ -11337,6 +11544,7 @@ mod tests {
                     orelse: vec![],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("class_instance_truthiness");
         let obj_path = dir.join("class_instance_truthiness.o");
@@ -11348,7 +11556,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_codegen: string conversion of a class instance is not supported yet")]
+    #[should_panic(
+        expected = "pycc_codegen: string conversion of a class instance is not supported yet"
+    )]
     fn string_conversion_of_a_class_instance_panics_honestly() {
         // Mirrors `string_conversion_of_a_list_value_panics_honestly`
         // above exactly: `pycc_types` type-checks `print(p)` for a class
@@ -11394,7 +11604,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_codegen: internal error: range() start did not evaluate to int")]
+    #[should_panic(
+        expected = "pycc_codegen: internal error: range() start did not evaluate to int"
+    )]
     fn range_operand_to_tagged_int_rejects_an_instance_operand() {
         let context = Context::create();
         let (_module, rt) = list_scalar_panic_fixture(&context);
@@ -11417,6 +11629,7 @@ mod tests {
                 args: vec![MirExpr::FloatLiteral(2.0)],
                 ty: Ty::Float,
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("math_sqrt_call");
         let obj_path = dir.join("math_sqrt_call.o");
@@ -11437,6 +11650,7 @@ mod tests {
                 name: "math.pi".to_string(),
                 ty: Ty::Float,
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("math_pi");
         let obj_path = dir.join("math_pi.o");
@@ -11469,6 +11683,7 @@ mod tests {
                     ty: Ty::Float,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("float_call");
         let obj_path = dir.join("float_call.o");
@@ -11509,6 +11724,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("user_defined_float_call");
         let obj_path = dir.join("user_defined_float_call.o");
@@ -11529,8 +11745,14 @@ mod tests {
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "x".to_string(),
                     value: MirExpr::DictLiteral(vec![
-                        (MirExpr::StringLiteral("a".to_string()), MirExpr::IntLiteral(1)),
-                        (MirExpr::StringLiteral("b".to_string()), MirExpr::IntLiteral(2)),
+                        (
+                            MirExpr::StringLiteral("a".to_string()),
+                            MirExpr::IntLiteral(1),
+                        ),
+                        (
+                            MirExpr::StringLiteral("b".to_string()),
+                            MirExpr::IntLiteral(2),
+                        ),
                     ]),
                 }),
                 MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
@@ -11538,6 +11760,7 @@ mod tests {
                     key: Box::new(MirExpr::StringLiteral("b".to_string())),
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_get");
         let obj_path = dir.join("dict_get.o");
@@ -11580,6 +11803,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_set_update");
         let obj_path = dir.join("dict_set_update.o");
@@ -11617,6 +11841,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_set_append");
         let obj_path = dir.join("dict_set_append.o");
@@ -11640,8 +11865,14 @@ mod tests {
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "x".to_string(),
                     value: MirExpr::DictLiteral(vec![
-                        (MirExpr::StringLiteral("b".to_string()), MirExpr::IntLiteral(2)),
-                        (MirExpr::StringLiteral("a".to_string()), MirExpr::IntLiteral(1)),
+                        (
+                            MirExpr::StringLiteral("b".to_string()),
+                            MirExpr::IntLiteral(2),
+                        ),
+                        (
+                            MirExpr::StringLiteral("a".to_string()),
+                            MirExpr::IntLiteral(1),
+                        ),
                     ]),
                 }),
                 MirItem::TopLevelStmt(MirStmt::ForDict {
@@ -11653,6 +11884,7 @@ mod tests {
                     })],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_dict_iteration");
         let obj_path = dir.join("for_dict_iteration.o");
@@ -11710,6 +11942,7 @@ mod tests {
                     key: Box::new(MirExpr::StringLiteral("a".to_string())),
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_dict_var_reassignment");
         let obj_path = dir.join("for_dict_var_reassignment.o");
@@ -11747,6 +11980,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("set_literal_and_len");
         let obj_path = dir.join("set_literal_and_len.o");
@@ -11793,6 +12027,7 @@ mod tests {
                     })],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_set_iteration");
         let obj_path = dir.join("for_set_iteration.o");
@@ -11875,6 +12110,7 @@ mod tests {
                     ty: set_int(),
                 }))],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("set_int_param_and_return");
         let obj_path = dir.join("set_int_param_and_return.o");
@@ -11914,6 +12150,7 @@ mod tests {
                     }))],
                 },
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("set_int_passed_as_argument");
         let obj_path = dir.join("set_int_passed_as_argument.o");
@@ -11940,6 +12177,7 @@ mod tests {
                     body: vec![call_user_fn("missing")],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_set_body_error");
         let error = compile_to_object(&mir, &dir.join("for_set_body_error.o"), None, false)
@@ -12082,6 +12320,7 @@ mod tests {
                     index: Box::new(MirExpr::IntLiteral(2)),
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("tuple_literal_and_reads");
         let obj_path = dir.join("tuple_literal_and_reads.o");
@@ -12133,6 +12372,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("tuple_local_slot");
         let obj_path = dir.join("tuple_local_slot.o");
@@ -12158,6 +12398,7 @@ mod tests {
                 ])),
                 index: Box::new(MirExpr::IntLiteral(1)),
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("tuple_inline_subscript");
         let obj_path = dir.join("tuple_inline_subscript.o");
@@ -12226,6 +12467,7 @@ mod tests {
                     ty: tuple_int_bool_float(),
                 }))],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("tuple_param_and_return");
         let obj_path = dir.join("tuple_param_and_return.o");
@@ -12264,6 +12506,7 @@ mod tests {
                     }))],
                 },
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("tuple_passed_as_argument");
         let obj_path = dir.join("tuple_passed_as_argument.o");
@@ -12271,7 +12514,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_codegen: truthiness of a tuple[...] value is not supported yet")]
+    #[should_panic(
+        expected = "pycc_codegen: truthiness of a tuple[...] value is not supported yet"
+    )]
     fn truthiness_of_a_tuple_value_panics_honestly() {
         // The `tuple[...]` counterpart of `truthiness_of_a_set_value_
         // panics_honestly` above: a real, reachable feature gap, not a
@@ -12340,6 +12585,7 @@ mod tests {
                 target: "t".to_string(),
                 value: MirExpr::TupleLiteral(vec![MirExpr::StringLiteral("a".to_string())]),
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("tuple_non_scalar_element");
         let _ = compile_to_object(&mir, &dir.join("tuple_non_scalar_element.o"), None, false);
@@ -12374,6 +12620,7 @@ mod tests {
                     }),
                 }))],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("tuple_non_literal_index");
         let _ = compile_to_object(&mir, &dir.join("tuple_non_literal_index.o"), None, false);
@@ -12403,9 +12650,15 @@ mod tests {
                     index: Box::new(MirExpr::IntLiteral(0)),
                 })],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("tuple_non_scalar_element_read");
-        let _ = compile_to_object(&mir, &dir.join("tuple_non_scalar_element_read.o"), None, false);
+        let _ = compile_to_object(
+            &mir,
+            &dir.join("tuple_non_scalar_element_read.o"),
+            None,
+            false,
+        );
     }
 
     #[test]
@@ -12420,13 +12673,7 @@ mod tests {
         let module = context.create_module("tuple_range_bound");
         let rt = declare_rt_functions(&context, &module);
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            range_operand_to_tagged_int(
-                &context,
-                &builder,
-                &rt,
-                tuple_scalar(&context),
-                "start",
-            );
+            range_operand_to_tagged_int(&context, &builder, &rt, tuple_scalar(&context), "start");
         }));
         let payload = panicked.expect_err("a tuple range bound must be rejected");
         let message = payload
@@ -12482,6 +12729,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_list_return_inside_body");
         let obj_path = dir.join("for_list_return_inside_body.o");
@@ -12547,6 +12795,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_set_return_inside_body");
         let obj_path = dir.join("for_set_return_inside_body.o");
@@ -12749,6 +12998,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("module_level_list_global");
         let obj_path = dir.join("module_level_list_global.o");
@@ -12835,6 +13085,7 @@ mod tests {
                     ty: Ty::None,
                 }))],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("none_param_compiles");
         let obj_path = dir.join("none_param_compiles.o");
@@ -12870,6 +13121,7 @@ mod tests {
                     },
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("float_param_and_return");
         let obj_path = dir.join("float_param_and_return.o");
@@ -12925,6 +13177,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_range_return_inside_body");
         let obj_path = dir.join("for_range_return_inside_body.o");
@@ -12961,6 +13214,7 @@ mod tests {
                     },
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("call_with_bool_arg");
         let obj_path = dir.join("call_with_bool_arg.o");
@@ -12998,6 +13252,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bool_arg_widens_to_int");
         let obj_path = dir.join("bool_arg_widens_to_int.o");
@@ -13035,6 +13290,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bool_return_widens_to_int");
         let obj_path = dir.join("bool_return_widens_to_int.o");
@@ -13075,6 +13331,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("reassign_bool_into_int");
         let obj_path = dir.join("reassign_bool_into_int.o");
@@ -13102,6 +13359,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("int_boundary_bool_identity");
         let obj_path = dir.join("int_boundary_bool_identity.o");
@@ -13148,6 +13406,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bool_identity_nested_fstring");
         let obj_path = dir.join("bool_identity_nested_fstring.o");
@@ -13182,6 +13441,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bool_dict_value_identity");
         let obj_path = dir.join("bool_dict_value_identity.o");
@@ -13213,6 +13473,7 @@ mod tests {
                     ty: Ty::None,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("print_result_nested_panics");
         let obj_path = dir.join("print_result_nested_panics.o");
@@ -13238,6 +13499,7 @@ mod tests {
                 name: "never_bound".to_string(),
                 ty: Ty::Int,
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("unbound_name_panics");
         let obj_path = dir.join("unbound_name_panics.o");
@@ -13260,6 +13522,7 @@ mod tests {
                     ty: pycc_mir::Ty::Float,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("true_div");
         let obj_path = dir.join("true_div.o");
@@ -13279,6 +13542,7 @@ mod tests {
                     ty: pycc_mir::Ty::Float,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("mixed_add");
         let obj_path = dir.join("mixed_add.o");
@@ -13309,6 +13573,7 @@ mod tests {
                     ty: pycc_mir::Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bool_arith");
         let obj_path = dir.join("bool_arith.o");
@@ -13331,6 +13596,7 @@ mod tests {
                     ty: pycc_mir::Ty::Bool,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("float_cmp");
         let obj_path = dir.join("float_cmp.o");
@@ -13352,6 +13618,7 @@ mod tests {
                     })],
                     orelse: vec![],
                 })],
+                class_defs: Vec::new(),
             };
             let dir = tempfile_dir(&format!("float_truthy_{test}"));
             let obj_path = dir.join("float_truthy.o");
@@ -13385,6 +13652,7 @@ mod tests {
                     ty: Ty::Int,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("binop_int_result_float_operand_panics");
         let obj_path = dir.join("binop_int_result_float_operand_panics.o");
@@ -13414,6 +13682,7 @@ mod tests {
                     ty: Ty::None,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("binop_none_result_panics");
         let obj_path = dir.join("binop_none_result_panics.o");
@@ -13437,6 +13706,7 @@ mod tests {
                     ty: Ty::Str,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_binop_left_mismatch_panics");
         let obj_path = dir.join("str_binop_left_mismatch_panics.o");
@@ -13460,6 +13730,7 @@ mod tests {
                     ty: Ty::Str,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_binop_right_mismatch_panics");
         let obj_path = dir.join("str_binop_right_mismatch_panics.o");
@@ -13483,6 +13754,7 @@ mod tests {
                     ty: Ty::Str,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_binop_unsupported_op_panics");
         let obj_path = dir.join("str_binop_unsupported_op_panics.o");
@@ -13508,6 +13780,7 @@ mod tests {
                     ty: Ty::Float,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bool_float_mixed");
         let obj_path = dir.join("bool_float_mixed.o");
@@ -13548,6 +13821,7 @@ mod tests {
                 MirItem::TopLevelStmt(float_binop(BinOpKind::Mod, 7.0, 2.0)),
                 MirItem::TopLevelStmt(float_binop(BinOpKind::Pow, 2.0, 5.0)),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("float_binops");
         let obj_path = dir.join("float_binops.o");
@@ -13573,6 +13847,7 @@ mod tests {
                     ty: Ty::Bool,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("mixed_cmp");
         let obj_path = dir.join("mixed_cmp.o");
@@ -13605,6 +13880,7 @@ mod tests {
                 MirItem::TopLevelStmt(assign_compare("d", CmpOpKind::Gt)),
                 MirItem::TopLevelStmt(assign_compare("e", CmpOpKind::GtE)),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("remaining_float_cmp_ops");
         let obj_path = dir.join("remaining_float_cmp_ops.o");
@@ -13637,6 +13913,7 @@ mod tests {
                     },
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_concat_reassign");
         let obj_path = dir.join("str_concat_reassign.o");
@@ -13665,6 +13942,7 @@ mod tests {
                     value: MirExpr::StringLiteral("bad".to_string()),
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_assignment_non_str_slot_panics");
         let obj_path = dir.join("str_assignment_non_str_slot_panics.o");
@@ -13699,6 +13977,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("int_first_assign_in_if_body");
         let obj_path = dir.join("int_first_assign_in_if_body.o");
@@ -13738,6 +14017,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("int_first_assign_in_if_else_both");
         let obj_path = dir.join("int_first_assign_in_if_else_both.o");
@@ -13769,6 +14049,7 @@ mod tests {
                 }],
                 orelse: vec![],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_first_assign_in_if_body");
         let obj_path = dir.join("str_first_assign_in_if_body.o");
@@ -13799,6 +14080,7 @@ mod tests {
                     value: MirExpr::StringLiteral("bye".to_string()),
                 }],
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_first_assign_in_if_else_both");
         let obj_path = dir.join("str_first_assign_in_if_else_both.o");
@@ -13854,6 +14136,7 @@ mod tests {
                     ],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_first_assign_in_while_body");
         let obj_path = dir.join("str_first_assign_in_while_body.o");
@@ -13893,6 +14176,7 @@ mod tests {
                     orelse: vec![],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_never_assigned_on_taken_path");
         let obj_path = dir.join("str_never_assigned_on_taken_path.o");
@@ -13936,6 +14220,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_first_assign_in_fn_leading_if");
         let obj_path = dir.join("str_first_assign_in_fn_leading_if.o");
@@ -13970,6 +14255,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_first_assign_in_fn_plain");
         let obj_path = dir.join("str_first_assign_in_fn_plain.o");
@@ -14022,6 +14308,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("int_first_assign_in_fn_leading_if_else");
         let obj_path = dir.join("int_first_assign_in_fn_leading_if_else.o");
@@ -14066,6 +14353,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("float_first_assign_in_fn");
         let obj_path = dir.join("float_first_assign_in_fn.o");
@@ -14088,6 +14376,7 @@ mod tests {
                     ty: Ty::Bool,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_cmp");
         let obj_path = dir.join("str_cmp.o");
@@ -14116,6 +14405,7 @@ mod tests {
                     })],
                     orelse: vec![],
                 })],
+                class_defs: Vec::new(),
             };
             let dir = tempfile_dir(&format!("str_cmp_runtime_{left}_{right}"));
             let obj_path = dir.join("str_cmp_runtime.o");
@@ -14158,6 +14448,7 @@ mod tests {
                 MirItem::TopLevelStmt(assign_compare("d", CmpOpKind::Gt)),
                 MirItem::TopLevelStmt(assign_compare("e", CmpOpKind::GtE)),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("remaining_str_cmp_ops");
         let obj_path = dir.join("remaining_str_cmp_ops.o");
@@ -14186,6 +14477,7 @@ mod tests {
                     ty: Ty::Bool,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("mixed_int_str_cmp_panics");
         let obj_path = dir.join("mixed_int_str_cmp_panics.o");
@@ -14224,6 +14516,7 @@ mod tests {
                     ty: Ty::Bool,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("lying_str_cmp_panics");
         let obj_path = dir.join("lying_str_cmp_panics.o");
@@ -14244,6 +14537,7 @@ mod tests {
                     })],
                     orelse: vec![],
                 })],
+                class_defs: Vec::new(),
             };
             let dir = tempfile_dir(&format!("str_truthy_{}", test.len()));
             let obj_path = dir.join("str_truthy.o");
@@ -14263,6 +14557,7 @@ mod tests {
                 target: "s".to_string(),
                 value: MirExpr::StringLiteral(long),
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_long_literal");
         let obj_path = dir.join("str_long_literal.o");
@@ -14305,6 +14600,7 @@ mod tests {
                     },
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("str_param_and_return");
         let obj_path = dir.join("str_param_and_return.o");
@@ -14336,6 +14632,7 @@ mod tests {
                     ty: Ty::Int,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("binop_int_result_str_operand_panics");
         let obj_path = dir.join("binop_int_result_str_operand_panics.o");
@@ -14359,6 +14656,7 @@ mod tests {
                     ty: Ty::Float,
                 },
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("binop_float_result_str_operand_panics");
         let obj_path = dir.join("binop_float_result_str_operand_panics.o");
@@ -14417,6 +14715,7 @@ mod tests {
                     ]),
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("fstring_int");
         let obj_path = dir.join("fstring_int.o");
@@ -14434,6 +14733,7 @@ mod tests {
                     pycc_mir::MirFStringPart::Interpolation(Box::new(MirExpr::BoolLiteral(true))),
                 ]),
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("fstring_float_bool");
         let obj_path = dir.join("fstring_float_bool.o");
@@ -14469,6 +14769,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("fstring_none_call");
         let obj_path = dir.join("fstring_none_call.o");
@@ -14488,6 +14789,7 @@ mod tests {
                     "no interpolation".to_string(),
                 )]),
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("fstring_literal_only");
         let obj_path = dir.join("fstring_literal_only.o");
@@ -14523,6 +14825,7 @@ mod tests {
                     ]),
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("fstring_str_passthrough");
         let obj_path = dir.join("fstring_str_passthrough.o");
@@ -14565,6 +14868,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("fstring_none_call");
         let obj_path = dir.join("fstring_none_call.o");
@@ -14613,6 +14917,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("fstring_none_typed_parameter");
         let obj_path = dir.join("fstring_none_typed_parameter.o");
@@ -14668,6 +14973,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bigint_overflow_loop");
         let obj_path = dir.join("bigint_overflow_loop.o");
@@ -14700,7 +15006,12 @@ mod tests {
             },
         ]);
         let dir = tempfile_dir("dict_set_on_non_dict_panics");
-        let _ = compile_to_object(&mir, &dir.join("dict_set_on_non_dict_panics.o"), None, false);
+        let _ = compile_to_object(
+            &mir,
+            &dir.join("dict_set_on_non_dict_panics.o"),
+            None,
+            false,
+        );
     }
 
     #[test]
@@ -14738,6 +15049,7 @@ mod tests {
                 target: "x".to_string(),
                 value: MirExpr::DictLiteral(vec![(MirExpr::IntLiteral(1), MirExpr::IntLiteral(2))]),
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_literal_non_str_key_panics");
         let _ = compile_to_object(
@@ -14763,9 +15075,15 @@ mod tests {
                 )])),
                 key: Box::new(MirExpr::IntLiteral(1)),
             }))],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_get_non_str_key_panics");
-        let _ = compile_to_object(&mir, &dir.join("dict_get_non_str_key_panics.o"), None, false);
+        let _ = compile_to_object(
+            &mir,
+            &dir.join("dict_get_non_str_key_panics.o"),
+            None,
+            false,
+        );
     }
 
     #[test]
@@ -14789,9 +15107,15 @@ mod tests {
                     value: MirExpr::IntLiteral(2),
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_set_non_str_key_panics");
-        let _ = compile_to_object(&mir, &dir.join("dict_set_non_str_key_panics.o"), None, false);
+        let _ = compile_to_object(
+            &mir,
+            &dir.join("dict_set_non_str_key_panics.o"),
+            None,
+            false,
+        );
     }
 
     #[test]
@@ -14819,6 +15143,7 @@ mod tests {
                     ty: dict_str_int(),
                 }))],
             }],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_str_int_param_and_return");
         let obj_path = dir.join("dict_str_int_param_and_return.o");
@@ -14859,6 +15184,7 @@ mod tests {
                     }))],
                 },
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_str_int_passed_as_argument");
         let obj_path = dir.join("dict_str_int_passed_as_argument.o");
@@ -14888,6 +15214,7 @@ mod tests {
                     body: vec![call_user_fn("missing")],
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("for_dict_body_error");
         let error = compile_to_object(&mir, &dir.join("for_dict_body_error.o"), None, false)
@@ -14932,6 +15259,7 @@ mod tests {
                     )]),
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_literal_variable_key_incref");
         let obj_path = dir.join("dict_literal_variable_key_incref.o");
@@ -14975,6 +15303,7 @@ mod tests {
                     value: MirExpr::IntLiteral(1),
                 }),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_set_variable_key_incref");
         let obj_path = dir.join("dict_set_variable_key_incref.o");
@@ -15066,6 +15395,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int("xs")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("listcomp_range_no_filter");
         let obj_path = dir.join("listcomp_range_no_filter.o");
@@ -15125,6 +15455,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int("ys")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("listcomp_list_with_filter");
         let obj_path = dir.join("listcomp_list_with_filter.o");
@@ -15136,8 +15467,8 @@ mod tests {
     }
 
     #[test]
-    fn a_list_sourced_list_comprehension_that_rebinds_its_own_source_name_reads_the_pre_existing_value(
-    ) {
+    fn a_list_sourced_list_comprehension_that_rebinds_its_own_source_name_reads_the_pre_existing_value()
+     {
         // Regression test (review round 1, post-Task-5a): `xs = [i for i in
         // range(5)]` then `xs = [x for x in xs if x > 2]`, reusing the same
         // name for both the source *and* the target of the second
@@ -15190,6 +15521,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int("xs")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("listcomp_self_referential_source");
         let obj_path = dir.join("listcomp_self_referential_source.o");
@@ -15201,8 +15533,8 @@ mod tests {
     }
 
     #[test]
-    fn a_range_sourced_list_comprehension_whose_bound_reads_its_own_rebound_target_uses_the_pre_existing_length(
-    ) {
+    fn a_range_sourced_list_comprehension_whose_bound_reads_its_own_rebound_target_uses_the_pre_existing_length()
+     {
         // Regression test (review round 1, post-Task-5a): `xs = [i for i in
         // range(5)]` then `xs = [i * 2 for i in range(len(xs))]`. `source`
         // is `CompSource::Range` here, not `CompSource::List` -- distinct
@@ -15262,6 +15594,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int("xs")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("listcomp_self_referential_range_bound");
         let obj_path = dir.join("listcomp_self_referential_range_bound.o");
@@ -15316,6 +15649,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int("xs")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("listcomp_self_referential_elt");
         let obj_path = dir.join("listcomp_self_referential_elt.o");
@@ -15363,6 +15697,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int("zs")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("listcomp_set_no_filter");
         let obj_path = dir.join("listcomp_set_no_filter.o");
@@ -15428,6 +15763,7 @@ mod tests {
                     ty: Ty::None,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("listcomp_range_empty");
         let obj_path = dir.join("listcomp_range_empty.o");
@@ -15463,8 +15799,14 @@ mod tests {
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "d".to_string(),
                     value: MirExpr::DictLiteral(vec![
-                        (MirExpr::StringLiteral("a".to_string()), MirExpr::IntLiteral(1)),
-                        (MirExpr::StringLiteral("b".to_string()), MirExpr::IntLiteral(2)),
+                        (
+                            MirExpr::StringLiteral("a".to_string()),
+                            MirExpr::IntLiteral(1),
+                        ),
+                        (
+                            MirExpr::StringLiteral("b".to_string()),
+                            MirExpr::IntLiteral(2),
+                        ),
                     ]),
                 }),
                 MirItem::TopLevelStmt(MirStmt::ListCompAssign {
@@ -15477,6 +15819,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int("zs")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("listcomp_dict_source_no_crash");
         let obj_path = dir.join("listcomp_dict_source_no_crash.o");
@@ -15532,6 +15875,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int_from_set("evens")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("setcomp_range_with_filter");
         let obj_path = dir.join("setcomp_range_with_filter.o");
@@ -15578,6 +15922,7 @@ mod tests {
                 })),
                 MirItem::TopLevelStmt(print_each_int_from_set("s")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("setcomp_list_no_filter_dedup");
         let obj_path = dir.join("setcomp_list_no_filter_dedup.o");
@@ -15589,8 +15934,8 @@ mod tests {
     }
 
     #[test]
-    fn a_set_sourced_set_comprehension_that_rebinds_its_own_source_name_reads_the_pre_existing_value(
-    ) {
+    fn a_set_sourced_set_comprehension_that_rebinds_its_own_source_name_reads_the_pre_existing_value()
+     {
         // `s = {1, 2, 3}` then `s = {x for x in s if x > 1}`, reusing the
         // same name for both the source *and* the target (PR-12 Task 5b,
         // D-117): the direct `SetCompAssign` analog of `ListCompAssign`'s
@@ -15634,6 +15979,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int_from_set("s")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("setcomp_self_referential_rebind");
         let obj_path = dir.join("setcomp_self_referential_rebind.o");
@@ -15645,8 +15991,8 @@ mod tests {
     }
 
     #[test]
-    fn a_range_sourced_set_comprehension_whose_bound_reads_its_own_rebound_target_uses_the_pre_existing_length(
-    ) {
+    fn a_range_sourced_set_comprehension_whose_bound_reads_its_own_rebound_target_uses_the_pre_existing_length()
+     {
         // `s = {1, 2, 3, 4, 5}` then `s = {i * 2 for i in range(len(s))}`
         // (PR-12 Task 5b, D-117): the `SetCompAssign` analog of
         // `ListCompAssign`'s own `a_range_sourced_list_comprehension_whose_
@@ -15700,6 +16046,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int_from_set("s")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("setcomp_self_referential_range_bound");
         let obj_path = dir.join("setcomp_self_referential_range_bound.o");
@@ -15728,8 +16075,14 @@ mod tests {
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "d".to_string(),
                     value: MirExpr::DictLiteral(vec![
-                        (MirExpr::StringLiteral("a".to_string()), MirExpr::IntLiteral(1)),
-                        (MirExpr::StringLiteral("b".to_string()), MirExpr::IntLiteral(2)),
+                        (
+                            MirExpr::StringLiteral("a".to_string()),
+                            MirExpr::IntLiteral(1),
+                        ),
+                        (
+                            MirExpr::StringLiteral("b".to_string()),
+                            MirExpr::IntLiteral(2),
+                        ),
                     ]),
                 }),
                 MirItem::TopLevelStmt(MirStmt::SetCompAssign {
@@ -15747,6 +16100,7 @@ mod tests {
                 })),
                 MirItem::TopLevelStmt(print_each_int_from_set("zs")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("setcomp_dict_source_no_crash");
         let obj_path = dir.join("setcomp_dict_source_no_crash.o");
@@ -15810,6 +16164,7 @@ mod tests {
                     key: Box::new(MirExpr::StringLiteral("n2".to_string())),
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dictcomp_range_fstring_key");
         let obj_path = dir.join("dictcomp_range_fstring_key.o");
@@ -15821,8 +16176,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dict_sourced_dict_comprehension_builds_an_independent_copy_and_leaves_the_source_intact()
-    {
+    fn a_dict_sourced_dict_comprehension_builds_an_independent_copy_and_leaves_the_source_intact() {
         // `d = {"a": 10, "b": 20}` then `d2 = {k: 1 for k in d}` (PR-12 Task
         // 5b, D-117's own dedicated safety test, brief item (d)): `d`, a
         // pre-existing `dict[str, int]`, is the one `Dict`-sourced
@@ -15853,8 +16207,14 @@ mod tests {
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "d".to_string(),
                     value: MirExpr::DictLiteral(vec![
-                        (MirExpr::StringLiteral("a".to_string()), MirExpr::IntLiteral(10)),
-                        (MirExpr::StringLiteral("b".to_string()), MirExpr::IntLiteral(20)),
+                        (
+                            MirExpr::StringLiteral("a".to_string()),
+                            MirExpr::IntLiteral(10),
+                        ),
+                        (
+                            MirExpr::StringLiteral("b".to_string()),
+                            MirExpr::IntLiteral(20),
+                        ),
                     ]),
                 }),
                 MirItem::TopLevelStmt(MirStmt::DictCompAssign {
@@ -15898,6 +16258,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dictcomp_dict_source_independent_copy");
         let obj_path = dir.join("dictcomp_dict_source_independent_copy.o");
@@ -15967,6 +16328,7 @@ mod tests {
                     key: Box::new(MirExpr::StringLiteral("v30".to_string())),
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dictcomp_list_with_filter");
         let obj_path = dir.join("dictcomp_list_with_filter.o");
@@ -16040,6 +16402,7 @@ mod tests {
                     key: Box::new(MirExpr::StringLiteral("s7".to_string())),
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dictcomp_set_with_filter");
         let obj_path = dir.join("dictcomp_set_with_filter.o");
@@ -16073,9 +16436,15 @@ mod tests {
                 key: Box::new(MirExpr::IntLiteral(1)),
                 value: Box::new(MirExpr::IntLiteral(2)),
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dictcomp_non_str_key_panics");
-        let _ = compile_to_object(&mir, &dir.join("dictcomp_non_str_key_panics.o"), None, false);
+        let _ = compile_to_object(
+            &mir,
+            &dir.join("dictcomp_non_str_key_panics.o"),
+            None,
+            false,
+        );
     }
 
     #[test]
@@ -16104,6 +16473,7 @@ mod tests {
                 key: Box::new(MirExpr::IntLiteral(1)),
                 value: Box::new(MirExpr::IntLiteral(2)),
             })],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dictcomp_non_str_key_filtered_panics");
         let _ = compile_to_object(
@@ -16115,8 +16485,8 @@ mod tests {
     }
 
     #[test]
-    fn a_dict_sourced_dict_comprehension_that_rebinds_its_own_source_name_reads_the_pre_existing_value(
-    ) {
+    fn a_dict_sourced_dict_comprehension_that_rebinds_its_own_source_name_reads_the_pre_existing_value()
+     {
         // `d = {"a": 5, "b": 6}` then `d = {k: 9 for k in d}`, reusing the
         // same name for both the source *and* the target (PR-12 Task 5b,
         // D-117): the direct `DictCompAssign` analog of `ListCompAssign`'s
@@ -16138,8 +16508,14 @@ mod tests {
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "d".to_string(),
                     value: MirExpr::DictLiteral(vec![
-                        (MirExpr::StringLiteral("a".to_string()), MirExpr::IntLiteral(5)),
-                        (MirExpr::StringLiteral("b".to_string()), MirExpr::IntLiteral(6)),
+                        (
+                            MirExpr::StringLiteral("a".to_string()),
+                            MirExpr::IntLiteral(5),
+                        ),
+                        (
+                            MirExpr::StringLiteral("b".to_string()),
+                            MirExpr::IntLiteral(6),
+                        ),
                     ]),
                 }),
                 MirItem::TopLevelStmt(MirStmt::DictCompAssign {
@@ -16168,6 +16544,7 @@ mod tests {
                     key: Box::new(MirExpr::StringLiteral("b".to_string())),
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dictcomp_self_referential_rebind");
         let obj_path = dir.join("dictcomp_self_referential_rebind.o");
@@ -16179,8 +16556,8 @@ mod tests {
     }
 
     #[test]
-    fn a_range_sourced_dict_comprehension_whose_bound_reads_its_own_rebound_target_uses_the_pre_existing_length(
-    ) {
+    fn a_range_sourced_dict_comprehension_whose_bound_reads_its_own_rebound_target_uses_the_pre_existing_length()
+     {
         // `d = {"a": 1, "b": 2, "c": 3}` then `d = {f"n{i}": i for i in
         // range(len(d))}` (PR-12 Task 5b, D-117): the `DictCompAssign`
         // analog of `ListCompAssign`'s own `a_range_sourced_list_
@@ -16203,9 +16580,18 @@ mod tests {
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "d".to_string(),
                     value: MirExpr::DictLiteral(vec![
-                        (MirExpr::StringLiteral("a".to_string()), MirExpr::IntLiteral(1)),
-                        (MirExpr::StringLiteral("b".to_string()), MirExpr::IntLiteral(2)),
-                        (MirExpr::StringLiteral("c".to_string()), MirExpr::IntLiteral(3)),
+                        (
+                            MirExpr::StringLiteral("a".to_string()),
+                            MirExpr::IntLiteral(1),
+                        ),
+                        (
+                            MirExpr::StringLiteral("b".to_string()),
+                            MirExpr::IntLiteral(2),
+                        ),
+                        (
+                            MirExpr::StringLiteral("c".to_string()),
+                            MirExpr::IntLiteral(3),
+                        ),
                     ]),
                 }),
                 MirItem::TopLevelStmt(MirStmt::DictCompAssign {
@@ -16252,6 +16638,7 @@ mod tests {
                     key: Box::new(MirExpr::StringLiteral("n2".to_string())),
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dictcomp_self_referential_range_bound");
         let obj_path = dir.join("dictcomp_self_referential_range_bound.o");
@@ -16306,6 +16693,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int("ys")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice_all_bounds_present");
         let obj_path = dir.join("slice_all_bounds_present.o");
@@ -16338,6 +16726,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int("ys")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice_all_bounds_omitted");
         let obj_path = dir.join("slice_all_bounds_omitted.o");
@@ -16369,6 +16758,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int("ys")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice_step_only");
         let obj_path = dir.join("slice_step_only.o");
@@ -16410,6 +16800,7 @@ mod tests {
                 MirItem::TopLevelStmt(print_each_int("xs")),
                 MirItem::TopLevelStmt(print_each_int("ys")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice_result_is_independent");
         let obj_path = dir.join("slice_result_is_independent.o");
@@ -16453,6 +16844,7 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(print_each_int("xs")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("slice_self_referential_rebind");
         let obj_path = dir.join("slice_self_referential_rebind.o");
@@ -16491,6 +16883,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("list_pop_basic");
         let obj_path = dir.join("list_pop_basic.o");
@@ -16537,6 +16930,7 @@ mod tests {
                 MirItem::TopLevelStmt(print_each_int("ys")),
                 MirItem::TopLevelStmt(print_each_int("xs")),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("list_pop_twice_same_statement");
         let obj_path = dir.join("list_pop_twice_same_statement.o");
@@ -16568,6 +16962,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_get_or_default_present");
         let obj_path = dir.join("dict_get_or_default_present.o");
@@ -16600,6 +16995,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_get_or_default_missing");
         let obj_path = dir.join("dict_get_or_default_missing.o");
@@ -16650,6 +17046,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_get_or_default_nested_default");
         let obj_path = dir.join("dict_get_or_default_nested_default.o");
@@ -16684,6 +17081,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("dict_get_or_default_non_str_key_panics");
         let _ = compile_to_object(
@@ -16707,13 +17105,19 @@ mod tests {
                     name: "foo".to_string(),
                     params: vec![("x".to_string(), Ty::Int)],
                     return_ty: Ty::Int,
-                    body: vec![MirStmt::Return(Some(MirExpr::Name { name: "x".to_string(), ty: Ty::Int }))],
+                    body: vec![MirStmt::Return(Some(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }))],
                 },
                 MirItem::Function {
                     name: "foo".to_string(),
                     params: vec![("x".to_string(), Ty::Int)],
                     return_ty: Ty::Int,
-                    body: vec![MirStmt::Return(Some(MirExpr::Name { name: "x".to_string(), ty: Ty::Int }))],
+                    body: vec![MirStmt::Return(Some(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }))],
                 },
                 // Call foo(42) and print the result -- exercises the
                 // indirect call dispatch through the function-pointer slot.
@@ -16723,6 +17127,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("fn_redef_unique_names");
         let obj_path = dir.join("fn_redef_unique_names.o");
@@ -16732,8 +17137,11 @@ mod tests {
         let output = Command::new(&bin_path).output().expect("binary should run");
         // The second definition (which returns its argument) is the one
         // bound at call time, so foo(42) should print 42.
-        assert_eq!(output.stdout, b"42
-");
+        assert_eq!(
+            output.stdout,
+            b"42
+"
+        );
         assert!(output.status.success());
     }
 
@@ -16753,7 +17161,10 @@ mod tests {
             items: vec![
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "s".to_string(),
-                    value: MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)]),
+                    value: MirExpr::SetLiteral(vec![
+                        MirExpr::IntLiteral(1),
+                        MirExpr::IntLiteral(2),
+                    ]),
                 }),
                 MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::SetAdd {
                     set: "s".to_string(),
@@ -16774,6 +17185,7 @@ mod tests {
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("set_add_grows_and_dedups");
         let obj_path = dir.join("set_add_grows_and_dedups.o");
@@ -16909,14 +17321,13 @@ mod tests {
                 MirItem::TopLevelStmt(print_expr(MirExpr::Call {
                     callee: "C.greet.classmethod".to_string(),
                     args: vec![
-                        MirExpr::NullInstance {
-                            ty: self_ty,
-                        },
+                        MirExpr::NullInstance { ty: self_ty },
                         MirExpr::IntLiteral(21),
                     ],
                     ty: Ty::Int,
                 })),
             ],
+            class_defs: Vec::new(),
         };
         let dir = tempfile_dir("null_instance_classmethod");
         let obj_path = dir.join("null_instance_classmethod.o");

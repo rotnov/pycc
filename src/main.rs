@@ -547,10 +547,7 @@ fn run(path: &str) -> ExitCode {
 /// unchanged, so an optimized build is linked exactly when `--release`
 /// (explicit or via a neighboring `pycc.toml` default) is actually in
 /// effect.
-fn find_pycc_rt_lib_dir(
-    target: Option<&str>,
-    release: bool,
-) -> Result<std::path::PathBuf, String> {
+fn find_pycc_rt_lib_dir(target: Option<&str>, release: bool) -> Result<std::path::PathBuf, String> {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     find_pycc_rt_lib_dir_in(workspace_root, target, release, std::path::Path::exists)
 }
@@ -654,10 +651,8 @@ mod linker_tests {
     #[test]
     fn reports_a_clean_error_naming_the_target_when_its_build_is_missing() {
         let root = std::path::Path::new("/workspace");
-        let err = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), false, |_| {
-            false
-        })
-        .unwrap_err();
+        let err = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), false, |_| false)
+            .unwrap_err();
         assert!(err.contains("x86_64-unknown-linux-gnu"));
         assert!(err.contains("rustup target add"));
     }
@@ -698,10 +693,8 @@ mod linker_tests {
     #[test]
     fn reports_a_clean_error_naming_the_target_and_release_when_its_build_is_missing() {
         let root = std::path::Path::new("/workspace");
-        let err = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), true, |_| {
-            false
-        })
-        .unwrap_err();
+        let err = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), true, |_| false)
+            .unwrap_err();
         assert!(err.contains("x86_64-unknown-linux-gnu"));
         assert!(err.contains("rustup target add"));
         assert!(err.contains("cargo build --release --target x86_64-unknown-linux-gnu -p pycc_rt"));

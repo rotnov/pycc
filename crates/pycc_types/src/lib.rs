@@ -260,7 +260,9 @@ impl Environment {
         // every known function name so the call-before-`def` check in
         // `infer_expr_in`'s `HirExpr::Call` arm never fires inside a
         // function body.
-        child.defined_functions.extend(child.functions.keys().cloned());
+        child
+            .defined_functions
+            .extend(child.functions.keys().cloned());
         child
     }
 }
@@ -364,7 +366,8 @@ fn std_function_used_as_a_value(name: &str) -> Diagnostic {
         "T0021",
         format!("`{name}` is a stdlib function and must be called, e.g. `{name}(...)`"),
         Span::new(0, 0),
-    ).with_help(format!("call it: `{name}(...)`"))
+    )
+    .with_help(format!("call it: `{name}(...)`"))
 }
 
 /// A stdlib constant (e.g. `math.pi`) called like a function
@@ -732,7 +735,9 @@ fn is_private_solver_scalar(ty: &Ty) -> bool {
 /// this solver has no representation for. The returned carrier is destructured
 /// by the `Subscript`/`ListPop` arms, never unified -- `unify_terms` and
 /// `merge_inferred_types` are unchanged.
-fn homogeneous_private_solver_scalar_list_element(element_terms: &[Option<TypeTerm>]) -> Option<Ty> {
+fn homogeneous_private_solver_scalar_list_element(
+    element_terms: &[Option<TypeTerm>],
+) -> Option<Ty> {
     let first = element_terms.first()?.as_ref()?.as_ref().ok()?;
     if !is_private_solver_scalar(first) {
         return None;
@@ -969,9 +974,7 @@ fn collect_expr_constraints(
                     return Err(std_receiver_shadowed(name));
                 }
                 return match symbol.kind {
-                    pycc_std::StdSymbolKind::Constant { ty } => {
-                        Ok(Some(Ok(std_scalar_to_ty(ty))))
-                    }
+                    pycc_std::StdSymbolKind::Constant { ty } => Ok(Some(Ok(std_scalar_to_ty(ty)))),
                     pycc_std::StdSymbolKind::Function { .. } => {
                         Err(std_function_used_as_a_value(name))
                     }
@@ -1076,7 +1079,8 @@ fn collect_expr_constraints(
                         "T0033",
                         format!("`len` expects exactly 1 argument, got {}", arg_terms.len()),
                         Span::new(0, 0),
-                    ).with_help("pass exactly 1 argument"));
+                    )
+                    .with_help("pass exactly 1 argument"));
                 }
                 if let Some(Ok(arg_ty)) = &arg_terms[0]
                     && !matches!(arg_ty, Ty::List(_) | Ty::Dict(_) | Ty::Set(_))
@@ -1130,7 +1134,11 @@ fn collect_expr_constraints(
                             arg_terms.len()
                         ),
                         Span::new(0, 0),
-                    ).with_help(format!("pass exactly {} argument(s)", expected_arg_tys.len())));
+                    )
+                    .with_help(format!(
+                        "pass exactly {} argument(s)",
+                        expected_arg_tys.len()
+                    )));
                 }
                 for (term, expected) in arg_terms.iter().zip(expected_arg_tys) {
                     if let Some(Ok(arg_ty)) = term
@@ -1144,7 +1152,11 @@ fn collect_expr_constraints(
                                 arg_ty.name()
                             ),
                             Span::new(0, 0),
-                        ).with_help(format!("pass a `{}` value", std_scalar_to_ty(*expected).name())));
+                        )
+                        .with_help(format!(
+                            "pass a `{}` value",
+                            std_scalar_to_ty(*expected).name()
+                        )));
                     }
                 }
                 return Ok(Some(Ok(std_scalar_to_ty(ret_ty))));
@@ -1170,7 +1182,8 @@ fn collect_expr_constraints(
                             arg_terms.len()
                         ),
                         Span::new(0, 0),
-                    ).with_help("pass exactly 1 argument"));
+                    )
+                    .with_help("pass exactly 1 argument"));
                 }
                 if let Some(Ok(arg_ty)) = &arg_terms[0]
                     && !matches!(arg_ty, Ty::Int | Ty::Float | Ty::Bool)
@@ -1182,7 +1195,8 @@ fn collect_expr_constraints(
                             arg_ty.name()
                         ),
                         Span::new(0, 0),
-                    ).with_help("pass an `int`, `float`, or `bool` value"));
+                    )
+                    .with_help("pass an `int`, `float`, or `bool` value"));
                 }
                 return Ok(Some(Ok(Ty::Float)));
             }
@@ -1619,8 +1633,7 @@ fn collect_block_constraints(
                 // only one branch are tracked as maybe-bound in
                 // `maybe_bindings`; names introduced by both branches are
                 // definitely bound.
-                let pre_existing: HashSet<String> =
-                    env.bindings.keys().cloned().collect();
+                let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
                 let mut body_env = env.clone();
                 collect_block_constraints(
                     signatures,
@@ -1658,8 +1671,7 @@ fn collect_block_constraints(
                 // may execute zero times, so every body-only binding is
                 // maybe-bound — mirroring the validation pass's
                 // `join_loop_body` (D-147).
-                let pre_existing: HashSet<String> =
-                    env.bindings.keys().cloned().collect();
+                let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
                 let mut body_env = env.clone();
                 collect_block_constraints(
                     signatures,
@@ -1702,8 +1714,7 @@ fn collect_block_constraints(
                 // binding names so the loop variable and body-only
                 // bindings can be tracked as maybe-bound after the loop
                 // (a `for` loop may execute zero times).
-                let pre_existing: HashSet<String> =
-                    env.bindings.keys().cloned().collect();
+                let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
                 if let Some(existing) = env.bindings.get(var).cloned() {
                     unify_terms(
                         existing,
@@ -1747,8 +1758,7 @@ fn collect_block_constraints(
                 // names so the loop variable and body-only bindings can be
                 // tracked as maybe-bound after the loop (a `for` loop may
                 // execute zero times).
-                let pre_existing: HashSet<String> =
-                    env.bindings.keys().cloned().collect();
+                let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
                 if !env.bindings.contains_key(var) {
                     let term = fresh_term(parents, concrete);
                     env.bindings.insert(var.clone(), term);
@@ -2123,10 +2133,7 @@ fn check_if_branches_in_place(
 /// Issue #118 Part 1: fast-path helper for module-scope `while` loops
 /// where the body introduces no new bindings. Checks the body in-place
 /// without cloning env.
-fn check_while_body_in_place(
-    env: &mut Environment,
-    body: &[HirStmt],
-) -> Result<(), Diagnostic> {
+fn check_while_body_in_place(env: &mut Environment, body: &[HirStmt]) -> Result<(), Diagnostic> {
     body.iter().try_for_each(|stmt| check_stmt(env, stmt))
 }
 
@@ -2139,8 +2146,11 @@ fn check_if_branches_in_place_in_function(
     orelse: &[HirStmt],
     return_ty: Ty,
 ) -> Result<(), Diagnostic> {
-    body.iter().try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))?;
-    orelse.iter().try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))
+    body.iter()
+        .try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))?;
+    orelse
+        .iter()
+        .try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))
 }
 
 /// Issue #118 Part 1: fast-path helper for function-scope `while` loops
@@ -2151,7 +2161,8 @@ fn check_while_body_in_place_in_function(
     body: &[HirStmt],
     return_ty: Ty,
 ) -> Result<(), Diagnostic> {
-    body.iter().try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))
+    body.iter()
+        .try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))
 }
 
 fn concrete_function_signatures(hir: &HirModule) -> Option<HashMap<String, (Vec<Ty>, Ty)>> {
@@ -2286,7 +2297,10 @@ fn infer_function_signatures_with_solver(
         }
     }
     for (item, local_names) in hir.items.iter().zip(function_local_names) {
-        let HirItem::Function { name, body, params, .. } = item else {
+        let HirItem::Function {
+            name, body, params, ..
+        } = item
+        else {
             continue;
         };
         let signature = &signatures[name];
@@ -2315,11 +2329,7 @@ fn infer_function_signatures_with_solver(
         // have the same raw type shape (already validated by
         // check_incompatible_redefinitions), and the last definition is the
         // one bound at call sites.
-        for (param_name, param_ty) in params
-            .iter()
-            .map(|(n, _)| n)
-            .zip(&signature.1)
-        {
+        for (param_name, param_ty) in params.iter().map(|(n, _)| n).zip(&signature.1) {
             env.bindings.insert(param_name.clone(), param_ty.clone());
         }
         collect_block_constraints(
@@ -2396,7 +2406,8 @@ fn infer_function_signatures_with_solver(
                 "T0021",
                 format!("cannot infer return type of private helper `{name}`; add an annotation"),
                 Span::new(0, 0),
-            ).with_help(format!("add a return type annotation to `{name}`"))
+            )
+            .with_help(format!("add a return type annotation to `{name}`"))
         })?;
         resolved.insert(name.clone(), (param_tys, return_ty));
     }
@@ -3276,8 +3287,21 @@ fn infer_expr_in(
             // rather than letting `infer_expr_in` on the class name
             // produce a confusing "name not defined" diagnostic.
             if let HirExpr::Name(class_name) = base.as_ref()
-                && env.lookup_class(class_name).is_some()
+                && let Some(class_def) = env.lookup_class(class_name)
             {
+                // #379 (PR-19): `Color.RED` — accessing an enum member by
+                // name on the enum class. An enum class's `enum_members`
+                // table holds the member names; if `attr` matches one, the
+                // expression's type is `Ty::Instance(class_name)` (the
+                // member is a singleton instance of the enum class). This
+                // intercepts the "accessing a class attribute without an
+                // instance" rejection below, which would otherwise reject
+                // all class-name attribute reads.
+                if !class_def.enum_members.is_empty()
+                    && class_def.enum_members.iter().any(|(name, _)| name == attr)
+                {
+                    return Ok(Ty::Instance(Box::new(class_name.clone())));
+                }
                 return Err(Diagnostic::error(
                     "T0044",
                     format!(
@@ -3467,7 +3491,8 @@ fn check_range_operand_in(
             "T0021",
             format!("range {position} expects `int`, got `{}`", actual.name()),
             Span::new(0, 0),
-        ).with_help("pass an `int` value"))
+        )
+        .with_help("pass an `int` value"))
     }
 }
 
@@ -3637,8 +3662,7 @@ fn join_if_branches(
                 joined.insert(name.clone(), BindingState::Maybe(ty.clone()));
             }
             // Body binds it, orelse does not -> Maybe.
-            (BindingState::Definitely(ty), None)
-            | (BindingState::Maybe(ty), None) => {
+            (BindingState::Definitely(ty), None) | (BindingState::Maybe(ty), None) => {
                 joined.insert(name.clone(), BindingState::Maybe(ty.clone()));
             }
         }
@@ -3802,14 +3826,39 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // Issue #118 Part 1: if the loop variable was not definitely bound
             // before the loop, downgrade it to Maybe (the loop may execute
             // zero times). A pre-bound variable stays Definitely bound.
-            if !was_definite
-                && let Some(ty) = env.lookup_any(var)
-            {
+            if !was_definite && let Some(ty) = env.lookup_any(var) {
                 env.bind_maybe(var.to_string(), ty);
             }
             Ok(())
         }
         HirStmt::ForList { var, list, body } => {
+            // #379 (PR-19): `for c in Color:` — iterating an enum class's
+            // members. A class name is not a value binding (classes live in
+            // `env.classes`, not `env.bindings`), so `lookup_bound_name`
+            // fails. Check `env.lookup_class` first: if `list` is an enum
+            // class (has non-empty `enum_members`), bind `var` to
+            // `Ty::Instance(list)` and check the body. The actual unrolling
+            // (expanding the loop into N sequential copies) is done by a
+            // separate HIR→HIR rewrite pass that runs after
+            // `check_and_resolve` (see `unroll_enum_loops`), so MIR never
+            // sees an enum iterable.
+            if let Some(class_def) = env.lookup_class(list)
+                && !class_def.enum_members.is_empty()
+            {
+                let var_ty = Ty::Instance(Box::new(list.clone()));
+                let was_definite =
+                    matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
+                check_assignment(env, var, var_ty)?;
+                let mut body_env = env.clone();
+                for stmt in body {
+                    check_stmt(&mut body_env, stmt)?;
+                }
+                join_loop_body(env, &body_env);
+                if !was_definite && let Some(ty) = env.lookup_any(var) {
+                    env.bind_maybe(var.to_string(), ty);
+                }
+                return Ok(());
+            }
             // Module (top-level) scope has no "local before assignment"
             // concept the way a function body does -- every other arm here
             // (e.g. `ExprStmt` via `infer_expr`) resolves names with an
@@ -3855,9 +3904,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // Issue #118 Part 1: if the loop variable was not definitely bound
             // before the loop, downgrade it to Maybe (the loop may execute
             // zero times). A pre-bound variable stays Definitely bound.
-            if !was_definite
-                && let Some(ty) = env.lookup_any(var)
-            {
+            if !was_definite && let Some(ty) = env.lookup_any(var) {
                 env.bind_maybe(var.to_string(), ty);
             }
             Ok(())
@@ -4005,7 +4052,8 @@ fn check_dict_set(
                 key_expr_ty.name()
             ),
             Span::new(0, 0),
-        ).with_help(format!("use a `{}` value here", key_ty.name())));
+        )
+        .with_help(format!("use a `{}` value here", key_ty.name())));
     }
     let value_ty = infer_expr_in(env, local_names, value)?;
     if !is_assignable(value_ty.clone(), val_ty.clone()) {
@@ -4090,15 +4138,17 @@ fn check_function_in(
     // already been validated by that function's own
     // `generic_type_param_name` call, and a non-generic function returns
     // `Ok(None)` unconditionally.
-    env.own_type_param = generic_type_param_name(params, return_ty)
-        .ok()
-        .flatten();
+    env.own_type_param = generic_type_param_name(params, return_ty).ok().flatten();
     // #433: extract the class name from a mangled `<ClassName>.<method>`
     // name so `infer_expr_in`'s `HirExpr::Super` arm can resolve the next
     // class in the MRO. A top-level function name contains no `.`, so
     // `current_class` stays `None` for those (and for the module-level
     // environment, which never goes through `check_function_in`).
-    env.current_class = name.split('.').next().filter(|prefix| *prefix != name).map(String::from);
+    env.current_class = name
+        .split('.')
+        .next()
+        .filter(|prefix| *prefix != name)
+        .map(String::from);
     if !signature_was_registered {
         env.bind_function(
             name.clone(),
@@ -4120,7 +4170,8 @@ fn check_function_in(
                 resolved_return.name()
             ),
             Span::new(0, 0),
-        ).with_help(format!("return a `{}` value", resolved_return.name())));
+        )
+        .with_help(format!("return a `{}` value", resolved_return.name())));
     }
     Ok(())
 }
@@ -4165,7 +4216,8 @@ fn check_stmt_in_function(
                         return_ty.name()
                     ),
                     Span::new(0, 0),
-                ).with_help(format!("return a `{}` value", return_ty.name())));
+                )
+                .with_help(format!("return a `{}` value", return_ty.name())));
             }
             Ok(())
         }
@@ -4180,7 +4232,8 @@ fn check_stmt_in_function(
                         actual.name()
                     ),
                     Span::new(0, 0),
-                ).with_help(format!("return a `{}` value", return_ty.name())));
+                )
+                .with_help(format!("return a `{}` value", return_ty.name())));
             }
             // PEP 695 (#387): `is_assignable`'s `from == Ty::Param` clause
             // lets a generic function's own `Ty::Param` pass as any concrete
@@ -4221,7 +4274,13 @@ fn check_stmt_in_function(
             // Fast path: if neither branch introduces any new bindings, skip
             // the clone+join and check both branches in-place.
             if !introduces_bindings(body) && !introduces_bindings(orelse) {
-                check_if_branches_in_place_in_function(env, local_names, body, orelse, return_ty.clone())
+                check_if_branches_in_place_in_function(
+                    env,
+                    local_names,
+                    body,
+                    orelse,
+                    return_ty.clone(),
+                )
             } else {
                 let mut body_env = env.clone();
                 for s in body {
@@ -4272,14 +4331,33 @@ fn check_stmt_in_function(
             // Issue #118 Part 1: if the loop variable was not definitely bound
             // before the loop, downgrade it to Maybe (the loop may execute
             // zero times). A pre-bound variable stays Definitely bound.
-            if !was_definite
-                && let Some(ty) = env.lookup_any(var)
-            {
+            if !was_definite && let Some(ty) = env.lookup_any(var) {
                 env.bind_maybe(var.to_string(), ty);
             }
             Ok(())
         }
         HirStmt::ForList { var, list, body } => {
+            // #379 (PR-19): `for c in Color:` inside a function body —
+            // same enum iteration intercept as the module-scope `check_stmt`
+            // arm above. A class name is not a value binding, so
+            // `lookup_bound_name` fails; check `env.lookup_class` first.
+            if let Some(class_def) = env.lookup_class(list)
+                && !class_def.enum_members.is_empty()
+            {
+                let var_ty = Ty::Instance(Box::new(list.clone()));
+                let was_definite =
+                    matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
+                check_assignment(env, var, var_ty)?;
+                let mut body_env = env.clone();
+                for s in body {
+                    check_stmt_in_function(&mut body_env, local_names, s, return_ty.clone())?;
+                }
+                join_loop_body(env, &body_env);
+                if !was_definite && let Some(ty) = env.lookup_any(var) {
+                    env.bind_maybe(var.to_string(), ty);
+                }
+                return Ok(());
+            }
             let list_ty = lookup_bound_name(env, local_names, list)?;
             // See the module-scope `check_stmt` arm's own comment (PR-11
             // Task 3, D-123): `for k in d:` iterates a dict's keys. PR-11
@@ -4311,9 +4389,7 @@ fn check_stmt_in_function(
             // Issue #118 Part 1: if the loop variable was not definitely bound
             // before the loop, downgrade it to Maybe (the loop may execute
             // zero times). A pre-bound variable stays Definitely bound.
-            if !was_definite
-                && let Some(ty) = env.lookup_any(var)
-            {
+            if !was_definite && let Some(ty) = env.lookup_any(var) {
                 env.bind_maybe(var.to_string(), ty);
             }
             Ok(())
@@ -4504,9 +4580,7 @@ fn scan_signature_ty_for_param(
         }
         // D-154: `Ty::Instance` can never carry a `Ty::Param` -- see
         // `ty_contains_param`'s own identical arm/reasoning above.
-        Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::None | Ty::Infer | Ty::Instance(_) => {
-            Ok(())
-        }
+        Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::None | Ty::Infer | Ty::Instance(_) => Ok(()),
     }
 }
 
@@ -4876,7 +4950,13 @@ fn substitute_ty(ty: &Ty, param_name: &str, concrete: &Ty) -> Ty {
 /// `Ty::Instance("0gen_Container__T_int")` so MIR/codegen resolve attribute
 /// slots against the monomorphized class's substituted attribute types, not
 /// the original generic class's `Ty::Param`-typed slots.
-fn substitute_ty_with_class(ty: &Ty, param_name: &str, concrete: &Ty, class_name: &str, mangled_class: &str) -> Ty {
+fn substitute_ty_with_class(
+    ty: &Ty,
+    param_name: &str,
+    concrete: &Ty,
+    class_name: &str,
+    mangled_class: &str,
+) -> Ty {
     match ty {
         Ty::Param(name) if name.as_ref() == param_name => concrete.clone(),
         Ty::Instance(name) if name.as_ref() == class_name => {
@@ -4951,7 +5031,9 @@ fn substitute_body_with_class(
     mangled_class: &str,
 ) -> Vec<HirStmt> {
     body.iter()
-        .map(|stmt| substitute_stmt_with_class(stmt, param_name, concrete, class_name, mangled_class))
+        .map(|stmt| {
+            substitute_stmt_with_class(stmt, param_name, concrete, class_name, mangled_class)
+        })
         .collect()
 }
 
@@ -4969,13 +5051,25 @@ fn substitute_stmt_with_class(
             value,
         } => HirStmt::AnnAssign {
             target: target.clone(),
-            annotation: substitute_ty_with_class(annotation, param_name, concrete, class_name, mangled_class),
+            annotation: substitute_ty_with_class(
+                annotation,
+                param_name,
+                concrete,
+                class_name,
+                mangled_class,
+            ),
             value: value.clone(),
         },
         HirStmt::If { test, body, orelse } => HirStmt::If {
             test: test.clone(),
             body: substitute_body_with_class(body, param_name, concrete, class_name, mangled_class),
-            orelse: substitute_body_with_class(orelse, param_name, concrete, class_name, mangled_class),
+            orelse: substitute_body_with_class(
+                orelse,
+                param_name,
+                concrete,
+                class_name,
+                mangled_class,
+            ),
         },
         HirStmt::While { test, body } => HirStmt::While {
             test: test.clone(),
@@ -5046,7 +5140,8 @@ pub fn instantiate_generic_call(
                 arg_tys.len()
             ),
             Span::new(0, 0),
-        ).with_help(format!("pass exactly {} argument(s)", params.len())));
+        )
+        .with_help(format!("pass exactly {} argument(s)", params.len())));
     }
     let mut resolved: Option<Ty> = None;
     for ((param_name, param_ty), arg_ty) in params.iter().zip(arg_tys) {
@@ -5071,7 +5166,8 @@ pub fn instantiate_generic_call(
                             arg_ty.name()
                         ),
                         Span::new(0, 0),
-                    ).with_help(format!("pass a `{}` value", other.name())));
+                    )
+                    .with_help(format!("pass a `{}` value", other.name())));
                 }
             }
         }
@@ -5257,7 +5353,11 @@ fn rewrite_generic_calls_in_expr(
         // ordinary `HirExpr::Call` to the mangled class name. The mangled
         // name follows the same `0gen_`-prefixed scheme as generic
         // functions (D-133/D-134).
-        HirExpr::GenericClassInstantiate { class, type_arg, args } => {
+        HirExpr::GenericClassInstantiate {
+            class,
+            type_arg,
+            args,
+        } => {
             for arg in args.iter_mut() {
                 rewrite_generic_calls_in_expr(env, local_names, arg, instantiations, seen)?;
             }
@@ -5520,12 +5620,13 @@ fn rewrite_comp_iter(
 /// `instantiate_generic_class_methods`'s pre-scan to know which generic
 /// classes need monomorphization before the rewrite pass starts. `Ty` does
 /// not implement `Hash`, so dedup is done linearly against this `Vec`.
-fn collect_generic_class_instantiations_from_expr(
-    expr: &HirExpr,
-    out: &mut Vec<(String, Ty)>,
-) {
+fn collect_generic_class_instantiations_from_expr(expr: &HirExpr, out: &mut Vec<(String, Ty)>) {
     match expr {
-        HirExpr::GenericClassInstantiate { class, type_arg, args } => {
+        HirExpr::GenericClassInstantiate {
+            class,
+            type_arg,
+            args,
+        } => {
             let pair = (class.clone(), type_arg.clone());
             if !out.contains(&pair) {
                 out.push(pair);
@@ -5550,9 +5651,7 @@ fn collect_generic_class_instantiations_from_expr(
                 }
             }
         }
-        HirExpr::ListLiteral(es)
-        | HirExpr::SetLiteral(es)
-        | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
             for e in es {
                 collect_generic_class_instantiations_from_expr(e, out);
             }
@@ -5567,14 +5666,18 @@ fn collect_generic_class_instantiations_from_expr(
             collect_generic_class_instantiations_from_expr(base, out);
             collect_generic_class_instantiations_from_expr(index, out);
         }
-        HirExpr::Slice { base, start, stop, step } => {
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
             collect_generic_class_instantiations_from_expr(base, out);
             for bound in [start, stop, step].into_iter().flatten() {
                 collect_generic_class_instantiations_from_expr(bound, out);
             }
         }
-        HirExpr::ListAppend { value, .. }
-        | HirExpr::SetAdd { value, .. } => {
+        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
             collect_generic_class_instantiations_from_expr(value, out);
         }
         HirExpr::DictGetOrDefault { key, default, .. } => {
@@ -5620,10 +5723,7 @@ fn collect_generic_class_instantiations_from_comp_iter(
 
 /// PEP 695 (#387): Recursively collects `(class_name, type_arg)` pairs from
 /// `GenericClassInstantiate` expressions reachable from a statement.
-fn collect_generic_class_instantiations_from_stmt(
-    stmt: &HirStmt,
-    out: &mut Vec<(String, Ty)>,
-) {
+fn collect_generic_class_instantiations_from_stmt(stmt: &HirStmt, out: &mut Vec<(String, Ty)>) {
     match stmt {
         HirStmt::ExprStmt(expr) => collect_generic_class_instantiations_from_expr(expr, out),
         HirStmt::Assign { value, .. } => collect_generic_class_instantiations_from_expr(value, out),
@@ -5647,7 +5747,13 @@ fn collect_generic_class_instantiations_from_stmt(
                 collect_generic_class_instantiations_from_stmt(s, out);
             }
         }
-        HirStmt::ForRange { start, stop, step, body, .. } => {
+        HirStmt::ForRange {
+            start,
+            stop,
+            step,
+            body,
+            ..
+        } => {
             for sub in [start, stop, step] {
                 collect_generic_class_instantiations_from_expr(sub, out);
             }
@@ -5666,15 +5772,25 @@ fn collect_generic_class_instantiations_from_stmt(
             collect_generic_class_instantiations_from_expr(key, out);
             collect_generic_class_instantiations_from_expr(value, out);
         }
-        HirStmt::ListCompAssign { elt, cond, iter, .. }
-        | HirStmt::SetCompAssign { elt, cond, iter, .. } => {
+        HirStmt::ListCompAssign {
+            elt, cond, iter, ..
+        }
+        | HirStmt::SetCompAssign {
+            elt, cond, iter, ..
+        } => {
             collect_generic_class_instantiations_from_comp_iter(iter, out);
             collect_generic_class_instantiations_from_expr(elt, out);
             if let Some(c) = cond {
                 collect_generic_class_instantiations_from_expr(c, out);
             }
         }
-        HirStmt::DictCompAssign { key, value, cond, iter, .. } => {
+        HirStmt::DictCompAssign {
+            key,
+            value,
+            cond,
+            iter,
+            ..
+        } => {
             collect_generic_class_instantiations_from_comp_iter(iter, out);
             collect_generic_class_instantiations_from_expr(key, out);
             collect_generic_class_instantiations_from_expr(value, out);
@@ -5752,22 +5868,49 @@ fn instantiate_generic_class_methods(
             // `HirItem::Function`, so the destructuring cannot fail — the
             // `else { continue }` handles only the `None` case (method not
             // found in `hir.items`).
-            let Some(HirItem::Function { name: _, params, return_ty, body }) =
-                hir.items.iter().rfind(|item| matches!(
+            let Some(HirItem::Function {
+                name: _,
+                params,
+                return_ty,
+                body,
+            }) = hir.items.iter().rfind(|item| {
+                matches!(
                     item,
                     HirItem::Function { name, .. } if name == original_mangled
-                ))
+                )
+            })
             else {
                 continue;
             };
             let substituted_params = params
                 .iter()
                 .map(|(pn, ty)| {
-                    (pn.clone(), substitute_ty_with_class(ty, type_param_name, type_arg, class_name, &mangled_class))
+                    (
+                        pn.clone(),
+                        substitute_ty_with_class(
+                            ty,
+                            type_param_name,
+                            type_arg,
+                            class_name,
+                            &mangled_class,
+                        ),
+                    )
                 })
                 .collect::<Vec<_>>();
-            let substituted_return = substitute_ty_with_class(return_ty, type_param_name, type_arg, class_name, &mangled_class);
-            let substituted_body = substitute_body_with_class(body, type_param_name, type_arg, class_name, &mangled_class);
+            let substituted_return = substitute_ty_with_class(
+                return_ty,
+                type_param_name,
+                type_arg,
+                class_name,
+                &mangled_class,
+            );
+            let substituted_body = substitute_body_with_class(
+                body,
+                type_param_name,
+                type_arg,
+                class_name,
+                &mangled_class,
+            );
             let new_mangled = format!("{mangled_class}.{method_name}");
             let param_tys = substituted_params
                 .iter()
@@ -5812,20 +5955,46 @@ fn instantiate_generic_class_methods(
         let mut monomorphized_properties: Vec<PropertyDef> = Vec::new();
         for prop in &class_def.properties {
             let new_getter = format!("{mangled_class}.{}", prop.name);
-            if let Some(HirItem::Function { name: _, params, return_ty, body }) =
-                hir.items.iter().rfind(|item| matches!(
+            if let Some(HirItem::Function {
+                name: _,
+                params,
+                return_ty,
+                body,
+            }) = hir.items.iter().rfind(|item| {
+                matches!(
                     item,
                     HirItem::Function { name, .. } if name == &prop.getter
-                ))
-            {
+                )
+            }) {
                 let substituted_params = params
                     .iter()
                     .map(|(pn, ty)| {
-                        (pn.clone(), substitute_ty_with_class(ty, type_param_name, type_arg, class_name, &mangled_class))
+                        (
+                            pn.clone(),
+                            substitute_ty_with_class(
+                                ty,
+                                type_param_name,
+                                type_arg,
+                                class_name,
+                                &mangled_class,
+                            ),
+                        )
                     })
                     .collect::<Vec<_>>();
-                let substituted_return = substitute_ty_with_class(return_ty, type_param_name, type_arg, class_name, &mangled_class);
-                let substituted_body = substitute_body_with_class(body, type_param_name, type_arg, class_name, &mangled_class);
+                let substituted_return = substitute_ty_with_class(
+                    return_ty,
+                    type_param_name,
+                    type_arg,
+                    class_name,
+                    &mangled_class,
+                );
+                let substituted_body = substitute_body_with_class(
+                    body,
+                    type_param_name,
+                    type_arg,
+                    class_name,
+                    &mangled_class,
+                );
                 let param_tys = substituted_params
                     .iter()
                     .map(|(_, ty)| ty.clone())
@@ -5847,20 +6016,46 @@ fn instantiate_generic_class_methods(
             }
             let new_setter = prop.setter.as_ref().map(|s| {
                 let new_s = format!("{mangled_class}.{}.setter", prop.name);
-                if let Some(HirItem::Function { name: _, params, return_ty, body }) =
-                    hir.items.iter().rfind(|item| matches!(
+                if let Some(HirItem::Function {
+                    name: _,
+                    params,
+                    return_ty,
+                    body,
+                }) = hir.items.iter().rfind(|item| {
+                    matches!(
                         item,
                         HirItem::Function { name, .. } if name == s
-                    ))
-                {
+                    )
+                }) {
                     let substituted_params = params
                         .iter()
                         .map(|(pn, ty)| {
-                            (pn.clone(), substitute_ty_with_class(ty, type_param_name, type_arg, class_name, &mangled_class))
+                            (
+                                pn.clone(),
+                                substitute_ty_with_class(
+                                    ty,
+                                    type_param_name,
+                                    type_arg,
+                                    class_name,
+                                    &mangled_class,
+                                ),
+                            )
                         })
                         .collect::<Vec<_>>();
-                    let substituted_return = substitute_ty_with_class(return_ty, type_param_name, type_arg, class_name, &mangled_class);
-                    let substituted_body = substitute_body_with_class(body, type_param_name, type_arg, class_name, &mangled_class);
+                    let substituted_return = substitute_ty_with_class(
+                        return_ty,
+                        type_param_name,
+                        type_arg,
+                        class_name,
+                        &mangled_class,
+                    );
+                    let substituted_body = substitute_body_with_class(
+                        body,
+                        type_param_name,
+                        type_arg,
+                        class_name,
+                        &mangled_class,
+                    );
                     let param_tys = substituted_params
                         .iter()
                         .map(|(_, ty)| ty.clone())
@@ -5896,22 +6091,49 @@ fn instantiate_generic_class_methods(
         // parameter substitution applies.
         let mut mangled_static_methods: Vec<(String, String)> = Vec::new();
         for (method_name, original_mangled) in &class_def.static_methods {
-            let Some(HirItem::Function { name: _, params, return_ty, body }) =
-                hir.items.iter().rfind(|item| matches!(
+            let Some(HirItem::Function {
+                name: _,
+                params,
+                return_ty,
+                body,
+            }) = hir.items.iter().rfind(|item| {
+                matches!(
                     item,
                     HirItem::Function { name, .. } if name == original_mangled
-                ))
+                )
+            })
             else {
                 continue;
             };
             let substituted_params = params
                 .iter()
                 .map(|(pn, ty)| {
-                    (pn.clone(), substitute_ty_with_class(ty, type_param_name, type_arg, class_name, &mangled_class))
+                    (
+                        pn.clone(),
+                        substitute_ty_with_class(
+                            ty,
+                            type_param_name,
+                            type_arg,
+                            class_name,
+                            &mangled_class,
+                        ),
+                    )
                 })
                 .collect::<Vec<_>>();
-            let substituted_return = substitute_ty_with_class(return_ty, type_param_name, type_arg, class_name, &mangled_class);
-            let substituted_body = substitute_body_with_class(body, type_param_name, type_arg, class_name, &mangled_class);
+            let substituted_return = substitute_ty_with_class(
+                return_ty,
+                type_param_name,
+                type_arg,
+                class_name,
+                &mangled_class,
+            );
+            let substituted_body = substitute_body_with_class(
+                body,
+                type_param_name,
+                type_arg,
+                class_name,
+                &mangled_class,
+            );
             let new_mangled = format!("{mangled_class}.{method_name}.static");
             let param_tys = substituted_params
                 .iter()
@@ -5942,22 +6164,49 @@ fn instantiate_generic_class_methods(
         // `Ty::Instance(mangled_class)`.
         let mut mangled_class_methods: Vec<(String, String)> = Vec::new();
         for (method_name, original_mangled) in &class_def.class_methods {
-            let Some(HirItem::Function { name: _, params, return_ty, body }) =
-                hir.items.iter().rfind(|item| matches!(
+            let Some(HirItem::Function {
+                name: _,
+                params,
+                return_ty,
+                body,
+            }) = hir.items.iter().rfind(|item| {
+                matches!(
                     item,
                     HirItem::Function { name, .. } if name == original_mangled
-                ))
+                )
+            })
             else {
                 continue;
             };
             let substituted_params = params
                 .iter()
                 .map(|(pn, ty)| {
-                    (pn.clone(), substitute_ty_with_class(ty, type_param_name, type_arg, class_name, &mangled_class))
+                    (
+                        pn.clone(),
+                        substitute_ty_with_class(
+                            ty,
+                            type_param_name,
+                            type_arg,
+                            class_name,
+                            &mangled_class,
+                        ),
+                    )
                 })
                 .collect::<Vec<_>>();
-            let substituted_return = substitute_ty_with_class(return_ty, type_param_name, type_arg, class_name, &mangled_class);
-            let substituted_body = substitute_body_with_class(body, type_param_name, type_arg, class_name, &mangled_class);
+            let substituted_return = substitute_ty_with_class(
+                return_ty,
+                type_param_name,
+                type_arg,
+                class_name,
+                &mangled_class,
+            );
+            let substituted_body = substitute_body_with_class(
+                body,
+                type_param_name,
+                type_arg,
+                class_name,
+                &mangled_class,
+            );
             let new_mangled = format!("{mangled_class}.{method_name}.classmethod");
             let param_tys = substituted_params
                 .iter()
@@ -5986,7 +6235,10 @@ fn instantiate_generic_class_methods(
             .attrs
             .iter()
             .map(|(attr_name, ty)| {
-                (attr_name.clone(), substitute_ty(ty, type_param_name, type_arg))
+                (
+                    attr_name.clone(),
+                    substitute_ty(ty, type_param_name, type_arg),
+                )
             })
             .collect::<Vec<_>>();
         let new_class_def = HirClassDef {
@@ -5999,6 +6251,7 @@ fn instantiate_generic_class_methods(
             properties: monomorphized_properties,
             static_methods: mangled_static_methods,
             class_methods: mangled_class_methods,
+            enum_members: Vec::new(),
         };
         env.bind_class(mangled_class.clone(), new_class_def.clone());
         new_class_defs.push((mangled_class, new_class_def));
@@ -6025,7 +6278,12 @@ fn rewrite_generic_calls_in_instantiation(
     seen: &mut HashSet<String>,
 ) -> Result<(), Diagnostic> {
     let (name, params, return_ty, body) = match &instantiations[i].specialized {
-        HirItem::Function { name, params, return_ty, body } => (
+        HirItem::Function {
+            name,
+            params,
+            return_ty,
+            body,
+        } => (
             name.clone(),
             params.clone(),
             return_ty.clone(),
@@ -6044,13 +6302,7 @@ fn rewrite_generic_calls_in_instantiation(
     }
     let mut new_body = body;
     for stmt in new_body.iter_mut() {
-        rewrite_generic_calls_in_stmt(
-            &mut fn_env,
-            &local_names_refs,
-            stmt,
-            instantiations,
-            seen,
-        )?;
+        rewrite_generic_calls_in_stmt(&mut fn_env, &local_names_refs, stmt, instantiations, seen)?;
     }
     // Direct assignment avoids a second `if let` (whose never-taken false
     // branch would carry an uncovered region under D-014). All instantiations
@@ -6146,7 +6398,13 @@ fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     // mangled class name, confident the monomorphized methods are already
     // registered in `env` and collected in `instantiations`.
     let mut new_class_defs: Vec<(String, HirClassDef)> = Vec::new();
-    instantiate_generic_class_methods(hir, &mut env, &mut instantiations, &mut seen, &mut new_class_defs);
+    instantiate_generic_class_methods(
+        hir,
+        &mut env,
+        &mut instantiations,
+        &mut seen,
+        &mut new_class_defs,
+    );
 
     // Two passes, matching `check_with_environment`'s own D-041 discipline
     // exactly (register every function's signature -- already done above --
@@ -6269,6 +6527,151 @@ fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     })
 }
 
+/// #379 (PR-19): PEP 435 enum loop unrolling. Rewrites every
+/// `HirStmt::ForList { var, list, body }` where `list` is an enum class
+/// name (a class with non-empty `enum_members`) into N sequential copies
+/// of the body, each preceded by `HirStmt::Assign { target: var, value:
+/// HirExpr::AttrGet { base: HirExpr::Name(list), attr: <member> } }`,
+/// one per member in source order. This runs after `check_and_resolve`
+/// and `monomorphize`, so the HIR is fully type-checked and the enum
+/// class's member table is final. MIR never sees an enum iterable -- it
+/// only sees ordinary `Assign` + body statements.
+///
+/// The rewrite walks both top-level items and function bodies (a
+/// `ForList`-over-enum can appear inside a function). Inside a function
+/// body, the enclosing `Vec<HirStmt>` is spliced in place: the unrolled
+/// statements replace the original `ForList` statement at its position.
+///
+/// Limitations (matching the plan's risk-1): no `break`/`continue`/`else`
+/// in an enum-loop body (already unimplemented for all v0.3 loops, so no
+/// real loss); code size is linear in member-count × body-size (acceptable
+/// for v0.3 fixtures). A module with no enum classes is returned unchanged.
+fn unroll_enum_loops(mut hir: HirModule) -> Result<HirModule, Diagnostic> {
+    // Fast path: if no class is an enum class, there is nothing to unroll.
+    let has_enum = hir
+        .class_defs
+        .iter()
+        .any(|(_, cd)| !cd.enum_members.is_empty());
+    if !has_enum {
+        return Ok(hir);
+    }
+    // Build a lookup table: enum class name -> member names (in source order).
+    let enum_members: HashMap<&str, Vec<&String>> = hir
+        .class_defs
+        .iter()
+        .filter(|(_, cd)| !cd.enum_members.is_empty())
+        .map(|(name, cd)| {
+            (
+                name.as_str(),
+                cd.enum_members.iter().map(|(mn, _)| mn).collect(),
+            )
+        })
+        .collect();
+    // Walk top-level items and function bodies, splicing unrolled statements.
+    let mut new_items: Vec<HirItem> = Vec::with_capacity(hir.items.len());
+    for item in hir.items.drain(..) {
+        match item {
+            HirItem::TopLevelStmt(stmt) => {
+                let mut unrolled =
+                    unroll_enum_loops_in_stmts(std::slice::from_ref(&stmt), &enum_members);
+                for s in unrolled.drain(..) {
+                    new_items.push(HirItem::TopLevelStmt(s));
+                }
+            }
+            HirItem::Function {
+                name,
+                params,
+                return_ty,
+                body,
+            } => {
+                let body = unroll_enum_loops_in_stmts(&body, &enum_members);
+                new_items.push(HirItem::Function {
+                    name,
+                    params,
+                    return_ty,
+                    body,
+                });
+            }
+        }
+    }
+    hir.items = new_items;
+    Ok(hir)
+}
+
+/// Helper for `unroll_enum_loops`: walks a `Vec<HirStmt>`, splicing any
+/// `ForList`-over-enum into its unrolled equivalent. Recurses into nested
+/// statement bodies (if/while/for bodies) so an enum loop inside a nested
+/// block is also unrolled. Returns a new `Vec<HirStmt>` with all enum loops
+/// expanded.
+fn unroll_enum_loops_in_stmts(
+    stmts: &[HirStmt],
+    enum_members: &HashMap<&str, Vec<&String>>,
+) -> Vec<HirStmt> {
+    let mut result: Vec<HirStmt> = Vec::new();
+    for stmt in stmts {
+        match stmt {
+            HirStmt::ForList { var, list, body } => {
+                // Check if `list` is an enum class name.
+                if let Some(members) = enum_members.get(list.as_str()) {
+                    // Unroll: for each member, emit `var = <enum>.<member>`
+                    // then the body (cloned).
+                    let body = body.clone();
+                    for member_name in members {
+                        result.push(HirStmt::Assign {
+                            target: var.clone(),
+                            value: HirExpr::AttrGet {
+                                base: Box::new(HirExpr::Name(list.clone())),
+                                attr: (*member_name).clone(),
+                            },
+                        });
+                        result.extend(body.iter().cloned());
+                    }
+                } else {
+                    // Not an enum loop -- keep as-is, but recurse into the
+                    // body in case it contains a nested enum loop.
+                    result.push(HirStmt::ForList {
+                        var: var.clone(),
+                        list: list.clone(),
+                        body: unroll_enum_loops_in_stmts(body, enum_members),
+                    });
+                }
+            }
+            // Recurse into nested statement bodies.
+            HirStmt::If { test, body, orelse } => {
+                result.push(HirStmt::If {
+                    test: test.clone(),
+                    body: unroll_enum_loops_in_stmts(body, enum_members),
+                    orelse: unroll_enum_loops_in_stmts(orelse, enum_members),
+                });
+            }
+            HirStmt::While { test, body } => {
+                result.push(HirStmt::While {
+                    test: test.clone(),
+                    body: unroll_enum_loops_in_stmts(body, enum_members),
+                });
+            }
+            HirStmt::ForRange {
+                var,
+                start,
+                stop,
+                step,
+                body,
+            } => {
+                result.push(HirStmt::ForRange {
+                    var: var.clone(),
+                    start: start.clone(),
+                    stop: stop.clone(),
+                    step: step.clone(),
+                    body: unroll_enum_loops_in_stmts(body, enum_members),
+                });
+            }
+            // Other statement kinds don't contain nested ForList loops.
+            other => result.push(other.clone()),
+        }
+    }
+    result
+}
+
 /// Type-checks a module and returns a cloned HIR whose function signatures
 /// contain only the concrete types resolved by private-helper inference.
 /// Consumers after the type boundary must use this module rather than the
@@ -6309,7 +6712,8 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     // redefinition pair that reaches this point is already raw-shape-
     // identical and is guaranteed to resolve to the same concrete
     // signature. A second check here would be unreachable dead code.
-    monomorphize(&resolved_hir)
+    let monomorphized = monomorphize(&resolved_hir)?;
+    unroll_enum_loops(monomorphized)
 }
 
 fn check_with_signatures(
@@ -6544,7 +6948,9 @@ mod tests {
     fn v0_1_slice_always_type_checks() {
         let hir = HirModule {
             items: vec![],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -6562,7 +6968,9 @@ mod tests {
                 return_ty: Ty::None,
                 body: vec![HirStmt::ExprStmt(HirExpr::Super)],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "C0001");
@@ -6577,7 +6985,9 @@ mod tests {
                 return_ty: Ty::Int,
                 body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert_eq!(
@@ -6596,7 +7006,9 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert!(concrete_function_signatures(&hir).is_none());
@@ -6625,7 +7037,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let concrete = concrete_function_signatures(&hir).unwrap();
@@ -6679,7 +7093,9 @@ mod tests {
                     return_ty: Ty::Infer,
                     body,
                 }],
-                type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+                type_aliases: Vec::new(),
+                imports: Vec::new(),
+                class_defs: Vec::new(),
             };
 
             assert_eq!(check(&hir).unwrap_err().message, expected_message);
@@ -6706,7 +7122,9 @@ mod tests {
                     })],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -6734,7 +7152,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -6762,7 +7182,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert_eq!(check(&hir).unwrap_err().code, "T0023");
@@ -6793,7 +7215,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -6820,7 +7244,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0032");
     }
@@ -6845,7 +7271,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -6883,7 +7311,9 @@ mod tests {
                     },
                 }),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -6906,7 +7336,9 @@ mod tests {
                     },
                 }),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0034");
     }
@@ -6945,7 +7377,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -6977,7 +7411,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0034");
     }
@@ -7162,7 +7598,8 @@ mod tests {
     }
 
     #[test]
-    fn constraint_collection_carries_a_homogeneous_scalar_list_literal_as_an_element_type_carrier() {
+    fn constraint_collection_carries_a_homogeneous_scalar_list_literal_as_an_element_type_carrier()
+    {
         // D-146 (#239): a homogeneous scalar-element list literal now produces
         // `Some(Ok(Ty::List(...)))` as a destructured element-type carrier --
         // never unified, only destructured by the `Subscript`/`ListPop` arms
@@ -7327,10 +7764,8 @@ mod tests {
             defs_rebound: HashSet::new(),
             maybe_bindings: HashSet::new(),
         };
-        let expr = HirExpr::ListLiteral(vec![
-            HirExpr::FloatLiteral(1.0),
-            HirExpr::FloatLiteral(2.0),
-        ]);
+        let expr =
+            HirExpr::ListLiteral(vec![HirExpr::FloatLiteral(1.0), HirExpr::FloatLiteral(2.0)]);
 
         let term = collect_expr_constraints(
             &signatures,
@@ -7391,10 +7826,7 @@ mod tests {
             defs_rebound: HashSet::new(),
             maybe_bindings: HashSet::new(),
         };
-        let expr = HirExpr::ListLiteral(vec![
-            HirExpr::IntLiteral(1),
-            HirExpr::FloatLiteral(2.0),
-        ]);
+        let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::FloatLiteral(2.0)]);
 
         let term = collect_expr_constraints(
             &signatures,
@@ -7427,10 +7859,7 @@ mod tests {
             defs_rebound: HashSet::new(),
             maybe_bindings: HashSet::new(),
         };
-        let expr = HirExpr::ListLiteral(vec![
-            HirExpr::IntLiteral(1),
-            HirExpr::BoolLiteral(true),
-        ]);
+        let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::BoolLiteral(true)]);
 
         let term = collect_expr_constraints(
             &signatures,
@@ -7490,9 +7919,7 @@ mod tests {
             defs_rebound: HashSet::new(),
             maybe_bindings: HashSet::new(),
         };
-        let expr = HirExpr::ListLiteral(vec![HirExpr::ListLiteral(vec![
-            HirExpr::IntLiteral(1),
-        ])]);
+        let expr = HirExpr::ListLiteral(vec![HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])]);
 
         let term = collect_expr_constraints(
             &signatures,
@@ -7808,19 +8235,13 @@ mod tests {
 
     #[test]
     fn homogeneous_private_solver_scalar_list_element_rejects_an_empty_slice() {
-        assert_eq!(
-            homogeneous_private_solver_scalar_list_element(&[]),
-            None
-        );
+        assert_eq!(homogeneous_private_solver_scalar_list_element(&[]), None);
     }
 
     #[test]
     fn homogeneous_private_solver_scalar_list_element_rejects_a_none_element_term() {
         let terms = vec![Some(Ok(Ty::Int)), None];
-        assert_eq!(
-            homogeneous_private_solver_scalar_list_element(&terms),
-            None
-        );
+        assert_eq!(homogeneous_private_solver_scalar_list_element(&terms), None);
     }
 
     #[test]
@@ -7828,19 +8249,13 @@ mod tests {
         // Covers the `.as_ref()?` None path when the first element itself is
         // `None` (distinct from the test above where `None` is at index 1).
         let terms = vec![None, Some(Ok(Ty::Int))];
-        assert_eq!(
-            homogeneous_private_solver_scalar_list_element(&terms),
-            None
-        );
+        assert_eq!(homogeneous_private_solver_scalar_list_element(&terms), None);
     }
 
     #[test]
     fn homogeneous_private_solver_scalar_list_element_rejects_an_err_element_term() {
         let terms = vec![Some(Ok(Ty::Int)), Some(Err(0))];
-        assert_eq!(
-            homogeneous_private_solver_scalar_list_element(&terms),
-            None
-        );
+        assert_eq!(homogeneous_private_solver_scalar_list_element(&terms), None);
     }
 
     #[test]
@@ -7848,19 +8263,13 @@ mod tests {
         // Covers the `.ok()?` None path when the first element is `Some(Err(_))`
         // (distinct from the test above where `Err` is at index 1).
         let terms = vec![Some(Err(0)), Some(Ok(Ty::Int))];
-        assert_eq!(
-            homogeneous_private_solver_scalar_list_element(&terms),
-            None
-        );
+        assert_eq!(homogeneous_private_solver_scalar_list_element(&terms), None);
     }
 
     #[test]
     fn homogeneous_private_solver_scalar_list_element_rejects_a_non_scalar_first_element() {
         let terms = vec![Some(Ok(Ty::List(Box::new(Ty::Int))))];
-        assert_eq!(
-            homogeneous_private_solver_scalar_list_element(&terms),
-            None
-        );
+        assert_eq!(homogeneous_private_solver_scalar_list_element(&terms), None);
     }
 
     #[test]
@@ -7868,10 +8277,7 @@ mod tests {
         let terms = vec![Some(Ok(Ty::Int)), Some(Ok(Ty::Bool))];
         // Exact `Ty` equality, NOT `merge_inferred_types` -- `bool` and `int`
         // are not merged even though `merge_inferred_types` would widen them.
-        assert_eq!(
-            homogeneous_private_solver_scalar_list_element(&terms),
-            None
-        );
+        assert_eq!(homogeneous_private_solver_scalar_list_element(&terms), None);
     }
 
     #[test]
@@ -8695,7 +9101,9 @@ mod tests {
                     value: Some(HirExpr::IntLiteral(1)),
                 }],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -8723,7 +9131,9 @@ mod tests {
                     args: vec![HirExpr::BoolLiteral(true)],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         check(&hir).unwrap();
@@ -8757,7 +9167,9 @@ mod tests {
                     args: vec![HirExpr::BoolLiteral(true)],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -8784,7 +9196,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -8811,7 +9225,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -8835,7 +9251,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -8874,7 +9292,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -8907,7 +9327,9 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -8946,7 +9368,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -8977,7 +9401,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -9007,7 +9433,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -9048,7 +9476,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -9086,7 +9516,9 @@ mod tests {
                     return_ty: Ty::Infer,
                     body,
                 }],
-                type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+                type_aliases: Vec::new(),
+                imports: Vec::new(),
+                class_defs: Vec::new(),
             };
 
             let resolved = check_and_resolve(&hir).unwrap();
@@ -9123,7 +9555,9 @@ mod tests {
                     return_ty: Ty::None,
                     body,
                 }],
-                type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+                type_aliases: Vec::new(),
+                imports: Vec::new(),
+                class_defs: Vec::new(),
             };
 
             let err = check_and_resolve(&hir).unwrap_err();
@@ -9155,7 +9589,9 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0025");
@@ -9186,7 +9622,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -9221,7 +9659,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0025");
@@ -9239,7 +9679,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert_eq!(check(&hir).unwrap_err().code, "T0024");
@@ -9502,7 +9944,9 @@ mod tests {
         // `pycc_types::check` entry point already does.
         let hir = HirModule {
             items: vec![HirItem::TopLevelStmt(HirStmt::Return(None))],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check_and_resolve(&hir).unwrap_err();
         assert_eq!(err.code, "T0024");
@@ -9725,7 +10169,8 @@ mod tests {
                 })),
             ],
             type_aliases: Vec::new(),
-            imports: Vec::new(), class_defs: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -10097,7 +10542,9 @@ mod tests {
                     args: vec![],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -10223,7 +10670,9 @@ mod tests {
                     body: vec![],
                 }],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0023");
     }
@@ -10260,7 +10709,9 @@ mod tests {
                     body: vec![],
                 }],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(
@@ -10752,11 +11203,8 @@ mod tests {
             },
         )
         .unwrap();
-        let err = check_stmt(
-            &mut env,
-            &HirStmt::ExprStmt(HirExpr::Name("x".to_string())),
-        )
-        .unwrap_err();
+        let err =
+            check_stmt(&mut env, &HirStmt::ExprStmt(HirExpr::Name("x".to_string()))).unwrap_err();
         assert_eq!(err.code, "T0041");
     }
 
@@ -10829,11 +11277,8 @@ mod tests {
             },
         )
         .unwrap();
-        let err = check_stmt(
-            &mut env,
-            &HirStmt::ExprStmt(HirExpr::Name("i".to_string())),
-        )
-        .unwrap_err();
+        let err =
+            check_stmt(&mut env, &HirStmt::ExprStmt(HirExpr::Name("i".to_string()))).unwrap_err();
         assert_eq!(err.code, "T0041");
     }
 
@@ -11268,7 +11713,9 @@ mod tests {
                     args: vec![HirExpr::Name("xs".to_string())],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -11556,7 +12003,6 @@ mod tests {
         assert_eq!(err.code, "T0041");
     }
 
-
     #[test]
     fn an_entirely_unannotated_private_helper_containing_a_comprehension_fails_with_t0021() {
         // Per D-116's own correction note: a container-literal assignment's
@@ -11589,7 +12035,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("xs".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check_and_resolve(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -12923,7 +13371,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -12955,7 +13405,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -12979,7 +13431,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -13013,11 +13467,16 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let signatures = infer_function_signatures_with_solver(&hir, &local_names).unwrap();
-        assert_eq!(signatures["_h"], (vec![Ty::List(Box::new(Ty::Int))], Ty::Int));
+        assert_eq!(
+            signatures["_h"],
+            (vec![Ty::List(Box::new(Ty::Int))], Ty::Int)
+        );
         assert!(check(&hir).is_ok());
     }
 
@@ -13044,7 +13503,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -13245,7 +13706,8 @@ mod tests {
                 }))],
             }],
             type_aliases: Vec::new(),
-            imports: Vec::new(), class_defs: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let signatures = infer_function_signatures_with_solver(&hir, &local_names).unwrap();
@@ -13266,7 +13728,8 @@ mod tests {
                 }))],
             }],
             type_aliases: Vec::new(),
-            imports: Vec::new(), class_defs: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
@@ -13286,7 +13749,8 @@ mod tests {
                 }))],
             }],
             type_aliases: Vec::new(),
-            imports: Vec::new(), class_defs: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
@@ -13306,7 +13770,8 @@ mod tests {
                 }))],
             }],
             type_aliases: Vec::new(),
-            imports: Vec::new(), class_defs: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
@@ -13320,10 +13785,13 @@ mod tests {
                 name: "_bad_ref".to_string(),
                 params: vec![],
                 return_ty: Ty::Infer,
-                body: vec![HirStmt::Return(Some(HirExpr::Name("math.sqrt".to_string())))],
+                body: vec![HirStmt::Return(Some(HirExpr::Name(
+                    "math.sqrt".to_string(),
+                )))],
             }],
             type_aliases: Vec::new(),
-            imports: Vec::new(), class_defs: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
@@ -13331,7 +13799,8 @@ mod tests {
     }
 
     #[test]
-    fn a_dotted_name_whose_module_part_is_not_a_registered_stdlib_module_is_an_ordinary_undefined_name() {
+    fn a_dotted_name_whose_module_part_is_not_a_registered_stdlib_module_is_an_ordinary_undefined_name()
+     {
         // `std_qualified_symbol`'s `resolve_module` step is defense-in-depth
         // against a hand-constructed `HirModule` (this crate's own public
         // API accepts any `&HirModule`, not only one `pycc_hir::lower_checked`
@@ -13493,7 +13962,8 @@ mod tests {
                 }))],
             }],
             type_aliases: Vec::new(),
-            imports: Vec::new(), class_defs: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
@@ -13514,7 +13984,8 @@ mod tests {
                 body: vec![HirStmt::Return(Some(HirExpr::Name("math.pi".to_string())))],
             }],
             type_aliases: Vec::new(),
-            imports: Vec::new(), class_defs: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
@@ -13969,7 +14440,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0036");
     }
@@ -14469,7 +14942,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0034");
     }
@@ -14526,7 +15001,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -14571,7 +15048,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -14606,7 +15085,9 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -14652,7 +15133,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -14696,7 +15179,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0023");
     }
@@ -14734,7 +15219,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -14774,7 +15261,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -14813,7 +15302,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -14852,7 +15343,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -14894,7 +15387,9 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -14932,7 +15427,9 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         // The real check pass still rejects this program overall (`0comp_11_i`
         // is a `list[int]`-typed parameter, and the comprehension tries to
@@ -14976,7 +15473,9 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -15007,7 +15506,9 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -15048,7 +15549,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0023");
     }
@@ -15084,7 +15587,9 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -15116,7 +15621,9 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -15148,7 +15655,9 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -15446,7 +15955,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0038");
     }
@@ -15647,7 +16158,9 @@ mod tests {
                     },
                 }),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -15739,7 +16252,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0039");
     }
@@ -15806,7 +16321,9 @@ mod tests {
                 left: Box::new(HirExpr::IntLiteral(1)),
                 right: Box::new(HirExpr::IntLiteral(2)),
             }))],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -15817,7 +16334,9 @@ mod tests {
             items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name(
                 "undefined".to_string(),
             )))],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -15838,7 +16357,9 @@ mod tests {
                     args: vec![],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -15874,7 +16395,9 @@ mod tests {
                     })],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -15909,7 +16432,9 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -15934,7 +16459,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -15958,7 +16485,9 @@ mod tests {
                     value: HirExpr::IntLiteral(5),
                 }),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -15978,7 +16507,9 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         // If the global (Ty::Str) leaked through instead of the parameter
         // (Ty::Int), this would fail with a T0022 return-type mismatch.
@@ -16007,7 +16538,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16035,7 +16568,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16178,7 +16713,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16207,7 +16744,9 @@ mod tests {
                     },
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -16244,7 +16783,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16267,7 +16808,9 @@ mod tests {
                     args: vec![],
                 })],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16374,7 +16917,9 @@ mod tests {
                     args: vec![],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16400,7 +16945,9 @@ mod tests {
                     args: vec![],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16435,7 +16982,9 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16475,7 +17024,9 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -16525,7 +17076,9 @@ mod tests {
                     value: HirExpr::IntLiteral(2),
                 }),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16554,7 +17107,9 @@ mod tests {
                     args: vec![HirExpr::Name("undefined_name".to_string())],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16581,7 +17136,9 @@ mod tests {
                     args: vec![],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16617,7 +17174,9 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -16648,7 +17207,9 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -16685,7 +17246,9 @@ mod tests {
                     args: vec![],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16727,7 +17290,9 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -16770,7 +17335,9 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -16808,7 +17375,9 @@ mod tests {
                     value: HirExpr::StringLiteral("leaked".to_string()),
                 }),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -16846,7 +17415,9 @@ mod tests {
                     }],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -16880,7 +17451,9 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -16913,7 +17486,9 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert!(check_and_resolve(&hir).is_ok());
@@ -16945,7 +17520,9 @@ mod tests {
                     value: HirExpr::IntLiteral(1),
                 }),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -16959,10 +17536,7 @@ mod tests {
         // Manually insert into functions without adding to defined_functions,
         // simulating a function that exists but hasn't been "executed" yet
         // in source order.
-        Arc::make_mut(&mut env.functions).insert(
-            "foo".to_string(),
-            (vec![], Ty::None),
-        );
+        Arc::make_mut(&mut env.functions).insert("foo".to_string(), (vec![], Ty::None));
         // Do NOT insert "foo" into defined_functions -- simulates a call
         // before the def's source-order position.
         let expr = HirExpr::Call {
@@ -16971,7 +17545,10 @@ mod tests {
         };
         let err = infer_expr_in(&env, &[], &expr).unwrap_err();
         assert_eq!(err.code, "T0021");
-        assert!(err.message.contains("cannot call function `foo` before its definition"));
+        assert!(
+            err.message
+                .contains("cannot call function `foo` before its definition")
+        );
     }
 
     #[test]
@@ -16992,6 +17569,7 @@ mod tests {
                 properties: Vec::new(),
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
+                enum_members: Vec::new(),
             },
         );
         env.bind_class(
@@ -17006,6 +17584,7 @@ mod tests {
                 properties: Vec::new(),
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
+                enum_members: Vec::new(),
             },
         );
         let expr = HirExpr::AttrGet {
@@ -17034,6 +17613,7 @@ mod tests {
                 properties: Vec::new(),
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
+                enum_members: Vec::new(),
             },
         );
         env.bind_class(
@@ -17048,14 +17628,12 @@ mod tests {
                 properties: Vec::new(),
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
+                enum_members: Vec::new(),
             },
         );
         env.bind_function(
             "A.add".to_string(),
-            vec![
-                Ty::Instance(Box::new("A".to_string())),
-                Ty::Int,
-            ],
+            vec![Ty::Instance(Box::new("A".to_string())), Ty::Int],
             Ty::Int,
         );
         let expr = HirExpr::MethodCall {
@@ -17086,6 +17664,7 @@ mod tests {
                 properties: Vec::new(),
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
+                enum_members: Vec::new(),
             },
         );
         env.bind_class(
@@ -17100,14 +17679,12 @@ mod tests {
                 properties: Vec::new(),
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
+                enum_members: Vec::new(),
             },
         );
         env.bind_function(
             "A.add".to_string(),
-            vec![
-                Ty::Instance(Box::new("A".to_string())),
-                Ty::Int,
-            ],
+            vec![Ty::Instance(Box::new("A".to_string())), Ty::Int],
             Ty::Int,
         );
         let expr = HirExpr::MethodCall {
@@ -17140,7 +17717,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -17171,7 +17750,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -17204,7 +17785,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -17238,7 +17821,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -17266,7 +17851,9 @@ mod tests {
                     }],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -17296,7 +17883,9 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -17331,7 +17920,9 @@ mod tests {
                 return_ty: Ty::None,
                 body: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -17903,7 +18494,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0041");
@@ -17928,7 +18521,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0041");
@@ -17957,7 +18552,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -17985,7 +18582,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0041");
@@ -18011,7 +18610,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("i".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0041");
@@ -18041,7 +18642,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("i".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -18066,7 +18669,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0041");
@@ -18095,7 +18700,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("i".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -18126,7 +18733,9 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -18753,7 +19362,9 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -18774,7 +19385,9 @@ mod tests {
                 return_ty: Ty::Int,
                 body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -18796,7 +19409,9 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -18833,7 +19448,9 @@ mod tests {
                     right: Box::new(HirExpr::IntLiteral(1)),
                 }))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -18865,7 +19482,9 @@ mod tests {
                     right: Box::new(HirExpr::Name("value".to_string())),
                 }))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -18897,7 +19516,9 @@ mod tests {
                     right: Box::new(HirExpr::Name("value".to_string())),
                 }))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -18915,7 +19536,9 @@ mod tests {
                     right: Box::new(HirExpr::StringLiteral("wrong".to_string())),
                 }))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -18949,7 +19572,9 @@ mod tests {
                     })],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -18976,7 +19601,9 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -19003,7 +19630,9 @@ mod tests {
                     },
                 }),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -19027,7 +19656,9 @@ mod tests {
                     ])],
                 })],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -19041,7 +19672,9 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![HirStmt::Return(None)],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -19055,7 +19688,9 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![HirStmt::Return(Some(HirExpr::FloatLiteral(1.5)))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -19085,7 +19720,9 @@ mod tests {
                     }],
                 }],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -19099,7 +19736,9 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -19115,7 +19754,9 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![HirStmt::Return(Some(HirExpr::Name("missing".to_string())))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -19134,7 +19775,9 @@ mod tests {
                     args: vec![],
                 }))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -19152,7 +19795,9 @@ mod tests {
                     right: Box::new(HirExpr::IntLiteral(1)),
                 }))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -19173,7 +19818,9 @@ mod tests {
                     right: Box::new(HirExpr::Name("right".to_string())),
                 }))],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -19193,7 +19840,9 @@ mod tests {
                     args: vec![HirExpr::Name("missing".to_string())],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -19217,7 +19866,9 @@ mod tests {
                     args: vec![HirExpr::StringLiteral("one".to_string())],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -19237,7 +19888,9 @@ mod tests {
                     )))],
                 }],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0022");
     }
@@ -19278,7 +19931,9 @@ mod tests {
                     body: vec![stmt],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         }
     }
 
@@ -19406,7 +20061,9 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -19445,7 +20102,9 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -19599,7 +20258,9 @@ mod tests {
                     value: HirExpr::Name("missing".to_string()),
                 }],
             }],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -19654,7 +20315,9 @@ mod tests {
                     args: vec![HirExpr::StringLiteral("wrong".to_string())],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -19680,7 +20343,9 @@ mod tests {
                     body: vec![],
                 }),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0022");
     }
@@ -19710,7 +20375,9 @@ mod tests {
                     body: vec![],
                 }),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -19734,7 +20401,9 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -20471,7 +21140,9 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, top],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -20489,7 +21160,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![func],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0042");
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0042");
@@ -20509,12 +21182,16 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity.clone(), top.clone()],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
         let hir = HirModule {
             items: vec![identity, top],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0021");
     }
@@ -20532,7 +21209,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![func],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0042");
     }
@@ -20590,7 +21269,9 @@ mod tests {
                     }],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert!(find_function(&resolved, "identity").is_none());
@@ -20663,7 +21344,9 @@ mod tests {
                 call_uses_global,
                 call_identity,
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         // `check` accepts this module (three-pass discipline lets
         // `uses_global` see `g` regardless of source position).
@@ -20700,7 +21383,9 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, call_int, call_str],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert!(find_function(&resolved, "identity").is_none());
@@ -20778,7 +21463,9 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, use_twice, top],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -20819,7 +21506,9 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, helper, use_helper, top],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert!(find_function(&resolved, "identity").is_none());
@@ -20863,7 +21552,9 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, helper, use_helper],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check_and_resolve(&hir).unwrap_err();
         assert_eq!(err.code, "T0042");
@@ -20907,7 +21598,9 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, helper, use_helper],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0042");
         assert_eq!(check(&hir).unwrap_err().code, "T0042");
@@ -20942,7 +21635,9 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, helper, use_helper],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0042");
         assert_eq!(check(&hir).unwrap_err().code, "T0042");
@@ -20980,7 +21675,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f, g],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21004,7 +21701,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21048,7 +21747,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21075,7 +21776,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21124,7 +21827,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21165,7 +21870,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21205,7 +21912,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_str"), 1);
@@ -21259,7 +21968,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_bool"), 1);
@@ -21291,7 +22002,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21325,7 +22038,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_str"), 1);
@@ -21356,7 +22071,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21392,7 +22109,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21429,7 +22148,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_str"), 1);
@@ -21497,7 +22218,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21528,7 +22251,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21555,7 +22280,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
     }
@@ -21572,7 +22299,9 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, top],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
     }
@@ -21609,7 +22338,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
     }
@@ -21638,7 +22369,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
     }
@@ -21916,7 +22649,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = monomorphize(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21945,7 +22680,9 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let resolved = monomorphize(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -21999,7 +22736,9 @@ mod tests {
                     }],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         }
     }
 
@@ -22343,7 +23082,9 @@ mod tests {
         // source order (pass 1 binds every signature before any body runs).
         let hir = HirModule {
             items: vec![f, g],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0042");
@@ -22397,7 +23138,9 @@ mod tests {
                     }],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
         let resolved = check_and_resolve(&hir).unwrap();
@@ -22419,7 +23162,9 @@ mod tests {
                 return_ty: Ty::Int,
                 body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
             }],
-            type_aliases: aliases.clone(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: aliases.clone(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let generic = HirModule {
             items: vec![
@@ -22429,7 +23174,9 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: aliases, imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: aliases,
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(
             check_and_resolve(&non_generic)
@@ -22458,20 +23205,20 @@ mod tests {
                 },
                 HirItem::Function {
                     name: "foo".to_string(),
-                    params: vec![
-                        ("x".to_string(), Ty::Int),
-                        ("y".to_string(), Ty::Int),
-                    ],
+                    params: vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int)],
                     return_ty: Ty::Int,
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(
-            err.message.contains("cannot redefine function `foo` with a different signature"),
+            err.message
+                .contains("cannot redefine function `foo` with a different signature"),
             "got: {}",
             err.message
         );
@@ -22491,21 +23238,21 @@ mod tests {
                 },
                 HirItem::Function {
                     name: "foo".to_string(),
-                    params: vec![
-                        ("x".to_string(), Ty::Int),
-                        ("y".to_string(), Ty::Int),
-                    ],
+                    params: vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int)],
                     return_ty: Ty::Int,
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let err = checked_function_signatures(&hir, &local_names).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(
-            err.message.contains("cannot redefine function `foo` with a different signature"),
+            err.message
+                .contains("cannot redefine function `foo` with a different signature"),
             "got: {}",
             err.message
         );
@@ -22528,12 +23275,15 @@ mod tests {
                     body: vec![],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(
-            err.message.contains("cannot redefine function `foo` with a different signature"),
+            err.message
+                .contains("cannot redefine function `foo` with a different signature"),
             "got: {}",
             err.message
         );
@@ -22556,12 +23306,15 @@ mod tests {
                     body: vec![],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(
-            err.message.contains("cannot redefine function `foo` with a different signature"),
+            err.message
+                .contains("cannot redefine function `foo` with a different signature"),
             "got: {}",
             err.message
         );
@@ -22590,7 +23343,9 @@ mod tests {
                     })],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -22619,12 +23374,15 @@ mod tests {
                     body: vec![],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(
-            err.message.contains("cannot redefine function `foo` with a different signature"),
+            err.message
+                .contains("cannot redefine function `foo` with a different signature"),
             "got: {}",
             err.message
         );
@@ -22655,7 +23413,9 @@ mod tests {
                     body: vec![],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check_and_resolve(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -22699,7 +23459,9 @@ mod tests {
                     body: vec![],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let err = checked_function_signatures(&hir, &local_names).unwrap_err();
@@ -22739,7 +23501,9 @@ mod tests {
                     body: vec![],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check_and_resolve(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -22778,7 +23542,9 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check_and_resolve(&hir).is_ok());
     }
@@ -22804,20 +23570,20 @@ mod tests {
                 },
                 HirItem::Function {
                     name: "foo".to_string(),
-                    params: vec![
-                        ("x".to_string(), Ty::Int),
-                        ("y".to_string(), Ty::Int),
-                    ],
+                    params: vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int)],
                     return_ty: Ty::Int,
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check_and_resolve(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(
-            err.message.contains("cannot redefine function `foo` with a different signature"),
+            err.message
+                .contains("cannot redefine function `foo` with a different signature"),
             "got: {}",
             err.message
         );
@@ -22846,12 +23612,15 @@ mod tests {
                     body: vec![],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let err = check_and_resolve(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(
-            err.message.contains("cannot redefine function `foo` with a different signature"),
+            err.message
+                .contains("cannot redefine function `foo` with a different signature"),
             "got: {}",
             err.message
         );
@@ -22885,7 +23654,9 @@ mod tests {
                     body: vec![],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         assert!(check_and_resolve(&hir).is_ok());
     }
@@ -23442,6 +24213,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         HirModule {
             items: vec![
@@ -23482,7 +24254,10 @@ mod tests {
         )));
         // The monomorphized class def should be in class_defs.
         assert!(
-            resolved.class_defs.iter().any(|(name, _)| name == "0gen_C__T_int"),
+            resolved
+                .class_defs
+                .iter()
+                .any(|(name, _)| name == "0gen_C__T_int"),
             "monomorphized class def should exist"
         );
     }
@@ -23506,12 +24281,14 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Marker.__init__".to_string(),
-            params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Marker".to_string()))),
-            ],
+            params: vec![(
+                "self".to_string(),
+                Ty::Instance(Box::new("Marker".to_string())),
+            )],
             return_ty: Ty::None,
             body: vec![HirStmt::AttrSet {
                 base: HirExpr::Name("self".to_string()),
@@ -23568,6 +24345,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let init = HirItem::Function {
             name: "C.__init__".to_string(),
@@ -23585,18 +24363,14 @@ mod tests {
         // First `fetch` definition — returns 1.
         let fetch_first = HirItem::Function {
             name: "C.fetch".to_string(),
-            params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("C".to_string()))),
-            ],
+            params: vec![("self".to_string(), Ty::Instance(Box::new("C".to_string())))],
             return_ty: Ty::Int,
             body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
         };
         // Second `fetch` definition — returns 2 (the rebind, should win).
         let fetch_second = HirItem::Function {
             name: "C.fetch".to_string(),
-            params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("C".to_string()))),
-            ],
+            params: vec![("self".to_string(), Ty::Instance(Box::new("C".to_string())))],
             return_ty: Ty::Int,
             body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
         };
@@ -23624,11 +24398,14 @@ mod tests {
         // pattern so that llvm-cov does not flag the implicit `_ => false` arm
         // as an uncovered region under D-014 — the guard's own true/false
         // branch is the tracked region, and it is exercised here.
-        assert!(matches!(
-            mono_fetch,
-            HirItem::Function { body, .. }
-            if matches!(&body[0], HirStmt::Return(Some(HirExpr::IntLiteral(n))) if *n == 2)
-        ), "monomorphized fetch should use the last (rebind) definition's body");
+        assert!(
+            matches!(
+                mono_fetch,
+                HirItem::Function { body, .. }
+                if matches!(&body[0], HirStmt::Return(Some(HirExpr::IntLiteral(n))) if *n == 2)
+            ),
+            "monomorphized fetch should use the last (rebind) definition's body"
+        );
     }
 
     // #377: A generic class with a @property getter should monomorphize
@@ -23651,11 +24428,15 @@ mod tests {
             }],
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Box.__init__".to_string(),
             params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+                (
+                    "self".to_string(),
+                    Ty::Instance(Box::new("Box".to_string())),
+                ),
                 ("v".to_string(), param.clone()),
             ],
             return_ty: Ty::None,
@@ -23667,9 +24448,10 @@ mod tests {
         };
         let getter = HirItem::Function {
             name: "Box.val".to_string(),
-            params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
-            ],
+            params: vec![(
+                "self".to_string(),
+                Ty::Instance(Box::new("Box".to_string())),
+            )],
             return_ty: param.clone(),
             body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
                 base: Box::new(HirExpr::Name("self".to_string())),
@@ -23703,7 +24485,9 @@ mod tests {
             "monomorphized getter should be a Function returning Int"
         );
         // The monomorphized class should have the property in its table.
-        let mono_class = resolved.class_defs.iter()
+        let mono_class = resolved
+            .class_defs
+            .iter()
             .find(|(n, _)| n == "0gen_Box__T_int")
             .expect("monomorphized class should exist");
         assert_eq!(mono_class.1.properties.len(), 1);
@@ -23732,11 +24516,15 @@ mod tests {
             }],
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Box.__init__".to_string(),
             params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+                (
+                    "self".to_string(),
+                    Ty::Instance(Box::new("Box".to_string())),
+                ),
                 ("v".to_string(), param.clone()),
             ],
             return_ty: Ty::None,
@@ -23748,9 +24536,10 @@ mod tests {
         };
         let getter = HirItem::Function {
             name: "Box.val".to_string(),
-            params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
-            ],
+            params: vec![(
+                "self".to_string(),
+                Ty::Instance(Box::new("Box".to_string())),
+            )],
             return_ty: param.clone(),
             body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
                 base: Box::new(HirExpr::Name("self".to_string())),
@@ -23760,7 +24549,10 @@ mod tests {
         let setter = HirItem::Function {
             name: "Box.val.setter".to_string(),
             params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+                (
+                    "self".to_string(),
+                    Ty::Instance(Box::new("Box".to_string())),
+                ),
                 ("new_v".to_string(), param.clone()),
             ],
             return_ty: Ty::None,
@@ -23797,7 +24589,9 @@ mod tests {
             "monomorphized property setter should exist"
         );
         // The monomorphized class should have the property with both names.
-        let mono_class = resolved.class_defs.iter()
+        let mono_class = resolved
+            .class_defs
+            .iter()
             .find(|(n, _)| n == "0gen_Box__T_int")
             .expect("monomorphized class should exist");
         assert_eq!(mono_class.1.properties.len(), 1);
@@ -23829,12 +24623,14 @@ mod tests {
             }],
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Box.__init__".to_string(),
-            params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
-            ],
+            params: vec![(
+                "self".to_string(),
+                Ty::Instance(Box::new("Box".to_string())),
+            )],
             return_ty: Ty::None,
             body: vec![HirStmt::AttrSet {
                 base: HirExpr::Name("self".to_string()),
@@ -23861,7 +24657,9 @@ mod tests {
         let resolved = check_and_resolve(&hir).unwrap();
         // The PropertyDef should still be created with mangled names, even
         // though the functions themselves were not monomorphized.
-        let mono_class = resolved.class_defs.iter()
+        let mono_class = resolved
+            .class_defs
+            .iter()
             .find(|(n, _)| n == "0gen_Box__T_int")
             .expect("monomorphized class should exist");
         assert_eq!(mono_class.1.properties.len(), 1);
@@ -23904,11 +24702,15 @@ mod tests {
             ],
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Box.__init__".to_string(),
             params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+                (
+                    "self".to_string(),
+                    Ty::Instance(Box::new("Box".to_string())),
+                ),
                 ("v".to_string(), param.clone()),
             ],
             return_ty: Ty::None,
@@ -23920,9 +24722,10 @@ mod tests {
         };
         let getter = HirItem::Function {
             name: "Box.val".to_string(),
-            params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
-            ],
+            params: vec![(
+                "self".to_string(),
+                Ty::Instance(Box::new("Box".to_string())),
+            )],
             return_ty: param.clone(),
             body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
                 base: Box::new(HirExpr::Name("self".to_string())),
@@ -23932,7 +24735,10 @@ mod tests {
         let setter = HirItem::Function {
             name: "Box.val.setter".to_string(),
             params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+                (
+                    "self".to_string(),
+                    Ty::Instance(Box::new("Box".to_string())),
+                ),
                 ("new_v".to_string(), param.clone()),
             ],
             return_ty: Ty::None,
@@ -23962,8 +24768,14 @@ mod tests {
         // Exactly one monomorphized getter and one setter (deduped).
         let getter_count = count_function(&resolved, "0gen_Box__T_int.val");
         let setter_count = count_function(&resolved, "0gen_Box__T_int.val.setter");
-        assert_eq!(getter_count, 1, "getter should be monomorphized exactly once");
-        assert_eq!(setter_count, 1, "setter should be monomorphized exactly once");
+        assert_eq!(
+            getter_count, 1,
+            "getter should be monomorphized exactly once"
+        );
+        assert_eq!(
+            setter_count, 1,
+            "setter should be monomorphized exactly once"
+        );
     }
 
     #[test]
@@ -24004,6 +24816,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let init = HirItem::Function {
             name: "C.__init__".to_string(),
@@ -24055,26 +24868,14 @@ mod tests {
     #[test]
     fn substitute_ty_with_class_substitutes_param() {
         let ty = Ty::Param(Box::new("T".to_string()));
-        let result = substitute_ty_with_class(
-            &ty,
-            "T",
-            &Ty::Int,
-            "C",
-            "0gen_C__T_int",
-        );
+        let result = substitute_ty_with_class(&ty, "T", &Ty::Int, "C", "0gen_C__T_int");
         assert_eq!(result, Ty::Int);
     }
 
     #[test]
     fn substitute_ty_with_class_rewrites_instance() {
         let ty = Ty::Instance(Box::new("C".to_string()));
-        let result = substitute_ty_with_class(
-            &ty,
-            "T",
-            &Ty::Int,
-            "C",
-            "0gen_C__T_int",
-        );
+        let result = substitute_ty_with_class(&ty, "T", &Ty::Int, "C", "0gen_C__T_int");
         assert_eq!(result, Ty::Instance(Box::new("0gen_C__T_int".to_string())));
     }
 
@@ -24083,13 +24884,7 @@ mod tests {
         // A type that is neither Param("T") nor Instance("C") falls through
         // to the `other => other.clone()` arm.
         let ty = Ty::Int;
-        let result = substitute_ty_with_class(
-            &ty,
-            "T",
-            &Ty::Str,
-            "C",
-            "0gen_C__T_int",
-        );
+        let result = substitute_ty_with_class(&ty, "T", &Ty::Str, "C", "0gen_C__T_int");
         assert_eq!(result, Ty::Int);
     }
 
@@ -24097,13 +24892,7 @@ mod tests {
     fn substitute_ty_with_class_does_not_substitute_a_different_param_name() {
         // `Ty::Param("U")` with param_name="T" falls through to `other`.
         let ty = Ty::Param(Box::new("U".to_string()));
-        let result = substitute_ty_with_class(
-            &ty,
-            "T",
-            &Ty::Int,
-            "C",
-            "0gen_C__T_int",
-        );
+        let result = substitute_ty_with_class(&ty, "T", &Ty::Int, "C", "0gen_C__T_int");
         assert_eq!(result, Ty::Param(Box::new("U".to_string())));
     }
 
@@ -24111,13 +24900,7 @@ mod tests {
     fn substitute_ty_with_class_does_not_rewrite_a_different_class_instance() {
         // `Ty::Instance("Other")` with class_name="C" falls through to `other`.
         let ty = Ty::Instance(Box::new("Other".to_string()));
-        let result = substitute_ty_with_class(
-            &ty,
-            "T",
-            &Ty::Int,
-            "C",
-            "0gen_C__T_int",
-        );
+        let result = substitute_ty_with_class(&ty, "T", &Ty::Int, "C", "0gen_C__T_int");
         assert_eq!(result, Ty::Instance(Box::new("Other".to_string())));
     }
 
@@ -24409,10 +25192,15 @@ mod tests {
         collect_generic_class_instantiations_from_expr(&HirExpr::IntLiteral(1), &mut out);
         collect_generic_class_instantiations_from_expr(&HirExpr::FloatLiteral(1.0), &mut out);
         collect_generic_class_instantiations_from_expr(&HirExpr::BoolLiteral(true), &mut out);
-        collect_generic_class_instantiations_from_expr(&HirExpr::StringLiteral("s".to_string()), &mut out);
+        collect_generic_class_instantiations_from_expr(
+            &HirExpr::StringLiteral("s".to_string()),
+            &mut out,
+        );
         collect_generic_class_instantiations_from_expr(&HirExpr::Name("x".to_string()), &mut out);
         collect_generic_class_instantiations_from_expr(
-            &HirExpr::ListPop { list: "xs".to_string() },
+            &HirExpr::ListPop {
+                list: "xs".to_string(),
+            },
             &mut out,
         );
 
@@ -24429,10 +25217,7 @@ mod tests {
         let mut out = Vec::new();
 
         // ExprStmt
-        collect_generic_class_instantiations_from_stmt(
-            &HirStmt::ExprStmt(gci.clone()),
-            &mut out,
-        );
+        collect_generic_class_instantiations_from_stmt(&HirStmt::ExprStmt(gci.clone()), &mut out);
         // Assign
         collect_generic_class_instantiations_from_stmt(
             &HirStmt::Assign {
@@ -24552,10 +25337,7 @@ mod tests {
             &mut out,
         );
         // Return(None)
-        collect_generic_class_instantiations_from_stmt(
-            &HirStmt::Return(None),
-            &mut out,
-        );
+        collect_generic_class_instantiations_from_stmt(&HirStmt::Return(None), &mut out);
         // Return(Some)
         collect_generic_class_instantiations_from_stmt(
             &HirStmt::Return(Some(gci.clone())),
@@ -24655,6 +25437,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -24707,19 +25490,14 @@ mod tests {
                 value: HirExpr::Name("x".to_string()),
             }],
         };
-        let nested_ann = |marker: &str| {
-            HirStmt::AnnAssign {
-                target: marker.to_string(),
-                annotation: Ty::Param(Box::new("T".to_string())),
-                value: None,
-            }
+        let nested_ann = |marker: &str| HirStmt::AnnAssign {
+            target: marker.to_string(),
+            annotation: Ty::Param(Box::new("T".to_string())),
+            value: None,
         };
         let process = HirItem::Function {
             name: "C.process".to_string(),
-            params: vec![
-                ("self".to_string(), self_ty),
-                ("n".to_string(), Ty::Int),
-            ],
+            params: vec![("self".to_string(), self_ty), ("n".to_string(), Ty::Int)],
             return_ty: Ty::None,
             body: vec![
                 // If → AnnAssign in body and orelse
@@ -24763,6 +25541,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -24831,6 +25610,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let caller = HirItem::Function {
             name: "f".to_string(),
@@ -24959,6 +25739,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let hir = HirModule {
             items: vec![init],
@@ -25039,6 +25820,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         // A generic function — prevents `monomorphize` from returning early.
         let identity = HirItem::Function {
@@ -25093,6 +25875,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let init = HirItem::Function {
             name: "E.__init__".to_string(),
@@ -25118,13 +25901,11 @@ mod tests {
             items: vec![
                 init,
                 identity,
-                HirItem::TopLevelStmt(HirStmt::ExprStmt(
-                    HirExpr::GenericClassInstantiate {
-                        class: "E".to_string(),
-                        type_arg: Ty::Int,
-                        args: vec![HirExpr::IntLiteral(1)],
-                    },
-                )),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "E".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
             ],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -25155,13 +25936,9 @@ mod tests {
         };
         let mut instantiations = Vec::new();
         let mut seen = HashSet::new();
-        let err = rewrite_generic_calls_in_expr(
-            &mut env,
-            &[],
-            &mut expr,
-            &mut instantiations,
-            &mut seen,
-        ).unwrap_err();
+        let err =
+            rewrite_generic_calls_in_expr(&mut env, &[], &mut expr, &mut instantiations, &mut seen)
+                .unwrap_err();
         assert_eq!(err.code, "T0001");
         assert!(err.message.contains("class `Ghost` is not defined"));
     }
@@ -25183,13 +25960,9 @@ mod tests {
         };
         let mut instantiations = Vec::new();
         let mut seen = HashSet::new();
-        let err = rewrite_generic_calls_in_expr(
-            &mut env,
-            &[],
-            &mut expr,
-            &mut instantiations,
-            &mut seen,
-        ).unwrap_err();
+        let err =
+            rewrite_generic_calls_in_expr(&mut env, &[], &mut expr, &mut instantiations, &mut seen)
+                .unwrap_err();
         assert_eq!(err.code, "T0001");
     }
 
@@ -25218,7 +25991,13 @@ mod tests {
         let mut seen = HashSet::new();
         let mut new_class_defs = Vec::new();
         // Should not panic — just continues past the Ghost pair.
-        instantiate_generic_class_methods(&hir, &mut env, &mut instantiations, &mut seen, &mut new_class_defs);
+        instantiate_generic_class_methods(
+            &hir,
+            &mut env,
+            &mut instantiations,
+            &mut seen,
+            &mut new_class_defs,
+        );
         assert!(instantiations.is_empty());
         assert!(new_class_defs.is_empty());
     }
@@ -25245,6 +26024,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let init = HirItem::Function {
             name: "F.__init__".to_string(),
@@ -25269,13 +26049,11 @@ mod tests {
             items: vec![
                 init,
                 identity,
-                HirItem::TopLevelStmt(HirStmt::ExprStmt(
-                    HirExpr::GenericClassInstantiate {
-                        class: "F".to_string(),
-                        type_arg: Ty::Int,
-                        args: vec![HirExpr::IntLiteral(1)],
-                    },
-                )),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "F".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
             ],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -25303,6 +26081,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: vec![("ghost".to_string(), "F.ghost.static".to_string())],
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let init = HirItem::Function {
             name: "F.__init__".to_string(),
@@ -25320,13 +26099,11 @@ mod tests {
         let hir = HirModule {
             items: vec![
                 init,
-                HirItem::TopLevelStmt(HirStmt::ExprStmt(
-                    HirExpr::GenericClassInstantiate {
-                        class: "F".to_string(),
-                        type_arg: Ty::Int,
-                        args: vec![HirExpr::IntLiteral(1)],
-                    },
-                )),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "F".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
             ],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -25354,6 +26131,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: vec![("ghost".to_string(), "F.ghost.classmethod".to_string())],
+            enum_members: Vec::new(),
         };
         let init = HirItem::Function {
             name: "F.__init__".to_string(),
@@ -25371,13 +26149,11 @@ mod tests {
         let hir = HirModule {
             items: vec![
                 init,
-                HirItem::TopLevelStmt(HirStmt::ExprStmt(
-                    HirExpr::GenericClassInstantiate {
-                        class: "F".to_string(),
-                        type_arg: Ty::Int,
-                        args: vec![HirExpr::IntLiteral(1)],
-                    },
-                )),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "F".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
             ],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -25424,6 +26200,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         // Private function with inferred types — forces the solver path.
         let f = HirItem::Function {
@@ -25479,10 +26256,7 @@ mod tests {
         let self_ty = Ty::Instance(Box::new("C".to_string()));
         let init = HirItem::Function {
             name: "C.__init__".to_string(),
-            params: vec![
-                ("self".to_string(), self_ty),
-                ("x".to_string(), Ty::Int),
-            ],
+            params: vec![("self".to_string(), self_ty), ("x".to_string(), Ty::Int)],
             return_ty: Ty::None,
             body: vec![HirStmt::AttrSet {
                 base: HirExpr::Name("self".to_string()),
@@ -25500,17 +26274,16 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
                 init,
-                HirItem::TopLevelStmt(HirStmt::ExprStmt(
-                    HirExpr::GenericClassInstantiate {
-                        class: "C".to_string(),
-                        type_arg: Ty::Int,
-                        args: vec![HirExpr::IntLiteral(1)],
-                    },
-                )),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "C".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
             ],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -25526,8 +26299,14 @@ mod tests {
         // Directly exercises the `Ty::Param` clause at line 3229:
         // `matches!(to, Ty::Param(_)) && matches!(from, Ty::Int | ...)`.
         assert!(is_assignable(Ty::Int, Ty::Param(Box::new("T".to_string()))));
-        assert!(is_assignable(Ty::Float, Ty::Param(Box::new("T".to_string()))));
-        assert!(is_assignable(Ty::Bool, Ty::Param(Box::new("T".to_string()))));
+        assert!(is_assignable(
+            Ty::Float,
+            Ty::Param(Box::new("T".to_string()))
+        ));
+        assert!(is_assignable(
+            Ty::Bool,
+            Ty::Param(Box::new("T".to_string()))
+        ));
         assert!(is_assignable(Ty::Str, Ty::Param(Box::new("T".to_string()))));
         // A non-scalar `from` should NOT match the Param branch.
         assert!(!is_assignable(
@@ -25568,6 +26347,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         // Generic function `g[T]` whose body contains `C[int](g(1))` —
         // the arg `g(1)` is a self-call, which `reject_generic_calls_in_expr`
@@ -25639,6 +26419,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         // A generic function forces `check_and_resolve` → `monomorphize`
         // → `instantiate_generic_class_methods`.
@@ -25652,13 +26433,11 @@ mod tests {
             items: vec![
                 init,
                 identity,
-                HirItem::TopLevelStmt(HirStmt::ExprStmt(
-                    HirExpr::GenericClassInstantiate {
-                        class: "D".to_string(),
-                        type_arg: Ty::Int,
-                        args: vec![HirExpr::IntLiteral(1)],
-                    },
-                )),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "D".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
             ],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -25691,7 +26470,10 @@ mod tests {
         let box_init = HirItem::Function {
             name: "Box.__init__".to_string(),
             params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+                (
+                    "self".to_string(),
+                    Ty::Instance(Box::new("Box".to_string())),
+                ),
                 ("v".to_string(), param.clone()),
             ],
             return_ty: Ty::None,
@@ -25711,11 +26493,15 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let maker_init = HirItem::Function {
             name: "Maker.__init__".to_string(),
             params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Maker".to_string()))),
+                (
+                    "self".to_string(),
+                    Ty::Instance(Box::new("Maker".to_string())),
+                ),
                 ("v".to_string(), param.clone()),
             ],
             return_ty: Ty::None,
@@ -25727,9 +26513,10 @@ mod tests {
         };
         let maker_fetch = HirItem::Function {
             name: "Maker.fetch".to_string(),
-            params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Maker".to_string()))),
-            ],
+            params: vec![(
+                "self".to_string(),
+                Ty::Instance(Box::new("Maker".to_string())),
+            )],
             return_ty: param,
             body: vec![
                 HirStmt::Assign {
@@ -25759,6 +26546,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -25844,11 +26632,15 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let maker_init = HirItem::Function {
             name: "Maker.__init__".to_string(),
             params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Maker".to_string()))),
+                (
+                    "self".to_string(),
+                    Ty::Instance(Box::new("Maker".to_string())),
+                ),
                 ("v".to_string(), param.clone()),
             ],
             return_ty: Ty::None,
@@ -25860,9 +26652,10 @@ mod tests {
         };
         let maker_fetch = HirItem::Function {
             name: "Maker.fetch".to_string(),
-            params: vec![
-                ("self".to_string(), Ty::Instance(Box::new("Maker".to_string()))),
-            ],
+            params: vec![(
+                "self".to_string(),
+                Ty::Instance(Box::new("Maker".to_string())),
+            )],
             return_ty: param,
             body: vec![
                 HirStmt::Assign {
@@ -25892,6 +26685,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -26005,12 +26799,8 @@ mod tests {
             return_ty: Ty::None,
         }];
         let mut seen = HashSet::new();
-        let result = rewrite_generic_calls_in_instantiation(
-            &mut env,
-            0,
-            &mut instantiations,
-            &mut seen,
-        );
+        let result =
+            rewrite_generic_calls_in_instantiation(&mut env, 0, &mut instantiations, &mut seen);
         assert!(result.is_ok());
         // The non-Function item should be unchanged (the helper returns
         // early without modifying it). Verified via the mangled name rather
@@ -26065,6 +26855,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: vec![("factory".to_string(), "C.factory.static".to_string())],
             class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
+            enum_members: Vec::new(),
         };
         HirModule {
             items: vec![
@@ -26178,18 +26969,17 @@ mod tests {
                 ("factory".to_string(), "D.factory.static".to_string()),
             ],
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
                 init,
                 static_fn,
-                HirItem::TopLevelStmt(HirStmt::ExprStmt(
-                    HirExpr::GenericClassInstantiate {
-                        class: "D".to_string(),
-                        type_arg: Ty::Int,
-                        args: vec![HirExpr::IntLiteral(1)],
-                    },
-                )),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "D".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
             ],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -26199,10 +26989,7 @@ mod tests {
         let resolved = check_and_resolve(&hir).unwrap();
         // The monomorphized static method should exist exactly once despite
         // the duplicate entry — `seen.insert` prevented the second push.
-        assert_eq!(
-            count_function(&resolved, "0gen_D__T_int.factory.static"),
-            1
-        );
+        assert_eq!(count_function(&resolved, "0gen_D__T_int.factory.static"), 1);
     }
 
     #[test]
@@ -26230,10 +27017,7 @@ mod tests {
         };
         let class_fn = HirItem::Function {
             name: "D.greet.classmethod".to_string(),
-            params: vec![
-                ("cls".to_string(), self_ty),
-                ("x".to_string(), Ty::Int),
-            ],
+            params: vec![("cls".to_string(), self_ty), ("x".to_string(), Ty::Int)],
             return_ty: Ty::Int,
             body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
         };
@@ -26251,18 +27035,17 @@ mod tests {
                 // Duplicate entry — same method name and mangled name.
                 ("greet".to_string(), "D.greet.classmethod".to_string()),
             ],
+            enum_members: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
                 init,
                 class_fn,
-                HirItem::TopLevelStmt(HirStmt::ExprStmt(
-                    HirExpr::GenericClassInstantiate {
-                        class: "D".to_string(),
-                        type_arg: Ty::Int,
-                        args: vec![HirExpr::IntLiteral(1)],
-                    },
-                )),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "D".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
             ],
             type_aliases: Vec::new(),
             imports: Vec::new(),

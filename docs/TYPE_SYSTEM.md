@@ -116,7 +116,7 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 | `Protocol` | structural | static dispatch via monomorphization; vtable only for explicit `dyn`-like use |
 | unions `A \| B` | tagged | discriminant + payload; niche optimization for `T \| None` |
 | `Callable[...]` | first-class functions | fn pointer / closure struct |
-| `enum.Enum` | per CPython | integer discriminant + const table |
+| `enum.Enum` | per CPython | integer discriminant + const table. **Current state (#379, PR-19):** scoped `class C(Enum):` with integer-literal member values is implemented — members are compile-time singletons (`Ty::Instance(C)`), `C.MEMBER.value` returns the `int` literal, `C.MEMBER.name` returns the member name as a `str`, and `for c in C:` iterates members in declaration order (unrolled before MIR). Non-integer values, duplicate names, multiple bases, generic enums, and method definitions in enum bodies are rejected with `C0001`. `enum.Enum` module import is not yet supported (bare `Enum` marker only). |
 
 ## Generics
 

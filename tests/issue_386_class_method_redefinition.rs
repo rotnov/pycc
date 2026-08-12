@@ -19,8 +19,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 /// later `def` with the same name rebinds the method.
 #[test]
 fn method_redefinition_rebinds_to_the_latest_definition() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_issue386_rebind_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_issue386_rebind_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -51,8 +50,7 @@ fn method_redefinition_rebinds_to_the_latest_definition() {
 /// regression that special-cases only the 2× path.
 #[test]
 fn three_redefinitions_of_the_same_method_keep_rebinding() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_issue386_rebind3_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_issue386_rebind3_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -84,8 +82,7 @@ fn three_redefinitions_of_the_same_method_keep_rebinding() {
 /// method.
 #[test]
 fn method_called_from_another_method_sees_latest_binding() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_issue386_late_bind_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_issue386_late_bind_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -115,8 +112,7 @@ fn method_called_from_another_method_sees_latest_binding() {
 /// `__init__` bodies. This is a `pycc check` error.
 #[test]
 fn init_redefinition_is_a_check_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_issue386_init_check_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_issue386_init_check_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -144,8 +140,7 @@ fn init_redefinition_is_a_check_error() {
 /// `pycc build` error.
 #[test]
 fn init_redefinition_is_a_build_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_issue386_init_build_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_issue386_init_build_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -172,11 +167,10 @@ fn init_redefinition_is_a_build_error() {
 /// names). This is a `pycc check` error.
 #[test]
 fn incompatible_method_redefinition_is_a_check_error() {
-    let dir = std::env::temp_dir()
-        .join(format!(
-            "pycc_issue386_incompat_check_{}",
-            std::process::id()
-        ));
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_issue386_incompat_check_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -204,11 +198,10 @@ fn incompatible_method_redefinition_is_a_check_error() {
 /// error.
 #[test]
 fn incompatible_method_redefinition_is_a_build_error() {
-    let dir = std::env::temp_dir()
-        .join(format!(
-            "pycc_issue386_incompat_build_{}",
-            std::process::id()
-        ));
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_issue386_incompat_build_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -237,11 +230,7 @@ fn incompatible_method_redefinition_is_a_build_error() {
 /// pre-existing limitation — see #386 comment).
 #[test]
 fn redefinition_with_different_parameter_names_does_not_false_positive() {
-    let dir = std::env::temp_dir()
-        .join(format!(
-            "pycc_issue386_diff_names_{}",
-            std::process::id()
-        ));
+    let dir = std::env::temp_dir().join(format!("pycc_issue386_diff_names_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,

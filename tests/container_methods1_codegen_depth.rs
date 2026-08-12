@@ -24,8 +24,10 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 }
 
 fn build_and_run(label: &str, source: &str) -> std::process::Output {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_container_methods1_{label}_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_container_methods1_{label}_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, &format!("{label}.py"), source);
     let out = dir.join(label);

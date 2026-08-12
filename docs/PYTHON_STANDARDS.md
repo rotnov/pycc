@@ -98,7 +98,7 @@ For each newly observed upstream release:
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [435](https://peps.python.org/pep-0435/) | `enum` | sem | `py34/pep_0435_enum.py` | ☐ |
+| [435](https://peps.python.org/pep-0435/) | `enum` | sem | `pep_0435_enum.py` | ☐ |
 | [443](https://peps.python.org/pep-0443/) | `functools.singledispatch` | sem | `py34/pep_0443_singledispatch.py` | ☐ |
 | [451](https://peps.python.org/pep-0451/) | Module spec import model | import | `py34/pep_0451_modspec.py` | ☐ |
 | [3156](https://peps.python.org/pep-3156/) | `asyncio` event loop model | rt | `py34/pep_3156_asyncio.py` | ☐ |

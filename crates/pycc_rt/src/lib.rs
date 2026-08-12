@@ -102,9 +102,8 @@ fn fits_smallint(value: i64) -> Option<i64> {
 }
 
 fn require_inline_int(encoded: i64, context: &str) -> i64 {
-    inline_int_value(encoded).unwrap_or_else(|| {
-        panic!("pycc_rt: {context} a bigint-valued `int` is not supported yet")
-    })
+    inline_int_value(encoded)
+        .unwrap_or_else(|| panic!("pycc_rt: {context} a bigint-valued `int` is not supported yet"))
 }
 
 /// D-058: hand-rolled sign-magnitude limbs, base 2^32, little-endian,
@@ -120,8 +119,7 @@ struct BigIntObj {
 }
 
 const _: () = assert!(std::mem::align_of::<BigIntObj>() >= 4);
-const _: () =
-    assert!(std::mem::size_of::<*const BigIntObj>() <= std::mem::size_of::<i64>());
+const _: () = assert!(std::mem::size_of::<*const BigIntObj>() <= std::mem::size_of::<i64>());
 
 fn trim(limbs: &[u32]) -> Vec<u32> {
     let mut end = limbs.len();
@@ -318,9 +316,7 @@ fn int_add(a: i64, b: i64) -> i64 {
         // Both operands fit 63 bits, so their true sum always fits i128
         // with room to spare -- exact, no further bigint math needed
         // for this specific promotion step.
-        return tag_bigint(bigint_from_i128(
-            a as i128 + b as i128,
-        ));
+        return tag_bigint(bigint_from_i128(a as i128 + b as i128));
     }
     let (a_neg, a_mag) = to_sign_and_magnitude(a);
     let (b_neg, b_mag) = to_sign_and_magnitude(b);
@@ -350,9 +346,7 @@ fn int_sub(a: i64, b: i64) -> i64 {
         if let Some(result) = a.checked_sub(b).and_then(fits_smallint) {
             return result;
         }
-        return tag_bigint(bigint_from_i128(
-            a as i128 - b as i128,
-        ));
+        return tag_bigint(bigint_from_i128(a as i128 - b as i128));
     }
     let (a_neg, a_mag) = to_sign_and_magnitude(a);
     let (b_neg, b_mag) = to_sign_and_magnitude(b);
@@ -936,7 +930,9 @@ pub unsafe extern "C" fn pycc_rt_str_decref(s: *mut PyStrObj) {
 fn int_to_str(tagged: i64) -> *mut PyStrObj {
     match classify_encoded_int(tagged) {
         EncodedIntKind::SmallInt => new_pystr(
-            format_i64_line(untag_smallint(tagged)).trim_end().as_bytes(),
+            format_i64_line(untag_smallint(tagged))
+                .trim_end()
+                .as_bytes(),
         ),
         EncodedIntKind::BoolFalse => new_pystr(b"False"),
         EncodedIntKind::BoolTrue => new_pystr(b"True"),
@@ -2027,8 +2023,14 @@ mod tests {
         assert_eq!(int_cmp(BOOL_FALSE_MARKER, tag_smallint(0)), 0);
         assert_eq!(int_cmp(tag_smallint(1), BOOL_TRUE_MARKER), 0);
         assert_eq!(int_cmp(BOOL_FALSE_MARKER, BOOL_TRUE_MARKER), -1);
-        assert_eq!(range_continue(BOOL_FALSE_MARKER, BOOL_TRUE_MARKER, BOOL_TRUE_MARKER), 1);
-        assert_eq!(range_continue(BOOL_TRUE_MARKER, BOOL_TRUE_MARKER, BOOL_TRUE_MARKER), 0);
+        assert_eq!(
+            range_continue(BOOL_FALSE_MARKER, BOOL_TRUE_MARKER, BOOL_TRUE_MARKER),
+            1
+        );
+        assert_eq!(
+            range_continue(BOOL_TRUE_MARKER, BOOL_TRUE_MARKER, BOOL_TRUE_MARKER),
+            0
+        );
     }
 
     #[test]

@@ -424,6 +424,18 @@ pub fn is_builtin_type_name(name: &str) -> bool {
     matches!(name, "int" | "str" | "float" | "bool")
 }
 
+/// Returns `true` if `name` is the builtin `Enum` base name recognized by
+/// `lower_class` as a marker that a class is a PEP 435 enum (#379, PR-19).
+/// `Enum` is not a user-defined class in `class_defs` -- it is a builtin
+/// base name consumed as a marker, not recorded in the class's `bases`/`mro`.
+/// pycc has no `enum` stdlib module (`pycc_std` ships only `math`, D-136),
+/// so `from enum import Enum` is already `C0001`; the bare name `Enum` is
+/// the only reachable spelling. Supporting `enum.Enum` waits on a real
+/// `enum` stdlib module (post-v0.3).
+pub fn is_enum_base_name(name: &str) -> bool {
+    name == "Enum"
+}
+
 /// Computes the compile-time result of `isinstance(obj, target_class)`.
 ///
 /// `obj_ty` is the inferred static type of the object expression.
@@ -770,11 +782,11 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
             // for `import ...`/`from ... import ...` (a single statement can
             // bind more than one local name, e.g. `from math import sqrt,
             // pi`, so every bound name is checked, not just the first).
-            if let Some(colliding) = bound
-                .iter()
-                .map(import_local_name)
-                .find(|local_name| class_defs.iter().any(|(class_name, _)| class_name == local_name))
-            {
+            if let Some(colliding) = bound.iter().map(import_local_name).find(|local_name| {
+                class_defs
+                    .iter()
+                    .any(|(class_name, _)| class_name == local_name)
+            }) {
                 return Err(unsupported(
                     format!(
                         "import `{colliding}` collides with a class of the same name \
@@ -823,10 +835,9 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
             // `<ClassName>.<method>` name can never collide with a bare
             // class name -- a real Python `NAME` token can never contain a
             // `.`, `pycc_hir::class`'s own doc comment).
-            if items
-                .iter()
-                .any(|item| matches!(item, HirItem::Function { name, .. } if *name == class_def.name))
-            {
+            if items.iter().any(
+                |item| matches!(item, HirItem::Function { name, .. } if *name == class_def.name),
+            ) {
                 return Err(unsupported(
                     format!(
                         "class `{}` collides with a function of the same name already \
@@ -880,7 +891,9 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
         }
         let item = match stmt {
             Stmt::FunctionDef(def) => lower_function(def, &aliases)?,
-            other => HirItem::TopLevelStmt(stmt::lower_stmt(other, &aliases, false, false, None, None)?),
+            other => {
+                HirItem::TopLevelStmt(stmt::lower_stmt(other, &aliases, false, false, None, None)?)
+            }
         };
         items.push(item);
     }
@@ -1169,7 +1182,10 @@ fn lower_function(
 /// the `pycc_ast` facade for the `Ranged` trait for no benefit here (the
 /// arity-gate rejection just above already reports the same function-level
 /// span for the analogous "too many type parameters" case).
-pub(crate) fn type_param_name<R>(type_param: &pycc_ast::TypeParam, def_range: R) -> Result<&str, Diagnostic>
+pub(crate) fn type_param_name<R>(
+    type_param: &pycc_ast::TypeParam,
+    def_range: R,
+) -> Result<&str, Diagnostic>
 where
     std::ops::Range<u32>: From<R>,
 {
@@ -1224,7 +1240,14 @@ fn lower_params(
             parameters.range,
         ));
     }
-    lower_arg_list(&parameters.args, is_public, fn_name, type_param, None, aliases)
+    lower_arg_list(
+        &parameters.args,
+        is_public,
+        fn_name,
+        type_param,
+        None,
+        aliases,
+    )
 }
 
 /// Lowers a plain positional-parameter list (no `/`/`*`/`**`/keyword-only
@@ -1255,14 +1278,18 @@ pub(crate) fn lower_arg_list(
             }
             let name = param.parameter.name.as_str();
             match &param.parameter.annotation {
-                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann, type_param, class_name, aliases)?)),
+                Some(ann) => Ok((
+                    name.to_string(),
+                    annotation_to_ty(ann, type_param, class_name, aliases)?,
+                )),
                 None if is_public => Err(Diagnostic::error(
                     "T0001",
                     format!(
                         "parameter `{name}` of public function `{fn_name}` needs a type annotation"
                     ),
                     Span::new(0, 0),
-                ).with_help(format!("add a type annotation to parameter `{name}`"))),
+                )
+                .with_help(format!("add a type annotation to parameter `{name}`"))),
                 None => Ok((name.to_string(), Ty::Infer)),
             }
         })
@@ -1283,7 +1310,8 @@ fn lower_return_annotation(
             "T0001",
             format!("public function `{fn_name}` needs a return type annotation"),
             Span::new(0, 0),
-        ).with_help(format!("add a return type annotation to `{fn_name}`"))),
+        )
+        .with_help(format!("add a return type annotation to `{fn_name}`"))),
         None => Ok(Ty::Infer),
     }
 }
@@ -1372,7 +1400,12 @@ fn annotation_to_ty(
             // does — through the alias table or as a known class name. We
             // reuse `annotation_to_ty` on the bare name so self-referential
             // class names, aliases, and builtin types all resolve identically.
-            annotation_to_ty(&Expr::Name(base_name.clone()), type_param, class_name, aliases)
+            annotation_to_ty(
+                &Expr::Name(base_name.clone()),
+                type_param,
+                class_name,
+                aliases,
+            )
         }
         other => Err(unsupported(
             format!("only a bare name type annotation is supported so far: {other:?}"),
@@ -1475,7 +1508,10 @@ mod tests {
         assert_eq!(Ty::None.name(), "None");
         assert_eq!(Ty::Infer.name(), "<inferred>");
         assert_eq!(Ty::Param(Box::new("T".to_string())).name(), "T");
-        assert_eq!(Ty::Instance(Box::new("MyClass".to_string())).name(), "MyClass");
+        assert_eq!(
+            Ty::Instance(Box::new("MyClass".to_string())).name(),
+            "MyClass"
+        );
     }
 
     #[test]
@@ -1557,10 +1593,7 @@ mod tests {
         // is not wrapped in a `<kind>[...]` shape -- a class instance's
         // type is spelled exactly like the class itself in real Python
         // (`Point`, not `Instance[Point]`).
-        assert_eq!(
-            Ty::Instance(Box::new("Point".to_string())).name(),
-            "Point"
-        );
+        assert_eq!(Ty::Instance(Box::new("Point".to_string())).name(), "Point");
     }
 
     #[test]
@@ -1597,11 +1630,20 @@ mod tests {
             // `lower_body`), so use `with open("x") as f: pass` — a valid
             // Python statement that is still unsupported — to exercise the
             // C0001 capability error path in statement positions.
-            ("function body", "def _f():\n    with open(\"x\") as f:\n        pass\n"),
+            (
+                "function body",
+                "def _f():\n    with open(\"x\") as f:\n        pass\n",
+            ),
             ("if test", "if (lambda: 1):\n    print(1)\n"),
-            ("if else body", "if True:\n    print(1)\nelse:\n    with open(\"x\") as f:\n        pass\n"),
+            (
+                "if else body",
+                "if True:\n    print(1)\nelse:\n    with open(\"x\") as f:\n        pass\n",
+            ),
             ("while test", "while (lambda: 1):\n    print(1)\n"),
-            ("while body", "while True:\n    with open(\"x\") as f:\n        pass\n"),
+            (
+                "while body",
+                "while True:\n    with open(\"x\") as f:\n        pass\n",
+            ),
             (
                 "one-argument range stop",
                 "for i in range((lambda: 1)):\n    print(i)\n",
@@ -1626,7 +1668,10 @@ mod tests {
                 "three-argument range step",
                 "for i in range(0, 1, (lambda: 1)):\n    print(i)\n",
             ),
-            ("for body", "for i in range(1):\n    with open(\"x\") as f:\n        pass\n"),
+            (
+                "for body",
+                "for i in range(1):\n    with open(\"x\") as f:\n        pass\n",
+            ),
             ("return value", "def _f():\n    return (lambda: 1)\n"),
             (
                 "elif test",
@@ -1950,7 +1995,10 @@ mod tests {
         // `unsupported_statement_and_expression_return_spanned_capability_diagnostics`
         // does for expressions. (#435: `pass` was previously used here but
         // is now supported as a no-op for PEP 487 hook bodies.)
-        assert_capability_error_message("with open(\"x\") as f:\n    pass\n", "statement kind not supported yet");
+        assert_capability_error_message(
+            "with open(\"x\") as f:\n    pass\n",
+            "statement kind not supported yet",
+        );
     }
 
     #[test]
@@ -4830,14 +4878,16 @@ mod tests {
         let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
-            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::MethodCall {
-                base: Box::new(HirExpr::ListLiteral(vec![
-                    HirExpr::IntLiteral(1),
-                    HirExpr::IntLiteral(2)
-                ])),
-                method: "sqrt".to_string(),
-                args: vec![],
-            }))]
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                HirExpr::MethodCall {
+                    base: Box::new(HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2)
+                    ])),
+                    method: "sqrt".to_string(),
+                    args: vec![],
+                }
+            ))]
         );
     }
 
@@ -4846,9 +4896,8 @@ mod tests {
         // The module-level side-table is populated only by `lower_checked`'s
         // top-level loop (mirroring `type_aliases`); a nested import still
         // reaches plain `lower_stmt`, which has no arm for `Stmt::Import`.
-        let module = pycc_parser_test_helper::parse(
-            "def f() -> None:\n    import math\n    return None\n",
-        );
+        let module =
+            pycc_parser_test_helper::parse("def f() -> None:\n    import math\n    return None\n");
         let diagnostic = lower_checked(&module).unwrap_err();
 
         assert_eq!(diagnostic.code, "C0001");
@@ -4885,9 +4934,18 @@ mod tests {
     #[test]
     fn generic_class_instantiation_lowers_with_float_bool_and_str_type_args() {
         for (source, expected_ty) in [
-            ("class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[float](1)\n", Ty::Float),
-            ("class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[bool](1)\n", Ty::Bool),
-            ("class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[str](1)\n", Ty::Str),
+            (
+                "class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[float](1)\n",
+                Ty::Float,
+            ),
+            (
+                "class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[bool](1)\n",
+                Ty::Bool,
+            ),
+            (
+                "class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[str](1)\n",
+                Ty::Str,
+            ),
         ] {
             let hir = lower_generic_class_instantiation(source);
             let last = hir.items.last().expect("should have items");
@@ -4983,7 +5041,9 @@ mod tests {
             }
             _ => None,
         });
-        let stmt = init.flatten().expect("should find B.__init__ with a non-empty body");
+        let stmt = init
+            .flatten()
+            .expect("should find B.__init__ with a non-empty body");
         assert_eq!(
             stmt,
             HirStmt::ExprStmt(HirExpr::MethodCall {
@@ -5003,9 +5063,7 @@ mod tests {
         );
         let hir = lower_checked(&module).unwrap();
         let greet = hir.items.iter().find_map(|item| match item {
-            HirItem::Function { name, body, .. } if name == "B.greet" => {
-                body.first().cloned()
-            }
+            HirItem::Function { name, body, .. } if name == "B.greet" => body.first().cloned(),
             _ => None,
         });
         let stmt = greet.expect("should find B.greet with a non-empty body");
@@ -5028,9 +5086,7 @@ mod tests {
         );
         let hir = lower_checked(&module).unwrap();
         let get_x = hir.items.iter().find_map(|item| match item {
-            HirItem::Function { name, body, .. } if name == "B.get_x" => {
-                body.first().cloned()
-            }
+            HirItem::Function { name, body, .. } if name == "B.get_x" => body.first().cloned(),
             _ => None,
         });
         let stmt = get_x.expect("should find B.get_x with a non-empty body");
@@ -5051,7 +5107,8 @@ mod tests {
         assert_eq!(err.code, "C0001");
         assert!(
             err.message.contains("bare `super()`"),
-            "should mention bare super(), got: {}", err.message
+            "should mention bare super(), got: {}",
+            err.message
         );
     }
 
@@ -5166,10 +5223,26 @@ mod tests {
         assert!(!eval_isinstance_single(&Ty::Str, "int", &[]));
         // `Ty::Instance` arm — checks MRO membership.
         let mro = vec!["D".to_string(), "B".to_string(), "A".to_string()];
-        assert!(eval_isinstance_single(&Ty::Instance(Box::new("D".to_string())), "D", &mro));
-        assert!(eval_isinstance_single(&Ty::Instance(Box::new("D".to_string())), "B", &mro));
-        assert!(eval_isinstance_single(&Ty::Instance(Box::new("D".to_string())), "A", &mro));
-        assert!(!eval_isinstance_single(&Ty::Instance(Box::new("D".to_string())), "C", &mro));
+        assert!(eval_isinstance_single(
+            &Ty::Instance(Box::new("D".to_string())),
+            "D",
+            &mro
+        ));
+        assert!(eval_isinstance_single(
+            &Ty::Instance(Box::new("D".to_string())),
+            "B",
+            &mro
+        ));
+        assert!(eval_isinstance_single(
+            &Ty::Instance(Box::new("D".to_string())),
+            "A",
+            &mro
+        ));
+        assert!(!eval_isinstance_single(
+            &Ty::Instance(Box::new("D".to_string())),
+            "C",
+            &mro
+        ));
     }
 
     #[test]
@@ -5199,9 +5272,7 @@ mod tests {
         assert!(result.is_err());
 
         // Tuple with a non-name element — covers the `_ => return Err` path.
-        let result = extract_class_names(&HirExpr::TupleLiteral(vec![
-            HirExpr::IntLiteral(42),
-        ]));
+        let result = extract_class_names(&HirExpr::TupleLiteral(vec![HirExpr::IntLiteral(42)]));
         assert!(result.is_err());
 
         // Non-name, non-tuple expression — covers the top-level `_ => Err` path.

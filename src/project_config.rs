@@ -330,7 +330,10 @@ entry = "src/main.py"
 python = "3.15"
 "#;
         let err = parse(toml).expect_err("python != 3.14 must be rejected in v1");
-        assert!(err.contains("3.14"), "error should mention the only supported version: {err}");
+        assert!(
+            err.contains("3.14"),
+            "error should mention the only supported version: {err}"
+        );
     }
 
     #[test]
@@ -492,7 +495,8 @@ paths = ["tests/"]
         // any entry type counts) is caught by the pre-check phase, and
         // nothing is written -- it used to surface as the final write's
         // own error after `pycc.toml` had already been replaced.
-        let dir = std::env::temp_dir().join(format!("pycc_main_py_conflict_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("pycc_main_py_conflict_{}", std::process::id()));
         std::fs::create_dir_all(dir.join("src").join("main.py")).unwrap();
 
         let err = scaffold(Some("x"), &dir).expect_err("scaffold must refuse an existing main.py");
@@ -511,7 +515,8 @@ paths = ["tests/"]
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("pycc.toml"), "user content").unwrap();
 
-        let err = scaffold(Some("x"), &dir).expect_err("scaffold must refuse an existing pycc.toml");
+        let err =
+            scaffold(Some("x"), &dir).expect_err("scaffold must refuse an existing pycc.toml");
         assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
         assert_eq!(err.to_string(), "`pycc.toml` already exists");
         assert_eq!(
@@ -617,8 +622,12 @@ paths = ["tests/"]
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("partial.txt");
 
-        let err = write_new_in(&path, b"contents", chmod_containing_dir_readonly_then_fail_write)
-            .expect_err("the injected write failure must propagate");
+        let err = write_new_in(
+            &path,
+            b"contents",
+            chmod_containing_dir_readonly_then_fail_write,
+        )
+        .expect_err("the injected write failure must propagate");
         let message = err.to_string();
         assert!(message.contains("injected write failure"));
         assert!(message.contains("could not remove"));
@@ -790,8 +799,11 @@ paths = ["tests/"]
         // are ever created, and would not discriminate this fix at all.
         let dir = std::env::temp_dir().join(format!("pycc_retry_ok_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::os::unix::fs::symlink(dir.join("missing_dir").join("pycc.toml"), dir.join("pycc.toml"))
-            .unwrap();
+        std::os::unix::fs::symlink(
+            dir.join("missing_dir").join("pycc.toml"),
+            dir.join("pycc.toml"),
+        )
+        .unwrap();
 
         scaffold(Some("x"), &dir).expect_err("first attempt must fail on the dangling symlink");
         assert!(
@@ -852,7 +864,8 @@ paths = ["tests/"]
 
     #[test]
     fn roll_back_after_toml_failure_removes_an_invocation_created_empty_src_dir() {
-        let parent = std::env::temp_dir().join(format!("pycc_rollback_srcdir_{}", std::process::id()));
+        let parent =
+            std::env::temp_dir().join(format!("pycc_rollback_srcdir_{}", std::process::id()));
         let src_dir = parent.join("src");
         std::fs::create_dir_all(&src_dir).unwrap();
         let main_py = src_dir.join("main.py");
@@ -860,14 +873,18 @@ paths = ["tests/"]
         let toml_error = std::io::Error::other("original toml failure");
 
         roll_back_after_toml_failure(toml_error, &main_py, &src_dir, true);
-        assert!(!src_dir.exists(), "an invocation-created, now-empty src/ must be removed");
+        assert!(
+            !src_dir.exists(),
+            "an invocation-created, now-empty src/ must be removed"
+        );
 
         std::fs::remove_dir_all(&parent).ok();
     }
 
     #[test]
     fn roll_back_after_toml_failure_never_removes_a_preexisting_src_dir() {
-        let parent = std::env::temp_dir().join(format!("pycc_rollback_preexisting_{}", std::process::id()));
+        let parent =
+            std::env::temp_dir().join(format!("pycc_rollback_preexisting_{}", std::process::id()));
         let src_dir = parent.join("src");
         std::fs::create_dir_all(&src_dir).unwrap();
         std::fs::write(src_dir.join("sibling.py"), "user file").unwrap();
@@ -877,7 +894,10 @@ paths = ["tests/"]
 
         // src_dir_created = false: this invocation did not create src/.
         roll_back_after_toml_failure(toml_error, &main_py, &src_dir, false);
-        assert!(src_dir.is_dir(), "a pre-existing src/ must never be removed");
+        assert!(
+            src_dir.is_dir(),
+            "a pre-existing src/ must never be removed"
+        );
         assert_eq!(
             std::fs::read_to_string(src_dir.join("sibling.py")).unwrap(),
             "user file"

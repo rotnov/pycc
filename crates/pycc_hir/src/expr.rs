@@ -722,13 +722,15 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
             method,
             args: args.into_iter().map(recurse).collect(),
         },
-        HirExpr::GenericClassInstantiate { class, type_arg, args } => {
-            HirExpr::GenericClassInstantiate {
-                class,
-                type_arg,
-                args: args.into_iter().map(recurse).collect(),
-            }
-        }
+        HirExpr::GenericClassInstantiate {
+            class,
+            type_arg,
+            args,
+        } => HirExpr::GenericClassInstantiate {
+            class,
+            type_arg,
+            args: args.into_iter().map(recurse).collect(),
+        },
         // #433: `Super` carries no names to rename — it is a compile-time
         // marker, not a value with sub-expressions.
         HirExpr::Super => expr,
@@ -801,7 +803,10 @@ pub(crate) fn lower_range_call(
 /// Any other shape is rejected with the existing generic `C0001` path,
 /// mirroring `Stmt::For`'s own "only `for x in range(...)` or `for x in
 /// <list>` is supported so far" message.
-fn lower_comprehension_iter(iter_expr: &Expr, class_name: Option<&str>) -> Result<CompIter, Diagnostic> {
+fn lower_comprehension_iter(
+    iter_expr: &Expr,
+    class_name: Option<&str>,
+) -> Result<CompIter, Diagnostic> {
     if let Expr::Name(name) = iter_expr {
         return Ok(CompIter::Name(name.id.as_str().to_string()));
     }
@@ -935,13 +940,18 @@ pub(crate) fn lower_list_comp_assign(
     comp: &pycc_ast::ExprListComp,
     class_name: Option<&str>,
 ) -> Result<HirStmt, Diagnostic> {
-    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators, class_name)?;
+    let (source_name, synth_var, iter, cond) =
+        lower_comprehension_header(&comp.generators, class_name)?;
     // Literal `true`: `elt` is lexically inside the comprehension's own
     // scope, same reasoning as `lower_comprehension_header`'s `cond` arm
     // above (D-149 correction 5) -- preserves today's `C0001` classification
     // for a comprehension-internal `yield`/`yield from` in both enclosing
     // scopes.
-    let elt = rename_name_in_expr(lower_expr(&comp.elt, true, class_name)?, &source_name, &synth_var);
+    let elt = rename_name_in_expr(
+        lower_expr(&comp.elt, true, class_name)?,
+        &source_name,
+        &synth_var,
+    );
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
     Ok(HirStmt::ListCompAssign {
         target: target.to_string(),
@@ -957,10 +967,15 @@ pub(crate) fn lower_set_comp_assign(
     comp: &pycc_ast::ExprSetComp,
     class_name: Option<&str>,
 ) -> Result<HirStmt, Diagnostic> {
-    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators, class_name)?;
+    let (source_name, synth_var, iter, cond) =
+        lower_comprehension_header(&comp.generators, class_name)?;
     // Literal `true`: same reasoning as `lower_list_comp_assign`'s `elt`
     // above (D-149 correction 5).
-    let elt = rename_name_in_expr(lower_expr(&comp.elt, true, class_name)?, &source_name, &synth_var);
+    let elt = rename_name_in_expr(
+        lower_expr(&comp.elt, true, class_name)?,
+        &source_name,
+        &synth_var,
+    );
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
     Ok(HirStmt::SetCompAssign {
         target: target.to_string(),
@@ -994,12 +1009,21 @@ pub(crate) fn lower_dict_comp_assign(
             pycc_ast::expr_range(&comp.value),
         ));
     };
-    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators, class_name)?;
+    let (source_name, synth_var, iter, cond) =
+        lower_comprehension_header(&comp.generators, class_name)?;
     // Literal `true` for both `key` and `value`: same reasoning as
     // `lower_list_comp_assign`'s `elt` above (D-149 correction 5) -- `key`
     // and `value` are both lexically inside the comprehension's own scope.
-    let key = rename_name_in_expr(lower_expr(key_expr, true, class_name)?, &source_name, &synth_var);
-    let value = rename_name_in_expr(lower_expr(&comp.value, true, class_name)?, &source_name, &synth_var);
+    let key = rename_name_in_expr(
+        lower_expr(key_expr, true, class_name)?,
+        &source_name,
+        &synth_var,
+    );
+    let value = rename_name_in_expr(
+        lower_expr(&comp.value, true, class_name)?,
+        &source_name,
+        &synth_var,
+    );
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
     Ok(HirStmt::DictCompAssign {
         target: target.to_string(),
