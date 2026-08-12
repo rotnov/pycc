@@ -98,10 +98,9 @@ class TestCheckSiteAccessibility < Minitest::Test
       ["--skip-lighthouse", "--skip-reduced-motion", "--site-dir",
        File.join(REPO_ROOT, "site")]
     )
-    # The current site has ARIA violations, so this should FAIL.
-    # After Merge 2 fixes the site, this test should pass.
-    # For now, we test with the fixed site in a temp dir.
-    assert_equal 1, exit_code
+    # After Merge 2 of #199 fixed the site's ARIA violations, the
+    # current site should pass the accessibility checker.
+    assert_equal 0, exit_code
   end
 
   # ------------------------------------------------------------------
@@ -158,15 +157,29 @@ class TestCheckSiteAccessibility < Minitest::Test
     assert(failures.any? { |f| f.include?("color-contrast") && f.include?("score") })
   end
 
-  def test_lhr_fails_when_required_audit_is_not_applicable
+  def test_lhr_passes_when_aria_allowed_role_is_not_applicable
     manifest = load_default_manifest
     base_url = "http://127.0.0.1:9999/"
     page = manifest["canonical_pages"].first
     lhr = healthy_lhr(page, base_url)
     lhr["audits"]["aria-allowed-role"]["scoreDisplayMode"] = "notApplicable"
     failures = validate_lhr_accessibility(lhr, page, 1, base_url)
+    # aria-allowed-role is notApplicable on pages without ARIA roles —
+    # this is a valid pass state for that specific audit only.
+    assert_empty failures
+  end
+
+  def test_lhr_fails_when_color_contrast_is_not_applicable
+    manifest = load_default_manifest
+    base_url = "http://127.0.0.1:9999/"
+    page = manifest["canonical_pages"].first
+    lhr = healthy_lhr(page, base_url)
+    lhr["audits"]["color-contrast"]["scoreDisplayMode"] = "notApplicable"
+    failures = validate_lhr_accessibility(lhr, page, 1, base_url)
+    # color-contrast must never be notApplicable on pages with visible
+    # content — if it is, that indicates a measurement failure.
     refute_empty failures
-    assert(failures.any? { |f| f.include?("notApplicable") })
+    assert(failures.any? { |f| f.include?("color-contrast") && f.include?("notApplicable") })
   end
 
   def test_lhr_fails_when_required_audit_is_missing
@@ -341,13 +354,11 @@ class TestCheckSiteAccessibility < Minitest::Test
   # ARIA conformance: mutation tests against the Python evaluator
   # ------------------------------------------------------------------
 
-  def test_aria_conformance_fails_on_current_site
-    # The current (unfixed) site has 8 div[aria-label] violations.
+  def test_aria_conformance_passes_on_current_site
+    # After Merge 2 of #199 fixed the site's div[aria-label] violations,
+    # the current site should pass ARIA conformance with no failures.
     failures = check_aria_conformance(File.join(REPO_ROOT, "site"))
-    refute_empty failures
-    # Should find violations on multiple pages
-    assert(failures.any? { |f| f.include?("home") })
-    assert(failures.any? { |f| f.include?("status") })
+    assert_empty failures
   end
 
   def test_aria_conformance_fails_when_article_listitem_is_present

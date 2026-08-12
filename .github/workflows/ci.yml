@@ -852,6 +852,45 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  # Issue #199: hermetic site accessibility gate.  Runs on every
+  # pull request and push to main, unprivileged (contents: read only).
+  # Uses a pinned Lighthouse 12.8.2 mobile accessibility profile, a
+  # W3C Nu ARIA conformance evaluator, and a Puppeteer reduced-motion
+  # evaluator against the hermetic local server.  No continue-on-error:
+  # failures propagate to ci-gate, which requires this job's literal
+  # 'success'.
+  pages-accessibility:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      - name: Run hermetic Lighthouse accessibility gate
+        run: |
+          python3 scripts/run_pages_lighthouse_accessibility.py \
+            --output-dir /tmp/lighthouse-a11y-results \
+            --site-dir site
+          ruby scripts/check_site_accessibility.rb \
+            --lhr-dir /tmp/lighthouse-a11y-results \
+            --site-dir site
+
+      - name: Upload Lighthouse accessibility reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lighthouse-a11y-reports
+          path: /tmp/lighthouse-a11y-results
+          if-no-files-found: error
+          retention-days: 90
+
   ci-gate:
     needs:
       - build-test-coverage
@@ -861,6 +900,7 @@ jobs:
       - frontend-perf-measure
       - frontend-perf-gate
       - pages-performance
+      - pages-accessibility
     if: always()
     runs-on: ubuntu-latest
     # Overrides the workflow-level `contents: read` default: this job only
@@ -885,7 +925,8 @@ jobs:
           needs.cross-compile-verify.result != 'success' ||
           needs.frontend-perf-measure.result != 'success' ||
           needs.frontend-perf-gate.result != 'success' ||
-          needs.pages-performance.result != 'success'
+          needs.pages-performance.result != 'success' ||
+          needs.pages-accessibility.result != 'success'
         run: |
           echo "one or more required jobs did not succeed:"
           echo '${{ toJSON(needs) }}'

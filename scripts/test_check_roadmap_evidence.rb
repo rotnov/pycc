@@ -42,6 +42,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
   D229_PAGES_PERFORMANCE_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent /
     "tests/fixtures/policy-successors/ci.yml"
+  D199_PAGES_ACCESSIBILITY_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent /
+    "tests/fixtures/policy-successors/ci-d199.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -996,14 +999,15 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
-  # ci.yml now matches D229 (Phase 3 activation, issue #229) -- D100/D112/D114
-  # remain in the accepted array below only because retiring them is a
-  # separate, later propose-then-activate round for
-  # check_roadmap_evidence.rb's own bytes (the same self-authorization
-  # boundary this whole array already exists to enforce).
-  def test_tier1_workflow_authorization_is_the_active_d229_digest
+  # ci.yml now matches D199 (Merge 2 of issue #199, activating the
+  # pages-accessibility job) -- D100/D112/D114/D229 remain in the accepted
+  # array below only because retiring them is a separate, later
+  # propose-then-activate round for check_roadmap_evidence.rb's own bytes
+  # (the same self-authorization boundary this whole array already exists
+  # to enforce).
+  def test_tier1_workflow_authorization_is_the_active_d199_digest
     assert_equal(
-      D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
+      D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256,
       Digest::SHA256.hexdigest(
         (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
       )
@@ -1013,20 +1017,22 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # D100/D112's own retirement (later, separate propose-then-activate
   # rounds for check_roadmap_evidence.rb's own bytes) will shrink this
   # array further -- until then all three coexist, mirroring D-090's own
-  # coexist-then-retire precedent for this exact array. D229 is now the
+  # coexist-then-retire precedent for this exact array. D199 is now the
   # live `.github/workflows/ci.yml` shape (see
-  # test_tier1_workflow_authorization_is_the_active_d229_digest above);
-  # D100/D112/D114 remain accepted alongside it only as retained,
+  # test_tier1_workflow_authorization_is_the_active_d199_digest above);
+  # D100/D112/D114/D229 remain accepted alongside it only as retained,
   # no-longer-live audit evidence.
   # Issue #229 (Phase 3 activation): the D229 pages-performance digest
-  # is now the live ci.yml shape.
-  def test_tier1_workflow_authorization_contains_exactly_d100_d112_d114_and_d229
+  # is retained audit evidence.  Issue #199 (Merge 2 activation): the
+  # D199 pages-accessibility digest is now the live ci.yml shape.
+  def test_tier1_workflow_authorization_contains_exactly_d100_d112_d114_d229_and_d199
     assert_equal(
       [
         D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
         D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
         D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
-        D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256
+        D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
+        D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256
       ],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
@@ -1035,9 +1041,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # D-114 (round 5/6): this reviewed successor fixture -- identical to
   # the D112 shape except the gate job's own comparison step gains an
   # explicit "7.0" threshold_percent argument -- is now retained audit
-  # evidence only. D229 is now the live
+  # evidence only. D199 is now the live
   # `.github/workflows/ci.yml` shape (see
-  # test_tier1_workflow_authorization_is_the_active_d229_digest above);
+  # test_tier1_workflow_authorization_is_the_active_d199_digest above);
   # D114 remains accepted alongside it only as retained, no-longer-live
   # audit evidence.
   def test_d114_frontend_perf_threshold_workflow_fixture_matches_its_own_digest
@@ -1052,21 +1058,30 @@ class RoadmapEvidenceCliTest < Minitest::Test
                     D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
   end
 
-  # Issue #229 (Phase 3 activation): D229 is now the live ci.yml shape.
-  # This test verifies the D229 pages-performance ci.yml fixture matches
-  # its own digest, matches the live ci.yml, and passes the lifecycle
-  # validators (source-aware perf gate and pages-performance lifecycle).
-  def test_d229_pages_performance_workflow_is_active_and_reviewed
+  # Issue #229 (Phase 3 activation): D229 was the live ci.yml shape.
+  # Issue #199 (Merge 2 activation): D199 is now the live ci.yml shape.
+  # This test verifies the D229 pages-performance ci.yml fixture still
+  # matches its own digest (retained audit evidence), and that the live
+  # D199 ci.yml passes the lifecycle validators (source-aware perf gate
+  # and pages-performance lifecycle).
+  def test_d229_pages_performance_workflow_fixture_matches_its_own_digest
     assert_equal(
       D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
       Digest::SHA256.file(D229_PAGES_PERFORMANCE_WORKFLOW_FIXTURE).hexdigest
     )
+  end
+
+  def test_d199_pages_accessibility_workflow_is_active_and_reviewed
     assert_equal(
-      D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
+      D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D199_PAGES_ACCESSIBILITY_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert_equal(
+      D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256,
       Digest::SHA256.file(ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW).hexdigest
     )
     assert_equal(
-      D229_PAGES_PERFORMANCE_WORKFLOW_FIXTURE.read,
+      D199_PAGES_ACCESSIBILITY_WORKFLOW_FIXTURE.read,
       ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
     )
     assert validate_source_aware_perf_gate_lifecycle(
@@ -1547,7 +1562,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # D100's own digest remains in REVIEWED_PERF_CI_WORKFLOW_SHA256S (see
   # the coexist test above), but the live ci.yml file itself now matches
   # D229, not D100 (see
-  # test_tier1_workflow_authorization_is_the_active_d229_digest above) --
+  # test_tier1_workflow_authorization_is_the_active_d199_digest above) --
   # D100's retirement from the checker's array is a separate, later round.
   def test_d100_composed_workflow_fixture_matches_its_own_digest
     assert_equal(
@@ -1578,8 +1593,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  # D-112 is no longer the live shape once D229 activates (see
-  # test_d229_pages_performance_workflow_is_active_and_reviewed
+  # D-112 is no longer the live shape once D199 activates (see
+  # test_d199_pages_accessibility_workflow_is_active_and_reviewed
   # above) -- its remaining, still-true facts (fixture digest,
   # array membership, structural recognition) stay covered by
   # test_d112_ubuntu_frontend_perf_workflow_digest_matches_the_fixture,
@@ -1588,8 +1603,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # below, so this test (which asserted D112 == the live file) is
   # removed rather than left asserting something now false.
 
-  # D112 is no longer the live shape once D229 activates (see
-  # test_d229_pages_performance_workflow_is_active_and_reviewed
+  # D112 is no longer the live shape once D199 activates (see
+  # test_d199_pages_accessibility_workflow_is_active_and_reviewed
   # above), but the checker still recognizes and accepts it (this fixture
   # is identical to the live D91/REPLICATED frontend-perf-measure/gate
   # shape except runs-on: ubuntu-latest and the macOS brew-based LLVM
@@ -1630,7 +1645,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # authorizes either gate-job shape (D-112's 2.0%-implicit-threshold shape,
   # still covered by the tests above, or this 7.0%-explicit-threshold
   # shape, now retained audit evidence -- see
-  # test_tier1_workflow_authorization_is_the_active_d229_digest above).
+  # test_tier1_workflow_authorization_is_the_active_d199_digest above).
   def test_d114_raised_threshold_frontend_perf_gate_job_structure_is_recognized
     workflow = d114_raised_threshold_frontend_perf_workflow
     assert validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
@@ -1707,6 +1722,79 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_d229_paired_perf_ci_gate_job_has_seven_needs_entries
     assert_equal 7, D229_PAIRED_PERF_CI_GATE_JOB.fetch("needs").length
+  end
+
+  # Issue #199: the D199 eight-element ci-gate shape (with
+  # pages-accessibility) must be accepted by
+  # validate_source_aware_perf_gate_lifecycle.  This shape coexists
+  # with the pre-D229 and D229 shapes until a later round retires
+  # them.
+
+  def test_d199_pages_accessibility_ci_gate_job_has_pages_accessibility_in_needs
+    assert_includes D199_PAGES_ACCESSIBILITY_CI_GATE_JOB.fetch("needs"),
+                    "pages-accessibility"
+  end
+
+  def test_d199_pages_accessibility_ci_gate_job_has_pages_accessibility_in_fail_condition
+    fail_step =
+      D199_PAGES_ACCESSIBILITY_CI_GATE_JOB.fetch("steps").find do |step|
+        step["name"] == "Fail unless every required job succeeded"
+      end
+    assert_includes fail_step.fetch("if"),
+                    "needs.pages-accessibility.result != 'success'"
+  end
+
+  def test_d199_pages_accessibility_ci_gate_job_has_eight_needs_entries
+    assert_equal 8, D199_PAGES_ACCESSIBILITY_CI_GATE_JOB.fetch("needs").length
+  end
+
+  def test_d199_pages_accessibility_ci_gate_job_includes_pages_performance
+    assert_includes D199_PAGES_ACCESSIBILITY_CI_GATE_JOB.fetch("needs"),
+                    "pages-performance"
+  end
+
+  def test_source_aware_perf_gate_lifecycle_accepts_the_d199_ci_gate_shape
+    workflow = d114_raised_threshold_frontend_perf_workflow do |jobs|
+      jobs["ci-gate"] =
+        Marshal.load(Marshal.dump(D199_PAGES_ACCESSIBILITY_CI_GATE_JOB))
+    end
+    assert validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+  end
+
+  def test_source_aware_perf_gate_lifecycle_rejects_d199_shape_without_pages_accessibility_fail_check
+    # validate_pages_performance_lifecycle must reject a D199-shaped
+    # ci-gate where the pages-accessibility fail check is missing.
+    # We build a workflow with a valid pages-performance job and a
+    # ci-gate that has pages-accessibility in needs but not in the
+    # fail condition.
+    gate = Marshal.load(Marshal.dump(D199_PAGES_ACCESSIBILITY_CI_GATE_JOB))
+    fail_step = gate.fetch("steps").find { |s| s["name"] =~ /Fail unless/ }
+    fail_step["if"] = fail_step["if"].sub(
+      " || needs.pages-accessibility.result != 'success'", ""
+    )
+    workflow = pages_perf_workflow_yaml(
+      pages_job: pages_perf_job_yaml,
+      ci_gate: { "ci-gate" => gate }.to_yaml
+    )
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_pages_performance_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message,
+                    "ci-gate fail step must check needs.pages-accessibility.result"
+  end
+
+  def test_source_aware_perf_gate_lifecycle_rejects_d199_shape_with_extra_needs_entry
+    workflow = d114_raised_threshold_frontend_perf_workflow do |jobs|
+      gate = Marshal.load(Marshal.dump(D199_PAGES_ACCESSIBILITY_CI_GATE_JOB))
+      gate["needs"] = gate["needs"] + ["rogue-job"]
+      jobs["ci-gate"] = gate
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed fail-closed aggregate job"
   end
 
   def test_source_aware_perf_gate_lifecycle_accepts_the_pre_d229_ci_gate_shape
@@ -2904,8 +2992,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # Issue #229 (Phase 3 activation): tests for validate_pages_performance_lifecycle.
   # These tests use synthetic ci.yml fixtures (not the live ci.yml) to test
   # the lifecycle validator's structural invariants in isolation.  The live
-  # ci.yml now has a pages-performance job (activated in this round), and
-  # test_d229_pages_performance_workflow_is_active_and_reviewed above
+  # ci.yml now has a pages-accessibility job (activated in Merge 2 of #199),
+  # and test_d199_pages_accessibility_workflow_is_active_and_reviewed above
   # verifies the live ci.yml passes the lifecycle validator.
 
   # A minimal valid pages-performance job for lifecycle testing.  The
@@ -3145,5 +3233,53 @@ class RoadmapEvidenceCliTest < Minitest::Test
     digest = Digest::SHA256.hexdigest(workflow)
     refute_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S, digest
     assert validate_pages_performance_lifecycle(workflow, "ci.yml")
+  end
+
+  # Issue #199 (D-103 stage): the D199 pages-accessibility ci.yml
+  # digest is staged but not yet active.  These tests verify the
+  # staged fixture exists, its digest is in the accepted array, and
+  # the D199 ci-gate shape is accepted by the lifecycle validator.
+
+  def test_d199_pages_accessibility_digest_is_staged
+    assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
+                    D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256
+  end
+
+  def test_d199_pages_accessibility_workflow_fixture_digest_matches_constant
+    assert_equal(
+      D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D199_PAGES_ACCESSIBILITY_WORKFLOW_FIXTURE).hexdigest
+    )
+  end
+
+  def test_d199_pages_accessibility_workflow_is_the_live_ci_yml
+    # The D199 fixture must match the live ci.yml (Merge 2 activation).
+    live_digest = Digest::SHA256.file(
+      Pathname(__dir__).parent / ".github/workflows/ci.yml"
+    ).hexdigest
+    assert_equal D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256, live_digest
+  end
+
+  def test_d199_pages_accessibility_ci_gate_has_pages_accessibility_in_needs
+    assert_includes D199_PAGES_ACCESSIBILITY_CI_GATE_JOB.fetch("needs"),
+                    "pages-accessibility"
+  end
+
+  def test_d199_pages_accessibility_ci_gate_has_pages_accessibility_in_fail_condition
+    fail_step =
+      D199_PAGES_ACCESSIBILITY_CI_GATE_JOB.fetch("steps").find do |step|
+        step["name"] == "Fail unless every required job succeeded"
+      end
+    assert_includes fail_step.fetch("if"),
+                    "needs.pages-accessibility.result != 'success'"
+  end
+
+  def test_d199_pages_accessibility_ci_gate_has_eight_needs_entries
+    assert_equal 8, D199_PAGES_ACCESSIBILITY_CI_GATE_JOB.fetch("needs").length
+  end
+
+  def test_accepted_perf_ci_gate_jobs_includes_d199_shape
+    assert_includes ACCEPTED_PERF_CI_GATE_JOBS,
+                    D199_PAGES_ACCESSIBILITY_CI_GATE_JOB
   end
 end

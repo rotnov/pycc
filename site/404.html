@@ -5,10 +5,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex">
     <link rel="canonical" href="https://rotnov.github.io/pycc/">
+    <link rel="stylesheet" href="/pycc/styles.css">
     <title>Page not found — pycc</title>
   </head>
   <body>
-    <h1>Page not found</h1>
-    <p><a href="https://rotnov.github.io/pycc/">Return to the pycc website</a></p>
+    <header class="site-header">
+      <a class="brand" href="/pycc/" aria-label="pycc home">
+        <span class="brand-mark" aria-hidden="true">&gt;_</span>
+        <span>pycc</span>
+      </a>
+    </header>
+
+    <main id="main-content">
+      <section class="not-found" aria-labelledby="not-found-title">
+        <h1 id="not-found-title">Page not found</h1>
+        <p class="not-found-lede">
+          The page you requested could not be found. It may have moved, been
+          removed, or never existed. Use the links below to get back on track.
+        </p>
+        <a class="button button-primary" href="/pycc/">Return to the pycc home page</a>
+        <nav class="not-found-nav" aria-label="Recovery navigation">
+          <a href="/pycc/status/">Status</a>
+          <a href="/pycc/architecture/">Architecture</a>
+          <a href="/pycc/python-aot-compilers/">Python AOT compilers</a>
+        </nav>
+      </section>
+    </main>
+
+    <footer>
+      <a class="brand" href="/pycc/" aria-label="pycc home">
+        <span class="brand-mark" aria-hidden="true">&gt;_</span>
+        <span>pycc</span>
+      </a>
+      <p>An AI-created, human-managed AOT compiler for typed Python. Pre-alpha.</p>
+    </footer>
   </body>
 </html>

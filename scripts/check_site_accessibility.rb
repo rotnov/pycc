@@ -201,10 +201,18 @@ def validate_lhr_accessibility(lhr, page, replicate, base_url)
       next
     end
 
-    # The audit must not be notApplicable (the fixture should exercise it).
+    # aria-allowed-role is notApplicable on pages that lack ARIA roles
+    # (e.g. status, architecture, ai-native).  This is a valid pass state
+    # for that specific audit only.  Other required audits (e.g.
+    # color-contrast) must never be notApplicable on pages with visible
+    # content — if they are, that indicates a measurement failure.
     if audit["scoreDisplayMode"] == "notApplicable"
-      failures << "#{page_id} replicate #{replicate}: audit '#{audit_id}' is notApplicable (fixture should exercise it)"
-      next
+      if audit_id == "aria-allowed-role"
+        next
+      else
+        failures << "#{page_id} replicate #{replicate}: audit '#{audit_id}' is notApplicable (expected to apply to this page)"
+        next
+      end
     end
 
     # Score must be 1 (pass) — accessibility audits are binary (1 = pass, 0 = fail).
