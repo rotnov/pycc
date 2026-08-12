@@ -2151,4 +2151,77 @@ fi
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
+# --- Issue #206: Markdown landing semantic contract mutations ---
+
+# Mutation: remove the ROADMAP link from the Markdown.
+cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
+python3 - "$fixture_root/site/index.html.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "- [Roadmap](https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md)\n",
+    ""
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted Markdown without ROADMAP link (issue #206)" >&2
+  exit 1
+fi
+
+# Mutation: remove the conformance claim from the Markdown.
+cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
+python3 - "$fixture_root/site/index.html.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace("mandelbrot-ascii", "another-test")
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted Markdown without mandelbrot-ascii claim (issue #206)" >&2
+  exit 1
+fi
+
+# Mutation: add production-ready claim to the Markdown.
+cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
+python3 - "$fixture_root/site/index.html.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "pycc is pre-alpha and is not ready for production.",
+    "pycc is pre-alpha and is not ready for production. It is production-ready."
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted Markdown with production-ready claim (issue #206)" >&2
+  exit 1
+fi
+
+# Mutation: remove the code example feature mention.
+cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
+python3 - "$fixture_root/site/index.html.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "recursive_fibonacci_matches_the_well_known_sequence",
+    "some_other_test"
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted Markdown without conformance test reference (issue #206)" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
+
 echo "Website validator self-tests passed."

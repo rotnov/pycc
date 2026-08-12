@@ -1499,6 +1499,56 @@ for evidence_link in (
         raise SystemExit(
             f"Markdown website is missing evidence link: {evidence_link}"
         )
+
+# --- Issue #206: bind Markdown landing to HTML page semantic contract ---
+# The Markdown must cover the same key facts as the HTML page so that
+# one-sided semantic drift is detected.
+
+# Must mention the same authoritative resources as the HTML page.
+for resource in (
+    "https://github.com/rotnov/pycc",
+    "https://github.com/rotnov/pycc/blob/main/docs/SPEC.md",
+    "https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md",
+):
+    if resource not in markdown:
+        raise SystemExit(
+            f"Markdown website is missing authoritative resource: {resource}"
+        )
+
+# Must mention the conformance evidence (matching the HTML page).
+for conformance_claim in (
+    "fib",
+    "mandelbrot-ascii",
+    "five Tier-1 targets",
+):
+    if conformance_claim not in markdown:
+        raise SystemExit(
+            f"Markdown website is missing conformance claim: {conformance_claim}"
+        )
+
+# Must mention the code example features (matching the HTML hero).
+for code_feature in (
+    "statement-form",
+    "recursive_fibonacci_matches_the_well_known_sequence",
+):
+    if code_feature not in markdown:
+        raise SystemExit(
+            f"Markdown website is missing code example feature: {code_feature}"
+        )
+
+# Must not claim production readiness (matching the HTML page's pre-alpha status).
+md_lower = markdown.lower()
+for false_claim in ("production-ready", "production ready", "stable release"):
+    if false_claim in md_lower:
+        raise SystemExit(
+            f"Markdown website must not claim '{false_claim}' — pycc is pre-alpha"
+        )
+
+# Must mention the v0.1/v0.2 acceptance status (matching the HTML page).
+if "v0.1" not in markdown or "acceptance criteria" not in markdown:
+    raise SystemExit(
+        "Markdown website must mention v0.1 acceptance criteria status"
+    )
 PY
 
 key_file="$site_dir/${indexnow_key}.txt"
