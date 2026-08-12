@@ -109,6 +109,28 @@ def check!
           "Notify IndexNow step must set GITHUB_STEP_SUMMARY env for job summary"
   end
 
+  # --- Issue #160: the build job must invoke the hermetic IndexNow test ---
+  # Removing the only `python3 ./scripts/test-notify-indexnow.py` line must
+  # not leave every persistent validator green.  The build job's
+  # validate-website step must include that invocation.
+  build_job = jobs["build"]
+  raise PagesWorkflowError, "pages.yml must have a build job" unless build_job
+
+  build_steps = build_job["steps"]
+  raise PagesWorkflowError, "build job must have steps" unless build_steps
+
+  validate_step = build_steps.find { |s| s["name"]&.include?("Validate website") }
+  unless validate_step
+    raise PagesWorkflowError, "build job must have a 'Validate website' step"
+  end
+
+  validate_run = validate_step["run"].to_s
+  unless validate_run.include?("test-notify-indexnow.py")
+    raise PagesWorkflowError,
+          "build job's Validate website step must invoke " \
+          "scripts/test-notify-indexnow.py (issue #160)"
+  end
+
   puts "Pages workflow invariants passed."
 rescue PagesWorkflowError => e
   warn "Pages workflow check failed: #{e.message}"

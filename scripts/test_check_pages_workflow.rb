@@ -171,4 +171,34 @@ class TestCheckPagesWorkflow < Minitest::Test
     status, = run_checker(text)
     refute_equal 0, status, "accepted notify job without deploy dependency"
   end
+
+  # --- Issue #160: hermetic IndexNow test must be bound to CI ---
+
+  def test_live_build_job_invokes_test_notify_indexnow
+    workflow = YAML.load_file(PAGES_WORKFLOW)
+    build_steps = workflow["jobs"]["build"]["steps"]
+    validate_step = build_steps.find { |s| s["name"]&.include?("Validate website") }
+    assert validate_step, "build job must have a Validate website step"
+    assert_includes validate_step["run"], "test-notify-indexnow.py",
+                    "Validate website step must invoke test-notify-indexnow.py"
+  end
+
+  def test_rejects_build_job_without_test_notify_indexnow
+    text = read_live_workflow.sub(
+      "python3 ./scripts/test-notify-indexnow.py\n",
+      "echo 'indexnow test removed'\n"
+    )
+    status, = run_checker(text)
+    refute_equal 0, status,
+                 "accepted build job without test-notify-indexnow.py invocation"
+  end
+
+  def test_rejects_build_job_without_validate_website_step
+    text = read_live_workflow.sub(
+      "- name: Validate website",
+      "- name: Check website"
+    )
+    status, = run_checker(text)
+    refute_equal 0, status, "accepted build job without Validate website step"
+  end
 end
