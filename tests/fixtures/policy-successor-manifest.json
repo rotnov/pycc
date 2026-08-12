@@ -4,7 +4,7 @@
     {
       "path": ".github/workflows/ci.yml",
       "source_path": "tests/fixtures/policy-successors/ci-d199.yml",
-      "sha256": "c7cffaf68c669724df418860de9597fe98e8876c78dec088a7079e37ffd7ae7f"
+      "sha256": "8f1b3406448a5790b90f945d67ba33f6b1af99468fec3ef63d69db5ee79747c1"
     },
     {
       "path": "scripts/check_ci_permissions.rb",
@@ -24,7 +24,7 @@
     {
       "path": "scripts/check_roadmap_evidence.rb",
       "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence-d199.rb",
-      "sha256": "f3c494b59c7d378470a11374d1745ca2b09df9101ee08ccf40c06f7e5e2fe99d"
+      "sha256": "d3fcae631e791a5cd50039aa803efd7783c4c1d3c920c019e921277046ba1c07"
     },
     {
       "path": "scripts/check_search_visibility_audit.py",
@@ -169,7 +169,7 @@
     {
       "path": "tests/fixtures/policy-successors/check_roadmap_evidence.rb",
       "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence.rb",
-      "sha256": "f3c494b59c7d378470a11374d1745ca2b09df9101ee08ccf40c06f7e5e2fe99d"
+      "sha256": "d3fcae631e791a5cd50039aa803efd7783c4c1d3c920c019e921277046ba1c07"
     },
     {
       "path": "tests/fixtures/policy-successors/check_roadmap_evidence-d229.rb",
@@ -209,12 +209,12 @@
     {
       "path": "tests/fixtures/policy-successors/ci-d199.yml",
       "source_path": "tests/fixtures/policy-successors/ci-d199.yml",
-      "sha256": "c7cffaf68c669724df418860de9597fe98e8876c78dec088a7079e37ffd7ae7f"
+      "sha256": "8f1b3406448a5790b90f945d67ba33f6b1af99468fec3ef63d69db5ee79747c1"
     },
     {
       "path": "tests/fixtures/policy-successors/check_roadmap_evidence-d199.rb",
       "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence-d199.rb",
-      "sha256": "f3c494b59c7d378470a11374d1745ca2b09df9101ee08ccf40c06f7e5e2fe99d"
+      "sha256": "d3fcae631e791a5cd50039aa803efd7783c4c1d3c920c019e921277046ba1c07"
     },
     {
       "path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-d199.rb",
