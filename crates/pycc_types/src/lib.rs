@@ -13921,6 +13921,68 @@ mod tests {
     }
 
     #[test]
+    fn enum_marker_used_as_a_bare_value_is_rejected_as_t0021() {
+        let env = Environment::new();
+        let expr = HirExpr::Name("enum.Enum".to_string());
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("class marker"));
+    }
+
+    #[test]
+    fn enum_marker_called_like_a_function_is_rejected_as_t0021() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "enum.Enum".to_string(),
+            args: vec![],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("class marker"));
+    }
+
+    #[test]
+    fn enum_marker_used_as_a_bare_value_is_rejected_by_the_constraint_solver_path() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_bad_ref".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Name(
+                    "enum.Enum".to_string(),
+                )))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let local_names = module_function_local_names(&hir);
+        let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn enum_marker_called_like_a_function_is_rejected_by_the_constraint_solver_path() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_bad_call".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Call {
+                    callee: "enum.Enum".to_string(),
+                    args: vec![],
+                }))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let local_names = module_function_local_names(&hir);
+        let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
     fn math_sqrt_call_is_shadowed_by_a_bound_local_named_math() {
         // Post-review finding: a real local/parameter legally named `math`
         // must shadow the stdlib module -- CPython would raise
@@ -27085,5 +27147,55 @@ mod tests {
             count_function(&resolved, "0gen_D__T_int.greet.classmethod"),
             1
         );
+    }
+
+    // -- #379: enum loop unrolling recursive branches -------------------
+
+    fn parse_and_check(source: &str) -> Result<(), pycc_diag::Diagnostic> {
+        let module = pycc_parser::parse(source).expect("test fixture must parse");
+        let hir = pycc_hir::lower_checked(&module).expect("test fixture must lower");
+        check(&hir)
+    }
+
+    #[test]
+    fn enum_loop_nested_inside_a_non_enum_for_list_unrolls_correctly() {
+        // Exercises `unroll_enum_loops_in_stmts`'s `ForList` non-enum
+        // fallback branch (line 6655-6663): a `for x in xs:` loop (not an
+        // enum class iteration) whose body contains a nested `for c in
+        // Color:` enum loop.
+        let result = parse_and_check(
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\nxs = [1, 2]\nfor x in xs:\n    for c in Color:\n        print(c.value)\n",
+        );
+        assert!(result.is_ok(), "non-enum for-list with nested enum loop should check");
+    }
+
+    #[test]
+    fn enum_loop_nested_inside_an_if_unrolls_correctly() {
+        // Exercises `unroll_enum_loops_in_stmts`'s `If` branch
+        // (lines 6665-6672).
+        let result = parse_and_check(
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\nx = 1\nif x:\n    for c in Color:\n        print(c.value)\n",
+        );
+        assert!(result.is_ok(), "enum loop nested inside if should check");
+    }
+
+    #[test]
+    fn enum_loop_nested_inside_a_while_unrolls_correctly() {
+        // Exercises `unroll_enum_loops_in_stmts`'s `While` branch
+        // (lines 6673-6678).
+        let result = parse_and_check(
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\ni = 0\nwhile i < 1:\n    for c in Color:\n        print(c.value)\n    i = i + 1\n",
+        );
+        assert!(result.is_ok(), "enum loop nested inside while should check");
+    }
+
+    #[test]
+    fn enum_loop_nested_inside_a_for_range_unrolls_correctly() {
+        // Exercises `unroll_enum_loops_in_stmts`'s `ForRange` branch
+        // (lines 6679-6693).
+        let result = parse_and_check(
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\nfor i in range(1):\n    for c in Color:\n        print(c.value)\n",
+        );
+        assert!(result.is_ok(), "enum loop nested inside for-range should check");
     }
 }

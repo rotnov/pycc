@@ -3226,4 +3226,38 @@ mod tests {
         let hir = lower_checked(&module);
         assert!(hir.is_ok(), "init_subclass before init should be accepted");
     }
+
+    // -- #379 (PR-19): PEP 435 enum class lowering ------------------------
+
+    #[test]
+    fn generic_enum_class_is_rejected() {
+        // `class C[T](Enum):` — a generic class whose single base is `Enum`.
+        // The type parameter `T` triggers the generic-enum rejection at
+        // line 448-455, distinct from the multiple-bases rejection.
+        assert_c0001("class C[T](Enum):\n    RED = 1\n");
+    }
+
+    #[test]
+    fn enum_member_with_multiple_targets_is_rejected() {
+        // `RED = GREEN = 1` — a chain assignment with multiple targets,
+        // which has `assign.targets.len() == 2`, triggering the rejection
+        // at line 551-556. (Tuple unpacking `RED, GREEN = 1, 2` has a
+        // single tuple target and hits a different path.)
+        assert_c0001("class C(Enum):\n    RED = GREEN = 1\n");
+    }
+
+    #[test]
+    fn enum_member_with_non_name_target_is_rejected() {
+        assert_c0001("class C(Enum):\n    C.RED = 1\n");
+    }
+
+    #[test]
+    fn enum_member_value_overflowing_i64_is_rejected() {
+        assert_c0001("class C(Enum):\n    RED = 99999999999999999999999999\n");
+    }
+
+    #[test]
+    fn enum_member_with_non_literal_value_is_rejected() {
+        assert_c0001("x = 1\nclass C(Enum):\n    RED = x\n");
+    }
 }

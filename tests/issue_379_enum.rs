@@ -185,3 +185,220 @@ fn non_member_attribute_on_enum_class_is_rejected() {
         "accessing a non-member on an enum class should be a compile error"
     );
 }
+
+/// #379: a generic enum class (`class C[T](Enum):`) is rejected — enums
+/// cannot have type parameters.
+#[test]
+fn generic_enum_class_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("pycc_379_generic_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "generic.py",
+        "class Color[T](Enum):\n    RED = 1\n",
+    );
+    assert!(
+        check_fails(&dir, &src),
+        "a generic enum class should be a compile error"
+    );
+}
+
+/// #379: an enum member assignment with multiple targets (chain assignment)
+/// is rejected.
+#[test]
+fn multiple_targets_in_enum_member_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("pycc_379_multitarget_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "multitarget.py",
+        "class Color(Enum):\n    RED = GREEN = 1\n",
+    );
+    assert!(
+        check_fails(&dir, &src),
+        "an enum member assignment with multiple targets should be a compile error"
+    );
+}
+
+/// #379: an enum member assignment with a non-name target (attribute
+/// access) is rejected.
+#[test]
+fn non_name_target_in_enum_member_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("pycc_379_nonname_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "nonname.py",
+        "class Color(Enum):\n    Color.RED = 1\n",
+    );
+    assert!(
+        check_fails(&dir, &src),
+        "an enum member assignment with a non-name target should be a compile error"
+    );
+}
+
+/// #379: an enum member value that overflows i64 is rejected.
+#[test]
+fn overflow_enum_member_value_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("pycc_379_overflow_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "overflow.py",
+        "class Color(Enum):\n    RED = 99999999999999999999999999\n",
+    );
+    assert!(
+        check_fails(&dir, &src),
+        "an enum member value that overflows i64 should be a compile error"
+    );
+}
+
+/// #379: an enum member value that is a non-literal expression is rejected.
+#[test]
+fn non_literal_enum_member_value_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("pycc_379_nonlit_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "nonlit.py",
+        "x = 1\nclass Color(Enum):\n    RED = x\n",
+    );
+    assert!(
+        check_fails(&dir, &src),
+        "an enum member value that is a non-literal expression should be a compile error"
+    );
+}
+
+/// #379: `from enum import Enum` works — the import resolves and `Enum`
+/// is usable as a base class marker.
+#[test]
+fn from_enum_import_enum_works() {
+    let dir = std::env::temp_dir().join(format!("pycc_379_fromimport_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "fromimport.py",
+        "from enum import Enum\nclass Color(Enum):\n    RED = 1\n    GREEN = 2\nprint(Color.RED.value)\nprint(Color.GREEN.value)\n",
+    );
+    let (ok, stdout) = build_and_run(&dir, &src, "fromimport");
+    assert!(
+        ok,
+        "pycc build and run should succeed with `from enum import Enum`"
+    );
+    assert_eq!(stdout, b"1\n2\n", "enum values should be 1 and 2");
+}
+
+/// #379: `import enum` then referencing `enum.Enum` as a value is
+/// rejected — `Enum` is a class marker, not a first-class value.
+#[test]
+fn import_enum_dotted_enum_used_as_value_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("pycc_379_dottedval_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "dottedval.py",
+        "import enum\nprint(enum.Enum)\n",
+    );
+    assert!(
+        check_fails(&dir, &src),
+        "referencing `enum.Enum` as a value should be a compile error"
+    );
+}
+
+/// #379: `import enum` then calling `enum.Enum()` is rejected — `Enum`
+/// is a class marker, not a callable function.
+#[test]
+fn import_enum_dotted_enum_called_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("pycc_379_dottedcall_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "dottedcall.py",
+        "import enum\nenum.Enum()\n",
+    );
+    assert!(
+        check_fails(&dir, &src),
+        "calling `enum.Enum()` should be a compile error"
+    );
+}
+
+/// #379: a non-enum `for` loop over a list (not an enum class) that
+/// contains a nested enum loop in its body — exercises the recursive
+/// `unroll_enum_loops_in_stmts` fallback for `ForList`.
+#[test]
+fn non_enum_for_list_with_nested_enum_loop_unrolls() {
+    let dir = std::env::temp_dir().join(format!("pycc_379_nestedlist_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "nestedlist.py",
+        "class Color(Enum):\n    RED = 1\n    GREEN = 2\nxs = [1, 2]\nfor x in xs:\n    for c in Color:\n        print(c.value)\n",
+    );
+    let (ok, stdout) = build_and_run(&dir, &src, "nestedlist");
+    assert!(
+        ok,
+        "pycc build and run should succeed for a non-enum for-list with a nested enum loop"
+    );
+    assert_eq!(
+        stdout,
+        b"1\n2\n1\n2\n",
+        "nested enum loop should unroll inside a non-enum for-list body"
+    );
+}
+
+/// #379: an enum loop nested inside an `if` statement — exercises the
+/// recursive `unroll_enum_loops_in_stmts` `If` arm.
+#[test]
+fn enum_loop_nested_inside_if_unrolls() {
+    let dir = std::env::temp_dir().join(format!("pycc_379_ifnest_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "ifnest.py",
+        "class Color(Enum):\n    RED = 1\n    GREEN = 2\nx = 1\nif x:\n    for c in Color:\n        print(c.value)\n",
+    );
+    let (ok, stdout) = build_and_run(&dir, &src, "ifnest");
+    assert!(
+        ok,
+        "pycc build and run should succeed for an enum loop nested inside an if"
+    );
+    assert_eq!(stdout, b"1\n2\n", "nested enum loop should unroll inside an if body");
+}
+
+/// #379: an enum loop nested inside a `while` statement — exercises the
+/// recursive `unroll_enum_loops_in_stmts` `While` arm.
+#[test]
+fn enum_loop_nested_inside_while_unrolls() {
+    let dir = std::env::temp_dir().join(format!("pycc_379_whilenest_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "whilenest.py",
+        "class Color(Enum):\n    RED = 1\n    GREEN = 2\ni = 0\nwhile i < 1:\n    for c in Color:\n        print(c.value)\n    i = i + 1\n",
+    );
+    let (ok, stdout) = build_and_run(&dir, &src, "whilenest");
+    assert!(
+        ok,
+        "pycc build and run should succeed for an enum loop nested inside a while"
+    );
+    assert_eq!(stdout, b"1\n2\n", "nested enum loop should unroll inside a while body");
+}
+
+/// #379: an enum loop nested inside a `for i in range(...)` statement —
+/// exercises the recursive `unroll_enum_loops_in_stmts` `ForRange` arm.
+#[test]
+fn enum_loop_nested_inside_for_range_unrolls() {
+    let dir = std::env::temp_dir().join(format!("pycc_379_fornest_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "fornest.py",
+        "class Color(Enum):\n    RED = 1\n    GREEN = 2\nfor i in range(1):\n    for c in Color:\n        print(c.value)\n",
+    );
+    let (ok, stdout) = build_and_run(&dir, &src, "fornest");
+    assert!(
+        ok,
+        "pycc build and run should succeed for an enum loop nested inside a for-range"
+    );
+    assert_eq!(stdout, b"1\n2\n", "nested enum loop should unroll inside a for-range body");
+}

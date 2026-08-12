@@ -11,3 +11,4 @@ pycc_std = { path = "../pycc_std" }
 
 [dev-dependencies]
 pycc_mir = { path = "../pycc_mir" }
+pycc_parser = { path = "../pycc_parser" }
