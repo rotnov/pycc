@@ -6,7 +6,11 @@
 
 AI agents create the specifications, code, tests, documentation, reviews, and
 release automation. A human only manages goals, constraints, priorities, and
-product decisions. No project code is handwritten by a human.
+product decisions. No project code is handwritten by a human. This is a
+maintainer attestation supported by the public Git history, pull requests,
+agent instructions, review artifacts, and session handoff logs — not a fact
+provable from Git author metadata alone, which identifies the accountable
+human maintainer rather than the code generator.
 
 “AI-native” describes the authorship and management model. pycc is not an AI
 or machine-learning compiler.
