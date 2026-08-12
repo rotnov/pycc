@@ -76,25 +76,21 @@ for the language, artifact, runtime, and positioning boundaries behind this
 summary. No performance ranking is claimed without a shared reproducible
 benchmark.
 
-## Quick start (planned CLI)
+## Quick start
 
-```python
-# hello.py
+```console
+$ cat hello.py
 def fib(n: int) -> int:
     return n if n < 2 else fib(n - 1) + fib(n - 2)
 
 def main() -> None:
     print(fib(35))
+$ pycc check hello.py
 ```
 
-```console
-$ pycc build hello.py -o hello
-$ ./hello
-9227465
-```
-
-Type errors are compile errors, Rust-style. For example, if `main` read
-`print(fib("35"))` instead:
+`pycc check` parses and type-checks the file, enforcing public annotations
+and rejecting `Any`. No output means no errors. Type errors are compile
+errors, Rust-style. For example, if `main` read `print(fib("35"))` instead:
 
 ```
 error[T0021]: argument 1 of `fib` expects `int`, got `str`
@@ -104,6 +100,10 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
   |               ^^^^ expected `int`
   = help: did you mean `int("35")`?
 ```
+
+`pycc build` and `pycc run` compile the implemented v0.1 surface through
+MIR, LLVM, and the native runtime — see the status block above and
+[`docs/CLI_SPEC.md`](./docs/CLI_SPEC.md) for the full command reference.
 
 ## Pre-commit (experimental)
 
@@ -146,10 +146,10 @@ Design principles:
   representations. Native pycc execution has no interpreter loop; only the
   planned CPython-backed boundary executes package operations in its bundled
   interpreter (D-128).
-- **Fast above all.** Compiler in Rust 1.97+, zero-copy parsing, per-module parallel compilation, incremental caching. Goal: frontend + type check of a mid-size project in well under a second — compiling should feel like `ruff`, not like `webpack`.
-- **Ownership under the hood.** Rust-style ownership and escape analysis *inferred* from standard Python — no new syntax. Locals that don't escape live on the stack, values with a single owner are moved instead of shared, reference counting only where sharing is proven. Goal: predictable memory, no tracing-GC pauses.
-- **No pycc-wide GIL.** Native pycc execution has no interpreter or GIL, and
-  `threading` maps to real OS threads (roadmap). The planned embedded CPython
+- **Fast above all.** Compiler in Rust 1.97+, zero-copy parsing. Goal: frontend + type check of a mid-size project in well under a second — compiling should feel like `ruff`, not like `webpack`. Per-module parallel compilation and incremental caching are planned for v0.4.
+- **Ownership under the hood (planned v0.5).** Rust-style ownership and escape analysis *inferred* from standard Python — no new syntax. Locals that don't escape live on the stack, values with a single owner are moved instead of shared, reference counting only where sharing is proven. Goal: predictable memory, no tracing-GC pauses.
+- **No pycc-wide GIL (planned v0.6).** Native pycc execution has no interpreter or GIL, and
+  `threading` maps to real OS threads. The planned embedded CPython
   boundary retains CPython's own GIL only while it executes CPython-backed
   operations (D-128).
 
@@ -168,13 +168,13 @@ The complete internal test architecture has seven layers, defined in
 are especially important:
 
 1. **Conformance suite.** Every language standard pycc supports maps to a PEP, and every PEP has its own test in `tests/conformance/`. Each supported language level compiles and runs its cumulative fixture set, then compares output with that level's pinned CPython oracle. The v1 track uses CPython 3.14. Unsupported-by-design features get *negative* tests asserting the exact compile error. The full matrix: [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
-2. **Real-world corpus.** CI compiles well-typed open-source projects (`black`, `packaging`, `attrs`, `mypy`, ...) and runs their own test suites against the compiled artifacts — the same way ruff validates against a real-repo ecosystem. Pass rate per project is tracked release to release.
-3. **Ecosystem bot.** A scheduled job picks popular PyPI/GitHub projects, compiles them with the latest pycc, and auto-files a structured issue *in this repo* for every new incompatibility: minimized repro, diagnostic, PEP reference. When pycc uncovers a genuine type bug in an upstream project, we report it upstream — manually and curated, never bot-spammed.
+2. **Real-world corpus (planned).** CI compiles well-typed open-source projects (`black`, `packaging`, `attrs`, `mypy`, ...) and runs their own test suites against the compiled artifacts — the same way ruff validates against a real-repo ecosystem. Pass rate per project is tracked release to release.
+3. **Ecosystem bot (planned).** A scheduled job picks popular PyPI/GitHub projects, compiles them with the latest pycc, and auto-files a structured issue *in this repo* for every new incompatibility: minimized repro, diagnostic, PEP reference. When pycc uncovers a genuine type bug in an upstream project, we report it upstream — manually and curated, never bot-spammed.
 
 ## Roadmap
 
-- [ ] **MVP:** functions, `int`/`float`/`str`/`bool`, arithmetic, `if`/`while`/`for`, `print` → Linux/macOS binary
-- [ ] Collections (`list`/`dict`/`tuple`/`set`) + generics (PEP 585/695)
+- [x] **MVP:** functions, `int`/`float`/`str`/`bool`, arithmetic, `if`/`while`/`for`, `print` → Linux/macOS binary
+- [x] Collections (`list`/`dict`/`tuple`/`set`) + generics (PEP 585/695)
 - [ ] Classes, dataclasses, protocols, pattern matching
 - [ ] Modules, imports, multi-file projects, incremental builds
 - [ ] Core stdlib subset (typed, compiled)
