@@ -262,9 +262,9 @@ Each entry must produce the documented error code, tested in `tests/diagnostics/
 | `type()` three-arg dynamic class creation | `E0103` | `d0103_dyn_class.py` |
 | Wildcard `import *` | `E0104` | `d0104_star_import.py` |
 
-## Real-world corpus (integration tests)
+## Real-world corpus (integration tests, planned)
 
-Nightly CI compiles pinned revisions of open-source projects and runs their own test suites against pycc-built artifacts. New incompatibilities auto-file issues in the pycc repo (minimized repro + PEP reference + diagnostic).
+Planned nightly CI would compile pinned revisions of open-source projects and run their own test suites against pycc-built artifacts. New incompatibilities would auto-file issues in the pycc repo (minimized repro + PEP reference + diagnostic). No corpus workflow exists on current `main`.
 
 | Tier | Projects | Gate |
 |---|---|---|

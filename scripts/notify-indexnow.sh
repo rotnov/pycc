@@ -120,6 +120,11 @@ if [ "${INDEXNOW_DRY_RUN:-}" = "1" ]; then
   exit 0
 fi
 
+sitemap_sha256=$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1)
+url_count=$(printf '%s' "$payload" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['urlList']))")
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+endpoint_host=$(printf '%s' "$endpoint" | sed 's|^[a-z]*://||; s|/.*||')
+
 response_code=$(curl \
   --disable \
   --connect-timeout "$connect_timeout" \
@@ -135,7 +140,22 @@ response_code=$(curl \
   --silent \
   --output /dev/null \
   --write-out '%{http_code}' \
-  "$endpoint")
+  "$endpoint" 2>/dev/null) || true
+
+case "$response_code" in
+  200)
+    accepted_class="submitted"
+    ;;
+  202)
+    accepted_class="key_validation_pending"
+    ;;
+  *)
+    accepted_class="failed"
+    ;;
+esac
+
+printf 'IndexNow result: timestamp=%s endpoint_host=%s method=POST url_count=%s sitemap_sha256=%s http_status=%s accepted_class=%s\n' \
+  "$timestamp" "$endpoint_host" "$url_count" "$sitemap_sha256" "$response_code" "$accepted_class"
 
 case "$response_code" in
   200|202)

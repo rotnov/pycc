@@ -75,5 +75,14 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Notify IndexNow
+        id: notify-indexnow
         continue-on-error: true
         run: ./scripts/notify-indexnow.sh
+
+      - name: Report IndexNow outcome
+        if: always()
+        run: |
+          echo "IndexNow notification outcome: ${{ steps.notify-indexnow.outcome }}"
+          if [ "${{ steps.notify-indexnow.outcome }}" != "success" ]; then
+            echo "::warning::IndexNow notification failed (outcome=${{ steps.notify-indexnow.outcome }}). Pages deployment is unaffected."
+          fi
