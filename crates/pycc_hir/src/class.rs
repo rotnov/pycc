@@ -368,7 +368,7 @@ fn compute_c3_mro(
 /// Generic classes (`class C[T]:`) with a single type parameter ARE now
 /// supported by #387 (see the `type_params` handling below). Inheritance
 /// (`class C(Base):`) is now supported by #432 (Part 1).
-
+///
 /// #379 (PR-19): Lower a PEP 435-style enum class. An enum class body is
 /// assignments only (`RED = 1`), not method definitions. This function
 /// validates the enum body and constructs the `HirClassDef` with
