@@ -2224,4 +2224,52 @@ fi
 
 cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
 
+# --- Issue #207: llms.txt bounded and Markdown-first ---
+
+# Mutation: split the single-line blockquote summary into multiple lines.
+cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
+python3 - "$fixture_root/site/llms.txt" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+single_line = (
+    "> pycc is a pre-alpha strict ahead-of-time compiler for typed, standard Python 3.14 "
+    "with an implemented native-binary path through Rust and LLVM. AI agents create it, "
+    "and a human manages it."
+)
+multi_line = (
+    "> pycc is a pre-alpha strict ahead-of-time compiler for typed, standard Python\n"
+    "> 3.14 with an implemented native-binary path through Rust and LLVM. AI agents\n"
+    "> create it, and a human manages it."
+)
+content = content.replace(single_line, multi_line)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted multi-line blockquote summary (issue #207)" >&2
+  exit 1
+fi
+
+# Mutation: remove the Markdown landing link.
+cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
+python3 - "$fixture_root/site/llms.txt" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "- [Markdown landing](https://rotnov.github.io/pycc/index.html.md): "
+    "Clean text equivalent of the landing page for agents and constrained clients.\n",
+    ""
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted llms.txt without Markdown landing link (issue #207)" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
+
 echo "Website validator self-tests passed."

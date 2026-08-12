@@ -1438,18 +1438,31 @@ if not llms.startswith(
     "# pycc\n\n> pycc is a pre-alpha strict ahead-of-time compiler for typed, standard Python"
 ):
     raise SystemExit("llms.txt summary must put the product before provenance")
+# --- Issue #207: the blockquote summary must be a single physical line
+# so reference consumers (llms_txt2ctx) do not truncate it after the
+# first line and push the rest into the info field with literal > prefixes.
+first_blockquote_line = llms.split("\n")[2]  # line 0: H1, line 1: blank, line 2: > ...
+if not first_blockquote_line.startswith("> "):
+    raise SystemExit("llms.txt must have a blockquote summary on line 3")
+second_line = llms.split("\n")[3]
+if second_line.startswith(">"):
+    raise SystemExit(
+        "llms.txt blockquote summary must be a single physical line (issue #207) — "
+        "reference consumers truncate multi-line blockquotes"
+    )
 for heading in ("## Project", "## Specifications", "## Optional"):
-    if llms.count(heading) != 1:
-        raise SystemExit(f"llms.txt must contain exactly one {heading!r} section")
+    if heading not in llms:
+        raise SystemExit(f"llms.txt must contain a {heading!r} section")
 for required_link in (
     f"[Canonical website]({canonical})",
-    f"[Markdown website]({canonical}index.html.md)",
+    f"[Markdown landing]({canonical}index.html.md)",
     f"[Current implementation status]({canonical}status/)",
     f"[Compiler architecture]({canonical}architecture/)",
     f"[Python AOT compiler comparison]({canonical}python-aot-compilers/)",
     f"[AI-native experiment]({canonical}ai-native/)",
     "[Source repository](https://github.com/rotnov/pycc)",
     "[Specification index](https://github.com/rotnov/pycc/blob/main/docs/SPEC.md)",
+    "[README](https://github.com/rotnov/pycc/blob/main/README.md)",
 ):
     if required_link not in llms:
         raise SystemExit(f"llms.txt is missing required link: {required_link}")
