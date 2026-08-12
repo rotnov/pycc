@@ -2034,4 +2034,121 @@ fi
 cp "$repo_root/README.md" "$fixture_root/README.md"
 cp "$repo_root/site/python-aot-compilers/claims.json" "$fixture_root/site/python-aot-compilers/claims.json"
 
+# --- Issue #203: SoftwareSourceCode JSON-LD semantic bindings ---
+
+# Mutation: change programmingLanguage to Python (false).
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"programmingLanguage": "Rust"',
+    '"programmingLanguage": "Python"',
+    1
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted programmingLanguage=Python (issue #203)" >&2
+  exit 1
+fi
+
+# Mutation: add runtimePlatform back (misleading).
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"programmingLanguage": "Rust",',
+    '"programmingLanguage": "Rust",\n            "runtimePlatform": "LLVM",',
+    1
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted runtimePlatform=LLVM (issue #203)" >&2
+  exit 1
+fi
+
+# Mutation: change license to GPL (false).
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"license": "https://opensource.org/license/mit"',
+    '"license": "https://www.gnu.org/licenses/gpl-3.0.html"',
+    1
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted license=GPL (issue #203)" >&2
+  exit 1
+fi
+
+# Mutation: add "AI compiler" to keywords.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"autonomous software development"',
+    '"autonomous software development",\n              "AI compiler"',
+    1
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted 'AI compiler' keyword (issue #203)" >&2
+  exit 1
+fi
+
+# Mutation: change name to something false.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"@type": "SoftwareSourceCode",\n            "@id": "https://rotnov.github.io/pycc/#project",\n            "name": "pycc"',
+    '"@type": "SoftwareSourceCode",\n            "@id": "https://rotnov.github.io/pycc/#project",\n            "name": "pycc-compiler"'
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted name=pycc-compiler (issue #203)" >&2
+  exit 1
+fi
+
+# Mutation: add production-ready claim to description.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    'AI-created and human-managed."',
+    'AI-created and human-managed. Production-ready."',
+    1
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted production-ready claim in JSON-LD (issue #203)" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
 echo "Website validator self-tests passed."

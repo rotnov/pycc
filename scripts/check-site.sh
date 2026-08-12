@@ -476,6 +476,44 @@ expected_source_description = (
 if software_source.get("description") != expected_source_description:
     raise SystemExit("SoftwareSourceCode description must preserve product-first truth")
 
+# --- Issue #203: bind SoftwareSourceCode semantics to visible facts ---
+if software_source.get("name") != "pycc":
+    raise SystemExit("SoftwareSourceCode JSON-LD name must be 'pycc'")
+if software_source.get("license") != "https://opensource.org/license/mit":
+    raise SystemExit("SoftwareSourceCode JSON-LD license must be the MIT URL")
+if software_source.get("programmingLanguage") != "Rust":
+    raise SystemExit("SoftwareSourceCode JSON-LD programmingLanguage must be 'Rust'")
+# runtimePlatform must NOT be present — LLVM is the compiler backend,
+# not a runtime platform.  schema.org defines runtimePlatform as the
+# runtime/interpreter dependency; pycc's output is standalone native
+# binaries with no runtime platform.  Setting it to "LLVM" would
+# misleadingly imply generated programs run on an LLVM platform.
+if "runtimePlatform" in software_source:
+    raise SystemExit(
+        "SoftwareSourceCode JSON-LD must not declare runtimePlatform — "
+        "LLVM is the compiler backend, not a runtime platform (issue #203)"
+    )
+# Keywords must describe a typed-Python AOT compiler and must not
+# describe pycc as an AI or ML compiler.
+keywords = software_source.get("keywords")
+if not isinstance(keywords, list) or not keywords:
+    raise SystemExit("SoftwareSourceCode JSON-LD must have a non-empty keywords array")
+kw_text = " ".join(keywords).lower()
+if "python" not in kw_text or "compiler" not in kw_text:
+    raise SystemExit("SoftwareSourceCode keywords must describe a Python compiler")
+if "ai compiler" in kw_text or "machine learning" in kw_text:
+    raise SystemExit(
+        "SoftwareSourceCode keywords must not describe pycc as an AI or ML compiler"
+    )
+# Must not claim production readiness.
+source_text = json.dumps(software_source).lower()
+for false_claim in ("production-ready", "production ready", "stable release", "ga "):
+    if false_claim in source_text:
+        raise SystemExit(
+            f"SoftwareSourceCode JSON-LD must not claim '{false_claim}' — "
+            "pycc is pre-alpha"
+        )
+
 visible_body_text = " ".join(" ".join(parser.visible_body_text).split())
 required_disclosures = (
     "Built entirely by AI.",
