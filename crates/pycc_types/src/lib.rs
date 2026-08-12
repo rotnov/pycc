@@ -3316,17 +3316,9 @@ fn infer_expr_in(
                 && let Some(class_def) = env.lookup_class(class_name)
             {
                 // #379 (PR-19): `Color.RED` — accessing an enum member by
-                // name on the enum class. An enum class's `enum_members`
-                // table holds the member names; if `attr` matches one, the
-                // expression's type is `Ty::Instance(class_name)` (the
-                // member is a singleton instance of the enum class). This
-                // intercepts the "accessing a class attribute without an
-                // instance" rejection below, which would otherwise reject
-                // all class-name attribute reads.
-                if !class_def.enum_members.is_empty()
-                    && class_def.enum_members.iter().any(|(name, _)| name == attr)
-                {
-                    return Ok(Ty::Instance(Box::new(class_name.clone())));
+                // name on the enum class.
+                if let Some(ty) = enum_member_attr_type(class_def, class_name, attr) {
+                    return Ok(ty);
                 }
                 return Err(Diagnostic::error(
                     "T0044",
@@ -3871,19 +3863,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             if let Some(class_def) = env.lookup_class(list)
                 && !class_def.enum_members.is_empty()
             {
-                let var_ty = Ty::Instance(Box::new(list.clone()));
-                let was_definite =
-                    matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
-                check_assignment(env, var, var_ty)?;
-                let mut body_env = env.clone();
-                for stmt in body {
-                    check_stmt(&mut body_env, stmt)?;
-                }
-                join_loop_body(env, &body_env);
-                if !was_definite && let Some(ty) = env.lookup_any(var) {
-                    env.bind_maybe(var.to_string(), ty);
-                }
-                return Ok(());
+                return check_enum_loop_body_module(env, var, list, body);
             }
             // Module (top-level) scope has no "local before assignment"
             // concept the way a function body does -- every other arm here
@@ -4370,19 +4350,7 @@ fn check_stmt_in_function(
             if let Some(class_def) = env.lookup_class(list)
                 && !class_def.enum_members.is_empty()
             {
-                let var_ty = Ty::Instance(Box::new(list.clone()));
-                let was_definite =
-                    matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
-                check_assignment(env, var, var_ty)?;
-                let mut body_env = env.clone();
-                for s in body {
-                    check_stmt_in_function(&mut body_env, local_names, s, return_ty.clone())?;
-                }
-                join_loop_body(env, &body_env);
-                if !was_definite && let Some(ty) = env.lookup_any(var) {
-                    env.bind_maybe(var.to_string(), ty);
-                }
-                return Ok(());
+                return check_enum_loop_body_function(env, var, list, body, local_names, return_ty.clone());
             }
             let list_ty = lookup_bound_name(env, local_names, list)?;
             // See the module-scope `check_stmt` arm's own comment (PR-11
@@ -6563,6 +6531,98 @@ fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
 /// class's member table is final. MIR never sees an enum iterable -- it
 /// only sees ordinary `Assign` + body statements.
 ///
+/// #379 (PR-19): Return the type of an enum member accessed by name
+/// (`Color.RED`), or `None` if `class_def` is not an enum class or `attr`
+/// is not one of its members. Extracted from `infer_expr_in` to isolate
+/// the enum-specific code paths (see cargo-llvm-cov#276 for the coverage
+/// instantiation issue).
+fn enum_member_attr_type(
+    class_def: &crate::HirClassDef,
+    class_name: &str,
+    attr: &str,
+) -> Option<Ty> {
+    if !class_def.enum_members.is_empty()
+        && class_def.enum_members.iter().any(|(name, _)| name == attr)
+    {
+        Some(Ty::Instance(Box::new(class_name.to_string())))
+    } else {
+        None
+    }
+}
+
+/// #379 (PR-19): Type-check an enum class iteration loop body. Binds `var`
+/// to `Ty::Instance(list)`, checks each body statement, then joins the body
+/// environment back. Extracted from `check_stmt` and
+/// `check_stmt_in_function` to isolate the enum-specific code paths (see
+/// cargo-llvm-cov#276 for the coverage instantiation issue). Two variants
+/// exist (module-scope and function-scope) to avoid generic closure
+/// monomorphization producing separate coverage records per call site.
+fn check_enum_loop_body_module(
+    env: &mut Environment,
+    var: &str,
+    list: &str,
+    body: &[HirStmt],
+) -> Result<(), Diagnostic> {
+    let var_ty = Ty::Instance(Box::new(list.to_string()));
+    let was_definite =
+        matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
+    check_assignment(env, var, var_ty)?;
+    let mut body_env = env.clone();
+    for stmt in body {
+        check_stmt(&mut body_env, stmt)?;
+    }
+    join_loop_body(env, &body_env);
+    if !was_definite && let Some(ty) = env.lookup_any(var) {
+        env.bind_maybe(var.to_string(), ty);
+    }
+    Ok(())
+}
+
+/// #379 (PR-19): Function-scope variant of `check_enum_loop_body_module`.
+/// Checks each body statement via `check_stmt_in_function` with the
+/// enclosing function's `local_names` and `return_ty`.
+fn check_enum_loop_body_function(
+    env: &mut Environment,
+    var: &str,
+    list: &str,
+    body: &[HirStmt],
+    local_names: &[&str],
+    return_ty: Ty,
+) -> Result<(), Diagnostic> {
+    let var_ty = Ty::Instance(Box::new(list.to_string()));
+    let was_definite =
+        matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
+    check_assignment(env, var, var_ty)?;
+    let mut body_env = env.clone();
+    for s in body {
+        check_stmt_in_function(&mut body_env, local_names, s, return_ty.clone())?;
+    }
+    join_loop_body(env, &body_env);
+    if !was_definite && let Some(ty) = env.lookup_any(var) {
+        env.bind_maybe(var.to_string(), ty);
+    }
+    Ok(())
+}
+
+/// #379 (PR-19): Build a lookup table mapping enum class name to its
+/// member names (in source order). Extracted from `unroll_enum_loops` to
+/// isolate the enum-specific code paths (see cargo-llvm-cov#276 for the
+/// coverage instantiation issue).
+fn build_enum_member_table(
+    class_defs: &[(String, crate::HirClassDef)],
+) -> HashMap<&str, Vec<&String>> {
+    class_defs
+        .iter()
+        .filter(|(_, cd)| !cd.enum_members.is_empty())
+        .map(|(name, cd)| {
+            (
+                name.as_str(),
+                cd.enum_members.iter().map(|(mn, _)| mn).collect(),
+            )
+        })
+        .collect()
+}
+
 /// The rewrite walks both top-level items and function bodies (a
 /// `ForList`-over-enum can appear inside a function). Inside a function
 /// body, the enclosing `Vec<HirStmt>` is spliced in place: the unrolled
@@ -6582,17 +6642,7 @@ fn unroll_enum_loops(mut hir: HirModule) -> Result<HirModule, Diagnostic> {
         return Ok(hir);
     }
     // Build a lookup table: enum class name -> member names (in source order).
-    let enum_members: HashMap<&str, Vec<&String>> = hir
-        .class_defs
-        .iter()
-        .filter(|(_, cd)| !cd.enum_members.is_empty())
-        .map(|(name, cd)| {
-            (
-                name.as_str(),
-                cd.enum_members.iter().map(|(mn, _)| mn).collect(),
-            )
-        })
-        .collect();
+    let enum_members = build_enum_member_table(&hir.class_defs);
     // Walk top-level items and function bodies, splicing unrolled statements.
     let mut new_items: Vec<HirItem> = Vec::with_capacity(hir.items.len());
     for item in hir.items.drain(..) {
@@ -27197,5 +27247,91 @@ mod tests {
             "class Color(Enum):\n    RED = 1\n    GREEN = 2\nfor i in range(1):\n    for c in Color:\n        print(c.value)\n",
         );
         assert!(result.is_ok(), "enum loop nested inside for-range should check");
+    }
+
+    #[test]
+    fn enum_loop_inside_a_function_body_checks() {
+        // Exercises `check_enum_loop_body_function` — the function-body
+        // variant of the enum loop check. The `for c in Color:` inside `f`
+        // is type-checked by `check_stmt_in_function`, which delegates to
+        // `check_enum_loop_body_function`.
+        let result = parse_and_check(
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\ndef f() -> None:\n    for c in Color:\n        print(c.value)\nf()\n",
+        );
+        assert!(result.is_ok(), "enum loop inside a function should check");
+    }
+
+    #[test]
+    fn enum_loop_with_pre_bound_loop_var_checks() {
+        // Exercises the `was_definite = true` path in
+        // `check_enum_loop_body_module`: when the loop variable is already
+        // definitely bound to the same enum instance type before the enum
+        // loop (here via an explicit `c = Color.RED` assignment), the
+        // `if !was_definite` branch is skipped (the `bind_maybe` call is
+        // not executed).
+        let result = parse_and_check(
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\nc = Color.RED\nfor c in Color:\n    print(c.value)\n",
+        );
+        assert!(result.is_ok(), "enum loop with pre-bound loop var should check");
+    }
+
+    #[test]
+    fn enum_loop_in_function_with_pre_bound_loop_var_checks() {
+        // Exercises the `was_definite = true` path in
+        // `check_enum_loop_body_function`: when the loop variable is already
+        // definitely bound to the same enum instance type before the enum
+        // loop inside a function body (here via an explicit `c = Color.RED`
+        // assignment).
+        let result = parse_and_check(
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\ndef f() -> None:\n    c = Color.RED\n    for c in Color:\n        print(c.value)\nf()\n",
+        );
+        assert!(result.is_ok(), "enum loop in function with pre-bound loop var should check");
+    }
+
+    #[test]
+    fn enum_loop_body_with_undefined_name_is_rejected() {
+        // Exercises the `?` error propagation path in
+        // `check_enum_loop_body_module`: when a body statement references an
+        // undefined name, `check_stmt` returns an error which propagates
+        // through the `?` in the for loop.
+        let result = parse_and_check(
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\nfor c in Color:\n    print(undefined_name)\n",
+        );
+        assert!(result.is_err(), "enum loop with undefined name in body should be rejected");
+    }
+
+    #[test]
+    fn enum_loop_body_in_function_with_undefined_name_is_rejected() {
+        // Exercises the `?` error propagation path in
+        // `check_enum_loop_body_function`: when a body statement inside a
+        // function references an undefined name, `check_stmt_in_function`
+        // returns an error which propagates through the `?` in the for loop.
+        let result = parse_and_check(
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\ndef f() -> None:\n    for c in Color:\n        print(undefined_name)\nf()\n",
+        );
+        assert!(result.is_err(), "enum loop in function with undefined name in body should be rejected");
+    }
+
+    #[test]
+    fn enum_loop_with_incompatibly_typed_loop_var_is_rejected() {
+        // Exercises the `?` error propagation path of `check_assignment`
+        // in `check_enum_loop_body_module`: when the loop variable is
+        // already bound to an incompatible type (here `int`), binding it
+        // to `Ty::Instance("Color")` fails with T0023.
+        let result = parse_and_check(
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\nc = 0\nfor c in Color:\n    print(c.value)\n",
+        );
+        assert!(result.is_err(), "enum loop with incompatible loop var type should be rejected");
+    }
+
+    #[test]
+    fn enum_loop_in_function_with_incompatibly_typed_loop_var_is_rejected() {
+        // Exercises the `?` error propagation path of `check_assignment`
+        // in `check_enum_loop_body_function`: when the loop variable is
+        // already bound to an incompatible type inside a function body.
+        let result = parse_and_check(
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\ndef f() -> None:\n    c = 0\n    for c in Color:\n        print(c.value)\nf()\n",
+        );
+        assert!(result.is_err(), "enum loop in function with incompatible loop var type should be rejected");
     }
 }

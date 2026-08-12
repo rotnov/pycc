@@ -1,7 +1,8 @@
 use pycc_hir::{
-    CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirModule, HirStmt,
+    CompIter, FStringPart, HirExpr, HirItem, HirModule, HirStmt,
     eval_isinstance_single, eval_issubclass_single, extract_class_names, is_builtin_type_name,
 };
+pub use pycc_hir::HirClassDef;
 use std::collections::HashMap;
 
 // Re-exported (not just `use`d) because `pycc_codegen` doesn't depend on
@@ -1009,6 +1010,33 @@ fn lower_stmt(
     }
 }
 
+/// #379 (PR-19): Try to lower `Color.RED` (an enum member accessed by name
+/// on the enum class) to `MirExpr::Name` reading the synthetic
+/// `<Class>.<Member>.enum_member` global. Returns `None` if `base` is not
+/// an enum class name or `attr` is not one of its members. Extracted from
+/// `lower_expr` to isolate the enum-specific code paths (see
+/// cargo-llvm-cov#276 for the coverage instantiation issue).
+fn try_lower_enum_member_attr(
+    base: &HirExpr,
+    attr: &str,
+    classes: &HashMap<String, HirClassDef>,
+) -> Option<MirExpr> {
+    if let HirExpr::Name(class_name) = base
+        && let Some(class_def) = classes.get(class_name.as_str())
+        && !class_def.enum_members.is_empty()
+        && class_def
+            .enum_members
+            .iter()
+            .any(|(name, _)| name == attr)
+    {
+        return Some(MirExpr::Name {
+            name: format!("{class_name}.{attr}.enum_member"),
+            ty: Ty::Instance(Box::new(class_name.clone())),
+        });
+    }
+    None
+}
+
 fn lower_expr(
     expr: &HirExpr,
     scopes: &[HashMap<String, Ty>],
@@ -1372,18 +1400,10 @@ fn lower_expr(
             // `.value`/`.name` read on this result is a separate
             // `AttrGet` that resolves to a slot via the enum class's
             // `attrs = [("value", Int), ("name", Str)]` table.
-            if let HirExpr::Name(class_name) = base.as_ref()
-                && let Some(class_def) = classes.get(class_name.as_str())
-                && !class_def.enum_members.is_empty()
-                && class_def
-                    .enum_members
-                    .iter()
-                    .any(|(name, _)| name == attr.as_str())
+            if let Some(enum_member_expr) =
+                try_lower_enum_member_attr(base.as_ref(), attr.as_str(), classes)
             {
-                return MirExpr::Name {
-                    name: format!("{class_name}.{attr}.enum_member"),
-                    ty: Ty::Instance(Box::new(class_name.clone())),
-                };
+                return enum_member_expr;
             }
             let base = lower_expr(base, scopes, classes, current_class);
             let class_def = class_def_of(&base, classes);
@@ -6674,5 +6694,53 @@ mod tests {
             class_defs: vec![],
         };
         let _ = build(&hir);
+    }
+
+    #[test]
+    fn enum_member_attr_get_lowers_to_synthetic_global() {
+        // #379: `Color.RED` lowers to `MirExpr::Name` reading the
+        // synthetic `<Class>.<Member>.enum_member` global.
+        let class_def = pycc_hir::HirClassDef {
+            name: "Color".to_string(),
+            bases: vec![],
+            mro: vec!["Color".to_string()],
+            attrs: vec![
+                ("value".to_string(), Ty::Int),
+                ("name".to_string(), Ty::Str),
+            ],
+            methods: vec![],
+            properties: vec![],
+            static_methods: vec![],
+            class_methods: vec![],
+            type_param: None,
+            enum_members: vec![
+                ("RED".to_string(), 1),
+                ("GREEN".to_string(), 2),
+            ],
+        };
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("Color".to_string())),
+                    attr: "RED".to_string(),
+                }],
+            }))],
+            type_aliases: vec![],
+            imports: vec![],
+            class_defs: vec![("Color".to_string(), class_def)],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::Name {
+                    name: "Color.RED.enum_member".to_string(),
+                    ty: Ty::Instance(Box::new("Color".to_string())),
+                }],
+                ty: Ty::None,
+            }))
+        );
     }
 }

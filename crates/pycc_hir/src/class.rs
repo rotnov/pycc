@@ -368,6 +368,130 @@ fn compute_c3_mro(
 /// Generic classes (`class C[T]:`) with a single type parameter ARE now
 /// supported by #387 (see the `type_params` handling below). Inheritance
 /// (`class C(Base):`) is now supported by #432 (Part 1).
+
+/// #379 (PR-19): Lower a PEP 435-style enum class. An enum class body is
+/// assignments only (`RED = 1`), not method definitions. This function
+/// validates the enum body and constructs the `HirClassDef` with
+/// `enum_members` populated. Extracted from `lower_class` to isolate the
+/// enum-specific code paths (see cargo-llvm-cov#276 for the coverage
+/// instantiation issue that motivated the extraction).
+fn lower_enum_class(
+    def: &pycc_ast::StmtClassDef,
+    class_name: String,
+    bases: Vec<String>,
+    mro: Vec<String>,
+    type_param: Option<String>,
+) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
+    // An enum class's attrs are the two reserved member attributes
+    // (`value`, `name`), so `member.value`/`member.name` resolve via
+    // the existing `resolve_attr_get`/MIR slot resolution unchanged.
+    let attrs = vec![
+        ("value".to_string(), Ty::Int),
+        ("name".to_string(), Ty::Str),
+    ];
+    let mut enum_members: Vec<(String, i64)> = Vec::new();
+    for stmt in &def.body {
+        let Stmt::Assign(assign) = stmt else {
+            return Err(unsupported(
+                "an enum class body must contain only member assignments (`RED = 1`) -- \
+                 no method definitions or other statements are supported yet",
+                pycc_ast::stmt_range(stmt),
+            ));
+        };
+        // The target must be a single bare name (not a tuple or
+        // subscript).
+        if assign.targets.len() != 1 {
+            return Err(unsupported(
+                "an enum member assignment must have a single target (`RED = 1`), not \
+                 multiple targets",
+                assign.range,
+            ));
+        }
+        let Expr::Name(target_name) = &assign.targets[0] else {
+            return Err(unsupported(
+                "an enum member name must be a bare name (`RED = 1`), not an attribute \
+                 access, subscript, or other expression",
+                pycc_ast::expr_range(&assign.targets[0]),
+            ));
+        };
+        let member_name = target_name.id.to_string();
+        // Reject duplicate member names (matching CPython's
+        // `TypeError: Attempted to reuse key`).
+        if enum_members.iter().any(|(name, _)| name == &member_name) {
+            return Err(unsupported(
+                format!(
+                    "enum member `{member_name}` is already defined in class \
+                     `{class_name}` -- duplicate member names are not allowed"
+                ),
+                assign.range,
+            ));
+        }
+        // The value must be an int literal (the only supported member
+        // value type in v0.3, matching TYPE_SYSTEM.md's "integer
+        // discriminant" representation). A bool literal is rejected
+        // (it is a separate type in pycc, not an int subtype for
+        // enum-value purposes). A non-literal value (e.g. `RED = f()`)
+        // is also rejected -- enum values must be compile-time
+        // literals in pycc's static model. The actual integer value is
+        // extracted and carried in `enum_members` so codegen can
+        // initialize each member's `value` slot with the correct
+        // literal, not a position-derived guess.
+        let member_value: i64 = match &*assign.value {
+            Expr::NumberLiteral(number) => match &number.value {
+                Number::Int(i) => {
+                    let Some(value) = i.as_i64() else {
+                        return Err(unsupported(
+                            format!(
+                                "enum member `{member_name}` has an integer value that does \
+                                 not fit in i64 -- only i64-range values are supported"
+                            ),
+                            assign.range,
+                        ));
+                    };
+                    value
+                }
+                _ => {
+                    return Err(unsupported(
+                        format!(
+                            "enum member `{member_name}` has a non-integer value -- only \
+                             `int` member values are supported in v0.3"
+                        ),
+                        assign.range,
+                    ));
+                }
+            },
+            _ => {
+                return Err(unsupported(
+                    format!(
+                        "enum member `{member_name}` must be assigned an integer literal \
+                         (`{member_name} = 1`), not an expression or non-integer value"
+                    ),
+                    assign.range,
+                ));
+            }
+        };
+        enum_members.push((member_name, member_value));
+    }
+    // An enum class has no methods, no __init__, and no items. Its
+    // members are compile-time singletons allocated by codegen, not
+    // runtime-instantiated objects.
+    Ok((
+        HirClassDef {
+            name: class_name,
+            bases,
+            mro,
+            attrs,
+            methods: Vec::new(),
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            type_param,
+            enum_members,
+        },
+        Vec::new(),
+    ))
+}
+
 pub(crate) fn lower_class(
     def: &pycc_ast::StmtClassDef,
     aliases: &[(String, Ty)],
@@ -525,119 +649,19 @@ pub(crate) fn lower_class(
     let mut properties: Vec<PropertyDef> = Vec::new();
     let mut static_methods: Vec<(String, String)> = Vec::new();
     let mut class_methods: Vec<(String, String)> = Vec::new();
-    let mut enum_members: Vec<(String, i64)> = Vec::new();
+    let enum_members: Vec<(String, i64)> = Vec::new();
     let mut init_seen = false;
     // #379 (PR-19): an enum class body is assignments only (`RED = 1`),
-    // not method definitions. Handle this in a separate loop before the
+    // not method definitions. Handle this in a separate function before the
     // regular class-body loop below, which rejects non-`def` statements.
     if is_enum {
-        // An enum class's attrs are the two reserved member attributes
-        // (`value`, `name`), so `member.value`/`member.name` resolve via
-        // the existing `resolve_attr_get`/MIR slot resolution unchanged.
-        attrs = vec![
-            ("value".to_string(), Ty::Int),
-            ("name".to_string(), Ty::Str),
-        ];
-        for stmt in &def.body {
-            let Stmt::Assign(assign) = stmt else {
-                return Err(unsupported(
-                    "an enum class body must contain only member assignments (`RED = 1`) -- \
-                     no method definitions or other statements are supported yet",
-                    pycc_ast::stmt_range(stmt),
-                ));
-            };
-            // The target must be a single bare name (not a tuple or
-            // subscript).
-            if assign.targets.len() != 1 {
-                return Err(unsupported(
-                    "an enum member assignment must have a single target (`RED = 1`), not \
-                     multiple targets",
-                    assign.range,
-                ));
-            }
-            let Expr::Name(target_name) = &assign.targets[0] else {
-                return Err(unsupported(
-                    "an enum member name must be a bare name (`RED = 1`), not an attribute \
-                     access, subscript, or other expression",
-                    pycc_ast::expr_range(&assign.targets[0]),
-                ));
-            };
-            let member_name = target_name.id.to_string();
-            // Reject duplicate member names (matching CPython's
-            // `TypeError: Attempted to reuse key`).
-            if enum_members.iter().any(|(name, _)| name == &member_name) {
-                return Err(unsupported(
-                    format!(
-                        "enum member `{member_name}` is already defined in class \
-                         `{class_name}` -- duplicate member names are not allowed"
-                    ),
-                    assign.range,
-                ));
-            }
-            // The value must be an int literal (the only supported member
-            // value type in v0.3, matching TYPE_SYSTEM.md's "integer
-            // discriminant" representation). A bool literal is rejected
-            // (it is a separate type in pycc, not an int subtype for
-            // enum-value purposes). A non-literal value (e.g. `RED = f()`)
-            // is also rejected -- enum values must be compile-time
-            // literals in pycc's static model. The actual integer value is
-            // extracted and carried in `enum_members` so codegen can
-            // initialize each member's `value` slot with the correct
-            // literal, not a position-derived guess.
-            let member_value: i64 = match &*assign.value {
-                Expr::NumberLiteral(number) => match &number.value {
-                    Number::Int(i) => {
-                        let Some(value) = i.as_i64() else {
-                            return Err(unsupported(
-                                format!(
-                                    "enum member `{member_name}` has an integer value that does \
-                                     not fit in i64 -- only i64-range values are supported"
-                                ),
-                                assign.range,
-                            ));
-                        };
-                        value
-                    }
-                    _ => {
-                        return Err(unsupported(
-                            format!(
-                                "enum member `{member_name}` has a non-integer value -- only \
-                                 `int` member values are supported in v0.3"
-                            ),
-                            assign.range,
-                        ));
-                    }
-                },
-                _ => {
-                    return Err(unsupported(
-                        format!(
-                            "enum member `{member_name}` must be assigned an integer literal \
-                             (`{member_name} = 1`), not an expression or non-integer value"
-                        ),
-                        assign.range,
-                    ));
-                }
-            };
-            enum_members.push((member_name, member_value));
-        }
-        // An enum class has no methods, no __init__, and no items. Its
-        // members are compile-time singletons allocated by codegen, not
-        // runtime-instantiated objects.
-        return Ok((
-            HirClassDef {
-                name: class_name,
-                bases,
-                mro,
-                attrs,
-                methods,
-                properties,
-                static_methods,
-                class_methods,
-                type_param,
-                enum_members,
-            },
-            items,
-        ));
+        return lower_enum_class(
+            def,
+            class_name,
+            bases,
+            mro,
+            type_param,
+        );
     }
     for stmt in &def.body {
         let Stmt::FunctionDef(method_def) = stmt else {

@@ -4221,6 +4221,82 @@ pub fn compile_to_object(
     compile_to_object_with_observer(mir, output_path, target_triple, release, None)
 }
 
+/// #379 (PR-19): Emit per-enum-member singleton init sequences. Each enum
+/// member is a compile-time singleton instance that must be alive before
+/// any top-level code reads it. For each enum class with members, and each
+/// member in source order, allocate a fresh 2-slot instance
+/// (`pycc_rt_instance_new(2)`), set slot 0 to the integer member value,
+/// set slot 1 to a string pointer containing the member name, and store
+/// the instance pointer into the synthetic global
+/// `<Class>.<Member>.enum_member`. Extracted from
+/// `compile_to_object_with_observer` to isolate the enum-specific code
+/// paths (see cargo-llvm-cov#276 for the coverage instantiation issue).
+fn emit_enum_member_inits<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    mir: &MirModule,
+    module_globals: &BTreeMap<String, StorageSlot<'ctx>>,
+) {
+    for (class_name, class_def) in &mir.class_defs {
+        for (member_name, member_value) in &class_def.enum_members {
+            let global_name = format!("{class_name}.{member_name}.enum_member");
+            let slot = &module_globals[&global_name];
+            // Allocate a fresh 2-slot instance.
+            let count = context.i64_type().const_int(2, false);
+            let instance_ptr = builder
+                .build_call(rt.instance_new, &[count.into()], "enum_instance_new")
+                .expect("build_call should not fail for a well-formed enum member allocation")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_instance_new returns a non-void pointer")
+                .into_pointer_value();
+            // Set slot 0 to the integer member value. The value is the
+            // actual `i64` literal from the source (`RED = 1` → 1), carried
+            // in `HirClassDef.enum_members` from HIR through MIR to here.
+            // `tag_smallint_const` folds it at compile time into the
+            // tagged-pointer representation `pycc_rt` uses for small ints.
+            let value_scalar = Scalar::Int(tag_smallint_const(context, *member_value));
+            let value_word = scalar_to_slot_word(context, builder, value_scalar);
+            let slot0_index = context.i64_type().const_int(0, false);
+            builder
+                .build_call(
+                    rt.instance_set_slot,
+                    &[instance_ptr.into(), slot0_index.into(), value_word.into()],
+                    "enum_set_value",
+                )
+                .expect("build_call should not fail for a well-formed enum value slot write");
+            // Set slot 1 to a string pointer containing the member name.
+            let name_ptr = emit_string_literal(context, builder, module, rt, member_name);
+            let name_scalar = Scalar::Str(name_ptr);
+            let name_word = scalar_to_slot_word(context, builder, name_scalar);
+            let slot1_index = context.i64_type().const_int(1, false);
+            builder
+                .build_call(
+                    rt.instance_set_slot,
+                    &[instance_ptr.into(), slot1_index.into(), name_word.into()],
+                    "enum_set_name",
+                )
+                .expect("build_call should not fail for a well-formed enum name slot write");
+            // Store the instance pointer into the synthetic global and
+            // mark it initialized. Module globals always have an
+            // initialized flag (see `declare_module_globals`), so
+            // `slot.initialized` is always `Some` here — `expect` makes
+            // that invariant explicit without an unreachable `None` arm
+            // that would create a permanently uncovered coverage region.
+            builder
+                .build_store(slot.ptr, instance_ptr)
+                .expect("build_store should not fail for a declared enum member global");
+            let initialized_ptr = slot
+                .initialized
+                .expect("module globals always have an initialized flag");
+            builder
+                .build_store(initialized_ptr, context.i8_type().const_int(1, false))
+                .expect("build_store should not fail for a declared enum member init flag");
+        }
+    }
+}
+
 fn compile_to_object_with_observer(
     mir: &MirModule,
     output_path: &Path,
@@ -4356,74 +4432,15 @@ fn compile_to_object_with_observer(
         .map(|(name, binding)| (name.clone(), binding.clone()))
         .collect();
     // #379 (PR-19): emit per-enum-member singleton init sequences BEFORE
-    // the top-level statement loop. Each enum member is a compile-time
-    // singleton instance that must be alive before any top-level code reads
-    // it (`print(Color.RED.value)` is a top-level statement that runs in
-    // the loop below). For each enum class with members, and each member
-    // in source order, allocate a fresh 2-slot instance
-    // (`pycc_rt_instance_new(2)`), set slot 0 to the integer member value,
-    // set slot 1 to a string pointer containing the member name, and store
-    // the instance pointer into the synthetic global
-    // `<Class>.<Member>.enum_member`. The singleton's `name` string slot
-    // is alive for the program's lifetime (leak-only, matching
-    // `Ty::Instance`'s own leak-only policy, D-154). The member's integer
-    // value is a compile-time literal, so `tag_smallint_const` folds it at
-    // compile time. The `name` string is emitted via
-    // `emit_string_literal`, which calls `pycc_rt_str_from_literal` to
-    // allocate a `PyStrObj` -- the resulting pointer is stored into slot 1
-    // via `scalar_to_slot_word` (which `ptrtoint`s it to an `i64` word,
-    // the same encoding `slot_word_to_scalar` decodes on read).
-    for (class_name, class_def) in &mir.class_defs {
-        for (member_name, member_value) in &class_def.enum_members {
-            let global_name = format!("{class_name}.{member_name}.enum_member");
-            let slot = &module_globals[&global_name];
-            // Allocate a fresh 2-slot instance.
-            let count = context.i64_type().const_int(2, false);
-            let instance_ptr = builder
-                .build_call(rt.instance_new, &[count.into()], "enum_instance_new")
-                .expect("build_call should not fail for a well-formed enum member allocation")
-                .try_as_basic_value()
-                .expect_basic("pycc_rt_instance_new returns a non-void pointer")
-                .into_pointer_value();
-            // Set slot 0 to the integer member value. The value is the
-            // actual `i64` literal from the source (`RED = 1` → 1), carried
-            // in `HirClassDef.enum_members` from HIR through MIR to here.
-            // `tag_smallint_const` folds it at compile time into the
-            // tagged-pointer representation `pycc_rt` uses for small ints.
-            let value_scalar = Scalar::Int(tag_smallint_const(&context, *member_value));
-            let value_word = scalar_to_slot_word(&context, &builder, value_scalar);
-            let slot0_index = context.i64_type().const_int(0, false);
-            builder
-                .build_call(
-                    rt.instance_set_slot,
-                    &[instance_ptr.into(), slot0_index.into(), value_word.into()],
-                    "enum_set_value",
-                )
-                .expect("build_call should not fail for a well-formed enum value slot write");
-            // Set slot 1 to a string pointer containing the member name.
-            let name_ptr = emit_string_literal(&context, &builder, &module, &rt, member_name);
-            let name_scalar = Scalar::Str(name_ptr);
-            let name_word = scalar_to_slot_word(&context, &builder, name_scalar);
-            let slot1_index = context.i64_type().const_int(1, false);
-            builder
-                .build_call(
-                    rt.instance_set_slot,
-                    &[instance_ptr.into(), slot1_index.into(), name_word.into()],
-                    "enum_set_name",
-                )
-                .expect("build_call should not fail for a well-formed enum name slot write");
-            // Store the instance pointer into the synthetic global and
-            // mark it initialized.
-            builder
-                .build_store(slot.ptr, instance_ptr)
-                .expect("build_store should not fail for a declared enum member global");
-            if let Some(initialized_ptr) = slot.initialized {
-                builder
-                    .build_store(initialized_ptr, context.i8_type().const_int(1, false))
-                    .expect("build_store should not fail for a declared enum member init flag");
-            }
-        }
-    }
+    // the top-level statement loop.
+    emit_enum_member_inits(
+        &context,
+        &builder,
+        &module,
+        &rt,
+        mir,
+        &module_globals,
+    );
     // Issue #22: iterate over ALL items in source order, not just
     // top-level statements. A `MirItem::Function` at its source position
     // represents a `def` statement's runtime binding effect: store the
@@ -17336,5 +17353,54 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"42\n");
+    }
+
+    #[test]
+    fn enum_member_singleton_init_emits_and_runs() {
+        // #379: Exercises `emit_enum_member_inits` by building a MIR
+        // module with an enum class definition and a top-level statement
+        // that reads a member's value. The codegen must emit the
+        // per-member singleton init sequence before the top-level
+        // statement loop.
+        let class_def = pycc_mir::HirClassDef {
+            name: "Color".to_string(),
+            bases: vec![],
+            mro: vec!["Color".to_string()],
+            attrs: vec![
+                ("value".to_string(), Ty::Int),
+                ("name".to_string(), Ty::Str),
+            ],
+            methods: vec![],
+            properties: vec![],
+            static_methods: vec![],
+            class_methods: vec![],
+            type_param: None,
+            enum_members: vec![
+                ("RED".to_string(), 1),
+                ("GREEN".to_string(), 2),
+            ],
+        };
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "Color.RED.enum_member".to_string(),
+                        ty: Ty::Instance(Box::new("Color".to_string())),
+                    }),
+                    slot: 0,
+                    ty: Ty::Int,
+                }],
+                ty: Ty::None,
+            }))],
+            class_defs: vec![("Color".to_string(), class_def)],
+        };
+        let dir = tempfile_dir("enum_member_init");
+        let obj_path = dir.join("enum_member_init.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("enum_member_init");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
     }
 }
