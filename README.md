@@ -49,7 +49,7 @@ syntax or dialect.
 
 ## The experiment
 
-**pycc is an experiment in autonomous, AI-native software development: the project writes itself.** AI agents create its specifications, code, tests, documentation, reviews, and release automation. Humans set goals and constraints; not a single line of project code is handwritten by a human.
+**pycc is an experiment in autonomous, AI-native software development: the project writes itself.** AI agents create its specifications, code, tests, documentation, reviews, and release automation. Humans set goals and constraints; not a single line of project code is handwritten by a human. This is a maintainer attestation supported by the public Git history, pull requests, agent instructions, review artifacts, and session handoff logs — not a fact provable from Git author metadata alone, which identifies the accountable human maintainer rather than the code generator.
 
 “AI-native” describes the authorship workflow. pycc is an AOT compiler for
 typed Python, not an AI or machine-learning compiler.

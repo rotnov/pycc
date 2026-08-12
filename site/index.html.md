@@ -28,7 +28,11 @@ specifications, every line of project code, tests, documentation, reviews,
 release automation, and process rules. A human only manages goals, constraints,
 priorities, product decisions, and the definition of success.
 
-No project code is handwritten by a human.
+No project code is handwritten by a human. This is a maintainer attestation
+supported by the public Git history, pull requests, agent instructions,
+review artifacts, and session handoff logs — not a fact provable from Git
+author metadata alone, which identifies the accountable human maintainer
+rather than the code generator.
 
 “AI-native” describes the authorship and management model. pycc is not an AI
 or machine-learning compiler.

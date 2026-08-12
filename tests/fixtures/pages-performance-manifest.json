@@ -57,7 +57,7 @@
       "local_route": "/pycc/ai-native/",
       "expected_http_status": 200,
       "source_artifact": "site/ai-native/index.html",
-      "source_artifact_sha256": "5c379f6ca102252b30f0527d6b037f7d0d57afcb5f2ea32c5e9e9f2bdb7e782c",
+      "source_artifact_sha256": "b0e50b8abe44796593cdc2eb61b2aa4b666683dc3e2e8ad856be1f39fc96c399",
       "expected_title": "pycc AI-native experiment \u2014 software built entirely by AI",
       "expected_h1": "The project writes itself.",
       "canonical_url": "https://rotnov.github.io/pycc/ai-native/",
