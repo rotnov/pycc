@@ -159,7 +159,7 @@
     {
       "path": "tests/fixtures/pages-performance-manifest.json",
       "source_path": "tests/fixtures/pages-performance-manifest.json",
-      "sha256": "50a4841004174786bb919be2575d03901f38ed0e0d24b52313e08b946524c965"
+      "sha256": "aac67b859efc39d437a30dcd76b7a43ac2303553863e2f834608b5d8b9573ecc"
     },
     {
       "path": "tests/fixtures/workflow-policy-search-ledger.yml",
