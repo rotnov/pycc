@@ -35,7 +35,7 @@ state where every required check had completed and passed, but GitHub's
 `mergeStateStatus` was `BLOCKED` — an automated Codex reviewer had left an
 unresolved review thread, and this repository's branch protection has
 `required_conversation_resolution` enabled. `scripts/ci-watch.sh`, running
-under `Monitor` per the `autopilot-async-monitoring` skill, never emitted a
+under `Monitor` per the `gha-watch-ci-pr` skill (formerly `autopilot-async-monitoring`), never emitted a
 line: its `poll_once` function checks for `state != OPEN`, `mergeable ==
 CONFLICTING`, `mergeStateStatus == BEHIND`, failed/timed-out/cancelled
 checks, and `pending == 0 && mergeStateStatus == CLEAN` — with no branch for
@@ -129,32 +129,33 @@ dimension of a multi-dimensional predicate proves nothing about the others.
 
 ---
 
-## 2026-08-05 — Used `sleep 240` to wait on CI instead of `ci-watch.sh`; missed `autopilot-async-monitoring` skill at the CI-wait fork
+## 2026-08-05 — Used `sleep 240` to wait on CI instead of `ci-watch.sh`; missed `gha-watch-ci-pr` skill at the CI-wait fork
 
 **What happened:** during the `issue-implement` run for #345 (PR #348), the session
 reached the CI-monitoring step and waited on the pull request's check suite using
 `sleep 240` followed by a manual `gh pr view` re-check — exactly the fixed-interval
-polling pattern the `autopilot-async-monitoring` skill (and its `scripts/ci-watch.sh`
-mechanism) exists to replace. The user pointed this out ("а чего ты не используешь
-скил autopilot-async-monitoring"). The skill was available and its description
-directly covered the situation ("deciding how to wait on async state such as a pull
-request, a CI run"), but the session did not re-scan the skill list at the CI-wait
-fork — it had applied skill-selection discipline once at session start (invoking
-`issue-implement`) and then stopped re-evaluating at each subsequent sub-step.
+polling pattern the `gha-watch-ci-pr` skill (formerly `autopilot-async-monitoring`,
+and its `ci-watch.sh` mechanism) exists to replace. The user pointed this out ("а чего
+ты не используешь скил autopilot-async-monitoring"). The skill was available and its
+description directly covered the situation ("deciding how to wait on async state such
+as a pull request, a CI run"), but the session did not re-scan the skill list at the
+CI-wait fork — it had applied skill-selection discipline once at session start
+(invoking `issue-implement`) and then stopped re-evaluating at each subsequent
+sub-step.
 
 **Root cause:** trigger gap. `issue-implement`'s step 7 (Monitor) already said
 "Before waiting on CI, query the pull request's current state" but did not
-cross-reference `autopilot-async-monitoring` or name `ci-watch.sh` as the mechanism
+cross-reference `gha-watch-ci-pr` or name `ci-watch.sh` as the mechanism
 for the wait itself. The skill that should have been invoked was discoverable but
 not pointed at from the skill the session was actively running — so the agent reached
 for the familiar `sleep` pattern instead. This is the same failure mode the
-`autopilot-async-monitoring` skill's own creation history documents (four
+`gha-watch-ci-pr` skill's own creation history documents (four
 `.ievo/evolution/project.md` entries with `Trigger: user-observed mistake during PR
 monitoring` → extracted into the skill), but the extraction did not close the loop
 back from `issue-implement` to the extracted skill.
 
 **What fixed it:** PR #349 added a cross-reference from `issue-implement` step 7 to
-`autopilot-async-monitoring` and `scripts/ci-watch.sh`, so a future session reaching
+`gha-watch-ci-pr` and `ci-watch.sh`, so a future session reaching
 that step picks up the right tooling directly from the skill text it is already
 following. This same session then used `ci-watch.sh` for the remaining CI waits
 (PR #348 merge, PR #349 CI, and PR #350 for this skill's own delivery) — all three

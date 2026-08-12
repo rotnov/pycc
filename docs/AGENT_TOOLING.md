@@ -295,6 +295,18 @@ compliance gap), applies the fix directly for process-text edits or via a
 dedicated PR for new skills/ADRs, and records the entry in
 `docs/AGENT_RETROSPECTIVE.md`. See D-145 for the full design rationale.
 
+`gha-watch-ci-pr` is a project-local skill committed under `.claude/skills/`
+with a thin `.agents/skills/` entrypoint, following the same cross-platform
+discovery convention. It is not alpha and is intentionally absent from the
+alpha eval tuples: its rules are procedural (when to poll, how to serialize
+PRs, when to act on failed checks) with no deterministic output oracle. It
+bundles `ci-watch.sh` (PR/CI terminal-state poller) and prescribes its use
+via `Monitor` instead of fixed-interval `ScheduleWakeup`. It also covers
+session identification in PR bodies, strict-protection PR serialization
+with draft-then-ready queuing, monitoring only active work, and not
+stop-and-waiting on dispatched agents. It replaces the former
+`autopilot-async-monitoring` skill, which was overly verbose.
+
 ## Optional Claude Code plugins
 
 `.claude/settings.json` also enables optional third-party capability plugins from the

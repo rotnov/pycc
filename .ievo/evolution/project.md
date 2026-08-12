@@ -10,22 +10,22 @@
 ## 2026-07-26 12:58 UTC — Check PR state before waiting for CI
 **Trigger:** user-observed mistake during PR monitoring
 
-**Moved to** `.claude/skills/autopilot-async-monitoring/SKILL.md` (extracted 2026-08-04).
+**Moved to** `.claude/skills/gha-watch-ci-pr/SKILL.md` (extracted 2026-08-04).
 
 ## 2026-07-26 21:37 UTC — Do not monitor historical pull requests
 **Trigger:** user-observed mistake during PR monitoring
 
-**Moved to** `.claude/skills/autopilot-async-monitoring/SKILL.md` (extracted 2026-08-04).
+**Moved to** `.claude/skills/gha-watch-ci-pr/SKILL.md` (extracted 2026-08-04).
 
 ## 2026-07-30 17:50 UTC — Consider a background watcher for the autopilot loop
 **Trigger:** user-defined convention
 
-**Moved to** `.claude/skills/autopilot-async-monitoring/SKILL.md` (extracted 2026-08-04).
+**Moved to** `.claude/skills/gha-watch-ci-pr/SKILL.md` (extracted 2026-08-04).
 
 ## 2026-08-04 05:19 UTC — Dispatched orchestrator agents must not stop-and-wait for their own sub-dispatches
 **Trigger:** user-observed mistake during PR-13/PR-14 autonomous delivery
 
-**Moved to** `.claude/skills/autopilot-async-monitoring/SKILL.md` (extracted 2026-08-04).
+**Moved to** `.claude/skills/gha-watch-ci-pr/SKILL.md` (extracted 2026-08-04).
 
 ## 2026-08-04 05:48 UTC — Never run an unbounded `find` across the whole filesystem
 **Trigger:** user-observed mistake during PR-14 autonomous delivery
@@ -91,7 +91,7 @@ before pushing, rather than relying on CI to be the first place a
 mechanical, locally-reproducible check runs. Local iteration is strictly
 faster than a CI round-trip (multiple minutes per push) for anything that
 CAN be run locally — this is the same "check real state before waiting"
-discipline `autopilot-async-monitoring/SKILL.md` already covers for
+discipline `gha-watch-ci-pr/SKILL.md` already covers for
 PR/CI/agent status, applied one step earlier: verify locally before
 creating the async wait in the first place, not just before consuming its
 result.

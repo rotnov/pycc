@@ -3,7 +3,7 @@ name: gha-watch-ci-pr
 description: Use when driving the pycc autonomous-delivery autopilot loop and deciding how to wait on async state — a pull request, a CI run, or any dispatched `Agent`. Provides `ci-watch.sh` for PR/CI polling and rules for serialization, session identification, and dispatched-agent lifecycles.
 ---
 
-# Autopilot async monitoring
+# gha-watch-ci-pr
 
 Procedural rules and tools for waiting on asynchronous state during the
 project's autonomous PR-by-PR delivery loop: pull requests, CI runs, and
@@ -11,13 +11,13 @@ dispatched background agents.
 
 ## Tools
 
-### `scripts/ci-watch.sh` — poll PRs until terminal state
+### `ci-watch.sh` — poll PRs until terminal state
 
 Run via `Monitor` (`persistent: false`, generous `timeout_ms` — the script
 exits on its own):
 
 ```
-scripts/ci-watch.sh <repo> <pr-number> [<pr-number> ...]
+.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh <repo> <pr-number> [<pr-number> ...]
 ```
 
 Polls every `$POLL_INTERVAL` seconds (default 10). Silent between polls.
@@ -81,3 +81,19 @@ notification is deferred — potentially arbitrarily long.
 
 Instead: check actual current state directly, or resume the agent. Never
 end your own turn to "wait for the notification."
+
+### Act on failed checks immediately, don't wait for the rest
+
+When checking `gh pr checks` and any job is already terminal (`fail`, not
+`pending`), pull its logs and start root-causing it right away, regardless
+of whether sibling jobs are still running. A fast-failing job (10s) can sit
+fully diagnosable for minutes before the rest of the suite reports in.
+
+### Always pass `--head` explicitly to `gh pr create`
+
+Never rely on the shell's cwd having the right branch checked out — in a
+multi-worktree session, a forgotten `cd` after worktree operations is
+exactly how `gh pr create` silently opens a PR against the wrong branch.
+Always pass `--head <branch> --base <base>`, and after creating, verify
+`gh pr view --json headRefName,headRefOid` matches the intended branch
+before treating the PR as real.

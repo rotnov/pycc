@@ -836,4 +836,4 @@ EOF
 
 - [ ] **Step 9: Monitor CI and merge**
 
-Follow this project's own `autopilot-async-monitoring` skill for the CI wait (not a fixed `sleep`). Once every required check is green, re-read the full diff one final time, then merge with a merge commit and delete the task branch, per this repository's own standard merge discipline (`AGENTS.md`'s D-024/D-078 sections).
+Follow this project's own `gha-watch-ci-pr` skill for the CI wait (not a fixed `sleep`). Once every required check is green, re-read the full diff one final time, then merge with a merge commit and delete the task branch, per this repository's own standard merge discipline (`AGENTS.md`'s D-024/D-078 sections).
