@@ -54,6 +54,8 @@ jobs:
           ruby scripts/test_check_sitemap_lastmod.rb
           ruby scripts/check_source_links_registry.rb
           ruby scripts/test_check_source_links_registry.rb
+          ruby scripts/check_search_visibility.rb
+          ruby scripts/test_check_search_visibility.rb
 
       - name: Upload website
         uses: actions/upload-pages-artifact@v4
