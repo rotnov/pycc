@@ -383,6 +383,18 @@ fn std_constant_is_not_callable(name: &str) -> Diagnostic {
     )
 }
 
+/// A stdlib class marker (e.g. `enum.Enum`) referenced as a first-class
+/// value (`print(enum.Enum)`, not `class C(Enum):`). `Enum` is only a
+/// marker for enum class detection — it has no runtime representation
+/// this compiler can emit as a value.
+fn enum_marker_is_not_a_value(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0021",
+        format!("`{name}` is a class marker, not a first-class value — use it only as a base class (`class C(Enum):`)"),
+        Span::new(0, 0),
+    )
+}
+
 /// Issue #142: the sorted set of known Python 3.14 callable builtin names
 /// that this compiler version does not implement. These are valid Python --
 /// `ValueError("x")`, `Exception("msg")`, `int("5")`, `range(10)` (as a
@@ -978,6 +990,9 @@ fn collect_expr_constraints(
                     pycc_std::StdSymbolKind::Function { .. } => {
                         Err(std_function_used_as_a_value(name))
                     }
+                    pycc_std::StdSymbolKind::EnumMarker => {
+                        Err(enum_marker_is_not_a_value(name))
+                    }
                 };
             }
             // Issue #359 (Part 2 of #118): a maybe-bound name (assigned
@@ -1123,7 +1138,11 @@ fn collect_expr_constraints(
                     ret_ty,
                 } = symbol.kind
                 else {
-                    return Err(std_constant_is_not_callable(callee));
+                    return Err(if matches!(symbol.kind, pycc_std::StdSymbolKind::EnumMarker) {
+                        enum_marker_is_not_a_value(callee)
+                    } else {
+                        std_constant_is_not_callable(callee)
+                    });
                 };
                 if arg_terms.len() != expected_arg_tys.len() {
                     return Err(Diagnostic::error(
@@ -2473,6 +2492,9 @@ fn infer_expr_in(
                     pycc_std::StdSymbolKind::Function { .. } => {
                         Err(std_function_used_as_a_value(name))
                     }
+                    pycc_std::StdSymbolKind::EnumMarker => {
+                        Err(enum_marker_is_not_a_value(name))
+                    }
                 };
             }
             // Issue #118 Part 1: three-way distinction -- definitely bound ->
@@ -2634,7 +2656,11 @@ fn infer_expr_in(
                     ret_ty,
                 } = symbol.kind
                 else {
-                    return Err(std_constant_is_not_callable(callee));
+                    return Err(if matches!(symbol.kind, pycc_std::StdSymbolKind::EnumMarker) {
+                        enum_marker_is_not_a_value(callee)
+                    } else {
+                        std_constant_is_not_callable(callee)
+                    });
                 };
                 if arg_tys.len() != expected_arg_tys.len() {
                     return Err(Diagnostic::error(

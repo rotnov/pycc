@@ -428,10 +428,11 @@ pub fn is_builtin_type_name(name: &str) -> bool {
 /// `lower_class` as a marker that a class is a PEP 435 enum (#379, PR-19).
 /// `Enum` is not a user-defined class in `class_defs` -- it is a builtin
 /// base name consumed as a marker, not recorded in the class's `bases`/`mro`.
-/// pycc has no `enum` stdlib module (`pycc_std` ships only `math`, D-136),
-/// so `from enum import Enum` is already `C0001`; the bare name `Enum` is
-/// the only reachable spelling. Supporting `enum.Enum` waits on a real
-/// `enum` stdlib module (post-v0.3).
+/// `pycc_std` registers `enum.Enum` as an `EnumMarker` symbol so
+/// `from enum import Enum` resolves (the import is a no-op binding — `Enum`
+/// is never a first-class value, only a base class marker). The bare name
+/// `Enum` (without any import) is also accepted, matching pycc's existing
+/// textual-resolution precedent for `math.sqrt`.
 pub fn is_enum_base_name(name: &str) -> bool {
     name == "Enum"
 }
@@ -4674,6 +4675,23 @@ mod tests {
         // Whole statement fails closed -- `sqrt` is not partially bound
         // even though it is itself registered.
         assert_eq!(diagnostic.code, "C0002");
+    }
+
+    #[test]
+    fn from_enum_import_enum_binds_enum_marker() {
+        let module = pycc_parser_test_helper::parse("from enum import Enum\n");
+        let hir = lower_checked(&module).expect("enum.Enum must resolve");
+
+        let enum_symbol = pycc_std::resolve_symbol(pycc_std::StdModule::Enum, "Enum")
+            .expect("enum.Enum is registered");
+        assert_eq!(
+            hir.imports,
+            vec![ImportBinding::Symbol {
+                local_name: "Enum".to_string(),
+                module: pycc_std::StdModule::Enum,
+                symbol: enum_symbol,
+            }]
+        );
     }
 
     #[test]
