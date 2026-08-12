@@ -1963,4 +1963,75 @@ fi
 
 cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
 
+# --- README comparison table mutation tests (Part 2 of #162) ---
+
+# Value-false mutation: corrupt a README comparison cell while keeping
+# the claims.json model intact. The validator must reject the mismatch.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+# Corrupt the Codon type_enforcement cell
+content = content.replace(
+    "| Codon | ✅ static language |",
+    "| Codon | ❌ no type enforcement |",
+    1
+)
+path.write_text(content)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a corrupted README comparison cell (Codon type_enforcement)" >&2
+  exit 1
+fi
+
+# Model-HTML mismatch: change the claims.json readme_projection label
+# without changing the README. The validator must reject the mismatch.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+cp "$repo_root/site/python-aot-compilers/claims.json" "$fixture_root/site/python-aot-compilers/claims.json"
+python3 - "$fixture_root/site/python-aot-compilers/claims.json" <<'PY'
+from pathlib import Path
+import sys
+import json
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+# Corrupt the pycc native_executable label
+data["readme_projection"]["labels"]["pycc"]["native_executable"] = "CPython interpreter required"
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a corrupted claims.json readme_projection label" >&2
+  exit 1
+fi
+
+# Entity-set mutation: add an extra entity to the README table.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+# Add a fake row after Cython
+content = content.replace(
+    "| Cython | ⚠️ optional | ❌ extension or embedded CPython | ⚠️ Python superset |",
+    "| Cython | ⚠️ optional | ❌ extension or embedded CPython | ⚠️ Python superset |\n| FakeCompiler | ✅ | ✅ | ✅ |",
+    1
+)
+path.write_text(content)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an extra entity in the README comparison table" >&2
+  exit 1
+fi
+
+cp "$repo_root/README.md" "$fixture_root/README.md"
+cp "$repo_root/site/python-aot-compilers/claims.json" "$fixture_root/site/python-aot-compilers/claims.json"
+
 echo "Website validator self-tests passed."
