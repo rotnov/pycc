@@ -260,6 +260,32 @@
                 v0.1 surface remain design targets unless marked otherwise.
               </p>
             </div>
+            <div class="callout callout-warning">
+              <strong>Known correctness defects in the named v0.1 surface.</strong>
+              <p>
+                The accepted boundaries above are deliberate scope limits.
+                The following are open defects inside the named current
+                surface, not deliberate scope limits — programs that pass
+                <code>pycc check</code> or run under <code>pycc run</code>
+                but produce wrong results or abort where CPython succeeds:
+              </p>
+              <ul>
+                <li><a href="https://github.com/rotnov/pycc/issues/118">#118</a>: <code>pycc check</code> exits 0 for a name assigned only under <code>if False</code> and then read (false-success; CPython raises <code>NameError</code>).</li>
+                <li><a href="https://github.com/rotnov/pycc/issues/123">#123</a>: <code>pycc check</code> rejects <code>"ab" * 3</code> with <code>T0021</code> (valid standard Python; CPython prints <code>ababab</code>).</li>
+                <li><a href="https://github.com/rotnov/pycc/issues/145">#145</a>: multi-argument <code>print</code> evaluates arguments in a different order than CPython, producing silently different output.</li>
+                <li><a href="https://github.com/rotnov/pycc/issues/146">#146</a>: supported bigint add/sub in a constant-magnitude loop leaks native memory linearly.</li>
+                <li><a href="https://github.com/rotnov/pycc/issues/147">#147</a>: <code>pycc run</code> aborts (exit 101) for bigint-valued <code>range</code> instead of raising a user-level exception.</li>
+                <li><a href="https://github.com/rotnov/pycc/issues/148">#148</a>: <code>pycc run</code> aborts with a codegen panic for large integer literals like <code>2**62</code>.</li>
+                <li><a href="https://github.com/rotnov/pycc/issues/150">#150</a>: <code>pycc run</code> aborts with a non-unwinding Rust panic for <code>range(..., step=0)</code> instead of raising <code>ValueError</code>.</li>
+              </ul>
+              <p>
+                This list is not exhaustive — other open issues define
+                additional source-order, call-target, and conversion
+                boundaries. Milestone acceptance proves the five binary
+                gates are green; it does not prove every combination
+                inside a broad feature label is correct.
+              </p>
+            </div>
           </section>
 
           <section id="evidence">
@@ -345,6 +371,9 @@
         <p>
           AI agents write the specifications, code, tests, documentation,
           reviews, and automation. No project code is handwritten by a human.
+          This is a maintainer attestation supported by the public Git history,
+          pull requests, agent instructions, review artifacts, and session
+          handoff logs — not a fact provable from Git author metadata alone.
         </p>
       </aside>
     </main>
