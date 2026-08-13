@@ -9,10 +9,15 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 1. Unit (Rust) | per-crate `#[cfg(test)]` | lexer/parser/checker/MIR internals |
 | 2. Conformance | `tests/conformance/pyXY/` | each supported language level compiles and runs its cumulative fixture set; `stdout ==` that level's pinned CPython oracle |
 | 3. Diagnostics | `tests/diagnostics/` | rejected constructs fail with the exact code + span (insta-style snapshots) |
-| 4. Differential fuzzing | `tests/fuzz/` | generated typed-Python programs: pycc binary output ≡ CPython output; crashes/mismatches auto-minimized |
+| 4. Differential fuzzing *(planned)* | `tests/fuzz/` *(not yet created)* | generated typed-Python programs: pycc binary output ≡ CPython output; crashes/mismatches auto-minimized |
 | 5. Runtime property tests | `pycc_rt` proptest | str/list/dict/RC/cycle-collector invariants |
-| 6. Corpus (OSS projects) | nightly CI | real code compiles and its own test suite passes |
+| 6. Corpus (OSS projects) *(planned)* | nightly CI *(not yet live)* | real code compiles and its own test suite passes |
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
+
+Layers 4 and 6 are planned and not yet implemented on current `main`; no
+`tests/fuzz/` directory or nightly corpus workflow exists. Their table rows
+describe the target architecture, not a live system — see the dedicated
+planned sections below for the current status of each.
 
 The focused D-094 release regression in `pycc_codegen` observes the same
 production codegen helper immediately before object emission. Debug codegen
@@ -236,6 +241,42 @@ wrong branch, CI badge with wrong workflow, CI badge with wrong repository, CI
 badge link target pointing to wrong repo or workflow, duplicate coverage badge,
 duplicate CI badge, skippable coverage step (both `if:` condition and
 `continue-on-error`), and ci-gate without build-test-coverage dependency.
+
+## README testing-claims validator (issue #214)
+
+`scripts/check_readme_testing_claims.rb` parses the README's "Testing
+strategy" section and verifies that every claimed testing mechanism is
+consistent with actual repository evidence. It complements
+`scripts/check_readme_claims.rb` (which checks text patterns) by
+cross-referencing claims against real workflow files and test directories.
+
+The validator checks four invariants:
+
+1. **Current mechanisms have evidence.** A mechanism presented as current
+   (e.g. the conformance suite) must have backing evidence — either a test
+   file (`tests/conformance.rs`) or a workflow that references it. A
+   current claim without evidence is a false live claim.
+2. **Planned mechanisms are explicitly marked.** A planned mechanism
+   (corpus, ecosystem bot, differential fuzzing) must carry an explicit
+   `(planned)` marker or "not yet implemented" language in the same
+   paragraph as any mention.
+3. **No contradictory present-tense claims.** A present-tense deployment
+   verb ("CI compiles", "a scheduled job picks", "runs continuously") for
+   a planned mechanism without a planned marker in the same paragraph is
+   rejected — it reads as live but no backing evidence exists.
+4. **Roadmap checklist consistency.** The roadmap's ecosystem-bot
+   checklist item must be unchecked `[ ]` while the testing section marks
+   the bot as planned; a checked roadmap item alongside a planned testing
+   claim is an inconsistency.
+
+The validator runs in `pages.yml` alongside
+`scripts/check_readme_claims.rb`. Its test suite
+(`scripts/test_check_readme_testing_claims.rb`) includes mutation tests
+for every invariant: current mechanism without evidence, present-tense
+corpus/bot/fuzzing claims without planned markers, mechanism mentioned
+without any planned marker, roadmap bot checked while testing says
+planned, and positive controls for planned markers that legitimize
+mentions.
 
 The `ci-tier1-cross-compile` evidence binds an allowlist of exact reviewed
 `ci.yml` byte digests that provide the five Tier-1 native targets, cross-host

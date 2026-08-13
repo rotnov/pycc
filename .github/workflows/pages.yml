@@ -13,6 +13,8 @@ on:
       - "README.md"
       - "tests/fixtures/quick_start.py"
       - "docs/WEBSITE.md"
+      - "scripts/check_readme_testing_claims.rb"
+      - "scripts/test_check_readme_testing_claims.rb"
   pull_request:
     paths:
       - "site/**"
@@ -24,6 +26,8 @@ on:
       - "README.md"
       - "tests/fixtures/quick_start.py"
       - "docs/WEBSITE.md"
+      - "scripts/check_readme_testing_claims.rb"
+      - "scripts/test_check_readme_testing_claims.rb"
   workflow_dispatch:
 
 permissions:
@@ -56,6 +60,8 @@ jobs:
           ruby scripts/test_check_citation_cff.rb
           ruby scripts/check_readme_claims.rb
           ruby scripts/test_check_readme_claims.rb
+          ruby scripts/check_readme_testing_claims.rb
+          ruby scripts/test_check_readme_testing_claims.rb
           ruby scripts/check_readme_coverage_badge.rb
           ruby scripts/test_check_readme_coverage_badge.rb
           ruby scripts/check_sitemap_lastmod.rb

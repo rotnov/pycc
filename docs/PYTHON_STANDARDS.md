@@ -273,4 +273,9 @@ Planned nightly CI would compile pinned revisions of open-source projects and ru
 | 3 — large / typed | `mypy`, `httpx`, `rich` | tracked pass-rate |
 | 4 — stretch | `fastapi` + `pydantic` stack | aspirational |
 
+The gates above describe the planned target, not a live system. No corpus
+workflow, pinned corpus inputs, or pass-rate dashboard exists on current
+`main`; "tracked pass-rate" is the intended gate once the corpus CI is
+implemented, not a current measurement.
+
 Rules: pinned commits for reproducibility; per-project pass-rate dashboard; regressions block release; genuine upstream type bugs found by pycc are reported upstream manually (curated, never bot-spammed).
