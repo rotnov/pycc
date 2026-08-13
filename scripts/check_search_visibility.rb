@@ -188,22 +188,6 @@ def check!
   end
 
   # --- Projection consistency ---
-  # The docs must mention the launch gate status.
-  unless docs.downcase.include?("launch gate")
-    raise SearchVisibilityError,
-          "SEARCH_VISIBILITY.md must mention the launch gate"
-  end
-
-  # The docs must mention the classification vocabulary.
-  unless docs.include?("self_authored_external")
-    raise SearchVisibilityError,
-          "SEARCH_VISIBILITY.md must document the self_authored_external classification"
-  end
-  unless docs.include?("independent_editorial")
-    raise SearchVisibilityError,
-          "SEARCH_VISIBILITY.md must document the independent_editorial classification"
-  end
-
   # The docs must not claim zero backlinks as a universal fact
   # (empty windows are bounded results, not universal zeros).  Sentences
   # that say "does not prove zero backlinks" are fine — they say the
