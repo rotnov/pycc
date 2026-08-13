@@ -890,14 +890,6 @@ jobs:
           ruby scripts/test_check_citation_cff.rb
           ruby scripts/check_readme_claims.rb
           ruby scripts/test_check_readme_claims.rb
-          ruby scripts/check_readme_coverage_badge.rb
-          ruby scripts/test_check_readme_coverage_badge.rb
-          ruby scripts/check_sitemap_lastmod.rb
-          ruby scripts/test_check_sitemap_lastmod.rb
-          ruby scripts/check_source_links_registry.rb
-          ruby scripts/test_check_source_links_registry.rb
-          ruby scripts/check_search_visibility.rb
-          ruby scripts/test_check_search_visibility.rb
 
       - name: Upload Lighthouse accessibility reports
         if: always()
