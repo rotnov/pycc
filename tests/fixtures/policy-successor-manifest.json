@@ -9,7 +9,7 @@
     {
       "path": "scripts/check_ci_permissions.rb",
       "source_path": "scripts/check_ci_permissions.rb",
-      "sha256": "edff9d62bef98b62c3f974db9f9ced3217632ad461bb0ba45880011db84f2085"
+      "sha256": "79d03d0399f5f19d1a0d3642f786ea6fe73f4d8f3275c4fa2a584d3d0143ec4f"
     },
     {
       "path": "scripts/check_pages_performance_budget.rb",
@@ -29,7 +29,7 @@
     {
       "path": "scripts/check_search_visibility_audit.py",
       "source_path": "scripts/check_search_visibility_audit.py",
-      "sha256": "5ca11c549b40b76ca4d33d61b2515572c44a9a5d3f79665983188db940f62586"
+      "sha256": "8aa52590514d82010f09b22f919551ae5bd042d42a1e0956cfc27cc9b9fc5b0f"
     },
     {
       "path": "scripts/check_site_accessibility.rb",
