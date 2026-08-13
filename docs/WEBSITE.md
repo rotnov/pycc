@@ -252,6 +252,22 @@ its navigation group must wrap within the available width; the validator and
 an independent negative mutation preserve that footer contract as the
 evidence-page link set grows.
 
+## Tested quick-start example binding
+
+The landing-page and README quick-start example is a tested, executable v0.1 example, not a design mock. Its source is bound to a single canonical fixture
+(`tests/fixtures/quick_start.py`) and a CLI regression test
+(`tests/quick_start.rs`) that builds and runs it through the real
+`pycc build` → native binary path and asserts exact stdout
+(`0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n55\n`). `scripts/check-site.sh` binds the
+README `cat hello.py` source, the site hero `<pre><code>` source, the
+copy-button command, and the documented output to that fixture and to each
+other, with mutation tests in `scripts/test-check-site.sh`. A deliberate
+coordinated change that updates the fixture, the Rust expected stdout, and the
+README output consistently is the intended update path; the binding prevents
+inconsistent drift, not deliberate coordinated updates. Other examples and CLI
+commands shown on the website are design targets unless explicitly identified
+as implemented behavior.
+
 ## Status-page freshness enforcement
 
 `site/status/index.html` and `site/index.html` restate `docs/ROADMAP.md`'s
