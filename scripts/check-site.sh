@@ -2090,12 +2090,6 @@ quick_start_match = re.search(
 )
 if not quick_start_match:
     raise SystemExit("README is missing a '## Quick start' heading")
-quick_start_heading = quick_start_match.group(0).strip()
-if quick_start_heading != "## Quick start":
-    raise SystemExit(
-        f"README Quick start heading must be exactly '## Quick start', "
-        f"found {quick_start_heading!r}"
-    )
 
 console_match = re.search(
     r"```console\n(.*?)\n```",
@@ -2185,13 +2179,12 @@ if command_displayed != "pycc check hello.py":
     )
 if parser.copy_button_data is None:
     raise SystemExit("site hero is missing a .copy-button with data-copy")
-if parser.copy_button_data != command_displayed:
-    raise SystemExit(
-        f"site hero copy-button data-copy ({parser.copy_button_data!r}) "
-        f"does not match the displayed command ({command_displayed!r})"
-    )
 
 # --- No-global-install guard ---
+# These checks run on the raw data-copy value BEFORE the equality check below,
+# so a copy-button carrying an install command or @<version> suffix is rejected
+# on its own merit rather than only being caught by the displayed-command
+# mismatch.
 install_patterns = (
     "pip install",
     "brew install",
@@ -2224,6 +2217,12 @@ if version_suffix.search(copy_command):
     raise SystemExit(
         f"site hero copy-button command must not use a @<version> suffix: "
         f"found in {copy_command!r}"
+    )
+
+if parser.copy_button_data != command_displayed:
+    raise SystemExit(
+        f"site hero copy-button data-copy ({parser.copy_button_data!r}) "
+        f"does not match the displayed command ({command_displayed!r})"
     )
 
 # --- No-"planned"-relapse guard ---

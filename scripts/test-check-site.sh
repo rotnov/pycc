@@ -2349,7 +2349,6 @@ done
 # mutation test is a false positive — check-site.sh exits 1 on the required-files
 # check before reaching the #197 validation block.
 cp -R "$repo_root/site/." "$fixture_root/site/"
-cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
 # --- Issue #197: quick-start example binding mutation tests ---
 # Execution-level negative controls (expression-form reintroduction, missing
@@ -2491,6 +2490,8 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
 fi
 
 # Mutation: rename README `## Quick start` to `## Quick start (planned CLI)`.
+# This is caught by the heading-existence guard (regex no longer matches),
+# not by a 'planned'-in-heading guard.
 cp "$repo_root/README.md" "$fixture_root/README.md"
 python3 - "$fixture_root/README.md" <<'PY'
 from pathlib import Path
