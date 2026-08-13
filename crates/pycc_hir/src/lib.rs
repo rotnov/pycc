@@ -1332,7 +1332,7 @@ fn lower_return_annotation(
 /// (module-level `AnnAssign`, type aliases), where `"Self"` and a bare class
 /// name remain unrecognized (C0001), matching CPython's own scope rule that
 /// `Self` is only valid inside a class body.
-fn annotation_to_ty(
+pub(crate) fn annotation_to_ty(
     annotation: &Expr,
     type_param: Option<&str>,
     class_name: Option<&str>,

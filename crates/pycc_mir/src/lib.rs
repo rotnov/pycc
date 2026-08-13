@@ -1,8 +1,8 @@
-use pycc_hir::{
-    CompIter, FStringPart, HirExpr, HirItem, HirModule, HirStmt,
-    eval_isinstance_single, eval_issubclass_single, extract_class_names, is_builtin_type_name,
-};
 pub use pycc_hir::HirClassDef;
+use pycc_hir::{
+    CompIter, FStringPart, HirExpr, HirItem, HirModule, HirStmt, eval_isinstance_single,
+    eval_issubclass_single, extract_class_names, is_builtin_type_name,
+};
 use std::collections::HashMap;
 
 // Re-exported (not just `use`d) because `pycc_codegen` doesn't depend on
@@ -1024,10 +1024,7 @@ fn try_lower_enum_member_attr(
     if let HirExpr::Name(class_name) = base
         && let Some(class_def) = classes.get(class_name.as_str())
         && !class_def.enum_members.is_empty()
-        && class_def
-            .enum_members
-            .iter()
-            .any(|(name, _)| name == attr)
+        && class_def.enum_members.iter().any(|(name, _)| name == attr)
     {
         return Some(MirExpr::Name {
             name: format!("{class_name}.{attr}.enum_member"),
@@ -1085,7 +1082,21 @@ fn lower_expr(
             }
             let args: Vec<MirExpr> = args
                 .iter()
-                .map(|a| lower_expr(a, scopes, classes, current_class))
+                .map(|a| {
+                    let lowered = lower_expr(a, scopes, classes, current_class);
+                    // #378 (PR-18): for `print(instance)`, rewrite an
+                    // instance-typed argument to a `__repr__` call so the
+                    // codegen's `to_str` receives a `str` scalar. Only
+                    // `print` feeds non-str values to `to_str` among call
+                    // expressions (f-string interpolations are handled in
+                    // the `FString` arm); other calls pass instance
+                    // arguments directly as opaque pointers.
+                    if callee == "print" {
+                        rewrite_instance_to_repr(&lowered, classes)
+                    } else {
+                        lowered
+                    }
+                })
                 .collect();
             // D-154 (Part 1 of #375): `ClassName(args)` (instantiation)
             // reuses `HirExpr::Call` -- there is no dedicated HIR shape for
@@ -1179,20 +1190,98 @@ fn lower_expr(
                 ty,
             }
         }
-        HirExpr::Compare { op, left, right } => MirExpr::Compare {
-            op: *op,
-            left: Box::new(lower_expr(left, scopes, classes, current_class)),
-            right: Box::new(lower_expr(right, scopes, classes, current_class)),
-            ty: Ty::Bool,
-        },
+        HirExpr::Compare { op, left, right } => {
+            let left_lowered = lower_expr(left, scopes, classes, current_class);
+            let right_lowered = lower_expr(right, scopes, classes, current_class);
+            // #378 (PR-18): `==`/`!=` between same-class dataclass instances
+            // is rewritten to a `MirExpr::Call` to the class's
+            // compiler-synthesized `__eq__` method. `!=` is lowered as
+            // `__eq__(left, right) != True` (the negation), since pycc's
+            // MIR has no `UnaryOp::Not` node. This mirrors how `@property`
+            // redirects attribute access to method calls -- a MIR-level
+            // rewrite, not a new MIR node. Only `Eq` and `NotEq` are
+            // rewritten, and only for dataclass classes (whose synthesized
+            // `__eq__` has a known-correct signature); other comparison
+            // operators (`<`, `<=`, `>`, `>=`) and non-dataclass classes
+            // fall through to the default `MirExpr::Compare` (the type
+            // checker rejects them with `T0021` before they reach MIR
+            // lowering in normal compilation, but the MIR itself stays
+            // semantically correct for defense-in-depth).
+            if matches!(op, pycc_hir::CmpOpKind::Eq | pycc_hir::CmpOpKind::NotEq)
+                && let (Ty::Instance(left_class), Ty::Instance(right_class)) =
+                    (left_lowered.ty(), right_lowered.ty())
+                && left_class == right_class
+                && let Some(class_def) = classes.get(left_class.as_str())
+                && class_def.is_dataclass
+            {
+                let eq_mangled = class_def.mro.iter().find_map(|mro_class| {
+                    // Every class in the MRO was registered when the class
+                    // was lowered; using `.expect` (whose panic path lives
+                    // in libcore, outside this crate's instrumented regions)
+                    // avoids a `?` whose `None` branch is structurally
+                    // unreachable and would show up as a permanently
+                    // uncovered region under D-014's 100% coverage gate.
+                    let mro_def = classes
+                        .get(mro_class.as_str())
+                        .expect("MRO class must be registered");
+                    mro_def
+                        .methods
+                        .iter()
+                        .find(|(mn, _)| mn == "__eq__")
+                        .map(|(_, mangled)| mangled.clone())
+                });
+                // A dataclass always has a synthesized `__eq__` in its
+                // MRO (the `is_dataclass` guard above ensures we only
+                // enter this block for dataclass classes). Using
+                // `.expect` (whose panic path lives in libcore, outside
+                // this crate's instrumented regions) avoids an `if let
+                // Some` whose `None` branch is structurally unreachable
+                // for a dataclass and would show up as a permanently
+                // uncovered region under D-014's 100% coverage gate.
+                let eq_mangled = eq_mangled.expect("dataclass must have __eq__");
+                let eq_call = MirExpr::Call {
+                    callee: eq_mangled,
+                    args: vec![left_lowered, right_lowered],
+                    ty: Ty::Bool,
+                };
+                // The `matches!` guard above limits entry to
+                // `Eq`/`NotEq`, so an if/else (rather than a match
+                // with a `_` arm) suffices and avoids an unreachable
+                // arm that would be permanently uncovered under
+                // D-014's 100% coverage gate.
+                if *op == pycc_hir::CmpOpKind::Eq {
+                    return eq_call;
+                }
+                return MirExpr::Compare {
+                    op: pycc_hir::CmpOpKind::NotEq,
+                    left: Box::new(eq_call),
+                    right: Box::new(MirExpr::BoolLiteral(true)),
+                    ty: Ty::Bool,
+                };
+            }
+            MirExpr::Compare {
+                op: *op,
+                left: Box::new(left_lowered),
+                right: Box::new(right_lowered),
+                ty: Ty::Bool,
+            }
+        }
         HirExpr::FString(parts) => MirExpr::FString(
             parts
                 .iter()
                 .map(|p| match p {
                     FStringPart::Literal(s) => MirFStringPart::Literal(s.clone()),
-                    FStringPart::Interpolation(e) => MirFStringPart::Interpolation(Box::new(
-                        lower_expr(e, scopes, classes, current_class),
-                    )),
+                    FStringPart::Interpolation(e) => {
+                        let lowered = lower_expr(e, scopes, classes, current_class);
+                        // #378 (PR-18): if the interpolation is a class
+                        // instance with `__repr__`, rewrite it to a call to
+                        // `__repr__` so the codegen's `to_str` receives a
+                        // `str` scalar, not an Instance scalar (which would
+                        // panic). This mirrors how `==`/`!=` on instances is
+                        // rewritten to `__eq__` calls in the Compare arm.
+                        let rewritten = rewrite_instance_to_repr(&lowered, classes);
+                        MirFStringPart::Interpolation(Box::new(rewritten))
+                    }
                 })
                 .collect(),
         ),
@@ -1677,6 +1766,65 @@ fn lower_expr(
 /// `check_and_resolve`) already accepted, so only a hand-built `MirExpr`/
 /// `HirModule` bypassing that validation (e.g. this file's own internal-error
 /// tests) can reach either panic.
+/// #378 (PR-18): If `expr` is a class-instance-typed expression whose
+/// class has a `__repr__` method (found via the MRO), rewrites it to a
+/// `MirExpr::Call` to that `__repr__` method, passing the original
+/// expression as the `self` argument. The result type is `Ty::Str`. If
+/// the expression is not an instance or the class has no `__repr__`,
+/// returns the original expression unchanged.
+///
+/// This is used by `HirExpr::FString`'s interpolation lowering and
+/// `HirExpr::Call`'s `print` argument lowering so the codegen's `to_str`
+/// receives a `str` scalar (from the `__repr__` call's return value)
+/// instead of an `Instance` scalar (which would panic in `to_str`).
+fn rewrite_instance_to_repr(expr: &MirExpr, classes: &HashMap<String, HirClassDef>) -> MirExpr {
+    let Ty::Instance(class_name) = expr.ty() else {
+        return expr.clone();
+    };
+    let Some(class_def) = classes.get(class_name.as_str()) else {
+        return expr.clone();
+    };
+    // #378 (PR-18): only rewrite for dataclass classes, whose
+    // compiler-synthesized `__repr__` has a known-correct signature
+    // `(self) -> str`. A user-defined `__repr__` on a non-dataclass class
+    // may have a different arity or return type, which would cause a
+    // codegen panic if rewritten to a call here. Non-dataclass instances
+    // pass through unchanged (the type checker rejects `print(instance)` /
+    // f-string interpolation of a non-dataclass instance with `T0021`
+    // before codegen).
+    if !class_def.is_dataclass {
+        return expr.clone();
+    }
+    let repr_mangled = class_def.mro.iter().find_map(|mro_class| {
+        // Every class in the MRO was registered when the class was lowered;
+        // using `.expect` (whose panic path lives in libcore, outside this
+        // crate's instrumented regions) avoids a `?` whose `None` branch is
+        // structurally unreachable and would show up as a permanently
+        // uncovered region under D-014's 100% coverage gate.
+        let mro_def = classes
+            .get(mro_class.as_str())
+            .expect("MRO class must be registered");
+        mro_def
+            .methods
+            .iter()
+            .find(|(mn, _)| mn == "__repr__")
+            .map(|(_, mangled)| mangled.clone())
+    });
+    // A dataclass always has a synthesized `__repr__` in its MRO (the
+    // `is_dataclass` guard above ensures we only reach here for dataclass
+    // classes). Using `.expect` (whose panic path lives in libcore,
+    // outside this crate's instrumented regions) avoids a `match` whose
+    // `None` arm is structurally unreachable for a dataclass and would
+    // show up as a permanently uncovered region under D-014's 100%
+    // coverage gate.
+    let repr_mangled = repr_mangled.expect("dataclass must have __repr__");
+    MirExpr::Call {
+        callee: repr_mangled,
+        args: vec![expr.clone()],
+        ty: Ty::Str,
+    }
+}
+
 fn class_def_of<'c>(expr: &MirExpr, classes: &'c HashMap<String, HirClassDef>) -> &'c HirClassDef {
     let Ty::Instance(class_name) = expr.ty() else {
         panic!(
@@ -4798,6 +4946,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         }
@@ -4922,6 +5072,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -5283,6 +5435,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -5436,6 +5590,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         }
@@ -5539,6 +5695,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -5578,6 +5736,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -5659,6 +5819,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
                 (
@@ -5674,6 +5836,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
             ],
@@ -5767,6 +5931,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
                 (
@@ -5782,6 +5948,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
             ],
@@ -5878,6 +6046,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
                 (
@@ -5896,6 +6066,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
             ],
@@ -5986,6 +6158,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
                 (
@@ -6001,6 +6175,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
             ],
@@ -6082,6 +6258,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
                 (
@@ -6097,6 +6275,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
             ],
@@ -6166,6 +6346,8 @@ mod tests {
                     static_methods: vec![("create".to_string(), "C.create.static".to_string())],
                     class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         }
@@ -6335,6 +6517,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -6373,6 +6557,8 @@ mod tests {
                     static_methods: vec![("found".to_string(), "C.found.static".to_string())],
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -6422,6 +6608,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -6472,6 +6660,8 @@ mod tests {
                     static_methods: vec![("found".to_string(), "Derived.found.static".to_string())],
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -6514,6 +6704,8 @@ mod tests {
                     properties: vec![],
                     type_param: None,
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -6557,6 +6749,8 @@ mod tests {
                     properties: vec![],
                     type_param: None,
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -6661,6 +6855,8 @@ mod tests {
                     properties: vec![],
                     type_param: None,
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -6713,10 +6909,9 @@ mod tests {
             static_methods: vec![],
             class_methods: vec![],
             type_param: None,
-            enum_members: vec![
-                ("RED".to_string(), 1),
-                ("GREEN".to_string(), 2),
-            ],
+            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let hir = HirModule {
             items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
@@ -6742,5 +6937,355 @@ mod tests {
                 ty: Ty::None,
             }))
         );
+    }
+
+    // -- #378 (PR-18): dataclass __eq__ / __repr__ MIR rewrites -----------
+
+    /// A minimal dataclass-like `Point` module with `__init__`, `__eq__`,
+    /// and `__repr__` methods registered in the class definition. Used by
+    /// the dataclass MIR-rewrite tests below.
+    fn dataclass_point_module(extra_items: Vec<HirItem>) -> HirModule {
+        let self_ty = Ty::Instance(Box::new("Point".to_string()));
+        let init = HirItem::Function {
+            name: "Point.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("x".to_string(), Ty::Int),
+                ("y".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "x".to_string(),
+                    value: HirExpr::Name("x".to_string()),
+                },
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "y".to_string(),
+                    value: HirExpr::Name("y".to_string()),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let eq = HirItem::Function {
+            name: "Point.__eq__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("other".to_string(), self_ty.clone()),
+            ],
+            return_ty: Ty::Bool,
+            body: vec![HirStmt::Return(Some(HirExpr::BoolLiteral(true)))],
+        };
+        let repr = HirItem::Function {
+            name: "Point.__repr__".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: Ty::Str,
+            body: vec![HirStmt::Return(Some(HirExpr::StringLiteral(
+                "Point()".to_string(),
+            )))],
+        };
+        let mut items = vec![init, eq, repr];
+        items.extend(extra_items);
+        HirModule {
+            items,
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "Point".to_string(),
+                HirClassDef {
+                    name: "Point".to_string(),
+                    bases: Vec::new(),
+                    mro: vec!["Point".to_string()],
+                    attrs: vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int)],
+                    methods: vec![
+                        ("__init__".to_string(), "Point.__init__".to_string()),
+                        ("__eq__".to_string(), "Point.__eq__".to_string()),
+                        ("__repr__".to_string(), "Point.__repr__".to_string()),
+                    ],
+                    type_param: None,
+                    properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
+                    enum_members: Vec::new(),
+                    is_dataclass: true,
+                    dataclass_fields: vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int)],
+                },
+            )],
+        }
+    }
+
+    #[test]
+    fn an_eq_comparison_between_same_class_instances_lowers_to_eq_call() {
+        let hir = dataclass_point_module(vec![
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "p".to_string(),
+                value: HirExpr::Call {
+                    callee: "Point".to_string(),
+                    args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+                },
+            }),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "q".to_string(),
+                value: HirExpr::Call {
+                    callee: "Point".to_string(),
+                    args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+                },
+            }),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "r".to_string(),
+                value: HirExpr::Compare {
+                    op: CmpOpKind::Eq,
+                    left: Box::new(HirExpr::Name("p".to_string())),
+                    right: Box::new(HirExpr::Name("q".to_string())),
+                },
+            }),
+        ]);
+        let mir = build(&hir);
+        // Items: [__init__, __eq__, __repr__, Assign p, Assign q, Assign r].
+        // The comparison is at index 5. Using `matches!` with a guard
+        // avoids a hand-written `other => panic!(...)` arm that would be
+        // permanently uncovered under D-014's 100%-line-coverage gate
+        // (the happy path always matches the expected pattern).
+        assert!(matches!(
+            &mir.items[5],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                value: MirExpr::Call { callee, .. },
+                ..
+            }) if callee == "Point.__eq__"
+        ));
+    }
+
+    #[test]
+    fn a_neq_comparison_between_same_class_instances_lowers_to_neq_of_eq_call() {
+        let hir = dataclass_point_module(vec![
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "p".to_string(),
+                value: HirExpr::Call {
+                    callee: "Point".to_string(),
+                    args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+                },
+            }),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "q".to_string(),
+                value: HirExpr::Call {
+                    callee: "Point".to_string(),
+                    args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+                },
+            }),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "r".to_string(),
+                value: HirExpr::Compare {
+                    op: CmpOpKind::NotEq,
+                    left: Box::new(HirExpr::Name("p".to_string())),
+                    right: Box::new(HirExpr::Name("q".to_string())),
+                },
+            }),
+        ]);
+        let mir = build(&hir);
+        // The NotEq arm wraps the __eq__ call in a Compare with True.
+        assert!(matches!(
+            &mir.items[5],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                value: MirExpr::Compare {
+                    op: CmpOpKind::NotEq,
+                    left,
+                    right,
+                    ..
+                },
+                ..
+            }) if matches!(left.as_ref(), MirExpr::Call { callee, .. } if callee == "Point.__eq__")
+                && matches!(right.as_ref(), MirExpr::BoolLiteral(true))
+        ));
+    }
+
+    #[test]
+    fn a_non_eq_neq_comparison_between_instances_with_eq_falls_through_to_mir_compare() {
+        // A non-Eq/NotEq comparison (`<`, `<=`, `>`, `>=`) between same-class
+        // instances with `__eq__` falls through to the default
+        // `MirExpr::Compare` rather than being rewritten to an `__eq__` call.
+        // The `matches!(op, Eq | NotEq)` guard at the top of the rewrite
+        // block prevents entry for other operators. The type checker would
+        // reject `<` between class instances (T0021), but the MIR lowering
+        // is tested directly here without going through the type checker.
+        let hir = dataclass_point_module(vec![
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "p".to_string(),
+                value: HirExpr::Call {
+                    callee: "Point".to_string(),
+                    args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+                },
+            }),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "q".to_string(),
+                value: HirExpr::Call {
+                    callee: "Point".to_string(),
+                    args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+                },
+            }),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "r".to_string(),
+                value: HirExpr::Compare {
+                    op: CmpOpKind::Lt,
+                    left: Box::new(HirExpr::Name("p".to_string())),
+                    right: Box::new(HirExpr::Name("q".to_string())),
+                },
+            }),
+        ]);
+        let mir = build(&hir);
+        // The `Lt` comparison should NOT be rewritten to an `__eq__` call;
+        // it should remain a `MirExpr::Compare` with the original operator.
+        assert!(matches!(
+            &mir.items[5],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                value: MirExpr::Compare { op, .. },
+                ..
+            }) if *op == CmpOpKind::Lt
+        ));
+    }
+
+    #[test]
+    fn an_eq_comparison_between_instances_without_eq_falls_through_to_mir_compare() {
+        // When the class has no `__eq__` method in its MRO, the `if let
+        // Some(eq_mangled)` block is not entered, and the comparison falls
+        // through to the default `MirExpr::Compare`. This covers the `}`
+        // (merge point) of the `if let Some(eq_mangled)` block.
+        let self_ty = Ty::Instance(Box::new("Plain".to_string()));
+        let init = HirItem::Function {
+            name: "Plain.__init__".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "p".to_string(),
+                    value: HirExpr::Call {
+                        callee: "Plain".to_string(),
+                        args: vec![],
+                    },
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "q".to_string(),
+                    value: HirExpr::Call {
+                        callee: "Plain".to_string(),
+                        args: vec![],
+                    },
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "r".to_string(),
+                    value: HirExpr::Compare {
+                        op: CmpOpKind::Eq,
+                        left: Box::new(HirExpr::Name("p".to_string())),
+                        right: Box::new(HirExpr::Name("q".to_string())),
+                    },
+                }),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "Plain".to_string(),
+                HirClassDef {
+                    name: "Plain".to_string(),
+                    bases: Vec::new(),
+                    mro: vec!["Plain".to_string()],
+                    attrs: Vec::new(),
+                    methods: vec![("__init__".to_string(), "Plain.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
+                    enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
+                },
+            )],
+        };
+        let mir = build(&hir);
+        // The last item should be a MirExpr::Compare (not a __eq__ call).
+        assert!(matches!(
+            &mir.items[3],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                value: MirExpr::Compare { op, .. },
+                ..
+            }) if *op == CmpOpKind::Eq
+        ));
+    }
+
+    #[test]
+    fn print_of_an_instance_with_an_unregistered_class_passes_through() {
+        // `rewrite_instance_to_repr` returns `expr.clone()` when the
+        // instance's class is not in the `classes` map. This test creates
+        // a function with a parameter typed as `Ghost` (an unregistered
+        // class), then prints it inside the function body. The MIR should
+        // pass the instance through without rewriting (the codegen would
+        // panic later, but we only test the MIR lowering here).
+        let ghost_ty = Ty::Instance(Box::new("Ghost".to_string()));
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "test".to_string(),
+                params: vec![("g".to_string(), ghost_ty.clone())],
+                return_ty: Ty::None,
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Name("g".to_string())],
+                })],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let mir = build(&hir);
+        // The function body's print argument should be a MirExpr::Name
+        // with the Ghost instance type (not rewritten to a __repr__ call).
+        // Using nested `matches!` avoids hand-written `other => panic!(...)`
+        // arms that would be permanently uncovered under D-014's coverage gate.
+        assert!(matches!(
+            &mir.items[0],
+            MirItem::Function { body, .. }
+                if body.len() == 1
+                    && matches!(
+                        &body[0],
+                        MirStmt::ExprStmt(MirExpr::Call { args, .. })
+                            if args.len() == 1 && args[0].ty() == ghost_ty
+                    )
+        ));
+    }
+
+    #[test]
+    fn print_of_an_instance_with_repr_lowers_to_repr_call() {
+        let hir = dataclass_point_module(vec![
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "p".to_string(),
+                value: HirExpr::Call {
+                    callee: "Point".to_string(),
+                    args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+                },
+            }),
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Name("p".to_string())],
+            })),
+        ]);
+        let mir = build(&hir);
+        // Items: [__init__, __eq__, __repr__, Assign p, ExprStmt(print)].
+        // The print is at index 4. The argument should be a MirExpr::Call
+        // to Point.__repr__.
+        assert!(matches!(
+            &mir.items[4],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee,
+                args,
+                ..
+            })) if callee == "print"
+                  && args.len() == 1
+                  && matches!(
+                      &args[0],
+                      MirExpr::Call { callee: repr_callee, .. }
+                          if repr_callee == "Point.__repr__"
+                  )
+        ));
     }
 }
