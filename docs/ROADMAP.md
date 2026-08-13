@@ -79,8 +79,9 @@ the typed-Python AOT compiler before the separate AI-authorship experiment.
 - [x] The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output. <!-- roadmap-evidence: cli-spec-diagnostic-match -->
 - [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile -->
 - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+- [x] The README coverage badge percentage is bound to ci.yml's enforced --fail-under-lines and --fail-under-regions thresholds. <!-- roadmap-evidence: readme-coverage-badge-bound -->
 
-All five v0.1 acceptance criteria are green: per this document's own binary milestone definition above, v0.1 is complete. [DELIVERY_PLAN.md](./DELIVERY_PLAN.md)'s PR-7 buffer slice closed this checklist. The next delivery slices are v0.2's, defined below.
+All five v0.1 acceptance criteria are green: per this document's own binary milestone definition above, v0.1 is complete. The README coverage badge binding (issue #211) is an additional enforced contract verified by `scripts/check_readme_coverage_badge.rb` in both `ci.yml` and `pages.yml`. [DELIVERY_PLAN.md](./DELIVERY_PLAN.md)'s PR-7 buffer slice closed this checklist. The next delivery slices are v0.2's, defined below.
 
 ### CI/tooling follow-ups (untracked by any issue yet)
 
