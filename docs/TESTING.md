@@ -196,6 +196,43 @@ coverage job with a successful no-op. The marker controls whether the delivery
 claim may be shown as complete; it never controls whether hard coverage is
 enforced.
 
+## README badge-to-gate contract (issue #211)
+
+The README displays two badges at the top of the file:
+
+1. **CI badge** — a GitHub Actions workflow badge
+   (`[![CI](https://github.com/rotnov/pycc/actions/workflows/ci.yml/badge.svg?branch=main)]`).
+   It is bound to the `ci.yml` workflow and the `main` branch.
+2. **Coverage badge** — a Shields static badge
+   (`[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)]`).
+   Its percentage is bound to `ci.yml`'s `--fail-under-lines` and
+   `--fail-under-regions` thresholds.
+
+`scripts/check_readme_coverage_badge.rb` validates both badges locally
+without network access. It verifies:
+
+- the coverage badge's alt-text percentage and URL percentage agree with each
+  other and with ci.yml's `--fail-under-lines` threshold;
+- `--fail-under-lines` and `--fail-under-regions` agree (the badge binds to a
+  single threshold);
+- the coverage badge links to `./docs/TESTING.md`;
+- the CI badge references `actions/workflows/ci.yml` (not another workflow),
+  uses `branch=main` (not another branch), and links to `rotnov/pycc`;
+- the README contains exactly one coverage badge (no duplicates);
+- the coverage step in `build-test-coverage` has no `if:` condition that could
+  skip it;
+- `ci-gate`'s `needs` list includes `build-test-coverage`.
+
+The validator runs in both `ci.yml` (inside the `build-test-coverage` job, which
+contributes to `ci-gate`) and `pages.yml`, so deletion from either workflow is
+detected. Its test suite (`scripts/test_check_readme_coverage_badge.rb`)
+includes negative tests for every mutation: wrong percentage, missing badge,
+alt/URL disagreement, CI threshold mismatch, missing CI threshold, lines/regions
+disagreement, badge not linking to TESTING.md, CI badge with wrong branch,
+CI badge with wrong workflow, CI badge with wrong repository, duplicate coverage
+badge, skippable coverage step, and ci-gate without build-test-coverage
+dependency.
+
 The `ci-tier1-cross-compile` evidence binds an allowlist of exact reviewed
 `ci.yml` byte digests that provide the five Tier-1 native targets, cross-host
 build and execution proof, and aggregate `ci-gate`. Because a workflow can

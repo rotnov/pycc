@@ -893,6 +893,61 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
+  # Issue #211: README coverage badge binding evidence
+
+  def test_accepts_readme_coverage_badge_bound_evidence
+    repository_root = Pathname(__dir__).parent
+    workflow = (repository_root / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The README coverage badge percentage is bound to ci.yml's enforced --fail-under-lines and --fail-under-regions thresholds. <!-- roadmap-evidence: readme-coverage-badge-bound -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_readme_coverage_badge_bound_evidence_with_the_wrong_claim
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The README coverage badge is green. <!-- roadmap-evidence: readme-coverage-badge-bound -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "does not prove this roadmap claim"
+  end
+
+  def test_rejects_readme_coverage_badge_bound_evidence_outside_the_v0_1_checklist
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## v1.0 — spec freeze
+
+      ### v0.1 acceptance checklist
+
+      - [x] The README coverage badge percentage is bound to ci.yml's enforced --fail-under-lines and --fail-under-regions thresholds. <!-- roadmap-evidence: readme-coverage-badge-bound -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "must appear under the expected roadmap section"
+  end
+
   def test_accepts_throughput_floor_evidence
     repository_root = Pathname(__dir__).parent
     workflow = (repository_root / ".github/workflows/ci.yml").read

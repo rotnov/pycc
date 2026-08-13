@@ -25,7 +25,9 @@ EVIDENCE_CLAIMS = {
   "check-throughput-1k-loc-75ms" =>
     "`pycc check` processes 1k LOC in under 75 ms.",
   "cli-spec-diagnostic-match" =>
-    "The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output."
+    "The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output.",
+  "readme-coverage-badge-bound" =>
+    "The README coverage badge percentage is bound to ci.yml's enforced --fail-under-lines and --fail-under-regions thresholds."
 }.freeze
 EVIDENCE_SECTIONS = {
   "ci-tier1-cross-compile" => [
@@ -49,6 +51,11 @@ EVIDENCE_SECTIONS = {
     "v0.1 acceptance checklist"
   ],
   "cli-spec-diagnostic-match" => [
+    "pycc Roadmap",
+    "Current delivery status",
+    "v0.1 acceptance checklist"
+  ],
+  "readme-coverage-badge-bound" => [
     "pycc Roadmap",
     "Current delivery status",
     "v0.1 acceptance checklist"
@@ -221,7 +228,7 @@ D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256 =
 # activation (Merge 2 of #199) -- the live ci.yml is untouched by this
 # staging round.
 D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256 =
-  "b96af8b0aa4d3d7ce2509174f071a168dc53f2aac31372b75c0bdda20fc390b8"
+  "a22d8845e4f755bfc50e75e0bb6cc3ae285da7c9aea35ced95bf7a83c39c4b46"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,

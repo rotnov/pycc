@@ -102,6 +102,11 @@ jobs:
           ruby scripts/test_check_roadmap_evidence.rb
           ruby scripts/check_roadmap_evidence.rb
 
+      - name: Check README coverage badge binding (issue #211)
+        run: |
+          ruby scripts/check_readme_coverage_badge.rb
+          ruby scripts/test_check_readme_coverage_badge.rb
+
       # Rebuild outside the coverage boundary so the regular cargo test below
       # exercises the same cross-target success path.
       - name: Build pycc_rt for x86_64-apple-darwin

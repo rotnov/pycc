@@ -19,6 +19,7 @@
 # Exits 0 if the badge matches the enforced threshold, 1 otherwise.
 
 require "pathname"
+require "psych"
 
 class CoverageBadgeError < StandardError; end
 
@@ -37,6 +38,50 @@ BADGE_PATTERN = /
 # Matches: --fail-under-lines N
 FAIL_UNDER_LINES_PATTERN = /--fail-under-lines\s+(\d+)/.freeze
 
+# The CI badge pattern in README.md.
+# Matches: [![CI](https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg?branch=<branch>)](https://github.com/<owner>/<repo>/actions/workflows/ci.yml)
+CI_BADGE_PATTERN = /
+  \[!\[CI\]\(
+    (https:\/\/github\.com\/(?<repo>[^\/]+\/[^\/]+)\/actions\/workflows\/(?<workflow>[^\/?]+)\/badge\.svg\?branch=(?<branch>[^)\s]+))
+  \)\]\(
+    https:\/\/github\.com\/[^\/]+\/[^\/]+\/actions\/workflows\/[^\/]+
+  \)
+/x.freeze
+
+# The coverage step name in ci.yml's build-test-coverage job.
+COVERAGE_STEP_NAME = "Hard coverage gate"
+
+def yaml_mapping(node, context)
+  raise CoverageBadgeError, "#{context} must be a mapping" unless node.is_a?(Psych::Nodes::Mapping)
+
+  entries = {}
+  node.children.each_slice(2) do |key, value|
+    unless key.is_a?(Psych::Nodes::Scalar)
+      raise CoverageBadgeError, "#{context} contains a non-scalar key"
+    end
+    entries[key.value] = value
+  end
+  entries
+end
+
+def yaml_scalar(node, context)
+  raise CoverageBadgeError, "#{context} must be a scalar" unless node.is_a?(Psych::Nodes::Scalar)
+  node.value
+end
+
+def yaml_value(node, context)
+  case node
+  when Psych::Nodes::Scalar
+    node.value.strip
+  when Psych::Nodes::Mapping
+    yaml_mapping(node, context).transform_values { |v| yaml_value(v, context) }
+  when Psych::Nodes::Sequence
+    node.children.map { |v| yaml_value(v, context) }
+  else
+    raise CoverageBadgeError, "#{context} contains an unsupported YAML value"
+  end
+end
+
 def check!
   raise CoverageBadgeError, "README.md not found at #{README_PATH}" unless README_PATH.exist?
   raise CoverageBadgeError, "ci.yml not found at #{CI_WORKFLOW_PATH}" unless CI_WORKFLOW_PATH.exist?
@@ -45,14 +90,20 @@ def check!
   ci_text = CI_WORKFLOW_PATH.read
 
   # --- Extract the badge percentage from README ---
-  badge_match = readme_text.match(BADGE_PATTERN)
-  unless badge_match
+  badge_matches = readme_text.scan(BADGE_PATTERN)
+  if badge_matches.empty?
     raise CoverageBadgeError,
           "README.md must contain a 'test coverage: N%' Shields badge"
   end
 
-  badge_alt_pct = badge_match[1].to_i
-  badge_url_pct = badge_match[3].to_i
+  if badge_matches.length > 1
+    raise CoverageBadgeError,
+          "README.md must contain exactly one coverage badge, found #{badge_matches.length}"
+  end
+
+  badge_match = badge_matches.first
+  badge_alt_pct = badge_match[0].to_i
+  badge_url_pct = badge_match[2].to_i
 
   # The alt text percentage and the URL percentage must agree.
   if badge_alt_pct != badge_url_pct
@@ -96,10 +147,113 @@ def check!
           "README coverage badge must link to ./docs/TESTING.md"
   end
 
+  # --- Verify the CI badge ---
+  ci_badge_match = readme_text.match(CI_BADGE_PATTERN)
+  unless ci_badge_match
+    raise CoverageBadgeError,
+          "README.md must contain a CI badge linking to the ci.yml workflow"
+  end
+
+  ci_badge_repo = ci_badge_match[:repo]
+  unless ci_badge_repo == "rotnov/pycc"
+    raise CoverageBadgeError,
+          "README CI badge must link to rotnov/pycc, found #{ci_badge_repo.inspect}"
+  end
+
+  ci_badge_workflow = ci_badge_match[:workflow]
+  unless ci_badge_workflow == "ci.yml"
+    raise CoverageBadgeError,
+          "README CI badge must reference actions/workflows/ci.yml, " \
+          "found #{ci_badge_workflow.inspect}"
+  end
+
+  ci_badge_branch = ci_badge_match[:branch]
+  unless ci_badge_branch == "main"
+    raise CoverageBadgeError,
+          "README CI badge must use branch=main, found #{ci_badge_branch.inspect}"
+  end
+
+  # --- Verify the coverage step cannot be skipped ---
+  validate_coverage_step_unconditional(ci_text)
+
+  # --- Verify ci-gate depends on build-test-coverage ---
+  validate_ci_gate_needs_build_test_coverage(ci_text)
+
   puts "README coverage badge matches CI threshold (#{ci_threshold}%)."
 rescue CoverageBadgeError => e
   warn "README coverage badge check failed: #{e.message}"
   exit 1
+end
+
+# Parses ci.yml and verifies the coverage step in build-test-coverage
+# has no `if:` condition that could skip it (issue #211).
+def validate_coverage_step_unconditional(ci_text)
+  stream = Psych.parse_stream(ci_text, filename: CI_WORKFLOW_PATH.to_s)
+  root = yaml_mapping(stream.children.first.root, CI_WORKFLOW_PATH.to_s)
+  jobs = yaml_mapping(root["jobs"], "#{CI_WORKFLOW_PATH} jobs")
+  coverage_job_node = jobs["build-test-coverage"]
+  unless coverage_job_node
+    raise CoverageBadgeError,
+          "#{CI_WORKFLOW_PATH}: build-test-coverage job not found"
+  end
+  coverage_job = yaml_mapping(coverage_job_node, "#{CI_WORKFLOW_PATH} build-test-coverage")
+  steps = coverage_job["steps"]
+  unless steps && steps.is_a?(Psych::Nodes::Sequence)
+    raise CoverageBadgeError,
+          "#{CI_WORKFLOW_PATH}: build-test-coverage must have a steps sequence"
+  end
+
+  steps.children.each do |step_node|
+    step = yaml_mapping(step_node, "#{CI_WORKFLOW_PATH} step")
+    next unless step["name"] && step["run"]
+
+    step_name = yaml_scalar(step["name"], "#{CI_WORKFLOW_PATH} step name")
+    next unless step_name.include?(COVERAGE_STEP_NAME)
+
+    if step.key?("if")
+      raise CoverageBadgeError,
+            "#{CI_WORKFLOW_PATH}: coverage step must not have an if condition " \
+            "that could skip it"
+    end
+
+    continue_on_error = step["continue-on-error"]
+    if continue_on_error &&
+       yaml_scalar(continue_on_error, "#{CI_WORKFLOW_PATH} step continue-on-error").strip != "false"
+      raise CoverageBadgeError,
+            "#{CI_WORKFLOW_PATH}: coverage step must propagate failures"
+    end
+
+    return
+  end
+
+  raise CoverageBadgeError,
+        "#{CI_WORKFLOW_PATH}: coverage step '#{COVERAGE_STEP_NAME}' not found"
+end
+
+# Parses ci.yml and verifies ci-gate's needs list includes build-test-coverage
+# (issue #211).
+def validate_ci_gate_needs_build_test_coverage(ci_text)
+  stream = Psych.parse_stream(ci_text, filename: CI_WORKFLOW_PATH.to_s)
+  root = yaml_mapping(stream.children.first.root, CI_WORKFLOW_PATH.to_s)
+  jobs = yaml_mapping(root["jobs"], "#{CI_WORKFLOW_PATH} jobs")
+  ci_gate_node = jobs["ci-gate"]
+  unless ci_gate_node
+    raise CoverageBadgeError,
+          "#{CI_WORKFLOW_PATH}: ci-gate job not found"
+  end
+  ci_gate = yaml_mapping(ci_gate_node, "#{CI_WORKFLOW_PATH} ci-gate")
+  needs_node = ci_gate["needs"]
+  unless needs_node && needs_node.is_a?(Psych::Nodes::Sequence)
+    raise CoverageBadgeError,
+          "#{CI_WORKFLOW_PATH}: ci-gate must have a needs sequence"
+  end
+  needs = needs_node.children.map do |need|
+    yaml_scalar(need, "#{CI_WORKFLOW_PATH} ci-gate needs entry")
+  end
+  unless needs.include?("build-test-coverage")
+    raise CoverageBadgeError,
+          "#{CI_WORKFLOW_PATH}: ci-gate must depend on build-test-coverage"
+  end
 end
 
 check!

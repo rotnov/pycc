@@ -141,4 +141,91 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
     status, = run_checker(live_readme, text)
     refute_equal 0, status, "accepted CI with lines=100 but regions=95"
   end
+
+  # --- Negative: CI badge mutations (issue #211) ---
+
+  def test_rejects_ci_badge_with_wrong_branch
+    text = live_readme.sub(
+      /badge\.svg\?branch=main\)\]\(/,
+      "badge.svg?branch=dev)]("
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted CI badge with branch=dev instead of branch=main"
+  end
+
+  def test_rejects_ci_badge_with_wrong_workflow
+    text = live_readme.sub(
+      %r{actions/workflows/ci\.yml/badge\.svg},
+      "actions/workflows/pages.yml/badge.svg"
+    ).sub(
+      %r{actions/workflows/ci\.yml\)\]},
+      "actions/workflows/pages.yml)]"
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted CI badge referencing pages.yml instead of ci.yml"
+  end
+
+  def test_rejects_ci_badge_with_wrong_repository
+    text = live_readme.sub(
+      %r{github\.com/rotnov/pycc/actions},
+      "github.com/wrong/repo/actions"
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted CI badge linking to wrong repository"
+  end
+
+  def test_rejects_missing_ci_badge
+    text = live_readme.sub(
+      /\[!\[CI\]\([^)]+\)\]\([^)]+\)\n/,
+      ""
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted README without CI badge"
+  end
+
+  # --- Negative: duplicate coverage badge (issue #211) ---
+
+  def test_rejects_duplicate_coverage_badge
+    text = live_readme.sub(
+      /\[!\[test coverage: \d+%\]\([^)]+\)\]\(\.\/docs\/TESTING\.md\)\n/,
+      "[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/TESTING.md)\n" \
+      "[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/TESTING.md)\n"
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted README with duplicate coverage badge"
+  end
+
+  # --- Negative: coverage step can be skipped (issue #211) ---
+
+  def test_rejects_coverage_step_with_if_condition
+    text = live_ci.sub(
+      /(      - name: Hard coverage gate[^\n]*\n)/,
+      "\\1        if: failure()\n"
+    )
+    status, = run_checker(live_readme, text)
+    refute_equal 0, status, "accepted coverage step with if: failure() that could skip it"
+  end
+
+  # --- Negative: ci-gate does not depend on build-test-coverage (issue #211) ---
+
+  def test_rejects_ci_gate_without_build_test_coverage_dependency
+    text = live_ci.sub(
+      /      - build-test-coverage\n/,
+      ""
+    )
+    status, = run_checker(live_readme, text)
+    refute_equal 0, status, "accepted ci-gate without build-test-coverage dependency"
+  end
+
+  # --- Positive: validator is present in ci.yml (issue #211) ---
+
+  def test_live_ci_contains_coverage_badge_validator
+    assert_match(/check_readme_coverage_badge\.rb/, live_ci,
+                 "ci.yml must run the README coverage badge validator")
+  end
+
+  def test_live_ci_contains_coverage_badge_validator_tests
+    assert_match(/test_check_readme_coverage_badge\.rb/, live_ci,
+                 "ci.yml must run the README coverage badge validator tests")
+  end
 end
