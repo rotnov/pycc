@@ -2375,6 +2375,26 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   exit 1
 fi
 
+# Mutation: dedent the README `return n` line (syntactically invalid Python)
+# to verify the validator preserves indentation rather than collapsing it.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "def fib(n: int) -> int:\n    if n < 2:\n        return n",
+    "def fib(n: int) -> int:\n    if n < 2:\n    return n",
+    1,
+)
+path.write_text(content)
+PY
+if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted README source with indentation drift (issue #197)" >&2
+  exit 1
+fi
+
 # Mutation: change site hero `<pre><code>` text so it differs from the fixture.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 python3 - "$fixture_root/site/index.html" <<'PY'

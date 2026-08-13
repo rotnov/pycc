@@ -1997,6 +1997,28 @@ def normalize_ws(text):
     return " ".join(text.split())
 
 
+def normalize_source(text):
+    """Normalize Python source for semantic comparison.
+
+    Preserves leading indentation (semantically significant in Python) while
+    normalizing line endings, stripping trailing whitespace, and collapsing
+    blank lines. This is stricter than normalize_ws for source-code comparison.
+    """
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    stripped = [line.rstrip() for line in lines]
+    # Drop leading and trailing blank lines, collapse internal blank runs.
+    result = []
+    for line in stripped:
+        if line == "" and (not result or result[-1] == ""):
+            continue
+        result.append(line)
+    while result and result[-1] == "":
+        result.pop()
+    while result and result[0] == "":
+        result.pop(0)
+    return "\n".join(result)
+
+
 class HeroCodeParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -2148,16 +2170,16 @@ hero_source_raw = "".join(parser.hero_code_text)
 hero_source = hero_source_raw
 # HTMLParser already unescapes entities in handle_data, so hero_source is
 # already unescaped. Normalize whitespace for comparison.
-if normalize_ws(hero_source) != normalize_ws(fixture_source):
+if normalize_source(hero_source) != normalize_source(fixture_source):
     raise SystemExit(
         "site/index.html hero <pre><code> source does not match "
-        "tests/fixtures/quick_start.py (whitespace-normalized)"
+        "tests/fixtures/quick_start.py (indentation-preserving)"
     )
 
-if normalize_ws(readme_source) != normalize_ws(fixture_source):
+if normalize_source(readme_source) != normalize_source(fixture_source):
     raise SystemExit(
         "README Quick start 'cat hello.py' source does not match "
-        "tests/fixtures/quick_start.py (whitespace-normalized)"
+        "tests/fixtures/quick_start.py (indentation-preserving)"
     )
 
 canonical_output = "0 1 1 2 3 5 8 13 21 34 55"

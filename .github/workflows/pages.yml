@@ -12,6 +12,7 @@ on:
       - ".github/workflows/pages.yml"
       - "README.md"
       - "tests/fixtures/quick_start.py"
+      - "docs/WEBSITE.md"
   pull_request:
     paths:
       - "site/**"
@@ -22,6 +23,7 @@ on:
       - ".github/workflows/pages.yml"
       - "README.md"
       - "tests/fixtures/quick_start.py"
+      - "docs/WEBSITE.md"
   workflow_dispatch:
 
 permissions:
