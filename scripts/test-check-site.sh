@@ -1525,7 +1525,7 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-13</lastmod>"""
+    <lastmod>2026-08-12</lastmod>"""
 assert entry in content
 path.write_text(content.replace(entry, entry + "\n    <lastmod>2026-07-30</lastmod>", 1))
 PY
@@ -1542,7 +1542,7 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-lastmod = "<lastmod>2026-08-13</lastmod>"
+lastmod = "<lastmod>2026-08-12</lastmod>"
 assert lastmod in content
 path.write_text(content.replace(lastmod, "<lastmod>not-a-date</lastmod>", 1))
 PY
@@ -1559,7 +1559,7 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-lastmod = "<lastmod>2026-08-13</lastmod>"
+lastmod = "<lastmod>2026-08-12</lastmod>"
 assert lastmod in content
 path.write_text(content.replace(lastmod, "<lastmod>9999-12-31</lastmod>", 1))
 PY
@@ -1577,9 +1577,9 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/python-aot-compilers/</loc>
-    <lastmod>2026-08-13</lastmod>"""
+    <lastmod>2026-08-12</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-13", "2026-07-27"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-08-12", "2026-07-27"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
