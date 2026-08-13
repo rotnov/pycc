@@ -218,9 +218,12 @@ without network access. It verifies:
 - the coverage badge links to `./docs/TESTING.md`;
 - the CI badge references `actions/workflows/ci.yml` (not another workflow),
   uses `branch=main` (not another branch), and links to `rotnov/pycc`;
-- the README contains exactly one coverage badge (no duplicates);
-- the coverage step in `build-test-coverage` has no `if:` condition that could
-  skip it;
+- the CI badge's clickable link target matches its badge image source (same
+  repo and workflow);
+- the README contains exactly one coverage badge and exactly one CI badge
+  (no duplicates);
+- the coverage step in `build-test-coverage` has no `if:` condition or
+  `continue-on-error` that could skip it or suppress its failures;
 - `ci-gate`'s `needs` list includes `build-test-coverage`.
 
 The validator runs in both `ci.yml` (inside the `build-test-coverage` job, which

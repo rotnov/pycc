@@ -108,11 +108,6 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
 
   def test_rejects_badge_not_linking_to_testing_md
     text = live_readme.sub(
-      /\]\(\.\/docs\/TESTING\.md\)/,
-      "](./docs/TESTING.md)"
-    )
-    # This sub is a no-op; do a real mutation:
-    text = live_readme.sub(
       /\[!\[test coverage: \d+%\]\([^)]+\)\]\(\.\/docs\/TESTING\.md\)/,
       "[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/ROADMAP.md)"
     )
