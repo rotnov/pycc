@@ -1,0 +1,208 @@
+{
+  "artifact_version": 1,
+  "provenance": {
+    "source": "google_search_console_owner_data",
+    "sanitized": true,
+    "collection_method": "manual_owner_inspection_and_search_console_export",
+    "collected_at": "2026-07-29T10:25:27Z",
+    "sanitization_note": "All credentials, API keys, and tokens removed. Only owner-facing Search Console observations and public sitemap verification results are retained."
+  },
+  "observations": [
+    {
+      "observed_at": "2026-07-25T10:29:08Z",
+      "url_inspection": {
+        "status": "all_on_google",
+        "canonical_urls_on_google": 4,
+        "canonical_urls_total": 4,
+        "breadcrumbs_valid": true
+      },
+      "sitemap": {
+        "public_http_status": 200,
+        "content_type": "application/xml",
+        "canonical_urls_count": 4,
+        "search_console_status": "could_not_process",
+        "discovered_pages": 0
+      },
+      "performance": {
+        "status": "processing",
+        "clicks": null,
+        "impressions": null,
+        "ctr_percent": null,
+        "avg_position": null,
+        "query_rows": []
+      }
+    },
+    {
+      "observed_at": "2026-07-25T12:54:10Z",
+      "url_inspection": {
+        "status": "partial",
+        "canonical_urls_on_google": 4,
+        "canonical_urls_total": 5,
+        "breadcrumbs_valid": null,
+        "note": "New comparison URL not on Google; request accepted into priority crawl queue"
+      },
+      "sitemap": {
+        "public_http_status": 200,
+        "content_type": "application/xml",
+        "canonical_urls_count": 5,
+        "search_console_status": "could_not_fetch",
+        "discovered_pages": 0
+      },
+      "performance": {
+        "status": "processing",
+        "clicks": null,
+        "impressions": null,
+        "ctr_percent": null,
+        "avg_position": null,
+        "query_rows": []
+      }
+    },
+    {
+      "observed_at": "2026-07-25T16:15:43Z",
+      "url_inspection": {
+        "status": "partial",
+        "canonical_urls_on_google": 4,
+        "canonical_urls_total": 5,
+        "breadcrumbs_valid": null,
+        "note": "Inspected /compare/python-compilers/ path is a noncanonical 404; live /python-aot-compilers/ not inspected"
+      },
+      "sitemap": {
+        "public_http_status": 200,
+        "content_type": "application/xml",
+        "canonical_urls_count": 5,
+        "search_console_status": "could_not_fetch",
+        "discovered_pages": 0
+      },
+      "performance": {
+        "status": "available",
+        "clicks": 0,
+        "impressions": 0,
+        "ctr_percent": null,
+        "avg_position": null,
+        "query_rows": []
+      }
+    },
+    {
+      "observed_at": "2026-07-25T16:43:18Z",
+      "url_inspection": {
+        "status": "all_on_google",
+        "canonical_urls_on_google": 5,
+        "canonical_urls_total": 5,
+        "breadcrumbs_valid": true,
+        "note": "Live /python-aot-compilers/ URL on Google; Googlebot Smartphone crawled at 13:58:20 UTC"
+      },
+      "sitemap": {
+        "public_http_status": 200,
+        "content_type": "application/xml",
+        "canonical_urls_count": 5,
+        "search_console_status": "could_not_fetch",
+        "discovered_pages": 0
+      },
+      "performance": {
+        "status": "available",
+        "clicks": 0,
+        "impressions": 0,
+        "ctr_percent": null,
+        "avg_position": null,
+        "query_rows": []
+      }
+    },
+    {
+      "observed_at": "2026-07-25T17:49:31Z",
+      "url_inspection": {
+        "status": "all_on_google",
+        "canonical_urls_on_google": 5,
+        "canonical_urls_total": 5,
+        "breadcrumbs_valid": true,
+        "note": "No new inspection; latest authoritative evidence remains positive for all 5 canonical URLs"
+      },
+      "sitemap": {
+        "public_http_status": 200,
+        "content_type": "application/xml",
+        "canonical_urls_count": 5,
+        "search_console_status": "could_not_fetch",
+        "discovered_pages": 0
+      },
+      "performance": {
+        "status": "available",
+        "clicks": 0,
+        "impressions": 0,
+        "ctr_percent": null,
+        "avg_position": null,
+        "query_rows": []
+      }
+    },
+    {
+      "observed_at": "2026-07-25T19:10:03Z",
+      "url_inspection": {
+        "status": "all_on_google",
+        "canonical_urls_on_google": 5,
+        "canonical_urls_total": 5,
+        "breadcrumbs_valid": true,
+        "note": "No new inspection; latest authoritative evidence remains positive for all 5 canonical URLs"
+      },
+      "sitemap": {
+        "public_http_status": 200,
+        "content_type": "application/xml",
+        "canonical_urls_count": 5,
+        "search_console_status": "could_not_fetch",
+        "discovered_pages": 0
+      },
+      "performance": {
+        "status": "available",
+        "clicks": 0,
+        "impressions": 0,
+        "ctr_percent": null,
+        "avg_position": null,
+        "query_rows": []
+      }
+    },
+    {
+      "observed_at": "2026-07-29T10:25:27Z",
+      "url_inspection": {
+        "status": "all_on_google",
+        "canonical_urls_on_google": 5,
+        "canonical_urls_total": 5,
+        "breadcrumbs_valid": true,
+        "note": "No new inspection; all 5 canonical URLs retain latest positive per-URL evidence"
+      },
+      "sitemap": {
+        "public_http_status": 200,
+        "content_type": "application/xml",
+        "canonical_urls_count": 5,
+        "search_console_status": "failed",
+        "discovered_pages": 0
+      },
+      "performance": {
+        "status": "available",
+        "clicks": 2,
+        "impressions": 15,
+        "ctr_percent": 13.3,
+        "avg_position": 5.7,
+        "query_rows": [
+          {
+            "query": "python aot compiler",
+            "clicks": 0,
+            "impressions": 3,
+            "avg_position": 6.3
+          }
+        ]
+      }
+    }
+  ],
+  "latest_projection": {
+    "url_inspection_status": "all_on_google",
+    "canonical_urls_on_google": 5,
+    "canonical_urls_total": 5,
+    "sitemap_search_console_status": "failed",
+    "sitemap_discovered_pages": 0,
+    "performance_impressions": 15,
+    "performance_clicks": 2,
+    "performance_ctr_percent": 13.3,
+    "performance_avg_position": 5.7,
+    "disclosed_query": "python aot compiler",
+    "disclosed_query_clicks": 0,
+    "disclosed_query_impressions": 3,
+    "disclosed_query_avg_position": 6.3
+  }
+}

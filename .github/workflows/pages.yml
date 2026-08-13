@@ -17,6 +17,11 @@ on:
       - "scripts/test_check_readme_testing_claims.rb"
       - "scripts/check_readme_milestone_projection.rb"
       - "scripts/test_check_readme_milestone_projection.rb"
+      - "scripts/check_search_console_observations.py"
+      - "scripts/test_check_search_console_observations.py"
+      - "docs/SEARCH_CONSOLE_OBSERVATIONS.json"
+      - "docs/SEARCH_VISIBILITY.md"
+      - "docs/ROADMAP.md"
   pull_request:
     paths:
       - "site/**"
@@ -32,6 +37,11 @@ on:
       - "scripts/test_check_readme_testing_claims.rb"
       - "scripts/check_readme_milestone_projection.rb"
       - "scripts/test_check_readme_milestone_projection.rb"
+      - "scripts/check_search_console_observations.py"
+      - "scripts/test_check_search_console_observations.py"
+      - "docs/SEARCH_CONSOLE_OBSERVATIONS.json"
+      - "docs/SEARCH_VISIBILITY.md"
+      - "docs/ROADMAP.md"
   workflow_dispatch:
 
 permissions:
@@ -76,6 +86,8 @@ jobs:
           ruby scripts/test_check_source_links_registry.rb
           ruby scripts/check_search_visibility.rb
           ruby scripts/test_check_search_visibility.rb
+          python3 scripts/check_search_console_observations.py
+          python3 scripts/test_check_search_console_observations.py
 
       - name: Upload website
         uses: actions/upload-pages-artifact@v4
