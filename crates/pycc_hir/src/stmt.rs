@@ -54,7 +54,9 @@ pub(crate) fn lower_stmt(
     type_param: Option<&str>,
 ) -> Result<HirStmt, Diagnostic> {
     let lowered = match stmt {
-        Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value, in_function, class_name)?),
+        Stmt::Expr(expr_stmt) => {
+            HirStmt::ExprStmt(lower_expr(&expr_stmt.value, in_function, class_name)?)
+        }
         Stmt::Assign(assign) => {
             let [target] = assign.targets.as_slice() else {
                 return Err(unsupported(
@@ -77,9 +79,15 @@ pub(crate) fn lower_stmt(
                     // and falls through to that function's existing
                     // generic "expression kind not supported yet"
                     // catch-all.
-                    Expr::ListComp(comp) => lower_list_comp_assign(name.id.as_str(), comp, class_name)?,
-                    Expr::SetComp(comp) => lower_set_comp_assign(name.id.as_str(), comp, class_name)?,
-                    Expr::DictComp(comp) => lower_dict_comp_assign(name.id.as_str(), comp, class_name)?,
+                    Expr::ListComp(comp) => {
+                        lower_list_comp_assign(name.id.as_str(), comp, class_name)?
+                    }
+                    Expr::SetComp(comp) => {
+                        lower_set_comp_assign(name.id.as_str(), comp, class_name)?
+                    }
+                    Expr::DictComp(comp) => {
+                        lower_dict_comp_assign(name.id.as_str(), comp, class_name)?
+                    }
                     _ => HirStmt::Assign {
                         target: name.id.as_str().to_string(),
                         value: lower_expr(&assign.value, in_function, class_name)?,
@@ -196,7 +204,14 @@ pub(crate) fn lower_stmt(
         }
         Stmt::If(if_stmt) => HirStmt::If {
             test: lower_expr(&if_stmt.test, in_function, class_name)?,
-            body: lower_body(&if_stmt.body, aliases, in_loop, in_function, class_name, type_param)?,
+            body: lower_body(
+                &if_stmt.body,
+                aliases,
+                in_loop,
+                in_function,
+                class_name,
+                type_param,
+            )?,
             orelse: lower_elif_else_clauses(
                 &if_stmt.elif_else_clauses,
                 aliases,
@@ -215,7 +230,14 @@ pub(crate) fn lower_stmt(
             }
             HirStmt::While {
                 test: lower_expr(&while_stmt.test, in_function, class_name)?,
-                body: lower_body(&while_stmt.body, aliases, true, in_function, class_name, type_param)?,
+                body: lower_body(
+                    &while_stmt.body,
+                    aliases,
+                    true,
+                    in_function,
+                    class_name,
+                    type_param,
+                )?,
             }
         }
         Stmt::For(for_stmt) => {
@@ -258,7 +280,14 @@ pub(crate) fn lower_stmt(
                 return Ok(HirStmt::ForList {
                     var: var.id.to_string(),
                     list: list_name.id.as_str().to_string(),
-                    body: lower_body(&for_stmt.body, aliases, true, in_function, class_name, type_param)?,
+                    body: lower_body(
+                        &for_stmt.body,
+                        aliases,
+                        true,
+                        in_function,
+                        class_name,
+                        type_param,
+                    )?,
                 });
             }
             let Expr::Call(call) = for_stmt.iter.as_ref() else {
@@ -300,7 +329,14 @@ pub(crate) fn lower_stmt(
                 start,
                 stop,
                 step,
-                body: lower_body(&for_stmt.body, aliases, true, in_function, class_name, type_param)?,
+                body: lower_body(
+                    &for_stmt.body,
+                    aliases,
+                    true,
+                    in_function,
+                    class_name,
+                    type_param,
+                )?,
             }
         }
         Stmt::Return(ret) => HirStmt::Return(
@@ -313,7 +349,10 @@ pub(crate) fn lower_stmt(
             return Err(if in_loop {
                 // A real enclosing loop -- valid Python, break/continue
                 // control-flow codegen is just not implemented yet.
-                unsupported("statement kind not supported yet", pycc_ast::stmt_range(stmt))
+                unsupported(
+                    "statement kind not supported yet",
+                    pycc_ast::stmt_range(stmt),
+                )
             } else {
                 // No enclosing loop -- CPython rejects this as a
                 // `SyntaxError`, not "valid but unimplemented" (D-148).
@@ -322,7 +361,10 @@ pub(crate) fn lower_stmt(
         }
         Stmt::Continue(_) => {
             return Err(if in_loop {
-                unsupported("statement kind not supported yet", pycc_ast::stmt_range(stmt))
+                unsupported(
+                    "statement kind not supported yet",
+                    pycc_ast::stmt_range(stmt),
+                )
             } else {
                 context_invalid(
                     "'continue' not properly in loop",
@@ -373,15 +415,36 @@ pub(crate) fn lower_elif_else_clauses(
     match &first.test {
         Some(test) => Ok(vec![HirStmt::If {
             test: lower_expr(test, in_function, class_name)?,
-            body: lower_body(&first.body, aliases, in_loop, in_function, class_name, type_param)?,
-            orelse: lower_elif_else_clauses(rest, aliases, in_loop, in_function, class_name, type_param)?,
+            body: lower_body(
+                &first.body,
+                aliases,
+                in_loop,
+                in_function,
+                class_name,
+                type_param,
+            )?,
+            orelse: lower_elif_else_clauses(
+                rest,
+                aliases,
+                in_loop,
+                in_function,
+                class_name,
+                type_param,
+            )?,
         }]),
         None => {
             assert!(
                 rest.is_empty(),
                 "pycc_hir: an else clause must be the last elif_else_clause"
             );
-            lower_body(&first.body, aliases, in_loop, in_function, class_name, type_param)
+            lower_body(
+                &first.body,
+                aliases,
+                in_loop,
+                in_function,
+                class_name,
+                type_param,
+            )
         }
     }
 }

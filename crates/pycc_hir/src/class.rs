@@ -128,6 +128,19 @@ pub struct HirClassDef {
     /// with the concrete type, reusing PR-13's `Ty::Param` call-site-
     /// substitution mechanism (D-133/D-134).
     pub type_param: Option<String>,
+    /// PEP 435 (#379, PR-19): the enum members of an enum class
+    /// (`class Color(Enum): RED = 1; GREEN = 2`), in source order. Each
+    /// entry is `(member_name, value)` where `value` is the integer
+    /// literal assigned to the member. Empty for a non-enum class; a
+    /// non-empty vec marks this class as an enum class. An enum class has
+    /// `bases = []` and `mro = [self_name]` (the `Enum` base is consumed
+    /// as a marker, not a real base), no `__init__` requirement, and
+    /// `attrs = [("value", Ty::Int), ("name", Ty::Str)]` so existing
+    /// `resolve_attr_get`/MIR slot resolution handle `member.value`/
+    /// `member.name` unchanged. Each member is a compile-time singleton
+    /// instance allocated once at module-init time (see `pycc_codegen`'s
+    /// per-member init sequence).
+    pub enum_members: Vec<(String, i64)>,
 }
 
 /// A single `@property` definition (#377): the attribute name exposed to
@@ -204,7 +217,10 @@ fn classify_decorator(
         return Ok(MethodKind::Regular { is_override: false });
     }
     if decorator_list.len() > 1 {
-        return Err(unsupported("method decorators are not supported yet", range));
+        return Err(unsupported(
+            "method decorators are not supported yet",
+            range,
+        ));
     }
     let decorator = &decorator_list[0];
     match &decorator.expression {
@@ -226,10 +242,16 @@ fn classify_decorator(
         // the attribute is `"setter"`.
         Expr::Attribute(attr) => {
             let Expr::Name(base_name) = attr.value.as_ref() else {
-                return Err(unsupported("method decorators are not supported yet", range));
+                return Err(unsupported(
+                    "method decorators are not supported yet",
+                    range,
+                ));
             };
             if attr.attr.as_str() != "setter" {
-                return Err(unsupported("method decorators are not supported yet", range));
+                return Err(unsupported(
+                    "method decorators are not supported yet",
+                    range,
+                ));
             }
             let prop_name = base_name.id.as_str().to_string();
             // The decorator name must match the method's own source name
@@ -248,7 +270,10 @@ fn classify_decorator(
             }
             Ok(MethodKind::PropertySetter { prop_name })
         }
-        _ => Err(unsupported("method decorators are not supported yet", range)),
+        _ => Err(unsupported(
+            "method decorators are not supported yet",
+            range,
+        )),
     }
 }
 
@@ -300,9 +325,9 @@ fn compute_c3_mro(
         let mut chosen: Option<String> = None;
         for seq in &sequences {
             let candidate = &seq[0];
-            let in_tail = sequences.iter().any(|s| {
-                s.iter().skip(1).any(|elem| elem == candidate)
-            });
+            let in_tail = sequences
+                .iter()
+                .any(|s| s.iter().skip(1).any(|elem| elem == candidate));
             if !in_tail {
                 chosen = Some(candidate.clone());
                 break;
@@ -343,13 +368,140 @@ fn compute_c3_mro(
 /// Generic classes (`class C[T]:`) with a single type parameter ARE now
 /// supported by #387 (see the `type_params` handling below). Inheritance
 /// (`class C(Base):`) is now supported by #432 (Part 1).
+///
+/// #379 (PR-19): Lower a PEP 435-style enum class. An enum class body is
+/// assignments only (`RED = 1`), not method definitions. This function
+/// validates the enum body and constructs the `HirClassDef` with
+/// `enum_members` populated. Extracted from `lower_class` to isolate the
+/// enum-specific code paths (see cargo-llvm-cov#276 for the coverage
+/// instantiation issue that motivated the extraction).
+fn lower_enum_class(
+    def: &pycc_ast::StmtClassDef,
+    class_name: String,
+    bases: Vec<String>,
+    mro: Vec<String>,
+    type_param: Option<String>,
+) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
+    // An enum class's attrs are the two reserved member attributes
+    // (`value`, `name`), so `member.value`/`member.name` resolve via
+    // the existing `resolve_attr_get`/MIR slot resolution unchanged.
+    let attrs = vec![
+        ("value".to_string(), Ty::Int),
+        ("name".to_string(), Ty::Str),
+    ];
+    let mut enum_members: Vec<(String, i64)> = Vec::new();
+    for stmt in &def.body {
+        let Stmt::Assign(assign) = stmt else {
+            return Err(unsupported(
+                "an enum class body must contain only member assignments (`RED = 1`) -- \
+                 no method definitions or other statements are supported yet",
+                pycc_ast::stmt_range(stmt),
+            ));
+        };
+        // The target must be a single bare name (not a tuple or
+        // subscript).
+        if assign.targets.len() != 1 {
+            return Err(unsupported(
+                "an enum member assignment must have a single target (`RED = 1`), not \
+                 multiple targets",
+                assign.range,
+            ));
+        }
+        let Expr::Name(target_name) = &assign.targets[0] else {
+            return Err(unsupported(
+                "an enum member name must be a bare name (`RED = 1`), not an attribute \
+                 access, subscript, or other expression",
+                pycc_ast::expr_range(&assign.targets[0]),
+            ));
+        };
+        let member_name = target_name.id.to_string();
+        // Reject duplicate member names (matching CPython's
+        // `TypeError: Attempted to reuse key`).
+        if enum_members.iter().any(|(name, _)| name == &member_name) {
+            return Err(unsupported(
+                format!(
+                    "enum member `{member_name}` is already defined in class \
+                     `{class_name}` -- duplicate member names are not allowed"
+                ),
+                assign.range,
+            ));
+        }
+        // The value must be an int literal (the only supported member
+        // value type in v0.3, matching TYPE_SYSTEM.md's "integer
+        // discriminant" representation). A bool literal is rejected
+        // (it is a separate type in pycc, not an int subtype for
+        // enum-value purposes). A non-literal value (e.g. `RED = f()`)
+        // is also rejected -- enum values must be compile-time
+        // literals in pycc's static model. The actual integer value is
+        // extracted and carried in `enum_members` so codegen can
+        // initialize each member's `value` slot with the correct
+        // literal, not a position-derived guess.
+        let member_value: i64 = match &*assign.value {
+            Expr::NumberLiteral(number) => match &number.value {
+                Number::Int(i) => {
+                    let Some(value) = i.as_i64() else {
+                        return Err(unsupported(
+                            format!(
+                                "enum member `{member_name}` has an integer value that does \
+                                 not fit in i64 -- only i64-range values are supported"
+                            ),
+                            assign.range,
+                        ));
+                    };
+                    value
+                }
+                _ => {
+                    return Err(unsupported(
+                        format!(
+                            "enum member `{member_name}` has a non-integer value -- only \
+                             `int` member values are supported in v0.3"
+                        ),
+                        assign.range,
+                    ));
+                }
+            },
+            _ => {
+                return Err(unsupported(
+                    format!(
+                        "enum member `{member_name}` must be assigned an integer literal \
+                         (`{member_name} = 1`), not an expression or non-integer value"
+                    ),
+                    assign.range,
+                ));
+            }
+        };
+        enum_members.push((member_name, member_value));
+    }
+    // An enum class has no methods, no __init__, and no items. Its
+    // members are compile-time singletons allocated by codegen, not
+    // runtime-instantiated objects.
+    Ok((
+        HirClassDef {
+            name: class_name,
+            bases,
+            mro,
+            attrs,
+            methods: Vec::new(),
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            type_param,
+            enum_members,
+        },
+        Vec::new(),
+    ))
+}
+
 pub(crate) fn lower_class(
     def: &pycc_ast::StmtClassDef,
     aliases: &[(String, Ty)],
     defined_classes: &[(String, HirClassDef)],
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
     if !def.decorator_list.is_empty() {
-        return Err(unsupported("class decorators are not supported yet", def.range));
+        return Err(unsupported(
+            "class decorators are not supported yet",
+            def.range,
+        ));
     }
     // PEP 695 (#387): a generic class (`class C[T]:`) with exactly one type
     // parameter is now supported, reusing PR-13's `Ty::Param` call-site-
@@ -404,6 +556,32 @@ pub(crate) fn lower_class(
         }
     }
     let class_name = def.name.to_string();
+    // #379 (PR-19): PEP 435 enum detection. A class whose single base is
+    // the bare name `Enum` (`class Color(Enum):`) is an enum class. `Enum`
+    // is a builtin base name (see `is_enum_base_name`), not a user-defined
+    // class in `defined_classes` -- so it must be intercepted here, before
+    // the unknown-base rejection below. An enum class has `bases = []` and
+    // `mro = [self_name]` (the `Enum` base is consumed as a marker, not
+    // recorded as a real base), no `__init__` requirement, and its body is
+    // assignments only (`RED = 1`), not method definitions. Multiple bases
+    // with `Enum` (e.g. `class C(Enum, Other):`) are rejected -- `Enum`
+    // must be the sole base. A generic enum (`class C[T](Enum):`) is also
+    // rejected -- enums are never generic.
+    let is_enum = bases.len() == 1 && crate::is_enum_base_name(&bases[0]);
+    if is_enum {
+        if type_param.is_some() {
+            return Err(unsupported(
+                format!(
+                    "generic enum class `{class_name}` is not supported -- enums cannot have \
+                     type parameters"
+                ),
+                def.range,
+            ));
+        }
+        // Consume the `Enum` base as a marker: clear `bases` so the class
+        // has no real inheritance, and set `mro = [self_name]`.
+        bases.clear();
+    }
     // #432: A generic class (from #387) with base classes is not supported
     // yet — `instantiate_generic_class_methods` creates a monomorphized
     // `HirClassDef` with empty `bases`/`mro`, silently dropping inheritance.
@@ -471,7 +649,20 @@ pub(crate) fn lower_class(
     let mut properties: Vec<PropertyDef> = Vec::new();
     let mut static_methods: Vec<(String, String)> = Vec::new();
     let mut class_methods: Vec<(String, String)> = Vec::new();
+    let enum_members: Vec<(String, i64)> = Vec::new();
     let mut init_seen = false;
+    // #379 (PR-19): an enum class body is assignments only (`RED = 1`),
+    // not method definitions. Handle this in a separate function before the
+    // regular class-body loop below, which rejects non-`def` statements.
+    if is_enum {
+        return lower_enum_class(
+            def,
+            class_name,
+            bases,
+            mro,
+            type_param,
+        );
+    }
     for stmt in &def.body {
         let Stmt::FunctionDef(method_def) = stmt else {
             return Err(unsupported(
@@ -553,14 +744,15 @@ pub(crate) fn lower_class(
                         // regions) instead of a `let .. else { return false
                         // }` avoids a permanently-uncovered else branch under
                         // D-014's 100%-region coverage gate.
-                        let (_, base_def) =
-                            defined_classes.iter().find(|(name, _)| name == mro_class)
-                                .expect("every class in the MRO must be in defined_classes");
-                        base_def.methods.iter().any(|(name, _)| name == &method_name)
-                            || base_def
-                                .properties
-                                .iter()
-                                .any(|p| p.name == method_name)
+                        let (_, base_def) = defined_classes
+                            .iter()
+                            .find(|(name, _)| name == mro_class)
+                            .expect("every class in the MRO must be in defined_classes");
+                        base_def
+                            .methods
+                            .iter()
+                            .any(|(name, _)| name == &method_name)
+                            || base_def.properties.iter().any(|p| p.name == method_name)
                     });
                     if !found_in_base {
                         return Err(Diagnostic::error(
@@ -632,9 +824,7 @@ pub(crate) fn lower_class(
                 // table clean -- the mangled name is the same either way,
                 // so `resolve_method_call` and MIR lowering's
                 // `.methods.iter().find(..)` resolve identically.
-                if let Some(entry) =
-                    methods.iter_mut().find(|(name, _)| name == &method_name)
-                {
+                if let Some(entry) = methods.iter_mut().find(|(name, _)| name == &method_name) {
                     *entry = (method_name.clone(), mangled.clone());
                 } else {
                     methods.push((method_name.clone(), mangled));
@@ -741,8 +931,9 @@ pub(crate) fn lower_class(
                     ));
                 }
                 let mangled = format!("{class_name}.{method_name}.static");
-                if let Some(entry) =
-                    static_methods.iter_mut().find(|(name, _)| name == &method_name)
+                if let Some(entry) = static_methods
+                    .iter_mut()
+                    .find(|(name, _)| name == &method_name)
                 {
                     *entry = (method_name.clone(), mangled.clone());
                 } else {
@@ -785,8 +976,9 @@ pub(crate) fn lower_class(
                     ));
                 }
                 let mangled = format!("{class_name}.{method_name}.classmethod");
-                if let Some(entry) =
-                    class_methods.iter_mut().find(|(name, _)| name == &method_name)
+                if let Some(entry) = class_methods
+                    .iter_mut()
+                    .find(|(name, _)| name == &method_name)
                 {
                     *entry = (method_name.clone(), mangled.clone());
                 } else {
@@ -865,6 +1057,7 @@ pub(crate) fn lower_class(
             static_methods,
             class_methods,
             type_param,
+            enum_members,
         },
         items,
     ))
@@ -901,13 +1094,19 @@ fn lower_method(
     kind: &MethodKind,
 ) -> Result<(HirItem, Vec<(String, Ty)>), Diagnostic> {
     if def.is_async {
-        return Err(unsupported("an async method is not supported yet", def.range));
+        return Err(unsupported(
+            "an async method is not supported yet",
+            def.range,
+        ));
     }
     // #377: decorators are now classified by `classify_decorator` in
     // `lower_class` before this function is called -- the `kind` parameter
     // carries the result. No additional decorator check is needed here.
     if def.type_params.is_some() {
-        return Err(unsupported("a generic method is not supported yet", def.range));
+        return Err(unsupported(
+            "a generic method is not supported yet",
+            def.range,
+        ));
     }
     let parameters = &def.parameters;
     if !parameters.posonlyargs.is_empty() {
@@ -1054,7 +1253,14 @@ fn lower_method(
         Some(class_name),
         aliases,
     )?;
-    let body = crate::stmt::lower_body(&def.body, aliases, false, true, Some(class_name), type_param)?;
+    let body = crate::stmt::lower_body(
+        &def.body,
+        aliases,
+        false,
+        true,
+        Some(class_name),
+        type_param,
+    )?;
     // #377/#436: compute the mangled name based on the method kind. A
     // regular method uses `<Class>.<name>`. A property getter uses the
     // same `<Class>.<name>`. A property setter uses
@@ -1152,10 +1358,7 @@ fn collect_init_attrs(
 /// assignment, a return, etc.) is rejected with `C0001`, since pycc's
 /// compile-time class-creation model has no mechanism to run side-effecting
 /// statements at class-definition time.
-fn validate_init_subclass_body<R>(
-    body: &[Stmt],
-    range: R,
-) -> Result<(), Diagnostic>
+fn validate_init_subclass_body<R>(body: &[Stmt], range: R) -> Result<(), Diagnostic>
 where
     std::ops::Range<u32>: From<R>,
 {
@@ -1334,7 +1537,8 @@ mod tests {
         // PEP 695 (#387): `class C[T]:` with exactly one type parameter is
         // now supported. The type parameter `T` is recorded in
         // `HirClassDef::type_param` for later monomorphization.
-        let hir = lower_ok("class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\n");
+        let hir =
+            lower_ok("class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\n");
         assert_eq!(hir.class_defs.len(), 1);
         assert_eq!(hir.class_defs[0].1.type_param, Some("T".to_string()));
     }
@@ -1423,9 +1627,7 @@ mod tests {
         let foo_items: Vec<&HirItem> = hir
             .items
             .iter()
-            .filter(|item| {
-                matches!(item, HirItem::Function { name, .. } if name == "C.foo")
-            })
+            .filter(|item| matches!(item, HirItem::Function { name, .. } if name == "C.foo"))
             .collect();
         assert_eq!(foo_items.len(), 2, "both foo definitions should be lowered");
     }
@@ -1649,14 +1851,16 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic
-                .message
-                .contains("method name `get` collides with the compiler's built-in container-method syntax"),
+            diagnostic.message.contains(
+                "method name `get` collides with the compiler's built-in container-method syntax"
+            ),
             "unexpected message: {}",
             diagnostic.message
         );
         assert!(
-            !diagnostic.message.contains("dict.get() takes exactly two arguments"),
+            !diagnostic
+                .message
+                .contains("dict.get() takes exactly two arguments"),
             "the confusing container-method message must not resurface: {}",
             diagnostic.message
         );
@@ -1671,9 +1875,17 @@ mod tests {
         // old, confusing container-method message (asserted absent below)
         // is actually reachable pre-fix, not merely untriggered.
         let cases = [
-            ("append", "c.append()", "list.append() takes exactly one argument, got 0"),
+            (
+                "append",
+                "c.append()",
+                "list.append() takes exactly one argument, got 0",
+            ),
             ("pop", "c.pop(1)", "list.pop() takes no arguments, got 1"),
-            ("add", "c.add()", "set.add() takes exactly one argument, got 0"),
+            (
+                "add",
+                "c.add()",
+                "set.add() takes exactly one argument, got 0",
+            ),
         ];
         for (name, call, old_message) in cases {
             let source = format!(
@@ -1807,15 +2019,13 @@ mod tests {
                 name: "Point".to_string(),
                 bases: Vec::new(),
                 mro: vec!["Point".to_string()],
-                attrs: vec![
-                    ("x".to_string(), Ty::Int),
-                    ("y".to_string(), Ty::Int),
-                ],
+                attrs: vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int),],
                 methods: vec![("__init__".to_string(), "Point.__init__".to_string())],
                 properties: Vec::new(),
                 type_param: None,
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
+                enum_members: Vec::new(),
             }
         );
         // Direct value comparison, not a `let PATTERN = .. else { panic!(..) }`
@@ -2034,7 +2244,9 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic.message.contains("cannot share a name with a `@staticmethod`"),
+            diagnostic
+                .message
+                .contains("cannot share a name with a `@staticmethod`"),
             "unexpected message: {}",
             diagnostic.message
         );
@@ -2048,7 +2260,9 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic.message.contains("cannot share a name with a `@classmethod`"),
+            diagnostic
+                .message
+                .contains("cannot share a name with a `@classmethod`"),
             "unexpected message: {}",
             diagnostic.message
         );
@@ -2062,7 +2276,9 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic.message.contains("cannot share a name with a regular method"),
+            diagnostic
+                .message
+                .contains("cannot share a name with a regular method"),
             "unexpected message: {}",
             diagnostic.message
         );
@@ -2076,7 +2292,9 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic.message.contains("cannot share a name with a property"),
+            diagnostic
+                .message
+                .contains("cannot share a name with a property"),
             "unexpected message: {}",
             diagnostic.message
         );
@@ -2090,7 +2308,9 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic.message.contains("cannot share a name with a `@classmethod`"),
+            diagnostic
+                .message
+                .contains("cannot share a name with a `@classmethod`"),
             "unexpected message: {}",
             diagnostic.message
         );
@@ -2104,7 +2324,9 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic.message.contains("cannot share a name with a regular method"),
+            diagnostic
+                .message
+                .contains("cannot share a name with a regular method"),
             "unexpected message: {}",
             diagnostic.message
         );
@@ -2118,7 +2340,9 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic.message.contains("cannot share a name with a property"),
+            diagnostic
+                .message
+                .contains("cannot share a name with a property"),
             "unexpected message: {}",
             diagnostic.message
         );
@@ -2132,7 +2356,9 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic.message.contains("cannot share a name with a `@staticmethod`"),
+            diagnostic
+                .message
+                .contains("cannot share a name with a `@staticmethod`"),
             "unexpected message: {}",
             diagnostic.message
         );
@@ -2251,9 +2477,7 @@ mod tests {
             .items
             .iter()
             .find_map(|item| match item {
-                HirItem::Function { name, params, .. } if name == "C.create.static" => {
-                    Some(params)
-                }
+                HirItem::Function { name, params, .. } if name == "C.create.static" => Some(params),
                 _ => None,
             })
             .expect("C.create.static should be in items");
@@ -2392,9 +2616,7 @@ mod tests {
 
     #[test]
     fn an_init_attr_assigned_from_an_unrelated_name_is_unsupported() {
-        assert_c0001(
-            "class C:\n    def __init__(self, x: int) -> None:\n        self.y = z\n",
-        );
+        assert_c0001("class C:\n    def __init__(self, x: int) -> None:\n        self.y = z\n");
     }
 
     #[test]
@@ -2412,9 +2634,7 @@ mod tests {
         // `Ty::Instance` directly by `lower_method`, bypassing
         // `annotation_to_ty` entirely) is the only non-scalar entry
         // `params` can ever actually contain.
-        assert_c0001(
-            "class C:\n    def __init__(self) -> None:\n        self.link = self\n",
-        );
+        assert_c0001("class C:\n    def __init__(self) -> None:\n        self.link = self\n");
     }
 
     #[test]
@@ -2426,7 +2646,10 @@ mod tests {
     #[test]
     fn an_init_attr_assigned_a_float_literal_establishes_a_float_slot() {
         let hir = lower_ok("class C:\n    def __init__(self) -> None:\n        self.x = 1.5\n");
-        assert_eq!(hir.class_defs[0].1.attrs, vec![("x".to_string(), Ty::Float)]);
+        assert_eq!(
+            hir.class_defs[0].1.attrs,
+            vec![("x".to_string(), Ty::Float)]
+        );
     }
 
     #[test]
@@ -2445,16 +2668,13 @@ mod tests {
 
     #[test]
     fn an_init_attr_assigned_a_string_literal_establishes_a_str_slot() {
-        let hir =
-            lower_ok("class C:\n    def __init__(self) -> None:\n        self.x = \"hi\"\n");
+        let hir = lower_ok("class C:\n    def __init__(self) -> None:\n        self.x = \"hi\"\n");
         assert_eq!(hir.class_defs[0].1.attrs, vec![("x".to_string(), Ty::Str)]);
     }
 
     #[test]
     fn an_init_attr_assigned_an_arithmetic_expression_is_unsupported() {
-        assert_c0001(
-            "class C:\n    def __init__(self, x: int) -> None:\n        self.y = x + 1\n",
-        );
+        assert_c0001("class C:\n    def __init__(self, x: int) -> None:\n        self.y = x + 1\n");
     }
 
     #[test]
@@ -2499,9 +2719,7 @@ mod tests {
         // pre-scan ever runs (see that function's own doc comment for why
         // its `assign.targets.first().expect(...)` is therefore safe, not
         // a `continue`-guarded shape this pre-scan needs to skip itself).
-        assert_c0001(
-            "class C:\n    def __init__(self) -> None:\n        self.x = self.y = 0\n",
-        );
+        assert_c0001("class C:\n    def __init__(self) -> None:\n        self.x = self.y = 0\n");
     }
 
     #[test]
@@ -2532,7 +2750,9 @@ mod tests {
         // The `clone` method should be lowered as a function with return
         // type `Ty::Instance("C")`.
         let clone = hir.items.iter().find_map(|item| match item {
-            HirItem::Function { name, return_ty, .. } if name == "C.clone" => Some(return_ty),
+            HirItem::Function {
+                name, return_ty, ..
+            } if name == "C.clone" => Some(return_ty),
             _ => None,
         });
         assert_eq!(
@@ -2586,13 +2806,12 @@ mod tests {
             "class Builder:\n    def __init__(self) -> None:\n        self.count = 0\n    def clone(self) -> Builder:\n        return self\n",
         );
         let clone = hir.items.iter().find_map(|item| match item {
-            HirItem::Function { name, return_ty, .. } if name == "Builder.clone" => Some(return_ty.clone()),
+            HirItem::Function {
+                name, return_ty, ..
+            } if name == "Builder.clone" => Some(return_ty.clone()),
             _ => None,
         });
-        assert_eq!(
-            clone,
-            Some(Ty::Instance(Box::new("Builder".to_string()))),
-        );
+        assert_eq!(clone, Some(Ty::Instance(Box::new("Builder".to_string()))),);
     }
 
     // PEP 649/749 (#387 Part 2, Bug 4 fix): a local `AnnAssign` *inside* a
@@ -2626,9 +2845,8 @@ mod tests {
     // at monomorphization time.
     #[test]
     fn generic_class_init_param_seeds_param_typed_slot() {
-        let hir = lower_ok(
-            "class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\n",
-        );
+        let hir =
+            lower_ok("class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\n");
         assert_eq!(hir.class_defs[0].1.type_param, Some("T".to_string()));
         assert_eq!(
             hir.class_defs[0].1.attrs,
@@ -2668,7 +2886,10 @@ mod tests {
         );
         let (_, c_def) = &hir.class_defs[2];
         assert_eq!(c_def.bases, vec!["A".to_string(), "B".to_string()]);
-        assert_eq!(c_def.mro, vec!["C".to_string(), "A".to_string(), "B".to_string()]);
+        assert_eq!(
+            c_def.mro,
+            vec!["C".to_string(), "A".to_string(), "B".to_string()]
+        );
     }
 
     #[test]
@@ -2678,7 +2899,15 @@ mod tests {
         );
         let (_, d_def) = &hir.class_defs[3];
         // C3: D, B, C, A
-        assert_eq!(d_def.mro, vec!["D".to_string(), "B".to_string(), "C".to_string(), "A".to_string()]);
+        assert_eq!(
+            d_def.mro,
+            vec![
+                "D".to_string(),
+                "B".to_string(),
+                "C".to_string(),
+                "A".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -2690,7 +2919,9 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic.message.contains("inherits from unknown class `B`"),
+            diagnostic
+                .message
+                .contains("inherits from unknown class `B`"),
             "unexpected message: {}",
             diagnostic.message
         );
@@ -2718,7 +2949,9 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic.message.contains("cannot inherit from generic class `A`"),
+            diagnostic
+                .message
+                .contains("cannot inherit from generic class `A`"),
             "unexpected message: {}",
             diagnostic.message
         );
@@ -2732,7 +2965,9 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic.message.contains("generic class `C` with base classes"),
+            diagnostic
+                .message
+                .contains("generic class `C` with base classes"),
             "unexpected message: {}",
             diagnostic.message
         );
@@ -2802,7 +3037,9 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
-            diagnostic.message.contains("no base class in its MRO provides one"),
+            diagnostic
+                .message
+                .contains("no base class in its MRO provides one"),
             "unexpected message: {}",
             diagnostic.message
         );
@@ -2885,6 +3122,7 @@ mod tests {
             properties: Vec::new(),
             static_methods: Vec::new(),
             class_methods: Vec::new(),
+            enum_members: Vec::new(),
         };
         let defined_classes = vec![("A".to_string(), fake_a)];
         let diagnostic = super::lower_class(def, &[], &defined_classes).unwrap_err();
@@ -2971,14 +3209,17 @@ mod tests {
 
     #[test]
     fn init_subclass_without_base_having_init_subclass_is_not_validated() {
-    // A class defines `__init_subclass__` but no base class has it.
-    // The validation should NOT run (no base_has_init_subclass), so even
-    // a non-trivial body is accepted (it's just a regular method).
-    let module = crate::pycc_parser_test_helper::parse(
+        // A class defines `__init_subclass__` but no base class has it.
+        // The validation should NOT run (no base_has_init_subclass), so even
+        // a non-trivial body is accepted (it's just a regular method).
+        let module = crate::pycc_parser_test_helper::parse(
             "class D:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        print(1)\n",
         );
         let hir = lower_checked(&module);
-        assert!(hir.is_ok(), "non-trivial body without base init_subclass should be accepted");
+        assert!(
+            hir.is_ok(),
+            "non-trivial body without base init_subclass should be accepted"
+        );
     }
 
     #[test]
@@ -2991,7 +3232,10 @@ mod tests {
             "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n",
         );
         let hir = lower_checked(&module);
-        assert!(hir.is_ok(), "subclass without own __init_subclass should be accepted");
+        assert!(
+            hir.is_ok(),
+            "subclass without own __init_subclass should be accepted"
+        );
     }
 
     #[test]
@@ -3005,5 +3249,39 @@ mod tests {
         );
         let hir = lower_checked(&module);
         assert!(hir.is_ok(), "init_subclass before init should be accepted");
+    }
+
+    // -- #379 (PR-19): PEP 435 enum class lowering ------------------------
+
+    #[test]
+    fn generic_enum_class_is_rejected() {
+        // `class C[T](Enum):` — a generic class whose single base is `Enum`.
+        // The type parameter `T` triggers the generic-enum rejection at
+        // line 448-455, distinct from the multiple-bases rejection.
+        assert_c0001("class C[T](Enum):\n    RED = 1\n");
+    }
+
+    #[test]
+    fn enum_member_with_multiple_targets_is_rejected() {
+        // `RED = GREEN = 1` — a chain assignment with multiple targets,
+        // which has `assign.targets.len() == 2`, triggering the rejection
+        // at line 551-556. (Tuple unpacking `RED, GREEN = 1, 2` has a
+        // single tuple target and hits a different path.)
+        assert_c0001("class C(Enum):\n    RED = GREEN = 1\n");
+    }
+
+    #[test]
+    fn enum_member_with_non_name_target_is_rejected() {
+        assert_c0001("class C(Enum):\n    C.RED = 1\n");
+    }
+
+    #[test]
+    fn enum_member_value_overflowing_i64_is_rejected() {
+        assert_c0001("class C(Enum):\n    RED = 99999999999999999999999999\n");
+    }
+
+    #[test]
+    fn enum_member_with_non_literal_value_is_rejected() {
+        assert_c0001("x = 1\nclass C(Enum):\n    RED = x\n");
     }
 }

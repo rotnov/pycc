@@ -860,6 +860,7 @@ dependencies = [
  "pycc_diag",
  "pycc_hir",
  "pycc_mir",
+ "pycc_parser",
  "pycc_std",
 ]
 

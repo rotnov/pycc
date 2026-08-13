@@ -16,8 +16,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 /// `C.create(42)` calls `C.create.static(42)` with no implicit receiver.
 #[test]
 fn static_method_call_through_class_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_static_class_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_436_static_class_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -36,18 +35,14 @@ fn static_method_call_through_class_builds_and_runs() {
     );
 
     let output = Command::new(&out).output().unwrap();
-    assert_eq!(
-        output.stdout, b"43\n",
-        "C.create(42) should return 43"
-    );
+    assert_eq!(output.stdout, b"43\n", "C.create(42) should return 43");
 }
 
 /// #436: a `@staticmethod` called through an instance. The instance is
 /// not passed as a receiver — only explicit arguments are forwarded.
 #[test]
 fn static_method_call_through_instance_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_static_inst_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_436_static_inst_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -66,10 +61,7 @@ fn static_method_call_through_instance_builds_and_runs() {
     );
 
     let output = Command::new(&out).output().unwrap();
-    assert_eq!(
-        output.stdout, b"30\n",
-        "c.combine(10, 20) should return 30"
-    );
+    assert_eq!(output.stdout, b"30\n", "c.combine(10, 20) should return 30");
 }
 
 /// #436: a basic `@classmethod` called through the class name. The
@@ -78,8 +70,8 @@ fn static_method_call_through_instance_builds_and_runs() {
 /// computed from its explicit arguments without dereferencing `cls`.
 #[test]
 fn class_method_call_through_class_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_classmethod_class_{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("pycc_436_classmethod_class_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -98,18 +90,15 @@ fn class_method_call_through_class_builds_and_runs() {
     );
 
     let output = Command::new(&out).output().unwrap();
-    assert_eq!(
-        output.stdout, b"42\n",
-        "C.greet(21) should return 42"
-    );
+    assert_eq!(output.stdout, b"42\n", "C.greet(21) should return 42");
 }
 
 /// #436: a `@classmethod` called through an instance. The instance is
 /// passed as the implicit `cls` parameter.
 #[test]
 fn class_method_call_through_instance_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_classmethod_inst_{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("pycc_436_classmethod_inst_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -128,10 +117,7 @@ fn class_method_call_through_instance_builds_and_runs() {
     );
 
     let output = Command::new(&out).output().unwrap();
-    assert_eq!(
-        output.stdout, b"42\n",
-        "c.greet(21) should return 42"
-    );
+    assert_eq!(output.stdout, b"42\n", "c.greet(21) should return 42");
 }
 
 /// #436: a `@classmethod` that uses `cls` to read an instance attribute.
@@ -139,8 +125,7 @@ fn class_method_call_through_instance_builds_and_runs() {
 /// `cls.attr` reads the instance's attribute slot.
 #[test]
 fn class_method_using_cls_attribute_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_cls_attr_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_436_cls_attr_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -169,8 +154,7 @@ fn class_method_using_cls_attribute_builds_and_runs() {
 /// name, it takes no arguments and returns a constant.
 #[test]
 fn static_method_with_no_parameters_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_static_noargs_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_436_static_noargs_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -189,18 +173,14 @@ fn static_method_with_no_parameters_builds_and_runs() {
     );
 
     let output = Command::new(&out).output().unwrap();
-    assert_eq!(
-        output.stdout, b"42\n",
-        "C.answer() should return 42"
-    );
+    assert_eq!(output.stdout, b"42\n", "C.answer() should return 42");
 }
 
 /// #436: an inherited `@staticmethod`. A derived class calls a static
 /// method defined in its base class through the derived class name.
 #[test]
 fn inherited_static_method_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_inh_static_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_436_inh_static_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -229,8 +209,7 @@ fn inherited_static_method_builds_and_runs() {
 /// method defined in its base class through the derived class name.
 #[test]
 fn inherited_class_method_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_inh_classmethod_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_436_inh_classmethod_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -259,8 +238,7 @@ fn inherited_class_method_builds_and_runs() {
 /// constructor must be a regular instance method.
 #[test]
 fn staticmethod_on_init_is_a_build_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_static_init_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_436_static_init_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -288,8 +266,8 @@ fn staticmethod_on_init_is_a_build_error() {
 /// constructor must be a regular instance method.
 #[test]
 fn classmethod_on_init_is_a_build_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_classmethod_init_{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("pycc_436_classmethod_init_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -317,8 +295,8 @@ fn classmethod_on_init_is_a_build_error() {
 /// type-check time with T0021.
 #[test]
 fn static_method_wrong_argument_types_is_a_check_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_static_wrongtype_{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("pycc_436_static_wrongtype_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -347,8 +325,10 @@ fn static_method_wrong_argument_types_is_a_check_error() {
 /// from the argument count/type check.
 #[test]
 fn class_method_wrong_argument_types_is_a_check_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_classmethod_wrongtype_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_436_classmethod_wrongtype_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -379,8 +359,7 @@ fn class_method_wrong_argument_types_is_a_check_error() {
 /// where no implicit receiver exists.
 #[test]
 fn static_method_declaring_self_is_a_check_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_static_self_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_436_static_self_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -408,8 +387,7 @@ fn static_method_declaring_self_is_a_check_error() {
 /// C0001 at HIR-lowering time.
 #[test]
 fn class_method_without_cls_is_a_build_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_436_no_cls_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_436_no_cls_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -437,8 +415,7 @@ fn class_method_without_cls_is_a_build_error() {
 /// method in the same class.
 #[test]
 fn static_method_collides_with_regular_method_is_a_build_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_issue436_collide_sm_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_issue436_collide_sm_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -466,8 +443,7 @@ fn static_method_collides_with_regular_method_is_a_build_error() {
 /// method in the same class.
 #[test]
 fn class_method_collides_with_regular_method_is_a_build_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_issue436_collide_cm_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_issue436_collide_cm_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -495,8 +471,8 @@ fn class_method_collides_with_regular_method_is_a_build_error() {
 /// @classmethod in the same class.
 #[test]
 fn static_method_collides_with_class_method_is_a_build_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_issue436_collide_both_{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("pycc_issue436_collide_both_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -524,11 +500,8 @@ fn static_method_collides_with_class_method_is_a_build_error() {
 /// the same name is also rejected (reverse direction collision).
 #[test]
 fn regular_method_collides_with_static_method_is_a_build_error() {
-    let dir = std::env::temp_dir()
-        .join(format!(
-            "pycc_issue436_collide_rev_{}",
-            std::process::id()
-        ));
+    let dir =
+        std::env::temp_dir().join(format!("pycc_issue436_collide_rev_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,

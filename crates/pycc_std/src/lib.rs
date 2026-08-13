@@ -27,6 +27,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StdModule {
     Math,
+    /// The `enum` module, recognized solely so `from enum import Enum`
+    /// resolves (#379, PR-19). `Enum` is a marker symbol, not a value —
+    /// it is only valid as the sole base class of `class C(Enum):`.
+    Enum,
 }
 
 /// The scalar shape of a registered symbol's argument/return type, kept
@@ -40,7 +44,8 @@ pub enum ScalarKind {
 }
 
 /// The kind of a registered stdlib symbol: a callable function with a fixed
-/// argument/return shape, or a constant with a fixed type.
+/// argument/return shape, a constant with a fixed type, or a class marker
+/// that is only valid as a base class (not a first-class value).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StdSymbolKind {
     Function {
@@ -50,6 +55,11 @@ pub enum StdSymbolKind {
     Constant {
         ty: ScalarKind,
     },
+    /// A class marker symbol (e.g. `enum.Enum`) that is only valid as the
+    /// sole base class of a class definition (`class C(Enum):`). It is not
+    /// a first-class value — referencing it as a value or calling it is
+    /// rejected by the type checker.
+    EnumMarker,
 }
 
 /// A single registered stdlib symbol: which module it lives in, its source
@@ -82,6 +92,11 @@ const REGISTRY: &[StdSymbol] = &[
             ty: ScalarKind::Float,
         },
     },
+    StdSymbol {
+        module: StdModule::Enum,
+        name: "Enum",
+        kind: StdSymbolKind::EnumMarker,
+    },
 ];
 
 /// Resolves a dotted-import module name (e.g. `"math"`) to a [`StdModule`],
@@ -90,6 +105,7 @@ const REGISTRY: &[StdSymbol] = &[
 pub fn resolve_module(name: &str) -> Option<StdModule> {
     match name {
         "math" => Some(StdModule::Math),
+        "enum" => Some(StdModule::Enum),
         _ => None,
     }
 }
@@ -119,6 +135,11 @@ mod tests {
         assert_eq!(resolve_module("os"), None);
         assert_eq!(resolve_module("sys"), None);
         assert_eq!(resolve_module("cgi"), None);
+    }
+
+    #[test]
+    fn resolve_module_recognizes_enum() {
+        assert_eq!(resolve_module("enum"), Some(StdModule::Enum));
     }
 
     #[test]
@@ -155,6 +176,20 @@ mod tests {
     }
 
     #[test]
+    fn resolve_symbol_finds_enum_enum() {
+        let sym = resolve_symbol(StdModule::Enum, "Enum").expect("enum.Enum is registered");
+        assert_eq!(sym.module, StdModule::Enum);
+        assert_eq!(sym.name, "Enum");
+        assert_eq!(sym.kind, StdSymbolKind::EnumMarker);
+    }
+
+    #[test]
+    fn resolve_symbol_rejects_unregistered_symbol_in_enum_module() {
+        assert_eq!(resolve_symbol(StdModule::Enum, "IntEnum"), None);
+        assert_eq!(resolve_symbol(StdModule::Enum, "auto"), None);
+    }
+
+    #[test]
     fn std_module_derives_are_exercised() {
         // Exercises `Debug`/`Clone`/`Copy`/`PartialEq`/`Eq` on `StdModule`
         // directly, since `resolve_module`'s equality checks above only
@@ -163,6 +198,12 @@ mod tests {
         let m2 = m;
         assert_eq!(format!("{m:?}"), "Math");
         assert_eq!(m, m2);
+
+        let e = StdModule::Enum;
+        let e2 = e;
+        assert_eq!(format!("{e:?}"), "Enum");
+        assert_eq!(e, e2);
+        assert_ne!(m, e);
     }
 
     #[test]
@@ -183,5 +224,14 @@ mod tests {
         let sym2 = sym;
         assert_eq!(sym, sym2);
         assert!(format!("{sym:?}").contains("StdSymbol"));
+
+        let enum_sym = StdSymbol {
+            module: StdModule::Enum,
+            name: "Enum",
+            kind: StdSymbolKind::EnumMarker,
+        };
+        let enum_sym2 = enum_sym;
+        assert_eq!(enum_sym, enum_sym2);
+        assert!(format!("{enum_sym:?}").contains("EnumMarker"));
     }
 }

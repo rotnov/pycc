@@ -1,7 +1,8 @@
 use pycc_hir::{
-    CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirModule, HirStmt,
+    CompIter, FStringPart, HirExpr, HirItem, HirModule, HirStmt,
     eval_isinstance_single, eval_issubclass_single, extract_class_names, is_builtin_type_name,
 };
+pub use pycc_hir::HirClassDef;
 use std::collections::HashMap;
 
 // Re-exported (not just `use`d) because `pycc_codegen` doesn't depend on
@@ -502,6 +503,13 @@ pub enum MirItem {
 
 pub struct MirModule {
     pub items: Vec<MirItem>,
+    /// #379 (PR-19): the module's class definitions, carried through to
+    /// codegen so it can emit per-enum-member singleton init sequences.
+    /// Codegen needs the `enum_members` table (member names and value
+    /// types) to allocate and initialize each member's singleton instance
+    /// at module-init time. Non-enum class defs are also carried, though
+    /// codegen only reads `enum_members` from them today.
+    pub class_defs: Vec<(String, pycc_hir::HirClassDef)>,
 }
 
 pub fn build(hir: &HirModule) -> MirModule {
@@ -547,7 +555,10 @@ pub fn build(hir: &HirModule) -> MirModule {
         .into_iter()
         .map(|item| item.expect("every HIR item is either a function or a top-level statement"))
         .collect();
-    MirModule { items }
+    MirModule {
+        items,
+        class_defs: hir.class_defs.clone(),
+    }
 }
 
 fn lower_item(
@@ -694,7 +705,9 @@ fn lower_stmt(
     current_class: Option<&str>,
 ) -> MirStmt {
     match stmt {
-        HirStmt::ExprStmt(expr) => MirStmt::ExprStmt(lower_expr(expr, scopes, classes, current_class)),
+        HirStmt::ExprStmt(expr) => {
+            MirStmt::ExprStmt(lower_expr(expr, scopes, classes, current_class))
+        }
         HirStmt::Assign { target, value } => {
             let value = lower_expr(value, scopes, classes, current_class);
             // The first assignment fixes a binding's representation.
@@ -748,12 +761,21 @@ fn lower_stmt(
         HirStmt::AnnAssign { value: None, .. } => MirStmt::NoOp,
         HirStmt::If { test, body, orelse } => MirStmt::If {
             test: lower_expr(test, scopes, classes, current_class),
-            body: body.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect(),
-            orelse: orelse.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect(),
+            body: body
+                .iter()
+                .map(|s| lower_stmt(s, scopes, classes, current_class))
+                .collect(),
+            orelse: orelse
+                .iter()
+                .map(|s| lower_stmt(s, scopes, classes, current_class))
+                .collect(),
         },
         HirStmt::While { test, body } => MirStmt::While {
             test: lower_expr(test, scopes, classes, current_class),
-            body: body.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect(),
+            body: body
+                .iter()
+                .map(|s| lower_stmt(s, scopes, classes, current_class))
+                .collect(),
         },
         HirStmt::ForRange {
             var,
@@ -766,7 +788,10 @@ fn lower_stmt(
             let stop = lower_expr(stop, scopes, classes, current_class);
             let step = lower_expr(step, scopes, classes, current_class);
             bind_variable(scopes, var.clone(), Ty::Int);
-            let body = body.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect();
+            let body = body
+                .iter()
+                .map(|s| lower_stmt(s, scopes, classes, current_class))
+                .collect();
             MirStmt::ForRange {
                 var: var.clone(),
                 start,
@@ -804,7 +829,10 @@ fn lower_stmt(
             match lookup(scopes, list) {
                 Ty::List(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
-                    let body = body.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect();
+                    let body = body
+                        .iter()
+                        .map(|s| lower_stmt(s, scopes, classes, current_class))
+                        .collect();
                     MirStmt::ForList {
                         var: var.clone(),
                         list: list.clone(),
@@ -813,7 +841,10 @@ fn lower_stmt(
                 }
                 Ty::Dict(kv) => {
                     bind_variable(scopes, var.clone(), kv.0);
-                    let body = body.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect();
+                    let body = body
+                        .iter()
+                        .map(|s| lower_stmt(s, scopes, classes, current_class))
+                        .collect();
                     MirStmt::ForDict {
                         var: var.clone(),
                         dict: list.clone(),
@@ -828,7 +859,10 @@ fn lower_stmt(
                 // Task 7 fix round).
                 Ty::Set(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
-                    let body = body.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect();
+                    let body = body
+                        .iter()
+                        .map(|s| lower_stmt(s, scopes, classes, current_class))
+                        .collect();
                     MirStmt::ForSet {
                         var: var.clone(),
                         set: list.clone(),
@@ -849,7 +883,9 @@ fn lower_stmt(
             elt,
         } => {
             let (source, var_ty) = resolve_comp_source(iter, var, scopes, classes, current_class);
-            let cond = cond.as_deref().map(|c| lower_expr(c, scopes, classes, current_class));
+            let cond = cond
+                .as_deref()
+                .map(|c| lower_expr(c, scopes, classes, current_class));
             let elt = lower_expr(elt, scopes, classes, current_class);
             bind_variable(scopes, target.clone(), Ty::List(Box::new(elt.ty())));
             MirStmt::ListCompAssign {
@@ -869,7 +905,9 @@ fn lower_stmt(
             elt,
         } => {
             let (source, var_ty) = resolve_comp_source(iter, var, scopes, classes, current_class);
-            let cond = cond.as_deref().map(|c| lower_expr(c, scopes, classes, current_class));
+            let cond = cond
+                .as_deref()
+                .map(|c| lower_expr(c, scopes, classes, current_class));
             let elt = lower_expr(elt, scopes, classes, current_class);
             bind_variable(scopes, target.clone(), Ty::Set(Box::new(elt.ty())));
             MirStmt::SetCompAssign {
@@ -890,7 +928,9 @@ fn lower_stmt(
             value,
         } => {
             let (source, var_ty) = resolve_comp_source(iter, var, scopes, classes, current_class);
-            let cond = cond.as_deref().map(|c| lower_expr(c, scopes, classes, current_class));
+            let cond = cond
+                .as_deref()
+                .map(|c| lower_expr(c, scopes, classes, current_class));
             let key = lower_expr(key, scopes, classes, current_class);
             let value = lower_expr(value, scopes, classes, current_class);
             bind_variable(
@@ -908,7 +948,11 @@ fn lower_stmt(
                 value: Box::new(value),
             }
         }
-        HirStmt::Return(value) => MirStmt::Return(value.as_ref().map(|v| lower_expr(v, scopes, classes, current_class))),
+        HirStmt::Return(value) => MirStmt::Return(
+            value
+                .as_ref()
+                .map(|v| lower_expr(v, scopes, classes, current_class)),
+        ),
         HirStmt::DictSet { dict, key, value } => MirStmt::DictSet {
             dict: dict.clone(),
             key: lower_expr(key, scopes, classes, current_class),
@@ -966,6 +1010,33 @@ fn lower_stmt(
     }
 }
 
+/// #379 (PR-19): Try to lower `Color.RED` (an enum member accessed by name
+/// on the enum class) to `MirExpr::Name` reading the synthetic
+/// `<Class>.<Member>.enum_member` global. Returns `None` if `base` is not
+/// an enum class name or `attr` is not one of its members. Extracted from
+/// `lower_expr` to isolate the enum-specific code paths (see
+/// cargo-llvm-cov#276 for the coverage instantiation issue).
+fn try_lower_enum_member_attr(
+    base: &HirExpr,
+    attr: &str,
+    classes: &HashMap<String, HirClassDef>,
+) -> Option<MirExpr> {
+    if let HirExpr::Name(class_name) = base
+        && let Some(class_def) = classes.get(class_name.as_str())
+        && !class_def.enum_members.is_empty()
+        && class_def
+            .enum_members
+            .iter()
+            .any(|(name, _)| name == attr)
+    {
+        return Some(MirExpr::Name {
+            name: format!("{class_name}.{attr}.enum_member"),
+            ty: Ty::Instance(Box::new(class_name.clone())),
+        });
+    }
+    None
+}
+
 fn lower_expr(
     expr: &HirExpr,
     scopes: &[HashMap<String, Ty>],
@@ -1012,7 +1083,10 @@ fn lower_expr(
             if callee == "issubclass" && !is_user_defined {
                 return lower_issubclass(args, classes);
             }
-            let args: Vec<MirExpr> = args.iter().map(|a| lower_expr(a, scopes, classes, current_class)).collect();
+            let args: Vec<MirExpr> = args
+                .iter()
+                .map(|a| lower_expr(a, scopes, classes, current_class))
+                .collect();
             // D-154 (Part 1 of #375): `ClassName(args)` (instantiation)
             // reuses `HirExpr::Call` -- there is no dedicated HIR shape for
             // it (`pycc_hir::class`'s own doc comment) -- so it is resolved
@@ -1026,20 +1100,24 @@ fn lower_expr(
                 // without its own `__init__` inherits the base class's
                 // constructor. The MRO is ordered most-derived-first, so
                 // the first `__init__` found is the one to call.
-                let ctor = class_def.mro.iter().find_map(|mro_class| {
-                    let mro_def = classes.get(mro_class.as_str())?;
-                    if mro_def.methods.iter().any(|(mn, _)| mn == "__init__") {
-                        Some(format!("{mro_class}.__init__"))
-                    } else {
-                        None
-                    }
-                }).unwrap_or_else(|| {
-                    panic!(
-                        "pycc_mir: internal error: no `__init__` found in class `{callee}`'s \
+                let ctor = class_def
+                    .mro
+                    .iter()
+                    .find_map(|mro_class| {
+                        let mro_def = classes.get(mro_class.as_str())?;
+                        if mro_def.methods.iter().any(|(mn, _)| mn == "__init__") {
+                            Some(format!("{mro_class}.__init__"))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "pycc_mir: internal error: no `__init__` found in class `{callee}`'s \
                          MRO -- pycc_hir::lower_class should have rejected this before it \
                          reached pycc_mir"
-                    )
-                });
+                        )
+                    });
                 return MirExpr::Instantiate(Box::new(InstantiateExpr {
                     ctor,
                     // #432: allocate slots for all unique attributes across the
@@ -1112,15 +1190,18 @@ fn lower_expr(
                 .iter()
                 .map(|p| match p {
                     FStringPart::Literal(s) => MirFStringPart::Literal(s.clone()),
-                    FStringPart::Interpolation(e) => {
-                        MirFStringPart::Interpolation(Box::new(lower_expr(e, scopes, classes, current_class)))
-                    }
+                    FStringPart::Interpolation(e) => MirFStringPart::Interpolation(Box::new(
+                        lower_expr(e, scopes, classes, current_class),
+                    )),
                 })
                 .collect(),
         ),
-        HirExpr::ListLiteral(elements) => {
-            MirExpr::ListLiteral(elements.iter().map(|e| lower_expr(e, scopes, classes, current_class)).collect())
-        }
+        HirExpr::ListLiteral(elements) => MirExpr::ListLiteral(
+            elements
+                .iter()
+                .map(|e| lower_expr(e, scopes, classes, current_class))
+                .collect(),
+        ),
         // `HirExpr::Subscript` is reused unconditionally by `pycc_hir`'s own
         // lowering for both a list read and a dict read (it has no type
         // information to pick a different node) -- `pycc_types::infer_expr_in`
@@ -1150,15 +1231,26 @@ fn lower_expr(
         HirExpr::DictLiteral(pairs) => MirExpr::DictLiteral(
             pairs
                 .iter()
-                .map(|(k, v)| (lower_expr(k, scopes, classes, current_class), lower_expr(v, scopes, classes, current_class)))
+                .map(|(k, v)| {
+                    (
+                        lower_expr(k, scopes, classes, current_class),
+                        lower_expr(v, scopes, classes, current_class),
+                    )
+                })
                 .collect(),
         ),
-        HirExpr::SetLiteral(elements) => {
-            MirExpr::SetLiteral(elements.iter().map(|e| lower_expr(e, scopes, classes, current_class)).collect())
-        }
-        HirExpr::TupleLiteral(elements) => {
-            MirExpr::TupleLiteral(elements.iter().map(|e| lower_expr(e, scopes, classes, current_class)).collect())
-        }
+        HirExpr::SetLiteral(elements) => MirExpr::SetLiteral(
+            elements
+                .iter()
+                .map(|e| lower_expr(e, scopes, classes, current_class))
+                .collect(),
+        ),
+        HirExpr::TupleLiteral(elements) => MirExpr::TupleLiteral(
+            elements
+                .iter()
+                .map(|e| lower_expr(e, scopes, classes, current_class))
+                .collect(),
+        ),
         // PR-12 Task 8 (D-118): purely structural -- recurse into `base` and
         // every present bound, same as every other MIR-lowering site in this
         // function. `pycc_types` already validated the base is
@@ -1173,9 +1265,15 @@ fn lower_expr(
             step,
         } => MirExpr::Slice {
             base: Box::new(lower_expr(base, scopes, classes, current_class)),
-            start: start.as_deref().map(|e| Box::new(lower_expr(e, scopes, classes, current_class))),
-            stop: stop.as_deref().map(|e| Box::new(lower_expr(e, scopes, classes, current_class))),
-            step: step.as_deref().map(|e| Box::new(lower_expr(e, scopes, classes, current_class))),
+            start: start
+                .as_deref()
+                .map(|e| Box::new(lower_expr(e, scopes, classes, current_class))),
+            stop: stop
+                .as_deref()
+                .map(|e| Box::new(lower_expr(e, scopes, classes, current_class))),
+            step: step
+                .as_deref()
+                .map(|e| Box::new(lower_expr(e, scopes, classes, current_class))),
         },
         // PR-12 Task 11 (D-119): `list`'s element type is resolved via the
         // same `lookup` mechanism every other name reference in this file
@@ -1290,6 +1388,23 @@ fn lower_expr(
                     ty,
                 };
             }
+            // #379 (PR-19): `Color.RED` — accessing an enum member by name
+            // on the enum class. The base is `HirExpr::Name` referring to
+            // an enum class (a class with non-empty `enum_members`), and
+            // `attr` is a member name. Lower to `MirExpr::Name` reading a
+            // synthetic global (`<Class>.<Member>.enum_member`) that
+            // codegen initializes once at module-init time with the
+            // member's singleton instance. The `.enum_member` suffix
+            // ensures the name cannot collide with a real Python
+            // identifier (which cannot contain `.`). The subsequent
+            // `.value`/`.name` read on this result is a separate
+            // `AttrGet` that resolves to a slot via the enum class's
+            // `attrs = [("value", Int), ("name", Str)]` table.
+            if let Some(enum_member_expr) =
+                try_lower_enum_member_attr(base.as_ref(), attr.as_str(), classes)
+            {
+                return enum_member_expr;
+            }
             let base = lower_expr(base, scopes, classes, current_class);
             let class_def = class_def_of(&base, classes);
             // #432: walk the MRO for property lookup first (matching
@@ -1361,18 +1476,21 @@ fn lower_expr(
                     .position(|c| c == current)
                     .expect("pycc_mir: internal error: class not found in its own MRO");
                 let super_mro = &class_def.mro[current_pos + 1..];
-                let mangled = super_mro.iter().find_map(|mro_class| {
-                    let mro_def = &classes[mro_class.as_str()];
-                    mro_def
-                        .methods
-                        .iter()
-                        .find(|(name, _)| name == method)
-                        .map(|(_, mangled)| mangled.clone())
-                }).expect(
-                    "pycc_mir: internal error: method not declared on class or any base in its \
+                let mangled = super_mro
+                    .iter()
+                    .find_map(|mro_class| {
+                        let mro_def = &classes[mro_class.as_str()];
+                        mro_def
+                            .methods
+                            .iter()
+                            .find(|(name, _)| name == method)
+                            .map(|(_, mangled)| mangled.clone())
+                    })
+                    .expect(
+                        "pycc_mir: internal error: method not declared on class or any base in its \
                      MRO after the current class -- pycc_types::check should have rejected this \
                      HIR before it reached pycc_mir",
-                );
+                    );
                 let ty = lookup(scopes, &format!("$fn:{mangled}"));
                 let mut call_args = Vec::with_capacity(args.len() + 1);
                 call_args.push(self_expr);
@@ -1430,7 +1548,10 @@ fn lower_expr(
                     call_args.push(MirExpr::NullInstance {
                         ty: Ty::Instance(Box::new(class_name.clone())),
                     });
-                    call_args.extend(args.iter().map(|a| lower_expr(a, scopes, classes, current_class)));
+                    call_args.extend(
+                        args.iter()
+                            .map(|a| lower_expr(a, scopes, classes, current_class)),
+                    );
                     return MirExpr::Call {
                         callee: mangled,
                         args: call_args,
@@ -1476,7 +1597,10 @@ fn lower_expr(
                 let ty = lookup(scopes, &format!("$fn:{mangled}"));
                 let mut call_args = Vec::with_capacity(args.len() + 1);
                 call_args.push(base);
-                call_args.extend(args.iter().map(|a| lower_expr(a, scopes, classes, current_class)));
+                call_args.extend(
+                    args.iter()
+                        .map(|a| lower_expr(a, scopes, classes, current_class)),
+                );
                 return MirExpr::Call {
                     callee: mangled,
                     args: call_args,
@@ -1484,25 +1608,32 @@ fn lower_expr(
                 };
             }
             // #432: walk the MRO to find the method's mangled name.
-            let mangled = class_def.mro.iter().find_map(|mro_class| {
-                let mro_def = mro_class_def(mro_class, classes);
-                mro_def
-                    .methods
-                    .iter()
-                    .find(|(name, _)| name == method)
-                    .map(|(_, mangled)| mangled.clone())
-            }).unwrap_or_else(|| {
-                panic!(
-                    "pycc_mir: internal error: method `{method}` not declared on class `{}` or \
+            let mangled = class_def
+                .mro
+                .iter()
+                .find_map(|mro_class| {
+                    let mro_def = mro_class_def(mro_class, classes);
+                    mro_def
+                        .methods
+                        .iter()
+                        .find(|(name, _)| name == method)
+                        .map(|(_, mangled)| mangled.clone())
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "pycc_mir: internal error: method `{method}` not declared on class `{}` or \
                      any base in its MRO -- pycc_types::check should have rejected this HIR \
                      before it reached pycc_mir",
-                    class_def.name
-                )
-            });
+                        class_def.name
+                    )
+                });
             let ty = lookup(scopes, &format!("$fn:{mangled}"));
             let mut call_args = Vec::with_capacity(args.len() + 1);
             call_args.push(base);
-            call_args.extend(args.iter().map(|a| lower_expr(a, scopes, classes, current_class)));
+            call_args.extend(
+                args.iter()
+                    .map(|a| lower_expr(a, scopes, classes, current_class)),
+            );
             MirExpr::Call {
                 callee: mangled,
                 args: call_args,
@@ -1672,8 +1803,9 @@ fn lower_isinstance(
     let obj = lower_expr(&args[0], scopes, classes, current_class);
     let obj_ty = obj.ty();
     // Extract class names from the second argument.
-    let class_names = extract_class_names(&args[1])
-        .expect("pycc_mir: internal error: isinstance's second argument was not validated by pycc_types");
+    let class_names = extract_class_names(&args[1]).expect(
+        "pycc_mir: internal error: isinstance's second argument was not validated by pycc_types",
+    );
     // Compute the result: true if any target class matches.
     let obj_mro = match &obj_ty {
         Ty::Instance(class_name) => classes
@@ -1692,10 +1824,7 @@ fn lower_isinstance(
 /// constant. Neither argument is lowered as a MIR expression — both are
 /// class references. The result is computed using `eval_issubclass_single`
 /// with the source class's MRO.
-fn lower_issubclass(
-    args: &[HirExpr],
-    classes: &HashMap<String, HirClassDef>,
-) -> MirExpr {
+fn lower_issubclass(args: &[HirExpr], classes: &HashMap<String, HirClassDef>) -> MirExpr {
     // The type checker already validated arg count and class names. If we
     // reach here, args has exactly 2 elements, args[0] is a bare class name,
     // and args[1] is a valid class name or tuple of class names.
@@ -1705,8 +1834,9 @@ fn lower_issubclass(
             "pycc_mir: internal error: issubclass's first argument was not validated by pycc_types"
         ),
     };
-    let target_names = extract_class_names(&args[1])
-        .expect("pycc_mir: internal error: issubclass's second argument was not validated by pycc_types");
+    let target_names = extract_class_names(&args[1]).expect(
+        "pycc_mir: internal error: issubclass's second argument was not validated by pycc_types",
+    );
     // Get the source class's MRO (empty for builtin types).
     let cls_mro = if is_builtin_type_name(cls_name) {
         &[][..]
@@ -1758,7 +1888,10 @@ mod tests {
                     args: vec![HirExpr::Name("x".to_string())],
                 })),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1792,7 +1925,10 @@ mod tests {
                     right: Box::new(HirExpr::Name("b".to_string())),
                 }))],
             }],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1836,7 +1972,10 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[0],
@@ -1860,7 +1999,10 @@ mod tests {
                     args: vec![HirExpr::Name("n".to_string())],
                 }))],
             }],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1894,7 +2036,10 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(2)],
                 })],
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1924,7 +2069,10 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })],
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1952,7 +2100,10 @@ mod tests {
                     args: vec![HirExpr::Name("i".to_string())],
                 })],
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1982,7 +2133,10 @@ mod tests {
                 return_ty: Ty::None,
                 body: vec![HirStmt::Return(None)],
             }],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -2013,7 +2167,10 @@ mod tests {
                 }),
                 HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -2056,7 +2213,10 @@ mod tests {
                 }),
                 HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -2092,18 +2252,21 @@ mod tests {
                     right: Box::new(HirExpr::IntLiteral(2)),
                 }),
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
             vec![MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "x".to_string(),
                 value: MirExpr::IntBoundary(Box::new(MirExpr::Compare {
-                        op: CmpOpKind::Lt,
-                        left: Box::new(MirExpr::IntLiteral(1)),
-                        right: Box::new(MirExpr::IntLiteral(2)),
-                        ty: Ty::Bool,
-                    })),
+                    op: CmpOpKind::Lt,
+                    left: Box::new(MirExpr::IntLiteral(1)),
+                    right: Box::new(MirExpr::IntLiteral(2)),
+                    ty: Ty::Bool,
+                })),
             })]
         );
     }
@@ -2123,7 +2286,10 @@ mod tests {
                 annotation: Ty::Int,
                 value: None,
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(mir.items, vec![MirItem::TopLevelStmt(MirStmt::NoOp)]);
     }
@@ -2140,7 +2306,10 @@ mod tests {
                 }),
                 HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("y".to_string()))),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         build(&hir);
     }
 
@@ -2155,7 +2324,10 @@ mod tests {
                     right: Box::new(HirExpr::IntLiteral(2)),
                 },
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -2187,7 +2359,10 @@ mod tests {
                     ]),
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2215,7 +2390,10 @@ mod tests {
                     right: Box::new(HirExpr::StringLiteral("b".to_string())),
                 },
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -2242,7 +2420,10 @@ mod tests {
                     right: Box::new(HirExpr::IntLiteral(2)),
                 },
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -2269,7 +2450,10 @@ mod tests {
                     right: Box::new(HirExpr::IntLiteral(2)),
                 },
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -2299,7 +2483,10 @@ mod tests {
                     right: Box::new(HirExpr::FloatLiteral(1.5)),
                 },
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -2330,7 +2517,10 @@ mod tests {
                     value: HirExpr::IntLiteral(5),
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[0],
@@ -2360,7 +2550,10 @@ mod tests {
                 }),
                 HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[2],
@@ -2382,7 +2575,10 @@ mod tests {
                     value: HirExpr::IntLiteral(1),
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         build(&hir);
     }
 
@@ -2398,7 +2594,10 @@ mod tests {
             items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name(
                 "undefined".to_string(),
             )))],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         build(&hir);
     }
 
@@ -2429,7 +2628,10 @@ mod tests {
                     ],
                 },
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2481,7 +2683,10 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[2],
@@ -2515,7 +2720,10 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2558,7 +2766,10 @@ mod tests {
                     ],
                 },
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2615,7 +2826,10 @@ mod tests {
                     ],
                 },
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2669,7 +2883,10 @@ mod tests {
                     ],
                 },
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2724,7 +2941,10 @@ mod tests {
                     ],
                 },
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2916,7 +3136,10 @@ mod tests {
                 target: "x".to_string(),
                 value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         // Not a `let PATTERN = ... else { panic!(...) }` destructure -- this
         // file's own coverage-gate convention (see `pycc_hir`'s equivalent
@@ -2954,7 +3177,10 @@ mod tests {
                     })],
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2992,7 +3218,10 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3022,7 +3251,10 @@ mod tests {
                     value: Box::new(HirExpr::IntLiteral(2)),
                 })),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3055,7 +3287,10 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3087,7 +3322,10 @@ mod tests {
                     list: "xs".to_string(),
                 })),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         build(&hir);
     }
 
@@ -3114,7 +3352,10 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3147,7 +3388,10 @@ mod tests {
                     default: Box::new(HirExpr::IntLiteral(0)),
                 })),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         build(&hir);
     }
 
@@ -3167,7 +3411,10 @@ mod tests {
                     value: Box::new(HirExpr::IntLiteral(2)),
                 })),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3194,7 +3441,8 @@ mod tests {
                 },
             })],
             type_aliases: Vec::new(),
-            imports: Vec::new(), class_defs: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let mir = build(&hir);
         assert_eq!(
@@ -3222,7 +3470,8 @@ mod tests {
                 value: HirExpr::Name("math.pi".to_string()),
             })],
             type_aliases: Vec::new(),
-            imports: Vec::new(), class_defs: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         };
         let mir = build(&hir);
         assert_eq!(
@@ -3261,7 +3510,10 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3301,7 +3553,10 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3348,7 +3603,10 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3400,7 +3658,10 @@ mod tests {
                 }),
                 HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("y".to_string()))),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         // `y = xs[0]` binds `y` as `Ty::Str`, derived from `xs`'s own
         // `Ty::List(Box::new(Ty::Str))` binding (itself derived from the
@@ -3489,7 +3750,10 @@ mod tests {
                     body: vec![],
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         build(&hir);
     }
 
@@ -3514,7 +3778,10 @@ mod tests {
                     HirExpr::IntLiteral(1),
                 )]),
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         let expected_value = MirExpr::DictLiteral(vec![(
             MirExpr::StringLiteral("a".to_string()),
@@ -3553,7 +3820,10 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3601,7 +3871,10 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3635,7 +3908,10 @@ mod tests {
                     value: HirExpr::IntLiteral(2),
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3667,7 +3943,10 @@ mod tests {
                     })],
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3789,7 +4068,10 @@ mod tests {
                     HirExpr::BoolLiteral(true),
                 ]),
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         let expected_value =
             MirExpr::TupleLiteral(vec![MirExpr::IntLiteral(1), MirExpr::BoolLiteral(true)]);
@@ -3813,7 +4095,10 @@ mod tests {
                 target: "x".to_string(),
                 value: HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         let expected_value =
             MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)]);
@@ -3847,7 +4132,10 @@ mod tests {
                     })],
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3893,7 +4181,10 @@ mod tests {
                     args: vec![HirExpr::Name("y".to_string())],
                 })),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[0],
@@ -3950,7 +4241,10 @@ mod tests {
                     elt: Box::new(HirExpr::Name("v".to_string())),
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3986,7 +4280,10 @@ mod tests {
                 cond: Some(Box::new(HirExpr::BoolLiteral(true))),
                 elt: Box::new(HirExpr::Name("i".to_string())),
             })],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[0],
@@ -4029,7 +4326,10 @@ mod tests {
                     elt: Box::new(HirExpr::Name("v".to_string())),
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -4076,7 +4376,10 @@ mod tests {
                     value: Box::new(HirExpr::IntLiteral(2)),
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -4117,7 +4420,10 @@ mod tests {
                     elt: Box::new(HirExpr::Name("v".to_string())),
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         build(&hir);
     }
 
@@ -4143,7 +4449,9 @@ mod tests {
                     value: slice,
                 }),
             ],
-            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
         }
     }
 
@@ -4344,7 +4652,10 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items[4],
@@ -4486,6 +4797,7 @@ mod tests {
                     properties: Vec::new(),
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
+                    enum_members: Vec::new(),
                 },
             )],
         }
@@ -4609,6 +4921,7 @@ mod tests {
                     properties: Vec::new(),
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
+                    enum_members: Vec::new(),
                 },
             )],
         };
@@ -4906,7 +5219,9 @@ mod tests {
     // `attr_set_of_an_undeclared_attribute_panics_with_an_internal_error`
     // above).
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: property `val` on class `Box` has no setter")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: property `val` on class `Box` has no setter"
+    )]
     fn attr_set_on_a_read_only_property_panics_with_an_internal_error() {
         use pycc_hir::{HirClassDef, PropertyDef};
         let self_ty = Ty::Instance(Box::new("Box".to_string()));
@@ -4967,6 +5282,7 @@ mod tests {
                     type_param: None,
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
+                    enum_members: Vec::new(),
                 },
             )],
         };
@@ -4979,7 +5295,9 @@ mod tests {
     // the type checker with a hand-built HIR to exercise the panic arm,
     // matching this file's own established internal-error-test convention.
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: `GenericClassInstantiate` for class `C` reached MIR lowering")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: `GenericClassInstantiate` for class `C` reached MIR lowering"
+    )]
     fn generic_class_instantiate_reaching_mir_panics_with_an_internal_error() {
         let hir = HirModule {
             items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
@@ -5004,12 +5322,12 @@ mod tests {
     // panic arm, matching this file's own established internal-error-test
     // convention.
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: a bare `HirExpr::Super` reached MIR lowering")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: a bare `HirExpr::Super` reached MIR lowering"
+    )]
     fn bare_super_reaching_mir_panics_with_an_internal_error() {
         let hir = HirModule {
-            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
-                HirExpr::Super,
-            ))],
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Super))],
             type_aliases: Vec::new(),
             imports: Vec::new(),
             class_defs: Vec::new(),
@@ -5026,15 +5344,15 @@ mod tests {
     // file's own established internal-error-test convention.
 
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: `HirExpr::Super` reached lower_expr outside a method body")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: `HirExpr::Super` reached lower_expr outside a method body"
+    )]
     fn super_attr_get_outside_method_panics_with_an_internal_error() {
         let hir = HirModule {
-            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
-                HirExpr::AttrGet {
-                    base: Box::new(HirExpr::Super),
-                    attr: "x".to_string(),
-                },
-            ))],
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Super),
+                attr: "x".to_string(),
+            }))],
             type_aliases: Vec::new(),
             imports: Vec::new(),
             class_defs: Vec::new(),
@@ -5043,7 +5361,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: `HirExpr::Super` reached lower_expr outside a method body")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: `HirExpr::Super` reached lower_expr outside a method body"
+    )]
     fn super_method_call_outside_method_panics_with_an_internal_error() {
         let hir = HirModule {
             items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
@@ -5115,13 +5435,16 @@ mod tests {
                     properties: Vec::new(),
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
+                    enum_members: Vec::new(),
                 },
             )],
         }
     }
 
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef"
+    )]
     fn attr_set_with_a_ghost_class_in_the_mro_panics_with_an_internal_error() {
         let hir = ghost_mro_param_module(vec![
             HirStmt::AttrSet {
@@ -5135,7 +5458,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef"
+    )]
     fn attr_get_with_a_ghost_class_in_the_mro_panics_with_an_internal_error() {
         let hir = ghost_mro_param_module(vec![
             HirStmt::ExprStmt(HirExpr::AttrGet {
@@ -5148,7 +5473,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef"
+    )]
     fn method_call_with_a_ghost_class_in_the_mro_panics_with_an_internal_error() {
         let hir = ghost_mro_param_module(vec![
             HirStmt::ExprStmt(HirExpr::MethodCall {
@@ -5162,7 +5489,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef"
+    )]
     fn mro_attrs_with_a_ghost_class_in_the_mro_panics_with_an_internal_error() {
         // `Instantiate` calls `mro_attr_count` → `mro_attrs`, which walks
         // the full MRO. The `__init__` MRO walk (using `?`, not panicking)
@@ -5209,6 +5538,7 @@ mod tests {
                     properties: Vec::new(),
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
+                    enum_members: Vec::new(),
                 },
             )],
         };
@@ -5247,6 +5577,7 @@ mod tests {
                     properties: Vec::new(),
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
+                    enum_members: Vec::new(),
                 },
             )],
         };
@@ -5279,7 +5610,10 @@ mod tests {
         };
         let base_init = HirItem::Function {
             name: "Base.__init__".to_string(),
-            params: vec![("self".to_string(), Ty::Instance(Box::new("Base".to_string())))],
+            params: vec![(
+                "self".to_string(),
+                Ty::Instance(Box::new("Base".to_string())),
+            )],
             return_ty: Ty::None,
             body: vec![
                 HirStmt::AttrSet {
@@ -5324,6 +5658,7 @@ mod tests {
                         properties: Vec::new(),
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
+                        enum_members: Vec::new(),
                     },
                 ),
                 (
@@ -5338,6 +5673,7 @@ mod tests {
                         properties: Vec::new(),
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
+                        enum_members: Vec::new(),
                     },
                 ),
             ],
@@ -5382,7 +5718,10 @@ mod tests {
         };
         let base_init = HirItem::Function {
             name: "Base.__init__".to_string(),
-            params: vec![("self".to_string(), Ty::Instance(Box::new("Base".to_string())))],
+            params: vec![(
+                "self".to_string(),
+                Ty::Instance(Box::new("Base".to_string())),
+            )],
             return_ty: Ty::None,
             body: vec![
                 HirStmt::AttrSet {
@@ -5427,6 +5766,7 @@ mod tests {
                         properties: Vec::new(),
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
+                        enum_members: Vec::new(),
                     },
                 ),
                 (
@@ -5441,6 +5781,7 @@ mod tests {
                         properties: Vec::new(),
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
+                        enum_members: Vec::new(),
                     },
                 ),
             ],
@@ -5452,11 +5793,17 @@ mod tests {
             .items
             .iter()
             .find_map(|item| match item {
-                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::AttrGet { ty, .. })) => Some(ty.clone()),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::AttrGet { ty, .. })) => {
+                    Some(ty.clone())
+                }
                 _ => None,
             })
             .expect("expected an AttrGet node");
-        assert_eq!(attr_get, Ty::Float, "re-declared attribute should use the most-derived type (Float)");
+        assert_eq!(
+            attr_get,
+            Ty::Float,
+            "re-declared attribute should use the most-derived type (Float)"
+        );
     }
 
     // #433: super() MIR lowering tests.
@@ -5530,6 +5877,7 @@ mod tests {
                         properties: Vec::new(),
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
+                        enum_members: Vec::new(),
                     },
                 ),
                 (
@@ -5547,6 +5895,7 @@ mod tests {
                         properties: Vec::new(),
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
+                        enum_members: Vec::new(),
                     },
                 ),
             ],
@@ -5636,6 +5985,7 @@ mod tests {
                         properties: Vec::new(),
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
+                        enum_members: Vec::new(),
                     },
                 ),
                 (
@@ -5650,6 +6000,7 @@ mod tests {
                         properties: Vec::new(),
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
+                        enum_members: Vec::new(),
                     },
                 ),
             ],
@@ -5730,6 +6081,7 @@ mod tests {
                         }],
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
+                        enum_members: Vec::new(),
                     },
                 ),
                 (
@@ -5744,6 +6096,7 @@ mod tests {
                         properties: Vec::new(),
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
+                        enum_members: Vec::new(),
                     },
                 ),
             ],
@@ -5812,6 +6165,7 @@ mod tests {
                     properties: Vec::new(),
                     static_methods: vec![("create".to_string(), "C.create.static".to_string())],
                     class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
+                    enum_members: Vec::new(),
                 },
             )],
         }
@@ -5950,7 +6304,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef"
+    )]
     fn static_method_call_through_class_name_with_ghost_mro_panics() {
         // A `MethodCall` on a class name whose MRO contains a ghost class
         // triggers the defensive panic in the static_methods MRO walk. The
@@ -5978,6 +6334,7 @@ mod tests {
                     properties: Vec::new(),
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
+                    enum_members: Vec::new(),
                 },
             )],
         };
@@ -5985,7 +6342,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef"
+    )]
     fn class_method_call_through_class_name_with_ghost_mro_panics() {
         // Same as above but exercises the class_methods MRO walk. The
         // method name `missing` is not in `C`'s own static_methods or
@@ -6013,6 +6372,7 @@ mod tests {
                     properties: Vec::new(),
                     static_methods: vec![("found".to_string(), "C.found.static".to_string())],
                     class_methods: Vec::new(),
+                    enum_members: Vec::new(),
                 },
             )],
         };
@@ -6020,7 +6380,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef"
+    )]
     fn static_method_call_through_instance_with_ghost_mro_panics() {
         // A `MethodCall` on an instance whose class MRO contains a ghost
         // class triggers the defensive panic in the instance-receiver
@@ -6059,6 +6421,7 @@ mod tests {
                     properties: Vec::new(),
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
+                    enum_members: Vec::new(),
                 },
             )],
         };
@@ -6066,7 +6429,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef")]
+    #[should_panic(
+        expected = "pycc_mir: internal error: class `Ghost` in MRO has no registered HirClassDef"
+    )]
     fn class_method_call_through_instance_with_ghost_mro_panics() {
         // Same as above but exercises the instance-receiver class_methods
         // MRO walk. `Derived` has a static method `found` so the
@@ -6106,6 +6471,7 @@ mod tests {
                     properties: Vec::new(),
                     static_methods: vec![("found".to_string(), "Derived.found.static".to_string())],
                     class_methods: Vec::new(),
+                    enum_members: Vec::new(),
                 },
             )],
         };
@@ -6135,17 +6501,21 @@ mod tests {
             }))],
             type_aliases: vec![],
             imports: vec![],
-            class_defs: vec![("D".to_string(), HirClassDef {
-                name: "D".to_string(),
-                bases: vec![],
-                mro: vec!["D".to_string()],
-                methods: vec![("__init__".to_string(), "D.__init__".to_string())],
-                attrs: vec![],
-                static_methods: vec![],
-                class_methods: vec![],
-                properties: vec![],
-                type_param: None,
-            })],
+            class_defs: vec![(
+                "D".to_string(),
+                HirClassDef {
+                    name: "D".to_string(),
+                    bases: vec![],
+                    mro: vec!["D".to_string()],
+                    methods: vec![("__init__".to_string(), "D.__init__".to_string())],
+                    attrs: vec![],
+                    static_methods: vec![],
+                    class_methods: vec![],
+                    properties: vec![],
+                    type_param: None,
+                    enum_members: Vec::new(),
+                },
+            )],
         };
         let mir = build(&hir);
         assert_eq!(
@@ -6174,17 +6544,21 @@ mod tests {
             }))],
             type_aliases: vec![],
             imports: vec![],
-            class_defs: vec![("D".to_string(), HirClassDef {
-                name: "D".to_string(),
-                bases: vec![],
-                mro: vec!["D".to_string()],
-                methods: vec![("__init__".to_string(), "D.__init__".to_string())],
-                attrs: vec![],
-                static_methods: vec![],
-                class_methods: vec![],
-                properties: vec![],
-                type_param: None,
-            })],
+            class_defs: vec![(
+                "D".to_string(),
+                HirClassDef {
+                    name: "D".to_string(),
+                    bases: vec![],
+                    mro: vec!["D".to_string()],
+                    methods: vec![("__init__".to_string(), "D.__init__".to_string())],
+                    attrs: vec![],
+                    static_methods: vec![],
+                    class_methods: vec![],
+                    properties: vec![],
+                    type_param: None,
+                    enum_members: Vec::new(),
+                },
+            )],
         };
         let mir = build(&hir);
         assert_eq!(
@@ -6274,17 +6648,21 @@ mod tests {
             }))],
             type_aliases: vec![],
             imports: vec![],
-            class_defs: vec![("D".to_string(), HirClassDef {
-                name: "D".to_string(),
-                bases: vec![],
-                mro: vec!["D".to_string()],
-                methods: vec![("__init__".to_string(), "D.__init__".to_string())],
-                attrs: vec![],
-                static_methods: vec![],
-                class_methods: vec![],
-                properties: vec![],
-                type_param: None,
-            })],
+            class_defs: vec![(
+                "D".to_string(),
+                HirClassDef {
+                    name: "D".to_string(),
+                    bases: vec![],
+                    mro: vec!["D".to_string()],
+                    methods: vec![("__init__".to_string(), "D.__init__".to_string())],
+                    attrs: vec![],
+                    static_methods: vec![],
+                    class_methods: vec![],
+                    properties: vec![],
+                    type_param: None,
+                    enum_members: Vec::new(),
+                },
+            )],
         };
         let mir = build(&hir);
         assert_eq!(
@@ -6308,10 +6686,7 @@ mod tests {
                 callee: "print".to_string(),
                 args: vec![HirExpr::Call {
                     callee: "issubclass".to_string(),
-                    args: vec![
-                        HirExpr::IntLiteral(42),
-                        HirExpr::Name("int".to_string()),
-                    ],
+                    args: vec![HirExpr::IntLiteral(42), HirExpr::Name("int".to_string())],
                 }],
             }))],
             type_aliases: vec![],
@@ -6319,5 +6694,53 @@ mod tests {
             class_defs: vec![],
         };
         let _ = build(&hir);
+    }
+
+    #[test]
+    fn enum_member_attr_get_lowers_to_synthetic_global() {
+        // #379: `Color.RED` lowers to `MirExpr::Name` reading the
+        // synthetic `<Class>.<Member>.enum_member` global.
+        let class_def = pycc_hir::HirClassDef {
+            name: "Color".to_string(),
+            bases: vec![],
+            mro: vec!["Color".to_string()],
+            attrs: vec![
+                ("value".to_string(), Ty::Int),
+                ("name".to_string(), Ty::Str),
+            ],
+            methods: vec![],
+            properties: vec![],
+            static_methods: vec![],
+            class_methods: vec![],
+            type_param: None,
+            enum_members: vec![
+                ("RED".to_string(), 1),
+                ("GREEN".to_string(), 2),
+            ],
+        };
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("Color".to_string())),
+                    attr: "RED".to_string(),
+                }],
+            }))],
+            type_aliases: vec![],
+            imports: vec![],
+            class_defs: vec![("Color".to_string(), class_def)],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::Name {
+                    name: "Color.RED.enum_member".to_string(),
+                    ty: Ty::Instance(Box::new("Color".to_string())),
+                }],
+                ty: Ty::None,
+            }))
+        );
     }
 }

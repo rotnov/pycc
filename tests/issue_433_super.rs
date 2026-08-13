@@ -17,8 +17,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 /// The attribute is then readable on the `B` instance.
 #[test]
 fn super_init_no_args_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_init_no_args_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_init_no_args_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -47,8 +46,7 @@ fn super_init_no_args_builds_and_runs() {
 /// takes a parameter, and `super().__init__(x)` passes it through.
 #[test]
 fn super_init_with_args_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_init_args_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_init_args_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -78,8 +76,7 @@ fn super_init_with_args_builds_and_runs() {
 /// attributes set by the derived class's `__init__` are visible.
 #[test]
 fn super_method_call_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_method_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_method_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -111,8 +108,7 @@ fn super_method_call_builds_and_runs() {
 /// `A.describe()`, building up a sum.
 #[test]
 fn three_level_super_chain_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_chain_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_chain_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -143,8 +139,7 @@ fn three_level_super_chain_builds_and_runs() {
 /// and the slot index is from the full MRO's flat layout.
 #[test]
 fn super_attr_read_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_attr_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_attr_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -173,14 +168,9 @@ fn super_attr_read_builds_and_runs() {
 /// HIR-lowering time (build and check).
 #[test]
 fn super_outside_method_is_a_build_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_outside_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_outside_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(
-        &dir,
-        "outside.py",
-        "x = super()\n",
-    );
+    let src = write_fixture(&dir, "outside.py", "x = super()\n");
     let out = dir.join("outside");
 
     let output = Command::new(pycc_bin())
@@ -202,8 +192,7 @@ fn super_outside_method_is_a_build_error() {
 /// (PEP 3135) is supported.
 #[test]
 fn super_with_arguments_is_a_build_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_args_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_args_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -233,8 +222,7 @@ fn super_with_arguments_is_a_build_error() {
 /// class is rejected with T0044 at type-check time.
 #[test]
 fn super_method_not_in_base_is_a_check_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_missing_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_missing_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -262,8 +250,7 @@ fn super_method_not_in_base_is_a_check_error() {
 /// passed to the base class's `__init__` is rejected at type-check time.
 #[test]
 fn super_init_type_mismatch_is_a_check_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_typemismatch_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_typemismatch_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -291,8 +278,7 @@ fn super_init_type_mismatch_is_a_check_error() {
 /// arguments for the base class's `__init__` is rejected.
 #[test]
 fn super_init_wrong_arity_is_a_check_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_arity_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_arity_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -320,8 +306,7 @@ fn super_init_wrong_arity_is_a_check_error() {
 /// and `super().method(args)` passes them through correctly.
 #[test]
 fn super_method_with_args_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_method_args_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_method_args_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -352,8 +337,7 @@ fn super_method_with_args_builds_and_runs() {
 /// is ever called.
 #[test]
 fn super_method_with_unbound_arg_is_a_check_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_unbound_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_unbound_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -382,8 +366,7 @@ fn super_method_with_unbound_arg_is_a_check_error() {
 /// should be rejected with T0044 (no such member in any base class).
 #[test]
 fn super_in_class_with_no_base_is_a_check_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_433_nobase_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_433_nobase_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -412,8 +395,7 @@ fn super_in_class_with_no_base_is_a_check_error() {
 /// slot will contain the redeclared type at runtime.
 #[test]
 fn super_attr_with_redeclared_type_is_a_check_error() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_issue433_redecl_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_issue433_redecl_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -440,8 +422,8 @@ fn super_attr_with_redeclared_type_is_a_check_error() {
 /// SAME type in a derived class should still work (no false positive).
 #[test]
 fn super_attr_with_same_type_redeclaration_builds_and_runs() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_issue433_same_redecl_{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("pycc_issue433_same_redecl_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
@@ -475,8 +457,7 @@ fn super_attr_with_same_type_redeclaration_builds_and_runs() {
 /// (not C.f()), because super() skips to the next class in B's own MRO.
 #[test]
 fn super_in_diamond_skips_sibling_classes() {
-    let dir = std::env::temp_dir()
-        .join(format!("pycc_issue433_diamond_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pycc_issue433_diamond_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     // MRO for D is [D, B, C, A]. B.f calls super().f → resolves to A.f
     // (B's own MRO is [B, A], so B's super_mro is [A], and A.f is found).

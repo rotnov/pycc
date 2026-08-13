@@ -319,9 +319,11 @@ fn init_scaffolds_pycc_toml_and_main_py_in_the_current_directory() {
     // directly (no `[lib]` target to link against).
     let toml_contents = std::fs::read_to_string(dir.join("pycc.toml")).unwrap();
     assert!(toml_contents.contains("e2e_init_project"));
-    assert!(std::fs::read_to_string(dir.join("src").join("main.py"))
-        .unwrap()
-        .contains("def main"));
+    assert!(
+        std::fs::read_to_string(dir.join("src").join("main.py"))
+            .unwrap()
+            .contains("def main")
+    );
 }
 
 #[test]
@@ -1135,8 +1137,9 @@ fn check_subcommand_rejects_an_unknown_error_format() {
 // non-internal-assertion-only code except where the domain has none
 // (`O0201` is documented internal-only, which is fine for `explain` since
 // it only documents the code, not whether it fires on legal Python).
-const EXPLAIN_DOMAIN_REPRESENTATIVE_CODES: [&str; 7] =
-    ["C0001", "L0001", "T0001", "O0201", "E0100", "I0401", "W1001"];
+const EXPLAIN_DOMAIN_REPRESENTATIVE_CODES: [&str; 7] = [
+    "C0001", "L0001", "T0001", "O0201", "E0100", "I0401", "W1001",
+];
 
 #[test]
 fn explain_subcommand_prints_a_human_explanation_for_a_known_code() {
@@ -1147,7 +1150,10 @@ fn explain_subcommand_prints_a_human_explanation_for_a_known_code() {
             .unwrap();
         assert_eq!(output.status.code(), Some(0), "code {code}");
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains(code), "stdout for {code} should contain its own code: {stdout}");
+        assert!(
+            stdout.contains(code),
+            "stdout for {code} should contain its own code: {stdout}"
+        );
     }
 }
 
@@ -1259,7 +1265,10 @@ fn module_type_api_rejects_a_for_target_representation_change() {
                 body: vec![],
             }],
         }],
-     type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
     assert_eq!(pycc_types::check(&hir).unwrap_err().code, "T0023");
 }
 
@@ -1272,7 +1281,10 @@ fn direct_type_api_rejects_an_unconstrained_private_parameter() {
             return_ty: pycc_hir::Ty::None,
             body: vec![],
         }],
-     type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
     assert_eq!(
         pycc_types::check_and_resolve(&hir).unwrap_err().code,
         "T0021"
@@ -1290,7 +1302,10 @@ fn direct_type_api_rejects_an_unconstrained_private_return() {
                 "missing".to_string(),
             )))],
         }],
-     type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
     let err = pycc_types::check_and_resolve(&hir).unwrap_err();
     assert_eq!(err.code, "T0021");
     assert!(err.message.contains("return type"));
@@ -1309,7 +1324,10 @@ fn direct_type_api_propagates_an_annotated_binary_result() {
                 right: Box::new(pycc_hir::HirExpr::IntLiteral(1)),
             }))],
         }],
-     type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
     assert!(pycc_types::check_and_resolve(&hir).is_ok());
 }
 
@@ -1332,7 +1350,10 @@ fn direct_type_api_rejects_incompatible_resolved_binary_operands() {
                 args: vec![pycc_hir::HirExpr::IntLiteral(1)],
             })),
         ],
-     type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),};
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
     assert_eq!(
         pycc_types::check_and_resolve(&hir).unwrap_err().code,
         "T0021"
