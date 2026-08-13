@@ -192,11 +192,7 @@ fn non_member_attribute_on_enum_class_is_rejected() {
 fn generic_enum_class_is_rejected() {
     let dir = std::env::temp_dir().join(format!("pycc_379_generic_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(
-        &dir,
-        "generic.py",
-        "class Color[T](Enum):\n    RED = 1\n",
-    );
+    let src = write_fixture(&dir, "generic.py", "class Color[T](Enum):\n    RED = 1\n");
     assert!(
         check_fails(&dir, &src),
         "a generic enum class should be a compile error"
@@ -294,11 +290,7 @@ fn from_enum_import_enum_works() {
 fn import_enum_dotted_enum_used_as_value_is_rejected() {
     let dir = std::env::temp_dir().join(format!("pycc_379_dottedval_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(
-        &dir,
-        "dottedval.py",
-        "import enum\nprint(enum.Enum)\n",
-    );
+    let src = write_fixture(&dir, "dottedval.py", "import enum\nprint(enum.Enum)\n");
     assert!(
         check_fails(&dir, &src),
         "referencing `enum.Enum` as a value should be a compile error"
@@ -311,11 +303,7 @@ fn import_enum_dotted_enum_used_as_value_is_rejected() {
 fn import_enum_dotted_enum_called_is_rejected() {
     let dir = std::env::temp_dir().join(format!("pycc_379_dottedcall_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(
-        &dir,
-        "dottedcall.py",
-        "import enum\nenum.Enum()\n",
-    );
+    let src = write_fixture(&dir, "dottedcall.py", "import enum\nenum.Enum()\n");
     assert!(
         check_fails(&dir, &src),
         "calling `enum.Enum()` should be a compile error"
@@ -340,8 +328,7 @@ fn non_enum_for_list_with_nested_enum_loop_unrolls() {
         "pycc build and run should succeed for a non-enum for-list with a nested enum loop"
     );
     assert_eq!(
-        stdout,
-        b"1\n2\n1\n2\n",
+        stdout, b"1\n2\n1\n2\n",
         "nested enum loop should unroll inside a non-enum for-list body"
     );
 }
@@ -362,7 +349,10 @@ fn enum_loop_nested_inside_if_unrolls() {
         ok,
         "pycc build and run should succeed for an enum loop nested inside an if"
     );
-    assert_eq!(stdout, b"1\n2\n", "nested enum loop should unroll inside an if body");
+    assert_eq!(
+        stdout, b"1\n2\n",
+        "nested enum loop should unroll inside an if body"
+    );
 }
 
 /// #379: an enum loop nested inside a `while` statement — exercises the
@@ -381,7 +371,10 @@ fn enum_loop_nested_inside_while_unrolls() {
         ok,
         "pycc build and run should succeed for an enum loop nested inside a while"
     );
-    assert_eq!(stdout, b"1\n2\n", "nested enum loop should unroll inside a while body");
+    assert_eq!(
+        stdout, b"1\n2\n",
+        "nested enum loop should unroll inside a while body"
+    );
 }
 
 /// #379: an enum loop nested inside a `for i in range(...)` statement —
@@ -400,5 +393,8 @@ fn enum_loop_nested_inside_for_range_unrolls() {
         ok,
         "pycc build and run should succeed for an enum loop nested inside a for-range"
     );
-    assert_eq!(stdout, b"1\n2\n", "nested enum loop should unroll inside a for-range body");
+    assert_eq!(
+        stdout, b"1\n2\n",
+        "nested enum loop should unroll inside a for-range body"
+    );
 }

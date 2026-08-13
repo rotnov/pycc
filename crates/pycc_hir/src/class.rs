@@ -803,6 +803,33 @@ pub(crate) fn lower_class(
                 Some(&class_name),
                 aliases,
             )?;
+            // #378 (PR-18): a dataclass field's type must be a scalar slot
+            // type (int/float/bool/str, or a generic type parameter `T`
+            // that is substituted with a scalar at monomorphization time).
+            // The instance attribute-slot storage is a single `i64` word
+            // per slot (D-154), which has no representation for a heap-
+            // object-typed attribute (`list[T]`, `dict[K, V]`, `set[T]`),
+            // a by-value `tuple[...]`, `None`, or a class instance
+            // (`Ty::Instance`, including a self-referential field like
+            // `next: Node` or `next: Self`, which `annotation_to_ty`
+            // resolves to `Ty::Instance` -- see its self-referential class
+            // name and `Self` arms). Rejecting here, structurally, keeps
+            // every field type this PR's own `pycc_codegen`/`pycc_rt` slices
+            // actually implement -- matching `slot_ty_from_init_rhs`'s own
+            // scalar-only restriction for hand-written `__init__` bodies.
+            if !is_scalar_slot_type(&field_ty) {
+                return Err(unsupported(
+                    format!(
+                        "dataclass field `{field_name}` has type `{}`, which is not a scalar \
+                         slot type -- only `int`, `float`, `bool`, `str`, or a generic type \
+                         parameter is supported as a dataclass field in this version (the \
+                         instance attribute-slot storage is a single word per slot, with no \
+                         representation for a heap object, tuple, `None`, or class instance)",
+                        field_ty.name()
+                    ),
+                    ann.range,
+                ));
+            }
             // A field with a default value (`x: int = field(default=...)` or
             // `x: int = 42`) is recognized but rejected with C0001 -- field
             // defaults are deferred to a follow-up issue (the compiler has no
@@ -1545,6 +1572,20 @@ fn field_name_present(fields: &[(String, Ty)], name: &str) -> bool {
         }
     }
     false
+}
+
+/// #378 (PR-18): Returns `true` if `ty` is a scalar slot type -- one that
+/// fits in the single `i64` word per attribute slot that D-154's class-
+/// instance layout uses. This is the same set `slot_ty_from_init_rhs`
+/// accepts for hand-written `__init__` bodies (`int`/`float`/`bool`/`str`,
+/// plus `Ty::Param` for PEP 695 generic classes, where the type parameter
+/// is substituted with a concrete scalar at monomorphization time). A
+/// dataclass field with a non-scalar type (`list[T]`, `dict[K, V]`,
+/// `set[T]`, `tuple[...]`, `None`, or a class instance including a self-
+/// referential `next: Node`/`next: Self`) is rejected at HIR-lowering
+/// time with `C0001` before it can reach codegen and panic.
+fn is_scalar_slot_type(ty: &Ty) -> bool {
+    matches!(ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Param(_))
 }
 
 /// #378 (PR-18): Synthesizes a `__init__` method for a `@dataclass` class
@@ -3892,5 +3933,67 @@ mod tests {
     #[test]
     fn a_field_default_factory_in_a_dataclass_is_rejected() {
         assert_c0001("@dataclass\nclass C:\n    x: int = field(default_factory=int)\n");
+    }
+
+    // -- #378 scalar-field restriction: non-scalar types are rejected -----
+
+    #[test]
+    fn a_self_referential_dataclass_field_is_rejected() {
+        // `next: Node` resolves to `Ty::Instance("Node")` via
+        // `annotation_to_ty`'s self-referential class-name arm. Without
+        // the scalar-slot-type check, this panics in codegen (the
+        // attribute-slot storage is a single word, with no representation
+        // for a class instance). The check rejects it with C0001 instead.
+        assert_c0001("@dataclass\nclass Node:\n    next: Node\n");
+    }
+
+    #[test]
+    fn a_self_typed_dataclass_field_is_rejected() {
+        // `next: Self` resolves to `Ty::Instance("Node")` via
+        // `annotation_to_ty`'s `Self` arm (PEP 673). Same root cause as
+        // the self-referential class-name case above.
+        assert_c0001("@dataclass\nclass Node:\n    next: Self\n");
+    }
+
+    #[test]
+    fn a_none_typed_dataclass_field_is_rejected() {
+        // `x: None` resolves to `Ty::None` via `annotation_to_ty`'s
+        // `NoneLiteral` arm. `None` is not a scalar slot type.
+        assert_c0001("@dataclass\nclass C:\n    x: None\n");
+    }
+
+    #[test]
+    fn a_cross_class_instance_dataclass_field_is_rejected() {
+        // `x: Other` in class `C` is rejected by `annotation_to_ty` itself
+        // (the self-referential class-name arm only matches the enclosing
+        // class's own name, not other classes; `Other` is not a builtin
+        // type or alias, so it falls through to "type annotation `Other`
+        // is not supported yet"). This is still C0001, but reached before
+        // the scalar-slot-type check -- included here to document that
+        // cross-class instance fields are rejected regardless of which
+        // guard fires first.
+        assert_c0001("@dataclass\nclass Other:\n    pass\n@dataclass\nclass C:\n    x: Other\n");
+    }
+
+    #[test]
+    fn a_dataclass_field_with_a_non_scalar_type_gives_a_clear_message() {
+        // Verify the diagnostic message names the field and its type, so
+        // the user can identify which field and what type caused the
+        // rejection.
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "@dataclass\nclass Node:\n    next: Node\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("dataclass field `next`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+        assert!(
+            diagnostic.message.contains("not a scalar slot type"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
     }
 }
