@@ -2372,13 +2372,11 @@ mod tests {
         let init = hir
             .items
             .iter()
-            .filter_map(|item| {
-                if let HirItem::Function { name, params, .. } = item {
-                    if name == "C.__init__" {
-                        return Some(params.clone());
-                    }
+            .filter_map(|item| match item {
+                HirItem::Function { name, params, .. } if name == "C.__init__" => {
+                    Some(params.clone())
                 }
-                None
+                _ => None,
             })
             .next()
             .expect("C.__init__ must be lowered");
@@ -2405,13 +2403,11 @@ mod tests {
         let m = hir
             .items
             .iter()
-            .filter_map(|item| {
-                if let HirItem::Function { name, params, .. } = item {
-                    if name == "C.m.classmethod" {
-                        return Some(params.clone());
-                    }
+            .filter_map(|item| match item {
+                HirItem::Function { name, params, .. } if name == "C.m.classmethod" => {
+                    Some(params.clone())
                 }
-                None
+                _ => None,
             })
             .next()
             .expect("C.m.classmethod must be lowered");
@@ -2438,13 +2434,11 @@ mod tests {
         let m = hir
             .items
             .iter()
-            .filter_map(|item| {
-                if let HirItem::Function { name, params, .. } = item {
-                    if name == "C.m.static" {
-                        return Some(params.clone());
-                    }
+            .filter_map(|item| match item {
+                HirItem::Function { name, params, .. } if name == "C.m.static" => {
+                    Some(params.clone())
                 }
-                None
+                _ => None,
             })
             .next()
             .expect("C.m.static must be lowered");
