@@ -4,12 +4,12 @@ Milestone = shippable + demo-able. Acceptance criteria are binary; a milestone i
 
 ## Current delivery status
 
-Last reviewed on 2026-08-07. This section describes the repository tree in the
+Last reviewed on 2026-08-13. This section describes the repository tree in the
 commit that contains it: behavior and evidence from that same commit count,
 while work that exists only in another open pull request or unmerged branch
 remains work in flight.
 
-**Current milestone: v0.2 — acceptance criteria met; v0.3 in progress.** All five v0.1 acceptance-checklist bullets below are green: the checked v0.1 surface reaches a native executable through MIR, LLVM, and the runtime; `fib` and `mandelbrot-ascii` match pinned CPython output on all five Tier-1 targets; `pycc check` clears its <75ms/1000 LOC throughput floor; its diagnostic output matches CLI_SPEC.md's example; the five-target CI matrix and cross-host compilation are live; and the 100% line/region coverage gate is required and green. The Language surface row's documented gaps below are accepted boundaries this milestone's acceptance criteria never required closing, not blockers still outstanding.
+**Current milestone: v0.2 — acceptance criteria met; v0.3 in progress.** The v0.3 conformance sweep has begun: PEP 570 (positional-only parameters), PEP 591 (`Final`), and PEP 593 (`Annotated`) are now implemented, advancing the `PYTHON_STANDARDS.md` green-row count from 15 toward the v0.3 target of 37. All five v0.1 acceptance-checklist bullets below are green: the checked v0.1 surface reaches a native executable through MIR, LLVM, and the runtime; `fib` and `mandelbrot-ascii` match pinned CPython output on all five Tier-1 targets; `pycc check` clears its <75ms/1000 LOC throughput floor; its diagnostic output matches CLI_SPEC.md's example; the five-target CI matrix and cross-host compilation are live; and the 100% line/region coverage gate is required and green. The Language surface row's documented gaps below are accepted boundaries this milestone's acceptance criteria never required closing, not blockers still outstanding.
 
 The D-094 `--release` contract now has a focused semantic regression that
 observes the exact `default<O3>` pipeline and its removal of a dead runtime

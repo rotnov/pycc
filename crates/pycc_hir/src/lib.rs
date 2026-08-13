@@ -1421,9 +1421,10 @@ pub(crate) fn annotation_to_ty(
         // that does not understand a piece of metadata must treat
         // `Annotated[X, ...]` as `X` — this is correct, not a shortcut. The
         // first subscript argument is `X`; for the tuple form
-        // `Annotated[X, meta1, meta2, ...]` the first element is `X`, and
-        // for the degenerate single-argument form `Annotated[X]` the slice
-        // itself is `X`.
+        // `Annotated[X, meta1, meta2, ...]` the first element is `X`.
+        // PEP 593 requires at least two arguments (the type and at least one
+        // metadata element); `Annotated[X]` without metadata is rejected,
+        // matching CPython's own `TypeError`.
         Expr::Subscript(sub) => {
             let Expr::Name(base_name) = sub.value.as_ref() else {
                 return Err(unsupported(
@@ -1433,16 +1434,19 @@ pub(crate) fn annotation_to_ty(
             };
             match base_name.id.as_str() {
                 "Annotated" => {
-                    let x = match sub.slice.as_ref() {
-                        Expr::Tuple(tuple) => tuple.elts.first().ok_or_else(|| {
-                            unsupported(
-                                "Annotated requires at least one type argument",
-                                pycc_ast::expr_range(&sub.slice),
-                            )
-                        })?,
-                        other => other,
+                    let Expr::Tuple(tuple) = sub.slice.as_ref() else {
+                        return Err(unsupported(
+                            "Annotated requires at least two arguments: the type and at least one metadata element",
+                            pycc_ast::expr_range(&sub.slice),
+                        ));
                     };
-                    annotation_to_ty(x, type_param, class_name, aliases)
+                    if tuple.elts.len() < 2 {
+                        return Err(unsupported(
+                            "Annotated requires at least two arguments: the type and at least one metadata element",
+                            pycc_ast::expr_range(&sub.slice),
+                        ));
+                    }
+                    annotation_to_ty(&tuple.elts[0], type_param, class_name, aliases)
                 }
                 // PEP 591 (#383): `Final[X]` unwraps to `X`. `Final` is a
                 // binding-level property (this name may not be reassigned),
@@ -3285,19 +3289,13 @@ mod tests {
     }
 
     #[test]
-    fn annotated_with_a_single_argument_unwraps_to_that_argument() {
-        // PEP 593 (#383): the degenerate `Annotated[X]` form (no metadata)
-        // unwraps to `X`.
-        let module = pycc_parser_test_helper::parse("x: Annotated[str] = \"hello\"\n");
-        let hir = lower_checked(&module).unwrap();
-        assert_eq!(
-            hir.items,
-            vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
-                target: "x".to_string(),
-                annotation: Ty::Str,
-                value: Some(HirExpr::StringLiteral("hello".to_string())),
-                is_final: false,
-            })]
+    fn annotated_with_a_single_argument_is_rejected() {
+        // PEP 593 (#383): `Annotated[X]` without metadata is rejected — PEP 593
+        // requires at least two arguments (the type and at least one metadata
+        // element), matching CPython's own `TypeError`.
+        assert_capability_error_message(
+            "x: Annotated[str] = \"hello\"\n",
+            "Annotated requires at least two arguments: the type and at least one metadata element",
         );
     }
 
@@ -3333,10 +3331,11 @@ mod tests {
     #[test]
     fn annotated_with_an_empty_tuple_is_rejected() {
         // PEP 593 (#383): `Annotated[()]` (empty tuple) is rejected —
-        // `Annotated` requires at least one type argument.
+        // `Annotated` requires at least two arguments (the type and at
+        // least one metadata element).
         assert_capability_error_message(
             "x: Annotated[()] = 1\n",
-            "Annotated requires at least one type argument",
+            "Annotated requires at least two arguments: the type and at least one metadata element",
         );
     }
 
