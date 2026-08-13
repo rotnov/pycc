@@ -195,19 +195,31 @@ are especially important:
 
 ## Roadmap
 
-- [x] **MVP:** functions, `int`/`float`/`str`/`bool`, arithmetic, `if`/`while`/`for`, `print` → Linux/macOS binary
-- [x] Collections (`list`/`dict`/`tuple`/`set`) + generics (PEP 585/695)
-- [ ] Classes, dataclasses, protocols, pattern matching
-- [ ] Modules, imports, multi-file projects, incremental builds
-- [ ] Core stdlib subset (typed, compiled)
-- [ ] Generators, comprehensions, t-strings (PEP 750)
-- [ ] Exceptions incl. `except*` groups
-- [ ] Ownership & escape analysis: move semantics, stack allocation, RC elision
-- [ ] GIL-free threads
-- [ ] Ecosystem bot: compile top PyPI packages nightly, auto-file incompatibility issues
-- [ ] Transparent CPython interop (keep ordinary imports, automatically bundle the embedded interpreter when needed, and offer strict `allowlist`/`deny` build policies)
+**Current status (pre-alpha):** v0.1 and v0.2 acceptance criteria are both
+met. For v0.1: `fib` and `mandelbrot-ascii` match pinned CPython output on
+all five Tier-1 targets (Linux x64/arm64, macOS x64/arm64, Windows x64),
+`pycc check` clears its <75ms/1000 LOC throughput floor, diagnostic output
+matches the CLI specification, the five-target native CI matrix and one
+cross-host compilation path are live, the 100% line/region coverage gate is
+required and green, and the README coverage badge is bound to the enforced
+CI coverage thresholds. v0.2's container/generics corpus and `--release`
+speedup floor are likewise met on all five Tier-1 targets. v0.3 (classes,
+dataclasses, protocols, pattern matching, exceptions) is the current
+delivery milestone, in progress. Later capabilities — modules/imports,
+stdlib subset, generators, ownership & escape analysis, GIL-free threads,
+the ecosystem bot, and transparent CPython interop — remain planned. The
+compiler is still pre-alpha: documented representation and lifetime gaps
+are roadmap work, not production readiness.
 
-Cross-platform is not a roadmap item — Linux, macOS and Windows (x64 + arm64) are CI-gated from v0.1, including `pycc build --target` cross-compilation. Full spec: [`docs/SPEC.md`](./docs/SPEC.md).
+The complete, commit-relative milestone status — every acceptance bullet,
+its roadmap-evidence identifier, and the per-target evidence — lives in
+[`docs/ROADMAP.md`](./docs/ROADMAP.md), the sole milestone status owner.
+This section is a validated projection of that document, verified by
+`scripts/check_readme_milestone_projection.rb` in `pages.yml`; it is not
+an independently maintained checklist. Cross-platform is not a roadmap
+item — Linux, macOS and Windows (x64 + arm64) are CI-gated from v0.1,
+including `pycc build --target` cross-compilation. Full spec:
+[`docs/SPEC.md`](./docs/SPEC.md).
 
 ## Building from source
 
