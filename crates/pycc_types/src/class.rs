@@ -744,6 +744,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         }
@@ -1153,6 +1155,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -1221,6 +1225,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         };
@@ -1493,6 +1499,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         ));
         check_and_resolve(&hir).expect(
@@ -1595,6 +1603,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         let _ = super::resolve_instantiation(&env, "Ghost", &[]);
@@ -1637,6 +1647,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         let _ = super::resolve_instantiation(&env, "Ghost", &[]);
@@ -1659,6 +1671,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         let _ = super::resolve_method_call(
@@ -1697,6 +1711,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         let _ = super::resolve_attr_get(&env, &Ty::Instance(Box::new("Ghost".to_string())), "x");
@@ -1731,6 +1747,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         // `base` must infer as a `Ghost` instance so `check_attr_set`
@@ -1785,6 +1803,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
             env.bind_class(
@@ -1800,6 +1820,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
             env.bind_function(
@@ -1827,6 +1849,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
             env.bind_class(
@@ -1842,6 +1866,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
         });
@@ -1864,6 +1890,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
             env.bind_class(
@@ -1879,6 +1907,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
         });
@@ -1905,6 +1935,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
             env.bind_class(
@@ -1920,6 +1952,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
         });
@@ -1942,6 +1976,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
             env.bind_class(
@@ -1957,6 +1993,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
             env.bind_function(
@@ -1987,6 +2025,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
             env.bind_class(
@@ -2002,6 +2042,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
         });
@@ -2025,6 +2067,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
             env.bind_class(
@@ -2040,6 +2084,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             );
         });
@@ -2117,6 +2163,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         }
@@ -2171,6 +2219,8 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         }
@@ -2518,6 +2568,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
                 (
@@ -2536,6 +2588,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
             ],
@@ -2652,6 +2706,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
                 (
@@ -2667,6 +2723,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
             ],
@@ -2787,6 +2845,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
                 (
@@ -2802,6 +2862,8 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         enum_members: Vec::new(),
+                        is_dataclass: false,
+                        dataclass_fields: Vec::new(),
                     },
                 ),
             ],
@@ -2858,6 +2920,8 @@ mod tests {
                     static_methods: vec![("create".to_string(), "C.create.static".to_string())],
                     class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
                     enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
                 },
             )],
         }
@@ -3046,6 +3110,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         let diagnostic =
@@ -3083,6 +3149,8 @@ mod tests {
                 static_methods: vec![("create".to_string(), "C.create.static".to_string())],
                 class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         assert!(!super::has_static_or_class_method(&env, "C", "nonexistent"));
@@ -3107,6 +3175,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         // `Ghost` is in the MRO but not registered — the defensive
@@ -3139,6 +3209,8 @@ mod tests {
                 static_methods: vec![("create".to_string(), "C.create.static".to_string())],
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         let _ = super::resolve_static_or_class_method_call(&env, "C", "create", &[Ty::Int]);
@@ -3166,6 +3238,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         let _ = super::resolve_static_or_class_method_call(&env, "C", "greet", &[Ty::Int]);
@@ -3415,5 +3489,126 @@ mod tests {
         let diagnostic = check(&hir).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(diagnostic.message.contains("isinstance"));
+    }
+
+    // -- #378 (PR-18): dataclass __eq__ comparison type checking ---------
+
+    #[test]
+    fn a_same_class_instance_comparison_without_eq_is_t0021() {
+        // `Point` has `__init__` and `bump` but no `__eq__` method.
+        // Comparing two `Point` instances with `==` should fall through
+        // the `has_eq` check and produce T0021 (cannot compare instances).
+        // This covers the `}` (merge point) of the `if has_eq` block in
+        // `infer_expr_in`'s `Compare` arm.
+        let hir = point_module(vec![
+            top_level(HirStmt::Assign {
+                target: "p".to_string(),
+                value: HirExpr::Call {
+                    callee: "Point".to_string(),
+                    args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+                },
+            }),
+            top_level(HirStmt::Assign {
+                target: "q".to_string(),
+                value: HirExpr::Call {
+                    callee: "Point".to_string(),
+                    args: vec![HirExpr::IntLiteral(3), HirExpr::IntLiteral(4)],
+                },
+            }),
+            top_level(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Compare {
+                    op: pycc_hir::CmpOpKind::Eq,
+                    left: Box::new(HirExpr::Name("p".to_string())),
+                    right: Box::new(HirExpr::Name("q".to_string())),
+                }],
+            })),
+        ]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn a_same_class_instance_comparison_with_eq_type_checks() {
+        // A class with an `__eq__` method accepts `==` between same-class
+        // instances. This covers the `return Ok(Ty::Bool)` path in the
+        // `has_eq` block.
+        let self_ty = Ty::Instance(Box::new("EqPoint".to_string()));
+        let init = HirItem::Function {
+            name: "EqPoint.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("x".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "x".to_string(),
+                    value: HirExpr::Name("x".to_string()),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let eq = HirItem::Function {
+            name: "EqPoint.__eq__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("other".to_string(), self_ty.clone()),
+            ],
+            return_ty: Ty::Bool,
+            body: vec![HirStmt::Return(Some(HirExpr::BoolLiteral(true)))],
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                eq,
+                top_level(HirStmt::Assign {
+                    target: "p".to_string(),
+                    value: HirExpr::Call {
+                        callee: "EqPoint".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    },
+                }),
+                top_level(HirStmt::Assign {
+                    target: "q".to_string(),
+                    value: HirExpr::Call {
+                        callee: "EqPoint".to_string(),
+                        args: vec![HirExpr::IntLiteral(2)],
+                    },
+                }),
+                top_level(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Compare {
+                        op: pycc_hir::CmpOpKind::Eq,
+                        left: Box::new(HirExpr::Name("p".to_string())),
+                        right: Box::new(HirExpr::Name("q".to_string())),
+                    }],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "EqPoint".to_string(),
+                pycc_hir::HirClassDef {
+                    name: "EqPoint".to_string(),
+                    bases: Vec::new(),
+                    mro: vec!["EqPoint".to_string()],
+                    attrs: vec![("x".to_string(), Ty::Int)],
+                    methods: vec![
+                        ("__init__".to_string(), "EqPoint.__init__".to_string()),
+                        ("__eq__".to_string(), "EqPoint.__eq__".to_string()),
+                    ],
+                    type_param: None,
+                    properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
+                    enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
+                },
+            )],
+        };
+        check(&hir).expect("a same-class comparison with __eq__ should type-check");
     }
 }

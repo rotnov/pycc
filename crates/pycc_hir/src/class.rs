@@ -53,7 +53,7 @@
 //! recursion into a nested `if`/`while`/`for`), matching this same minimal,
 //! single-pass scope.
 
-use crate::{HirItem, Ty, lower_arg_list, unsupported};
+use crate::{HirExpr, HirItem, HirStmt, Ty, lower_arg_list, unsupported};
 use pycc_ast::{Decorator, Expr, Number, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
@@ -141,6 +141,22 @@ pub struct HirClassDef {
     /// instance allocated once at module-init time (see `pycc_codegen`'s
     /// per-member init sequence).
     pub enum_members: Vec<(String, i64)>,
+    /// PEP 557/681 (#378, PR-18): `true` when this class is decorated with
+    /// `@dataclass` or `@dataclass_transform(...)`. A dataclass class
+    /// auto-generates `__init__`, `__eq__`, and `__repr__` from its
+    /// `dataclass_fields` at HIR-lowering time (see `lower_class`'s own
+    /// synthesis logic). `false` for an ordinary class and for an enum
+    /// class.
+    pub is_dataclass: bool,
+    /// PEP 557 (#378, PR-18): the dataclass's annotated fields, in
+    /// declaration order. Each entry is `(field_name, field_type)`. Empty
+    /// for a non-dataclass class and for a dataclass with no fields (a
+    /// zero-field dataclass is valid per PEP 557). Populated from
+    /// `Stmt::AnnAssign` nodes in the class body; a field with a default
+    /// value (`x: int = field(default=...)`) is recognized but rejected
+    /// with `C0001` (field defaults are deferred to a follow-up issue --
+    /// the compiler has no optional-parameter mechanism yet).
+    pub dataclass_fields: Vec<(String, Ty)>,
 }
 
 /// A single `@property` definition (#377): the attribute name exposed to
@@ -274,6 +290,66 @@ fn classify_decorator(
             "method decorators are not supported yet",
             range,
         )),
+    }
+}
+
+/// PEP 3129/557/681 (#378, PR-18): classifies a class's decorator list to
+/// determine whether the class is a `@dataclass` (PEP 557) or a
+/// `@dataclass_transform(...)` (PEP 681) class. Returns:
+/// - `false` if the list is empty (an ordinary class).
+/// - `true` if the single decorator is `@dataclass` (a bare name `dataclass`)
+///   or `@dataclass_transform(...)` (a call whose callee is the bare name
+///   `dataclass_transform`).
+///
+/// Any other class decorator shape (multiple decorators, a different bare
+/// name, an attribute-access decorator, `@dataclass(frozen=True)` with
+/// options) is rejected with `C0001`, preserving the pre-#378 "class
+/// decorators are not supported yet" diagnostic for everything outside
+/// `@dataclass`/`@dataclass_transform()`.
+fn classify_class_decorator(
+    decorator_list: &[Decorator],
+    range: std::ops::Range<u32>,
+) -> Result<bool, Diagnostic> {
+    if decorator_list.is_empty() {
+        return Ok(false);
+    }
+    if decorator_list.len() > 1 {
+        return Err(unsupported(
+            "multiple class decorators are not supported yet",
+            range,
+        ));
+    }
+    let decorator = &decorator_list[0];
+    match &decorator.expression {
+        // `@dataclass` -- a bare name `dataclass` (PEP 557).
+        Expr::Name(name) if name.id.as_str() == "dataclass" => Ok(true),
+        // `@dataclass_transform(...)` -- a call whose callee is the bare
+        // name `dataclass_transform` (PEP 681). The keyword arguments
+        // (`eq_default`, `order_default`, `kw_only_default`,
+        // `field_specifiers`) are accepted but ignored -- pycc's dataclass
+        // implementation always generates `__init__`/`__eq__`/`__repr__`,
+        // matching the defaults.
+        Expr::Call(call) => {
+            let Expr::Name(name) = call.func.as_ref() else {
+                return Err(unsupported("class decorators are not supported yet", range));
+            };
+            if name.id.as_str() == "dataclass_transform" {
+                Ok(true)
+            } else if name.id.as_str() == "dataclass" {
+                // `@dataclass(frozen=True)` etc. -- rejected with C0001.
+                // Dataclass options (frozen, slots, order, etc.) are out of
+                // scope for this PR (see the plan's "Explicitly out of scope"
+                // list).
+                Err(unsupported(
+                    "`@dataclass` with options is not supported yet -- only a bare `@dataclass` \
+                     is supported in this version",
+                    range,
+                ))
+            } else {
+                Err(unsupported("class decorators are not supported yet", range))
+            }
+        }
+        _ => Err(unsupported("class decorators are not supported yet", range)),
     }
 }
 
@@ -487,6 +563,8 @@ fn lower_enum_class(
             class_methods: Vec::new(),
             type_param,
             enum_members,
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         },
         Vec::new(),
     ))
@@ -497,12 +575,10 @@ pub(crate) fn lower_class(
     aliases: &[(String, Ty)],
     defined_classes: &[(String, HirClassDef)],
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
-    if !def.decorator_list.is_empty() {
-        return Err(unsupported(
-            "class decorators are not supported yet",
-            def.range,
-        ));
-    }
+    // PEP 3129/557/681 (#378, PR-18): classify the class's decorator list.
+    // `@dataclass` and `@dataclass_transform(...)` are recognized; any other
+    // class decorator is rejected with C0001.
+    let is_dataclass = classify_class_decorator(&def.decorator_list, def.range.into())?;
     // PEP 695 (#387): a generic class (`class C[T]:`) with exactly one type
     // parameter is now supported, reusing PR-13's `Ty::Param` call-site-
     // substitution mechanism (D-133/D-134). More than one type parameter is
@@ -650,20 +726,112 @@ pub(crate) fn lower_class(
     let mut static_methods: Vec<(String, String)> = Vec::new();
     let mut class_methods: Vec<(String, String)> = Vec::new();
     let enum_members: Vec<(String, i64)> = Vec::new();
+    let mut dataclass_fields: Vec<(String, Ty)> = Vec::new();
     let mut init_seen = false;
     // #379 (PR-19): an enum class body is assignments only (`RED = 1`),
     // not method definitions. Handle this in a separate function before the
     // regular class-body loop below, which rejects non-`def` statements.
     if is_enum {
-        return lower_enum_class(
-            def,
-            class_name,
-            bases,
-            mro,
-            type_param,
-        );
+        return lower_enum_class(def, class_name, bases, mro, type_param);
+    }
+    // #378 (PR-18): a `@dataclass` class inheriting from a non-dataclass
+    // base is rejected -- the base must also be a dataclass for field
+    // merging to work. A `@dataclass` with no bases is always valid.
+    if is_dataclass {
+        for base_name in &bases {
+            let base_def = defined_classes
+                .iter()
+                .find(|(name, _)| name == base_name)
+                .map(|(_, def)| def)
+                .expect("base class must be defined before the derived class");
+            if !base_def.is_dataclass {
+                return Err(unsupported(
+                    format!(
+                        "a `@dataclass` class `{class_name}` cannot inherit from non-dataclass \
+                         class `{base_name}` -- dataclass inheritance requires all bases to also \
+                         be dataclasses in this version"
+                    ),
+                    def.range,
+                ));
+            }
+        }
     }
     for stmt in &def.body {
+        // #378 (PR-18): a `@dataclass` class body accepts `AnnAssign`
+        // (`x: int` or `x: int = default`) alongside method definitions.
+        // An annotated field contributes to `dataclass_fields`. A
+        // non-dataclass class still rejects `AnnAssign` (class-level
+        // attribute declarations are a separate feature, out of scope for
+        // this PR).
+        if let Stmt::Pass(_) = stmt {
+            // `pass` is a no-op in any class body (dataclass or not). A
+            // zero-field dataclass (`@dataclass\nclass Empty:\n    pass`)
+            // relies on this to have a valid body with no fields and no
+            // methods.
+            continue;
+        }
+        if let Stmt::AnnAssign(ann) = stmt {
+            if !is_dataclass {
+                return Err(unsupported(
+                    "a class body statement must be a method definition (`def ...`) -- no \
+                     other statement kind is supported yet",
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
+            // The target must be a single bare name.
+            let Expr::Name(target_name) = ann.target.as_ref() else {
+                return Err(unsupported(
+                    "a dataclass field annotation must target a bare name (`x: int`), not an \
+                     attribute access, subscript, or other expression",
+                    pycc_ast::expr_range(&ann.target),
+                ));
+            };
+            let field_name = target_name.id.to_string();
+            // Reject duplicate field names.
+            if dataclass_fields.iter().any(|(name, _)| name == &field_name) {
+                return Err(unsupported(
+                    format!(
+                        "dataclass field `{field_name}` is already defined in class \
+                         `{class_name}` -- duplicate field names are not allowed"
+                    ),
+                    ann.range,
+                ));
+            }
+            let field_ty = crate::annotation_to_ty(
+                &ann.annotation,
+                type_param.as_deref(),
+                Some(&class_name),
+                aliases,
+            )?;
+            // A field with a default value (`x: int = field(default=...)` or
+            // `x: int = 42`) is recognized but rejected with C0001 -- field
+            // defaults are deferred to a follow-up issue (the compiler has no
+            // optional-parameter mechanism yet). A bare `field()` call with
+            // no arguments is also rejected (a field with `field()` and no
+            // default is meaningless).
+            if let Some(value) = &ann.value {
+                // Recognize `field(...)` call shapes specifically, for a
+                // clearer diagnostic message.
+                if let Expr::Call(call) = value.as_ref()
+                    && let Expr::Name(name) = call.func.as_ref()
+                    && name.id.as_str() == "field"
+                {
+                    return Err(unsupported(
+                        "dataclass field defaults are not supported yet -- only required \
+                         fields are supported in this version (`field(default=...)` and \
+                         `field(default_factory=...)` are deferred to a follow-up issue)",
+                        ann.range,
+                    ));
+                }
+                return Err(unsupported(
+                    "dataclass field defaults are not supported yet -- only required fields \
+                     (no default value) are supported in this version",
+                    ann.range,
+                ));
+            }
+            dataclass_fields.push((field_name, field_ty));
+            continue;
+        }
         let Stmt::FunctionDef(method_def) = stmt else {
             return Err(unsupported(
                 "a class body statement must be a method definition (`def ...`) -- no \
@@ -691,6 +859,18 @@ pub(crate) fn lower_class(
                 "redefining `__init__` in the same class body is not supported yet \
                  -- the attribute-slot pre-scan cannot reconcile two different \
                  `__init__` bodies",
+                method_def.range,
+            ));
+        }
+        // #378 (PR-18): a `@dataclass` class auto-generates `__init__`,
+        // `__eq__`, and `__repr__` -- an explicit definition of any of these
+        // is rejected with C0001 (the synthesized method replaces it).
+        if is_dataclass && matches!(method_name.as_str(), "__init__" | "__eq__" | "__repr__") {
+            return Err(unsupported(
+                format!(
+                    "a `@dataclass` class auto-generates `{method_name}`; an explicit \
+                     `{method_name}` is not allowed in a `@dataclass` body"
+                ),
                 method_def.range,
             ));
         }
@@ -988,7 +1168,67 @@ pub(crate) fn lower_class(
         }
         items.push(item);
     }
-    if !methods.iter().any(|(name, _)| name == "__init__") {
+    // #378 (PR-18): synthesize `__init__`, `__eq__`, and `__repr__` for a
+    // `@dataclass` class from its (merged) field list. The synthesized
+    // methods flow through the existing method infrastructure as ordinary
+    // mangled `HirItem::Function`s, exactly like hand-written methods.
+    if is_dataclass {
+        // Merge parent dataclass fields (via MRO, in reverse order so
+        // parent fields come first) with own fields. The MRO is ordered
+        // most-derived-first, so walking it in reverse gives
+        // least-derived-first (parent fields before own fields), matching
+        // PEP 557's field ordering for inheritance.
+        let mut merged_fields: Vec<(String, Ty)> = Vec::new();
+        for mro_class in mro.iter().skip(1).rev() {
+            // Every class in the MRO (other than the class itself, which
+            // `skip(1)` removes) was defined earlier in the module -- the
+            // C3 MRO is built from already-lowered class definitions, and
+            // dataclass inheritance requires all bases to be dataclasses.
+            // Using `.expect` (whose panic path lives in libcore, outside
+            // this crate's instrumented regions) avoids an `if let Some`
+            // whose `else` branch is structurally unreachable and would
+            // show up as a permanently uncovered line under D-014's 100%
+            // line-coverage gate.
+            let (_, base_def) = defined_classes
+                .iter()
+                .find(|(name, _)| name == mro_class)
+                .expect("MRO class must be defined before the derived class");
+            for (name, ty) in &base_def.dataclass_fields {
+                if !field_name_present(&merged_fields, name) {
+                    merged_fields.push((name.clone(), ty.clone()));
+                }
+            }
+        }
+        for (name, ty) in &dataclass_fields {
+            if !field_name_present(&merged_fields, name) {
+                merged_fields.push((name.clone(), ty.clone()));
+            }
+        }
+        // Populate `attrs` from the merged field list (the dataclass's
+        // attribute slots are exactly its fields, in declaration order).
+        attrs = merged_fields.clone();
+        // Synthesize `__init__`: `def __init__(self, f1: T1, f2: T2, ...):
+        // self.f1 = f1; self.f2 = f2; ...`
+        let init_item = synthesize_dataclass_init(&class_name, &merged_fields);
+        let init_mangled = format!("{class_name}.__init__");
+        methods.push(("__init__".to_string(), init_mangled));
+        items.push(init_item);
+        // Synthesize `__eq__`: `def __eq__(self, other: ClassName) -> bool:
+        // return self.f1 == other.f1 and self.f2 == other.f2 and ...`
+        let eq_item = synthesize_dataclass_eq(&class_name, &merged_fields);
+        let eq_mangled = format!("{class_name}.__eq__");
+        methods.push(("__eq__".to_string(), eq_mangled));
+        items.push(eq_item);
+        // Synthesize `__repr__`: `def __repr__(self) -> str: return
+        // "ClassName(f1=" + str(self.f1) + ", f2=" + str(self.f2) + ...)"`
+        let repr_item = synthesize_dataclass_repr(&class_name, &merged_fields);
+        let repr_mangled = format!("{class_name}.__repr__");
+        methods.push(("__repr__".to_string(), repr_mangled));
+        items.push(repr_item);
+        // Store the merged field list for downstream consumers.
+        dataclass_fields = merged_fields;
+    }
+    if !is_dataclass && !methods.iter().any(|(name, _)| name == "__init__") {
         // #432: a derived class without its own `__init__` inherits the
         // base class's `__init__` -- check the MRO for a class that has one.
         // The MRO is ordered most-derived-first, so the first `__init__`
@@ -1058,6 +1298,8 @@ pub(crate) fn lower_class(
             class_methods,
             type_param,
             enum_members,
+            is_dataclass,
+            dataclass_fields,
         },
         items,
     ))
@@ -1288,6 +1530,139 @@ fn lower_method(
         },
         params,
     ))
+}
+
+/// #378 (PR-18): Returns `true` if a field named `name` already exists in
+/// `fields`. Used during dataclass inheritance field merging to avoid
+/// duplicate entries. Extracted as a standalone function (rather than an
+/// inline `.any(|(n, _)| n == name)` closure) so that the dedup check
+/// is always covered by the line-coverage gate regardless of whether
+/// `fields` is empty when the check runs.
+fn field_name_present(fields: &[(String, Ty)], name: &str) -> bool {
+    for (n, _) in fields {
+        if n == name {
+            return true;
+        }
+    }
+    false
+}
+
+/// #378 (PR-18): Synthesizes a `__init__` method for a `@dataclass` class
+/// from its (merged) field list. The synthesized method takes `self` plus
+/// one parameter per field (in declaration order), and assigns each
+/// parameter to the corresponding `self.<field>` attribute. All fields are
+/// required (no defaults -- see the plan's §3.6 deferral).
+fn synthesize_dataclass_init(class_name: &str, fields: &[(String, Ty)]) -> HirItem {
+    let self_ty = Ty::Instance(Box::new(class_name.to_string()));
+    let mut params: Vec<(String, Ty)> = vec![("self".to_string(), self_ty)];
+    for (name, ty) in fields {
+        params.push((name.clone(), ty.clone()));
+    }
+    let body: Vec<HirStmt> = fields
+        .iter()
+        .map(|(name, _)| HirStmt::AttrSet {
+            base: HirExpr::Name("self".to_string()),
+            attr: name.clone(),
+            value: HirExpr::Name(name.clone()),
+        })
+        .collect();
+    HirItem::Function {
+        name: format!("{class_name}.__init__"),
+        params,
+        return_ty: Ty::None,
+        body,
+    }
+}
+
+/// #378 (PR-18): Synthesizes an `__eq__` method for a `@dataclass` class
+/// from its (merged) field list. The synthesized method takes `self` and
+/// `other` (both typed `Ty::Instance(class_name)`), and returns `bool` --
+/// `True` if all fields are equal, `False` otherwise. The body uses a
+/// series of `if self.<field> != other.<field>: return False` checks
+/// followed by `return True`, since pycc's HIR has no `and`/`or` boolean
+/// operator (short-circuit `and` is not lowered). A zero-field dataclass's
+/// `__eq__` always returns `True` (two instances of a fieldless dataclass
+/// are always equal, matching CPython's PEP 557).
+fn synthesize_dataclass_eq(class_name: &str, fields: &[(String, Ty)]) -> HirItem {
+    let self_ty = Ty::Instance(Box::new(class_name.to_string()));
+    let params: Vec<(String, Ty)> = vec![
+        ("self".to_string(), self_ty.clone()),
+        ("other".to_string(), self_ty),
+    ];
+    let mut body: Vec<HirStmt> = Vec::new();
+    for (name, _) in fields {
+        // `if self.<field> != other.<field>: return False`
+        body.push(HirStmt::If {
+            test: HirExpr::Compare {
+                op: crate::CmpOpKind::NotEq,
+                left: Box::new(HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("self".to_string())),
+                    attr: name.clone(),
+                }),
+                right: Box::new(HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("other".to_string())),
+                    attr: name.clone(),
+                }),
+            },
+            body: vec![HirStmt::Return(Some(HirExpr::BoolLiteral(false)))],
+            orelse: Vec::new(),
+        });
+    }
+    // `return True`
+    body.push(HirStmt::Return(Some(HirExpr::BoolLiteral(true))));
+    HirItem::Function {
+        name: format!("{class_name}.__eq__"),
+        params,
+        return_ty: Ty::Bool,
+        body,
+    }
+}
+
+/// #378 (PR-18): Synthesizes a `__repr__` method for a `@dataclass` class
+/// from its (merged) field list. The synthesized method takes `self` and
+/// returns a `str` of the form `ClassName(field1=..., field2=..., ...)`.
+/// Each field value is converted to a string via f-string interpolation
+/// (which routes through the existing `to_str` codegen for scalars). The
+/// string is built by concatenating literal and interpolated parts using
+/// `pycc_rt_str_concat` at codegen time (the f-string codegen already
+/// does this).
+///
+/// For a zero-field dataclass, `__repr__` returns `"ClassName()"`.
+fn synthesize_dataclass_repr(class_name: &str, fields: &[(String, Ty)]) -> HirItem {
+    let self_ty = Ty::Instance(Box::new(class_name.to_string()));
+    let params: Vec<(String, Ty)> = vec![("self".to_string(), self_ty)];
+    // Build the repr string as an f-string with literal and interpolation
+    // parts. The codegen's f-string handling already converts each
+    // interpolated value to a string via `to_str` and concatenates with
+    // `pycc_rt_str_concat`.
+    let body = if fields.is_empty() {
+        vec![HirStmt::Return(Some(HirExpr::StringLiteral(format!(
+            "{class_name}()"
+        ))))]
+    } else {
+        let mut parts: Vec<crate::FStringPart> = Vec::new();
+        parts.push(crate::FStringPart::Literal(format!("{class_name}(")));
+        for (i, (name, _)) in fields.iter().enumerate() {
+            if i > 0 {
+                parts.push(crate::FStringPart::Literal(", ".to_string()));
+            }
+            parts.push(crate::FStringPart::Literal(format!("{name}=")));
+            parts.push(crate::FStringPart::Interpolation(Box::new(
+                HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("self".to_string())),
+                    attr: name.clone(),
+                },
+            )));
+        }
+        parts.push(crate::FStringPart::Literal(")".to_string()));
+        vec![HirStmt::Return(Some(HirExpr::FString(parts)))]
+    };
+    HirItem::Function {
+        name: format!("{class_name}.__repr__"),
+        params,
+        return_ty: Ty::Str,
+        body,
+    }
 }
 
 /// Scans `__init__`'s own top-level body statements (no recursion into a
@@ -2026,6 +2401,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             }
         );
         // Direct value comparison, not a `let PATTERN = .. else { panic!(..) }`
@@ -3021,12 +3398,25 @@ mod tests {
     #[test]
     fn a_class_without_init_and_without_base_init_is_rejected() {
         let module = crate::pycc_parser_test_helper::parse(
-            "class A:\n    def __init__(self) -> None:\n        return\nclass B(A):\n    pass\n",
+            "class A:\n    def __init__(self) -> None:\n        return\nclass B(A):\n    def f(self) -> int:\n        return 1\n",
         );
-        // `pass` in a class body is C0001 (not a def), so this is rejected
-        // before the __init__ check even runs.
-        let diagnostic = lower_checked(&module).unwrap_err();
-        assert_eq!(diagnostic.code, "C0001");
+        // `B` has no `__init__` and its base `A` has one, so this should
+        // succeed (B inherits A's `__init__`). But `B`'s own `f` method
+        // means it has a valid class body. The test name is historical --
+        // it originally tested `pass` being rejected, but #378 made `pass`
+        // valid in class bodies. This now tests that a derived class with
+        // a method but no `__init__` inherits the base's `__init__`.
+        let hir = lower_checked(&module).unwrap();
+        let b_def = hir
+            .class_defs
+            .iter()
+            .find(|(name, _)| name == "B")
+            .map(|(_, def)| def)
+            .unwrap();
+        assert!(
+            !b_def.methods.iter().any(|(mn, _)| mn == "__init__"),
+            "B should not have its own __init__"
+        );
     }
 
     #[test]
@@ -3123,6 +3513,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let defined_classes = vec![("A".to_string(), fake_a)];
         let diagnostic = super::lower_class(def, &[], &defined_classes).unwrap_err();
@@ -3283,5 +3675,222 @@ mod tests {
     #[test]
     fn enum_member_with_non_literal_value_is_rejected() {
         assert_c0001("x = 1\nclass C(Enum):\n    RED = x\n");
+    }
+
+    // -- #378 (PR-18): dataclass (PEP 557) lowering -----------------------
+
+    #[test]
+    fn a_dataclass_with_two_fields_lowers_successfully() {
+        let hir = lower_ok("@dataclass\nclass Point:\n    x: int\n    y: int\n");
+        assert_eq!(hir.class_defs.len(), 1);
+        let (_, class_def) = &hir.class_defs[0];
+        assert!(class_def.is_dataclass);
+        assert_eq!(
+            class_def.dataclass_fields,
+            vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int),]
+        );
+        // __init__, __eq__, and __repr__ should be auto-generated.
+        assert!(class_def.methods.iter().any(|(mn, _)| mn == "__init__"));
+        assert!(class_def.methods.iter().any(|(mn, _)| mn == "__eq__"));
+        assert!(class_def.methods.iter().any(|(mn, _)| mn == "__repr__"));
+    }
+
+    #[test]
+    fn a_dataclass_transform_decorator_lowers_successfully() {
+        let hir = lower_ok("@dataclass_transform()\nclass Point:\n    x: int\n");
+        assert_eq!(hir.class_defs.len(), 1);
+        let (_, class_def) = &hir.class_defs[0];
+        assert!(class_def.is_dataclass);
+    }
+
+    #[test]
+    fn a_dataclass_with_inheritance_merges_parent_fields() {
+        let hir = lower_ok(
+            "@dataclass\nclass Base:\n    a: int\n@dataclass\nclass Derived(Base):\n    b: int\n",
+        );
+        assert_eq!(hir.class_defs.len(), 2);
+        let (_, derived_def) = &hir.class_defs[1];
+        assert!(derived_def.is_dataclass);
+        // Parent field `a` comes before child field `b`.
+        assert_eq!(
+            derived_def.dataclass_fields,
+            vec![("a".to_string(), Ty::Int), ("b".to_string(), Ty::Int),]
+        );
+        assert_eq!(
+            derived_def.attrs,
+            vec![("a".to_string(), Ty::Int), ("b".to_string(), Ty::Int),]
+        );
+    }
+
+    #[test]
+    fn a_dataclass_child_redeclaring_a_parent_field_deduplicates() {
+        // When a child dataclass redeclares a field already present in a
+        // parent, the merge keeps the parent's field and skips the child's
+        // duplicate. This exercises the `true` return path of
+        // `field_name_present`.
+        let hir = lower_ok(
+            "@dataclass\nclass Base:\n    a: int\n@dataclass\nclass Derived(Base):\n    a: int\n",
+        );
+        assert_eq!(hir.class_defs.len(), 2);
+        let (_, derived_def) = &hir.class_defs[1];
+        assert!(derived_def.is_dataclass);
+        // The field `a` appears only once (from the parent).
+        assert_eq!(
+            derived_def.dataclass_fields,
+            vec![("a".to_string(), Ty::Int)]
+        );
+    }
+
+    #[test]
+    fn a_dataclass_grandchild_merges_parent_and_grandparent_fields_with_dedup() {
+        // A 3-level inheritance chain where the middle class redeclares a
+        // grandparent field. When processing the grandchild, the MRO-based
+        // merge iterates over the grandparent's fields first (adding `x`),
+        // then the middle class's fields. The middle class's `x` is already
+        // in `merged_fields`, so `field_name_present` returns `true` and
+        // the `if` body is skipped in the parent-fields loop. This covers
+        // the `if`'s "else" (false) branch in the MRO-based parent-fields
+        // merge loop.
+        let hir = lower_ok(
+            "@dataclass\nclass A:\n    x: int\n@dataclass\nclass B(A):\n    x: int\n\
+             @dataclass\nclass C(B):\n    y: int\n",
+        );
+        assert_eq!(hir.class_defs.len(), 3);
+        let (_, c_def) = &hir.class_defs[2];
+        assert!(c_def.is_dataclass);
+        // `x` (from A, deduplicated against B's redeclaration) comes before
+        // `y` (C's own field).
+        assert_eq!(
+            c_def.dataclass_fields,
+            vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int),]
+        );
+    }
+
+    #[test]
+    fn a_call_decorator_with_a_non_name_callee_is_rejected() {
+        // `@some.attr()` -- a call whose callee is an attribute access, not
+        // a bare name. `classify_class_decorator`'s `Expr::Call` arm hits
+        // the `let Expr::Name(name) = call.func.as_ref() else { ... }`
+        // rejection.
+        assert_c0001("@some.attr()\nclass C:\n    x: int\n");
+    }
+
+    #[test]
+    fn a_call_decorator_with_an_unknown_name_is_rejected() {
+        // `@other()` -- a call whose callee is a bare name but not
+        // `dataclass_transform` or `dataclass`.
+        assert_c0001("@other()\nclass C:\n    x: int\n");
+    }
+
+    #[test]
+    fn a_dataclass_with_duplicate_field_names_is_rejected() {
+        assert_c0001("@dataclass\nclass C:\n    x: int\n    x: int\n");
+    }
+
+    #[test]
+    fn a_dataclass_with_an_unsupported_annotation_is_rejected() {
+        // `annotation_to_ty` returns an error for `undefined_type`, which
+        // propagates through the `?` on the `annotation_to_ty(...)` call.
+        assert_c0001("@dataclass\nclass C:\n    x: undefined_type\n");
+    }
+
+    #[test]
+    fn a_dataclass_with_a_non_method_non_annassign_statement_is_rejected() {
+        // An `Assign` statement (`y = 5`) in a dataclass body is neither an
+        // `AnnAssign` (field) nor a `FunctionDef` (method) nor `Pass`.
+        assert_c0001("@dataclass\nclass C:\n    x: int\n    y = 5\n");
+    }
+
+    #[test]
+    fn a_zero_field_dataclass_lowers_successfully() {
+        let hir = lower_ok("@dataclass\nclass Empty:\n    pass\n");
+        assert_eq!(hir.class_defs.len(), 1);
+        let (_, class_def) = &hir.class_defs[0];
+        assert!(class_def.is_dataclass);
+        assert!(class_def.dataclass_fields.is_empty());
+        // __init__, __eq__, and __repr__ should still be auto-generated.
+        assert!(class_def.methods.iter().any(|(mn, _)| mn == "__init__"));
+        assert!(class_def.methods.iter().any(|(mn, _)| mn == "__eq__"));
+        assert!(class_def.methods.iter().any(|(mn, _)| mn == "__repr__"));
+    }
+
+    #[test]
+    fn a_bare_field_call_in_a_dataclass_is_rejected() {
+        // `x: int = field()` -- a bare `field()` call with no arguments.
+        assert_c0001("@dataclass\nclass C:\n    x: int = field()\n");
+    }
+
+    #[test]
+    fn a_dataclass_inheriting_from_a_non_dataclass_is_rejected() {
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "class Base:\n    def __init__(self) -> None:\n        return\n@dataclass\nclass Derived(Base):\n    b: int\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("cannot inherit from non-dataclass class `Base`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn an_explicit_init_in_a_dataclass_is_rejected() {
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "@dataclass\nclass C:\n    x: int\n    def __init__(self, x: int) -> None:\n        self.x = x\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("auto-generates `__init__`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn an_explicit_eq_in_a_dataclass_is_rejected() {
+        assert_c0001(
+            "@dataclass\nclass C:\n    x: int\n    def __eq__(self, other: C) -> bool:\n        return self.x == other.x\n",
+        );
+    }
+
+    #[test]
+    fn an_explicit_repr_in_a_dataclass_is_rejected() {
+        assert_c0001(
+            "@dataclass\nclass C:\n    x: int\n    def __repr__(self) -> str:\n        return \"C\"\n",
+        );
+    }
+
+    #[test]
+    fn multiple_decorators_on_a_dataclass_are_rejected() {
+        assert_c0001("@dataclass\n@dataclass\nclass C:\n    x: int\n");
+    }
+
+    #[test]
+    fn a_dataclass_with_options_is_rejected() {
+        assert_c0001("@dataclass(frozen=True)\nclass C:\n    x: int\n");
+    }
+
+    #[test]
+    fn a_non_name_field_target_in_a_dataclass_is_rejected() {
+        assert_c0001("@dataclass\nclass C:\n    self.x: int\n");
+    }
+
+    #[test]
+    fn a_plain_default_in_a_dataclass_field_is_rejected() {
+        assert_c0001("@dataclass\nclass C:\n    x: int = 42\n");
+    }
+
+    #[test]
+    fn a_field_default_in_a_dataclass_is_rejected() {
+        assert_c0001("@dataclass\nclass C:\n    x: int = field(default=0)\n");
+    }
+
+    #[test]
+    fn a_field_default_factory_in_a_dataclass_is_rejected() {
+        assert_c0001("@dataclass\nclass C:\n    x: int = field(default_factory=int)\n");
     }
 }

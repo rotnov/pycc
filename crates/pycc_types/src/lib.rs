@@ -390,7 +390,9 @@ fn std_constant_is_not_callable(name: &str) -> Diagnostic {
 fn enum_marker_is_not_a_value(name: &str) -> Diagnostic {
     Diagnostic::error(
         "T0021",
-        format!("`{name}` is a class marker, not a first-class value — use it only as a base class (`class C(Enum):`)"),
+        format!(
+            "`{name}` is a class marker, not a first-class value — use it only as a base class (`class C(Enum):`)"
+        ),
         Span::new(0, 0),
     )
 }
@@ -990,9 +992,7 @@ fn collect_expr_constraints(
                     pycc_std::StdSymbolKind::Function { .. } => {
                         Err(std_function_used_as_a_value(name))
                     }
-                    pycc_std::StdSymbolKind::EnumMarker => {
-                        Err(enum_marker_is_not_a_value(name))
-                    }
+                    pycc_std::StdSymbolKind::EnumMarker => Err(enum_marker_is_not_a_value(name)),
                 };
             }
             // Issue #359 (Part 2 of #118): a maybe-bound name (assigned
@@ -1138,11 +1138,13 @@ fn collect_expr_constraints(
                     ret_ty,
                 } = symbol.kind
                 else {
-                    return Err(if matches!(symbol.kind, pycc_std::StdSymbolKind::EnumMarker) {
-                        enum_marker_is_not_a_value(callee)
-                    } else {
-                        std_constant_is_not_callable(callee)
-                    });
+                    return Err(
+                        if matches!(symbol.kind, pycc_std::StdSymbolKind::EnumMarker) {
+                            enum_marker_is_not_a_value(callee)
+                        } else {
+                            std_constant_is_not_callable(callee)
+                        },
+                    );
                 };
                 if arg_terms.len() != expected_arg_tys.len() {
                     return Err(Diagnostic::error(
@@ -2525,6 +2527,27 @@ fn infer_expr_in(
         HirExpr::Compare { op: _, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;
+            // #378 (PR-18): `==`/`!=` between same-class instances is
+            // accepted when the class has an `__eq__` method (auto-generated
+            // for `@dataclass` classes, or user-defined). This is a general
+            // extension that benefits any class with `__eq__`, not just
+            // dataclasses. Different-class comparisons stay T0021.
+            if let (Ty::Instance(left_class), Ty::Instance(right_class)) =
+                (&left_ty, &right_ty)
+                && left_class == right_class
+                && let Some(class_def) = env.lookup_class(left_class)
+            {
+                let has_eq = class_def.mro.iter().any(|mro_class| {
+                    env.lookup_class(mro_class)
+                        .map(|cd| {
+                            cd.methods.iter().any(|(mn, _)| mn == "__eq__")
+                        })
+                        .unwrap_or(false)
+                });
+                if has_eq {
+                    return Ok(Ty::Bool);
+                }
+            }
             if numeric_or_bool_compatible(left_ty.clone(), right_ty.clone()) {
                 Ok(Ty::Bool)
             } else {
@@ -4350,7 +4373,14 @@ fn check_stmt_in_function(
             if let Some(class_def) = env.lookup_class(list)
                 && !class_def.enum_members.is_empty()
             {
-                return check_enum_loop_body_function(env, var, list, body, local_names, return_ty.clone());
+                return check_enum_loop_body_function(
+                    env,
+                    var,
+                    list,
+                    body,
+                    local_names,
+                    return_ty.clone(),
+                );
             }
             let list_ty = lookup_bound_name(env, local_names, list)?;
             // See the module-scope `check_stmt` arm's own comment (PR-11
@@ -6246,6 +6276,8 @@ fn instantiate_generic_class_methods(
             static_methods: mangled_static_methods,
             class_methods: mangled_class_methods,
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         env.bind_class(mangled_class.clone(), new_class_def.clone());
         new_class_defs.push((mangled_class, new_class_def));
@@ -6564,8 +6596,7 @@ fn check_enum_loop_body_module(
     body: &[HirStmt],
 ) -> Result<(), Diagnostic> {
     let var_ty = Ty::Instance(Box::new(list.to_string()));
-    let was_definite =
-        matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
+    let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
     check_assignment(env, var, var_ty)?;
     let mut body_env = env.clone();
     for stmt in body {
@@ -6590,8 +6621,7 @@ fn check_enum_loop_body_function(
     return_ty: Ty,
 ) -> Result<(), Diagnostic> {
     let var_ty = Ty::Instance(Box::new(list.to_string()));
-    let was_definite =
-        matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
+    let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
     check_assignment(env, var, var_ty)?;
     let mut body_env = env.clone();
     for s in body {
@@ -17708,6 +17738,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         env.bind_class(
@@ -17723,6 +17755,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         let expr = HirExpr::AttrGet {
@@ -17752,6 +17786,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         env.bind_class(
@@ -17767,6 +17803,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         env.bind_function(
@@ -17803,6 +17841,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         env.bind_class(
@@ -17818,6 +17858,8 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
             },
         );
         env.bind_function(
@@ -24352,6 +24394,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         HirModule {
             items: vec![
@@ -24420,6 +24464,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Marker.__init__".to_string(),
@@ -24484,6 +24530,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let init = HirItem::Function {
             name: "C.__init__".to_string(),
@@ -24567,6 +24615,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Box.__init__".to_string(),
@@ -24655,6 +24705,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Box.__init__".to_string(),
@@ -24762,6 +24814,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Box.__init__".to_string(),
@@ -24841,6 +24895,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Box.__init__".to_string(),
@@ -24955,6 +25011,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let init = HirItem::Function {
             name: "C.__init__".to_string(),
@@ -25576,6 +25634,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -25680,6 +25740,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -25749,6 +25811,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let caller = HirItem::Function {
             name: "f".to_string(),
@@ -25878,6 +25942,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let hir = HirModule {
             items: vec![init],
@@ -25959,6 +26025,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         // A generic function — prevents `monomorphize` from returning early.
         let identity = HirItem::Function {
@@ -26014,6 +26082,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let init = HirItem::Function {
             name: "E.__init__".to_string(),
@@ -26163,6 +26233,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let init = HirItem::Function {
             name: "F.__init__".to_string(),
@@ -26220,6 +26292,8 @@ mod tests {
             static_methods: vec![("ghost".to_string(), "F.ghost.static".to_string())],
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let init = HirItem::Function {
             name: "F.__init__".to_string(),
@@ -26270,6 +26344,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: vec![("ghost".to_string(), "F.ghost.classmethod".to_string())],
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let init = HirItem::Function {
             name: "F.__init__".to_string(),
@@ -26339,6 +26415,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         // Private function with inferred types — forces the solver path.
         let f = HirItem::Function {
@@ -26413,6 +26491,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -26486,6 +26566,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         // Generic function `g[T]` whose body contains `C[int](g(1))` —
         // the arg `g(1)` is a self-call, which `reject_generic_calls_in_expr`
@@ -26558,6 +26640,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         // A generic function forces `check_and_resolve` → `monomorphize`
         // → `instantiate_generic_class_methods`.
@@ -26632,6 +26716,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let maker_init = HirItem::Function {
             name: "Maker.__init__".to_string(),
@@ -26685,6 +26771,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -26771,6 +26859,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let maker_init = HirItem::Function {
             name: "Maker.__init__".to_string(),
@@ -26824,6 +26914,8 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -26994,6 +27086,8 @@ mod tests {
             static_methods: vec![("factory".to_string(), "C.factory.static".to_string())],
             class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         HirModule {
             items: vec![
@@ -27108,6 +27202,8 @@ mod tests {
             ],
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -27174,6 +27270,8 @@ mod tests {
                 ("greet".to_string(), "D.greet.classmethod".to_string()),
             ],
             enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -27216,7 +27314,10 @@ mod tests {
         let result = parse_and_check(
             "class Color(Enum):\n    RED = 1\n    GREEN = 2\nxs = [1, 2]\nfor x in xs:\n    for c in Color:\n        print(c.value)\n",
         );
-        assert!(result.is_ok(), "non-enum for-list with nested enum loop should check");
+        assert!(
+            result.is_ok(),
+            "non-enum for-list with nested enum loop should check"
+        );
     }
 
     #[test]
@@ -27246,7 +27347,10 @@ mod tests {
         let result = parse_and_check(
             "class Color(Enum):\n    RED = 1\n    GREEN = 2\nfor i in range(1):\n    for c in Color:\n        print(c.value)\n",
         );
-        assert!(result.is_ok(), "enum loop nested inside for-range should check");
+        assert!(
+            result.is_ok(),
+            "enum loop nested inside for-range should check"
+        );
     }
 
     #[test]
@@ -27272,7 +27376,10 @@ mod tests {
         let result = parse_and_check(
             "class Color(Enum):\n    RED = 1\n    GREEN = 2\nc = Color.RED\nfor c in Color:\n    print(c.value)\n",
         );
-        assert!(result.is_ok(), "enum loop with pre-bound loop var should check");
+        assert!(
+            result.is_ok(),
+            "enum loop with pre-bound loop var should check"
+        );
     }
 
     #[test]
@@ -27285,7 +27392,10 @@ mod tests {
         let result = parse_and_check(
             "class Color(Enum):\n    RED = 1\n    GREEN = 2\ndef f() -> None:\n    c = Color.RED\n    for c in Color:\n        print(c.value)\nf()\n",
         );
-        assert!(result.is_ok(), "enum loop in function with pre-bound loop var should check");
+        assert!(
+            result.is_ok(),
+            "enum loop in function with pre-bound loop var should check"
+        );
     }
 
     #[test]
@@ -27297,7 +27407,10 @@ mod tests {
         let result = parse_and_check(
             "class Color(Enum):\n    RED = 1\n    GREEN = 2\nfor c in Color:\n    print(undefined_name)\n",
         );
-        assert!(result.is_err(), "enum loop with undefined name in body should be rejected");
+        assert!(
+            result.is_err(),
+            "enum loop with undefined name in body should be rejected"
+        );
     }
 
     #[test]
@@ -27309,7 +27422,10 @@ mod tests {
         let result = parse_and_check(
             "class Color(Enum):\n    RED = 1\n    GREEN = 2\ndef f() -> None:\n    for c in Color:\n        print(undefined_name)\nf()\n",
         );
-        assert!(result.is_err(), "enum loop in function with undefined name in body should be rejected");
+        assert!(
+            result.is_err(),
+            "enum loop in function with undefined name in body should be rejected"
+        );
     }
 
     #[test]
@@ -27321,7 +27437,10 @@ mod tests {
         let result = parse_and_check(
             "class Color(Enum):\n    RED = 1\n    GREEN = 2\nc = 0\nfor c in Color:\n    print(c.value)\n",
         );
-        assert!(result.is_err(), "enum loop with incompatible loop var type should be rejected");
+        assert!(
+            result.is_err(),
+            "enum loop with incompatible loop var type should be rejected"
+        );
     }
 
     #[test]
@@ -27332,6 +27451,9 @@ mod tests {
         let result = parse_and_check(
             "class Color(Enum):\n    RED = 1\n    GREEN = 2\ndef f() -> None:\n    c = 0\n    for c in Color:\n        print(c.value)\nf()\n",
         );
-        assert!(result.is_err(), "enum loop in function with incompatible loop var type should be rejected");
+        assert!(
+            result.is_err(),
+            "enum loop in function with incompatible loop var type should be rejected"
+        );
     }
 }

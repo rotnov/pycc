@@ -1473,18 +1473,19 @@ fn to_str<'ctx>(
         Scalar::Tuple(_) => {
             panic!("pycc_codegen: string conversion of a tuple[...] value is not supported yet")
         }
-        // A real, reachable feature gap, identical in kind to the
-        // `List`/`Dict`/`Set`/`Tuple` arms above (D-154, Part 1 of #375):
-        // `pycc_types` places no type restriction on `print`'s argument or
-        // an f-string interpolation, so `print(p)`/`f"{p}"` for a class
-        // instance type-checks today and lands here. This PR ships no
-        // `__str__`/`__repr__` support (out of scope, see the plan's own
-        // "Explicitly out of scope" list), so there is no
-        // `pycc_rt_instance_to_str` to call -- panics honestly instead of
-        // handing a `PyInstanceObj` pointer to a `pycc_rt_*_to_str`
-        // function that would read it as a `PyStrObj`.
+        // #378 (PR-18): a class instance with a `__repr__` method is
+        // converted to a string at the MIR level -- `rewrite_instance_to_repr`
+        // in `pycc_mir` rewrites instance-typed f-string interpolations and
+        // `print` arguments to `__repr__` calls, so the codegen's `to_str`
+        // receives a `str` scalar from the `__repr__` call, never an
+        // `Instance` scalar. A bare `to_str` call reaching here with an
+        // Instance scalar means the class has no `__repr__` (the MIR rewrite
+        // is a no-op for classes without `__repr__`) -- panic honestly,
+        // matching the pre-#378 behavior.
         Scalar::Instance(_) => {
-            panic!("pycc_codegen: string conversion of a class instance is not supported yet")
+            panic!(
+                "pycc_codegen: string conversion of a class instance without `__repr__` is not supported yet"
+            )
         }
     };
     builder
@@ -4433,14 +4434,7 @@ fn compile_to_object_with_observer(
         .collect();
     // #379 (PR-19): emit per-enum-member singleton init sequences BEFORE
     // the top-level statement loop.
-    emit_enum_member_inits(
-        &context,
-        &builder,
-        &module,
-        &rt,
-        mir,
-        &module_globals,
-    );
+    emit_enum_member_inits(&context, &builder, &module, &rt, mir, &module_globals);
     // Issue #22: iterate over ALL items in source order, not just
     // top-level statements. A `MirItem::Function` at its source position
     // represents a `def` statement's runtime binding effect: store the
@@ -11574,15 +11568,17 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "pycc_codegen: string conversion of a class instance is not supported yet"
+        expected = "pycc_codegen: string conversion of a class instance without `__repr__` is not supported yet"
     )]
     fn string_conversion_of_a_class_instance_panics_honestly() {
         // Mirrors `string_conversion_of_a_list_value_panics_honestly`
         // above exactly: `pycc_types` type-checks `print(p)` for a class
-        // instance unconditionally, and this PR ships no `__str__`/
-        // `__repr__` (out of scope), so `to_str` panics honestly instead of
-        // handing a `PyInstanceObj` pointer to a `pycc_rt_*_to_str`
-        // function expecting a `PyStrObj`.
+        // instance unconditionally. #378 (PR-18) added `__repr__` support
+        // for dataclass instances (the MIR rewrites `print(instance)` to
+        // a `__repr__` call before codegen), but a bare `to_str` call with
+        // an Instance scalar (e.g. a class without `__repr__`) still panics
+        // honestly instead of handing a `PyInstanceObj` pointer to a
+        // `pycc_rt_*_to_str` function expecting a `PyStrObj`.
         let context = Context::create();
         let (_module, rt) = list_scalar_panic_fixture(&context);
         let builder = context.create_builder();
@@ -17375,10 +17371,9 @@ mod tests {
             static_methods: vec![],
             class_methods: vec![],
             type_param: None,
-            enum_members: vec![
-                ("RED".to_string(), 1),
-                ("GREEN".to_string(), 2),
-            ],
+            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
         };
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {

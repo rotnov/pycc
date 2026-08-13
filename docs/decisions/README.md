@@ -170,3 +170,4 @@ current.
 | [D-161](./D-161-pages-performance-budget-gate.md) | Pages performance budget gate | accepted |
 | [D-162](./D-162-site-accessibility-gate.md) | Site accessibility gate | accepted |
 | [D-163](./D-163-enum-scoped-singleton-model.md) | Enum scoped singleton model — compile-time members, no enum.Enum module | accepted |
+| [D-164](./D-164-dataclass-static-dispatch-narrow-scope.md) | Dataclass static dispatch and narrow scope | accepted |
