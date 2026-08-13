@@ -850,3 +850,63 @@ fn inheritance_basic_matches_cpython_3_14_6_byte_for_byte() {
 // imports, a byte-for-byte conformance fixture is not possible until
 // import support lands (v0.4). The @override behavior is covered by the
 // integration tests in tests/issue_432_inheritance.rs instead.
+
+// PEP 593 (#383): `Annotated[X, ...]` — unwraps to `X`, metadata discarded.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0593_annotated_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0593_annotated.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0593_annotated_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0593_annotated.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0593_annotated_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0593_annotated.py"
+    );
+}
+
+// PEP 570 (#383): positional-only parameters (`/` marker).
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0570_pos_only_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0570_pos_only.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0570_pos_only_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0570_pos_only.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0570_pos_only_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0570_pos_only.py"
+    );
+}
+
+// PEP 591 (#383): `Final[X]` — unwraps to `X`, non-reassignable.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0591_final_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0591_final.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0591_final_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0591_final.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0591_final_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0591_final.py"
+    );
+}

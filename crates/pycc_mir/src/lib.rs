@@ -724,6 +724,7 @@ fn lower_stmt(
             target,
             annotation,
             value: Some(value),
+            is_final: _,
         } => {
             let value = lower_expr(value, scopes, classes, current_class);
             // `pycc_types::is_assignable` accepts an annotated initializer
@@ -2309,6 +2310,7 @@ mod tests {
         let hir = HirModule {
             items: vec![
                 HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                    is_final: false,
                     target: "x".to_string(),
                     annotation: Ty::Int,
                     value: Some(HirExpr::IntLiteral(1)),
@@ -2355,6 +2357,7 @@ mod tests {
         let hir = HirModule {
             items: vec![
                 HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                    is_final: false,
                     target: "x".to_string(),
                     annotation: Ty::Int,
                     value: Some(HirExpr::BoolLiteral(true)),
@@ -2392,6 +2395,7 @@ mod tests {
         // case the previous test exercises.
         let hir = HirModule {
             items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: Some(HirExpr::Compare {
@@ -2430,6 +2434,7 @@ mod tests {
         // through.
         let hir = HirModule {
             items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                is_final: false,
                 target: "y".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -2448,6 +2453,7 @@ mod tests {
         let hir = HirModule {
             items: vec![
                 HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                    is_final: false,
                     target: "y".to_string(),
                     annotation: Ty::Int,
                     value: None,

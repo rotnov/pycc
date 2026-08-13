@@ -1351,12 +1351,13 @@ fn lower_method(
         ));
     }
     let parameters = &def.parameters;
-    if !parameters.posonlyargs.is_empty() {
-        return Err(unsupported(
-            "positional-only parameters (`/`) are not supported yet",
-            parameters.range,
-        ));
-    }
+    // PEP 570 (#383): positional-only parameters (`posonlyargs`, before the
+    // `/` marker) are now lowered. For `@staticmethod`, posonlyargs come
+    // first (no implicit `self`/`cls`). For regular/classmethod methods,
+    // `self`/`cls` is always the first parameter, so posonlyargs follow it.
+    // Since keyword call arguments are already globally unsupported, every
+    // parameter is already effectively positional-only — accepting
+    // posonlyargs changes nothing about call-site checking.
     if parameters.vararg.is_some() {
         return Err(unsupported(
             "`*args` is not supported yet",
@@ -1385,20 +1386,43 @@ fn lower_method(
     // compiler's static-dispatch model) as its first parameter. A
     // regular/property method takes `self` as before.
     let params = match kind {
-        MethodKind::StaticMethod => lower_arg_list(
-            &parameters.args,
-            params_is_public,
-            method_name,
-            type_param,
-            Some(class_name),
-            aliases,
-        )?,
+        MethodKind::StaticMethod => {
+            // PEP 570 (#383): for `@staticmethod`, posonlyargs come first
+            // (no implicit `self`/`cls`), then ordinary `args`.
+            let mut p = lower_arg_list(
+                &parameters.posonlyargs,
+                params_is_public,
+                method_name,
+                type_param,
+                Some(class_name),
+                aliases,
+            )?;
+            p.extend(lower_arg_list(
+                &parameters.args,
+                params_is_public,
+                method_name,
+                type_param,
+                Some(class_name),
+                aliases,
+            )?);
+            p
+        }
         MethodKind::ClassMethod => {
-            let [cls_param, rest @ ..] = parameters.args.as_slice() else {
+            // PEP 570 (#383): `cls` is the first parameter overall — it
+            // may be in `posonlyargs` (if `/` follows it) or in `args`.
+            // Extract it from the combined list, then lower the rest.
+            if parameters.posonlyargs.is_empty() && parameters.args.is_empty() {
                 return Err(unsupported(
                     "a `@classmethod` must take `cls` as its first parameter",
                     def.range,
                 ));
+            }
+            let (cls_param, posonly_rest, args_rest) = if !parameters.posonlyargs.is_empty() {
+                let (cls, rest_pos) = parameters.posonlyargs.split_first().unwrap();
+                (cls, rest_pos, parameters.args.as_slice())
+            } else {
+                let (cls, rest_args) = parameters.args.split_first().unwrap();
+                (cls, &[][..], rest_args)
             };
             if cls_param.parameter.name.as_str() != "cls" {
                 return Err(unsupported(
@@ -1420,8 +1444,18 @@ fn lower_method(
             }
             let cls_ty = Ty::Instance(Box::new(class_name.to_string()));
             let mut p = vec![("cls".to_string(), cls_ty)];
+            // PEP 570 (#383): remaining posonlyargs follow `cls`, before
+            // ordinary `args`.
             p.extend(lower_arg_list(
-                rest,
+                posonly_rest,
+                params_is_public,
+                method_name,
+                type_param,
+                Some(class_name),
+                aliases,
+            )?);
+            p.extend(lower_arg_list(
+                args_rest,
                 params_is_public,
                 method_name,
                 type_param,
@@ -1431,11 +1465,20 @@ fn lower_method(
             p
         }
         _ => {
-            let [self_param, rest @ ..] = parameters.args.as_slice() else {
+            // PEP 570 (#383): `self` is the first parameter overall — it
+            // may be in `posonlyargs` (if `/` follows it) or in `args`.
+            if parameters.posonlyargs.is_empty() && parameters.args.is_empty() {
                 return Err(unsupported(
                     "a method must take `self` as its first parameter",
                     def.range,
                 ));
+            }
+            let (self_param, posonly_rest, args_rest) = if !parameters.posonlyargs.is_empty() {
+                let (self_p, rest_pos) = parameters.posonlyargs.split_first().unwrap();
+                (self_p, rest_pos, parameters.args.as_slice())
+            } else {
+                let (self_p, rest_args) = parameters.args.split_first().unwrap();
+                (self_p, &[][..], rest_args)
             };
             if self_param.parameter.name.as_str() != "self" {
                 return Err(unsupported(
@@ -1459,14 +1502,15 @@ fn lower_method(
             // parameters); a `@<name>.setter` setter takes exactly one
             // additional parameter (the value to assign). A regular method
             // has no arity constraint beyond the structural checks above.
+            let extra_count = posonly_rest.len() + args_rest.len();
             match kind {
-                MethodKind::PropertyGetter { .. } if !rest.is_empty() => {
+                MethodKind::PropertyGetter { .. } if extra_count > 0 => {
                     return Err(unsupported(
                         "a `@property` getter must take only `self` (no additional parameters)",
                         parameters.range,
                     ));
                 }
-                MethodKind::PropertySetter { .. } if rest.len() != 1 => {
+                MethodKind::PropertySetter { .. } if extra_count != 1 => {
                     return Err(unsupported(
                         "a `@<name>.setter` setter must take exactly one parameter besides `self`",
                         parameters.range,
@@ -1476,8 +1520,18 @@ fn lower_method(
             }
             let self_ty = Ty::Instance(Box::new(class_name.to_string()));
             let mut p = vec![("self".to_string(), self_ty)];
+            // PEP 570 (#383): remaining posonlyargs follow `self`, before
+            // ordinary `args`.
             p.extend(lower_arg_list(
-                rest,
+                posonly_rest,
+                params_is_public,
+                method_name,
+                type_param,
+                Some(class_name),
+                aliases,
+            )?);
+            p.extend(lower_arg_list(
+                args_rest,
                 params_is_public,
                 method_name,
                 type_param,
@@ -2304,8 +2358,128 @@ mod tests {
     }
 
     #[test]
-    fn a_positional_only_method_parameter_is_unsupported() {
-        assert_c0001("class C:\n    def __init__(self, x: int, /) -> None:\n        return\n");
+    fn a_positional_only_method_parameter_lowers_successfully() {
+        // PEP 570 (#383): positional-only parameters on methods are now
+        // lowered. `self` remains the first parameter; posonlyargs follow
+        // it, before ordinary `args`. The class also has a regular method
+        // `foo` to exercise the `find_map` None branch (items before the
+        // target function that don't match).
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def foo(self) -> None:\n        return\n    def __init__(self, x: int, /, y: int) -> None:\n        return\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+        // Find the __init__ function item and verify its params.
+        let init = hir
+            .items
+            .iter()
+            .filter_map(|item| {
+                if let HirItem::Function { name, params, .. } = item {
+                    if name == "C.__init__" {
+                        return Some(params.clone());
+                    }
+                }
+                None
+            })
+            .next()
+            .expect("C.__init__ must be lowered");
+        assert_eq!(
+            init,
+            vec![
+                ("self".to_string(), Ty::Instance(Box::new("C".to_string()))),
+                ("x".to_string(), Ty::Int),
+                ("y".to_string(), Ty::Int),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_positional_only_classmethod_parameter_lowers_successfully() {
+        // PEP 570 (#383): positional-only parameters on `@classmethod` are
+        // now lowered. `cls` remains the first parameter; posonlyargs follow
+        // it, before ordinary `args`. The mangled name uses a `.classmethod`
+        // suffix (#436).
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def m(cls, x: int, /, y: int) -> None:\n        return\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+        let m = hir
+            .items
+            .iter()
+            .filter_map(|item| {
+                if let HirItem::Function { name, params, .. } = item {
+                    if name == "C.m.classmethod" {
+                        return Some(params.clone());
+                    }
+                }
+                None
+            })
+            .next()
+            .expect("C.m.classmethod must be lowered");
+        assert_eq!(
+            m,
+            vec![
+                ("cls".to_string(), Ty::Instance(Box::new("C".to_string()))),
+                ("x".to_string(), Ty::Int),
+                ("y".to_string(), Ty::Int),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_positional_only_staticmethod_parameter_lowers_successfully() {
+        // PEP 570 (#383): positional-only parameters on `@staticmethod` are
+        // now lowered. For static methods, posonlyargs come first (no
+        // implicit `self`/`cls`), then ordinary `args`. The mangled name
+        // uses a `.static` suffix (#436).
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def m(x: int, /, y: int) -> None:\n        return\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+        let m = hir
+            .items
+            .iter()
+            .filter_map(|item| {
+                if let HirItem::Function { name, params, .. } = item {
+                    if name == "C.m.static" {
+                        return Some(params.clone());
+                    }
+                }
+                None
+            })
+            .next()
+            .expect("C.m.static must be lowered");
+        assert_eq!(
+            m,
+            vec![
+                ("x".to_string(), Ty::Int),
+                ("y".to_string(), Ty::Int),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_positional_only_method_parameter_with_a_default_is_rejected() {
+        // PEP 570 (#383): the `lower_arg_list` error path for posonlyargs
+        // on methods (default values are unsupported) must fire.
+        assert_c0001("class C:\n    def __init__(self, x: int = 0, /) -> None:\n        return\n");
+    }
+
+    #[test]
+    fn a_positional_only_classmethod_parameter_with_a_default_is_rejected() {
+        // PEP 570 (#383): the `lower_arg_list` error path for posonlyargs
+        // on classmethods (default values are unsupported) must fire.
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def m(cls, x: int = 0, /) -> None:\n        return\n",
+        );
+    }
+
+    #[test]
+    fn a_positional_only_staticmethod_parameter_with_a_default_is_rejected() {
+        // PEP 570 (#383): the `lower_arg_list` error path for posonlyargs
+        // on static methods (default values are unsupported) must fire.
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def m(x: int = 0, /) -> None:\n        return\n",
+        );
     }
 
     #[test]

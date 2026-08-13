@@ -196,10 +196,24 @@ pub(crate) fn lower_stmt(
                 .as_deref()
                 .map(|e| lower_expr(e, in_function, class_name))
                 .transpose()?;
+            // PEP 591 (#383): detect `Final[X]` at the AST level (before
+            // `annotation_to_ty` unwrapped it to `X`) so the type checker
+            // can track this binding as non-reassignable. `Final` is
+            // recognized as a bare name without requiring `from typing
+            // import Final`, matching the existing `TypeAlias`/`Any`
+            // precedent.
+            let is_final = matches!(
+                ann.annotation.as_ref(),
+                Expr::Subscript(sub) if matches!(
+                    sub.value.as_ref(),
+                    Expr::Name(base) if base.id.as_str() == "Final"
+                )
+            );
             HirStmt::AnnAssign {
                 target: name.id.as_str().to_string(),
                 annotation,
                 value,
+                is_final,
             }
         }
         Stmt::If(if_stmt) => HirStmt::If {

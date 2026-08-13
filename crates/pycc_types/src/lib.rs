@@ -105,6 +105,18 @@ pub struct Environment {
     /// resolve the next class in the MRO after this one (D-006 static
     /// dispatch, per the #433 ADR — no vtable, no runtime dispatch).
     current_class: Option<String>,
+    /// PEP 591 (#383): names declared `Final` (variable-level only, not
+    /// parameters or class attributes). Populated from `HirStmt::AnnAssign`'s
+    /// `is_final` flag in `check_stmt`/`check_stmt_in_function`'s `AnnAssign`
+    /// arms, *after* the initial `check_assignment` call so the initial
+    /// binding is not rejected. `check_assignment` consults this set before
+    /// its `lookup_any`/`declared` branches: if the target is in `finals`
+    /// and already has a runtime binding in `bindings`, this is a
+    /// reassignment and is rejected with `T0045`. Mirrors `declared`'s
+    /// `child_for_function` clearing behavior — a function-local `Final`
+    /// declaration for a name shadowing a module-level `Final` does not
+    /// inherit the module-level constraint.
+    finals: HashSet<String>,
 }
 
 impl Environment {
@@ -252,6 +264,7 @@ impl Environment {
         for name in local_names {
             child.bindings.remove(*name);
             child.declared.remove(*name);
+            child.finals.remove(*name);
         }
         // Issue #22: a function body may call any module-level function
         // regardless of source order -- Python's late binding evaluates a
@@ -1571,6 +1584,7 @@ fn collect_block_constraints(
                 target,
                 value: Some(value),
                 annotation,
+                is_final: _,
             } => {
                 // Issue #359 (Part 2 of #118): an unconditional annotated
                 // assignment upgrades a maybe-bound name back to definitely
@@ -2255,6 +2269,7 @@ fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
         classes: Arc::new(hir.class_defs.iter().cloned().collect()),
         own_type_param: None,
         current_class: None,
+        finals: HashSet::new(),
     })
 }
 
@@ -3536,6 +3551,23 @@ fn check_range_operand_in(
 }
 
 fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), Diagnostic> {
+    // PEP 591 (#383): reject reassignment of a `Final` name. The `finals`
+    // set is populated *after* the initial assignment's `check_assignment`
+    // call returns (in `check_stmt`/`check_stmt_in_function`'s `AnnAssign`
+    // arm), so the initial binding does not trigger this check — only a
+    // subsequent `Assign` or valued `AnnAssign` to the same name does. The
+    // `bindings.contains_key` guard distinguishes a reassignment (the name
+    // already has a runtime value) from the value-less `Final` declaration
+    // case (`x: Final[int]` then `x = 1`): a value-less declaration puts the
+    // name in `declared`, not `bindings`, so the first real assignment is
+    // the *initial* assignment and must be allowed.
+    if env.finals.contains(target) && env.bindings.contains_key(target) {
+        return Err(Diagnostic::error(
+            "T0045",
+            format!("cannot reassign `Final` name `{target}`"),
+            Span::new(0, 0),
+        ));
+    }
     // Every value assignment re-shadows a same-named `def` (D-110),
     // including a compatible-type reassignment of a name that already has a
     // representation record -- that branch below returns without calling
@@ -3761,6 +3793,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             target,
             annotation,
             value,
+            is_final,
         } => {
             if let Some(value) = value {
                 let inferred = infer_expr(env, value)?;
@@ -3797,6 +3830,20 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                 // treating the first later assignment as the initial,
                 // unconstrained binding.
                 env.declare(target.clone(), annotation.clone())?;
+            }
+            // PEP 591 (#383): record the name as `Final` *after*
+            // `check_assignment` returns, so the initial assignment's own
+            // `check_assignment` call does not yet see the name in `finals`
+            // and is not rejected. A subsequent plain `Assign` or valued
+            // `AnnAssign` to the same name will see it in both `finals` and
+            // `bindings`, and is rejected with `T0045`. A value-less `Final`
+            // declaration (`x: Final[int]` with no `= ...`) also inserts into
+            // `finals` — the first real assignment to it is allowed (the name
+            // is in `declared`, not `bindings`, so `check_assignment`'s
+            // `finals` check does not fire), but a second assignment is
+            // rejected.
+            if *is_final {
+                env.finals.insert(target.clone());
             }
             Ok(())
         }
@@ -4508,6 +4555,7 @@ fn check_stmt_in_function(
             target,
             annotation,
             value,
+            is_final,
         } => {
             if let Some(value) = value {
                 let inferred = infer_expr_in(env, local_names, value)?;
@@ -4533,6 +4581,13 @@ fn check_stmt_in_function(
                 // binding it, so a premature read still raises T0021 and a
                 // later assignment is checked against the declaration.
                 env.declare(target.clone(), annotation.clone())?;
+            }
+            // PEP 591 (#383): see the module-scope `check_stmt` arm's
+            // comment — record the name as `Final` *after*
+            // `check_assignment` returns so the initial assignment is not
+            // rejected, only a subsequent reassignment.
+            if *is_final {
+                env.finals.insert(target.clone());
             }
             Ok(())
         }
@@ -5007,10 +5062,12 @@ fn substitute_stmt(stmt: &HirStmt, param_name: &str, concrete: &Ty) -> HirStmt {
             target,
             annotation,
             value,
+            is_final,
         } => HirStmt::AnnAssign {
             target: target.clone(),
             annotation: substitute_ty(annotation, param_name, concrete),
             value: value.clone(),
+            is_final: *is_final,
         },
         HirStmt::If { test, body, orelse } => HirStmt::If {
             test: test.clone(),
@@ -5071,6 +5128,7 @@ fn substitute_stmt_with_class(
             target,
             annotation,
             value,
+            is_final,
         } => HirStmt::AnnAssign {
             target: target.clone(),
             annotation: substitute_ty_with_class(
@@ -5081,6 +5139,7 @@ fn substitute_stmt_with_class(
                 mangled_class,
             ),
             value: value.clone(),
+            is_final: *is_final,
         },
         HirStmt::If { test, body, orelse } => HirStmt::If {
             test: test.clone(),
@@ -5443,6 +5502,7 @@ fn rewrite_generic_calls_in_stmt(
             target,
             annotation,
             value,
+            is_final: _,
         } => {
             if let Some(value) = value {
                 rewrite_generic_calls_in_expr(env, local_names, value, instantiations, seen)?;
@@ -7535,6 +7595,7 @@ mod tests {
             local_names: &[],
         };
         let body = vec![HirStmt::AnnAssign {
+            is_final: false,
             target: "y".to_string(),
             annotation: Ty::Int,
             value: Some(HirExpr::IntLiteral(5)),
@@ -7574,6 +7635,7 @@ mod tests {
             local_names: &["y"],
         };
         let body = vec![HirStmt::AnnAssign {
+            is_final: false,
             target: "y".to_string(),
             annotation: Ty::Str,
             value: Some(HirExpr::StringLiteral("again".to_string())),
@@ -7612,6 +7674,7 @@ mod tests {
             local_names: &[],
         };
         let body = vec![HirStmt::AnnAssign {
+            is_final: false,
             target: "y".to_string(),
             annotation: Ty::Int,
             value: Some(HirExpr::Name("unresolved_global".to_string())),
@@ -7645,6 +7708,7 @@ mod tests {
             local_names: &["y"],
         };
         let body = vec![HirStmt::AnnAssign {
+            is_final: false,
             target: "y".to_string(),
             annotation: Ty::Int,
             value: None,
@@ -7682,6 +7746,7 @@ mod tests {
             local_names: &["z"],
         };
         let body = vec![HirStmt::AnnAssign {
+            is_final: false,
             target: "y".to_string(),
             annotation: Ty::Int,
             value: Some(HirExpr::Name("z".to_string())),
@@ -9200,6 +9265,7 @@ mod tests {
                 params: vec![],
                 return_ty: Ty::Infer,
                 body: vec![HirStmt::AnnAssign {
+                    is_final: false,
                     target: "x".to_string(),
                     annotation: Ty::Int,
                     value: Some(HirExpr::IntLiteral(1)),
@@ -9223,6 +9289,7 @@ mod tests {
                     return_ty: Ty::Infer,
                     body: vec![
                         HirStmt::AnnAssign {
+                            is_final: false,
                             target: "y".to_string(),
                             annotation: Ty::Int,
                             value: Some(HirExpr::Name("x".to_string())),
@@ -9259,6 +9326,7 @@ mod tests {
                     return_ty: Ty::Infer,
                     body: vec![
                         HirStmt::AnnAssign {
+                            is_final: false,
                             target: "y".to_string(),
                             annotation: Ty::Int,
                             value: Some(HirExpr::Name("x".to_string())),
@@ -9293,6 +9361,7 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![
                     HirStmt::AnnAssign {
+                        is_final: false,
                         target: "y".to_string(),
                         annotation: Ty::Int,
                         value: Some(HirExpr::Name("x".to_string())),
@@ -9322,6 +9391,7 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![
                     HirStmt::AnnAssign {
+                        is_final: false,
                         target: "y".to_string(),
                         annotation: Ty::List(Box::new(Ty::Int)),
                         value: Some(HirExpr::Name("x".to_string())),
@@ -9348,6 +9418,7 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![
                     HirStmt::AnnAssign {
+                        is_final: false,
                         target: "y".to_string(),
                         annotation: Ty::List(Box::new(Ty::Int)),
                         value: Some(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
@@ -9384,6 +9455,7 @@ mod tests {
                     return_ty: Ty::Infer,
                     body: vec![
                         HirStmt::AnnAssign {
+                            is_final: false,
                             target: "y".to_string(),
                             annotation: Ty::List(Box::new(Ty::Int)),
                             value: Some(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
@@ -9419,6 +9491,7 @@ mod tests {
                     return_ty: Ty::Infer,
                     body: vec![
                         HirStmt::AnnAssign {
+                            is_final: false,
                             target: "y".to_string(),
                             annotation: Ty::List(Box::new(Ty::Int)),
                             value: Some(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
@@ -9460,6 +9533,7 @@ mod tests {
                     return_ty: Ty::Infer,
                     body: vec![
                         HirStmt::AnnAssign {
+                            is_final: false,
                             target: "y".to_string(),
                             annotation: Ty::List(Box::new(Ty::Int)),
                             value: Some(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
@@ -9494,6 +9568,7 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![
                     HirStmt::AnnAssign {
+                        is_final: false,
                         target: "y".to_string(),
                         annotation: Ty::Int,
                         value: Some(HirExpr::BinOp {
@@ -9526,6 +9601,7 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![
                     HirStmt::AnnAssign {
+                        is_final: false,
                         target: "y".to_string(),
                         annotation: Ty::Int,
                         value: Some(HirExpr::BinOp {
@@ -9560,6 +9636,7 @@ mod tests {
                     return_ty: Ty::Infer,
                     body: vec![
                         HirStmt::AnnAssign {
+                            is_final: false,
                             target: "y".to_string(),
                             annotation: Ty::Int,
                             value: Some(HirExpr::Name("x".to_string())),
@@ -9597,11 +9674,13 @@ mod tests {
     fn multiple_annotation_bounds_choose_bool_in_either_declaration_order() {
         for bool_first in [false, true] {
             let int_assignment = HirStmt::AnnAssign {
+                is_final: false,
                 target: "a".to_string(),
                 annotation: Ty::Int,
                 value: Some(HirExpr::Name("x".to_string())),
             };
             let bool_assignment = HirStmt::AnnAssign {
+                is_final: false,
                 target: "b".to_string(),
                 annotation: Ty::Bool,
                 value: Some(HirExpr::Name("x".to_string())),
@@ -9638,11 +9717,13 @@ mod tests {
         let mut messages = Vec::new();
         for string_first in [false, true] {
             let int_assignment = HirStmt::AnnAssign {
+                is_final: false,
                 target: "a".to_string(),
                 annotation: Ty::Int,
                 value: Some(HirExpr::Name("x".to_string())),
             };
             let string_assignment = HirStmt::AnnAssign {
+                is_final: false,
                 target: "b".to_string(),
                 annotation: Ty::Str,
                 value: Some(HirExpr::Name("x".to_string())),
@@ -9681,6 +9762,7 @@ mod tests {
                     return_ty: Ty::Infer,
                     body: vec![
                         HirStmt::AnnAssign {
+                            is_final: false,
                             target: "y".to_string(),
                             annotation: Ty::Bool,
                             value: Some(HirExpr::Name("x".to_string())),
@@ -9715,6 +9797,7 @@ mod tests {
                     return_ty: Ty::Infer,
                     body: vec![
                         HirStmt::AnnAssign {
+                            is_final: false,
                             target: "y".to_string(),
                             annotation: Ty::Int,
                             value: Some(HirExpr::Subscript {
@@ -9752,6 +9835,7 @@ mod tests {
                     return_ty: Ty::Infer,
                     body: vec![
                         HirStmt::AnnAssign {
+                            is_final: false,
                             target: "y".to_string(),
                             annotation: Ty::Bool,
                             value: Some(HirExpr::Subscript {
@@ -10128,6 +10212,7 @@ mod tests {
         check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: Some(HirExpr::BoolLiteral(true)),
@@ -10143,6 +10228,7 @@ mod tests {
         let err = check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: Some(HirExpr::StringLiteral("nope".to_string())),
@@ -10163,6 +10249,7 @@ mod tests {
         let err = check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: Some(HirExpr::Name("undefined".to_string())),
@@ -10183,6 +10270,7 @@ mod tests {
         check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10200,6 +10288,7 @@ mod tests {
         check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10226,6 +10315,7 @@ mod tests {
         check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10257,6 +10347,7 @@ mod tests {
                     return_ty: Ty::Int,
                     body: vec![
                         HirStmt::AnnAssign {
+                            is_final: false,
                             target: "x".to_string(),
                             annotation: Ty::Int,
                             value: None,
@@ -10290,6 +10381,7 @@ mod tests {
         check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10299,6 +10391,7 @@ mod tests {
         check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10324,6 +10417,7 @@ mod tests {
         check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10333,6 +10427,7 @@ mod tests {
         let err = check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Str,
                 value: None,
@@ -10353,6 +10448,7 @@ mod tests {
         check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10362,6 +10458,7 @@ mod tests {
         check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Bool,
                 value: Some(HirExpr::BoolLiteral(true)),
@@ -10380,6 +10477,7 @@ mod tests {
         check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10389,6 +10487,7 @@ mod tests {
         let err = check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Str,
                 value: Some(HirExpr::StringLiteral("hello".to_string())),
@@ -10416,6 +10515,7 @@ mod tests {
         check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10432,6 +10532,7 @@ mod tests {
             &mut env,
             &["x"],
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10459,6 +10560,7 @@ mod tests {
             &mut env,
             &["x"],
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10487,6 +10589,7 @@ mod tests {
             &mut env,
             &["x"],
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10498,6 +10601,7 @@ mod tests {
             &mut env,
             &["x"],
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Str,
                 value: None,
@@ -10518,6 +10622,7 @@ mod tests {
         check_stmt(
             &mut module_env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10548,6 +10653,7 @@ mod tests {
             &mut env,
             &["x"],
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: Some(HirExpr::BoolLiteral(true)),
@@ -10565,6 +10671,7 @@ mod tests {
             &mut env,
             &["x"],
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: Some(HirExpr::StringLiteral("nope".to_string())),
@@ -10588,6 +10695,7 @@ mod tests {
             &mut env,
             &["x"],
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "y".to_string(),
                 annotation: Ty::Int,
                 value: Some(HirExpr::Name("x".to_string())),
@@ -10606,6 +10714,7 @@ mod tests {
             &mut env,
             &["x"],
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -10631,6 +10740,7 @@ mod tests {
                     return_ty: Ty::None,
                     body: vec![
                         HirStmt::AnnAssign {
+                            is_final: false,
                             target: "x".to_string(),
                             annotation: Ty::Int,
                             value: None,
@@ -10680,6 +10790,7 @@ mod tests {
         let err = check_stmt(
             &mut env,
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Str,
                 value: Some(HirExpr::StringLiteral("s".to_string())),
@@ -10707,6 +10818,7 @@ mod tests {
             &mut env,
             &["x"],
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Str,
                 value: Some(HirExpr::StringLiteral("s".to_string())),
@@ -16796,11 +16908,13 @@ mod tests {
     fn local_name_collection_deduplicates_annotated_assignment_targets() {
         let body = vec![
             HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: Some(HirExpr::IntLiteral(1)),
             },
             HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -16813,6 +16927,7 @@ mod tests {
     #[test]
     fn contains_return_treats_an_annotated_assignment_as_not_a_return() {
         let body = vec![HirStmt::AnnAssign {
+            is_final: false,
             target: "x".to_string(),
             annotation: Ty::Int,
             value: Some(HirExpr::IntLiteral(1)),
@@ -16823,6 +16938,7 @@ mod tests {
     #[test]
     fn block_always_returns_treats_an_annotated_assignment_as_not_a_return() {
         let body = vec![HirStmt::AnnAssign {
+            is_final: false,
             target: "x".to_string(),
             annotation: Ty::Int,
             value: None,
@@ -20910,6 +21026,7 @@ mod tests {
             body: vec![HirStmt::If {
                 test: HirExpr::BoolLiteral(true),
                 body: vec![HirStmt::AnnAssign {
+                    is_final: false,
                     target: "y".to_string(),
                     annotation: param,
                     value: None,
@@ -20927,6 +21044,7 @@ mod tests {
                 body: vec![HirStmt::If {
                     test: HirExpr::BoolLiteral(true),
                     body: vec![HirStmt::AnnAssign {
+                        is_final: false,
                         target: "y".to_string(),
                         annotation: Ty::Bool,
                         value: None,
@@ -20946,6 +21064,7 @@ mod tests {
         let param = Ty::Param(Box::new("T".to_string()));
         let nested = |marker: &str| {
             vec![HirStmt::AnnAssign {
+                is_final: false,
                 target: marker.to_string(),
                 annotation: Ty::Param(Box::new("T".to_string())),
                 value: None,
@@ -20977,6 +21096,7 @@ mod tests {
         let instantiation = instantiate_generic_call(&func, &[Ty::Int]).unwrap();
         let expected_nested = |marker: &str| {
             vec![HirStmt::AnnAssign {
+                is_final: false,
                 target: marker.to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -21496,6 +21616,7 @@ mod tests {
             body: vec![HirStmt::Return(Some(HirExpr::Name("g".to_string())))],
         };
         let global_assign = HirItem::TopLevelStmt(HirStmt::AnnAssign {
+            is_final: false,
             target: "g".to_string(),
             annotation: Ty::Int,
             value: Some(HirExpr::IntLiteral(5)),
@@ -22267,11 +22388,13 @@ mod tests {
             return_ty: Ty::None,
             body: vec![
                 HirStmt::AnnAssign {
+                    is_final: false,
                     target: "y".to_string(),
                     annotation: Ty::Int,
                     value: None,
                 },
                 HirStmt::AnnAssign {
+                    is_final: false,
                     target: "z".to_string(),
                     annotation: Ty::Int,
                     value: Some(HirExpr::Call {
@@ -22643,6 +22766,7 @@ mod tests {
         }]);
         // `AnnAssign` (`Some(value)`).
         assert_monomorphize_propagates_error(vec![HirStmt::AnnAssign {
+            is_final: false,
             target: "y".to_string(),
             annotation: Ty::Int,
             value: Some(bad_generic_call()),
@@ -22953,6 +23077,7 @@ mod tests {
                 value: self_call(),
             },
             HirStmt::AnnAssign {
+                is_final: false,
                 target: "t".to_string(),
                 annotation: Ty::Int,
                 value: Some(self_call()),
@@ -23201,6 +23326,7 @@ mod tests {
         ];
         let mut body: Vec<HirStmt> = leaves.into_iter().map(HirStmt::ExprStmt).collect();
         body.push(HirStmt::AnnAssign {
+            is_final: false,
             target: "t".to_string(),
             annotation: Ty::Int,
             value: None,
@@ -25103,6 +25229,7 @@ mod tests {
     #[test]
     fn substitute_stmt_with_class_substitutes_ann_assign_annotation() {
         let stmt = HirStmt::AnnAssign {
+            is_final: false,
             target: "y".to_string(),
             annotation: Ty::Param(Box::new("T".to_string())),
             value: None,
@@ -25111,6 +25238,7 @@ mod tests {
         assert_eq!(
             result,
             HirStmt::AnnAssign {
+                is_final: false,
                 target: "y".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -25123,11 +25251,13 @@ mod tests {
         let stmt = HirStmt::If {
             test: HirExpr::BoolLiteral(true),
             body: vec![HirStmt::AnnAssign {
+                is_final: false,
                 target: "a".to_string(),
                 annotation: Ty::Param(Box::new("T".to_string())),
                 value: None,
             }],
             orelse: vec![HirStmt::AnnAssign {
+                is_final: false,
                 target: "b".to_string(),
                 annotation: Ty::Param(Box::new("T".to_string())),
                 value: None,
@@ -25139,11 +25269,13 @@ mod tests {
             HirStmt::If {
                 test: HirExpr::BoolLiteral(true),
                 body: vec![HirStmt::AnnAssign {
+                    is_final: false,
                     target: "a".to_string(),
                     annotation: Ty::Int,
                     value: None,
                 }],
                 orelse: vec![HirStmt::AnnAssign {
+                    is_final: false,
                     target: "b".to_string(),
                     annotation: Ty::Int,
                     value: None,
@@ -25157,6 +25289,7 @@ mod tests {
         let stmt = HirStmt::While {
             test: HirExpr::BoolLiteral(true),
             body: vec![HirStmt::AnnAssign {
+                is_final: false,
                 target: "w".to_string(),
                 annotation: Ty::Param(Box::new("T".to_string())),
                 value: None,
@@ -25168,6 +25301,7 @@ mod tests {
             HirStmt::While {
                 test: HirExpr::BoolLiteral(true),
                 body: vec![HirStmt::AnnAssign {
+                    is_final: false,
                     target: "w".to_string(),
                     annotation: Ty::Int,
                     value: None,
@@ -25184,6 +25318,7 @@ mod tests {
             stop: HirExpr::IntLiteral(1),
             step: HirExpr::IntLiteral(1),
             body: vec![HirStmt::AnnAssign {
+                is_final: false,
                 target: "r".to_string(),
                 annotation: Ty::Param(Box::new("T".to_string())),
                 value: None,
@@ -25198,6 +25333,7 @@ mod tests {
                 stop: HirExpr::IntLiteral(1),
                 step: HirExpr::IntLiteral(1),
                 body: vec![HirStmt::AnnAssign {
+                    is_final: false,
                     target: "r".to_string(),
                     annotation: Ty::Int,
                     value: None,
@@ -25212,6 +25348,7 @@ mod tests {
             var: "e".to_string(),
             list: "xs".to_string(),
             body: vec![HirStmt::AnnAssign {
+                is_final: false,
                 target: "l".to_string(),
                 annotation: Ty::Param(Box::new("T".to_string())),
                 value: None,
@@ -25224,6 +25361,7 @@ mod tests {
                 var: "e".to_string(),
                 list: "xs".to_string(),
                 body: vec![HirStmt::AnnAssign {
+                    is_final: false,
                     target: "l".to_string(),
                     annotation: Ty::Int,
                     value: None,
@@ -25423,6 +25561,7 @@ mod tests {
         // AnnAssign with value
         collect_generic_class_instantiations_from_stmt(
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "y".to_string(),
                 annotation: Ty::Int,
                 value: Some(gci.clone()),
@@ -25432,6 +25571,7 @@ mod tests {
         // AnnAssign without value (None arm)
         collect_generic_class_instantiations_from_stmt(
             &HirStmt::AnnAssign {
+                is_final: false,
                 target: "z".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -25687,6 +25827,7 @@ mod tests {
             }],
         };
         let nested_ann = |marker: &str| HirStmt::AnnAssign {
+            is_final: false,
             target: marker.to_string(),
             annotation: Ty::Param(Box::new("T".to_string())),
             value: None,
@@ -27453,5 +27594,226 @@ mod tests {
             result.is_err(),
             "enum loop in function with incompatible loop var type should be rejected"
         );
+    }
+
+    // -- PEP 591 (#383): Final[X] reassignment diagnostic T0045 ------------
+
+    #[test]
+    fn final_annotated_name_with_initial_value_succeeds() {
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::IntLiteral(1)),
+                is_final: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn final_annotated_name_reassignment_is_t0045() {
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::IntLiteral(1)),
+                is_final: true,
+            },
+        )
+        .unwrap();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(2),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0045");
+    }
+
+    #[test]
+    fn final_value_less_declaration_then_first_assignment_succeeds() {
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+                is_final: true,
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn final_value_less_declaration_then_two_assignments_is_t0045() {
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+                is_final: true,
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(2),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0045");
+    }
+
+    #[test]
+    fn final_reassignment_in_function_scope_is_t0045() {
+        let mut env = Environment::new();
+        check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::IntLiteral(1)),
+                is_final: true,
+            },
+            Ty::None,
+        )
+        .unwrap();
+        let err = check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(2),
+            },
+            Ty::None,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0045");
+    }
+
+    #[test]
+    fn final_reassignment_via_valued_annassign_is_t0045() {
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::IntLiteral(1)),
+                is_final: true,
+            },
+        )
+        .unwrap();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::IntLiteral(2)),
+                is_final: true,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0045");
+    }
+
+    #[test]
+    fn final_does_not_block_a_non_final_reassignment_of_a_different_name() {
+        // A `Final` declaration on `x` must not affect a different name `y`.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::IntLiteral(1)),
+                is_final: true,
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::IntLiteral(2),
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("y"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn child_for_function_clears_a_final_entry_for_a_shadowed_local_name() {
+        // A module-level `Final` declaration for `x` must not leak into an
+        // unrelated function's own local `x` — mirrors the existing
+        // `bindings`/`declared`-clearing behavior.
+        let mut module_env = Environment::new();
+        check_stmt(
+            &mut module_env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::IntLiteral(1)),
+                is_final: true,
+            },
+        )
+        .unwrap();
+        let mut fn_env = module_env.child_for_function(&["x"]);
+        // The function's own body assigns to its local `x` — if the
+        // module-level `finals` entry leaked through, this would fail with
+        // T0045.
+        check_stmt_in_function(
+            &mut fn_env,
+            &["x"],
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(42),
+            },
+            Ty::None,
+        )
+        .unwrap();
+        // A second assignment in the function body should also succeed
+        // (the function-local `x` is not `Final`).
+        check_stmt_in_function(
+            &mut fn_env,
+            &["x"],
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(99),
+            },
+            Ty::None,
+        )
+        .unwrap();
     }
 }
