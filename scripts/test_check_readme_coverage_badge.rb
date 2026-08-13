@@ -158,8 +158,8 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
       %r{actions/workflows/ci\.yml/badge\.svg},
       "actions/workflows/pages.yml/badge.svg"
     ).sub(
-      %r{actions/workflows/ci\.yml\)\]},
-      "actions/workflows/pages.yml)]"
+      %r{actions/workflows/ci\.yml\)},
+      "actions/workflows/pages.yml)"
     )
     status, = run_checker(text, live_ci)
     refute_equal 0, status, "accepted CI badge referencing pages.yml instead of ci.yml"
@@ -227,5 +227,48 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
   def test_live_ci_contains_coverage_badge_validator_tests
     assert_match(/test_check_readme_coverage_badge\.rb/, live_ci,
                  "ci.yml must run the README coverage badge validator tests")
+  end
+
+  # --- Negative: coverage step with continue-on-error (issue #211) ---
+
+  def test_rejects_coverage_step_with_continue_on_error
+    text = live_ci.sub(
+      /(      - name: Hard coverage gate[^\n]*\n)/,
+      "\\1        continue-on-error: true\n"
+    )
+    status, = run_checker(live_readme, text)
+    refute_equal 0, status, "accepted coverage step with continue-on-error: true"
+  end
+
+  # --- Negative: CI badge link target mismatch (issue #211) ---
+
+  def test_rejects_ci_badge_link_target_wrong_repo
+    text = live_readme.sub(
+      %r{\)\]\(https://github\.com/rotnov/pycc/actions/workflows/ci\.yml\)},
+      ")](https://github.com/evil/repo/actions/workflows/ci.yml)"
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted CI badge with link target pointing to wrong repo"
+  end
+
+  def test_rejects_ci_badge_link_target_wrong_workflow
+    text = live_readme.sub(
+      %r{\)\]\(https://github\.com/rotnov/pycc/actions/workflows/ci\.yml\)},
+      ")](https://github.com/rotnov/pycc/actions/workflows/pages.yml)"
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted CI badge with link target pointing to wrong workflow"
+  end
+
+  # --- Negative: duplicate CI badge (issue #211) ---
+
+  def test_rejects_duplicate_ci_badge
+    ci_badge_line = live_readme.match(/\[!\[CI\]\([^)]+\)\]\([^)]+\)\n/).to_s
+    text = live_readme.sub(
+      /\[!\[CI\]\([^)]+\)\]\([^)]+\)\n/,
+      ci_badge_line + "[![CI](https://github.com/wrong/repo/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/wrong/repo/actions/workflows/ci.yml)\n"
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted README with duplicate CI badge"
   end
 end

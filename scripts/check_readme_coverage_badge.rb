@@ -44,7 +44,7 @@ CI_BADGE_PATTERN = /
   \[!\[CI\]\(
     (https:\/\/github\.com\/(?<repo>[^\/]+\/[^\/]+)\/actions\/workflows\/(?<workflow>[^\/?]+)\/badge\.svg\?branch=(?<branch>[^)\s]+))
   \)\]\(
-    https:\/\/github\.com\/[^\/]+\/[^\/]+\/actions\/workflows\/[^\/]+
+    https:\/\/github\.com\/(?<link_repo>[^\/]+\/[^\/]+)\/actions\/workflows\/(?<link_workflow>[^\/?]+)
   \)
 /x.freeze
 
@@ -67,19 +67,6 @@ end
 def yaml_scalar(node, context)
   raise CoverageBadgeError, "#{context} must be a scalar" unless node.is_a?(Psych::Nodes::Scalar)
   node.value
-end
-
-def yaml_value(node, context)
-  case node
-  when Psych::Nodes::Scalar
-    node.value.strip
-  when Psych::Nodes::Mapping
-    yaml_mapping(node, context).transform_values { |v| yaml_value(v, context) }
-  when Psych::Nodes::Sequence
-    node.children.map { |v| yaml_value(v, context) }
-  else
-    raise CoverageBadgeError, "#{context} contains an unsupported YAML value"
-  end
 end
 
 def check!
@@ -148,29 +135,51 @@ def check!
   end
 
   # --- Verify the CI badge ---
-  ci_badge_match = readme_text.match(CI_BADGE_PATTERN)
-  unless ci_badge_match
+  ci_badge_matches = readme_text.scan(CI_BADGE_PATTERN)
+  if ci_badge_matches.empty?
     raise CoverageBadgeError,
           "README.md must contain a CI badge linking to the ci.yml workflow"
   end
 
-  ci_badge_repo = ci_badge_match[:repo]
+  if ci_badge_matches.length > 1
+    raise CoverageBadgeError,
+          "README.md must contain exactly one CI badge, found #{ci_badge_matches.length}"
+  end
+
+  ci_badge_match = ci_badge_matches.first
+  ci_badge_repo = ci_badge_match[0]
+  ci_badge_workflow = ci_badge_match[1]
+  ci_badge_branch = ci_badge_match[2]
+  ci_badge_link_repo = ci_badge_match[3]
+  ci_badge_link_workflow = ci_badge_match[4]
+
   unless ci_badge_repo == "rotnov/pycc"
     raise CoverageBadgeError,
           "README CI badge must link to rotnov/pycc, found #{ci_badge_repo.inspect}"
   end
 
-  ci_badge_workflow = ci_badge_match[:workflow]
   unless ci_badge_workflow == "ci.yml"
     raise CoverageBadgeError,
           "README CI badge must reference actions/workflows/ci.yml, " \
           "found #{ci_badge_workflow.inspect}"
   end
 
-  ci_badge_branch = ci_badge_match[:branch]
   unless ci_badge_branch == "main"
     raise CoverageBadgeError,
           "README CI badge must use branch=main, found #{ci_badge_branch.inspect}"
+  end
+
+  # The clickable link target must match the badge image source.
+  unless ci_badge_link_repo == ci_badge_repo
+    raise CoverageBadgeError,
+          "README CI badge link target repo (#{ci_badge_link_repo.inspect}) " \
+          "does not match badge image repo (#{ci_badge_repo.inspect})"
+  end
+
+  unless ci_badge_link_workflow == ci_badge_workflow
+    raise CoverageBadgeError,
+          "README CI badge link target workflow (#{ci_badge_link_workflow.inspect}) " \
+          "does not match badge image workflow (#{ci_badge_workflow.inspect})"
   end
 
   # --- Verify the coverage step cannot be skipped ---

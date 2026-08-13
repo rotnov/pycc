@@ -223,10 +223,9 @@ D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256 =
 # (hermetic Lighthouse 12.8.2 accessibility gate + ARIA conformance +
 # reduced-motion evaluator) and its ci-gate.needs / fail-step wiring.
 # Coexists with D100/D112/D114/D229 until a later round retires them,
-# mirroring this array's own coexist-then-retire precedent.  Not yet
-# active: this array entry only authorizes the shape for a future ci.yml
-# activation (Merge 2 of #199) -- the live ci.yml is untouched by this
-# staging round.
+# mirroring this array's own coexist-then-retire precedent. Now active:
+# the live ci.yml contains the D199 shape and the digest below matches
+# the live file.
 D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256 =
   "a22d8845e4f755bfc50e75e0bb6cc3ae285da7c9aea35ced95bf7a83c39c4b46"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
