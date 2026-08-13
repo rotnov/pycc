@@ -102,6 +102,49 @@ Evidence pages carry a `WebPage` and two-level `BreadcrumbList`; each WebPage
 references the landing-page project entity instead of duplicating it.
 Structured data must match visible content and current status.
 
+### SoftwareSourceCode entity model
+
+The landing page's `SoftwareSourceCode` entity (`@id`:
+`https://rotnov.github.io/pycc/#project`) is the machine-readable projection of
+the project's authoritative facts. `scripts/check-site.sh` binds every material
+field to a visible or repository-authoritative value so the JSON-LD cannot
+silently claim a different project identity, license, language, runtime
+semantics, or maturity:
+
+- **`name`** must be `pycc`, matching the visible brand and page title.
+- **`alternateName`** must be `pycc Python compiler`, a canonical
+  human-readable alias that identifies the product category without
+  misclassifying it as an AI or ML compiler.
+- **`url`** must be the canonical landing-page URL
+  (`https://rotnov.github.io/pycc/`), not the repository URL or any other
+  origin.
+- **`description`** must match the product-first pre-alpha source description
+  that puts the AOT compiler for typed Python and current maturity first, with
+  AI-created/human-managed provenance second.
+- **`codeRepository`** must link to `https://github.com/rotnov/pycc`.
+- **`license`** must be the MIT license URL
+  (`https://opensource.org/license/mit`), matching the root `LICENSE` file.
+  A non-MIT license (e.g. GPL) is rejected.
+- **`programmingLanguage`** must be `Rust`, matching the Cargo workspace that
+  implements the compiler. A false value (e.g. `Python`) is rejected.
+- **`runtimePlatform`** must not be present. schema.org defines
+  `runtimePlatform` as the runtime or interpreter dependency for the software
+  being described; pycc's native and pure builds emit standalone executables
+  with no runtime platform, and LLVM is the compiler backend, not a runtime
+  platform for generated programs. Setting `runtimePlatform: "LLVM"` would
+  misleadingly imply that pycc's output runs on an LLVM platform.
+- **`keywords`** must be a non-empty array that includes compiler-category
+  terms (`python`, `compiler`) and must not describe pycc as an AI or ML
+  compiler (`ai compiler`, `machine learning`). AI-authorship terms
+  (`AI-created software`, `AI agents`, `autonomous software development`)
+  describe the development model, not the product intent.
+- The entity must not claim production readiness (`production-ready`,
+  `production ready`, `stable release`, `ga`), matching the visible pre-alpha
+  status.
+
+Each binding has a negative mutation test in `scripts/test-check-site.sh` that
+corrupts the field and verifies the validator rejects the change.
+
 Visible page copy must also state that AI agents create the entire project, the
 human role is management, and no project code is handwritten by a human. This
 development-model claim is part of the public project identity, not hidden

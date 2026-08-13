@@ -2130,6 +2130,44 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   exit 1
 fi
 
+# Mutation: change alternateName to something false.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"alternateName": "pycc Python compiler"',
+    '"alternateName": "pycc AI compiler"',
+    1
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted alternateName=pycc AI compiler (issue #203)" >&2
+  exit 1
+fi
+
+# Mutation: change SoftwareSourceCode url to a non-canonical URL.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"url": "https://rotnov.github.io/pycc/",\n            "mainEntityOfPage"',
+    '"url": "https://github.com/rotnov/pycc",\n            "mainEntityOfPage"',
+    1
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted non-canonical SoftwareSourceCode url (issue #203)" >&2
+  exit 1
+fi
+
 # Mutation: add production-ready claim to description.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 python3 - "$fixture_root/site/index.html" <<'PY'
