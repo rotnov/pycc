@@ -108,11 +108,6 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
 
   def test_rejects_badge_not_linking_to_testing_md
     text = live_readme.sub(
-      /\]\(\.\/docs\/TESTING\.md\)/,
-      "](./docs/TESTING.md)"
-    )
-    # This sub is a no-op; do a real mutation:
-    text = live_readme.sub(
       /\[!\[test coverage: \d+%\]\([^)]+\)\]\(\.\/docs\/TESTING\.md\)/,
       "[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/ROADMAP.md)"
     )
@@ -140,5 +135,123 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
     )
     status, = run_checker(live_readme, text)
     refute_equal 0, status, "accepted CI with lines=100 but regions=95"
+  end
+
+  # --- Negative: CI badge mutations (issue #211) ---
+
+  def test_rejects_ci_badge_with_wrong_branch
+    text = live_readme.sub(
+      /badge\.svg\?branch=main\)\]\(/,
+      "badge.svg?branch=dev)]("
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted CI badge with branch=dev instead of branch=main"
+  end
+
+  def test_rejects_ci_badge_with_wrong_workflow
+    text = live_readme.sub(
+      %r{actions/workflows/ci\.yml/badge\.svg},
+      "actions/workflows/pages.yml/badge.svg"
+    ).sub(
+      %r{actions/workflows/ci\.yml\)},
+      "actions/workflows/pages.yml)"
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted CI badge referencing pages.yml instead of ci.yml"
+  end
+
+  def test_rejects_ci_badge_with_wrong_repository
+    text = live_readme.sub(
+      %r{github\.com/rotnov/pycc/actions},
+      "github.com/wrong/repo/actions"
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted CI badge linking to wrong repository"
+  end
+
+  def test_rejects_missing_ci_badge
+    text = live_readme.sub(
+      /\[!\[CI\]\([^)]+\)\]\([^)]+\)\n/,
+      ""
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted README without CI badge"
+  end
+
+  # --- Negative: duplicate coverage badge (issue #211) ---
+
+  def test_rejects_duplicate_coverage_badge
+    text = live_readme.sub(
+      /\[!\[test coverage: \d+%\]\([^)]+\)\]\(\.\/docs\/TESTING\.md\)\n/,
+      "[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/TESTING.md)\n" \
+      "[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/TESTING.md)\n"
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted README with duplicate coverage badge"
+  end
+
+  # --- Negative: coverage step can be skipped (issue #211) ---
+
+  def test_rejects_coverage_step_with_if_condition
+    text = live_ci.sub(
+      /(      - name: Hard coverage gate[^\n]*\n)/,
+      "\\1        if: failure()\n"
+    )
+    status, = run_checker(live_readme, text)
+    refute_equal 0, status, "accepted coverage step with if: failure() that could skip it"
+  end
+
+  # --- Negative: ci-gate does not depend on build-test-coverage (issue #211) ---
+
+  def test_rejects_ci_gate_without_build_test_coverage_dependency
+    text = live_ci.sub(
+      /      - build-test-coverage\n/,
+      ""
+    )
+    status, = run_checker(live_readme, text)
+    refute_equal 0, status, "accepted ci-gate without build-test-coverage dependency"
+  end
+
+  # --- Negative: coverage step with continue-on-error (issue #211) ---
+
+  def test_rejects_coverage_step_with_continue_on_error
+    text = live_ci.sub(
+      /(      - name: Hard coverage gate[^\n]*\n)/,
+      "\\1        continue-on-error: true\n"
+    )
+    status, = run_checker(live_readme, text)
+    refute_equal 0, status, "accepted coverage step with continue-on-error: true"
+  end
+
+  # --- Negative: CI badge link target mismatch (issue #211) ---
+
+  def test_rejects_ci_badge_link_target_wrong_repo
+    text = live_readme.sub(
+      %r{\)\]\(https://github\.com/rotnov/pycc/actions/workflows/ci\.yml\)},
+      ")](https://github.com/evil/repo/actions/workflows/ci.yml)"
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted CI badge with link target pointing to wrong repo"
+  end
+
+  def test_rejects_ci_badge_link_target_wrong_workflow
+    text = live_readme.sub(
+      %r{\)\]\(https://github\.com/rotnov/pycc/actions/workflows/ci\.yml\)},
+      ")](https://github.com/rotnov/pycc/actions/workflows/pages.yml)"
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted CI badge with link target pointing to wrong workflow"
+  end
+
+  # --- Negative: duplicate CI badge (issue #211) ---
+
+  def test_rejects_duplicate_ci_badge
+    ci_badge_line = live_readme.match(/\[!\[CI\]\([^)]+\)\]\([^)]+\)\n/).to_s
+    text = live_readme.sub(
+      /\[!\[CI\]\([^)]+\)\]\([^)]+\)\n/,
+      ci_badge_line + "[![CI](https://github.com/wrong/repo/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/wrong/repo/actions/workflows/ci.yml)\n"
+    )
+    status, = run_checker(text, live_ci)
+    refute_equal 0, status, "accepted README with duplicate CI badge"
   end
 end
