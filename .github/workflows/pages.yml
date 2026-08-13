@@ -22,6 +22,8 @@ on:
       - "docs/SEARCH_CONSOLE_OBSERVATIONS.json"
       - "docs/SEARCH_VISIBILITY.md"
       - "docs/ROADMAP.md"
+      - "scripts/check_package_identity.rb"
+      - "scripts/test_check_package_identity.rb"
   pull_request:
     paths:
       - "site/**"
@@ -42,6 +44,8 @@ on:
       - "docs/SEARCH_CONSOLE_OBSERVATIONS.json"
       - "docs/SEARCH_VISIBILITY.md"
       - "docs/ROADMAP.md"
+      - "scripts/check_package_identity.rb"
+      - "scripts/test_check_package_identity.rb"
   workflow_dispatch:
 
 permissions:
@@ -88,6 +92,8 @@ jobs:
           ruby scripts/test_check_search_visibility.rb
           python3 scripts/check_search_console_observations.py
           python3 scripts/test_check_search_console_observations.py
+          ruby scripts/check_package_identity.rb
+          ruby scripts/test_check_package_identity.rb
 
       - name: Upload website
         uses: actions/upload-pages-artifact@v4

@@ -4,6 +4,51 @@ This document owns the distribution contract that exists today. pycc remains
 pre-alpha: binary installers, signing, package-manager publication, and
 `rustup`-style channels are not specified yet.
 
+## Package identity (issue #210)
+
+The public product is named **pycc**, and the CLI binary is `pycc`. However,
+the package-manager identity must be collision-safe before public distribution:
+
+- **`pip install pycc`** resolves to an unrelated foreign PyPI project, not
+  this compiler.
+- **`pip install pycc-compiler`** resolves to a different foreign compiler.
+- The Cargo package (`name = "pycc"`) cannot be published to crates.io
+  because its workspace dependencies are path-only (`pycc_parser = { path =
+  "crates/pycc_parser" }`, etc.). A clean `cargo publish --dry-run` on the
+  root crate fails for this reason, so no project-owned content may claim
+  crates.io readiness until every internal dependency is either published
+  independently or restructured for publication.
+
+### Chosen PyPI distribution name: `pycc-aot`
+
+The collision-safe PyPI distribution name is **`pycc-aot`**. This name:
+
+- Does not collide with the foreign `pycc` or `pycc-compiler` PyPI packages.
+- Reflects the product's ahead-of-time compilation model.
+- Is not yet registered or published — no package name has been reserved.
+  This section records the identity decision only; actual registration and
+  publication are separate, later steps that require their own release
+  evidence.
+
+No project-owned content may instruct `pip install pycc` or
+`pip install pycc-compiler` while those names remain foreign. The
+`scripts/check_package_identity.rb` validator enforces this contract in CI
+(`pages.yml`): it rejects any project-owned copy containing those install
+instructions, any unevidenced pypi.org or crates.io URL, any crates.io-ready
+claim while path-only internal dependencies remain, and any inconsistency
+between the product, CLI, package, README, Pages, llms.txt, and JSON-LD
+identity surfaces.
+
+### Identity surface map
+
+| Surface | Identity | Status |
+|---|---|---|
+| Product name | `pycc` | Active — used in README, website, llms.txt, JSON-LD |
+| CLI binary | `pycc` | Active — `[[bin]] name = "pycc"` in root `Cargo.toml` |
+| Cargo package | `pycc` | Active — not publishable to crates.io (path-only workspace deps) |
+| PyPI distribution | `pycc-aot` | Decided — not yet registered or published |
+| Pre-commit hook id | `pycc-check` | Active — `.pre-commit-hooks.yaml` |
+
 ## Pre-commit hook
 
 The main pycc repository is also the hook repository. Its
