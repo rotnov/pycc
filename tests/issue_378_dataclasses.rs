@@ -405,3 +405,40 @@ fn dataclass_float_field() {
         "float field repr and equality"
     );
 }
+
+/// #378: ordering operators (`<`, `<=`, `>`, `>=`) between dataclass
+/// instances are rejected with T0021 -- pycc has no `__lt__`/`__le__`/
+/// `__gt__`/`__ge__` dispatch.
+#[test]
+fn reject_ordering_between_dataclass_instances() {
+    let dir = std::env::temp_dir().join(format!("pycc_378_rej_ordering_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "rej_ordering.py",
+        "@dataclass\nclass Point:\n    x: int\np1 = Point(1)\np2 = Point(2)\nprint(p1 < p2)\n",
+    );
+    assert!(
+        check_fails(&dir, &src),
+        "ordering between dataclass instances should be rejected with T0021"
+    );
+}
+
+/// #378: `==` between non-dataclass instances with a user-defined `__eq__`
+/// is rejected with T0021 -- the MIR `__eq__` rewrite is restricted to
+/// dataclass classes (whose synthesized `__eq__` has a known-correct
+/// signature).
+#[test]
+fn reject_eq_between_non_dataclass_instances_with_user_eq() {
+    let dir = std::env::temp_dir().join(format!("pycc_378_rej_nondc_eq_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "rej_nondc_eq.py",
+        "class C:\n    def __init__(self, x: int) -> None:\n        self.x = x\n    def __eq__(self, other: C) -> bool:\n        return self.x == other.x\nc1 = C(1)\nc2 = C(2)\nprint(c1 == c2)\n",
+    );
+    assert!(
+        check_fails(&dir, &src),
+        "== between non-dataclass instances with user __eq__ should be rejected with T0021"
+    );
+}

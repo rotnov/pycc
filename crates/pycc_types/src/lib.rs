@@ -6,8 +6,8 @@ use pycc_diag::{Diagnostic, Span};
 use pycc_hir::CmpOpKind;
 pub use pycc_hir::Ty;
 use pycc_hir::{
-    BinOpKind, CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirModule, HirStmt,
-    PropertyDef,
+    BinOpKind, CmpOpKind as CmpOp, CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirModule,
+    HirStmt, PropertyDef,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -2524,29 +2524,27 @@ fn infer_expr_in(
             let right_ty = infer_expr_in(env, local_names, right)?;
             numeric_result_type(*op, left_ty, right_ty)
         }
-        HirExpr::Compare { op: _, left, right } => {
+        HirExpr::Compare { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;
-            // #378 (PR-18): `==`/`!=` between same-class instances is
-            // accepted when the class has an `__eq__` method (auto-generated
-            // for `@dataclass` classes, or user-defined). This is a general
-            // extension that benefits any class with `__eq__`, not just
-            // dataclasses. Different-class comparisons stay T0021.
-            if let (Ty::Instance(left_class), Ty::Instance(right_class)) =
-                (&left_ty, &right_ty)
+            // #378 (PR-18): `==`/`!=` between same-class dataclass instances
+            // is accepted -- the compiler-synthesized `__eq__` method has a
+            // known-correct signature `(self, other: SameClass) -> bool`.
+            // This is restricted to dataclass classes (not any class with a
+            // user-defined `__eq__`) because the MIR rewrite assumes the
+            // synthesized signature; a user-defined `__eq__` with wrong
+            // arity or return type would reach codegen and panic. Ordering
+            // operators (`<`, `<=`, `>`, `>=`) between instances are always
+            // rejected with T0021 -- pycc has no `__lt__`/`__le__`/`__gt__`/
+            // `__ge__` dispatch. Different-class comparisons also stay T0021.
+            if matches!(op, CmpOp::Eq | CmpOp::NotEq)
+                && let (Ty::Instance(left_class), Ty::Instance(right_class)) =
+                    (&left_ty, &right_ty)
                 && left_class == right_class
                 && let Some(class_def) = env.lookup_class(left_class)
+                && class_def.is_dataclass
             {
-                let has_eq = class_def.mro.iter().any(|mro_class| {
-                    env.lookup_class(mro_class)
-                        .map(|cd| {
-                            cd.methods.iter().any(|(mn, _)| mn == "__eq__")
-                        })
-                        .unwrap_or(false)
-                });
-                if has_eq {
-                    return Ok(Ty::Bool);
-                }
+                return Ok(Ty::Bool);
             }
             if numeric_or_bool_compatible(left_ty.clone(), right_ty.clone()) {
                 Ok(Ty::Bool)

@@ -1193,23 +1193,26 @@ fn lower_expr(
         HirExpr::Compare { op, left, right } => {
             let left_lowered = lower_expr(left, scopes, classes, current_class);
             let right_lowered = lower_expr(right, scopes, classes, current_class);
-            // #378 (PR-18): `==`/`!=` between same-class instances with an
-            // `__eq__` method is rewritten to a `MirExpr::Call` to the
-            // class's `__eq__` method. `!=` is lowered as
+            // #378 (PR-18): `==`/`!=` between same-class dataclass instances
+            // is rewritten to a `MirExpr::Call` to the class's
+            // compiler-synthesized `__eq__` method. `!=` is lowered as
             // `__eq__(left, right) != True` (the negation), since pycc's
             // MIR has no `UnaryOp::Not` node. This mirrors how `@property`
             // redirects attribute access to method calls -- a MIR-level
             // rewrite, not a new MIR node. Only `Eq` and `NotEq` are
-            // rewritten; other comparison operators (`<`, `<=`, `>`, `>=`)
-            // between instances fall through to the default `MirExpr::Compare`
-            // (the type checker rejects them with `T0021` before they reach
-            // MIR lowering in normal compilation, but the MIR itself stays
+            // rewritten, and only for dataclass classes (whose synthesized
+            // `__eq__` has a known-correct signature); other comparison
+            // operators (`<`, `<=`, `>`, `>=`) and non-dataclass classes
+            // fall through to the default `MirExpr::Compare` (the type
+            // checker rejects them with `T0021` before they reach MIR
+            // lowering in normal compilation, but the MIR itself stays
             // semantically correct for defense-in-depth).
             if matches!(op, pycc_hir::CmpOpKind::Eq | pycc_hir::CmpOpKind::NotEq)
                 && let (Ty::Instance(left_class), Ty::Instance(right_class)) =
                     (left_lowered.ty(), right_lowered.ty())
                 && left_class == right_class
                 && let Some(class_def) = classes.get(left_class.as_str())
+                && class_def.is_dataclass
             {
                 let eq_mangled = class_def.mro.iter().find_map(|mro_class| {
                     // Every class in the MRO was registered when the class
@@ -1227,27 +1230,34 @@ fn lower_expr(
                         .find(|(mn, _)| mn == "__eq__")
                         .map(|(_, mangled)| mangled.clone())
                 });
-                if let Some(eq_mangled) = eq_mangled {
-                    let eq_call = MirExpr::Call {
-                        callee: eq_mangled,
-                        args: vec![left_lowered, right_lowered],
-                        ty: Ty::Bool,
-                    };
-                    // The `matches!` guard above limits entry to
-                    // `Eq`/`NotEq`, so an if/else (rather than a match
-                    // with a `_` arm) suffices and avoids an unreachable
-                    // arm that would be permanently uncovered under
-                    // D-014's 100% coverage gate.
-                    if *op == pycc_hir::CmpOpKind::Eq {
-                        return eq_call;
-                    }
-                    return MirExpr::Compare {
-                        op: pycc_hir::CmpOpKind::NotEq,
-                        left: Box::new(eq_call),
-                        right: Box::new(MirExpr::BoolLiteral(true)),
-                        ty: Ty::Bool,
-                    };
+                // A dataclass always has a synthesized `__eq__` in its
+                // MRO (the `is_dataclass` guard above ensures we only
+                // enter this block for dataclass classes). Using
+                // `.expect` (whose panic path lives in libcore, outside
+                // this crate's instrumented regions) avoids an `if let
+                // Some` whose `None` branch is structurally unreachable
+                // for a dataclass and would show up as a permanently
+                // uncovered region under D-014's 100% coverage gate.
+                let eq_mangled = eq_mangled.expect("dataclass must have __eq__");
+                let eq_call = MirExpr::Call {
+                    callee: eq_mangled,
+                    args: vec![left_lowered, right_lowered],
+                    ty: Ty::Bool,
+                };
+                // The `matches!` guard above limits entry to
+                // `Eq`/`NotEq`, so an if/else (rather than a match
+                // with a `_` arm) suffices and avoids an unreachable
+                // arm that would be permanently uncovered under
+                // D-014's 100% coverage gate.
+                if *op == pycc_hir::CmpOpKind::Eq {
+                    return eq_call;
                 }
+                return MirExpr::Compare {
+                    op: pycc_hir::CmpOpKind::NotEq,
+                    left: Box::new(eq_call),
+                    right: Box::new(MirExpr::BoolLiteral(true)),
+                    ty: Ty::Bool,
+                };
             }
             MirExpr::Compare {
                 op: *op,
@@ -1774,6 +1784,17 @@ fn rewrite_instance_to_repr(expr: &MirExpr, classes: &HashMap<String, HirClassDe
     let Some(class_def) = classes.get(class_name.as_str()) else {
         return expr.clone();
     };
+    // #378 (PR-18): only rewrite for dataclass classes, whose
+    // compiler-synthesized `__repr__` has a known-correct signature
+    // `(self) -> str`. A user-defined `__repr__` on a non-dataclass class
+    // may have a different arity or return type, which would cause a
+    // codegen panic if rewritten to a call here. Non-dataclass instances
+    // pass through unchanged (the type checker rejects `print(instance)` /
+    // f-string interpolation of a non-dataclass instance with `T0021`
+    // before codegen).
+    if !class_def.is_dataclass {
+        return expr.clone();
+    }
     let repr_mangled = class_def.mro.iter().find_map(|mro_class| {
         // Every class in the MRO was registered when the class was lowered;
         // using `.expect` (whose panic path lives in libcore, outside this
@@ -1789,13 +1810,18 @@ fn rewrite_instance_to_repr(expr: &MirExpr, classes: &HashMap<String, HirClassDe
             .find(|(mn, _)| mn == "__repr__")
             .map(|(_, mangled)| mangled.clone())
     });
-    match repr_mangled {
-        Some(repr_mangled) => MirExpr::Call {
-            callee: repr_mangled,
-            args: vec![expr.clone()],
-            ty: Ty::Str,
-        },
-        None => expr.clone(),
+    // A dataclass always has a synthesized `__repr__` in its MRO (the
+    // `is_dataclass` guard above ensures we only reach here for dataclass
+    // classes). Using `.expect` (whose panic path lives in libcore,
+    // outside this crate's instrumented regions) avoids a `match` whose
+    // `None` arm is structurally unreachable for a dataclass and would
+    // show up as a permanently uncovered region under D-014's 100%
+    // coverage gate.
+    let repr_mangled = repr_mangled.expect("dataclass must have __repr__");
+    MirExpr::Call {
+        callee: repr_mangled,
+        args: vec![expr.clone()],
+        ty: Ty::Str,
     }
 }
 

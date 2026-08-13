@@ -3529,10 +3529,12 @@ mod tests {
     }
 
     #[test]
-    fn a_same_class_instance_comparison_with_eq_type_checks() {
-        // A class with an `__eq__` method accepts `==` between same-class
-        // instances. This covers the `return Ok(Ty::Bool)` path in the
-        // `has_eq` block.
+    fn a_same_class_dataclass_instance_comparison_with_eq_type_checks() {
+        // A dataclass class with a compiler-synthesized `__eq__` method
+        // accepts `==` between same-class instances. This covers the
+        // `return Ok(Ty::Bool)` path in the dataclass comparison check.
+        // Non-dataclass classes with a user-defined `__eq__` are rejected
+        // (the MIR rewrite assumes the synthesized signature).
         let self_ty = Ty::Instance(Box::new("EqPoint".to_string()));
         let init = HirItem::Function {
             name: "EqPoint.__init__".to_string(),
@@ -3604,11 +3606,98 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     enum_members: Vec::new(),
+                    is_dataclass: true,
+                    dataclass_fields: vec![("x".to_string(), Ty::Int)],
+                },
+            )],
+        };
+        check(&hir).expect("a same-class dataclass comparison with __eq__ should type-check");
+    }
+
+    #[test]
+    fn a_non_dataclass_instance_comparison_with_user_eq_is_t0021() {
+        // A non-dataclass class with a user-defined `__eq__` method does
+        // NOT accept `==` between same-class instances -- the MIR rewrite
+        // for `__eq__` is restricted to dataclass classes (whose
+        // synthesized `__eq__` has a known-correct signature), so the type
+        // checker must reject this to prevent a codegen panic.
+        let self_ty = Ty::Instance(Box::new("PlainEq".to_string()));
+        let init = HirItem::Function {
+            name: "PlainEq.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("x".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "x".to_string(),
+                    value: HirExpr::Name("x".to_string()),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let eq = HirItem::Function {
+            name: "PlainEq.__eq__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("other".to_string(), self_ty.clone()),
+            ],
+            return_ty: Ty::Bool,
+            body: vec![HirStmt::Return(Some(HirExpr::BoolLiteral(true)))],
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                eq,
+                top_level(HirStmt::Assign {
+                    target: "p".to_string(),
+                    value: HirExpr::Call {
+                        callee: "PlainEq".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    },
+                }),
+                top_level(HirStmt::Assign {
+                    target: "q".to_string(),
+                    value: HirExpr::Call {
+                        callee: "PlainEq".to_string(),
+                        args: vec![HirExpr::IntLiteral(2)],
+                    },
+                }),
+                top_level(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Compare {
+                        op: pycc_hir::CmpOpKind::Eq,
+                        left: Box::new(HirExpr::Name("p".to_string())),
+                        right: Box::new(HirExpr::Name("q".to_string())),
+                    }],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "PlainEq".to_string(),
+                pycc_hir::HirClassDef {
+                    name: "PlainEq".to_string(),
+                    bases: Vec::new(),
+                    mro: vec!["PlainEq".to_string()],
+                    attrs: vec![("x".to_string(), Ty::Int)],
+                    methods: vec![
+                        ("__init__".to_string(), "PlainEq.__init__".to_string()),
+                        ("__eq__".to_string(), "PlainEq.__eq__".to_string()),
+                    ],
+                    type_param: None,
+                    properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
+                    enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
                 },
             )],
         };
-        check(&hir).expect("a same-class comparison with __eq__ should type-check");
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
     }
 }
