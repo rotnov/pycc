@@ -482,6 +482,12 @@ if software_source.get("description") != expected_source_description:
 # --- Issue #203: bind SoftwareSourceCode semantics to visible facts ---
 if software_source.get("name") != "pycc":
     raise SystemExit("SoftwareSourceCode JSON-LD name must be 'pycc'")
+if software_source.get("alternateName") != "pycc Python compiler":
+    raise SystemExit(
+        "SoftwareSourceCode JSON-LD alternateName must be 'pycc Python compiler'"
+    )
+if software_source.get("url") != canonical:
+    raise SystemExit("SoftwareSourceCode JSON-LD url must be the canonical URL")
 if software_source.get("license") != "https://opensource.org/license/mit":
     raise SystemExit("SoftwareSourceCode JSON-LD license must be the MIT URL")
 if software_source.get("programmingLanguage") != "Rust":
