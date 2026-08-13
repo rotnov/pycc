@@ -554,6 +554,29 @@ p.y  # `Point` has no attribute named `y`
 ",
     },
     DiagnosticExplanation {
+        code: "T0045",
+        severity: Severity::Error,
+        summary: "cannot reassign a `Final` name (PEP 591)",
+        explanation: "\
+T0045 fires when a name declared `Final` (PEP 591) is reassigned after its \
+initial binding. A `Final`-annotated name may be assigned exactly once; any \
+subsequent assignment -- plain `x = ...` or annotated `x: Final[...] = ...` \
+-- is rejected. `Final[X]` unwraps to `X` at HIR-lowering time (the type is \
+just `X`; `Final` is a binding-level property, not a type-level one), and \
+the non-reassignability is tracked by the type checker's `Environment.finals` \
+set, populated from `HirStmt::AnnAssign`'s `is_final` flag. The initial \
+assignment's own `check_assignment` call does not see the name in `finals` \
+yet (the insert happens after it returns), so only a subsequent \
+reassignment triggers T0045. A value-less `Final` declaration (`x: \
+Final[int]` with no `= ...`) also marks the name as `Final`; the first real \
+assignment to it is allowed, but a second is rejected.",
+        example: "\
+def f() -> None:
+    x: Final[int] = 1
+    x = 2  # cannot reassign a Final name
+",
+    },
+    DiagnosticExplanation {
         code: "O0201",
         severity: Severity::Error,
         summary: "value used after move across scope boundary",

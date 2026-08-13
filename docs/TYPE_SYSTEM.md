@@ -144,6 +144,14 @@ pycc uses static dispatch (D-006): every variable's runtime type is exactly its 
 
 Per PEP 649/749 (3.14): annotations are lazily evaluated code — pycc evaluates them **statically at compile time**; string annotations and `from __future__ import annotations` files accepted. Runtime introspection of `__annotations__` is supported for dataclass-style use, computed at compile time.
 
+### `Annotated[X, ...]` (PEP 593)
+
+`Annotated[X, ...]` unwraps to `X` at HIR-lowering time — the inner type is resolved normally and all metadata arguments are discarded. `Annotated` is recognized as a bare name without requiring `from typing import Annotated`, matching the existing `TypeAlias`/`Any` precedent. No metadata-consuming behavior is implemented; the metadata is purely compile-time and has no runtime or type-checking effect.
+
+### `Final[X]` (PEP 591)
+
+`Final[X]` unwraps to `X` at HIR-lowering time — `Final` is a binding-level property, not a type-level one, so the unwrapped type is just `X`. `Final` is recognized as a bare name without requiring `from typing import Final`. A `Final`-annotated name may be assigned exactly once; any subsequent assignment (plain `x = ...` or annotated `x: Final[...] = ...`) is rejected with `T0045`. The non-reassignability is tracked by the type checker's `Environment.finals` set, populated from `HirStmt::AnnAssign`'s `is_final` flag *after* the initial `check_assignment` call returns, so the initial binding is not rejected — only a subsequent reassignment. A value-less `Final` declaration (`x: Final[int]` with no `= ...`) also marks the name as `Final`; the first real assignment to it is allowed, but a second is rejected. Support is restricted to variable-level annotated assignments (module-level variables and function-local annotated assignments); `Final` on function parameters or class-body attributes is out of scope.
+
 ## Python 3.15 typing preview (post-v1.0)
 
 The preview does not expand the v1 Python 3.14 contract. The v1.x language

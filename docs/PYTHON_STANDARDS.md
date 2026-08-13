@@ -140,11 +140,11 @@ For each newly observed upstream release:
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
 | [544](https://peps.python.org/pep-0544/) | `Protocol` — structural typing | typing | `py38/pep_0544_protocol.py` | ☐ |
-| [570](https://peps.python.org/pep-0570/) | Positional-only params `/` | syntax | `py38/pep_0570_pos_only.py` | ☐ |
+| [570](https://peps.python.org/pep-0570/) | Positional-only params `/` | syntax | `py38/pep_0570_pos_only.py` | ✅ |
 | [572](https://peps.python.org/pep-0572/) | Walrus `:=` | syntax | `py38/pep_0572_walrus.py` | ☐ |
 | [586](https://peps.python.org/pep-0586/) | `Literal` | typing | `py38/pep_0586_literal.py` | ☐ |
 | [589](https://peps.python.org/pep-0589/) | `TypedDict` | typing | `py38/pep_0589_typeddict.py` | ☐ |
-| [591](https://peps.python.org/pep-0591/) | `Final` | typing | `py38/pep_0591_final.py` | ☐ |
+| [591](https://peps.python.org/pep-0591/) | `Final` | typing | `py38/pep_0591_final.py` | ✅ |
 | — | f-string `=` debug specifier | syntax | `py38/fstring_eq.py` | ☐ |
 
 ## Python 3.9
@@ -153,7 +153,7 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [584](https://peps.python.org/pep-0584/) | `dict \| dict` union | sem | `py39/pep_0584_dict_union.py` | ☐ |
 | [585](https://peps.python.org/pep-0585/) | Builtin generics: `list[int]` (D-105), `dict[str, int]`/`set[int]` (D-121/D-122, PR-11a), and `tuple[...]` (D-115/D-116, PR-11b) all ship real codegen — this row's `✅` reflects all four fixtures' own CI-observed, all-5-Tier-1-target evidence ([PR #305](https://github.com/rotnov/pycc/pull/305)). `tuple[...]`'s own literal construction, `t[k]` literal-index reads, and both module-global and function-local storage are covered; passing or returning a tuple *value* across a function boundary from real, unannotated Python source does not work yet even though the codegen layer already supports it, for two independent reasons: `pycc_types`' signature-inference solver is scalar-only (D-116 point 4's correction note), and `pycc_codegen`'s `emit_expr` has no `MirExpr::Call` result-dispatch arm for a container-typed return either (D-116's own further correction note) — deferred alongside iteration, unpacking assignment, and an annotation syntax (see `docs/ROADMAP.md`) | typing | `pep_0585_builtin_generics.py`, `dict_order.py`, `pep_0585_set_int.py`, `tuple_heterogeneous.py` | ✅ |
-| [593](https://peps.python.org/pep-0593/) | `Annotated` | typing | `py39/pep_0593_annotated.py` | ☐ |
+| [593](https://peps.python.org/pep-0593/) | `Annotated` | typing | `py39/pep_0593_annotated.py` | ✅ |
 | [614](https://peps.python.org/pep-0614/) | Relaxed decorator grammar | syntax | `py39/pep_0614_decorators.py` | ☐ |
 | [617](https://peps.python.org/pep-0617/) | PEG parser — **pycc's grammar reference** | syntax | (covered by whole suite) | ☐ |
 

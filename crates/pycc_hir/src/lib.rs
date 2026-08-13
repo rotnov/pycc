@@ -533,6 +533,15 @@ pub enum HirStmt {
         target: String,
         annotation: Ty,
         value: Option<HirExpr>,
+        /// PEP 591 (#383): `true` when the original annotation was
+        /// `Final[X]`, meaning this binding may not be reassigned after its
+        /// initial assignment. Set at HIR-lowering time in `stmt.rs`'s
+        /// `Stmt::AnnAssign` arm by inspecting the raw AST annotation
+        /// before `annotation_to_ty` unwraps `Final[X]` to `X`. The type
+        /// checker's `Environment.finals` set is populated from this flag,
+        /// and `check_assignment` rejects a reassignment of a `Final` name
+        /// with `T0045`.
+        is_final: bool,
     },
     If {
         test: HirExpr,
@@ -1217,12 +1226,14 @@ fn lower_params(
     // whatever plain positional args happened to exist, instead of the
     // explicit capability diagnostic every other out-of-scope construct in
     // this file produces (self-review finding, pre-merge).
-    if !parameters.posonlyargs.is_empty() {
-        return Err(unsupported(
-            "positional-only parameters (`/`) are not supported yet",
-            parameters.range,
-        ));
-    }
+    //
+    // PEP 570 (#383): positional-only parameters (`posonlyargs`, before the
+    // `/` marker) are now lowered via the same `lower_arg_list` path as
+    // ordinary `args`, prepended before `args` in the parameter list. Since
+    // keyword call arguments are already globally unsupported (rejected in
+    // `expr.rs`/`stmt.rs`), every parameter is already effectively
+    // positional-only — accepting `posonlyargs` changes nothing about
+    // call-site checking.
     if parameters.vararg.is_some() {
         return Err(unsupported(
             "`*args` is not supported yet",
@@ -1241,14 +1252,26 @@ fn lower_params(
             parameters.range,
         ));
     }
-    lower_arg_list(
+    // PEP 570 (#383): lower `posonlyargs` (before `/`) via the same
+    // `lower_arg_list` path as ordinary `args`, prepending them. The full
+    // parameter list is `posonlyargs ++ args`.
+    let mut params = lower_arg_list(
+        &parameters.posonlyargs,
+        is_public,
+        fn_name,
+        type_param,
+        None,
+        aliases,
+    )?;
+    params.extend(lower_arg_list(
         &parameters.args,
         is_public,
         fn_name,
         type_param,
         None,
         aliases,
-    )
+    )?);
+    Ok(params)
 }
 
 /// Lowers a plain positional-parameter list (no `/`/`*`/`**`/keyword-only
@@ -1390,6 +1413,18 @@ pub(crate) fn annotation_to_ty(
         // generic classes are handled by PEP 695's `GenericClassInstantiate`
         // for actual instantiation, not annotation). The base must be a bare
         // name (a class name); any other subscript shape is rejected.
+        //
+        // PEP 593 (#383): `Annotated[X, ...]` is recognized as a bare name
+        // (no `from typing import Annotated` required, matching the existing
+        // `TypeAlias`/`Any` precedent) and unwrapped to `X`, discarding all
+        // metadata arguments. Per PEP 593's own spec, a static type checker
+        // that does not understand a piece of metadata must treat
+        // `Annotated[X, ...]` as `X` — this is correct, not a shortcut. The
+        // first subscript argument is `X`; for the tuple form
+        // `Annotated[X, meta1, meta2, ...]` the first element is `X`.
+        // PEP 593 requires at least two arguments (the type and at least one
+        // metadata element); `Annotated[X]` without metadata is rejected,
+        // matching CPython's own `TypeError`.
         Expr::Subscript(sub) => {
             let Expr::Name(base_name) = sub.value.as_ref() else {
                 return Err(unsupported(
@@ -1397,16 +1432,55 @@ pub(crate) fn annotation_to_ty(
                     pycc_ast::expr_range(&sub.value),
                 ));
             };
-            // The class name resolves the same way a bare-name annotation
-            // does — through the alias table or as a known class name. We
-            // reuse `annotation_to_ty` on the bare name so self-referential
-            // class names, aliases, and builtin types all resolve identically.
-            annotation_to_ty(
-                &Expr::Name(base_name.clone()),
-                type_param,
-                class_name,
-                aliases,
-            )
+            match base_name.id.as_str() {
+                "Annotated" => {
+                    let Expr::Tuple(tuple) = sub.slice.as_ref() else {
+                        return Err(unsupported(
+                            "Annotated requires at least two arguments: the type and at least one metadata element",
+                            pycc_ast::expr_range(&sub.slice),
+                        ));
+                    };
+                    if tuple.elts.len() < 2 {
+                        return Err(unsupported(
+                            "Annotated requires at least two arguments: the type and at least one metadata element",
+                            pycc_ast::expr_range(&sub.slice),
+                        ));
+                    }
+                    annotation_to_ty(&tuple.elts[0], type_param, class_name, aliases)
+                }
+                // PEP 591 (#383): `Final[X]` unwraps to `X`. `Final` is a
+                // binding-level property (this name may not be reassigned),
+                // not a type-level property — the type is just `X`. The
+                // non-reassignability is tracked separately by the type
+                // checker's `Environment.finals` set, populated from
+                // `HirStmt::AnnAssign`'s `is_final` flag (set at lowering
+                // time in `stmt.rs`). `Final` takes exactly one type
+                // argument; `Final[X, Y]` is rejected.
+                "Final" => {
+                    let x = match sub.slice.as_ref() {
+                        Expr::Tuple(tuple) if tuple.elts.len() != 1 => {
+                            return Err(unsupported(
+                                "Final takes exactly one type argument",
+                                pycc_ast::expr_range(&sub.slice),
+                            ));
+                        }
+                        Expr::Tuple(tuple) => &tuple.elts[0],
+                        other => other,
+                    };
+                    annotation_to_ty(x, type_param, class_name, aliases)
+                }
+                // The class name resolves the same way a bare-name annotation
+                // does — through the alias table or as a known class name. We
+                // reuse `annotation_to_ty` on the bare name so self-referential
+                // class names, aliases, and builtin types all resolve
+                // identically.
+                _ => annotation_to_ty(
+                    &Expr::Name(base_name.clone()),
+                    type_param,
+                    class_name,
+                    aliases,
+                ),
+            }
         }
         other => Err(unsupported(
             format!("only a bare name type annotation is supported so far: {other:?}"),
@@ -2676,10 +2750,38 @@ mod tests {
     }
 
     #[test]
-    fn a_positional_only_parameter_returns_a_capability_error() {
+    fn a_positional_only_parameter_lowers_successfully() {
+        // PEP 570 (#383): positional-only parameters (`/` marker) are now
+        // lowered via the same path as ordinary args, prepended before `args`.
+        let module =
+            pycc_parser_test_helper::parse("def f(a: int, /, b: int) -> int:\n    return a + b\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![
+                    ("a".to_string(), Ty::Int),
+                    ("b".to_string(), Ty::Int),
+                ],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::Name("a".to_string())),
+                    right: Box::new(HirExpr::Name("b".to_string())),
+                }))],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_positional_only_parameter_with_a_default_value_is_rejected() {
+        // PEP 570 (#383): the `lower_arg_list` error path for posonlyargs
+        // (default values are unsupported) must fire, not be silently
+        // bypassed by the posonlyargs concatenation.
         assert_capability_error_message(
-            "def f(a: int, /, b: int) -> int:\n    return a + b\n",
-            "positional-only parameters",
+            "def f(a: int = 0, /) -> int:\n    return a\n",
+            "default parameter values are not supported yet",
         );
     }
 
@@ -2868,6 +2970,7 @@ mod tests {
             hir.items,
             vec![
                 HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                    is_final: false,
                     target: "x".to_string(),
                     annotation: Ty::Int,
                     value: Some(HirExpr::IntLiteral(1)),
@@ -2887,6 +2990,7 @@ mod tests {
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                is_final: false,
                 target: "x".to_string(),
                 annotation: Ty::Int,
                 value: None,
@@ -3161,6 +3265,155 @@ mod tests {
         assert_capability_error_message(
             "x: a.b[int] = 1\n",
             "a subscripted type annotation's base must be a bare class name",
+        );
+    }
+
+    #[test]
+    fn annotated_unwraps_to_the_first_type_argument() {
+        // PEP 593 (#383): `Annotated[X, "meta"]` unwraps to `X`, discarding
+        // metadata. `Annotated` is recognized as a bare name without
+        // requiring `from typing import Annotated`, matching the existing
+        // `TypeAlias`/`Any` precedent.
+        let module =
+            pycc_parser_test_helper::parse("def f(x: Annotated[int, \"meta\"]) -> int:\n    return x\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }]
+        );
+    }
+
+    #[test]
+    fn annotated_with_a_single_argument_is_rejected() {
+        // PEP 593 (#383): `Annotated[X]` without metadata is rejected — PEP 593
+        // requires at least two arguments (the type and at least one metadata
+        // element), matching CPython's own `TypeError`.
+        assert_capability_error_message(
+            "x: Annotated[str] = \"hello\"\n",
+            "Annotated requires at least two arguments: the type and at least one metadata element",
+        );
+    }
+
+    #[test]
+    fn annotated_with_multiple_metadata_args_discards_all_metadata() {
+        // PEP 593 (#383): `Annotated[X, 1, "x", 2]` unwraps to `X`, discarding
+        // all metadata arguments.
+        let module =
+            pycc_parser_test_helper::parse("def f(x: Annotated[int, 1, \"x\", 2]) -> int:\n    return x\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }]
+        );
+    }
+
+    #[test]
+    fn annotated_with_an_unsupported_inner_type_still_rejects() {
+        // PEP 593 (#383): `Annotated[NonExistent, "meta"]` still rejects via
+        // the recursive `annotation_to_ty` call — the unwrap does not bypass
+        // type resolution.
+        assert_capability_error_message(
+            "x: Annotated[NonExistent, \"meta\"] = 1\n",
+            "type annotation `NonExistent` is not supported yet",
+        );
+    }
+
+    #[test]
+    fn annotated_with_an_empty_tuple_is_rejected() {
+        // PEP 593 (#383): `Annotated[()]` (empty tuple) is rejected —
+        // `Annotated` requires at least two arguments (the type and at
+        // least one metadata element).
+        assert_capability_error_message(
+            "x: Annotated[()] = 1\n",
+            "Annotated requires at least two arguments: the type and at least one metadata element",
+        );
+    }
+
+    #[test]
+    fn final_unwraps_to_the_inner_type() {
+        // PEP 591 (#383): `Final[X]` unwraps to `X`. `Final` is recognized
+        // as a bare name without requiring `from typing import Final`,
+        // matching the existing `TypeAlias`/`Any` precedent.
+        let module = pycc_parser_test_helper::parse("x: Final[int] = 1\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::IntLiteral(1)),
+                is_final: true,
+            })]
+        );
+    }
+
+    #[test]
+    fn final_with_str_unwraps_to_str() {
+        let module = pycc_parser_test_helper::parse("x: Final[str] = \"hello\"\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Str,
+                value: Some(HirExpr::StringLiteral("hello".to_string())),
+                is_final: true,
+            })]
+        );
+    }
+
+    #[test]
+    fn final_with_two_type_arguments_is_rejected() {
+        // PEP 591 (#383): `Final[X, Y]` is rejected — `Final` takes exactly
+        // one type argument.
+        assert_capability_error_message(
+            "x: Final[int, str] = 1\n",
+            "Final takes exactly one type argument",
+        );
+    }
+
+    #[test]
+    fn final_with_a_single_element_tuple_unwraps_to_the_inner_type() {
+        // PEP 591 (#383): `Final[(int,)]` (a single-element tuple) unwraps
+        // to `int` — the tuple shape with exactly one element is accepted.
+        let module = pycc_parser_test_helper::parse("x: Final[(int,)] = 1\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::IntLiteral(1)),
+                is_final: true,
+            })]
+        );
+    }
+
+    #[test]
+    fn final_value_less_declaration_sets_is_final() {
+        // PEP 591 (#383): a value-less `Final` declaration (`x: Final[int]`
+        // with no `= ...`) still sets `is_final` — the name is tracked as
+        // non-reassignable even before its initial assignment.
+        let module = pycc_parser_test_helper::parse("x: Final[int]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+                is_final: true,
+            })]
         );
     }
 

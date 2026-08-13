@@ -295,6 +295,15 @@ fn t0041_maybe_bound_for_range() {
     assert_diagnostic_matches_fixture("t0041_maybe_bound_for_range");
 }
 
+// PEP 591 (#383): reassigning a `Final`-annotated name after its initial
+// binding is T0045. Variable-level annotations only (module-level and
+// function-local); `Final` on parameters or class-body attributes is out
+// of scope for this PR.
+#[test]
+fn t0045_final_reassignment() {
+    assert_diagnostic_matches_fixture("t0045_final_reassignment");
+}
+
 #[test]
 fn d0021_float_wrong_arity() {
     assert_diagnostic_matches_fixture("d0021_float_wrong_arity");
