@@ -35,10 +35,14 @@ CANONICAL_TO_SOURCE = {
 }.freeze
 
 def git_last_commit_date(file_path)
-  # Returns the date (YYYY-MM-DD) of the last commit that modified the
-  # given file, or nil if the file is not tracked by git.
+  # Returns the date (YYYY-MM-DD) of the last non-merge commit that
+  # modified the given file, or nil if the file is not tracked by git.
+  # Uses the author date (when the change was actually written) rather
+  # than the committer date (which can be bumped by merge/rebase), and
+  # skips merge commits so that CI merge commits don't shadow the real
+  # last-content-change date.
   dir = REPO_ROOT.to_s
-  output = `git -C "#{dir}" log -1 --format=%cs -- "#{file_path}" 2>/dev/null`.strip
+  output = `git -C "#{dir}" log -1 --no-merges --format=%as -- "#{file_path}" 2>/dev/null`.strip
   return nil if output.empty?
   output
 end
