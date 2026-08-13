@@ -54,7 +54,7 @@ class TestCheckSitemapLastmod < Minitest::Test
 
   def test_rejects_stale_lastmod
     text = live_sitemap.sub(
-      %r{<loc>https://rotnov\.github\.io/pycc/</loc>\s*<lastmod>2026-08-12</lastmod>},
+      %r{<loc>https://rotnov\.github\.io/pycc/</loc>\s*<lastmod>2026-08-13</lastmod>},
       "<loc>https://rotnov.github.io/pycc/</loc>\n    <lastmod>2020-01-01</lastmod>"
     )
     status, output = run_checker(text)
@@ -65,7 +65,7 @@ class TestCheckSitemapLastmod < Minitest::Test
 
   def test_rejects_malformed_lastmod
     text = live_sitemap.sub(
-      /<lastmod>2026-08-12<\/lastmod>/,
+      /<lastmod>2026-08-13<\/lastmod>/,
       "<lastmod>not-a-date</lastmod>"
     )
     status, output = run_checker(text)
