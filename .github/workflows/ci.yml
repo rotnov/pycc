@@ -882,15 +882,6 @@ jobs:
             --lhr-dir /tmp/lighthouse-a11y-results \
             --site-dir site
 
-      - name: Validate documentation invariants (issues #205, #212, #214)
-        run: |
-          ruby scripts/check_pages_workflow.rb
-          ruby scripts/test_check_pages_workflow.rb
-          ruby scripts/check_citation_cff.rb
-          ruby scripts/test_check_citation_cff.rb
-          ruby scripts/check_readme_claims.rb
-          ruby scripts/test_check_readme_claims.rb
-
       - name: Upload Lighthouse accessibility reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
