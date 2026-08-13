@@ -1525,7 +1525,7 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-07</lastmod>"""
+    <lastmod>2026-08-12</lastmod>"""
 assert entry in content
 path.write_text(content.replace(entry, entry + "\n    <lastmod>2026-07-30</lastmod>", 1))
 PY
@@ -1542,7 +1542,7 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-lastmod = "<lastmod>2026-08-07</lastmod>"
+lastmod = "<lastmod>2026-08-12</lastmod>"
 assert lastmod in content
 path.write_text(content.replace(lastmod, "<lastmod>not-a-date</lastmod>", 1))
 PY
@@ -1559,7 +1559,7 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-lastmod = "<lastmod>2026-08-07</lastmod>"
+lastmod = "<lastmod>2026-08-12</lastmod>"
 assert lastmod in content
 path.write_text(content.replace(lastmod, "<lastmod>9999-12-31</lastmod>", 1))
 PY
@@ -1577,9 +1577,9 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/python-aot-compilers/</loc>
-    <lastmod>2026-08-07</lastmod>"""
+    <lastmod>2026-08-12</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-07", "2026-07-27"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-08-12", "2026-07-27"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -2033,5 +2033,314 @@ fi
 
 cp "$repo_root/README.md" "$fixture_root/README.md"
 cp "$repo_root/site/python-aot-compilers/claims.json" "$fixture_root/site/python-aot-compilers/claims.json"
+
+# --- Issue #203: SoftwareSourceCode JSON-LD semantic bindings ---
+
+# Mutation: change programmingLanguage to Python (false).
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"programmingLanguage": "Rust"',
+    '"programmingLanguage": "Python"',
+    1
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted programmingLanguage=Python (issue #203)" >&2
+  exit 1
+fi
+
+# Mutation: add runtimePlatform back (misleading).
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"programmingLanguage": "Rust",',
+    '"programmingLanguage": "Rust",\n            "runtimePlatform": "LLVM",',
+    1
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted runtimePlatform=LLVM (issue #203)" >&2
+  exit 1
+fi
+
+# Mutation: change license to GPL (false).
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"license": "https://opensource.org/license/mit"',
+    '"license": "https://www.gnu.org/licenses/gpl-3.0.html"',
+    1
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted license=GPL (issue #203)" >&2
+  exit 1
+fi
+
+# Mutation: add "AI compiler" to keywords.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"autonomous software development"',
+    '"autonomous software development",\n              "AI compiler"',
+    1
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted 'AI compiler' keyword (issue #203)" >&2
+  exit 1
+fi
+
+# Mutation: change name to something false.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"@type": "SoftwareSourceCode",\n            "@id": "https://rotnov.github.io/pycc/#project",\n            "name": "pycc"',
+    '"@type": "SoftwareSourceCode",\n            "@id": "https://rotnov.github.io/pycc/#project",\n            "name": "pycc-compiler"'
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted name=pycc-compiler (issue #203)" >&2
+  exit 1
+fi
+
+# Mutation: add production-ready claim to description.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    'AI-created and human-managed."',
+    'AI-created and human-managed. Production-ready."',
+    1
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted production-ready claim in JSON-LD (issue #203)" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# --- Issue #206: Markdown landing semantic contract mutations ---
+
+# Mutation: remove the ROADMAP link from the Markdown.
+cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
+python3 - "$fixture_root/site/index.html.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "- [Roadmap](https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md)\n",
+    ""
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted Markdown without ROADMAP link (issue #206)" >&2
+  exit 1
+fi
+
+# Mutation: remove the conformance claim from the Markdown.
+cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
+python3 - "$fixture_root/site/index.html.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace("mandelbrot-ascii", "another-test")
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted Markdown without mandelbrot-ascii claim (issue #206)" >&2
+  exit 1
+fi
+
+# Mutation: add production-ready claim to the Markdown.
+cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
+python3 - "$fixture_root/site/index.html.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "pycc is pre-alpha and is not ready for production.",
+    "pycc is pre-alpha and is not ready for production. It is production-ready."
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted Markdown with production-ready claim (issue #206)" >&2
+  exit 1
+fi
+
+# Mutation: remove the code example feature mention.
+cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
+python3 - "$fixture_root/site/index.html.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "recursive_fibonacci_matches_the_well_known_sequence",
+    "some_other_test"
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted Markdown without conformance test reference (issue #206)" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
+
+# --- Issue #207: llms.txt bounded and Markdown-first ---
+
+# Mutation: split the single-line blockquote summary into multiple lines.
+cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
+python3 - "$fixture_root/site/llms.txt" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+single_line = (
+    "> pycc is a pre-alpha strict ahead-of-time compiler for typed, standard Python 3.14 "
+    "with an implemented native-binary path through Rust and LLVM. AI agents create it, "
+    "and a human manages it."
+)
+multi_line = (
+    "> pycc is a pre-alpha strict ahead-of-time compiler for typed, standard Python\n"
+    "> 3.14 with an implemented native-binary path through Rust and LLVM. AI agents\n"
+    "> create it, and a human manages it."
+)
+content = content.replace(single_line, multi_line)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted multi-line blockquote summary (issue #207)" >&2
+  exit 1
+fi
+
+# Mutation: remove the Markdown landing link.
+cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
+python3 - "$fixture_root/site/llms.txt" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "- [Markdown landing](https://rotnov.github.io/pycc/index.html.md): "
+    "Clean text equivalent of the landing page for agents and constrained clients.\n",
+    ""
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted llms.txt without Markdown landing link (issue #207)" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
+
+# --- Issue #39: table-driven mutation tests for required files ---
+
+# For each required file, remove it and verify the validator rejects.
+for required_file in \
+  index.html \
+  index.html.md \
+  styles.css \
+  site.js \
+  og.png \
+  favicon.svg \
+  robots.txt \
+  sitemap.xml \
+  llms.txt \
+  404.html \
+  status/index.html \
+  architecture/index.html \
+  python-aot-compilers/index.html \
+  python-aot-compilers/claims.json \
+  ai-native/index.html
+do
+  cp -R "$repo_root/site" "$fixture_root/site/"
+  rm -f "$fixture_root/site/$required_file"
+  if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+    echo "Validator accepted missing required file: $required_file (issue #39)" >&2
+    exit 1
+  fi
+done
+
+# --- Issue #39: table-driven mutation tests for required metadata ---
+
+# For each required metadata key, remove it from index.html and verify
+# the validator rejects.
+for meta_key in \
+  og:url \
+  og:title \
+  og:description \
+  og:image \
+  og:image:alt \
+  twitter:card \
+  twitter:title \
+  twitter:description \
+  twitter:image \
+  twitter:image:alt
+do
+  cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+  python3 - "$fixture_root/site/index.html" "$meta_key" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+meta_key = sys.argv[2]
+content = path.read_text()
+# Remove the meta tag with this property/name.
+import re
+# Match <meta property="meta_key" ...> or <meta name="meta_key" ...>
+pattern = re.compile(
+    r'<meta\s+(?:property|name)="' + re.escape(meta_key) + r'"[^>]*/?>',
+    re.IGNORECASE
+)
+content, count = pattern.subn("", content)
+if count == 0:
+    print(f"WARNING: could not find meta tag for {meta_key}", file=sys.stderr)
+path.write_text(content)
+PY
+  if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+    echo "Validator accepted missing required metadata: $meta_key (issue #39)" >&2
+    exit 1
+  fi
+done
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
 echo "Website validator self-tests passed."

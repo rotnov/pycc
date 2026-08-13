@@ -1,0 +1,167 @@
+{
+  "description": "Append-only external-mention evidence record for pycc (issue #209). Entries are never deleted or rewritten; later observations add new entries. CI validates structure and classification only — it does not crawl third parties.",
+  "launch_gate": {
+    "status": "closed",
+    "human_authorized": false,
+    "criteria": [
+      "release_tag_roadmap_reconciled",
+      "executable_tested_quick_start",
+      "landing_status_agree",
+      "canonical_urls_and_live_links_pass",
+      "launch_text_names_product_category_not_ai_compiler",
+      "discloses_pre_alpha_and_provenance"
+    ],
+    "closed_reason": "Pre-alpha; launch readiness criteria not yet all verified."
+  },
+  "observations": [
+    {
+      "observed_at": "2026-07-29T15:30:22Z",
+      "discovery_surface": "github_code_search",
+      "query": "exact \"https://rotnov.github.io/pycc/\"",
+      "result_count": 0,
+      "result_type": "empty_window",
+      "entries": [],
+      "sample_limitation": "GitHub code search has indexing and matching boundaries; zero rows means zero in this observed window, not zero universally."
+    },
+    {
+      "observed_at": "2026-07-29T15:30:22Z",
+      "discovery_surface": "github_code_search",
+      "query": "exact \"github.com/rotnov/pycc\"",
+      "result_count": 0,
+      "result_type": "empty_window",
+      "entries": [],
+      "sample_limitation": "GitHub code search has indexing and matching boundaries; zero rows means zero in this observed window, not zero universally."
+    },
+    {
+      "observed_at": "2026-07-29T15:30:22Z",
+      "discovery_surface": "github_code_search",
+      "query": "exact \"rotnov/pycc\"",
+      "result_count": 0,
+      "result_type": "empty_window",
+      "entries": [],
+      "sample_limitation": "GitHub code search has indexing and matching boundaries; zero rows means zero in this observed window, not zero universally."
+    },
+    {
+      "observed_at": "2026-07-29T15:30:22Z",
+      "discovery_surface": "github_commit_search",
+      "query": "exact \"rotnov/pycc\"",
+      "result_count": 0,
+      "result_type": "empty_window",
+      "entries": [],
+      "sample_limitation": "GitHub commit search has its own indexing boundaries."
+    },
+    {
+      "observed_at": "2026-07-29T15:30:22Z",
+      "discovery_surface": "github_issue_search",
+      "query": "exact \"rotnov/pycc\"",
+      "result_count": 3,
+      "result_type": "rows",
+      "entries": [
+        {
+          "source_url": "https://github.com/ievo-ai/skills/issues/432",
+          "target_url": "https://github.com/rotnov/pycc",
+          "classification": "self_authored_external",
+          "author": "rotnov",
+          "author_relationship": "repository_owner",
+          "live_state": "closed",
+          "link_exposed": true,
+          "nofollow_known": false,
+          "first_seen": "2026-07-29T15:30:22Z",
+          "last_verified": "2026-07-29T15:30:22Z",
+          "claim_accuracy": "references pycc as reproduction context for an upstream tool defect"
+        },
+        {
+          "source_url": "https://github.com/ievo-ai/skills/issues/446",
+          "target_url": "https://github.com/rotnov/pycc",
+          "classification": "self_authored_external",
+          "author": "rotnov",
+          "author_relationship": "repository_owner",
+          "live_state": "closed",
+          "link_exposed": true,
+          "nofollow_known": false,
+          "first_seen": "2026-07-29T15:30:22Z",
+          "last_verified": "2026-07-29T15:30:22Z",
+          "claim_accuracy": "references pycc as reproduction context for an upstream tool defect"
+        },
+        {
+          "source_url": "https://github.com/ievo-ai/skills/issues/449",
+          "target_url": "https://github.com/rotnov/pycc",
+          "classification": "self_authored_external",
+          "author": "rotnov",
+          "author_relationship": "repository_owner",
+          "live_state": "closed",
+          "link_exposed": true,
+          "nofollow_known": false,
+          "first_seen": "2026-07-29T15:30:22Z",
+          "last_verified": "2026-07-29T15:30:22Z",
+          "claim_accuracy": "references pycc as reproduction context for an upstream tool defect"
+        }
+      ],
+      "sample_limitation": "GitHub issue search has its own indexing boundaries."
+    },
+    {
+      "observed_at": "2026-07-29T15:30Z",
+      "discovery_surface": "google_web_search",
+      "query": "\"rotnov/pycc\" -site:github.com -site:rotnov.github.io",
+      "result_count": 0,
+      "result_type": "empty_window",
+      "entries": [],
+      "sample_limitation": "Google results are a bounded public window with hl=en, gl=us, pws=0; not an exhaustive backlink search."
+    },
+    {
+      "observed_at": "2026-07-29T15:31Z",
+      "discovery_surface": "google_web_search",
+      "query": "\"ahead-of-time compiler for typed Python\" -site:github.com -site:rotnov.github.io",
+      "result_count": 0,
+      "result_type": "empty_window",
+      "entries": [],
+      "sample_limitation": "Google results are a bounded public window with hl=en, gl=us, pws=0; not an exhaustive backlink search."
+    },
+    {
+      "observed_at": "2026-07-29T15:31Z",
+      "discovery_surface": "search_console_links",
+      "query": "Links report export",
+      "result_count": 0,
+      "result_type": "processing",
+      "entries": [],
+      "source_limitation": "Search Console Links report is sampled, grouped, deduplicated, truncated, and non-comprehensive per Google documentation.",
+      "sample_limitation": "Report was still processing; retry in about a day."
+    },
+    {
+      "observed_at": "2026-07-29T15:31Z",
+      "discovery_surface": "github_traffic_referrers",
+      "query": "Top referrers rolling list",
+      "result_count": 2,
+      "result_type": "rows",
+      "entries": [
+        {
+          "source_url": "github.com",
+          "target_url": "https://github.com/rotnov/pycc",
+          "classification": "owned",
+          "author": null,
+          "author_relationship": "project_owned_surface",
+          "live_state": "live",
+          "link_exposed": true,
+          "nofollow_known": false,
+          "first_seen": "2026-07-29T15:31Z",
+          "last_verified": "2026-07-29T15:31Z",
+          "claim_accuracy": "project-owned GitHub surface"
+        },
+        {
+          "source_url": "rotnov.github.io",
+          "target_url": "https://github.com/rotnov/pycc",
+          "classification": "owned",
+          "author": null,
+          "author_relationship": "project_owned_surface",
+          "live_state": "live",
+          "link_exposed": true,
+          "nofollow_known": false,
+          "first_seen": "2026-07-29T15:31Z",
+          "last_verified": "2026-07-29T15:31Z",
+          "claim_accuracy": "project-owned Pages surface"
+        }
+      ],
+      "sample_limitation": "Rolling top referrer list, not all-time or exhaustive."
+    }
+  ]
+}

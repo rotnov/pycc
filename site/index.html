@@ -55,7 +55,7 @@
             "name": "pycc — AOT compiler for typed Python to native binaries",
             "description": "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM; AI-created and human-managed.",
             "inLanguage": "en",
-            "dateModified": "2026-08-07",
+            "dateModified": "2026-08-12",
             "mainEntity": {
               "@id": "https://rotnov.github.io/pycc/#project"
             }
@@ -73,7 +73,6 @@
             "codeRepository": "https://github.com/rotnov/pycc",
             "license": "https://opensource.org/license/mit",
             "programmingLanguage": "Rust",
-            "runtimePlatform": "LLVM",
             "keywords": [
               "Python compiler",
               "ahead-of-time compiler",
@@ -157,10 +156,14 @@
               <span class="window-state">PY 3.14</span>
             </div>
             <pre><code><span class="code-keyword">def</span> <span class="code-function">fib</span>(n: <span class="code-type">int</span>) -&gt; <span class="code-type">int</span>:
-    <span class="code-keyword">return</span> n <span class="code-keyword">if</span> n &lt; <span class="code-number">2</span> <span class="code-keyword">else</span> fib(n - <span class="code-number">1</span>) + fib(n - <span class="code-number">2</span>)
+    <span class="code-keyword">if</span> n &lt; <span class="code-number">2</span>:
+        <span class="code-keyword">return</span> n
+    <span class="code-keyword">return</span> fib(n - <span class="code-number">1</span>) + fib(n - <span class="code-number">2</span>)
 
-<span class="code-keyword">def</span> <span class="code-function">main</span>() -&gt; <span class="code-type">None</span>:
-    print(fib(<span class="code-string">"35"</span>))</code></pre>
+i = <span class="code-number">0</span>
+<span class="code-keyword">while</span> i &lt; <span class="code-number">11</span>:
+    print(fib(i))
+    i = i + <span class="code-number">1</span></code></pre>
           </div>
           <div class="diagnostic-card">
             <div class="diagnostic-title">
@@ -170,10 +173,10 @@
             </div>
             <p>argument 1 of <code>fib</code> expects <code>int</code>, got <code>str</code></p>
             <div class="diagnostic-line">
-              <span>5</span>
-              <code>print(fib(<mark>"35"</mark>))</code>
+              <span>8</span>
+              <code>print(fib(<mark>"5"</mark>))</code>
             </div>
-            <p class="diagnostic-help">help: did you mean <code>int("35")</code>?</p>
+            <p class="diagnostic-help">help: did you mean <code>int("5")</code>?</p>
           </div>
         </div>
       </section>

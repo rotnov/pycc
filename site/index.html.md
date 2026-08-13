@@ -54,8 +54,11 @@ Documented representation and lifetime gaps, the full multi-version
 conformance matrix, differential fuzzing, corpus testing, and production
 readiness remain roadmap work.
 
-Examples and CLI commands on the website are design targets unless explicitly
-identified as implemented behavior.
+The landing page's code example uses only implemented v0.1 language features
+(statement-form `if`, `while`, recursive calls, `print`) and matches the
+`recursive_fibonacci_matches_the_well_known_sequence` conformance test.
+Other examples and CLI commands on the website are design targets unless
+explicitly identified as implemented behavior.
 
 ## Evidence pages
 

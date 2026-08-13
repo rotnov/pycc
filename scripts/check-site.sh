@@ -457,7 +457,7 @@ if web_page.get("name") != title:
     raise SystemExit("WebPage JSON-LD name must match the page title")
 if web_page.get("description") != metadata["description"][0]["content"]:
     raise SystemExit("WebPage JSON-LD description must match the meta description")
-if web_page.get("dateModified") != "2026-08-07":
+if web_page.get("dateModified") != "2026-08-12":
     raise SystemExit("Landing WebPage dateModified is stale")
 if web_page.get("mainEntity") != {"@id": project_id}:
     raise SystemExit("WebPage JSON-LD must identify the pycc project as its main entity")
@@ -475,6 +475,44 @@ expected_source_description = (
 )
 if software_source.get("description") != expected_source_description:
     raise SystemExit("SoftwareSourceCode description must preserve product-first truth")
+
+# --- Issue #203: bind SoftwareSourceCode semantics to visible facts ---
+if software_source.get("name") != "pycc":
+    raise SystemExit("SoftwareSourceCode JSON-LD name must be 'pycc'")
+if software_source.get("license") != "https://opensource.org/license/mit":
+    raise SystemExit("SoftwareSourceCode JSON-LD license must be the MIT URL")
+if software_source.get("programmingLanguage") != "Rust":
+    raise SystemExit("SoftwareSourceCode JSON-LD programmingLanguage must be 'Rust'")
+# runtimePlatform must NOT be present — LLVM is the compiler backend,
+# not a runtime platform.  schema.org defines runtimePlatform as the
+# runtime/interpreter dependency; pycc's output is standalone native
+# binaries with no runtime platform.  Setting it to "LLVM" would
+# misleadingly imply generated programs run on an LLVM platform.
+if "runtimePlatform" in software_source:
+    raise SystemExit(
+        "SoftwareSourceCode JSON-LD must not declare runtimePlatform — "
+        "LLVM is the compiler backend, not a runtime platform (issue #203)"
+    )
+# Keywords must describe a typed-Python AOT compiler and must not
+# describe pycc as an AI or ML compiler.
+keywords = software_source.get("keywords")
+if not isinstance(keywords, list) or not keywords:
+    raise SystemExit("SoftwareSourceCode JSON-LD must have a non-empty keywords array")
+kw_text = " ".join(keywords).lower()
+if "python" not in kw_text or "compiler" not in kw_text:
+    raise SystemExit("SoftwareSourceCode keywords must describe a Python compiler")
+if "ai compiler" in kw_text or "machine learning" in kw_text:
+    raise SystemExit(
+        "SoftwareSourceCode keywords must not describe pycc as an AI or ML compiler"
+    )
+# Must not claim production readiness.
+source_text = json.dumps(software_source).lower()
+for false_claim in ("production-ready", "production ready", "stable release", "ga "):
+    if false_claim in source_text:
+        raise SystemExit(
+            f"SoftwareSourceCode JSON-LD must not claim '{false_claim}' — "
+            "pycc is pre-alpha"
+        )
 
 visible_body_text = " ".join(" ".join(parser.visible_body_text).split())
 required_disclosures = (
@@ -524,7 +562,7 @@ ROBOTS = (
 PAGE_SPECS = {
     "status": {
         "canonical": f"{ROOT}status/",
-        "date_modified": "2026-08-07",
+        "date_modified": "2026-08-12",
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
@@ -551,7 +589,7 @@ PAGE_SPECS = {
     },
     "architecture": {
         "canonical": f"{ROOT}architecture/",
-        "date_modified": "2026-08-02",
+        "date_modified": "2026-08-12",
         "title": "pycc architecture — typed Python to LLVM native binaries",
         "description": (
             "Explore pycc's implemented Rust and LLVM compiler pipeline, "
@@ -573,7 +611,7 @@ PAGE_SPECS = {
     },
     "python-aot-compilers": {
         "canonical": f"{ROOT}python-aot-compilers/",
-        "date_modified": "2026-08-07",
+        "date_modified": "2026-08-12",
         "title": "Python AOT compilers compared — where pycc fits",
         "description": (
             "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from "
@@ -618,7 +656,7 @@ PAGE_SPECS = {
     },
     "ai-native": {
         "canonical": f"{ROOT}ai-native/",
-        "date_modified": "2026-07-30",
+        "date_modified": "2026-08-12",
         "title": (
             "pycc AI-native experiment — software built entirely by AI"
         ),
@@ -1400,18 +1438,31 @@ if not llms.startswith(
     "# pycc\n\n> pycc is a pre-alpha strict ahead-of-time compiler for typed, standard Python"
 ):
     raise SystemExit("llms.txt summary must put the product before provenance")
+# --- Issue #207: the blockquote summary must be a single physical line
+# so reference consumers (llms_txt2ctx) do not truncate it after the
+# first line and push the rest into the info field with literal > prefixes.
+first_blockquote_line = llms.split("\n")[2]  # line 0: H1, line 1: blank, line 2: > ...
+if not first_blockquote_line.startswith("> "):
+    raise SystemExit("llms.txt must have a blockquote summary on line 3")
+second_line = llms.split("\n")[3]
+if second_line.startswith(">"):
+    raise SystemExit(
+        "llms.txt blockquote summary must be a single physical line (issue #207) — "
+        "reference consumers truncate multi-line blockquotes"
+    )
 for heading in ("## Project", "## Specifications", "## Optional"):
-    if llms.count(heading) != 1:
-        raise SystemExit(f"llms.txt must contain exactly one {heading!r} section")
+    if heading not in llms:
+        raise SystemExit(f"llms.txt must contain a {heading!r} section")
 for required_link in (
     f"[Canonical website]({canonical})",
-    f"[Markdown website]({canonical}index.html.md)",
+    f"[Markdown landing]({canonical}index.html.md)",
     f"[Current implementation status]({canonical}status/)",
     f"[Compiler architecture]({canonical}architecture/)",
     f"[Python AOT compiler comparison]({canonical}python-aot-compilers/)",
     f"[AI-native experiment]({canonical}ai-native/)",
     "[Source repository](https://github.com/rotnov/pycc)",
     "[Specification index](https://github.com/rotnov/pycc/blob/main/docs/SPEC.md)",
+    "[README](https://github.com/rotnov/pycc/blob/main/README.md)",
 ):
     if required_link not in llms:
         raise SystemExit(f"llms.txt is missing required link: {required_link}")
@@ -1461,6 +1512,56 @@ for evidence_link in (
         raise SystemExit(
             f"Markdown website is missing evidence link: {evidence_link}"
         )
+
+# --- Issue #206: bind Markdown landing to HTML page semantic contract ---
+# The Markdown must cover the same key facts as the HTML page so that
+# one-sided semantic drift is detected.
+
+# Must mention the same authoritative resources as the HTML page.
+for resource in (
+    "https://github.com/rotnov/pycc",
+    "https://github.com/rotnov/pycc/blob/main/docs/SPEC.md",
+    "https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md",
+):
+    if resource not in markdown:
+        raise SystemExit(
+            f"Markdown website is missing authoritative resource: {resource}"
+        )
+
+# Must mention the conformance evidence (matching the HTML page).
+for conformance_claim in (
+    "fib",
+    "mandelbrot-ascii",
+    "five Tier-1 targets",
+):
+    if conformance_claim not in markdown:
+        raise SystemExit(
+            f"Markdown website is missing conformance claim: {conformance_claim}"
+        )
+
+# Must mention the code example features (matching the HTML hero).
+for code_feature in (
+    "statement-form",
+    "recursive_fibonacci_matches_the_well_known_sequence",
+):
+    if code_feature not in markdown:
+        raise SystemExit(
+            f"Markdown website is missing code example feature: {code_feature}"
+        )
+
+# Must not claim production readiness (matching the HTML page's pre-alpha status).
+md_lower = markdown.lower()
+for false_claim in ("production-ready", "production ready", "stable release"):
+    if false_claim in md_lower:
+        raise SystemExit(
+            f"Markdown website must not claim '{false_claim}' — pycc is pre-alpha"
+        )
+
+# Must mention the v0.1/v0.2 acceptance status (matching the HTML page).
+if "v0.1" not in markdown or "acceptance criteria" not in markdown:
+    raise SystemExit(
+        "Markdown website must mention v0.1 acceptance criteria status"
+    )
 PY
 
 key_file="$site_dir/${indexnow_key}.txt"

@@ -59,17 +59,19 @@ must reject a program before code generation. In
 lock the public diagnostic. This focused oracle case does not replace the
 planned multi-version conformance harness.
 
-## Differential fuzzing
+## Differential fuzzing (planned)
 
-Generator produces well-typed programs (type-directed generation — always compile-clean), weighted toward: arithmetic edges (overflow → bigint promotion paths), string unicode edges, collection aliasing, control-flow + exceptions, match patterns. Mismatch → auto-minimize (creduce-style) → auto-file issue with repro. Runs continuously on a dedicated runner.
+A generator would produce well-typed programs (type-directed generation — always compile-clean), weighted toward: arithmetic edges (overflow → bigint promotion paths), string unicode edges, collection aliasing, control-flow + exceptions, match patterns. Mismatch → auto-minimize (creduce-style) → auto-file issue with repro. This would run continuously on a dedicated runner. No fuzzing harness exists on current `main`.
 
-## Corpus: open-source projects as integration tests
+## Corpus: open-source projects as integration tests (planned)
 
-Tiers and gates in PYTHON_STANDARDS.md § Real-world corpus. Mechanics:
+Tiers and gates in PYTHON_STANDARDS.md § Real-world corpus. Planned mechanics:
 
 - Pinned commit per project; `pycc build` the package, run its pytest suite against the compiled artifact (test files themselves compiled where possible; interop fallback allowed and measured).
 - Per-project dashboard: % files compiled, % tests passed, RC-elision rate, binary size, speed vs CPython on the project's own benchmarks.
 - Regression vs previous release = release blocker.
+
+No corpus workflow, pinned corpus inputs, or pass-rate dashboard exists on current `main`.
 
 ## Planned CPython interop matrix (v0.7)
 
@@ -111,9 +113,9 @@ Each negative case requires both human and versioned JSON diagnostic snapshots.
 The automatic and allowlist cases must also exercise target-specific native
 package artifacts rather than passing only with a pure-Python stand-in.
 
-## The bot
+## The bot (planned)
 
-GitHub Action (`corpus-bot`):
+A planned GitHub Action (`corpus-bot`) would work as follows. No `corpus-bot` workflow exists on current `main`.
 
 1. Nightly: run corpus + a rotating slice of top-PyPI packages (by download count) in compile-only mode.
 2. New failure → fingerprint (diagnostic code + normalized span + package) → dedupe → auto-file issue **in the pycc repo**: minimized repro, diagnostic output, PEP link, dashboard delta. Labels: `corpus`, `regression`/`gap`.

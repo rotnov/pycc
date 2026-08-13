@@ -81,29 +81,51 @@ benchmark.
 ```console
 $ cat hello.py
 def fib(n: int) -> int:
-    return n if n < 2 else fib(n - 1) + fib(n - 2)
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
 
-def main() -> None:
-    print(fib(35))
+i = 0
+while i < 11:
+    print(fib(i))
+    i = i + 1
 $ pycc check hello.py
+$ pycc build hello.py -o hello
+$ ./hello
+0
+1
+1
+2
+3
+5
+8
+13
+21
+34
+55
 ```
 
 `pycc check` parses and type-checks the file, enforcing public annotations
 and rejecting `Any`. No output means no errors. Type errors are compile
-errors, Rust-style. For example, if `main` read `print(fib("35"))` instead:
+errors, Rust-style. For example, if `fib` were called with a string
+argument instead:
 
 ```
 error[T0021]: argument 1 of `fib` expects `int`, got `str`
- --> hello.py:5:15
+ --> hello.py:8:15
   |
-5 |     print(fib("35"))
-  |               ^^^^ expected `int`
-  = help: did you mean `int("35")`?
+8 |     print(fib("5"))
+  |               ^^^ expected `int`
+  = help: did you mean `int("5")`?
 ```
 
 `pycc build` and `pycc run` compile the implemented v0.1 surface through
 MIR, LLVM, and the native runtime — see the status block above and
 [`docs/CLI_SPEC.md`](./docs/CLI_SPEC.md) for the full command reference.
+The quick-start source above uses only implemented v0.1 language features
+(statement-form `if`, `while`, recursive calls, `print`) and matches the
+`recursive_fibonacci_matches_the_well_known_sequence` conformance test in
+`tests/slice1_codegen_depth.rs`.
 
 ## Pre-commit (experimental)
 
@@ -168,8 +190,8 @@ The complete internal test architecture has seven layers, defined in
 are especially important:
 
 1. **Conformance suite.** Every language standard pycc supports maps to a PEP, and every PEP has its own test in `tests/conformance/`. Each supported language level compiles and runs its cumulative fixture set, then compares output with that level's pinned CPython oracle. The v1 track uses CPython 3.14. Unsupported-by-design features get *negative* tests asserting the exact compile error. The full matrix: [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
-2. **Real-world corpus (planned).** CI compiles well-typed open-source projects (`black`, `packaging`, `attrs`, `mypy`, ...) and runs their own test suites against the compiled artifacts — the same way ruff validates against a real-repo ecosystem. Pass rate per project is tracked release to release.
-3. **Ecosystem bot (planned).** A scheduled job picks popular PyPI/GitHub projects, compiles them with the latest pycc, and auto-files a structured issue *in this repo* for every new incompatibility: minimized repro, diagnostic, PEP reference. When pycc uncovers a genuine type bug in an upstream project, we report it upstream — manually and curated, never bot-spammed.
+2. **Real-world corpus (planned).** CI would compile well-typed open-source projects (`black`, `packaging`, `attrs`, `mypy`, ...) and run their own test suites against the compiled artifacts — the same way ruff validates against a real-repo ecosystem. Pass rate per project would be tracked release to release. This is not yet implemented; no corpus workflow, pinned corpus inputs, or pass-rate dashboard exists on current `main`.
+3. **Ecosystem bot (planned).** A scheduled job would pick popular PyPI/GitHub projects, compile them with the latest pycc, and auto-file a structured issue *in this repo* for every new incompatibility: minimized repro, diagnostic, PEP reference. When pycc uncovers a genuine type bug in an upstream project, we report it upstream — manually and curated, never bot-spammed. This is not yet implemented; no scheduled bot workflow exists on current `main`.
 
 ## Roadmap
 
@@ -195,3 +217,15 @@ Requires Rust 1.97+ (`rustup update stable`) and LLVM 22.1.1.
 ## License
 
 MIT
+
+## Citation
+
+If you reference pycc in your work, please cite this repository. A
+machine-readable [`CITATION.cff`](./CITATION.cff) (CFF 1.2.0) is provided
+in the repository root; GitHub renders a "Cite this repository" panel
+from it. The citation identity uses the exact `rotnov/pycc` repository
+URL to avoid collision with unrelated same-named projects. Authorship is
+attributed to a collective AI-agents entity that truthfully describes the
+autonomous development model; the human maintainer is not listed as a
+software author. Release-bound fields (version, date-released, DOI) are
+omitted until the release lifecycle becomes coherent.

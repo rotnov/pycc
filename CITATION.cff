@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you reference pycc in your work, please cite this repository."
+title: "pycc: ahead-of-time compiler for typed Python"
+abstract: >-
+  pycc is a pre-alpha ahead-of-time (AOT) compiler that takes
+  type-annotated standard Python 3.14 source, enforces every type
+  annotation at compile time, and produces standalone native binaries
+  through Rust and LLVM. The project is an experiment in autonomous,
+  AI-native software development: AI agents create the specifications,
+  code, tests, documentation, and reviews; a human manages direction,
+  priorities, and constraints. No project code is handwritten by a
+  human. "AI-native" describes the authorship workflow; pycc is an AOT
+  compiler for typed Python, not an AI or machine-learning compiler.
+type: software
+repository-code: https://github.com/rotnov/pycc
+url: https://rotnov.github.io/pycc/
+license: MIT
+license-url: https://opensource.org/license/mit
+keywords:
+  - Python compiler
+  - ahead-of-time compiler
+  - typed Python
+  - native binary
+  - static typing
+  - AOT compilation
+authors:
+  - name: "pycc AI agents"
+    description: >-
+      Collective entity: the autonomous AI coding agents that create
+      the project's specifications, code, tests, documentation, and
+      reviews. Not a legal person. The human maintainer (Denys Rotnov)
+      manages direction and constraints but is not attributed as a
+      software author; this distinction is a maintainer attestation
+      supported by the public Git history, not a fact provable from
+      Git author metadata alone.

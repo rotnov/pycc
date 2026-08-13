@@ -339,11 +339,32 @@ updates quickly. It rejects empty, duplicate, out-of-scope, query-bearing, or
 fragment-bearing URLs before making a request. Its public verification key is
 hosted below `/pycc/`, which limits that key to URLs in the project path. The
 notification is best-effort, has finite connection and request timeouts, and
-does not block a successful Pages deployment.
+does not block a successful Pages deployment. On every terminal path the
+notifier emits a structured one-line result record containing the UTC
+submission timestamp, endpoint host, URL count, sitemap payload SHA-256,
+deployed commit, final HTTP status, accepted class (`submitted` for 200,
+`key_validation_pending` for 202, `failed` otherwise), sanitized failure
+class (distinguishing DNS errors, connection errors, timeouts, TLS errors,
+rate limiting, scope mismatches, and HTTP errors), and retry configuration.
+The production workflow step has a stable `id` and an `if: always()` follow-up
+that inspects the step's raw `outcome` before `continue-on-error`
+normalization, so a failed notification is externally visible as a workflow
+warning without rolling back the completed deployment. The notifier also
+writes a concise `GITHUB_STEP_SUMMARY` table so a reader can identify the
+trusted commit, URL count, sitemap digest, response class, and delivery
+outcome without downloading raw logs.
 
 `scripts/test-notify-indexnow.py` points the production notifier at a local HTTP
 fixture and proves that the real non-dry-run path sends the expected JSON
-payload and fails on an HTTP error without contacting a public search endpoint.
+payload, emits the structured result record with all required fields on every
+terminal path, distinguishes 200 from 202, classifies failures by sanitized
+failure class, writes the `GITHUB_STEP_SUMMARY` file, and fails on an HTTP
+error without contacting a public search endpoint. The pages workflow
+structural invariants (step `id`, `continue-on-error`, `if: always()`
+observer, `outcome` not `conclusion`, unprivileged permissions, push-only
+after deploy) are independently validated by
+`scripts/check_pages_workflow.rb` with its own mutation suite
+(`scripts/test_check_pages_workflow.rb`).
 An accepted IndexNow response proves receipt only, not crawl or indexing.
 
 Discovery is not ranking. Long-term visibility depends on publishing accurate,
@@ -534,3 +555,26 @@ When the website's claims change, update the root README and the relevant
 specification in the same patch. Search metadata must describe current or
 explicitly labelled planned behavior; it must never turn roadmap goals into
 present-tense product claims.
+
+## Citation metadata
+
+The root `CITATION.cff` provides machine-readable software citation metadata
+conforming to CFF 1.2.0. GitHub renders a "Cite this repository" panel from
+this file. The citation identity uses the exact `rotnov/pycc` repository
+identity rather than the bare product name, which collides with unrelated
+projects. Authorship is attributed to a collective entity ("pycc AI agents")
+that truthfully describes the autonomous AI coding agent development model;
+the human maintainer is not listed as a software author, only as the
+repository owner and manager. Release-bound fields (`version`,
+`date-released`, `commit`, DOI) are omitted until the release lifecycle
+becomes coherent (see #196); a future release will derive those fields from
+the accepted structured release state rather than duplicating literals by
+hand. No DOI or `preferred-citation` is declared because no external
+archival record exists. The citation file is validated by
+`scripts/check_citation_cff.rb`, which rejects wrong repository URLs,
+non-MIT licenses, "AI compiler" product semantics, human authorship
+inferred from repository ownership, release-bound fields before #196
+resolves, and the presence of `.zenodo.json` (Zenodo is a separate,
+explicitly approved step). Its mutation suite
+(`scripts/test_check_citation_cff.rb`) provides negative controls for
+each material field.
