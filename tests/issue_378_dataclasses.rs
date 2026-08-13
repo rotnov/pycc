@@ -400,8 +400,8 @@ fn dataclass_float_field() {
         ok,
         "pycc build and run should succeed for a float-field dataclass"
     );
-    assert!(
-        stdout.starts_with(b"True\nMeasurement(value=3.14"),
+    assert_eq!(
+        stdout, b"True\nMeasurement(value=3.14, unit=1)\n",
         "float field repr and equality"
     );
 }
@@ -440,5 +440,60 @@ fn reject_eq_between_non_dataclass_instances_with_user_eq() {
     assert!(
         check_fails(&dir, &src),
         "== between non-dataclass instances with user __eq__ should be rejected with T0021"
+    );
+}
+
+/// #378: a self-referential dataclass field (`next: Node`) is rejected with
+/// C0001 -- the instance attribute-slot storage is a single word per slot
+/// (D-154), with no representation for a class instance. Without the
+/// scalar-slot-type check in HIR lowering, this panics in codegen with an
+/// "internal error" message; the check rejects it cleanly at HIR time.
+#[test]
+fn reject_self_referential_dataclass_field() {
+    let dir = std::env::temp_dir().join(format!("pycc_378_rej_self_ref_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "rej_self_ref.py",
+        "@dataclass\nclass Node:\n    next: Node\n",
+    );
+    assert!(
+        check_fails(&dir, &src),
+        "a self-referential dataclass field should be rejected with C0001, not panic in codegen"
+    );
+}
+
+/// #378: a `Self`-typed dataclass field (`next: Self`) is rejected with
+/// C0001 -- `Self` resolves to `Ty::Instance(class_name)` (PEP 673), the
+/// same non-scalar case as a self-referential class-name field.
+#[test]
+fn reject_self_typed_dataclass_field() {
+    let dir = std::env::temp_dir().join(format!("pycc_378_rej_self_typed_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "rej_self_typed.py",
+        "@dataclass\nclass Node:\n    next: Self\n",
+    );
+    assert!(
+        check_fails(&dir, &src),
+        "a `Self`-typed dataclass field should be rejected with C0001, not panic in codegen"
+    );
+}
+
+/// #378: a `None`-typed dataclass field (`x: None`) is rejected with C0001
+/// -- `None` is not a scalar slot type.
+#[test]
+fn reject_none_typed_dataclass_field() {
+    let dir = std::env::temp_dir().join(format!("pycc_378_rej_none_field_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "rej_none_field.py",
+        "@dataclass\nclass C:\n    x: None\n",
+    );
+    assert!(
+        check_fails(&dir, &src),
+        "a `None`-typed dataclass field should be rejected with C0001"
     );
 }
