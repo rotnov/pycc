@@ -10,6 +10,9 @@ on:
       - "scripts/notify-indexnow.sh"
       - "scripts/test-notify-indexnow.py"
       - ".github/workflows/pages.yml"
+      - "README.md"
+      - "tests/fixtures/quick_start.py"
+      - "docs/WEBSITE.md"
   pull_request:
     paths:
       - "site/**"
@@ -18,6 +21,9 @@ on:
       - "scripts/notify-indexnow.sh"
       - "scripts/test-notify-indexnow.py"
       - ".github/workflows/pages.yml"
+      - "README.md"
+      - "tests/fixtures/quick_start.py"
+      - "docs/WEBSITE.md"
   workflow_dispatch:
 
 permissions:

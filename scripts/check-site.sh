@@ -5,6 +5,9 @@ canonical='https://rotnov.github.io/pycc/'
 site_dir=${SITE_DIR:-site}
 indexnow_key='3361fe03d0f44ab7cdbb1a3ce1461821'
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+readme_path=${README_PATH:-"$repo_root/README.md"}
+quick_start_fixture=${QUICK_START_FIXTURE_PATH:-"$repo_root/tests/fixtures/quick_start.py"}
+website_md_path=${WEBSITE_MD_PATH:-"$repo_root/docs/WEBSITE.md"}
 
 for required_file in \
   index.html \
@@ -1971,6 +1974,299 @@ for entity_name in readme_names:
                 f"{column!r}: expected {expected!r}, "
                 f"found {actual_normalized!r}"
             )
+PY
+
+# --- Issue #197: bind the public quick-start example across README, site,
+# and the canonical fixture. The fixture is the single source of truth; the
+# README `cat hello.py` block, the site hero `<pre><code>` source, the
+# copy-button command, and the documented output are all bound to it and to
+# each other so cross-file drift is detected.
+
+python3 - \
+  "$index" \
+  "$readme_path" \
+  "$quick_start_fixture" \
+  "$website_md_path" <<'PY'
+from html.parser import HTMLParser
+from pathlib import Path
+import re
+import sys
+
+
+def normalize_ws(text):
+    return " ".join(text.split())
+
+
+def normalize_source(text):
+    """Normalize Python source for semantic comparison.
+
+    Preserves leading indentation (semantically significant in Python) while
+    normalizing line endings, stripping trailing whitespace, and collapsing
+    blank lines. This is stricter than normalize_ws for source-code comparison.
+    """
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    stripped = [line.rstrip() for line in lines]
+    # Drop leading and trailing blank lines, collapse internal blank runs.
+    result = []
+    for line in stripped:
+        if line == "" and (not result or result[-1] == ""):
+            continue
+        result.append(line)
+    while result and result[-1] == "":
+        result.pop()
+    while result and result[0] == "":
+        result.pop(0)
+    return "\n".join(result)
+
+
+class HeroCodeParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_hero_code = False
+        self.hero_div_depth = 0
+        self.in_pre = False
+        self.in_pre_code = False
+        self.hero_code_text = []
+        self.in_command = False
+        self.command_div_depth = 0
+        self.command_in_code = False
+        self.command_text = []
+        self.copy_button_data = None
+        self.in_command_note = False
+        self.command_note_text = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        classes = attributes.get("class", "").split()
+        if tag == "div" and "hero-code" in classes:
+            self.in_hero_code = True
+            self.hero_div_depth = 1
+            return
+        if tag == "div" and "command" in classes:
+            self.in_command = True
+            self.command_div_depth = 1
+            return
+        if tag == "p" and "command-note" in classes:
+            self.in_command_note = True
+            self.command_note_text = []
+            return
+        if self.in_command:
+            if tag == "div":
+                self.command_div_depth += 1
+            if tag == "code":
+                self.command_in_code = True
+        if self.in_hero_code:
+            if tag == "div":
+                self.hero_div_depth += 1
+            if tag == "pre":
+                self.in_pre = True
+            if tag == "code" and self.in_pre:
+                self.in_pre_code = True
+        if tag == "button" and "copy-button" in classes:
+            self.copy_button_data = attributes.get("data-copy", "")
+
+    def handle_endtag(self, tag):
+        if self.in_command_note and tag == "p":
+            self.in_command_note = False
+        if self.in_command:
+            if tag == "code":
+                self.command_in_code = False
+            if tag == "div":
+                self.command_div_depth -= 1
+                if self.command_div_depth <= 0:
+                    self.in_command = False
+        if self.in_hero_code:
+            if tag == "code":
+                self.in_pre_code = False
+            if tag == "pre":
+                self.in_pre = False
+            if tag == "div":
+                self.hero_div_depth -= 1
+                if self.hero_div_depth <= 0:
+                    self.in_hero_code = False
+
+    def handle_data(self, data):
+        if self.in_hero_code and self.in_pre_code:
+            self.hero_code_text.append(data)
+        if self.in_command and self.command_in_code:
+            self.command_text.append(data)
+        if self.in_command_note:
+            self.command_note_text.append(data)
+
+
+index_path = Path(sys.argv[1])
+readme_path = Path(sys.argv[2])
+fixture_path = Path(sys.argv[3])
+website_md_path = Path(sys.argv[4])
+
+fixture_source = fixture_path.read_text()
+if fixture_source.endswith("\n"):
+    fixture_source = fixture_source[:-1]
+
+# --- README quick-start extraction ---
+readme_text = readme_path.read_text()
+quick_start_match = re.search(
+    r"^## Quick start\s*$",
+    readme_text,
+    re.MULTILINE,
+)
+if not quick_start_match:
+    raise SystemExit("README is missing a '## Quick start' heading")
+
+console_match = re.search(
+    r"```console\n(.*?)\n```",
+    readme_text,
+    re.DOTALL,
+)
+if not console_match:
+    raise SystemExit("README Quick start is missing a console fence block")
+console_block = console_match.group(1)
+console_lines = console_block.splitlines()
+
+# Extract the Python source: lines between `$ cat hello.py` and the next
+# line beginning with `$ `.
+cat_marker = None
+for idx, line in enumerate(console_lines):
+    if line.strip() == "$ cat hello.py":
+        cat_marker = idx
+        break
+if cat_marker is None:
+    raise SystemExit("README Quick start console block is missing '$ cat hello.py'")
+source_lines = []
+end_idx = None
+for idx in range(cat_marker + 1, len(console_lines)):
+    if console_lines[idx].startswith("$ "):
+        end_idx = idx
+        break
+    source_lines.append(console_lines[idx])
+if end_idx is None:
+    raise SystemExit("README Quick start console block has no command after cat")
+readme_source = "\n".join(source_lines)
+
+# Extract the expected output: lines after `$ ./hello` to the end of the
+# console block.
+hello_marker = None
+for idx, line in enumerate(console_lines):
+    if line.strip() == "$ ./hello":
+        hello_marker = idx
+        break
+if hello_marker is None:
+    raise SystemExit("README Quick start console block is missing '$ ./hello'")
+output_lines = []
+for idx in range(hello_marker + 1, len(console_lines)):
+    output_lines.append(console_lines[idx])
+readme_output = "\n".join(output_lines)
+
+# Extract README quick-start command lines for the no-global-install guard.
+readme_command_lines = [
+    line for line in console_lines if line.startswith("$ ")
+]
+
+# --- Site hero extraction ---
+parser = HeroCodeParser()
+parser.feed(index_path.read_text())
+
+hero_source_raw = "".join(parser.hero_code_text)
+hero_source = hero_source_raw
+# HTMLParser already unescapes entities in handle_data, so hero_source is
+# already unescaped. Normalize whitespace for comparison.
+if normalize_source(hero_source) != normalize_source(fixture_source):
+    raise SystemExit(
+        "site/index.html hero <pre><code> source does not match "
+        "tests/fixtures/quick_start.py (indentation-preserving)"
+    )
+
+if normalize_source(readme_source) != normalize_source(fixture_source):
+    raise SystemExit(
+        "README Quick start 'cat hello.py' source does not match "
+        "tests/fixtures/quick_start.py (indentation-preserving)"
+    )
+
+canonical_output = "0 1 1 2 3 5 8 13 21 34 55"
+if normalize_ws(readme_output) != canonical_output:
+    raise SystemExit(
+        f"README Quick start '$ ./hello' output does not match the "
+        f"canonical expected stdout (whitespace-normalized): "
+        f"expected {canonical_output!r}, found {normalize_ws(readme_output)!r}"
+    )
+
+# --- Copy-button binding ---
+command_displayed = "".join(parser.command_text).strip()
+if command_displayed.startswith("$ "):
+    command_displayed = command_displayed[2:]
+if command_displayed != "pycc check hello.py":
+    raise SystemExit(
+        f"site hero displayed command must be 'pycc check hello.py', "
+        f"found {command_displayed!r}"
+    )
+if parser.copy_button_data is None:
+    raise SystemExit("site hero is missing a .copy-button with data-copy")
+
+# --- No-global-install guard ---
+# These checks run on the raw data-copy value BEFORE the equality check below,
+# so a copy-button carrying an install command or @<version> suffix is rejected
+# on its own merit rather than only being caught by the displayed-command
+# mismatch.
+install_patterns = (
+    "pip install",
+    "brew install",
+    "npm install",
+    "cargo install",
+    "apt install",
+)
+version_suffix = re.compile(r"@\d")
+for line in readme_command_lines:
+    stripped = line[2:] if line.startswith("$ ") else line
+    for pattern in install_patterns:
+        if pattern in stripped:
+            raise SystemExit(
+                f"README Quick start command must not assume a package-manager "
+                f"install: found {pattern!r} in {stripped!r}"
+            )
+    if version_suffix.search(stripped):
+        raise SystemExit(
+            f"README Quick start command must not use a @<version> suffix: "
+            f"found in {stripped!r}"
+        )
+copy_command = parser.copy_button_data
+for pattern in install_patterns:
+    if pattern in copy_command:
+        raise SystemExit(
+            f"site hero copy-button command must not assume a package-manager "
+            f"install: found {pattern!r} in {copy_command!r}"
+        )
+if version_suffix.search(copy_command):
+    raise SystemExit(
+        f"site hero copy-button command must not use a @<version> suffix: "
+        f"found in {copy_command!r}"
+    )
+
+if parser.copy_button_data != command_displayed:
+    raise SystemExit(
+        f"site hero copy-button data-copy ({parser.copy_button_data!r}) "
+        f"does not match the displayed command ({command_displayed!r})"
+    )
+
+# --- No-"planned"-relapse guard ---
+command_note = "".join(parser.command_note_text)
+if "planned" in command_note.lower():
+    raise SystemExit(
+        "site hero .command-note must not contain 'planned' "
+        "(the quick-start example is tested, not planned)"
+    )
+
+# --- WEBSITE.md currency ---
+website_md = website_md_path.read_text()
+binding_phrase = "tested, executable v0.1 example"
+if binding_phrase not in website_md:
+    raise SystemExit(
+        f"docs/WEBSITE.md must contain the binding phrase "
+        f"{binding_phrase!r} identifying the quick start as a tested example"
+    )
+if "tests/fixtures/quick_start.py" not in website_md:
+    raise SystemExit(
+        "docs/WEBSITE.md must reference tests/fixtures/quick_start.py"
+    )
 PY
 
 if grep -R -nE '(localhost|127\.0\.0\.1|file://)' "$site_dir"; then
