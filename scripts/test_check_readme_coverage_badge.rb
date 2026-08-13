@@ -254,4 +254,16 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
     status, = run_checker(text, live_ci)
     refute_equal 0, status, "accepted README with duplicate CI badge"
   end
+
+  # --- Positive: validator is present in ci.yml (issue #211) ---
+
+  def test_live_ci_contains_coverage_badge_validator
+    assert_match(/check_readme_coverage_badge\.rb/, live_ci,
+                 "ci.yml must run the README coverage badge validator")
+  end
+
+  def test_live_ci_contains_coverage_badge_validator_tests
+    assert_match(/test_check_readme_coverage_badge\.rb/, live_ci,
+                 "ci.yml must run the README coverage badge validator tests")
+  end
 end

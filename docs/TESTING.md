@@ -226,19 +226,16 @@ without network access. It verifies:
   `continue-on-error` that could skip it or suppress its failures;
 - `ci-gate`'s `needs` list includes `build-test-coverage`.
 
-The validator currently runs in `pages.yml`. A staged successor
-(`tests/fixtures/policy-successors/ci-d199.yml`) adds it to `ci.yml`'s
-`build-test-coverage` job (which contributes to `ci-gate`) so that deletion
-from either workflow is detected; the activation merge will apply that staged
-shape to the live `ci.yml`. Its test suite
-(`scripts/test_check_readme_coverage_badge.rb`) includes negative tests for
-every mutation: wrong percentage, missing badge, alt/URL disagreement, CI
-threshold mismatch, missing CI threshold, lines/regions disagreement, badge not
-linking to TESTING.md, missing CI badge, CI badge with wrong branch, CI badge
-with wrong workflow, CI badge with wrong repository, CI badge link target
-pointing to wrong repo or workflow, duplicate coverage badge, duplicate CI
-badge, skippable coverage step (both `if:` condition and `continue-on-error`),
-and ci-gate without build-test-coverage dependency.
+The validator runs in both `ci.yml` (inside the `build-test-coverage` job, which
+contributes to `ci-gate`) and `pages.yml`, so deletion from either workflow is
+detected. Its test suite (`scripts/test_check_readme_coverage_badge.rb`)
+includes negative tests for every mutation: wrong percentage, missing badge,
+alt/URL disagreement, CI threshold mismatch, missing CI threshold, lines/regions
+disagreement, badge not linking to TESTING.md, missing CI badge, CI badge with
+wrong branch, CI badge with wrong workflow, CI badge with wrong repository, CI
+badge link target pointing to wrong repo or workflow, duplicate coverage badge,
+duplicate CI badge, skippable coverage step (both `if:` condition and
+`continue-on-error`), and ci-gate without build-test-coverage dependency.
 
 The `ci-tier1-cross-compile` evidence binds an allowlist of exact reviewed
 `ci.yml` byte digests that provide the five Tier-1 native targets, cross-host

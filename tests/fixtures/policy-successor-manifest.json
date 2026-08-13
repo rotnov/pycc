@@ -159,7 +159,7 @@
     {
       "path": "tests/fixtures/pages-performance-manifest.json",
       "source_path": "tests/fixtures/pages-performance-manifest.json",
-      "sha256": "fa542eacee5dfa1e1661c75043e6fac678fba8dce710192e0d085f0b51f21a43"
+      "sha256": "f98b2a15b54d47fcaa944b9caa96d9b7503aa6f17b058e15a35d83ea98765808"
     },
     {
       "path": "tests/fixtures/workflow-policy-search-ledger.yml",
@@ -169,7 +169,7 @@
     {
       "path": "tests/fixtures/policy-successors/check_roadmap_evidence.rb",
       "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence.rb",
-      "sha256": "eecfe6dff3e67f66fcd37b057e6ae5edbf3bac0c9f4f96f45790d31eb3e4e51f"
+      "sha256": "38cedac1ee96d8970a25717faf33a27fa03de23f974889303ec2e6de9d9ea3a0"
     },
     {
       "path": "tests/fixtures/policy-successors/check_roadmap_evidence-d229.rb",
@@ -194,7 +194,7 @@
     {
       "path": "tests/fixtures/policy-successors/test_check_roadmap_evidence.rb",
       "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence.rb",
-      "sha256": "49c1b337fcf2e574ad7b82bbe09835bafeb47b6dce06eacc7598c9121600d074"
+      "sha256": "85fa95c9e8b190c3ed43174f77b5be34e3fd93a559a103156a63f82f61a1b3b8"
     },
     {
       "path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-d229.rb",
@@ -214,7 +214,7 @@
     {
       "path": "tests/fixtures/policy-successors/check_roadmap_evidence-d199.rb",
       "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence-d199.rb",
-      "sha256": "eecfe6dff3e67f66fcd37b057e6ae5edbf3bac0c9f4f96f45790d31eb3e4e51f"
+      "sha256": "38cedac1ee96d8970a25717faf33a27fa03de23f974889303ec2e6de9d9ea3a0"
     },
     {
       "path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-d199.rb",
@@ -224,7 +224,7 @@
     {
       "path": "tests/fixtures/policy-successors/pages-performance-manifest.json",
       "source_path": "tests/fixtures/policy-successors/pages-performance-manifest.json",
-      "sha256": "3defd352810db9d6b7f1d12f98e5047f605d8b88dc4d39e08c5e88a6e4b706d0"
+      "sha256": "f98b2a15b54d47fcaa944b9caa96d9b7503aa6f17b058e15a35d83ea98765808"
     }
   ]
 }

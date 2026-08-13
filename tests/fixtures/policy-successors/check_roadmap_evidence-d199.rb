@@ -25,7 +25,9 @@ EVIDENCE_CLAIMS = {
   "check-throughput-1k-loc-75ms" =>
     "`pycc check` processes 1k LOC in under 75 ms.",
   "cli-spec-diagnostic-match" =>
-    "The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output."
+    "The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output.",
+  "readme-coverage-badge-bound" =>
+    "The README coverage badge percentage is bound to ci.yml's enforced --fail-under-lines and --fail-under-regions thresholds."
 }.freeze
 EVIDENCE_SECTIONS = {
   "ci-tier1-cross-compile" => [
@@ -49,6 +51,11 @@ EVIDENCE_SECTIONS = {
     "v0.1 acceptance checklist"
   ],
   "cli-spec-diagnostic-match" => [
+    "pycc Roadmap",
+    "Current delivery status",
+    "v0.1 acceptance checklist"
+  ],
+  "readme-coverage-badge-bound" => [
     "pycc Roadmap",
     "Current delivery status",
     "v0.1 acceptance checklist"
@@ -222,12 +229,22 @@ D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256 =
 # staging round.
 D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256 =
   "b96af8b0aa4d3d7ce2509174f071a168dc53f2aac31372b75c0bdda20fc390b8"
+# Issue #211: the D199-shaped ci.yml plus a new step in build-test-coverage
+# that runs scripts/check_readme_coverage_badge.rb and its test suite, binding
+# the README coverage badge to the enforced CI contract. Coexists with
+# D100/D112/D114/D229/D199 until a later round retires them, mirroring this
+# array's own coexist-then-retire precedent. Not yet active: this array entry
+# only authorizes the shape for a future ci.yml activation (Merge 2 of #211)
+# -- the live ci.yml is untouched by this staging round.
+D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256 =
+  "a22d8845e4f755bfc50e75e0bb6cc3ae285da7c9aea35ced95bf7a83c39c4b46"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
   D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
   D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
-  D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256
+  D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256,
+  D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
