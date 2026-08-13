@@ -1,0 +1,15 @@
+{
+  "topic": "false-completion-of-list-task",
+  "date": "2026-08-13",
+  "symptom": "User gave a file of SEO issues (seo-issues.md) to implement end-to-end. Agent completed only #197 (the first/top item), marked the entire task done, and stopped without continuing to the remaining 20 issues.",
+  "gap_type": "absence",
+  "termination": "project-rule",
+  "artefact": "AGENTS.md, Completion check section, item 6",
+  "journal_path": ".harden/incidents/false-completion-of-list-task/incident.json",
+  "fixture": "n/a — process error detected by user, not reproducible mechanically",
+  "artifact": "AGENTS.md rule: todo list must include every item in a multi-item task; task not complete until all items done/deferred/refuted",
+  "verify": "manual — future multi-item tasks must show all items in the todo list before starting",
+  "verdict": "shipped",
+  "root_cause": "Todo list tracked implementation steps for one issue only, not the full list of issues to process. Completing one issue produced a false 'all done' signal.",
+  "lesson": "When a task is given as a list or collection of items, the todo list must include every item as a pending entry before starting work on the first one."
+}

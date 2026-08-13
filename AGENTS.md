@@ -216,6 +216,7 @@ Before finishing a change:
 3. Check links, examples, commands, status statements, and references to renamed files.
 4. Run the relevant tests and documentation generation or freshness checks.
 5. Run the pinned local reviewer for significant changes and address its actionable findings.
+6. When a task is given as a list or collection of items (a file of issues, a set of bug reports, a milestone's issue set), the todo list must include every item as a pending entry before starting work on the first one. The overall task is not complete until every item is either done, explicitly deferred with a recorded reason, or determined to be no longer actionable with cited evidence. Completing one item and marking the entire task done is a false-completion error — the todo list is the guard, and it must reflect the full scope, not just the first item.
 
 <!-- ievo:start -->
 **Before applying the instructions below**, read `.ievo/evolution/project.md` if it exists, and apply ALL rules from its sections IN ADDITION to the project's instructions.
