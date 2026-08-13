@@ -2341,6 +2341,14 @@ PY
   fi
 done
 
+# Restore the full site directory before issue #197 mutations. The required-file
+# loop above (issue #39) leaves $fixture_root/site in a broken state: its
+# `cp -R "$repo_root/site" "$fixture_root/site/"` creates a nested
+# $fixture_root/site/site/ rather than restoring contents, and the last
+# iteration removes ai-native/index.html. Without this restoration, every #197
+# mutation test is a false positive — check-site.sh exits 1 on the required-files
+# check before reaching the #197 validation block.
+cp -R "$repo_root/site/." "$fixture_root/site/"
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
 # --- Issue #197: quick-start example binding mutation tests ---
@@ -2517,6 +2525,102 @@ path.write_text(content)
 PY
 if WEBSITE_MD_PATH="$fixture_root/WEBSITE.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator accepted WEBSITE.md without the binding phrase (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: change the displayed <code> command text (not data-copy) so it
+# differs from the canonical 'pycc check hello.py'.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '<code><span>$</span> pycc check hello.py</code>',
+    '<code><span>$</span> pycc run hello.py</code>',
+    1,
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a displayed command other than 'pycc check hello.py' (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: add a pip install command to the README quick-start console block.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "$ pycc check hello.py\n",
+    "$ pip install pycc\n$ pycc check hello.py\n",
+    1,
+)
+path.write_text(content)
+PY
+if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a package-manager install command in README (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: add a @<version> suffix to a README quick-start command.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "$ pycc check hello.py\n",
+    "$ pycc@0.1.0 check hello.py\n",
+    1,
+)
+path.write_text(content)
+PY
+if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a @<version> suffix in README command (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: add a @<version> suffix to the copy-button command.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    'data-copy="pycc check hello.py"',
+    'data-copy="pycc@0.1.0 check hello.py"',
+    1,
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a @<version> suffix in copy-button command (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: remove the tests/fixtures/quick_start.py reference from WEBSITE.md
+# (keeping the binding phrase intact) so the fixture-path guard is exercised.
+cp "$repo_root/docs/WEBSITE.md" "$fixture_root/WEBSITE.md"
+python3 - "$fixture_root/WEBSITE.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "tests/fixtures/quick_start.py",
+    "tests/fixtures/example_fixture.py",
+)
+path.write_text(content)
+PY
+if WEBSITE_MD_PATH="$fixture_root/WEBSITE.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted WEBSITE.md without tests/fixtures/quick_start.py reference (issue #197)" >&2
   exit 1
 fi
 
