@@ -1,0 +1,52 @@
+name: Source link check
+
+# Issue #202: scheduled, non-blocking live link audit for the Python
+# AOT compiler comparison's external source URLs.
+#
+# This workflow is deliberately separate from the Pages workflow and
+# is NOT triggered on pull_request. It runs on a daily schedule and
+# by manual dispatch from trusted default-branch code only.
+#
+# It does NOT execute pull-request-controlled code, does NOT receive
+# write permissions, OIDC tokens, or secrets. It uses only the
+# read-only GITHUB_TOKEN to check out the repository.
+#
+# A failure here surfaces a workflow warning for human triage; it does
+# not block pull-request merges. The hermetic offline validator
+# (scripts/check_source_links_registry.rb) runs in the Pages workflow
+# and is the PR-required gate.
+
+on:
+  schedule:
+    # Daily at 06:00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-link-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Run hermetic tests for the live link checker
+        run: python3 scripts/test_check_source_links_live.py
+
+      - name: Run live source link check
+        id: link-check
+        continue-on-error: true
+        run: python3 scripts/check_source_links_live.py --dry-run
+
+      - name: Report link check outcome
+        if: always()
+        run: |
+          echo "Source link check outcome: ${{ steps.link-check.outcome }}"
+          if [ "${{ steps.link-check.outcome }}" != "success" ]; then
+            echo "::warning::Live source link check found issues (outcome=${{ steps.link-check.outcome }}). Review the output above. This does not block PR merges."
+          fi

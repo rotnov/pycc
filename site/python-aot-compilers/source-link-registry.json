@@ -1,54 +1,60 @@
 {
-  "description": "Registry of external source URLs cited in the Python AOT compiler comparison. Each entry records the last live-check result so a scheduled workflow can detect broken links without making PR CI network-dependent (issue #202).",
-  "last_full_audit": "2026-08-12",
   "entries": [
     {
       "url": "https://docs.cython.org/en/latest/src/quickstart/overview.html",
-      "last_checked": "2026-08-12",
       "status": "ok",
-      "http_status": 200
+      "last_checked": "2026-08-14",
+      "last_outcome": "healthy",
+      "last_http_status": 200
     },
     {
       "url": "https://docs.cython.org/en/latest/src/tutorial/embedding.html",
-      "last_checked": "2026-08-12",
       "status": "ok",
-      "http_status": 200
+      "last_checked": "2026-08-14",
+      "last_outcome": "healthy",
+      "last_http_status": 200
     },
     {
       "url": "https://docs.exaloop.io/language/overview/",
-      "last_checked": "2026-08-12",
       "status": "ok",
-      "http_status": 200
+      "last_checked": "2026-08-14",
+      "last_outcome": "healthy",
+      "last_http_status": 200
     },
     {
       "url": "https://github.com/lcompilers/lpython",
-      "last_checked": "2026-08-12",
       "status": "ok",
-      "http_status": 200
+      "last_checked": "2026-08-14",
+      "last_outcome": "healthy",
+      "last_http_status": 200
     },
     {
       "url": "https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md",
-      "last_checked": "2026-08-12",
       "status": "ok",
-      "http_status": 200
+      "last_checked": "2026-08-14",
+      "last_outcome": "healthy",
+      "last_http_status": 200
     },
     {
       "url": "https://lpython.org/",
-      "last_checked": "2026-08-12",
       "status": "ok",
-      "http_status": 200
+      "last_checked": "2026-08-14",
+      "last_outcome": "healthy",
+      "last_http_status": 200
     },
     {
       "url": "https://mypyc.readthedocs.io/en/stable/introduction.html",
-      "last_checked": "2026-08-12",
       "status": "ok",
-      "http_status": 200
+      "last_checked": "2026-08-14",
+      "last_outcome": "healthy",
+      "last_http_status": 200
     },
     {
       "url": "https://nuitka.net/user-documentation/use-cases.html",
-      "last_checked": "2026-08-12",
       "status": "ok",
-      "http_status": 200
+      "last_checked": "2026-08-14",
+      "last_outcome": "healthy",
+      "last_http_status": 200
     }
   ]
 }
