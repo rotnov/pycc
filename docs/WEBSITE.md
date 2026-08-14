@@ -155,7 +155,13 @@ The sitemap lists the landing page plus `/status/`, `/architecture/`,
 `/python-aot-compilers/`, and `/ai-native/`. Every sitemap URL entry contains
 exactly one `lastmod`, equal to that page's JSON-LD `WebPage.dateModified`, and
 both values advance when main content, structured data, or important links
-materially change. The social preview is `site/og.png`. Each canonical page
+materially change. `scripts/check_sitemap_lastmod.rb` enforces a deterministic
+binding between each canonical page's sitemap `lastmod` and the last non-merge
+git commit (author date) that modified that page's source file, so a visible
+content edit that leaves the `lastmod` stale is caught before merge. The
+`check-site.sh` validator independently enforces that `lastmod` equals the
+page's JSON-LD `dateModified`, so the two checks together guarantee
+`lastmod` == `dateModified` == last content-change commit date. The social preview is `site/og.png`. Each canonical page
 carries an SVG favicon (`site/favicon.svg`, `>_` brand mark) linked with
 `rel="icon"` and `type="image/svg+xml"`; the validator checks the SVG root
 element, size limit, and link attributes. The 404 error page
