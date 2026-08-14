@@ -24,6 +24,8 @@ on:
       - "docs/ROADMAP.md"
       - "scripts/check_package_identity.rb"
       - "scripts/test_check_package_identity.rb"
+      - "scripts/check_indexnow_test_binding.rb"
+      - "scripts/test_check_indexnow_test_binding.rb"
   pull_request:
     paths:
       - "site/**"
@@ -46,6 +48,8 @@ on:
       - "docs/ROADMAP.md"
       - "scripts/check_package_identity.rb"
       - "scripts/test_check_package_identity.rb"
+      - "scripts/check_indexnow_test_binding.rb"
+      - "scripts/test_check_indexnow_test_binding.rb"
   workflow_dispatch:
 
 permissions:
@@ -94,6 +98,8 @@ jobs:
           python3 scripts/test_check_search_console_observations.py
           ruby scripts/check_package_identity.rb
           ruby scripts/test_check_package_identity.rb
+          ruby scripts/check_indexnow_test_binding.rb
+          ruby scripts/test_check_indexnow_test_binding.rb
 
       - name: Upload website
         uses: actions/upload-pages-artifact@v4

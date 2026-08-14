@@ -429,7 +429,15 @@ structural invariants (step `id`, `continue-on-error`, `if: always()`
 observer, `outcome` not `conclusion`, unprivileged permissions, push-only
 after deploy) are independently validated by
 `scripts/check_pages_workflow.rb` with its own mutation suite
-(`scripts/test_check_pages_workflow.rb`).
+(`scripts/test_check_pages_workflow.rb`). The binding of this hermetic test
+to the Pages workflow's build job — so that removing or weakening the only
+real HTTP-fixture invocation causes a CI failure — is enforced by
+`scripts/check_indexnow_test_binding.rb`, which semantically parses
+`pages.yml` and rejects deletion of the fixture invocation, push-only job-
+or step-level `if` conditions, job- or step-level `continue-on-error`, and
+shell control flow that absorbs the fixture's exit status (`|| true`, `; true`,
+`&& true`, background `&`, piping into `true`). Its mutation suite is
+`scripts/test_check_indexnow_test_binding.rb`.
 An accepted IndexNow response proves receipt only, not crawl or indexing.
 
 Discovery is not ranking. Long-term visibility depends on publishing accurate,
