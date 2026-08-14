@@ -33,6 +33,10 @@ on:
       - "scripts/test_check_markdown_landing.rb"
       - "scripts/check_sitemap_lastmod.rb"
       - "scripts/test_check_sitemap_lastmod.rb"
+      - "scripts/check_source_links_registry.rb"
+      - "scripts/test_check_source_links_registry.rb"
+      - "site/python-aot-compilers/source-link-registry.json"
+      - "site/python-aot-compilers/claims.json"
   pull_request:
     paths:
       - "site/**"
@@ -64,6 +68,10 @@ on:
       - "scripts/test_check_markdown_landing.rb"
       - "scripts/check_sitemap_lastmod.rb"
       - "scripts/test_check_sitemap_lastmod.rb"
+      - "scripts/check_source_links_registry.rb"
+      - "scripts/test_check_source_links_registry.rb"
+      - "site/python-aot-compilers/source-link-registry.json"
+      - "site/python-aot-compilers/claims.json"
   workflow_dispatch:
 
 permissions:

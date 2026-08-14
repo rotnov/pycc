@@ -775,3 +775,33 @@ resolves, and the presence of `.zenodo.json` (Zenodo is a separate,
 explicitly approved step). Its mutation suite
 (`scripts/test_check_citation_cff.rb`) provides negative controls for
 each material field.
+
+## Source link monitoring (issue #202)
+
+The Python AOT compiler comparison page cites external project
+documentation as evidence for each comparison-table cell. These source
+links can break when upstream projects reorganize their docs, but
+required PR CI must not depend on network calls to external sites.
+
+The contract has two layers:
+
+1. **Hermetic registry validator** (PR-required, in `pages.yml`):
+   `scripts/check_source_links_registry.rb` validates that
+   `site/python-aot-compilers/source-link-registry.json` covers every
+   external URL in `claims.json`, that each entry has a valid status
+   (`ok`, `broken`, or `redirect`) and `last_checked` date, and that no
+   entry has status `broken` (a known-broken link must be updated, not
+   silently kept). This check performs no network requests.
+
+2. **Scheduled live link check** (non-blocking, separate workflow):
+   `.github/workflows/link-check.yml` runs daily at 06:00 UTC and
+   executes `scripts/check_source_links_live.py` against the registry.
+   It uses `continue-on-error` so a failure surfaces a workflow warning
+   for human triage without blocking PR merges. The live checker
+   classifies each URL as `healthy`, `confirmed_missing`,
+   `blocked_or_rate_limited`, or `unknown_error`.
+
+The registry is the bridge: the hermetic validator ensures it is
+complete and well-formed, the live checker updates it, and a broken
+status in the registry blocks the hermetic validator until the link is
+fixed or the claim is updated.
