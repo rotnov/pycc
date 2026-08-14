@@ -468,6 +468,111 @@ captures are appended, they must pass the same local schema validator
 ledger. Repeated observations on a bounded cadence are required before
 changing public positioning solely because of answer-engine output.
 
+## Pages visit measurement
+
+The three discovery signals above — GitHub repository search, GitHub
+Traffic, Google Search Console, and engine-qualified visibility — do not
+measure visits to the **GitHub Pages site** from Yandex, DuckDuckGo,
+Perplexity, ChatGPT, other answer engines, ordinary referrals, or direct
+navigation. The five-page production artifact has no pageview/visit
+analytics integration, and the project has no owner-facing Pages request
+log. This leaves a material measurement gap: the project cannot tell
+whether a Yandex rank or an answer-engine citation produced a visit,
+which page became the entry page, or whether a visitor continued to
+GitHub (issue #208, [D-168](./decisions/D-168-pages-visit-measurement-capability-contract.md)).
+
+The [machine-readable Pages visit artifact](./PAGES_VISIT_OBSERVATIONS.json)
+is the structured source of truth for owner-facing GitHub Pages visit
+analytics. It reuses the same sanitized immutable evidence envelope as
+the Search Console, GitHub traffic, and engine-visibility artifacts:
+`artifact_version`, `provenance`, `observations`, and
+`latest_projection`. It also carries a `measurement_contract` block that
+defines the reporting timezone, canonical pages, primary conversion,
+source-class vocabulary, collection-status vocabulary, data-minimization
+boundary, and separation rules.
+
+### Current analytics decision
+
+The current explicit analytics decision is **keep no site analytics**
+(D-168). The site has no project-selected analytics script, cookie, or
+external beacon. The roadmap and this document state that non-Google
+landing visits remain unobservable. "Keep no site analytics" is a valid
+explicit decision; a future PR that activates analytics must record a
+superseding ADR that justifies the visitor-data, retention, and
+external-service policy, add an accurate public privacy/analytics
+disclosure before or with collection, and establish the activation
+baseline at deployment time without synthesizing pre-installation
+history.
+
+### Measurement contract
+
+The minimum measurement contract, defined before choosing fields:
+
+- **Timestamp/date and reporting timezone**: `observed_at` in UTC and
+  `data_through_date` in `YYYY-MM-DD` form; `reporting_timezone` is UTC.
+- **Canonical entry page**: each observation records a `per_page`
+  breakdown keyed by canonical URL.
+- **Pageviews and visit/unique as separate metrics**: `pageviews`,
+  `visits`, and `uniques` are separate fields; `unique_definition`
+  records the provider's exact unique-visitor definition so it is not
+  silently compared with GitHub's `uniques` or another provider's.
+- **Coarse referrer/source class**: `source_classes` uses a closed
+  vocabulary (`google`, `yandex`, `bing`, `duckduckgo`, `perplexity`,
+  `chatgpt`, `other_answer_engine`, `other_search`, `referral`,
+  `direct_or_unattributed`, `unknown`). A referrer domain supports a
+  coarse source classification; it does not expose the search query.
+  Missing referrer data is `direct_or_unattributed`, not proof of direct
+  navigation.
+- **Coarse country and device**: `country` and `device` dimensions are
+  permitted only if supplied by the provider without expanding the
+  chosen privacy boundary.
+- **Primary conversion**: a click from a canonical Pages page to
+  `https://github.com/rotnov/pycc`, recorded as
+  `primary_conversion_clicks`. This is the only instrumented interaction;
+  no speculative per-interaction tracking.
+- **Collection status**: `available`, `delayed`, `blocked`,
+  `unauthorized`, `provider_error`, or `unknown`. A non-zeroable status
+  (`blocked`, `delayed`, `unauthorized`, `provider_error`, `unknown`)
+  must never be converted to zero pageviews or zero visits; unavailable
+  data is `null`, not `0`.
+
+### Data-minimization boundary
+
+Unless a separately accepted decision justifies them, the artifact must
+not collect or retain: names, email/account identifiers, form contents,
+full IP addresses, full user agents, cookies, fingerprints, persistent
+cross-site IDs, session replay, arbitrary query strings/fragments, or
+raw search queries not supplied by a provider-owned search report. The
+`data_minimization_boundary` block in the artifact records this
+forbidden-fields list and a note explaining the scope.
+
+### Separation rules
+
+This source is separate from Google Search Console, GitHub repository
+traffic, and direct-provider SERP/answer observations. Those systems
+must never be joined at a person/session level, and no cross-provider
+funnel may be manufactured from marginal totals. A provider-specific
+unique visitor is not comparable with GitHub's `uniques` or another
+provider unless definitions are proven equivalent. A Pages visit after a
+Yandex or other engine observation is correlation only unless the
+analytics source exposes a corresponding referrer or UTM signal.
+Browser blocking, script failure, network loss, and provider filtering
+make client-side analytics incomplete; counts must not be presented as a
+census. Analytics must not be described as a ranking factor or as
+evidence that `llms.txt`, schema, or a content edit caused visibility.
+
+### Current state
+
+The artifact is a template with no Pages visit observations recorded
+yet. When a privacy-scoped analytics source is activated and real data
+is collected, observations must pass the local schema validator
+(`scripts/check_pages_visit_observations.py`) before they enter the
+ledger. The validator rejects a non-zeroable collection status converted
+to zero, an invalid source class, a non-append-only observation
+sequence, a `latest_projection` that disagrees with the latest
+observation, and prose that conflates repository views with Pages visits
+or Search Console clicks with all-provider visits.
+
 ## Change log
 
 Record meaningful discovery-surface changes separately from observations so a
