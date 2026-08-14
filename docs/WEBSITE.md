@@ -392,6 +392,32 @@ that proposal. Both files link to the evidence pages, including the
 source-backed compiler comparison, and must preserve the landing page's status
 and AI-authorship disclosures.
 
+### Markdown landing semantic contract (issue #206)
+
+`site/index.html.md` is publicly described (in `site/llms.txt` and above) as
+the "clean text equivalent" of the landing page. Without a binding contract,
+the Markdown could omit entire prominent visible sections of
+`site/index.html` — the design-contract pillars, the "why pycc" rationale,
+the comparison table, the compiler pipeline, and the final call to action —
+while the HTML kept them, producing one-sided semantic drift that no validator
+caught. `scripts/check_markdown_landing.rb` closes that gap with a
+section-coverage contract: a `SECTION_CONTRACT` table pairs each prominent
+visible section of the HTML page with (a) an HTML anchor substring that must
+still exist in `site/index.html` and (b) a set of Markdown marker phrases
+(and, for headed sections, the Markdown heading) that must appear in
+`site/index.html.md`. The validator first confirms each HTML anchor still
+exists in the live HTML page — so the contract cannot silently describe a
+section that was removed from the HTML — then confirms each Markdown marker
+and heading is present — so the Markdown cannot silently drop a section the
+HTML still shows. Either side drifting alone fails the validator. The
+validator also re-checks the pre-alpha no-production-readiness invariant so it
+is self-contained. Its paired mutation suite
+(`scripts/test_check_markdown_landing.rb`) provides negative controls for
+each direction of drift: removing an HTML anchor, dropping a Markdown section
+heading, removing a specific marker, corrupting the title, and adding a
+production-ready claim. Both are wired into the Pages workflow alongside the
+existing `check-site.sh` Markdown fact checks.
+
 The XML sitemap (`site/sitemap.xml`, referenced from `site/robots.txt`) is the
 standards-based discovery surface. The HTML `<link rel="sitemap">` link
 relation is not used: it is not a registered IANA link relation and is not a
