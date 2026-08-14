@@ -312,7 +312,113 @@ indexed, so this ledger records those states independently.
 | 2026-07-25T16:43:18Z | The live `/python-aot-compilers/` URL reports “URL is on Google,” HTTPS valid, and one valid breadcrumb item. Googlebot Smartphone last crawled it at 13:58:20 UTC; fetch and indexing permission succeeded, and Google selected the inspected canonical | Public `/sitemap.xml` still returns `200 application/xml` with all 5 canonical URLs. Search Console still reports “Couldn’t fetch,” 0 discovered pages, and a temporary processing error for the page's sitemap discovery field | The processed 3-month web report is updated about 5 hours before this observation and still reports 0 clicks, 0 impressions, and no query rows; therefore no Google query position exists yet |
 | 2026-07-25T17:49:31Z | No new URL Inspection was run; the latest authoritative evidence remains the positive inspection state for all 5 canonical URLs recorded above | Public `/sitemap.xml` returns `200 application/xml` with all 5 canonical URLs. Search Console still reports “Couldn’t fetch,” no processing date, and 0 discovered pages | The processed 3-month web report is updated about 4.5 hours before this observation and still reports 0 clicks, 0 impressions, and no query rows; therefore no Google query position exists yet |
 | 2026-07-25T19:10:03Z | No new URL Inspection was run; the latest authoritative evidence remains the positive inspection state for all 5 canonical URLs recorded above | Public `/sitemap.xml` returns `200 application/xml` with all 5 canonical URLs. Search Console still reports “Couldn’t fetch,” no processing date, and 0 discovered pages | The processed 3-month web report is updated about 5 hours before this observation and still reports 0 clicks, 0 impressions, and no query rows; therefore no Google query position exists yet |
-| 2026-07-29T10:25:27Z | No new URL Inspection was run; all 5 canonical URLs retain the latest positive per-URL evidence above | Search Console still reports the submitted `/sitemap.xml` as failed to process with 0 discovered pages, while the public resource remains independently valid; investigation continues in #193 | Maintainer-attested processed web data for 2026-07-23 through 2026-07-26 reports 15 impressions, 2 clicks, 13.3% CTR, and average position 5.7. The only disclosed query row is `python aot compiler`: 0 clicks, 3 impressions, average position 6.3. Low-volume rows are withheld, so the clicks cannot be attributed to named queries; #163 owns stronger immutable evidence. |
+| 2026-07-29T10:25:27Z | No new URL Inspection was run; all 5 canonical URLs retain the latest positive per-URL evidence above | Search Console still reports the submitted `/sitemap.xml` as failed to process with 0 discovered pages, while the public resource remains independently valid; investigation continues in #193 | Maintainer-attested processed web data for 2026-07-23 through 2026-07-26 reports 15 impressions, 2 clicks, 13.3% CTR, and average position 5.7. The only disclosed query row is `python aot compiler`: 0 clicks, 3 impressions, average position 6.3. Low-volume rows are withheld, so the clicks cannot be attributed to named queries; #163 owns stronger immutable evidence. The structured artifact now preserves page, country, device, date, and search-appearance dimension tables separately from the property aggregate: the page table displays 19 page-level impressions across 4 rows (property total 15), the device table shows 6 mobile and 9 desktop impressions, the country table shows 5 US impressions plus 10 across 8 other countries, the date table shows 0 impressions on 2026-07-23, 1 on 2026-07-24, 5 on 2026-07-25, and 9 on 2026-07-26, and search appearance reports no data. These marginals are independent observations and must not be joined into synthetic multi-dimensional rows. |
+
+## Engine-qualified visibility
+
+Indexability, public result visibility, and answer-engine citation are
+different signals and must remain separate. A successful HTTP fetch proves
+crawl access, not ranking. Search Console owner data proves Google indexing
+and performance, not ChatGPT citation. `llms.txt` is a concise
+machine-readable content map, not a claimed ranking lever. One volatile
+answer-engine result is not a stable position.
+
+The [machine-readable engine-visibility artifact](./ENGINE_VISIBILITY_OBSERVATIONS.json)
+is the structured source of truth for engine-qualified web-search and
+LLM answer-engine visibility observations. It reuses the same sanitized
+immutable evidence envelope as the Search Console and GitHub traffic
+artifacts: `artifact_version`, `provenance`, `observations`, and
+`latest_projection`. It also defines a `query_suite` with a stable
+prompt/query set and a `surfaces` map with explicitly qualified engine
+contracts.
+
+### Surfaces
+
+Each observation must name an explicitly qualified surface. The supported
+surfaces are:
+
+- `chatgpt_search` — the ChatGPT web-search surface (OpenAI);
+- `google_web_search` — Google web search (distinct from Search Console
+  owner data);
+- `bing_web_search` — Bing web search (Microsoft);
+- `perplexity_search` — Perplexity answer engine;
+- `unknown_web_provider` — an unidentified web-search provider, used only
+  when provenance is not disclosed. `unknown_web_provider` must never be
+  labeled as Google, Bing, or another named engine.
+
+A web observation without a defined surface/provider is invalid.
+
+### Query suite
+
+The stable prompt/query suite covers five intent classes:
+
+- exact entity (`rotnov/pycc`) — diagnostic, never a product-acquisition KPI;
+- named product (`pycc Python AOT compiler`) — product acquisition;
+- product category (`python aot compiler`) — product acquisition;
+- feature intent (`typed Python compiler native binary`) — product
+  acquisition;
+- AI-authorship diagnostic (`"fully AI-created" "pycc"`) — excluded from
+  the product-acquisition KPI, never counted as product progress.
+
+The intent/KPI compatibility matrix is closed: an unrecognized intent or
+any other pairing is invalid and cannot enter the acquisition denominator.
+
+### Outcome vocabulary
+
+Each observation records one outcome from a separate vocabulary that
+distinguishes indexability from visibility from citation:
+
+- `crawlable` — the resource is reachable by a crawler;
+- `indexed_owner_visible` — owner-visible indexing evidence (e.g. Search
+  Console URL Inspection);
+- `returned_in_result_set` — the project appeared in the observed result
+  window;
+- `cited_in_answer` — an answer engine cited the project with a captured
+  URL;
+- `not_surfaced_in_observed_window` — the project did not appear in the
+  observed result or answer window;
+- `unknown` — the outcome could not be determined.
+
+`crawlable` and `indexed_owner_visible` are indexability signals, not
+citation evidence. They must never be treated as `cited_in_answer`. A
+`cited_in_answer` outcome requires at least one captured cited URL.
+
+### Observation fields
+
+Every answer/search observation is stored append-only with:
+
+- `observed_at` UTC timestamp;
+- `query_suite_id` referencing the stable query suite;
+- `surface` naming the explicitly qualified engine;
+- `prompt` — the exact user prompt or query;
+- `model_product_version` — model/product/version when exposed, or
+  `unknown`;
+- `locale` and `country` — when known, or `unknown`;
+- `personalization_state` — signed-in/personalization state when known, or
+  `unknown`;
+- `result_window` — description of the result/citation window observed;
+- `outcome` — one of the vocabulary above;
+- `pycc_surfaced` — whether pycc appeared in the observed window;
+- `cited_urls` — cited URL(s) when surfaced with a citation outcome;
+- `citation_order` — citation/source order when surfaced, or `null`;
+- `competing_entities` — returned competing entities when absent;
+- `transport_tool` — transport/tool used for the observation;
+- `query_rewriting_disclosed` — `yes`, `no`, or `unknown`.
+
+Unavailable fields use `unknown` (or `null` for `citation_order`) rather
+than invented values. Observations are append-only: timestamps must be
+nondecreasing and earlier observations are never rewritten or deleted.
+
+### Current state
+
+The artifact is a template with no engine-qualified visibility observations
+recorded yet. The 2026-07-29 ChatGPT search baseline described in issue #195
+is preserved in that issue's body, not in this artifact, because it predates
+the contract and was not captured under this schema. When real manual
+captures are appended, they must pass the same local schema validator
+(`scripts/check_engine_visibility_observations.py`) before they enter the
+ledger. Repeated observations on a bounded cadence are required before
+changing public positioning solely because of answer-engine output.
 
 ## Change log
 
@@ -363,9 +469,21 @@ Console data now contains 15 impressions and 2 clicks; its only disclosed
 query row, `python aot compiler`, has 3 impressions, 0 clicks, and average
 position 6.3. That small disclosed row is product-intent evidence, not a stable
 rank or proof of demand, and the withheld rows prevent attribution of the two
-clicks. Sitemap processing remains unsuccessful even though the public sitemap
-is valid, reinforcing that query performance, per-URL indexing, and sitemap
-processing are independent signals. The traffic window remains too
+clicks. The structured artifact preserves 19 page-level impressions across 4
+page rows separately from the 15-impression property total: Search Console
+counts the property-level result once, while page-level aggregation counts
+each unique URL, so the page sum legitimately exceeds the property total. The
+device marginal shows both clicks on mobile (6 mobile impressions, 9 desktop
+impressions), and the country marginal shows both clicks from the United States
+(5 US impressions, 10 across 8 other countries). The date marginal shows 0
+impressions on 2026-07-23, 1 on 2026-07-24, 5 on 2026-07-25, and 9 on
+2026-07-26. Search appearance reports no data, which is categorical absence
+rather than a numeric zero. These dimension tables are independent marginal
+observations and must not be joined into synthetic page×country,
+page×device, or query×country rows; the individual page, query, country, and
+device identity of each click remains unknown. Sitemap processing remains unsuccessful even though the public sitemap is valid, reinforcing that query
+performance, per-URL indexing, and sitemap processing are independent signals.
+The traffic window remains too
 automation-heavy and low-uniqueness to attribute to SEO. The structured
 GitHub traffic artifact ([`GITHUB_TRAFFIC_OBSERVATIONS.json`](./GITHUB_TRAFFIC_OBSERVATIONS.json))
 preserves daily views and clones rows alongside the rolling 14-day endpoint
