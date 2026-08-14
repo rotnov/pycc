@@ -430,26 +430,47 @@ updates quickly. It rejects empty, duplicate, out-of-scope, query-bearing, or
 fragment-bearing URLs before making a request. Its public verification key is
 hosted below `/pycc/`, which limits that key to URLs in the project path. The
 notification is best-effort, has finite connection and request timeouts, and
-does not block a successful Pages deployment. On every terminal path the
-notifier emits a structured one-line result record containing the UTC
-submission timestamp, endpoint host, URL count, sitemap payload SHA-256,
-deployed commit, final HTTP status, accepted class (`submitted` for 200,
-`key_validation_pending` for 202, `failed` otherwise), sanitized failure
-class (distinguishing DNS errors, connection errors, timeouts, TLS errors,
-rate limiting, scope mismatches, and HTTP errors), and retry configuration.
-The production workflow step has a stable `id` and an `if: always()` follow-up
-that inspects the step's raw `outcome` before `continue-on-error`
-normalization, so a failed notification is externally visible as a workflow
-warning without rolling back the completed deployment. The notifier also
-writes a concise `GITHUB_STEP_SUMMARY` table so a reader can identify the
-trusted commit, URL count, sitemap digest, response class, and delivery
-outcome without downloading raw logs.
+does not block a successful Pages deployment. Redirects (3xx) are fail-closed:
+the notifier does not follow them, because a redirected request may not carry
+the original JSON payload and a final 200 from a different origin would be a
+false delivery claim. Instead of opaque curl retry, the notifier uses an
+explicit per-attempt loop that records each attempt's HTTP status and uploaded
+byte count. On every terminal path the notifier emits a structured one-line
+result record containing the UTC submission timestamp, endpoint host, URL
+count, sitemap payload SHA-256, deployed commit, final HTTP status, accepted
+class, delivery state, attempt count, possible-duplicate-delivery flag,
+sanitized failure class (distinguishing DNS errors, connection errors,
+timeouts, TLS errors, rate limiting, scope mismatches, redirect rejections,
+and HTTP errors), and retry configuration. The delivery state machine
+distinguishes: `submitted` (direct 200 with no earlier ambiguity),
+`key_validation_pending` (direct 202 with no earlier ambiguity),
+`submitted_after_ambiguous_retry` (200 after an earlier attempt sent the body
+but received no accepted response), `key_validation_pending_after_ambiguous_retry`
+(the corresponding 202 state), `delivery_unknown_after_payload_write` (no
+accepted response, but one or more attempts may have delivered bytes),
+`failed_before_payload_write` (no accepted response and no request body
+crossed the wire), `redirect_rejected` (3xx response), and `http_rejected`
+(4xx/5xx response). When `possible_duplicate_delivery=true`, the notifier is
+an at-least-once transport, not exactly-once: an earlier attempt may have been
+accepted before its response was lost. The production workflow step has a
+stable `id` and an `if: always()` follow-up that inspects the step's raw
+`outcome` before `continue-on-error` normalization, so a failed notification
+is externally visible as a workflow warning without rolling back the completed
+deployment. The notifier also writes a concise `GITHUB_STEP_SUMMARY` table so
+a reader can identify the trusted commit, URL count, sitemap digest, response
+class, delivery state, attempt count, and delivery outcome without downloading
+raw logs.
 
 `scripts/test-notify-indexnow.py` points the production notifier at a local HTTP
 fixture and proves that the real non-dry-run path sends the expected JSON
 payload, emits the structured result record with all required fields on every
 terminal path, distinguishes 200 from 202, classifies failures by sanitized
-failure class, writes the `GITHUB_STEP_SUMMARY` file, and fails on an HTTP
+failure class, rejects redirects (301/302/303/307/308) as `redirect_rejected`,
+verifies ambiguous retry states (`submitted_after_ambiguous_retry`,
+`key_validation_pending_after_ambiguous_retry`,
+`delivery_unknown_after_payload_write`), confirms
+`possible_duplicate_delivery` is set only after an ambiguous body-bearing
+attempt, writes the `GITHUB_STEP_SUMMARY` file, and fails on an HTTP
 error without contacting a public search endpoint. The pages workflow
 structural invariants (step `id`, `continue-on-error`, `if: always()`
 observer, `outcome` not `conclusion`, unprivileged permissions, push-only
