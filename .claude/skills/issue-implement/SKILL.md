@@ -310,6 +310,15 @@ working-tree review. Invoke the pinned deep reviewer from a structurally verifie
 no such install can be bound, the review gate is unavailable — report that and stop
 rather than substituting a weaker reviewer or skipping the loop.
 
+Every review dispatch — the first round and every rerun — carries the same three pointers
+verbatim: the issue number, the path to the current plan (`docs/superpowers/plans/<slug>.md`,
+or the issue's plan comment when no plan file exists), and the acceptance criteria quoted in
+the dispatch brief. Point, don't retell: a path stays true mid-loop while a summary thins
+with the orchestrator's context, and the reviewer reads the plan itself in its fresh context
+(it has Read and Grep, not `gh` — anything it needs from the issue must live in the plan or
+be quoted in the brief). A dispatch missing the plan pointer is an invalid round —
+re-dispatch with it instead of reviewing blind.
+
 Verify each finding against the sources before acting on it — preferably by *running* the
 predicted failure, not re-deriving it: when a finding predicts a wrong diagnostic or a false
 accept, reproduce that exact prediction against the unfixed tree first, and when a finding
