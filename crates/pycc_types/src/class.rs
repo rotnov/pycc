@@ -93,14 +93,17 @@ pub(crate) fn check_protocol_conformance(
                         Span::new(0, 0),
                     ));
                 }
-                // Check parameter types (contravariant — protocol param
-                // types must be assignable from concrete param types).
+                // Check parameter types (contravariant — a caller through
+                // the protocol may pass any value of the protocol's declared
+                // parameter type, so the concrete method must accept at least
+                // that type: the protocol param type must be assignable to
+                // the concrete param type).
                 for (i, (cp, pp)) in concrete_non_self
                     .iter()
                     .zip(proto_param_tys.iter())
                     .enumerate()
                 {
-                    if !is_assignable(cp.clone(), pp.clone()) {
+                    if !is_assignable(pp.clone(), cp.clone()) {
                         return Err(Diagnostic::error(
                             "T0046",
                             format!(
@@ -4359,6 +4362,20 @@ mod tests {
         assert_eq!(err.code, "T0046");
         assert!(
             err.message.contains("attribute `x` has type"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn protocol_conformance_with_contravariant_param_narrowing_is_t0046() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self, x: int) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self, x: bool) -> int:\n        return 1\nc: P = C()\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0046");
+        assert!(
+            err.message.contains("parameter 1 has type"),
             "unexpected message: {}",
             err.message
         );

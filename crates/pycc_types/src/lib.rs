@@ -774,6 +774,59 @@ fn is_local(local_names: &[&str], name: &str) -> bool {
     local_names.contains(&name)
 }
 
+/// #380 (PR-20): Pre-binds function-local variable types into `env` by
+/// walking the body in source order and inferring each assignment's
+/// value type. This lets the protocol monomorphization pass resolve
+/// local variables (not just module-level globals) when inferring the
+/// concrete type of a call-site argument.
+fn bind_local_types_in_body(env: &mut Environment, local_names: &[&str], body: &[HirStmt]) {
+    for stmt in body {
+        bind_local_types_in_stmt(env, local_names, stmt);
+    }
+}
+
+fn bind_local_types_in_stmt(env: &mut Environment, local_names: &[&str], stmt: &HirStmt) {
+    match stmt {
+        HirStmt::Assign { target, value } => {
+            if let Ok(ty) = infer_expr_in(env, local_names, value) {
+                env.bind(target.clone(), ty);
+            }
+        }
+        HirStmt::AnnAssign {
+            target,
+            annotation,
+            value,
+            ..
+        } => {
+            if let Some(val) = value {
+                if let Ok(ty) = infer_expr_in(env, local_names, val) {
+                    env.bind(target.clone(), ty);
+                }
+            } else {
+                env.bind(target.clone(), annotation.clone());
+            }
+        }
+        HirStmt::If { body, orelse, .. } => {
+            bind_local_types_in_body(env, local_names, body);
+            bind_local_types_in_body(env, local_names, orelse);
+        }
+        HirStmt::While { body, .. } => {
+            bind_local_types_in_body(env, local_names, body);
+        }
+        HirStmt::ForRange { var, body, .. } => {
+            env.bind(var.clone(), Ty::Int);
+            bind_local_types_in_body(env, local_names, body);
+        }
+        HirStmt::ForList { var, list, body } => {
+            if let Some(BindingState::Definitely(Ty::List(elt_ty))) = env.binding_state(list) {
+                env.bind(var.clone(), (**elt_ty).clone());
+            }
+            bind_local_types_in_body(env, local_names, body);
+        }
+        _ => {}
+    }
+}
+
 type TypeTerm = Result<Ty, usize>;
 type SignatureTerms = (Vec<String>, Vec<TypeTerm>, TypeTerm);
 type BinOpConstraint = (BinOpKind, TypeTerm, TypeTerm, TypeTerm);
@@ -5188,14 +5241,55 @@ fn substitute_ty_protocol(ty: &Ty, protocol_name: &str, concrete: &Ty) -> Ty {
     }
 }
 
-/// #380 (PR-20): Like `substitute_body` but uses `substitute_ty_protocol`.
-fn substitute_body_protocol(body: &[HirStmt], protocol_name: &str, concrete: &Ty) -> Vec<HirStmt> {
+/// #380 (PR-20): Returns `true` if a function signature has any
+/// `Ty::Protocol` parameters, indicating it needs monomorphization at
+/// each call site. A protocol *return* type alone does not require
+/// monomorphization — the return type is resolved through the type
+/// checker's normal assignment logic, and dropping such a function
+/// would leave call sites referencing a nonexistent function.
+fn has_protocol_param(params: &[(String, Ty)], _return_ty: &Ty) -> bool {
+    params.iter().any(|(_, ty)| matches!(ty, Ty::Protocol(_)))
+}
+
+/// #380 (PR-20): Mangles a function name for protocol monomorphization
+/// with one or more protocol→concrete substitutions, following the
+/// existing `0gen_` convention. Each substitution appends
+/// `__{protocol_name}_{concrete_name}` to the mangled name.
+fn mangle_protocol_instantiation(
+    func_name: &str,
+    substitutions: &[(String, Ty)],
+) -> String {
+    let mut name = format!("0gen_{func_name}");
+    for (proto_name, concrete) in substitutions {
+        if let Ty::Instance(concrete_name) = concrete {
+            name.push_str(&format!("__{proto_name}_{concrete_name}"));
+        }
+    }
+    name
+}
+
+/// #380 (PR-20): Substitutes multiple `Ty::Protocol` types in a single
+/// `Ty` value, applying each substitution in order.
+fn substitute_ty_protocols(ty: &Ty, substitutions: &[(String, Ty)]) -> Ty {
+    let mut result = ty.clone();
+    for (proto_name, concrete) in substitutions {
+        result = substitute_ty_protocol(&result, proto_name, concrete);
+    }
+    result
+}
+
+/// #380 (PR-20): Like `substitute_body_protocol` but applies multiple
+/// protocol→concrete substitutions.
+fn substitute_body_protocols(
+    body: &[HirStmt],
+    substitutions: &[(String, Ty)],
+) -> Vec<HirStmt> {
     body.iter()
-        .map(|stmt| substitute_stmt_protocol(stmt, protocol_name, concrete))
+        .map(|stmt| substitute_stmt_protocols(stmt, substitutions))
         .collect()
 }
 
-fn substitute_stmt_protocol(stmt: &HirStmt, protocol_name: &str, concrete: &Ty) -> HirStmt {
+fn substitute_stmt_protocols(stmt: &HirStmt, substitutions: &[(String, Ty)]) -> HirStmt {
     match stmt {
         HirStmt::AnnAssign {
             target,
@@ -5204,18 +5298,18 @@ fn substitute_stmt_protocol(stmt: &HirStmt, protocol_name: &str, concrete: &Ty) 
             is_final,
         } => HirStmt::AnnAssign {
             target: target.clone(),
-            annotation: substitute_ty_protocol(annotation, protocol_name, concrete),
+            annotation: substitute_ty_protocols(annotation, substitutions),
             value: value.clone(),
             is_final: *is_final,
         },
         HirStmt::If { test, body, orelse } => HirStmt::If {
             test: test.clone(),
-            body: substitute_body_protocol(body, protocol_name, concrete),
-            orelse: substitute_body_protocol(orelse, protocol_name, concrete),
+            body: substitute_body_protocols(body, substitutions),
+            orelse: substitute_body_protocols(orelse, substitutions),
         },
         HirStmt::While { test, body } => HirStmt::While {
             test: test.clone(),
-            body: substitute_body_protocol(body, protocol_name, concrete),
+            body: substitute_body_protocols(body, substitutions),
         },
         HirStmt::ForRange {
             var,
@@ -5228,45 +5322,15 @@ fn substitute_stmt_protocol(stmt: &HirStmt, protocol_name: &str, concrete: &Ty) 
             start: start.clone(),
             stop: stop.clone(),
             step: step.clone(),
-            body: substitute_body_protocol(body, protocol_name, concrete),
+            body: substitute_body_protocols(body, substitutions),
         },
         HirStmt::ForList { var, list, body } => HirStmt::ForList {
             var: var.clone(),
             list: list.clone(),
-            body: substitute_body_protocol(body, protocol_name, concrete),
+            body: substitute_body_protocols(body, substitutions),
         },
         other => other.clone(),
     }
-}
-
-/// #380 (PR-20): Returns `true` if a function signature has any
-/// `Ty::Protocol` parameters (or return type), indicating it needs
-/// monomorphization at each call site.
-fn has_protocol_param(params: &[(String, Ty)], return_ty: &Ty) -> bool {
-    params.iter().any(|(_, ty)| matches!(ty, Ty::Protocol(_)))
-        || matches!(return_ty, Ty::Protocol(_))
-}
-
-/// #380 (PR-20): Extracts the protocol name from the first
-/// `Ty::Protocol` parameter in a function's signature.
-fn protocol_param_name(params: &[(String, Ty)]) -> Option<String> {
-    params.iter().find_map(|(_, ty)| {
-        if let Ty::Protocol(name) = ty {
-            Some(name.as_ref().clone())
-        } else {
-            None
-        }
-    })
-}
-
-/// #380 (PR-20): Mangles a function name for protocol monomorphization,
-/// following the existing `0gen_` convention.
-fn mangle_protocol_instantiation(
-    func_name: &str,
-    protocol_name: &str,
-    concrete_name: &str,
-) -> String {
-    format!("0gen_{func_name}_{protocol_name}_{concrete_name}")
 }
 
 /// PEP 695 (#387): Like `substitute_ty` but also substitutes
@@ -6756,6 +6820,7 @@ fn monomorphize_protocol_params(
                     &mut new_stmt,
                     &protocol_funcs,
                     env,
+                    &[],
                     &mut specializations,
                     &mut seen,
                 );
@@ -6767,12 +6832,24 @@ fn monomorphize_protocol_params(
                 return_ty,
                 body,
             } => {
+                let local_names: Vec<String> = function_local_names(&params, &body)
+                    .into_iter()
+                    .map(String::from)
+                    .collect();
+                let local_names_refs: Vec<&str> =
+                    local_names.iter().map(|s| s.as_str()).collect();
+                let mut fn_env = env.child_for_function(&local_names_refs);
+                for (param_name, param_ty) in &params {
+                    fn_env.bind(param_name.clone(), param_ty.clone());
+                }
+                bind_local_types_in_body(&mut fn_env, &local_names_refs, &body);
                 let mut new_body = body;
                 for stmt in new_body.iter_mut() {
                     rewrite_protocol_calls_in_stmt(
                         stmt,
                         &protocol_funcs,
-                        env,
+                        &fn_env,
+                        &local_names_refs,
                         &mut specializations,
                         &mut seen,
                     );
@@ -6786,8 +6863,76 @@ fn monomorphize_protocol_params(
             }
         }
     }
-    new_items.extend(specializations);
+    // Rewrite calls inside specializations recursively. A specialized
+    // body may itself call another protocol-parameter function, which
+    // needs its own specialization. Process by index because rewriting
+    // may push new specializations, extending the vector we're walking.
+    //
+    // The per-item work is extracted into `rewrite_protocol_calls_in_specialization`
+    // so that the defense-in-depth non-`Function` arm (all specializations
+    // are `HirItem::Function` in practice) is a `match` arm in a standalone
+    // function that a direct unit test can cover, rather than an `if let`
+    // whose never-taken false branch would carry an uncovered continuation
+    // region under the 100%-coverage gate (D-014).
+    let mut all_specializations = std::mem::take(&mut specializations);
+    let mut i = 0;
+    while i < all_specializations.len() {
+        rewrite_protocol_calls_in_specialization(
+            env,
+            &mut all_specializations[i],
+            &protocol_funcs,
+            &mut specializations,
+            &mut seen,
+        );
+        i += 1;
+        if !specializations.is_empty() {
+            all_specializations.append(&mut specializations);
+        }
+    }
+    new_items.extend(all_specializations);
     new_items
+}
+
+/// #380 (PR-20): Per-item worker for the specialization rewrite loop.
+/// Rewrites protocol-parameter function calls inside one already-created
+/// specialization's body, pushing any newly discovered specializations.
+/// Extracted from `monomorphize_protocol_params`'s loop so the
+/// defense-in-depth non-`Function` arm is a `match` arm coverable by a
+/// direct unit test (D-014).
+fn rewrite_protocol_calls_in_specialization(
+    env: &Environment,
+    spec: &mut HirItem,
+    protocol_funcs: &HashMap<String, HirItem>,
+    specializations: &mut Vec<HirItem>,
+    seen: &mut HashSet<String>,
+) {
+    let (params, body) = match spec {
+        HirItem::Function { params, body, .. } => (params, body),
+        // All specializations are `HirItem::Function` (created by
+        // `rewrite_protocol_calls_in_expr`). This arm is defense-in-depth,
+        // covered by a direct unit test.
+        _ => return,
+    };
+    let local_names: Vec<String> = function_local_names(params, body)
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let local_names_refs: Vec<&str> = local_names.iter().map(|s| s.as_str()).collect();
+    let mut spec_env = env.child_for_function(&local_names_refs);
+    for (param_name, param_ty) in params.iter() {
+        spec_env.bind(param_name.clone(), param_ty.clone());
+    }
+    bind_local_types_in_body(&mut spec_env, &local_names_refs, body);
+    for stmt in body.iter_mut() {
+        rewrite_protocol_calls_in_stmt(
+            stmt,
+            protocol_funcs,
+            &spec_env,
+            &local_names_refs,
+            specializations,
+            seen,
+        );
+    }
 }
 
 /// #380 (PR-20): Rewrites calls to protocol-parameter functions in a
@@ -6796,37 +6941,38 @@ fn rewrite_protocol_calls_in_stmt(
     stmt: &mut HirStmt,
     protocol_funcs: &HashMap<String, HirItem>,
     env: &Environment,
+    local_names: &[&str],
     specializations: &mut Vec<HirItem>,
     seen: &mut HashSet<String>,
 ) {
     match stmt {
         HirStmt::ExprStmt(expr) => {
-            rewrite_protocol_calls_in_expr(expr, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(expr, protocol_funcs, env, local_names, specializations, seen);
         }
         HirStmt::Assign { value, .. } => {
-            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, local_names, specializations, seen);
         }
         HirStmt::AnnAssign {
             value: Some(value), ..
         } => {
-            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, local_names, specializations, seen);
         }
         HirStmt::Return(Some(expr)) => {
-            rewrite_protocol_calls_in_expr(expr, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(expr, protocol_funcs, env, local_names, specializations, seen);
         }
         HirStmt::If { test, body, orelse } => {
-            rewrite_protocol_calls_in_expr(test, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(test, protocol_funcs, env, local_names, specializations, seen);
             for s in body.iter_mut() {
-                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, specializations, seen);
+                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, local_names, specializations, seen);
             }
             for s in orelse.iter_mut() {
-                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, specializations, seen);
+                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, local_names, specializations, seen);
             }
         }
         HirStmt::While { test, body } => {
-            rewrite_protocol_calls_in_expr(test, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(test, protocol_funcs, env, local_names, specializations, seen);
             for s in body.iter_mut() {
-                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, specializations, seen);
+                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, local_names, specializations, seen);
             }
         }
         HirStmt::ForRange {
@@ -6836,39 +6982,39 @@ fn rewrite_protocol_calls_in_stmt(
             body,
             ..
         } => {
-            rewrite_protocol_calls_in_expr(start, protocol_funcs, env, specializations, seen);
-            rewrite_protocol_calls_in_expr(stop, protocol_funcs, env, specializations, seen);
-            rewrite_protocol_calls_in_expr(step, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(start, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(stop, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(step, protocol_funcs, env, local_names, specializations, seen);
             for s in body.iter_mut() {
-                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, specializations, seen);
+                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, local_names, specializations, seen);
             }
         }
         HirStmt::ForList { body, .. } => {
             for s in body.iter_mut() {
-                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, specializations, seen);
+                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, local_names, specializations, seen);
             }
         }
         HirStmt::DictSet { key, value, .. } => {
-            rewrite_protocol_calls_in_expr(key, protocol_funcs, env, specializations, seen);
-            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(key, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, local_names, specializations, seen);
         }
         HirStmt::AttrSet { base, value, .. } => {
-            rewrite_protocol_calls_in_expr(base, protocol_funcs, env, specializations, seen);
-            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(base, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, local_names, specializations, seen);
         }
         HirStmt::ListCompAssign { cond, elt, .. }
         | HirStmt::SetCompAssign { cond, elt, .. } => {
             if let Some(c) = cond {
-                rewrite_protocol_calls_in_expr(c, protocol_funcs, env, specializations, seen);
+                rewrite_protocol_calls_in_expr(c, protocol_funcs, env, local_names, specializations, seen);
             }
-            rewrite_protocol_calls_in_expr(elt, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(elt, protocol_funcs, env, local_names, specializations, seen);
         }
         HirStmt::DictCompAssign { cond, key, value, .. } => {
             if let Some(c) = cond {
-                rewrite_protocol_calls_in_expr(c, protocol_funcs, env, specializations, seen);
+                rewrite_protocol_calls_in_expr(c, protocol_funcs, env, local_names, specializations, seen);
             }
-            rewrite_protocol_calls_in_expr(key, protocol_funcs, env, specializations, seen);
-            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(key, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, local_names, specializations, seen);
         }
         _ => {}
     }
@@ -6880,6 +7026,7 @@ fn rewrite_protocol_calls_in_expr(
     expr: &mut HirExpr,
     protocol_funcs: &HashMap<String, HirItem>,
     env: &Environment,
+    local_names: &[&str],
     specializations: &mut Vec<HirItem>,
     seen: &mut HashSet<String>,
 ) {
@@ -6887,7 +7034,7 @@ fn rewrite_protocol_calls_in_expr(
         HirExpr::Call { callee, args } => {
             // First, recurse into arguments (they may contain nested calls).
             for arg in args.iter_mut() {
-                rewrite_protocol_calls_in_expr(arg, protocol_funcs, env, specializations, seen);
+                rewrite_protocol_calls_in_expr(arg, protocol_funcs, env, local_names, specializations, seen);
             }
             // Check if this is a call to a protocol-parameter function.
             if let Some(func_item) = protocol_funcs.get(callee.as_str())
@@ -6898,86 +7045,64 @@ fn rewrite_protocol_calls_in_expr(
                     body,
                 } = func_item
             {
-                // Determine the concrete type from the first
-                // protocol-typed parameter's argument.
-                if let Some(protocol_name) = protocol_param_name(params) {
-                    // Find the argument corresponding to the
-                    // protocol-typed parameter.
-                    for (i, (_, param_ty)) in params.iter().enumerate() {
-                        if let Ty::Protocol(_) = param_ty
-                            && i < args.len()
-                        {
-                            // Infer the argument's type.
-                            let arg_ty = infer_expr_in(env, &[], &args[i]);
-                            if let Ok(Ty::Instance(concrete_name)) = arg_ty {
-                                let concrete_ty = Ty::Instance(concrete_name.clone());
-                                let mangled = mangle_protocol_instantiation(
-                                    name,
-                                    &protocol_name,
-                                    concrete_name.as_str(),
-                                );
-                                if seen.insert(mangled.clone()) {
-                                    // Create the monomorphized function.
-                                    let substituted_params: Vec<(String, Ty)> = params
-                                        .iter()
-                                        .map(|(n, ty)| {
-                                            (
-                                                n.clone(),
-                                                substitute_ty_protocol(
-                                                    ty,
-                                                    &protocol_name,
-                                                    &concrete_ty,
-                                                ),
-                                            )
-                                        })
-                                        .collect();
-                                    let substituted_return = substitute_ty_protocol(
-                                        return_ty,
-                                        &protocol_name,
-                                        &concrete_ty,
-                                    );
-                                    let substituted_body = substitute_body_protocol(
-                                        body,
-                                        &protocol_name,
-                                        &concrete_ty,
-                                    );
-                                    specializations.push(HirItem::Function {
-                                        name: mangled.clone(),
-                                        params: substituted_params,
-                                        return_ty: substituted_return,
-                                        body: substituted_body,
-                                    });
-                                }
-                                // Rewrite the call.
-                                *callee = mangled;
-                                break;
-                            }
-                            break;
+                // Collect all protocol→concrete substitutions from every
+                // protocol-typed parameter's corresponding argument.
+                let mut substitutions: Vec<(String, Ty)> = Vec::new();
+                for (i, (_, param_ty)) in params.iter().enumerate() {
+                    if let Ty::Protocol(proto_name) = param_ty
+                        && i < args.len()
+                    {
+                        let arg_ty = infer_expr_in(env, local_names, &args[i]);
+                        if let Ok(Ty::Instance(concrete_name)) = arg_ty {
+                            substitutions
+                                .push((proto_name.as_ref().clone(), Ty::Instance(concrete_name)));
                         }
                     }
+                }
+                if !substitutions.is_empty() {
+                    let mangled = mangle_protocol_instantiation(name, &substitutions);
+                    if seen.insert(mangled.clone()) {
+                        let substituted_params: Vec<(String, Ty)> = params
+                            .iter()
+                            .map(|(n, ty)| {
+                                (n.clone(), substitute_ty_protocols(ty, &substitutions))
+                            })
+                            .collect();
+                        let substituted_return =
+                            substitute_ty_protocols(return_ty, &substitutions);
+                        let substituted_body =
+                            substitute_body_protocols(body, &substitutions);
+                        specializations.push(HirItem::Function {
+                            name: mangled.clone(),
+                            params: substituted_params,
+                            return_ty: substituted_return,
+                            body: substituted_body,
+                        });
+                    }
+                    *callee = mangled;
                 }
             }
         }
         HirExpr::MethodCall { base, args, .. } => {
-            rewrite_protocol_calls_in_expr(base, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(base, protocol_funcs, env, local_names, specializations, seen);
             for arg in args.iter_mut() {
-                rewrite_protocol_calls_in_expr(arg, protocol_funcs, env, specializations, seen);
+                rewrite_protocol_calls_in_expr(arg, protocol_funcs, env, local_names, specializations, seen);
             }
         }
         HirExpr::AttrGet { base, .. } => {
-            rewrite_protocol_calls_in_expr(base, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(base, protocol_funcs, env, local_names, specializations, seen);
         }
         HirExpr::BinOp { left, right, .. } => {
-            rewrite_protocol_calls_in_expr(left, protocol_funcs, env, specializations, seen);
-            rewrite_protocol_calls_in_expr(right, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(left, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(right, protocol_funcs, env, local_names, specializations, seen);
         }
         HirExpr::Compare { left, right, .. } => {
-            rewrite_protocol_calls_in_expr(left, protocol_funcs, env, specializations, seen);
-            rewrite_protocol_calls_in_expr(right, protocol_funcs, env, specializations, seen);
+            rewrite_protocol_calls_in_expr(left, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(right, protocol_funcs, env, local_names, specializations, seen);
         }
         HirExpr::ListLiteral(elements) => {
             for e in elements.iter_mut() {
-                rewrite_protocol_calls_in_expr(e, protocol_funcs, env, specializations, seen);
+                rewrite_protocol_calls_in_expr(e, protocol_funcs, env, local_names, specializations, seen);
             }
         }
         _ => {}
@@ -27937,6 +28062,80 @@ mod tests {
         assert_eq!(instantiations[0].mangled_name, "ghost");
     }
 
+    // -- rewrite_protocol_calls_in_specialization non-Function arm ---------
+
+    #[test]
+    fn rewrite_protocol_calls_in_specialization_skips_a_non_function_item() {
+        // Exercises the defense-in-depth `_ => return` arm in
+        // `rewrite_protocol_calls_in_specialization`. All specializations are
+        // `HirItem::Function` in practice (created by
+        // `rewrite_protocol_calls_in_expr`), so this arm is unreachable through
+        // `check_and_resolve`. Calling the helper directly with a
+        // `HirItem::TopLevelStmt` covers the arm without affecting the
+        // monomorphization pipeline.
+        let env = Environment::new();
+        let protocol_funcs = HashMap::new();
+        let mut specializations = Vec::new();
+        let mut seen = HashSet::new();
+        let mut item = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(1)));
+        rewrite_protocol_calls_in_specialization(
+            &env,
+            &mut item,
+            &protocol_funcs,
+            &mut specializations,
+            &mut seen,
+        );
+        assert!(specializations.is_empty());
+    }
+
+    // -- bind_local_types_in_stmt / mangle gap-region coverage --------------
+
+    #[test]
+    fn bind_local_types_in_stmt_skips_assign_when_inference_fails() {
+        let mut env = Environment::new();
+        let local_names = ["x"];
+        let stmt = HirStmt::Assign {
+            target: "x".to_string(),
+            value: HirExpr::Name("unbound".to_string()),
+        };
+        bind_local_types_in_stmt(&mut env, &local_names, &stmt);
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn bind_local_types_in_stmt_skips_annassign_when_inference_fails() {
+        let mut env = Environment::new();
+        let local_names = ["x"];
+        let stmt = HirStmt::AnnAssign {
+            target: "x".to_string(),
+            annotation: Ty::Int,
+            value: Some(HirExpr::Name("unbound".to_string())),
+            is_final: false,
+        };
+        bind_local_types_in_stmt(&mut env, &local_names, &stmt);
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn bind_local_types_in_stmt_for_list_skips_when_list_not_bound() {
+        let mut env = Environment::new();
+        let local_names = ["i"];
+        let stmt = HirStmt::ForList {
+            var: "i".to_string(),
+            list: "xs".to_string(),
+            body: vec![],
+        };
+        bind_local_types_in_stmt(&mut env, &local_names, &stmt);
+        assert_eq!(env.lookup("i"), None);
+    }
+
+    #[test]
+    fn mangle_protocol_instantiation_skips_non_instance_substitutions() {
+        let substitutions = vec![("P".to_string(), Ty::Int)];
+        let mangled = mangle_protocol_instantiation("foo", &substitutions);
+        assert_eq!(mangled, "0gen_foo");
+    }
+
     // -- #436: generic class monomorphization of static/class methods ------
 
     /// Builds a generic class `C[T]` with `__init__`, a static method
@@ -29007,14 +29206,26 @@ mod tests {
 
     #[test]
     fn protocol_function_returning_protocol_covers_param_name_none() {
-        // This exercises the path where a function is in protocol_funcs
-        // (because its return type is Protocol) but protocol_param_name
-        // returns None (no protocol-typed parameters). The call is not
-        // rewritten, covering the closing brace of `if let Some(...)`.
+        // A function with a protocol return type but no protocol-typed
+        // parameters is NOT classified for monomorphization
+        // (has_protocol_param only checks parameters). It is kept as-is
+        // and remains callable after monomorphization.
         let result = check_source(
-            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef ret_proto() -> P:\n    return C()\ndef caller() -> None:\n    x = ret_proto()\n    print(x.foo())\nc = C()\ncaller()\n",
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\nc = C()\ndef ret_proto() -> P:\n    return C()\ndef caller() -> None:\n    x = ret_proto()\n    print(x.foo())\ncaller()\n",
         );
         assert!(result.is_ok());
+        let resolved = result.unwrap();
+        let has_ret_proto = resolved.items.iter().any(|item| {
+            if let HirItem::Function { name, .. } = item {
+                name == "ret_proto"
+            } else {
+                false
+            }
+        });
+        assert!(
+            has_ret_proto,
+            "protocol-return-only function must not be dropped by monomorphization"
+        );
     }
 
     #[test]
@@ -29027,6 +29238,19 @@ mod tests {
         // This may or may not succeed depending on whether the
         // monomorphization handles protocol-typed args gracefully.
         // We just need to exercise the code path.
+        let _ = result;
+    }
+
+    #[test]
+    fn protocol_call_with_protocol_returned_arg_covers_empty_substitutions() {
+        // Exercises the false branch of `if !substitutions.is_empty()` in
+        // rewrite_protocol_calls_in_expr. A protocol-return-only function
+        // (make_proto) produces a protocol-typed local (x) whose inferred
+        // type is Ty::Protocol, not Ty::Instance, so no substitution is
+        // generated and the call is left unrewritten.
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef make_proto() -> P:\n    return C()\ndef proto_fn(p: P) -> int:\n    return p.foo()\ndef caller() -> None:\n    x = make_proto()\n    print(proto_fn(x))\ncaller()\n",
+        );
         let _ = result;
     }
 
@@ -29213,6 +29437,160 @@ mod tests {
         // covering the `cond == Some(c)` branch for the dict-comp arm.
         let result = check_source(
             "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef proto_fn(p: P) -> int:\n    return p.foo()\ndef caller() -> None:\n    xs = {\"k\": proto_fn(c) for i in range(3) if i > 0}\nc = C()\ncaller()\n",
+        );
+        assert!(result.is_ok());
+    }
+
+    // -- Bug 2: function-local variable as protocol call argument ----------
+
+    #[test]
+    fn protocol_call_with_function_local_variable_argument_compiles() {
+        // A function-local variable (not a module-level global) passed
+        // to a protocol-parameter function must be resolved through the
+        // monomorphization pass's child environment, not the module env.
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef proto_fn(p: P) -> int:\n    return p.foo()\ndef caller() -> None:\n    c = C()\n    print(proto_fn(c))\ncaller()\n",
+        );
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        let has_specialization = resolved.items.iter().any(|item| {
+            if let HirItem::Function { name, .. } = item {
+                name.contains("0gen_")
+            } else {
+                false
+            }
+        });
+        assert!(
+            has_specialization,
+            "monomorphized HIR should contain a protocol specialization for a local-variable argument"
+        );
+    }
+
+    #[test]
+    fn protocol_call_with_local_from_if_block_compiles() {
+        // A local variable assigned inside an if block (after being
+        // pre-bound) and then passed to a protocol-parameter function —
+        // exercises bind_local_types_in_stmt's If arm.
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef proto_fn(p: P) -> int:\n    return p.foo()\ndef caller() -> None:\n    c = C()\n    if True:\n        c = C()\n    print(proto_fn(c))\ncaller()\n",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn protocol_call_with_local_from_for_range_compiles() {
+        // A local variable reassigned inside a for-range loop body and
+        // then passed to a protocol-parameter function — exercises
+        // bind_local_types_in_stmt's ForRange arm.
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef proto_fn(p: P) -> int:\n    return p.foo()\ndef caller() -> None:\n    c = C()\n    for i in range(1):\n        c = C()\n    print(proto_fn(c))\ncaller()\n",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn protocol_call_with_local_from_for_list_compiles() {
+        // A for-list loop over a list[int] alongside a protocol call —
+        // exercises bind_local_types_in_stmt's ForList arm (binding the
+        // loop variable's type from the list's element type).
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef proto_fn(p: P) -> int:\n    return p.foo()\ndef caller() -> None:\n    xs = [1, 2, 3]\n    for x in xs:\n        print(x)\n    c = C()\n    print(proto_fn(c))\ncaller()\n",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn protocol_call_with_local_from_while_block_compiles() {
+        // A local variable reassigned inside a while loop body and then
+        // passed to a protocol-parameter function — exercises
+        // bind_local_types_in_stmt's While arm.
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef proto_fn(p: P) -> int:\n    return p.foo()\ndef caller() -> None:\n    c = C()\n    while False:\n        c = C()\n    print(proto_fn(c))\ncaller()\n",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn protocol_call_with_annassign_local_compiles() {
+        // A local variable bound via AnnAssign (with a value) passed to
+        // a protocol-parameter function — exercises
+        // bind_local_types_in_stmt's AnnAssign arm with a value.
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef proto_fn(p: P) -> int:\n    return p.foo()\ndef caller() -> None:\n    c: C = C()\n    print(proto_fn(c))\ncaller()\n",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn protocol_call_with_valueless_annassign_then_assign_compiles() {
+        // A value-less AnnAssign (`c: C`) followed by an assignment —
+        // exercises bind_local_types_in_stmt's AnnAssign arm without a
+        // value (binding from the annotation type).
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef proto_fn(p: P) -> int:\n    return p.foo()\ndef caller() -> None:\n    c: C\n    c = C()\n    print(proto_fn(c))\ncaller()\n",
+        );
+        assert!(result.is_ok());
+    }
+
+    // -- Bug 4: nested protocol-parameter function calls -------------------
+
+    #[test]
+    fn nested_protocol_parameter_functions_both_get_specialized() {
+        // One protocol-parameter function calling another — the inner
+        // call in the specialized body must also be rewritten.
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef inner(p: P) -> int:\n    return p.foo()\ndef outer(p: P) -> int:\n    return inner(p)\nc = C()\nprint(outer(c))\n",
+        );
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        let specialization_count = resolved
+            .items
+            .iter()
+            .filter(|item| {
+                if let HirItem::Function { name, .. } = item {
+                    name.contains("0gen_")
+                } else {
+                    false
+                }
+            })
+            .count();
+        assert!(
+            specialization_count >= 2,
+            "both inner and outer should be specialized, found {specialization_count}"
+        );
+    }
+
+    // -- Bug 5: multiple protocol-typed parameters ------------------------
+
+    #[test]
+    fn multiple_protocol_parameters_all_get_specialized() {
+        // A function with two different protocol-typed parameters — both
+        // must be substituted with their respective concrete types.
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass Q(Protocol):\n    def bar(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\nclass D:\n    def __init__(self) -> None:\n        self.x = 0\n    def bar(self) -> int:\n        return 2\ndef combine(a: P, b: Q) -> int:\n    return a.foo() + b.bar()\nc = C()\nd = D()\nprint(combine(c, d))\n",
+        );
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        let has_specialization = resolved.items.iter().any(|item| {
+            if let HirItem::Function { name, params, .. } = item {
+                name.contains("0gen_combine")
+                    && params.iter().all(|(_, ty)| !matches!(ty, Ty::Protocol(_)))
+            } else {
+                false
+            }
+        });
+        assert!(
+            has_specialization,
+            "combine should be specialized with both protocol types replaced"
+        );
+    }
+
+    #[test]
+    fn multiple_protocol_parameters_same_protocol_compiles() {
+        // A function with two parameters of the same protocol type —
+        // both should be substituted with the same concrete type.
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef combine(a: P, b: P) -> int:\n    return a.foo() + b.foo()\nc = C()\nprint(combine(c, c))\n",
         );
         assert!(result.is_ok());
     }
