@@ -218,7 +218,13 @@ the Pages workflow.
 `scripts/test-check-site.sh` proves that the validator accepts the complete
 site and rejects missing evidence pages, wrong canonicals, incomplete sitemaps,
 missing official comparison sources, missing LPython alpha-status evidence, a
-missing pre-alpha comparison warning, or required metadata. The self-test
+missing pre-alpha comparison warning, or required metadata. Table-driven
+negative controls remove each required file and each required metadata key
+individually, so deleting any entry from the validator's required-file or
+required-metadata check list causes the self-test to fail. Additional negative
+controls verify the landing-page canonical URL, the sitemap origin in
+`robots.txt`, the JSON-LD `codeRepository` link, and the local-only-URL grep
+check. The self-test
 independently removes LPython's official project source and alpha positioning
 so a newly covered compiler model cannot silently disappear. It rejects both a
 duplicate sitemap `lastmod` and a value that disagrees with the corresponding

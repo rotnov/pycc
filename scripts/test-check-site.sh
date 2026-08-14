@@ -2311,8 +2311,13 @@ fi
 cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
 
 # --- Issue #39: table-driven mutation tests for required files ---
-
-# For each required file, remove it and verify the validator rejects.
+# For each required file in the validator's required_file list, remove it
+# and verify the validator rejects. Each file is restored immediately after
+# its test so the fixture stays intact for the next iteration. This catches
+# deletion of any required-file check from scripts/check-site.sh: if a file
+# is removed from the validator's required_file loop, the corresponding
+# self-test case stops failing.
+indexnow_key='3361fe03d0f44ab7cdbb1a3ce1461821'
 for required_file in \
   index.html \
   index.html.md \
@@ -2323,6 +2328,7 @@ for required_file in \
   robots.txt \
   sitemap.xml \
   llms.txt \
+  "${indexnow_key}.txt" \
   404.html \
   status/index.html \
   architecture/index.html \
@@ -2330,19 +2336,31 @@ for required_file in \
   python-aot-compilers/claims.json \
   ai-native/index.html
 do
-  cp -R "$repo_root/site" "$fixture_root/site/"
-  rm -f "$fixture_root/site/$required_file"
+  target="$fixture_root/site/$required_file"
+  rm -f "$target"
   if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
     echo "Validator accepted missing required file: $required_file (issue #39)" >&2
     exit 1
   fi
+  mkdir -p "$(dirname "$target")"
+  cp "$repo_root/site/$required_file" "$target"
 done
 
 # --- Issue #39: table-driven mutation tests for required metadata ---
-
-# For each required metadata key, remove it from index.html and verify
-# the validator rejects.
+# For each required metadata key in the validator's required_metadata list,
+# remove the corresponding meta tag from index.html and verify the validator
+# rejects. index.html is restored from the pristine repo copy before each
+# iteration so only the targeted meta tag is missing. This catches deletion
+# of any required-metadata check from scripts/check-site.sh: if a key is
+# removed from the validator's required_metadata loop, the corresponding
+# self-test case stops failing.
 for meta_key in \
+  description \
+  google-site-verification \
+  robots \
+  og:type \
+  og:site_name \
+  og:locale \
   og:url \
   og:title \
   og:description \
@@ -2357,13 +2375,13 @@ do
   cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
   python3 - "$fixture_root/site/index.html" "$meta_key" <<'PY'
 from pathlib import Path
+import re
 import sys
 path = Path(sys.argv[1])
 meta_key = sys.argv[2]
 content = path.read_text()
-# Remove the meta tag with this property/name.
-import re
-# Match <meta property="meta_key" ...> or <meta name="meta_key" ...>
+# Remove the meta tag with this property/name. [^>] matches newlines so
+# multi-line meta tags (e.g. name="description") are handled correctly.
 pattern = re.compile(
     r'<meta\s+(?:property|name)="' + re.escape(meta_key) + r'"[^>]*/?>',
     re.IGNORECASE
@@ -2379,14 +2397,94 @@ PY
   fi
 done
 
-# Restore the full site directory before issue #197 mutations. The required-file
-# loop above (issue #39) leaves $fixture_root/site in a broken state: its
-# `cp -R "$repo_root/site" "$fixture_root/site/"` creates a nested
-# $fixture_root/site/site/ rather than restoring contents, and the last
-# iteration removes ai-native/index.html. Without this restoration, every #197
-# mutation test is a false positive — check-site.sh exits 1 on the required-files
-# check before reaching the #197 validation block.
-cp -R "$repo_root/site/." "$fixture_root/site/"
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# --- Issue #39: negative controls for other explicit contract checks ---
+# These verify that deleting any of the validator's explicit contract checks
+# (beyond the required-file and required-metadata loops) causes the self-test
+# to fail.
+
+# Canonical URL on the landing page: the validator must reject a landing page
+# whose canonical link href does not match the canonical origin.
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+canonical = '    <link rel="canonical" href="https://rotnov.github.io/pycc/">'
+assert canonical in content
+path.write_text(
+    content.replace(
+        canonical,
+        '    <link rel="canonical" href="https://rotnov.github.io/pycc/wrong/">',
+        1,
+    )
+)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a landing page with the wrong canonical URL (issue #39)" >&2
+  exit 1
+fi
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# Sitemap origin in robots.txt: the validator must reject a robots.txt that
+# does not declare the canonical sitemap URL.
+python3 - "$fixture_root/site/robots.txt" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+sitemap_line = "Sitemap: https://rotnov.github.io/pycc/sitemap.xml"
+assert sitemap_line in content
+path.write_text(content.replace(sitemap_line, "Sitemap: https://example.com/sitemap.xml", 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a robots.txt with the wrong sitemap origin (issue #39)" >&2
+  exit 1
+fi
+cp "$repo_root/site/robots.txt" "$fixture_root/site/robots.txt"
+
+# JSON-LD repository link: the validator must reject a SoftwareSourceCode
+# JSON-LD object whose codeRepository does not link to the public repository.
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    '"codeRepository": "https://github.com/rotnov/pycc"',
+    '"codeRepository": "https://github.com/wrong/pycc"',
+    1,
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a JSON-LD codeRepository pointing to the wrong repository (issue #39)" >&2
+  exit 1
+fi
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# Local-only URLs: the validator must reject any site file containing a
+# localhost, 127.0.0.1, or file:// URL. The URL is inserted as an HTML
+# comment so the metadata parser does not reject the page for structural
+# reasons before the local-only-URL grep check runs.
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "  </head>",
+    '  <!-- http://127.0.0.1/local -->\n  </head>',
+    1,
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a site containing a local-only URL (issue #39)" >&2
+  exit 1
+fi
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
 # --- Issue #197: quick-start example binding mutation tests ---
 # Execution-level negative controls (expression-form reintroduction, missing
