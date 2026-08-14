@@ -24,6 +24,7 @@ Entry point to the full spec. Development model is AI-first (D-013): the normati
 | [WEBSITE.md](./WEBSITE.md) | Public website, search metadata, canonical URL, and GitHub Pages publication | `site/`, Pages workflow |
 | [DISTRIBUTION.md](./DISTRIBUTION.md) | Source-based pre-commit publication, hook contract, installation limits, collision-safe package identity | `.pre-commit-hooks.yaml`, `pycc check`, release tags, `scripts/check_package_identity.rb` |
 | [SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md), [SEARCH_QUERY_REGISTRY.json](./SEARCH_QUERY_REGISTRY.json), and [SEARCH_VISIBILITY_CHECKPOINTS.json](./SEARCH_VISIBILITY_CHECKPOINTS.json) | Chronological provider-qualified measurements, the machine-readable query-intent registry, and append-only history-prefix checkpoints | discoverability monitoring, local validation, and the active trusted search audit |
+| [GITHUB_TRAFFIC_OBSERVATIONS.json](./GITHUB_TRAFFIC_OBSERVATIONS.json) | Sanitized immutable GitHub Traffic API observation artifact with daily views/clones rows, referrers, popular paths, and repository state | daily traffic evidence preservation, local validation (`scripts/check_github_traffic_observations.py`), and prose binding |
 | `CITATION.cff` | Machine-readable software citation metadata (CFF 1.2.0) | GitHub "Cite this repository" panel, citation identity |
 | `README.md` testing-strategy section | Current-vs-planned testing claims (issue #214) | `scripts/check_readme_claims.rb`, `scripts/test_check_readme_claims.rb` |
 

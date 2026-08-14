@@ -1,0 +1,472 @@
+{
+  "artifact_version": 1,
+  "provenance": {
+    "source": "github_traffic_api_owner_data",
+    "sanitized": true,
+    "collection_method": "manual_owner_inspection_and_traffic_api",
+    "collected_at": "2026-07-25T20:23:25Z",
+    "sanitization_note": "All credentials, API keys, and tokens removed. Only owner-facing GitHub Traffic API observations are retained. Clone counts include CI, agents, and other automation and are not attributed to human visitors.",
+    "api_version": "2026-03-10",
+    "api_documentation": "https://docs.github.com/en/rest/metrics/traffic?apiVersion=2026-03-10"
+  },
+  "observations": [
+    {
+      "observed_at": "2026-07-24T23:08:42Z",
+      "api_version": "2026-03-10",
+      "data_through": "2026-07-24",
+      "views": {
+        "count": 0,
+        "uniques": 0,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "clones": {
+        "count": 0,
+        "uniques": 0,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "referrers": [],
+      "referrers_collection_status": "collected",
+      "popular_paths": [],
+      "popular_paths_collection_status": "not_collected",
+      "repository_state": {
+        "stars": 0,
+        "forks": 0,
+        "watchers": 0
+      },
+      "interpretation_label": "no activity"
+    },
+    {
+      "observed_at": "2026-07-25T09:08:07Z",
+      "api_version": "2026-03-10",
+      "data_through": "2026-07-24",
+      "views": {
+        "count": 74,
+        "uniques": 1,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "clones": {
+        "count": 1444,
+        "uniques": 349,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "referrers": [
+        {
+          "referrer": "github.com",
+          "count": 5,
+          "uniques": 1
+        },
+        {
+          "referrer": "rotnov.github.io",
+          "count": 2,
+          "uniques": 1
+        }
+      ],
+      "referrers_collection_status": "collected",
+      "popular_paths": [],
+      "popular_paths_collection_status": "not_collected",
+      "repository_state": {
+        "stars": 0,
+        "forks": 1,
+        "watchers": 0
+      },
+      "interpretation_label": "automation-heavy / unattributed"
+    },
+    {
+      "observed_at": "2026-07-25T10:23:18Z",
+      "api_version": "2026-03-10",
+      "data_through": "2026-07-24",
+      "views": {
+        "count": 74,
+        "uniques": 1,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "clones": {
+        "count": 1444,
+        "uniques": 349,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "referrers": [
+        {
+          "referrer": "github.com",
+          "count": 5,
+          "uniques": 1
+        },
+        {
+          "referrer": "rotnov.github.io",
+          "count": 2,
+          "uniques": 1
+        }
+      ],
+      "referrers_collection_status": "collected",
+      "popular_paths": [],
+      "popular_paths_collection_status": "not_collected",
+      "repository_state": {
+        "stars": 0,
+        "forks": 1,
+        "watchers": 0
+      },
+      "interpretation_label": "automation-heavy / unattributed"
+    },
+    {
+      "observed_at": "2026-07-25T11:58:38Z",
+      "api_version": "2026-03-10",
+      "data_through": "2026-07-24",
+      "views": {
+        "count": 74,
+        "uniques": 1,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "clones": {
+        "count": 1444,
+        "uniques": 349,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "referrers": [
+        {
+          "referrer": "github.com",
+          "count": 5,
+          "uniques": 1
+        },
+        {
+          "referrer": "rotnov.github.io",
+          "count": 2,
+          "uniques": 1
+        }
+      ],
+      "referrers_collection_status": "collected",
+      "popular_paths": [],
+      "popular_paths_collection_status": "not_collected",
+      "repository_state": {
+        "stars": 0,
+        "forks": 1,
+        "watchers": 0
+      },
+      "interpretation_label": "automation-heavy / unattributed"
+    },
+    {
+      "observed_at": "2026-07-25T13:18:56Z",
+      "api_version": "2026-03-10",
+      "data_through": "2026-07-24",
+      "views": {
+        "count": 74,
+        "uniques": 1,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "clones": {
+        "count": 1444,
+        "uniques": 349,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "referrers": [
+        {
+          "referrer": "github.com",
+          "count": 5,
+          "uniques": 1
+        },
+        {
+          "referrer": "rotnov.github.io",
+          "count": 2,
+          "uniques": 1
+        }
+      ],
+      "referrers_collection_status": "collected",
+      "popular_paths": [],
+      "popular_paths_collection_status": "not_collected",
+      "repository_state": {
+        "stars": 0,
+        "forks": 1,
+        "watchers": 0
+      },
+      "interpretation_label": "automation-heavy / unattributed"
+    },
+    {
+      "observed_at": "2026-07-25T14:54:05Z",
+      "api_version": "2026-03-10",
+      "data_through": "2026-07-24",
+      "views": {
+        "count": 74,
+        "uniques": 1,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "clones": {
+        "count": 1444,
+        "uniques": 349,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "referrers": [
+        {
+          "referrer": "github.com",
+          "count": 5,
+          "uniques": 1
+        },
+        {
+          "referrer": "rotnov.github.io",
+          "count": 2,
+          "uniques": 1
+        }
+      ],
+      "referrers_collection_status": "collected",
+      "popular_paths": [],
+      "popular_paths_collection_status": "not_collected",
+      "repository_state": {
+        "stars": 0,
+        "forks": 1,
+        "watchers": 0
+      },
+      "interpretation_label": "automation-heavy / unattributed"
+    },
+    {
+      "observed_at": "2026-07-25T15:43:17Z",
+      "api_version": "2026-03-10",
+      "data_through": "2026-07-24",
+      "views": {
+        "count": 74,
+        "uniques": 1,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "clones": {
+        "count": 1444,
+        "uniques": 349,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "referrers": [
+        {
+          "referrer": "github.com",
+          "count": 5,
+          "uniques": 1
+        },
+        {
+          "referrer": "rotnov.github.io",
+          "count": 2,
+          "uniques": 1
+        }
+      ],
+      "referrers_collection_status": "collected",
+      "popular_paths": [],
+      "popular_paths_collection_status": "not_collected",
+      "repository_state": {
+        "stars": 0,
+        "forks": 1,
+        "watchers": 0
+      },
+      "interpretation_label": "automation-heavy / unattributed"
+    },
+    {
+      "observed_at": "2026-07-25T16:18:15Z",
+      "api_version": "2026-03-10",
+      "data_through": "2026-07-24",
+      "views": {
+        "count": 74,
+        "uniques": 1,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "clones": {
+        "count": 1444,
+        "uniques": 349,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "referrers": [
+        {
+          "referrer": "github.com",
+          "count": 5,
+          "uniques": 1
+        },
+        {
+          "referrer": "rotnov.github.io",
+          "count": 2,
+          "uniques": 1
+        }
+      ],
+      "referrers_collection_status": "collected",
+      "popular_paths": [],
+      "popular_paths_collection_status": "not_collected",
+      "repository_state": {
+        "stars": 0,
+        "forks": 1,
+        "watchers": 0
+      },
+      "interpretation_label": "automation-heavy / unattributed"
+    },
+    {
+      "observed_at": "2026-07-25T16:52:38Z",
+      "api_version": "2026-03-10",
+      "data_through": "2026-07-24",
+      "views": {
+        "count": 74,
+        "uniques": 1,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "clones": {
+        "count": 1444,
+        "uniques": 349,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "referrers": [
+        {
+          "referrer": "github.com",
+          "count": 5,
+          "uniques": 1
+        },
+        {
+          "referrer": "rotnov.github.io",
+          "count": 2,
+          "uniques": 1
+        }
+      ],
+      "referrers_collection_status": "collected",
+      "popular_paths": [],
+      "popular_paths_collection_status": "not_collected",
+      "repository_state": {
+        "stars": 0,
+        "forks": 1,
+        "watchers": 0
+      },
+      "interpretation_label": "automation-heavy / unattributed"
+    },
+    {
+      "observed_at": "2026-07-25T17:47:48Z",
+      "api_version": "2026-03-10",
+      "data_through": "2026-07-24",
+      "views": {
+        "count": 74,
+        "uniques": 1,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "clones": {
+        "count": 1444,
+        "uniques": 349,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "referrers": [
+        {
+          "referrer": "github.com",
+          "count": 5,
+          "uniques": 1
+        },
+        {
+          "referrer": "rotnov.github.io",
+          "count": 2,
+          "uniques": 1
+        }
+      ],
+      "referrers_collection_status": "collected",
+      "popular_paths": [],
+      "popular_paths_collection_status": "not_collected",
+      "repository_state": {
+        "stars": 0,
+        "forks": 1,
+        "watchers": 0
+      },
+      "interpretation_label": "automation-heavy / unattributed"
+    },
+    {
+      "observed_at": "2026-07-25T19:08:00Z",
+      "api_version": "2026-03-10",
+      "data_through": "2026-07-24",
+      "views": {
+        "count": 74,
+        "uniques": 1,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "clones": {
+        "count": 1444,
+        "uniques": 349,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "referrers": [
+        {
+          "referrer": "github.com",
+          "count": 5,
+          "uniques": 1
+        },
+        {
+          "referrer": "rotnov.github.io",
+          "count": 2,
+          "uniques": 1
+        }
+      ],
+      "referrers_collection_status": "collected",
+      "popular_paths": [],
+      "popular_paths_collection_status": "not_collected",
+      "repository_state": {
+        "stars": 0,
+        "forks": 1,
+        "watchers": 0
+      },
+      "interpretation_label": "automation-heavy / unattributed"
+    },
+    {
+      "observed_at": "2026-07-25T20:23:25Z",
+      "api_version": "2026-03-10",
+      "data_through": "2026-07-24",
+      "views": {
+        "count": 74,
+        "uniques": 1,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "clones": {
+        "count": 1444,
+        "uniques": 349,
+        "daily_rows": [],
+        "collection_status": "aggregate_only"
+      },
+      "referrers": [
+        {
+          "referrer": "github.com",
+          "count": 5,
+          "uniques": 1
+        },
+        {
+          "referrer": "rotnov.github.io",
+          "count": 2,
+          "uniques": 1
+        }
+      ],
+      "referrers_collection_status": "collected",
+      "popular_paths": [],
+      "popular_paths_collection_status": "not_collected",
+      "repository_state": {
+        "stars": 0,
+        "forks": 1,
+        "watchers": 0
+      },
+      "interpretation_label": "automation-heavy / unattributed"
+    }
+  ],
+  "latest_projection": {
+    "observed_at": "2026-07-25T20:23:25Z",
+    "data_through": "2026-07-24",
+    "views_count": 74,
+    "views_uniques": 1,
+    "clones_count": 1444,
+    "clones_uniques": 349,
+    "stars": 0,
+    "forks": 1,
+    "watchers": 0,
+    "has_daily_rows": false,
+    "interpretation_label": "automation-heavy / unattributed"
+  }
+}
