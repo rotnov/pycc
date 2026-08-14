@@ -22,7 +22,7 @@ Entry point to the full spec. Development model is AI-first (D-013): the normati
 | [sessions/](./sessions/README.md) | Informational handoff snapshots, one dated file per checkpoint: overall delivery status, in-flight work, resume points (not normative requirements) | session continuity/handoff only |
 | [AGENT_TOOLING.md](./AGENT_TOOLING.md) | Agent plugin pins, reviewed update process, validation, and rollback | `.agents/`, `.claude/`, agent-asset CI |
 | [WEBSITE.md](./WEBSITE.md) | Public website, search metadata, canonical URL, and GitHub Pages publication | `site/`, Pages workflow |
-| [DISTRIBUTION.md](./DISTRIBUTION.md) | Source-based pre-commit publication, hook contract, installation limits | `.pre-commit-hooks.yaml`, `pycc check`, release tags |
+| [DISTRIBUTION.md](./DISTRIBUTION.md) | Source-based pre-commit publication, hook contract, installation limits, collision-safe package identity | `.pre-commit-hooks.yaml`, `pycc check`, release tags, `scripts/check_package_identity.rb` |
 | [SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md), [SEARCH_QUERY_REGISTRY.json](./SEARCH_QUERY_REGISTRY.json), and [SEARCH_VISIBILITY_CHECKPOINTS.json](./SEARCH_VISIBILITY_CHECKPOINTS.json) | Chronological provider-qualified measurements, the machine-readable query-intent registry, and append-only history-prefix checkpoints | discoverability monitoring, local validation, and the active trusted search audit |
 | `CITATION.cff` | Machine-readable software citation metadata (CFF 1.2.0) | GitHub "Cite this repository" panel, citation identity |
 | `README.md` testing-strategy section | Current-vs-planned testing claims (issue #214) | `scripts/check_readme_claims.rb`, `scripts/test_check_readme_claims.rb` |
