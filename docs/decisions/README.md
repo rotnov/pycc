@@ -173,3 +173,4 @@ current.
 | [D-164](./D-164-dataclass-static-dispatch-narrow-scope.md) | Dataclass static dispatch and narrow scope | accepted |
 | [D-165](./D-165-preserve-daily-github-traffic-evidence.md) | Preserve daily GitHub traffic evidence in an immutable artifact | accepted |
 | [D-166](./D-166-protocols-structural-typing-compile-time-only.md) | PEP 544 protocols and structural typing: compile-time-only interface descriptions with static dispatch via monomorphization | accepted |
+| [D-167](./D-167-preserve-page-indexing-aggregates-separately.md) | Preserve Page Indexing aggregates separately from per-URL evidence | accepted |
