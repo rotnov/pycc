@@ -25,7 +25,9 @@ EVIDENCE_CLAIMS = {
   "check-throughput-1k-loc-75ms" =>
     "`pycc check` processes 1k LOC in under 75 ms.",
   "cli-spec-diagnostic-match" =>
-    "The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output."
+    "The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output.",
+  "readme-coverage-badge-bound" =>
+    "The README coverage badge percentage is bound to ci.yml's enforced --fail-under-lines and --fail-under-regions thresholds."
 }.freeze
 EVIDENCE_SECTIONS = {
   "ci-tier1-cross-compile" => [
@@ -49,6 +51,11 @@ EVIDENCE_SECTIONS = {
     "v0.1 acceptance checklist"
   ],
   "cli-spec-diagnostic-match" => [
+    "pycc Roadmap",
+    "Current delivery status",
+    "v0.1 acceptance checklist"
+  ],
+  "readme-coverage-badge-bound" => [
     "pycc Roadmap",
     "Current delivery status",
     "v0.1 acceptance checklist"

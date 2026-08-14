@@ -896,6 +896,61 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
+  # Issue #211: README coverage badge binding evidence
+
+  def test_accepts_readme_coverage_badge_bound_evidence
+    repository_root = Pathname(__dir__).parent
+    workflow = (repository_root / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The README coverage badge percentage is bound to ci.yml's enforced --fail-under-lines and --fail-under-regions thresholds. <!-- roadmap-evidence: readme-coverage-badge-bound -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_readme_coverage_badge_bound_evidence_with_the_wrong_claim
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The README coverage badge is green. <!-- roadmap-evidence: readme-coverage-badge-bound -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "does not prove this roadmap claim"
+  end
+
+  def test_rejects_readme_coverage_badge_bound_evidence_outside_the_v0_1_checklist
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## v1.0 — spec freeze
+
+      ### v0.1 acceptance checklist
+
+      - [x] The README coverage badge percentage is bound to ci.yml's enforced --fail-under-lines and --fail-under-regions thresholds. <!-- roadmap-evidence: readme-coverage-badge-bound -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "must appear under the expected roadmap section"
+  end
+
   def test_accepts_throughput_floor_evidence
     repository_root = Pathname(__dir__).parent
     workflow = (repository_root / ".github/workflows/ci.yml").read
@@ -1002,15 +1057,15 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
-  # ci.yml now matches D199 (Merge 2 of issue #199, activating the
-  # pages-accessibility job) -- D100/D112/D114/D229 remain in the accepted
-  # array below only because retiring them is a separate, later
-  # propose-then-activate round for check_roadmap_evidence.rb's own bytes
-  # (the same self-authorization boundary this whole array already exists
-  # to enforce).
-  def test_tier1_workflow_authorization_is_the_active_d199_digest
+  # ci.yml now matches D211 (Merge 2 of issue #211, activating the
+  # README coverage badge binding step) -- D100/D112/D114/D229/D199 remain
+  # in the accepted array below only because retiring them is a separate,
+  # later propose-then-activate round for check_roadmap_evidence.rb's own
+  # bytes (the same self-authorization boundary this whole array already
+  # exists to enforce).
+  def test_tier1_workflow_authorization_is_the_active_d211_digest
     assert_equal(
-      D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256,
+      D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
       Digest::SHA256.hexdigest(
         (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
       )
@@ -1075,17 +1130,17 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_d199_pages_accessibility_workflow_is_active_and_reviewed
+  def test_d211_coverage_badge_binding_workflow_is_active_and_reviewed
     assert_equal(
-      D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(D199_PAGES_ACCESSIBILITY_WORKFLOW_FIXTURE).hexdigest
+      D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D211_COVERAGE_BADGE_BINDING_WORKFLOW_FIXTURE).hexdigest
     )
     assert_equal(
-      D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256,
+      D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
       Digest::SHA256.file(ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW).hexdigest
     )
     assert_equal(
-      D199_PAGES_ACCESSIBILITY_WORKFLOW_FIXTURE.read,
+      D211_COVERAGE_BADGE_BINDING_WORKFLOW_FIXTURE.read,
       ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
     )
     assert validate_source_aware_perf_gate_lifecycle(
@@ -3263,21 +3318,21 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_d211_coverage_badge_binding_workflow_is_staged_not_live
-    # The D211 fixture is staged (not yet the live ci.yml).
-    # The live ci.yml is still the D199 shape until the activation merge.
+  def test_d211_coverage_badge_binding_workflow_is_the_live_ci_yml
+    # The D211 fixture must match the live ci.yml (Merge 2 activation).
     live_digest = Digest::SHA256.file(
       Pathname(__dir__).parent / ".github/workflows/ci.yml"
     ).hexdigest
-    refute_equal D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256, live_digest
+    assert_equal D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256, live_digest
   end
 
-  def test_d199_pages_accessibility_workflow_is_the_live_ci_yml
-    # The D199 fixture must match the live ci.yml (Merge 2 activation).
+  def test_d199_pages_accessibility_workflow_is_not_the_live_ci_yml
+    # The D199 fixture was the live ci.yml before the D211 activation.
+    # After issue #211's activation merge, the live ci.yml is the D211 shape.
     live_digest = Digest::SHA256.file(
       Pathname(__dir__).parent / ".github/workflows/ci.yml"
     ).hexdigest
-    assert_equal D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256, live_digest
+    refute_equal D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256, live_digest
   end
 
   def test_d199_pages_accessibility_ci_gate_has_pages_accessibility_in_needs
