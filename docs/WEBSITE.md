@@ -161,7 +161,56 @@ git commit (author date) that modified that page's source file, so a visible
 content edit that leaves the `lastmod` stale is caught before merge. The
 `check-site.sh` validator independently enforces that `lastmod` equals the
 page's JSON-LD `dateModified`, so the two checks together guarantee
-`lastmod` == `dateModified` == last content-change commit date. The social preview is `site/og.png`. Each canonical page
+`lastmod` == `dateModified` == last content-change commit date.
+
+### Repository social preview contract (issue #200)
+
+The social preview is `site/og.png`, a single canonical project-owned visual
+asset shared by the website Open Graph/X card metadata and the GitHub
+repository social preview. GitHub generates a default owner-avatar/counter
+card when no custom image is uploaded; the project replaces that generated
+card with the same `og.png` the website serves so repository shares and
+website shares present one consistent project identity.
+
+GitHub documents its upload constraints at
+<https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview>:
+PNG, JPG, or GIF under 1 MB, at least 640×320, with 1280×640 recommended for
+best display. The canonical asset is therefore PNG, exactly 1280×640, and
+held under a 960 KiB safety margin so routine recompression or metadata
+stripping cannot silently push it over GitHub's 1 MB ceiling. The asset
+leads with the product name `pycc`, the promise "Typed Python in. Native
+binaries out.", the "Rust + LLVM · pre-alpha" label, and the compiler
+pipeline graphic; it contains no volatile stars/issues/contributor counts
+and no personal owner imagery, preserving the product/provenance distinction
+(product: AOT compiler for typed Python; provenance: built by AI, managed by
+a human) owned jointly with #192.
+
+`scripts/check-site.sh` enforces the asset contract deterministically: it
+validates the PNG signature, IHDR dimensions (exactly 1280×640, rejecting
+both undersize images below 640×320 and valid PNGs at the wrong
+dimensions), and file size (rejecting anything at or above GitHub's 1 MB
+limit and anything at or above the 960 KiB safety margin). The validator
+also binds the `og:image` and `twitter:image` metadata to the canonical
+`{canonical}og.png` URL so the HTML cannot reference a different or missing
+asset. `scripts/test-check-site.sh` provides paired negative controls
+(issue #200): an oversize image at or above 1 MB, an undersize image below
+640×320, a valid PNG at wrong dimensions (640×320 instead of 1280×640), a
+non-PNG file (JPEG magic bytes), a wrong `og:image` target, a wrong
+`twitter:image` target, and a missing `og.png` that the metadata still
+references.
+
+The upload itself is performed through Repository Settings → Social preview
+on GitHub; it is a one-time manual action that cannot be automated through
+the standard repository API. After upload, the external setting is verified
+via GraphQL: `usesCustomOpenGraphImage` must report `true` and
+`openGraphImageUrl` must resolve successfully. The observation timestamp,
+source asset SHA-256, and setting verification are recorded without treating
+social-card publication as traffic or ranking evidence. The source asset
+SHA-256 for the current `site/og.png` is
+`79f47b25e40e4cc82d0d15a53fbf0828f3581942b4574be4294f053ba41a1ad7`
+(740,052 bytes, 1280×640, PNG).
+
+Each canonical page
 carries an SVG favicon (`site/favicon.svg`, `>_` brand mark) linked with
 `rel="icon"` and `type="image/svg+xml"`; the validator checks the SVG root
 element, size limit, and link attributes. The 404 error page

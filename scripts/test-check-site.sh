@@ -2937,4 +2937,168 @@ if WEBSITE_MD_PATH="$fixture_root/WEBSITE.md" SITE_DIR="$fixture_root/site" "$re
   exit 1
 fi
 
+# --- Issue #200: social preview image negative tests ---
+# Each mutation replaces og.png in the fixture with a deliberately invalid
+# image and verifies the validator rejects it. The fixture is restored from
+# the pristine repo copy after each test.
+
+# Mutation: oversize image (>= 1 MB GitHub limit).
+python3 - "$fixture_root/site/og.png" <<'PY'
+import struct
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+# Build a valid 1280x640 PNG whose uncompressed pixel data pushes the file
+# over 1 MB. We write a minimal PNG with a large IDAT of random-ish bytes.
+width, height = 1280, 640
+sig = b"\x89PNG\r\n\x1a\n"
+
+def chunk(tag, data):
+    return (
+        struct.pack(">I", len(data))
+        + tag
+        + data
+        + struct.pack(">I", 0)
+    )
+
+ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+# Raw row data: each row starts with filter byte 0, then RGB pixels.
+row = b"\x00" + b"\xaa\xbb\xcc" * width
+raw = row * height
+# Use stored (no) compression to inflate size past 1 MB.
+idat = b"x\x01\x01\x00" + struct.pack(">H", len(raw) & 0xFFFF) + struct.pack(">H", ~len(raw) & 0xFFFF) + raw + b"\x00\x00\x00\x00"
+png = sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+path.write_bytes(png)
+if len(png) < 1_048_576:
+    # Fallback: pad with an extra ancillary chunk to exceed 1 MB.
+    pad = b"\x00" * (1_048_576 - len(png) + 1024)
+    png = sig + chunk(b"IHDR", ihdr) + chunk(b"zTXt", pad) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+    path.write_bytes(png)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an og.png at or above 1 MB (issue #200)" >&2
+  exit 1
+fi
+cp "$repo_root/site/og.png" "$fixture_root/site/og.png"
+
+# Mutation: dimensions below 640x320 minimum.
+python3 - "$fixture_root/site/og.png" <<'PY'
+import struct
+import sys
+import zlib
+from pathlib import Path
+
+path = Path(sys.argv[1])
+width, height = 320, 160
+sig = b"\x89PNG\r\n\x1a\n"
+
+def chunk(tag, data):
+    import zlib as _z
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", _z.crc32(tag + data) & 0xFFFFFFFF)
+
+ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+row = b"\x00" + b"\xaa\xbb\xcc" * width
+raw = row * height
+idat_data = zlib.compress(raw)
+png = sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat_data) + chunk(b"IEND", b"")
+path.write_bytes(png)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted og.png with dimensions below 640x320 (issue #200)" >&2
+  exit 1
+fi
+cp "$repo_root/site/og.png" "$fixture_root/site/og.png"
+
+# Mutation: wrong dimensions (valid PNG but not 1280x640).
+python3 - "$fixture_root/site/og.png" <<'PY'
+import struct
+import sys
+import zlib
+from pathlib import Path
+
+path = Path(sys.argv[1])
+width, height = 640, 320
+sig = b"\x89PNG\r\n\x1a\n"
+
+def chunk(tag, data):
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+row = b"\x00" + b"\xaa\xbb\xcc" * width
+raw = row * height
+idat_data = zlib.compress(raw)
+png = sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat_data) + chunk(b"IEND", b"")
+path.write_bytes(png)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted og.png with wrong dimensions (not 1280x640) (issue #200)" >&2
+  exit 1
+fi
+cp "$repo_root/site/og.png" "$fixture_root/site/og.png"
+
+# Mutation: non-PNG format (JPEG magic bytes).
+python3 - "$fixture_root/site/og.png" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+# Write a minimal JPEG-like file (JPEG SOI + EOI markers).
+path.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100 + b"\xff\xd9")
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a non-PNG og.png (issue #200)" >&2
+  exit 1
+fi
+cp "$repo_root/site/og.png" "$fixture_root/site/og.png"
+
+# Mutation: wrong og:image target (points to a different file).
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    'property="og:image" content="https://rotnov.github.io/pycc/og.png"',
+    'property="og:image" content="https://rotnov.github.io/pycc/wrong-card.png"',
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a wrong og:image target (issue #200)" >&2
+  exit 1
+fi
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# Mutation: wrong twitter:image target (points to a different file).
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    'name="twitter:image" content="https://rotnov.github.io/pycc/og.png"',
+    'name="twitter:image" content="https://rotnov.github.io/pycc/wrong-card.png"',
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a wrong twitter:image target (issue #200)" >&2
+  exit 1
+fi
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# Mutation: preview asset absent from the site directory (og.png deleted but
+# og:image still references it). This is already covered by the required-file
+# loop above, but we add an explicit confirmation that removing og.png while
+# keeping the metadata reference is rejected.
+rm -f "$fixture_root/site/og.png"
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a missing og.png referenced by metadata (issue #200)" >&2
+  exit 1
+fi
+cp "$repo_root/site/og.png" "$fixture_root/site/og.png"
+
 echo "Website validator self-tests passed."
