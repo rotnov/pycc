@@ -95,6 +95,137 @@ def run_fixture(
     return result, records
 
 
+def run_fixture_with_location(
+    status: int,
+    location: str,
+    *,
+    max_time: int = 5,
+) -> tuple[subprocess.CompletedProcess[str], list[dict]]:
+    """Run the notifier against a server that sends a redirect with Location."""
+    records: list[dict] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            records.append(
+                {
+                    "path": self.path,
+                    "content_type": self.headers.get("Content-Type"),
+                    "body": self.rfile.read(length),
+                }
+            )
+            try:
+                self.send_response(status)
+                self.send_header("Location", location)
+                self.end_headers()
+            except BrokenPipeError:
+                pass
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        env = clean_env(
+            INDEXNOW_ENDPOINT=(
+                f"http://127.0.0.1:{server.server_port}/indexnow"
+            ),
+            INDEXNOW_RETRY_COUNT="0",
+            INDEXNOW_CONNECT_TIMEOUT_SECONDS="2",
+            INDEXNOW_MAX_TIME_SECONDS=str(max_time),
+        )
+        result = subprocess.run(
+            [str(NOTIFIER)],
+            cwd=REPO_ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    return result, records
+
+
+def run_multi_attempt_fixture(
+    attempt_responses: list[str],
+    *,
+    retry_count: int = 1,
+    max_time: int = 5,
+) -> tuple[subprocess.CompletedProcess[str], list[dict]]:
+    """Run the notifier against a server that gives different responses per attempt.
+
+    Each entry in attempt_responses is either an HTTP status string like
+    "200" or "202", or the literal "close" to indicate the server reads
+    the body and closes the connection without sending a response.
+    """
+    records: list[dict] = []
+    attempt_idx = [0]
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            idx = attempt_idx[0]
+            attempt_idx[0] += 1
+            records.append(
+                {
+                    "attempt": idx + 1,
+                    "path": self.path,
+                    "content_type": self.headers.get("Content-Type"),
+                    "body": body,
+                }
+            )
+            if idx < len(attempt_responses):
+                response = attempt_responses[idx]
+            else:
+                response = "close"
+            if response == "close":
+                # Read the body then close without sending a response.
+                # This simulates response loss after payload transmission.
+                return
+            try:
+                self.send_response(int(response))
+                self.end_headers()
+            except BrokenPipeError:
+                pass
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        env = clean_env(
+            INDEXNOW_ENDPOINT=(
+                f"http://127.0.0.1:{server.server_port}/indexnow"
+            ),
+            INDEXNOW_RETRY_COUNT=str(retry_count),
+            INDEXNOW_CONNECT_TIMEOUT_SECONDS="2",
+            INDEXNOW_MAX_TIME_SECONDS=str(max_time),
+        )
+        result = subprocess.run(
+            [str(NOTIFIER)],
+            cwd=REPO_ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    return result, records
+
+
 def assert_request(records: list[dict]) -> None:
     if len(records) != 1:
         raise AssertionError(f"expected one IndexNow request, got {len(records)}")
@@ -145,6 +276,9 @@ REQUIRED_RESULT_FIELDS = [
     "http_status",
     "accepted_class",
     "failure_class",
+    "delivery_state",
+    "attempt_count",
+    "possible_duplicate_delivery",
     "retries",
     "curl_exit",
 ]
@@ -156,6 +290,7 @@ def assert_result_record(
     expected_http_status: str,
     expected_accepted_class: str,
     expected_failure_class: str,
+    expected_delivery_state: str | None = None,
 ) -> dict[str, str]:
     """Verify the result record is present and has all required fields."""
     fields = parse_result_line(result.stdout)
@@ -179,6 +314,12 @@ def assert_result_record(
             f"expected failure_class={expected_failure_class!r}, "
             f"got {fields['failure_class']!r}"
         )
+    if expected_delivery_state is not None:
+        if fields["delivery_state"] != expected_delivery_state:
+            raise AssertionError(
+                f"expected delivery_state={expected_delivery_state!r}, "
+                f"got {fields['delivery_state']!r}"
+            )
     if fields["method"] != "POST":
         raise AssertionError(f"expected method=POST, got {fields['method']!r}")
     if not fields["timestamp"]:
@@ -189,6 +330,15 @@ def assert_result_record(
         raise AssertionError("sitemap_sha256 is empty")
     if not fields["url_count"] or fields["url_count"] == "0":
         raise AssertionError(f"url_count is invalid: {fields['url_count']!r}")
+    if not fields["attempt_count"] or fields["attempt_count"] == "0":
+        raise AssertionError(
+            f"attempt_count is invalid: {fields['attempt_count']!r}"
+        )
+    if fields["possible_duplicate_delivery"] not in ("true", "false"):
+        raise AssertionError(
+            f"possible_duplicate_delivery must be true or false, "
+            f"got {fields['possible_duplicate_delivery']!r}"
+        )
     return fields
 
 
@@ -265,6 +415,7 @@ def main() -> None:
         expected_http_status="200",
         expected_accepted_class="submitted",
         expected_failure_class="none",
+        expected_delivery_state="submitted",
     )
 
     success_202, records_202 = run_fixture(202)
@@ -278,6 +429,7 @@ def main() -> None:
         expected_http_status="202",
         expected_accepted_class="key_validation_pending",
         expected_failure_class="none",
+        expected_delivery_state="key_validation_pending",
     )
 
     # Negative control: 200 and 202 must NOT produce the same accepted_class.
@@ -299,6 +451,7 @@ def main() -> None:
         expected_http_status="503",
         expected_accepted_class="failed",
         expected_failure_class="http_error_503",
+        expected_delivery_state="http_rejected",
     )
 
     redirect, redirect_records = run_fixture(302)
@@ -309,10 +462,14 @@ def main() -> None:
         redirect,
         expected_http_status="302",
         expected_accepted_class="failed",
-        expected_failure_class="http_error_302",
+        expected_failure_class="redirect_rejected",
+        expected_delivery_state="redirect_rejected",
     )
 
     # Timeout: curl exits non-zero with no HTTP response code.
+    # The body is sent before the server delays, so this may be an
+    # ambiguous state: delivery_unknown_after_payload_write (body
+    # crossed the wire but no accepted response was received).
     timed_out, timeout_records = run_fixture(
         200,
         response_delay=2,
@@ -337,6 +494,18 @@ def main() -> None:
             f"timeout http_status should be 'none' or empty, "
             f"got {timeout_fields['http_status']!r}"
         )
+    # The body was sent before the timeout, so the delivery state must
+    # reflect ambiguous response loss, not a clean pre-body failure.
+    if timeout_fields["delivery_state"] not in (
+        "delivery_unknown_after_payload_write",
+        "failed_before_payload_write",
+    ):
+        raise AssertionError(
+            f"timeout delivery_state should be "
+            f"'delivery_unknown_after_payload_write' or "
+            f"'failed_before_payload_write', "
+            f"got {timeout_fields['delivery_state']!r}"
+        )
 
     # --- Negative control: a successful 200 must emit a result record ---
     # (already verified above via assert_result_record on success_200)
@@ -353,17 +522,6 @@ def main() -> None:
         )
 
     # --- Negative control: GITHUB_SHA is reflected in deployed_commit ---
-    sha_env = clean_env(
-        INDEXNOW_ENDPOINT=f"http://127.0.0.1:0/indexnow",
-        INDEXNOW_RETRY_COUNT="0",
-        INDEXNOW_CONNECT_TIMEOUT_SECONDS="2",
-        INDEXNOW_MAX_TIME_SECONDS="5",
-        GITHUB_SHA="abc123def456",
-    )
-    # We need a real server for this, so reuse run_fixture but with GITHUB_SHA.
-    # run_fixture doesn't support extra env, so we test via dry-run path
-    # which exits before the HTTP call — but dry-run doesn't emit a result
-    # record.  Instead, verify via a direct subprocess call with the fixture.
     records_sha: list[dict] = []
 
     class HandlerSha(BaseHTTPRequestHandler):
@@ -466,8 +624,11 @@ def main() -> None:
         "Sitemap SHA-256",
         "Deployed commit",
         "HTTP status",
+        "Delivery state",
         "Accepted class",
         "Failure class",
+        "Attempt count",
+        "Possible duplicate delivery",
     ]:
         if required not in summary_content:
             raise AssertionError(
@@ -479,6 +640,190 @@ def main() -> None:
         )
     import shutil
     shutil.rmtree(summary_dir)
+
+    # --- Redirect handling: 3xx with Location must be fail-closed ---
+    # The notifier must NOT follow redirects. A redirected request may
+    # not carry the original JSON payload, so a final 200 from a
+    # different origin would be a false delivery claim (issue #205).
+    for redirect_status in (301, 302, 303, 307, 308):
+        redir_result, redir_records = run_fixture_with_location(
+            redirect_status,
+            f"http://127.0.0.1:1/received",
+        )
+        if redir_result.returncode == 0:
+            raise AssertionError(
+                f"IndexNow notifier accepted HTTP {redirect_status} redirect"
+            )
+        assert_request(redir_records)
+        redir_fields = assert_result_record(
+            redir_result,
+            expected_http_status=str(redirect_status),
+            expected_accepted_class="failed",
+            expected_failure_class="redirect_rejected",
+            expected_delivery_state="redirect_rejected",
+        )
+        if redir_fields["possible_duplicate_delivery"] != "false":
+            raise AssertionError(
+                f"redirect should not set possible_duplicate_delivery: "
+                f"{redir_fields!r}"
+            )
+
+    # --- Ambiguous retry: body sent + no response, then 200 ---
+    # The first attempt sends the body but gets no response (connection
+    # closed). The second attempt gets 200. The final result must be
+    # classified as submitted_after_ambiguous_retry with
+    # possible_duplicate_delivery=true, because the first attempt may
+    # have been accepted before its response was lost.
+    ambig_200, ambig_200_records = run_multi_attempt_fixture(
+        ["close", "200"],
+        retry_count=1,
+    )
+    if ambig_200.returncode != 0:
+        raise AssertionError(
+            f"notifier failed after ambiguous retry + 200:\n{ambig_200.stderr}"
+        )
+    if len(ambig_200_records) != 2:
+        raise AssertionError(
+            f"expected 2 requests (ambiguous + retry), "
+            f"got {len(ambig_200_records)}"
+        )
+    # Both attempts must carry the full JSON payload.
+    for rec in ambig_200_records:
+        if not rec["body"]:
+            raise AssertionError(
+                f"attempt {rec['attempt']} sent empty body"
+            )
+        payload = json.loads(rec["body"])
+        if "urlList" not in payload:
+            raise AssertionError(
+                f"attempt {rec['attempt']} body missing urlList"
+            )
+    ambig_200_fields = parse_result_line(ambig_200.stdout)
+    if ambig_200_fields["delivery_state"] != "submitted_after_ambiguous_retry":
+        raise AssertionError(
+            f"expected delivery_state='submitted_after_ambiguous_retry', "
+            f"got {ambig_200_fields['delivery_state']!r}"
+        )
+    if ambig_200_fields["accepted_class"] != "submitted_after_ambiguous_retry":
+        raise AssertionError(
+            f"expected accepted_class='submitted_after_ambiguous_retry', "
+            f"got {ambig_200_fields['accepted_class']!r}"
+        )
+    if ambig_200_fields["possible_duplicate_delivery"] != "true":
+        raise AssertionError(
+            f"expected possible_duplicate_delivery='true', "
+            f"got {ambig_200_fields['possible_duplicate_delivery']!r}"
+        )
+    if ambig_200_fields["attempt_count"] != "2":
+        raise AssertionError(
+            f"expected attempt_count='2', "
+            f"got {ambig_200_fields['attempt_count']!r}"
+        )
+    if ambig_200_fields["http_status"] != "200":
+        raise AssertionError(
+            f"expected http_status='200', "
+            f"got {ambig_200_fields['http_status']!r}"
+        )
+
+    # --- Ambiguous retry: body sent + no response, then 202 ---
+    ambig_202, ambig_202_records = run_multi_attempt_fixture(
+        ["close", "202"],
+        retry_count=1,
+    )
+    if ambig_202.returncode != 0:
+        raise AssertionError(
+            f"notifier failed after ambiguous retry + 202:\n{ambig_202.stderr}"
+        )
+    ambig_202_fields = parse_result_line(ambig_202.stdout)
+    if ambig_202_fields["delivery_state"] != (
+        "key_validation_pending_after_ambiguous_retry"
+    ):
+        raise AssertionError(
+            f"expected delivery_state="
+            f"'key_validation_pending_after_ambiguous_retry', "
+            f"got {ambig_202_fields['delivery_state']!r}"
+        )
+    if ambig_202_fields["possible_duplicate_delivery"] != "true":
+        raise AssertionError(
+            f"expected possible_duplicate_delivery='true', "
+            f"got {ambig_202_fields['possible_duplicate_delivery']!r}"
+        )
+
+    # --- All attempts lose response after body sent ---
+    # Every attempt sends the body but gets no response. The delivery
+    # state must be delivery_unknown_after_payload_write, not a clean
+    # failure. The notifier must exit non-zero.
+    all_lost, all_lost_records = run_multi_attempt_fixture(
+        ["close", "close"],
+        retry_count=1,
+    )
+    if all_lost.returncode == 0:
+        raise AssertionError(
+            "notifier accepted all-response-loss as success"
+        )
+    if len(all_lost_records) != 2:
+        raise AssertionError(
+            f"expected 2 requests, got {len(all_lost_records)}"
+        )
+    all_lost_fields = parse_result_line(all_lost.stdout)
+    if all_lost_fields["delivery_state"] != (
+        "delivery_unknown_after_payload_write"
+    ):
+        raise AssertionError(
+            f"expected delivery_state="
+            f"'delivery_unknown_after_payload_write', "
+            f"got {all_lost_fields['delivery_state']!r}"
+        )
+    if all_lost_fields["accepted_class"] != "failed":
+        raise AssertionError(
+            f"expected accepted_class='failed', "
+            f"got {all_lost_fields['accepted_class']!r}"
+        )
+
+    # --- Direct 200 with no ambiguity must NOT set possible_duplicate ---
+    direct_200_fields = parse_result_line(success_200.stdout)
+    if direct_200_fields["possible_duplicate_delivery"] != "false":
+        raise AssertionError(
+            f"direct 200 should have possible_duplicate_delivery='false', "
+            f"got {direct_200_fields['possible_duplicate_delivery']!r}"
+        )
+    if direct_200_fields["delivery_state"] != "submitted":
+        raise AssertionError(
+            f"direct 200 should have delivery_state='submitted', "
+            f"got {direct_200_fields['delivery_state']!r}"
+        )
+    if direct_200_fields["attempt_count"] != "1":
+        raise AssertionError(
+            f"direct 200 should have attempt_count='1', "
+            f"got {direct_200_fields['attempt_count']!r}"
+        )
+
+    # --- Direct 202 with no ambiguity must NOT set possible_duplicate ---
+    direct_202_fields = parse_result_line(success_202.stdout)
+    if direct_202_fields["possible_duplicate_delivery"] != "false":
+        raise AssertionError(
+            f"direct 202 should have possible_duplicate_delivery='false', "
+            f"got {direct_202_fields['possible_duplicate_delivery']!r}"
+        )
+    if direct_202_fields["delivery_state"] != "key_validation_pending":
+        raise AssertionError(
+            f"direct 202 should have delivery_state='key_validation_pending', "
+            f"got {direct_202_fields['delivery_state']!r}"
+        )
+
+    # --- Mutation control: 200 and 202 after ambiguity must be distinct ---
+    if ambig_200_fields["delivery_state"] == ambig_202_fields["delivery_state"]:
+        raise AssertionError(
+            "200 and 202 after ambiguous retry collapsed into the same "
+            f"delivery_state: {ambig_200_fields['delivery_state']!r}"
+        )
+
+    # --- Mutation control: ambiguous and direct must be distinct ---
+    if ambig_200_fields["delivery_state"] == direct_200_fields["delivery_state"]:
+        raise AssertionError(
+            "ambiguous and direct 200 collapsed into the same "
+            f"delivery_state: {ambig_200_fields['delivery_state']!r}"
+        )
 
     # --- Environment validation ---
     assert_environment_rejected(
