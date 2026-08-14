@@ -2309,6 +2309,161 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
 fi
 
 cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
+cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
+
+# --- Issue #207: bounded Markdown-first expansion mutation tests ---
+
+# Mutation: replace a raw.githubusercontent.com URL with a GitHub blob URL in a
+# non-optional section. The validator must reject application-shell HTML where
+# a raw tracked Markdown document is expected.
+cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
+python3 - "$fixture_root/site/llms.txt" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "[README](https://raw.githubusercontent.com/rotnov/pycc/main/README.md)",
+    "[README](https://github.com/rotnov/pycc/blob/main/README.md)",
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted GitHub blob URL in non-optional section (issue #207)" >&2
+  exit 1
+fi
+
+# Mutation: move the Source repository (a large GitHub UI page) from Optional
+# into the non-optional Project section. The validator must reject a large
+# human-navigation-only resource that breaches the bounded default expansion.
+cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
+python3 - "$fixture_root/site/llms.txt" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "- [Source repository](https://github.com/rotnov/pycc): Public source, "
+    "tests, issues, pull requests, and development history.\n",
+    "",
+)
+content = content.replace(
+    "- [Markdown landing](https://rotnov.github.io/pycc/index.html.md): "
+    "Clean text equivalent of the landing page for agents and constrained clients.\n",
+    "- [Markdown landing](https://rotnov.github.io/pycc/index.html.md): "
+    "Clean text equivalent of the landing page for agents and constrained clients.\n"
+    "- [Source repository](https://github.com/rotnov/pycc): Public source, "
+    "tests, issues, pull requests, and development history.\n",
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a non-optional link absent from the manifest (issue #207)" >&2
+  exit 1
+fi
+
+# Mutation: add the canonical HTML landing to the non-optional Project section,
+# duplicating the Markdown landing representation. The validator must reject
+# duplicate default HTML+Markdown representations of the same page.
+cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
+python3 - "$fixture_root/site/llms.txt" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "- [Markdown landing](https://rotnov.github.io/pycc/index.html.md): "
+    "Clean text equivalent of the landing page for agents and constrained clients.\n",
+    "- [Canonical website](https://rotnov.github.io/pycc/): Human-readable project overview.\n"
+    "- [Markdown landing](https://rotnov.github.io/pycc/index.html.md): "
+    "Clean text equivalent of the landing page for agents and constrained clients.\n",
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted duplicate HTML+Markdown landing in non-optional section (issue #207)" >&2
+  exit 1
+fi
+
+# Mutation: shrink a per-resource budget below the actual file size so the
+# validator rejects an oversized document breaching its per-resource budget.
+cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
+python3 - "$fixture_root/site/llms-txt-context-manifest.json" <<'PY'
+from pathlib import Path
+import sys
+import json
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+for doc in data["non_optional_documents"]:
+    if doc["label"] == "README":
+        doc["budget_bytes"] = 1
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an oversized document breaching its per-resource budget (issue #207)" >&2
+  exit 1
+fi
+cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
+
+# Mutation: shrink the aggregate budget below the actual total so the
+# validator rejects an expansion breaching the reviewed total budget.
+cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
+python3 - "$fixture_root/site/llms-txt-context-manifest.json" <<'PY'
+from pathlib import Path
+import sys
+import json
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["budget_kib"] = 1
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted aggregate expansion breaching the total budget (issue #207)" >&2
+  exit 1
+fi
+cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
+
+# Mutation: declare a non-optional document's representation as HTML. The
+# validator must reject a representation that changed from Markdown/plain text
+# to HTML UI.
+cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
+python3 - "$fixture_root/site/llms-txt-context-manifest.json" <<'PY'
+from pathlib import Path
+import sys
+import json
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+for doc in data["non_optional_documents"]:
+    if doc["label"] == "README":
+        doc["representation"] = "html"
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted HTML representation for a non-optional document (issue #207)" >&2
+  exit 1
+fi
+cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
+
+# Mutation: remove a non-optional link from llms.txt so the manifest and the
+# file drift. The validator must reject a missing clean evidence representation.
+cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
+python3 - "$fixture_root/site/llms.txt" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "- [Roadmap](https://raw.githubusercontent.com/rotnov/pycc/main/docs/ROADMAP.md): "
+    "Delivery stages and acceptance criteria toward v1.0.\n",
+    "",
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted llms.txt with a non-optional link missing from the manifest (issue #207)" >&2
+  exit 1
+fi
+cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
 
 # --- Issue #39: table-driven mutation tests for required files ---
 # For each required file in the validator's required_file list, remove it
@@ -2328,6 +2483,7 @@ for required_file in \
   robots.txt \
   sitemap.xml \
   llms.txt \
+  llms-txt-context-manifest.json \
   "${indexnow_key}.txt" \
   404.html \
   status/index.html \

@@ -19,6 +19,7 @@ for required_file in \
   robots.txt \
   sitemap.xml \
   llms.txt \
+  llms-txt-context-manifest.json \
   "${indexnow_key}.txt" \
   404.html \
   status/index.html \
@@ -1331,7 +1332,8 @@ python3 - \
   "$site_dir/architecture/index.html" \
   "$site_dir/python-aot-compilers/index.html" \
   "$site_dir/ai-native/index.html" \
-  "$canonical" <<'PY'
+  "$canonical" \
+  "$repo_root" <<'PY'
 from datetime import date
 from html.parser import HTMLParser
 import json
@@ -1345,6 +1347,8 @@ llms_path = Path(sys.argv[2])
 markdown_path = Path(sys.argv[3])
 page_paths = [Path(argument) for argument in sys.argv[4:9]]
 canonical = sys.argv[9]
+repo_root = Path(sys.argv[10])
+site_dir = llms_path.parent
 
 
 class JsonLdParser(HTMLParser):
@@ -1470,11 +1474,162 @@ for required_link in (
     f"[Python AOT compiler comparison]({canonical}python-aot-compilers/)",
     f"[AI-native experiment]({canonical}ai-native/)",
     "[Source repository](https://github.com/rotnov/pycc)",
-    "[Specification index](https://github.com/rotnov/pycc/blob/main/docs/SPEC.md)",
-    "[README](https://github.com/rotnov/pycc/blob/main/README.md)",
+    "[Specification index](https://raw.githubusercontent.com/rotnov/pycc/main/docs/SPEC.md)",
+    "[README](https://raw.githubusercontent.com/rotnov/pycc/main/README.md)",
 ):
     if required_link not in llms:
         raise SystemExit(f"llms.txt is missing required link: {required_link}")
+
+# --- Issue #207: bounded Markdown-first llms.txt expansion ---
+# The non-optional (Project and Specifications) sections must expand to a
+# bounded context of Markdown/plain-text documents, never GitHub blob
+# application-shell HTML. A hermetic manifest
+# (site/llms-txt-context-manifest.json) binds each non-optional link to its
+# local source file, representation role, and per-resource byte budget. The
+# validator computes actual byte counts from the checked-out repository so the
+# 256 KiB aggregate ceiling and per-resource budgets are enforced without any
+# live network fetch. See docs/WEBSITE.md "llms.txt bounded expansion contract"
+# for the full consumer contract.
+import re as _re
+manifest_path = site_dir / "llms-txt-context-manifest.json"
+if not manifest_path.is_file():
+    raise SystemExit("site/llms-txt-context-manifest.json is required (issue #207)")
+manifest = json.loads(manifest_path.read_text())
+if manifest.get("schema") != "pycc-llms-txt-context-manifest/v1":
+    raise SystemExit("llms.txt context manifest has an unexpected schema")
+budget_kib = manifest.get("budget_kib")
+if not isinstance(budget_kib, int) or budget_kib <= 0:
+    raise SystemExit("llms.txt context manifest budget_kib must be a positive integer")
+manifest_docs = manifest.get("non_optional_documents")
+if not isinstance(manifest_docs, list) or not manifest_docs:
+    raise SystemExit("llms.txt context manifest must list non_optional_documents")
+
+
+def _parse_llms_txt_sections(text):
+    """Return {section_heading: [(label, url), ...]} for non-optional sections.
+
+    Non-optional sections are every ## heading except ## Optional. Links are
+    parsed from Markdown list items: ``- [label](url): description``.
+    """
+    sections = {}
+    current = None
+    link_re = _re.compile(r"^- \[([^\]]+)\]\(([^)]+)\)")
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current = line[3:].strip()
+            sections.setdefault(current, [])
+            continue
+        if current is None:
+            continue
+        match = link_re.match(line)
+        if match:
+            sections[current].append((match.group(1), match.group(2)))
+    return sections
+
+
+def _non_optional_links(text):
+    sections = _parse_llms_txt_sections(text)
+    links = []
+    for heading, items in sections.items():
+        if heading.lower().startswith("optional"):
+            continue
+        links.extend(items)
+    return links
+
+
+non_optional = _non_optional_links(llms)
+if not non_optional:
+    raise SystemExit("llms.txt must have non-optional Project/Specifications links")
+manifest_by_url = {doc["url"]: doc for doc in manifest_docs}
+manifest_urls = set(manifest_by_url)
+llms_urls = {url for _, url in non_optional}
+if llms_urls != manifest_urls:
+    missing = manifest_urls - llms_urls
+    extra = llms_urls - manifest_urls
+    detail = []
+    if missing:
+        detail.append(f"missing from llms.txt: {sorted(missing)}")
+    if extra:
+        detail.append(f"missing from manifest: {sorted(extra)}")
+    raise SystemExit(
+        "llms.txt non-optional links must match the context manifest (issue #207) — "
+        + "; ".join(detail)
+    )
+
+# Reject GitHub blob/application URLs and duplicate representations in the
+# non-optional expansion. Enforce that every non-optional URL is Markdown or
+# plain-text, not HTML UI.
+seen_local = set()
+total_bytes = 0
+for label, url in non_optional:
+    doc = manifest_by_url[url]
+    representation = doc.get("representation", "")
+    if representation not in ("markdown", "plain-text"):
+        raise SystemExit(
+            f"llms.txt non-optional link {label!r} must be markdown/plain-text, "
+            f"not {representation!r} (issue #207)"
+        )
+    if "github.com/" in url and "/blob/" in url:
+        raise SystemExit(
+            f"llms.txt non-optional link {label!r} uses a GitHub blob URL "
+            f"({url}); use raw.githubusercontent.com for tracked Markdown "
+            f"documents (issue #207)"
+        )
+    if representation == "markdown" and not (
+        url.startswith("https://raw.githubusercontent.com/") or url.endswith(".md")
+    ):
+        raise SystemExit(
+            f"llms.txt non-optional link {label!r} declares markdown but its URL "
+            f"({url}) is not a raw Markdown source or .md page (issue #207)"
+        )
+    local_path = repo_root / doc["local_path"]
+    if not local_path.is_file():
+        raise SystemExit(
+            f"llms.txt context manifest local_path {doc['local_path']!r} "
+            f"for {label!r} does not exist in the repository (issue #207)"
+        )
+    actual_bytes = local_path.stat().st_size
+    budget_bytes = doc.get("budget_bytes")
+    if not isinstance(budget_bytes, int) or budget_bytes <= 0:
+        raise SystemExit(
+            f"llms.txt context manifest budget_bytes for {label!r} "
+            f"must be a positive integer (issue #207)"
+        )
+    if actual_bytes > budget_bytes:
+        raise SystemExit(
+            f"llms.txt non-optional document {label!r} is {actual_bytes} bytes, "
+            f"exceeding its {budget_bytes}-byte per-resource budget (issue #207)"
+        )
+    if doc["local_path"] in seen_local:
+        raise SystemExit(
+            f"llms.txt non-optional expansion duplicates local representation "
+            f"{doc['local_path']!r} (issue #207)"
+        )
+    seen_local.add(doc["local_path"])
+    total_bytes += actual_bytes
+
+budget_ceiling = budget_kib * 1024
+if total_bytes > budget_ceiling:
+    raise SystemExit(
+        f"llms.txt non-optional expansion is {total_bytes} bytes, exceeding the "
+        f"{budget_ceiling}-byte ({budget_kib} KiB) aggregate budget (issue #207)"
+    )
+
+# Reject duplicate HTML+Markdown representations of the same page in the
+# non-optional expansion (e.g. both the canonical landing HTML and its Markdown
+# equivalent). The Markdown landing is the clean representation; the canonical
+# HTML landing must stay in the Optional section.
+non_optional_canonical_html = canonical.rstrip("/") + "/"
+non_optional_html_pages = {
+    url for _, url in non_optional
+    if url.endswith("/") and "rotnov.github.io/pycc" in url
+}
+if non_optional_canonical_html in non_optional_html_pages:
+    raise SystemExit(
+        "llms.txt non-optional expansion must not include the canonical HTML "
+        "landing; use the Markdown landing and keep the HTML page in Optional "
+        "(issue #207)"
+    )
 
 markdown = markdown_path.read_text()
 if not markdown.startswith("# pycc — AOT compiler for typed Python to native binaries"):

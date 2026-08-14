@@ -171,3 +171,4 @@ current.
 | [D-162](./D-162-site-accessibility-gate.md) | Site accessibility gate | accepted |
 | [D-163](./D-163-enum-scoped-singleton-model.md) | Enum scoped singleton model — compile-time members, no enum.Enum module | accepted |
 | [D-164](./D-164-dataclass-static-dispatch-narrow-scope.md) | Dataclass static dispatch and narrow scope | accepted |
+| [D-165](./D-165-preserve-daily-github-traffic-evidence.md) | Preserve daily GitHub traffic evidence in an immutable artifact | accepted |
