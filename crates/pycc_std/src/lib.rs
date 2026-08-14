@@ -31,6 +31,19 @@ pub enum StdModule {
     /// resolves (#379, PR-19). `Enum` is a marker symbol, not a value —
     /// it is only valid as the sole base class of `class C(Enum):`.
     Enum,
+    /// The `typing` module, recognized so `from typing import Protocol`
+    /// and `from typing import runtime_checkable` resolve (#380, PR-20).
+    /// `Protocol` is a marker symbol (base-class marker), and
+    /// `runtime_checkable` is a decorator-marker symbol. Both are
+    /// recognized as bare names without requiring the import, matching
+    /// the `Final`/`Annotated`/`Enum` precedent.
+    Typing,
+    /// The `abc` module, recognized so `from abc import ABC` and
+    /// `from abc import abstractmethod` resolve (#380, PR-20). `ABC` is
+    /// a base-class marker, and `abstractmethod` is a decorator-marker
+    /// symbol. Both are recognized as bare names without requiring the
+    /// import.
+    Abc,
 }
 
 /// The scalar shape of a registered symbol's argument/return type, kept
@@ -60,6 +73,21 @@ pub enum StdSymbolKind {
     /// a first-class value — referencing it as a value or calling it is
     /// rejected by the type checker.
     EnumMarker,
+    /// A protocol marker symbol (`typing.Protocol`) that is only valid as
+    /// the sole base class of a protocol class definition
+    /// (`class P(Protocol):`). It is not a first-class value —
+    /// referencing it as a value or calling it is rejected by the type
+    /// checker (#380, PR-20).
+    ProtocolMarker,
+    /// An ABC marker symbol (`abc.ABC`) that is only valid as a base
+    /// class of an abstract class definition (`class C(ABC):`). It is
+    /// not a first-class value (#380, PR-20).
+    AbcMarker,
+    /// A decorator-marker symbol (e.g. `typing.runtime_checkable`,
+    /// `abc.abstractmethod`) that is only valid as a class or method
+    /// decorator. It is not a first-class value — referencing it as a
+    /// value or calling it is rejected by the type checker (#380, PR-20).
+    DecoratorMarker,
 }
 
 /// A single registered stdlib symbol: which module it lives in, its source
@@ -97,6 +125,26 @@ const REGISTRY: &[StdSymbol] = &[
         name: "Enum",
         kind: StdSymbolKind::EnumMarker,
     },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "Protocol",
+        kind: StdSymbolKind::ProtocolMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "runtime_checkable",
+        kind: StdSymbolKind::DecoratorMarker,
+    },
+    StdSymbol {
+        module: StdModule::Abc,
+        name: "ABC",
+        kind: StdSymbolKind::AbcMarker,
+    },
+    StdSymbol {
+        module: StdModule::Abc,
+        name: "abstractmethod",
+        kind: StdSymbolKind::DecoratorMarker,
+    },
 ];
 
 /// Resolves a dotted-import module name (e.g. `"math"`) to a [`StdModule`],
@@ -106,6 +154,8 @@ pub fn resolve_module(name: &str) -> Option<StdModule> {
     match name {
         "math" => Some(StdModule::Math),
         "enum" => Some(StdModule::Enum),
+        "typing" => Some(StdModule::Typing),
+        "abc" => Some(StdModule::Abc),
         _ => None,
     }
 }
@@ -140,6 +190,16 @@ mod tests {
     #[test]
     fn resolve_module_recognizes_enum() {
         assert_eq!(resolve_module("enum"), Some(StdModule::Enum));
+    }
+
+    #[test]
+    fn resolve_module_recognizes_typing() {
+        assert_eq!(resolve_module("typing"), Some(StdModule::Typing));
+    }
+
+    #[test]
+    fn resolve_module_recognizes_abc() {
+        assert_eq!(resolve_module("abc"), Some(StdModule::Abc));
     }
 
     #[test]
@@ -190,6 +250,53 @@ mod tests {
     }
 
     #[test]
+    fn resolve_symbol_finds_typing_protocol() {
+        let sym =
+            resolve_symbol(StdModule::Typing, "Protocol").expect("typing.Protocol is registered");
+        assert_eq!(sym.module, StdModule::Typing);
+        assert_eq!(sym.name, "Protocol");
+        assert_eq!(sym.kind, StdSymbolKind::ProtocolMarker);
+    }
+
+    #[test]
+    fn resolve_symbol_finds_typing_runtime_checkable() {
+        let sym = resolve_symbol(StdModule::Typing, "runtime_checkable")
+            .expect("typing.runtime_checkable is registered");
+        assert_eq!(sym.module, StdModule::Typing);
+        assert_eq!(sym.name, "runtime_checkable");
+        assert_eq!(sym.kind, StdSymbolKind::DecoratorMarker);
+    }
+
+    #[test]
+    fn resolve_symbol_rejects_unregistered_symbol_in_typing_module() {
+        assert_eq!(resolve_symbol(StdModule::Typing, "TypeVar"), None);
+        assert_eq!(resolve_symbol(StdModule::Typing, "Generic"), None);
+    }
+
+    #[test]
+    fn resolve_symbol_finds_abc_abc() {
+        let sym = resolve_symbol(StdModule::Abc, "ABC").expect("abc.ABC is registered");
+        assert_eq!(sym.module, StdModule::Abc);
+        assert_eq!(sym.name, "ABC");
+        assert_eq!(sym.kind, StdSymbolKind::AbcMarker);
+    }
+
+    #[test]
+    fn resolve_symbol_finds_abc_abstractmethod() {
+        let sym = resolve_symbol(StdModule::Abc, "abstractmethod")
+            .expect("abc.abstractmethod is registered");
+        assert_eq!(sym.module, StdModule::Abc);
+        assert_eq!(sym.name, "abstractmethod");
+        assert_eq!(sym.kind, StdSymbolKind::DecoratorMarker);
+    }
+
+    #[test]
+    fn resolve_symbol_rejects_unregistered_symbol_in_abc_module() {
+        assert_eq!(resolve_symbol(StdModule::Abc, "ABCMeta"), None);
+        assert_eq!(resolve_symbol(StdModule::Abc, "getset"), None);
+    }
+
+    #[test]
     fn std_module_derives_are_exercised() {
         // Exercises `Debug`/`Clone`/`Copy`/`PartialEq`/`Eq` on `StdModule`
         // directly, since `resolve_module`'s equality checks above only
@@ -204,6 +311,18 @@ mod tests {
         assert_eq!(format!("{e:?}"), "Enum");
         assert_eq!(e, e2);
         assert_ne!(m, e);
+
+        let t = StdModule::Typing;
+        let t2 = t;
+        assert_eq!(format!("{t:?}"), "Typing");
+        assert_eq!(t, t2);
+        assert_ne!(t, e);
+
+        let a = StdModule::Abc;
+        let a2 = a;
+        assert_eq!(format!("{a:?}"), "Abc");
+        assert_eq!(a, a2);
+        assert_ne!(a, t);
     }
 
     #[test]
@@ -233,5 +352,32 @@ mod tests {
         let enum_sym2 = enum_sym;
         assert_eq!(enum_sym, enum_sym2);
         assert!(format!("{enum_sym:?}").contains("EnumMarker"));
+
+        let protocol_sym = StdSymbol {
+            module: StdModule::Typing,
+            name: "Protocol",
+            kind: StdSymbolKind::ProtocolMarker,
+        };
+        let protocol_sym2 = protocol_sym;
+        assert_eq!(protocol_sym, protocol_sym2);
+        assert!(format!("{protocol_sym:?}").contains("ProtocolMarker"));
+
+        let abc_sym = StdSymbol {
+            module: StdModule::Abc,
+            name: "ABC",
+            kind: StdSymbolKind::AbcMarker,
+        };
+        let abc_sym2 = abc_sym;
+        assert_eq!(abc_sym, abc_sym2);
+        assert!(format!("{abc_sym:?}").contains("AbcMarker"));
+
+        let decorator_sym = StdSymbol {
+            module: StdModule::Typing,
+            name: "runtime_checkable",
+            kind: StdSymbolKind::DecoratorMarker,
+        };
+        let decorator_sym2 = decorator_sym;
+        assert_eq!(decorator_sym, decorator_sym2);
+        assert!(format!("{decorator_sym:?}").contains("DecoratorMarker"));
     }
 }

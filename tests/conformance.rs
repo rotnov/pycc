@@ -875,8 +875,7 @@ fn pep_0593_annotated_matches_cpython_3_14_6_byte_for_byte() {
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
 fn pep_0570_pos_only_matches_cpython_3_14_6_byte_for_byte() {
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0570_pos_only.py");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0570_pos_only.py");
     let (debug_pycc, debug_cpython) =
         run_conformance_fixture_with_profile("pep_0570_pos_only_debug", &fixture, false);
     assert_eq!(
@@ -895,8 +894,7 @@ fn pep_0570_pos_only_matches_cpython_3_14_6_byte_for_byte() {
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
 fn pep_0591_final_matches_cpython_3_14_6_byte_for_byte() {
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0591_final.py");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0591_final.py");
     let (debug_pycc, debug_cpython) =
         run_conformance_fixture_with_profile("pep_0591_final_debug", &fixture, false);
     assert_eq!(
@@ -908,5 +906,54 @@ fn pep_0591_final_matches_cpython_3_14_6_byte_for_byte() {
     assert_eq!(
         release_pycc, release_cpython,
         "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0591_final.py"
+    );
+}
+
+// PEP 544 (#380): Protocols and structural typing. A @runtime_checkable
+// protocol with a method requirement, two conforming concrete classes,
+// a non-conforming class, protocol-typed variable assignments, isinstance
+// against the runtime_checkable protocol, and a protocol-typed function
+// parameter. The protocol is a compile-time-only interface in pycc and a
+// deferred-annotation type hint in CPython 3.14, so only the concrete
+// method calls and isinstance results produce observable output.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0544_protocol_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0544_protocol.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0544_protocol_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0544_protocol.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0544_protocol_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0544_protocol.py"
+    );
+}
+
+// PEP 3119 (#380): ABC and @abstractmethod. An ABC base class with an
+// @abstractmethod, two concrete subclasses that override it (one with
+// constructor parameters), super().__init__() chaining, and instantiation
+// + method calls. The ABC and @abstractmethod are compile-time-only
+// markers in pycc and runtime enforcement in CPython 3.14, but only the
+// concrete method calls produce observable output.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_3119_abc_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_3119_abc.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_3119_abc_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_3119_abc.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_3119_abc_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_3119_abc.py"
     );
 }

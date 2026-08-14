@@ -318,11 +318,11 @@ fn reject_multiple_decorators() {
     let src = write_fixture(
         &dir,
         "rej_multi.py",
-        "@dataclass\n@dataclass\nclass Point:\n    x: int\n",
+        "@dataclass\n@some_other_decorator\nclass Point:\n    x: int\n",
     );
     assert!(
         check_fails(&dir, &src),
-        "multiple class decorators should be rejected"
+        "unsupported class decorators should be rejected"
     );
 }
 

@@ -52,6 +52,7 @@ pub(crate) fn lower_stmt(
     in_function: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
+    class_defs: &[(String, bool)],
 ) -> Result<HirStmt, Diagnostic> {
     let lowered = match stmt {
         Stmt::Expr(expr_stmt) => {
@@ -190,7 +191,8 @@ pub(crate) fn lower_stmt(
                     pycc_ast::expr_range(&ann.target),
                 ));
             }
-            let annotation = annotation_to_ty(&ann.annotation, type_param, class_name, aliases)?;
+            let annotation =
+                annotation_to_ty(&ann.annotation, type_param, class_name, aliases, class_defs)?;
             let value = ann
                 .value
                 .as_deref()
@@ -225,6 +227,7 @@ pub(crate) fn lower_stmt(
                 in_function,
                 class_name,
                 type_param,
+                class_defs,
             )?,
             orelse: lower_elif_else_clauses(
                 &if_stmt.elif_else_clauses,
@@ -233,6 +236,7 @@ pub(crate) fn lower_stmt(
                 in_function,
                 class_name,
                 type_param,
+                class_defs,
             )?,
         },
         Stmt::While(while_stmt) => {
@@ -251,6 +255,7 @@ pub(crate) fn lower_stmt(
                     in_function,
                     class_name,
                     type_param,
+                    class_defs,
                 )?,
             }
         }
@@ -301,6 +306,7 @@ pub(crate) fn lower_stmt(
                         in_function,
                         class_name,
                         type_param,
+                        class_defs,
                     )?,
                 });
             }
@@ -350,6 +356,7 @@ pub(crate) fn lower_stmt(
                     in_function,
                     class_name,
                     type_param,
+                    class_defs,
                 )?,
             }
         }
@@ -403,6 +410,7 @@ pub(crate) fn lower_body(
     in_function: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
+    class_defs: &[(String, bool)],
 ) -> Result<Vec<HirStmt>, Diagnostic> {
     // #435: `Stmt::Pass` is a no-op — filter it out rather than lowering it
     // to a statement. This allows method bodies like `def __init_subclass__:
@@ -411,7 +419,17 @@ pub(crate) fn lower_body(
     // produces an empty `Vec<HirStmt>`, which is a valid no-op body.
     body.iter()
         .filter(|stmt| !matches!(stmt, Stmt::Pass(_)))
-        .map(|stmt| lower_stmt(stmt, aliases, in_loop, in_function, class_name, type_param))
+        .map(|stmt| {
+            lower_stmt(
+                stmt,
+                aliases,
+                in_loop,
+                in_function,
+                class_name,
+                type_param,
+                class_defs,
+            )
+        })
         .collect()
 }
 
@@ -422,6 +440,7 @@ pub(crate) fn lower_elif_else_clauses(
     in_function: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
+    class_defs: &[(String, bool)],
 ) -> Result<Vec<HirStmt>, Diagnostic> {
     let Some((first, rest)) = clauses.split_first() else {
         return Ok(vec![]);
@@ -436,6 +455,7 @@ pub(crate) fn lower_elif_else_clauses(
                 in_function,
                 class_name,
                 type_param,
+                class_defs,
             )?,
             orelse: lower_elif_else_clauses(
                 rest,
@@ -444,6 +464,7 @@ pub(crate) fn lower_elif_else_clauses(
                 in_function,
                 class_name,
                 type_param,
+                class_defs,
             )?,
         }]),
         None => {
@@ -458,6 +479,7 @@ pub(crate) fn lower_elif_else_clauses(
                 in_function,
                 class_name,
                 type_param,
+                class_defs,
             )
         }
     }
