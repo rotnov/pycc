@@ -1,0 +1,14 @@
+{
+  "name": "todo",
+  "summary": "Deferred-work log: one entry per idea, recorded with restart context, then stopped",
+  "why": "'Note it and stop' has no moment an agent can recognise, while 'the user asked to defer this' arrives as text and matches a skill description. The boundary becomes an action with a visible result — and the measured failure it prevents looked like diligence: files cleaned up so a deferred gate would pass, twice.",
+  "files": {},
+  "gate": "uv run .claude/skills/adr/scripts/generate-index.py docs/todo docs/todo/INDEX.md --prefix T- --label Todo --check",
+  "after": [
+    "uv run .claude/skills/adr/scripts/generate-index.py docs/todo docs/todo/INDEX.md --prefix T- --label Todo"
+  ],
+  "init": {
+    "README.md": "docs/todo/README.md",
+    "TEMPLATE.md": "docs/todo/TEMPLATE.md"
+  }
+}

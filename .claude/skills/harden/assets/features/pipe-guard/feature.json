@@ -1,0 +1,12 @@
+{
+  "name": "pipe-guard",
+  "summary": "Blocks status-bearing commands (commit, build, test) piped through a status-masking filter — Claude Code sessions only",
+  "why": "A pipeline's exit status is its last command's, so `git commit | tail` reports success whatever the commit did. Measured three times in one day, the third hours after the journal entry describing it - a reminder does not survive habit, a hook fires instead of memory. REACH: the seam is a Claude Code PreToolUse hook; a harness without that mechanism (devin, grok) gets only the rule text, which this very topic proved insufficient - do not install where no session runs under a hook-capable harness.",
+  "files": { "pipe-guard.py": ".claude/hooks/pipe-guard.py" },
+  "gate": null,
+  "after": [
+    "Claude Code - wire it as a PreToolUse hook for Bash in .claude/settings.json: {\"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"uv\", \"args\": [\"run\", \".claude/hooks/pipe-guard.py\"]}]}]}}",
+    "codex - append to .codex/hooks.json PreToolUse: {\"matcher\": \"\", \"hooks\": [{\"type\": \"command\", \"command\": \"uv run .claude/hooks/pipe-guard.py\"}]}",
+    "devin/grok have no hook mechanism - the guard cannot reach them; do not pretend the rule text is protection there"
+  ]
+}

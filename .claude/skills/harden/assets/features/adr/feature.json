@@ -1,0 +1,14 @@
+{
+  "name": "adr",
+  "summary": "Decision log: one file per hard-to-reverse choice, with a generated index",
+  "why": "Decisions otherwise survive only in commit bodies, where they are found by archaeology. The index is generated because a hand-kept one drifts, and a drifted index is worse than none: it reads as authoritative.",
+  "files": {},
+  "gate": "uv run .claude/skills/adr/scripts/generate-index.py docs/decisions docs/decisions/INDEX.md --check",
+  "after": [
+    "uv run .claude/skills/adr/scripts/generate-index.py docs/decisions docs/decisions/INDEX.md"
+  ],
+  "init": {
+    "README.md": "docs/decisions/README.md",
+    "TEMPLATE.md": "docs/decisions/TEMPLATE.md"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "active-learning",
+  "summary": "Ask one question at a time, with options, and record the answer",
+  "why": "Batched questions waste themselves: the answer to the first changes how the second should be worded, so the second arrives already stale. Measured in this repository — three questions asked at once, one answered, and that answer made the third meaningless.",
+  "requires": [
+    "adr"
+  ],
+  "files": {},
+  "gate": null,
+  "after": []
+}
