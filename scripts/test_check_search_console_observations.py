@@ -509,6 +509,242 @@ class SearchConsoleObservationTests(unittest.TestCase):
         with self.assertRaisesRegex(ObservationError, "missing bound phrase.*page indexing aggregate"):
             validate(self.root)
 
+    # --- Dimension table mutation tests (issue #198) ---
+
+    def test_removing_dimension_tables_fails(self) -> None:
+        """Removing dimension_tables from the latest observation must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        del artifact["observations"][-1]["performance"]["dimension_tables"]
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "performance has unexpected fields"):
+            validate(self.root)
+
+    def test_malformed_dimension_table_keys_fails(self) -> None:
+        """Adding an unexpected key to a dimension table must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["observations"][-1]["performance"]["dimension_tables"]["page"]["extra"] = True
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "unexpected fields"):
+            validate(self.root)
+
+    def test_malformed_dimension_row_fails(self) -> None:
+        """A dimension row with an unexpected key must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["observations"][-1]["performance"]["dimension_tables"]["page"]["rows"][0]["extra"] = True
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "row has unexpected fields"):
+            validate(self.root)
+
+    def test_missing_rows_zero_semantics_fails(self) -> None:
+        """Missing rows must use 'not_returned_in_observed_table', not zero."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        page_table = artifact["observations"][-1]["performance"]["dimension_tables"]["page"]
+        page_table["missing_rows"][0]["semantics"] = "zero"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "semantics must be not_returned_in_observed_table"):
+            validate(self.root)
+
+    def test_search_appearance_no_data_with_numeric_rows_fails(self) -> None:
+        """Search appearance 'no_data' with numeric rows must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        sa_table = artifact["observations"][-1]["performance"]["dimension_tables"]["search_appearance"]
+        sa_table["rows"] = [{"search_appearance": "FAQ", "clicks": 0, "impressions": 0}]
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "no_data must have empty rows"):
+            validate(self.root)
+
+    def test_search_appearance_no_data_with_displayed_row_sum_fails(self) -> None:
+        """Search appearance 'no_data' with a non-null displayed_row_sum must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        sa_table = artifact["observations"][-1]["performance"]["dimension_tables"]["search_appearance"]
+        sa_table["displayed_row_sum"] = {"clicks": 0, "impressions": 0}
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "no_data must have null displayed_row_sum"):
+            validate(self.root)
+
+    def test_replacing_property_impressions_with_page_sum_fails(self) -> None:
+        """Replacing property impressions (15) with the page displayed_row_sum
+        (19) must fail — the property aggregate is a different measure."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["observations"][-1]["performance"]["impressions"] = 19
+        artifact["latest_projection"]["performance_impressions"] = 19
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "property impressions must not equal"):
+            validate(self.root)
+
+    def test_synthetic_cross_dimension_rows_fails(self) -> None:
+        """Adding a cross-dimension key (e.g. country) to a page row must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        page_row = artifact["observations"][-1]["performance"]["dimension_tables"]["page"]["rows"][0]
+        page_row["country"] = "United States"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "row has unexpected fields"):
+            validate(self.root)
+
+    def test_missing_dimension_table_fails(self) -> None:
+        """Removing one of the five required dimension tables must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        del artifact["observations"][-1]["performance"]["dimension_tables"]["device"]
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "unexpected dimension tables"):
+            validate(self.root)
+
+    def test_extra_dimension_table_fails(self) -> None:
+        """Adding an unexpected dimension table must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["observations"][-1]["performance"]["dimension_tables"]["query"] = {}
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "unexpected dimension tables"):
+            validate(self.root)
+
+    def test_dimension_aggregation_type_mismatch_fails(self) -> None:
+        """A dimension table whose aggregation_type doesn't match its name must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["observations"][-1]["performance"]["dimension_tables"]["page"]["aggregation_type"] = "device"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "aggregation_type mismatch"):
+            validate(self.root)
+
+    def test_deleting_zero_click_positive_impression_row_fails(self) -> None:
+        """Deleting a zero-click/positive-impression row from a dimension table
+        must fail because the projection no longer matches."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        page_table = artifact["observations"][-1]["performance"]["dimension_tables"]["page"]
+        page_table["rows"] = [r for r in page_table["rows"] if "architecture" not in r["page"]]
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "page_dimension_.*disagrees"):
+            validate(self.root)
+
+    def test_deleting_older_snapshot_fails(self) -> None:
+        """Deleting an older observation must fail (append-only)."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        del artifact["observations"][0]
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "timestamps do not match"):
+            validate(self.root)
+
+    def test_dimension_projection_impressions_sum_mismatch_fails(self) -> None:
+        """The latest_projection page_dimension_impressions_sum must match the
+        page table's displayed_row_sum."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["latest_projection"]["page_dimension_impressions_sum"] = 99
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "page_dimension_impressions_sum disagrees"):
+            validate(self.root)
+
+    def test_dimension_projection_row_count_mismatch_fails(self) -> None:
+        """The latest_projection page_dimension_row_count must match the page
+        table's row count."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["latest_projection"]["page_dimension_row_count"] = 99
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "page_dimension_row_count disagrees"):
+            validate(self.root)
+
+    def test_dimension_projection_missing_row_count_mismatch_fails(self) -> None:
+        """The latest_projection page_dimension_missing_row_count must match
+        the page table's missing_rows count."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["latest_projection"]["page_dimension_missing_row_count"] = 99
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "page_dimension_missing_row_count disagrees"):
+            validate(self.root)
+
+    def test_dimension_projection_search_appearance_state_mismatch_fails(self) -> None:
+        """The latest_projection search_appearance_state must match the search
+        appearance table's state."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["latest_projection"]["search_appearance_state"] = "has_data"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "search_appearance_state disagrees"):
+            validate(self.root)
+
+    def test_performance_aggregation_type_projection_mismatch_fails(self) -> None:
+        """The latest_projection performance_aggregation_type must match the
+        latest observation's aggregation_type."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["latest_projection"]["performance_aggregation_type"] = "page"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "performance_aggregation_type disagrees"):
+            validate(self.root)
+
+    def test_report_scope_missing_fails(self) -> None:
+        """Removing the report_scope from the latest observation must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        del artifact["observations"][-1]["performance"]["report_scope"]
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "performance has unexpected fields"):
+            validate(self.root)
+
+    def test_report_scope_invalid_date_fails(self) -> None:
+        """An invalid date in the report_scope must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["observations"][-1]["performance"]["report_scope"]["data_start_date"] = "not-a-date"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "data_start_date.*YYYY-MM-DD"):
+            validate(self.root)
+
+    def test_visibility_binding_includes_dimension_phrases(self) -> None:
+        """The visibility binding phrases must include dimension table phrases."""
+        artifact = json.loads(self.files["SEARCH_CONSOLE_OBSERVATIONS.json"])
+        projection = validate_artifact(artifact)
+        phrases = visibility_binding_phrases(projection)
+        phrase_texts = [p[0] for p in phrases]
+        self.assertIn("19 page-level impressions", phrase_texts)
+        self.assertIn("4 page rows", phrase_texts)
+        self.assertIn("Search appearance reports no data", phrase_texts)
+
+    def test_roadmap_binding_includes_dimension_phrases(self) -> None:
+        """The roadmap binding phrases must include dimension table phrases."""
+        artifact = json.loads(self.files["SEARCH_CONSOLE_OBSERVATIONS.json"])
+        projection = validate_artifact(artifact)
+        phrases = roadmap_binding_phrases(projection)
+        phrase_texts = [p[0] for p in phrases]
+        self.assertIn("19 page-level impressions", phrase_texts)
+        self.assertIn("4 page rows", phrase_texts)
+        self.assertIn("search appearance reports no data", phrase_texts)
+
+    def test_corrupted_visibility_page_dimension_impressions_fails(self) -> None:
+        """Corrupting the page-level impressions in the visibility Current
+        interpretation must fail."""
+        path = self.root / "docs" / "SEARCH_VISIBILITY.md"
+        text = path.read_text()
+        corrupted = text.replace("19 page-level impressions", "18 page-level impressions")
+        self.assertNotEqual(text, corrupted)
+        path.write_text(corrupted)
+        with self.assertRaisesRegex(ObservationError, "missing bound phrase.*page dimension impressions"):
+            validate(self.root)
+
+    def test_corrupted_roadmap_page_dimension_impressions_fails(self) -> None:
+        """Corrupting the page-level impressions in the roadmap must fail."""
+        path = self.root / "docs" / "ROADMAP.md"
+        text = path.read_text()
+        corrupted = text.replace("19 page-level impressions", "18 page-level impressions")
+        self.assertNotEqual(text, corrupted)
+        path.write_text(corrupted)
+        with self.assertRaisesRegex(ObservationError, "missing bound phrase.*page dimension impressions"):
+            validate(self.root)
+
 
 class SearchConsoleObservationEntrypointTests(unittest.TestCase):
     """Exercise the real CLI entrypoint end-to-end through a subprocess."""
