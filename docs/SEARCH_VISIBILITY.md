@@ -481,8 +481,7 @@ impressions on 2026-07-23, 1 on 2026-07-24, 5 on 2026-07-25, and 9 on
 rather than a numeric zero. These dimension tables are independent marginal
 observations and must not be joined into synthetic page×country,
 page×device, or query×country rows; the individual page, query, country, and
-device identity of each click remains unknown. Sitemap processing remains
-unsuccessful even though the public sitemap is valid, reinforcing that query
+device identity of each click remains unknown. Sitemap processing remains unsuccessful even though the public sitemap is valid, reinforcing that query
 performance, per-URL indexing, and sitemap processing are independent signals.
 The traffic window remains too
 automation-heavy and low-uniqueness to attribute to SEO. The structured
