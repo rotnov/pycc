@@ -36,7 +36,13 @@ ROADMAP_PATH = Path("docs") / "ROADMAP.md"
 
 UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
-ARTIFACT_KEYS = {"artifact_version", "provenance", "observations", "latest_projection"}
+ARTIFACT_KEYS = {
+    "artifact_version",
+    "provenance",
+    "page_indexing_observations",
+    "observations",
+    "latest_projection",
+}
 PROVENANCE_KEYS = {
     "source",
     "sanitized",
@@ -54,13 +60,56 @@ SITEMAP_KEYS = {
 }
 PERFORMANCE_KEYS = {
     "status",
+    "aggregation_type",
     "clicks",
     "impressions",
     "ctr_percent",
     "avg_position",
     "query_rows",
+    "report_scope",
+    "dimension_tables",
 }
 QUERY_ROW_KEYS = {"query", "clicks", "impressions", "avg_position"}
+PAGE_INDEXING_OBSERVATION_KEYS = {
+    "collected_at",
+    "property",
+    "transport",
+    "locale",
+    "page_scope",
+    "sitemap_filter",
+    "report_last_updated",
+    "data_freshness",
+    "totals",
+    "filters",
+    "reason_rows",
+}
+PAGE_INDEXING_TOTALS_KEYS = {"indexed", "not_indexed"}
+PAGE_INDEXING_REASON_ROW_KEYS = {
+    "reason",
+    "source",
+    "validation_state",
+    "affected_pages",
+    "first_detected",
+    "examples",
+    "row_limit",
+    "example_limit",
+    "sampled",
+    "truncated",
+}
+PAGE_INDEXING_EXAMPLE_KEYS = {"url", "last_crawl"}
+PAGE_INDEXING_DATA_FRESHNESS_STATES = {
+    "fresh",
+    "report_lag_or_unreconciled",
+    "unknown",
+}
+PAGE_INDEXING_VALIDATION_STATES = {
+    "not_started",
+    "in_progress",
+    "passed",
+    "failed",
+    "unknown",
+}
+DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
 LATEST_PROJECTION_KEYS = {
     "url_inspection_status",
     "canonical_urls_on_google",
@@ -75,6 +124,18 @@ LATEST_PROJECTION_KEYS = {
     "disclosed_query_clicks",
     "disclosed_query_impressions",
     "disclosed_query_avg_position",
+    "performance_aggregation_type",
+    "page_dimension_impressions_sum",
+    "page_dimension_row_count",
+    "page_dimension_missing_row_count",
+    "search_appearance_state",
+    "page_indexing_report_last_updated",
+    "page_indexing_indexed",
+    "page_indexing_not_indexed",
+    "page_indexing_data_freshness",
+    "page_indexing_reason",
+    "page_indexing_example_url",
+    "page_indexing_example_last_crawl",
 }
 URL_INSPECTION_STATUSES = {"all_on_google", "partial", "not_on_google"}
 SITEMAP_SEARCH_CONSOLE_STATUSES = {
@@ -84,6 +145,39 @@ SITEMAP_SEARCH_CONSOLE_STATUSES = {
     "processed",
 }
 PERFORMANCE_STATUSES = {"processing", "available"}
+PERFORMANCE_AGGREGATION_TYPES = {"property", "page", "device", "country", "date", "search_appearance"}
+REPORT_SCOPE_KEYS = {
+    "property",
+    "search_type",
+    "selected_date_range",
+    "data_start_date",
+    "data_through_date",
+    "granularity",
+    "filters",
+    "transport",
+    "locale",
+    "freshness_note",
+}
+DIMENSION_TABLE_KEYS = {
+    "dimension",
+    "aggregation_type",
+    "rows",
+    "displayed_row_sum",
+    "missing_rows",
+    "row_limit",
+    "export_method",
+    "truncated",
+    "anonymized_rows_withheld",
+}
+DIMENSION_TABLE_NAMES = {"page", "device", "country", "date", "search_appearance"}
+SEARCH_APPEARANCE_STATES = {"no_data", "has_data"}
+MISSING_ROW_SEMANTICS = {"not_returned_in_observed_table"}
+DIMENSION_ROW_KEY_MAP = {
+    "page": "page",
+    "device": "device",
+    "country": "country",
+    "date": "date",
+}
 
 NUMBER_WORDS = {
     0: "zero",
@@ -150,10 +244,210 @@ def validate_timestamp(value: Any, description: str) -> str:
     return value
 
 
+def validate_date_only(value: Any, description: str) -> str:
+    if not isinstance(value, str) or not DATE_ONLY.fullmatch(value):
+        raise ObservationError(f"{description} must use YYYY-MM-DD")
+    return value
+
+
+def optional_string(value: Any, description: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ObservationError(f"{description} must be a nonempty string or null")
+    return value
+
+
 def number_word(n: int) -> str:
     if n in NUMBER_WORDS:
         return NUMBER_WORDS[n]
     return str(n)
+
+
+def validate_page_indexing_observations(
+    page_indexing_observations: Any,
+) -> list[dict[str, Any]]:
+    """Validate the Page indexing aggregate observation series.
+
+    The Page indexing report is a separate report-level dataset from per-URL
+    inspection, sitemap processing, and performance. Each snapshot preserves
+    the report scope, report last-updated date, totals, and reason rows
+    independently. Snapshots are append-only: ``collected_at`` timestamps must
+    be nondecreasing and earlier snapshots are never rewritten or deleted.
+    """
+    if not isinstance(page_indexing_observations, list) or not page_indexing_observations:
+        raise ObservationError("page_indexing_observations must be a nonempty list")
+
+    previous_ts: str | None = None
+    for snap in page_indexing_observations:
+        if not isinstance(snap, dict) or set(snap) != PAGE_INDEXING_OBSERVATION_KEYS:
+            raise ObservationError("page_indexing observation has unexpected fields")
+        ts = validate_timestamp(snap["collected_at"], "page_indexing collected_at")
+        if previous_ts is not None and ts < previous_ts:
+            raise ObservationError(
+                "page_indexing collected_at timestamps must be nondecreasing (append-only)"
+            )
+        previous_ts = ts
+        require_string(snap["property"], "page_indexing property")
+        require_string(snap["transport"], "page_indexing transport")
+        require_string(snap["locale"], "page_indexing locale")
+        require_string(snap["page_scope"], "page_indexing page_scope")
+        optional_string(snap["sitemap_filter"], "page_indexing sitemap_filter")
+        validate_date_only(snap["report_last_updated"], "page_indexing report_last_updated")
+        freshness = snap["data_freshness"]
+        if freshness not in PAGE_INDEXING_DATA_FRESHNESS_STATES:
+            raise ObservationError("page_indexing data_freshness is invalid")
+
+        totals = snap["totals"]
+        if not isinstance(totals, dict) or set(totals) != PAGE_INDEXING_TOTALS_KEYS:
+            raise ObservationError("page_indexing totals has unexpected fields")
+        require_integer(totals["indexed"], "page_indexing totals indexed")
+        require_integer(totals["not_indexed"], "page_indexing totals not_indexed")
+
+        filters = snap["filters"]
+        if not isinstance(filters, list):
+            raise ObservationError("page_indexing filters must be a list")
+
+        reason_rows = snap["reason_rows"]
+        if not isinstance(reason_rows, list):
+            raise ObservationError("page_indexing reason_rows must be a list")
+        for row in reason_rows:
+            if not isinstance(row, dict) or set(row) != PAGE_INDEXING_REASON_ROW_KEYS:
+                raise ObservationError("page_indexing reason row has unexpected fields")
+            require_string(row["reason"], "page_indexing reason row reason")
+            require_string(row["source"], "page_indexing reason row source")
+            vstate = row["validation_state"]
+            if vstate not in PAGE_INDEXING_VALIDATION_STATES:
+                raise ObservationError("page_indexing reason row validation_state is invalid")
+            require_integer(row["affected_pages"], "page_indexing reason row affected_pages")
+            validate_date_only(row["first_detected"], "page_indexing reason row first_detected")
+            examples = row["examples"]
+            if not isinstance(examples, list) or not examples:
+                raise ObservationError(
+                    "page_indexing reason row examples must be a nonempty list"
+                )
+            for ex in examples:
+                if not isinstance(ex, dict) or set(ex) != PAGE_INDEXING_EXAMPLE_KEYS:
+                    raise ObservationError("page_indexing example has unexpected fields")
+                require_string(ex["url"], "page_indexing example url")
+                validate_date_only(ex["last_crawl"], "page_indexing example last_crawl")
+            if row["row_limit"] is not None:
+                require_integer(row["row_limit"], "page_indexing reason row row_limit")
+            if row["example_limit"] is not None:
+                require_integer(row["example_limit"], "page_indexing reason row example_limit")
+            if not isinstance(row["sampled"], bool):
+                raise ObservationError("page_indexing reason row sampled must be a boolean")
+            if not isinstance(row["truncated"], bool):
+                raise ObservationError("page_indexing reason row truncated must be a boolean")
+
+    return page_indexing_observations
+
+
+
+def validate_report_scope(scope: Any, description: str) -> None:
+    """Validate a Search Console report scope object."""
+    if not isinstance(scope, dict) or set(scope) != REPORT_SCOPE_KEYS:
+        raise ObservationError(f"{description} has unexpected fields")
+    require_string(scope["property"], f"{description} property")
+    require_string(scope["search_type"], f"{description} search_type")
+    require_string(scope["selected_date_range"], f"{description} selected_date_range")
+    validate_date_only(scope["data_start_date"], f"{description} data_start_date")
+    validate_date_only(scope["data_through_date"], f"{description} data_through_date")
+    require_string(scope["granularity"], f"{description} granularity")
+    require_string(scope["filters"], f"{description} filters")
+    require_string(scope["transport"], f"{description} transport")
+    require_string(scope["locale"], f"{description} locale")
+    require_string(scope["freshness_note"], f"{description} freshness_note")
+
+
+def validate_dimension_row(row: Any, dimension_name: str, description: str) -> None:
+    """Validate a single row within a dimension table."""
+    if not isinstance(row, dict):
+        raise ObservationError(f"{description} row must be an object")
+    row_key = DIMENSION_ROW_KEY_MAP[dimension_name]
+    expected_keys = {row_key, "clicks", "impressions"}
+    if set(row) != expected_keys:
+        raise ObservationError(f"{description} row has unexpected fields")
+    require_string(row[row_key], f"{description} row {row_key}")
+    require_integer(row["clicks"], f"{description} row clicks")
+    require_integer(row["impressions"], f"{description} row impressions")
+    if dimension_name == "date":
+        if not DATE_ONLY.fullmatch(row[row_key]):
+            raise ObservationError(f"{description} row date must use YYYY-MM-DD")
+
+
+def validate_dimension_table(table: Any, dimension_name: str, description: str) -> None:
+    """Validate a single dimension table (page, device, country, date, search_appearance)."""
+    if not isinstance(table, dict):
+        raise ObservationError(f"{description} must be an object")
+    allowed_keys = DIMENSION_TABLE_KEYS | (
+        {"state"} if dimension_name == "search_appearance" else set()
+    )
+    if set(table) != allowed_keys:
+        raise ObservationError(f"{description} has unexpected fields")
+    if table["dimension"] != dimension_name:
+        raise ObservationError(f"{description} dimension name mismatch")
+    if table["aggregation_type"] != dimension_name:
+        raise ObservationError(f"{description} aggregation_type mismatch")
+    if not isinstance(table["rows"], list):
+        raise ObservationError(f"{description} rows must be a list")
+    if not isinstance(table["truncated"], bool):
+        raise ObservationError(f"{description} truncated must be a boolean")
+    if not isinstance(table["anonymized_rows_withheld"], bool):
+        raise ObservationError(f"{description} anonymized_rows_withheld must be a boolean")
+    require_string(table["export_method"], f"{description} export_method")
+
+    # search_appearance uses a categorical "state" instead of numeric rows.
+    if dimension_name == "search_appearance":
+        if table["state"] not in SEARCH_APPEARANCE_STATES:
+            raise ObservationError(f"{description} state is invalid")
+        if table["state"] == "no_data":
+            if table["rows"]:
+                raise ObservationError(
+                    f"{description} with state no_data must have empty rows"
+                )
+            if table["displayed_row_sum"] is not None:
+                raise ObservationError(
+                    f"{description} with state no_data must have null displayed_row_sum"
+                )
+        return
+
+    # Non-search-appearance tables must have numeric rows and a displayed_row_sum.
+    for row in table["rows"]:
+        validate_dimension_row(row, dimension_name, description)
+
+    row_sum = table["displayed_row_sum"]
+    if not isinstance(row_sum, dict) or set(row_sum) != {"clicks", "impressions"}:
+        raise ObservationError(f"{description} displayed_row_sum has unexpected fields")
+    require_integer(row_sum["clicks"], f"{description} displayed_row_sum clicks")
+    require_integer(row_sum["impressions"], f"{description} displayed_row_sum impressions")
+
+    # Validate missing_rows semantics.
+    missing_rows = table["missing_rows"]
+    if not isinstance(missing_rows, list):
+        raise ObservationError(f"{description} missing_rows must be a list")
+    row_key = DIMENSION_ROW_KEY_MAP[dimension_name]
+    for missing in missing_rows:
+        if not isinstance(missing, dict) or set(missing) != {row_key, "semantics"}:
+            raise ObservationError(f"{description} missing_rows entry has unexpected fields")
+        require_string(missing[row_key], f"{description} missing_rows {row_key}")
+        if missing["semantics"] not in MISSING_ROW_SEMANTICS:
+            raise ObservationError(
+                f"{description} missing_rows semantics must be not_returned_in_observed_table"
+            )
+
+
+def validate_dimension_tables(tables: Any, description: str) -> None:
+    """Validate the dimension_tables object on a performance record.
+
+    Each dimension table is an independent marginal observation.  The
+    validator rejects synthetic multi-dimensional joins by requiring that
+    each table carry exactly one dimension name and no cross-dimension keys.
+    """
+    if not isinstance(tables, dict) or set(tables) != DIMENSION_TABLE_NAMES:
+        raise ObservationError(f"{description} has unexpected dimension tables")
+    for name in DIMENSION_TABLE_NAMES:
+        validate_dimension_table(tables[name], name, f"{description} {name}")
 
 
 def validate_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
@@ -172,6 +466,10 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
     require_string(provenance["collection_method"], "provenance collection_method")
     validate_timestamp(provenance["collected_at"], "provenance collected_at")
     require_string(provenance["sanitization_note"], "provenance sanitization_note")
+
+    page_indexing_observations = validate_page_indexing_observations(
+        artifact["page_indexing_observations"]
+    )
 
     observations = artifact["observations"]
     if not isinstance(observations, list) or not observations:
@@ -227,6 +525,10 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
             perf_status = performance.get("status")
             if perf_status not in PERFORMANCE_STATUSES:
                 raise ObservationError("performance status is invalid")
+            agg_type = performance.get("aggregation_type")
+            if agg_type is not None:
+                if not isinstance(agg_type, str) or agg_type not in PERFORMANCE_AGGREGATION_TYPES:
+                    raise ObservationError("performance aggregation_type is invalid")
             optional_number(performance.get("clicks"), "performance clicks")
             optional_number(performance.get("impressions"), "performance impressions")
             optional_number(performance.get("ctr_percent"), "performance ctr_percent")
@@ -241,6 +543,26 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
                 require_integer(row.get("clicks"), "query row clicks")
                 require_integer(row.get("impressions"), "query row impressions")
                 optional_number(row.get("avg_position"), "query row avg_position")
+            report_scope = performance.get("report_scope")
+            if report_scope is not None:
+                validate_report_scope(report_scope, "performance report_scope")
+            dimension_tables = performance.get("dimension_tables")
+            if dimension_tables is not None:
+                validate_dimension_tables(dimension_tables, "performance dimension_tables")
+                # The property aggregate must not be replaced by a dimension
+                # sum.  Page-level impressions legitimately exceed property
+                # impressions because Google counts each unique URL separately
+                # in page aggregation while counting the property once in the
+                # property aggregate.  Reject any artifact that overwrites the
+                # property impressions with the page displayed_row_sum.
+                if agg_type == "property" and performance.get("impressions") is not None:
+                    page_sum = dimension_tables["page"]["displayed_row_sum"]["impressions"]
+                    if performance["impressions"] == page_sum and page_sum != 0:
+                        raise ObservationError(
+                            "property impressions must not equal the page "
+                            "displayed_row_sum — the property aggregate is a "
+                            "different measure from the page-level sum"
+                        )
 
     latest_projection = artifact["latest_projection"]
     if not isinstance(latest_projection, dict) or set(latest_projection) != LATEST_PROJECTION_KEYS:
@@ -259,6 +581,8 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
     if lp["sitemap_discovered_pages"] != latest["sitemap"]["discovered_pages"]:
         raise ObservationError("latest_projection sitemap_discovered_pages disagrees with latest observation")
     latest_perf = latest["performance"]
+    if lp["performance_aggregation_type"] != latest_perf.get("aggregation_type"):
+        raise ObservationError("latest_projection performance_aggregation_type disagrees with latest observation")
     if lp["performance_impressions"] != latest_perf.get("impressions"):
         raise ObservationError("latest_projection performance_impressions disagrees with latest observation")
     if lp["performance_clicks"] != latest_perf.get("clicks"):
@@ -287,6 +611,116 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
             if lp.get(key) is not None:
                 raise ObservationError(
                     f"latest_projection {key} must be null when no query rows exist"
+                )
+
+    # --- Page indexing aggregate projection ---
+    # The latest Page indexing aggregate snapshot is projected separately from
+    # the per-URL inspection. The aggregate is a lagging report-level dataset;
+    # it must never overwrite the newer per-URL inspection count.
+    latest_pi = page_indexing_observations[-1]
+    if lp["page_indexing_report_last_updated"] != latest_pi["report_last_updated"]:
+        raise ObservationError(
+            "latest_projection page_indexing_report_last_updated disagrees with "
+            "latest page indexing observation"
+        )
+    if lp["page_indexing_indexed"] != latest_pi["totals"]["indexed"]:
+        raise ObservationError(
+            "latest_projection page_indexing_indexed disagrees with latest page indexing observation"
+        )
+    if lp["page_indexing_not_indexed"] != latest_pi["totals"]["not_indexed"]:
+        raise ObservationError(
+            "latest_projection page_indexing_not_indexed disagrees with latest page indexing observation"
+        )
+    if lp["page_indexing_data_freshness"] != latest_pi["data_freshness"]:
+        raise ObservationError(
+            "latest_projection page_indexing_data_freshness disagrees with latest page indexing observation"
+        )
+    if latest_pi["reason_rows"]:
+        first_reason = latest_pi["reason_rows"][0]
+        if lp["page_indexing_reason"] != first_reason["reason"]:
+            raise ObservationError(
+                "latest_projection page_indexing_reason disagrees with latest page indexing observation"
+            )
+        if first_reason["examples"]:
+            first_example = first_reason["examples"][0]
+            if lp["page_indexing_example_url"] != first_example["url"]:
+                raise ObservationError(
+                    "latest_projection page_indexing_example_url disagrees with latest page indexing observation"
+                )
+            if lp["page_indexing_example_last_crawl"] != first_example["last_crawl"]:
+                raise ObservationError(
+                    "latest_projection page_indexing_example_last_crawl disagrees with latest page indexing observation"
+                )
+        else:
+            if lp["page_indexing_example_url"] is not None:
+                raise ObservationError(
+                    "latest_projection page_indexing_example_url must be null when no examples exist"
+                )
+            if lp["page_indexing_example_last_crawl"] is not None:
+                raise ObservationError(
+                    "latest_projection page_indexing_example_last_crawl must be null when no examples exist"
+                )
+    else:
+        if lp["page_indexing_reason"] is not None:
+            raise ObservationError(
+                "latest_projection page_indexing_reason must be null when no reason rows exist"
+            )
+        if lp["page_indexing_example_url"] is not None:
+            raise ObservationError(
+                "latest_projection page_indexing_example_url must be null when no reason rows exist"
+            )
+        if lp["page_indexing_example_last_crawl"] is not None:
+            raise ObservationError(
+                "latest_projection page_indexing_example_last_crawl must be null when no reason rows exist"
+            )
+
+    # --- Cross-report reconciliation: reject conflation ---
+    # A Page indexing aggregate that disagrees with the latest per-URL
+    # inspection must be marked ``report_lag_or_unreconciled``. Silently
+    # selecting the aggregate count to overwrite the per-URL evidence, or
+    # declaring the aggregate "fresh" while it contradicts the inspection, is
+    # the conflation this validator rejects.
+    pi_indexed = lp["page_indexing_indexed"]
+    urls_on_google = lp["canonical_urls_on_google"]
+    if pi_indexed != urls_on_google and lp["page_indexing_data_freshness"] == "fresh":
+        raise ObservationError(
+            "page_indexing aggregate indexed count disagrees with per-URL inspection "
+            "but data_freshness is 'fresh'; a lagging aggregate must be marked "
+            "'report_lag_or_unreconciled', not silently reconciled"
+        )
+
+    # --- Dimension table projection ---
+    # Validate dimension table projection fields against the latest observation.
+    dim_tables = latest_perf.get("dimension_tables")
+    if dim_tables is not None:
+        page_table = dim_tables["page"]
+        if lp["page_dimension_impressions_sum"] != page_table["displayed_row_sum"]["impressions"]:
+            raise ObservationError(
+                "latest_projection page_dimension_impressions_sum disagrees with latest observation"
+            )
+        if lp["page_dimension_row_count"] != len(page_table["rows"]):
+            raise ObservationError(
+                "latest_projection page_dimension_row_count disagrees with latest observation"
+            )
+        if lp["page_dimension_missing_row_count"] != len(page_table["missing_rows"]):
+            raise ObservationError(
+                "latest_projection page_dimension_missing_row_count disagrees with latest observation"
+            )
+        sa_table = dim_tables["search_appearance"]
+        if lp["search_appearance_state"] != sa_table["state"]:
+            raise ObservationError(
+                "latest_projection search_appearance_state disagrees with latest observation"
+            )
+    else:
+        for key in (
+            "page_dimension_impressions_sum",
+            "page_dimension_row_count",
+            "page_dimension_missing_row_count",
+            "search_appearance_state",
+        ):
+            if lp.get(key) is not None:
+                raise ObservationError(
+                    f"latest_projection {key} must be null when no dimension tables exist"
                 )
 
     return lp
@@ -381,6 +815,49 @@ def visibility_binding_phrases(projection: dict[str, Any]) -> list[tuple[str, st
             "Sitemap processing remains unsuccessful",
             "sitemap status in Current interpretation",
         ))
+    # Page indexing aggregate bindings: the lagging report-level aggregate is
+    # preserved separately from the per-URL inspection and must remain visible.
+    pi_indexed = projection.get("page_indexing_indexed")
+    pi_not_indexed = projection.get("page_indexing_not_indexed")
+    if pi_indexed is not None:
+        phrases.append((
+            f"{pi_indexed} indexed",
+            "page indexing aggregate indexed count in Current interpretation",
+        ))
+    if pi_not_indexed is not None:
+        phrases.append((
+            f"{pi_not_indexed} not indexed",
+            "page indexing aggregate not-indexed count in Current interpretation",
+        ))
+    if projection.get("page_indexing_data_freshness") == "report_lag_or_unreconciled":
+        phrases.append((
+            "lagging Page indexing aggregate",
+            "page indexing aggregate lag state in Current interpretation",
+        ))
+    pi_reason = projection.get("page_indexing_reason")
+    if pi_reason is not None:
+        phrases.append((
+            pi_reason,
+            "page indexing reason in Current interpretation",
+        ))
+    page_sum = projection.get("page_dimension_impressions_sum")
+    if page_sum is not None:
+        phrases.append((
+            f"{page_sum} page-level impressions",
+            "page dimension impressions sum in Current interpretation",
+        ))
+    page_rows = projection.get("page_dimension_row_count")
+    if page_rows is not None:
+        phrases.append((
+            f"{page_rows} page rows",
+            "page dimension row count in Current interpretation",
+        ))
+    sa_state = projection.get("search_appearance_state")
+    if sa_state == "no_data":
+        phrases.append((
+            "Search appearance reports no data",
+            "search appearance state in Current interpretation",
+        ))
     return phrases
 
 
@@ -446,6 +923,43 @@ def roadmap_binding_phrases(projection: dict[str, Any]) -> list[tuple[str, str]]
         phrases.append((
             "unsuccessful sitemap processing",
             "sitemap status in roadmap",
+        ))
+    # Page indexing aggregate bindings: the roadmap must honestly note the
+    # lagging aggregate alongside the five positive per-URL inspections.
+    pi_indexed = projection.get("page_indexing_indexed")
+    pi_not_indexed = projection.get("page_indexing_not_indexed")
+    if pi_indexed is not None:
+        phrases.append((
+            f"{pi_indexed} indexed",
+            "page indexing aggregate indexed count in roadmap",
+        ))
+    if pi_not_indexed is not None:
+        phrases.append((
+            f"{pi_not_indexed} not indexed",
+            "page indexing aggregate not-indexed count in roadmap",
+        ))
+    if projection.get("page_indexing_data_freshness") == "report_lag_or_unreconciled":
+        phrases.append((
+            "lagging Page indexing aggregate",
+            "page indexing aggregate lag state in roadmap",
+        ))
+    page_sum = projection.get("page_dimension_impressions_sum")
+    if page_sum is not None:
+        phrases.append((
+            f"{page_sum} page-level impressions",
+            "page dimension impressions sum in roadmap",
+        ))
+    page_rows = projection.get("page_dimension_row_count")
+    if page_rows is not None:
+        phrases.append((
+            f"{page_rows} page rows",
+            "page dimension row count in roadmap",
+        ))
+    sa_state = projection.get("search_appearance_state")
+    if sa_state == "no_data":
+        phrases.append((
+            "search appearance reports no data",
+            "search appearance state in roadmap",
         ))
     return phrases
 

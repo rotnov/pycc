@@ -314,6 +314,54 @@ indexed, so this ledger records those states independently.
 | 2026-07-25T19:10:03Z | No new URL Inspection was run; the latest authoritative evidence remains the positive inspection state for all 5 canonical URLs recorded above | Public `/sitemap.xml` returns `200 application/xml` with all 5 canonical URLs. Search Console still reports “Couldn’t fetch,” no processing date, and 0 discovered pages | The processed 3-month web report is updated about 5 hours before this observation and still reports 0 clicks, 0 impressions, and no query rows; therefore no Google query position exists yet |
 | 2026-07-29T10:25:27Z | No new URL Inspection was run; all 5 canonical URLs retain the latest positive per-URL evidence above | Search Console still reports the submitted `/sitemap.xml` as failed to process with 0 discovered pages, while the public resource remains independently valid; investigation continues in #193 | Maintainer-attested processed web data for 2026-07-23 through 2026-07-26 reports 15 impressions, 2 clicks, 13.3% CTR, and average position 5.7. The only disclosed query row is `python aot compiler`: 0 clicks, 3 impressions, average position 6.3. Low-volume rows are withheld, so the clicks cannot be attributed to named queries; #163 owns stronger immutable evidence. The structured artifact now preserves page, country, device, date, and search-appearance dimension tables separately from the property aggregate: the page table displays 19 page-level impressions across 4 rows (property total 15), the device table shows 6 mobile and 9 desktop impressions, the country table shows 5 US impressions plus 10 across 8 other countries, the date table shows 0 impressions on 2026-07-23, 1 on 2026-07-24, 5 on 2026-07-25, and 9 on 2026-07-26, and search appearance reports no data. These marginals are independent observations and must not be joined into synthetic multi-dimensional rows. |
 
+## Page indexing aggregate history
+
+The Search Console **Page indexing** report is a report-level dataset, distinct
+from URL Inspection, live URL tests, sitemap processing, HTTPS aggregates,
+performance data, and search appearance. Google documents that the report's
+totals describe the report state, not the current index status of any specific
+URL, and warns not to expect immediate indexing. The report exposes a
+report-level "last updated" date and example-level dates that must be preserved
+exactly as displayed; they are never collapsed into a single timestamp.
+
+The [machine-readable artifact](./SEARCH_CONSOLE_OBSERVATIONS.json) preserves
+each Page indexing aggregate snapshot in a separate append-only
+`page_indexing_observations` series, reusing the same sanitized provenance
+envelope as the per-URL observation series. Each snapshot records the verified
+property, collection timestamp, UI/API transport and locale, selected page
+scope or sitemap filter, report last-updated date, report-level totals,
+filters, data freshness state, and each reason row independently — exact
+reason, source, validation state, affected-page count, first-detected date,
+displayed examples with their last-crawl dates, and row/example limits with
+sampled/truncated flags.
+
+Cross-report reconciliation rules:
+
+- A Page indexing aggregate does not overwrite a newer per-URL inspection.
+- A per-URL inspection does not rewrite the historical aggregate snapshot.
+- Performance proves an appearance in its measured period, not permanent
+  current index membership.
+- Public HTTP/canonical/sitemap checks are implementation evidence, not
+  substitutes for owner-facing index state.
+- A stale contradiction is represented explicitly as
+  `report_lag_or_unreconciled`, not silently "fixed" by selecting one number.
+- The Page indexing aggregate is separate from #193's sitemap-processing
+  state; neither report proves or causes the other.
+- "Validate fix" is not started for a Google-systems reason unless a current
+  diagnosis identifies a deployed site-side change and the validation action
+  is bounded and recorded.
+
+| Collected at (UTC) | Report last updated | Indexed | Not indexed | Data freshness | Reason | Source | Validation | Affected | First detected | Example URL | Example last crawl |
+|---|---|---:|---:|---|---|---|---|---:|---|---|---|
+| 2026-07-29T11:59:42Z | 2026-07-24 | 4 | 1 | report_lag_or_unreconciled | Crawled — currently not indexed | Google systems | not_started | 1 | 2026-07-25 | `https://rotnov.github.io/pycc/python-aot-compilers/` | 2026-07-25 |
+
+The 2026-07-29 baseline preserves the lagging 4 indexed / 1 not indexed
+aggregate exactly as displayed. The example URL is the comparison page whose
+fresh URL Inspection reports it as indexed, so the aggregate lags behind the
+per-URL evidence; this is recorded as `report_lag_or_unreconciled`, not as a
+live-site regression. The displayed examples are a sample, not a complete
+lifetime URL inventory.
+
 ## Engine-qualified visibility
 
 Indexability, public result visibility, and answer-engine citation are
@@ -483,6 +531,21 @@ observations and must not be joined into synthetic page×country,
 page×device, or query×country rows; the individual page, query, country, and
 device identity of each click remains unknown. Sitemap processing remains unsuccessful even though the public sitemap is valid, reinforcing that query
 performance, per-URL indexing, and sitemap processing are independent signals.
+The lagging Page indexing aggregate (report last updated 2026-07-24, collected
+2026-07-29T11:59:42Z) still shows 4 indexed and 1 not indexed, with the single
+not-indexed reason row "Crawled — currently not indexed" (source: Google
+systems, validation not started, 1 affected page, first detected 2026-07-25)
+whose displayed example is the comparison page
+`https://rotnov.github.io/pycc/python-aot-compilers/` (example last crawl
+2026-07-25). That example URL is the same page whose fresh URL Inspection
+reports it as indexed, so the aggregate lags behind the per-URL evidence; this
+is recorded as `report_lag_or_unreconciled`, not as a live-site regression or a
+reason to request indexing again or click "Validate fix". The aggregate count
+of 4 indexed does not overwrite the five positive per-URL inspections, and the
+per-URL inspection does not rewrite the historical aggregate snapshot. The
+displayed examples are a sample, not a complete lifetime URL inventory, and the
+report, crawl, inspection, and performance dates are preserved separately
+rather than collapsed into one timestamp.
 The traffic window remains too
 automation-heavy and low-uniqueness to attribute to SEO. The structured
 GitHub traffic artifact ([`GITHUB_TRAFFIC_OBSERVATIONS.json`](./GITHUB_TRAFFIC_OBSERVATIONS.json))

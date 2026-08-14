@@ -322,6 +322,193 @@ class SearchConsoleObservationTests(unittest.TestCase):
         text = "average\nposition 6.3"
         self.assertIn("average position 6.3", normalize_whitespace(text))
 
+    # --- Page indexing aggregate mutation tests (issue #204) ---
+
+    def test_page_indexing_observations_must_be_present(self) -> None:
+        """Removing the page_indexing_observations key must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        del artifact["page_indexing_observations"]
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "unexpected top-level fields"):
+            validate(self.root)
+
+    def test_page_indexing_observations_must_be_nonempty(self) -> None:
+        """An empty page_indexing_observations list must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["page_indexing_observations"] = []
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "page_indexing_observations must be a nonempty list"):
+            validate(self.root)
+
+    def test_page_indexing_timestamps_must_be_nondecreasing(self) -> None:
+        """Page indexing snapshots must be append-only."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        later = json.loads(json.dumps(artifact["page_indexing_observations"][0]))
+        later["collected_at"] = "2026-07-30T00:00:00Z"
+        earlier = artifact["page_indexing_observations"][0]
+        earlier["collected_at"] = "2026-07-28T00:00:00Z"
+        artifact["page_indexing_observations"] = [later, earlier]
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "nondecreasing"):
+            validate(self.root)
+
+    def test_page_indexing_report_last_updated_must_be_date(self) -> None:
+        """report_last_updated must be a YYYY-MM-DD date, not a timestamp."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["page_indexing_observations"][0]["report_last_updated"] = "2026-07-24T00:00:00Z"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "report_last_updated.*YYYY-MM-DD"):
+            validate(self.root)
+
+    def test_page_indexing_reason_row_must_preserve_reason(self) -> None:
+        """Deleting the reason from a reason row must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        del artifact["page_indexing_observations"][0]["reason_rows"][0]["reason"]
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "reason row has unexpected fields"):
+            validate(self.root)
+
+    def test_page_indexing_example_last_crawl_must_be_date(self) -> None:
+        """example last_crawl must be a YYYY-MM-DD date."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["page_indexing_observations"][0]["reason_rows"][0]["examples"][0]["last_crawl"] = "2026-07-25T12:00:00Z"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "example last_crawl.*YYYY-MM-DD"):
+            validate(self.root)
+
+    def test_page_indexing_data_freshness_must_be_valid(self) -> None:
+        """An invalid data_freshness state must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["page_indexing_observations"][0]["data_freshness"] = "stale"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "data_freshness is invalid"):
+            validate(self.root)
+
+    def test_page_indexing_validation_state_must_be_valid(self) -> None:
+        """An invalid validation_state must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["page_indexing_observations"][0]["reason_rows"][0]["validation_state"] = "pending"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "validation_state is invalid"):
+            validate(self.root)
+
+    def test_page_indexing_examples_must_be_nonempty(self) -> None:
+        """An empty examples list must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["page_indexing_observations"][0]["reason_rows"][0]["examples"] = []
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "examples must be a nonempty list"):
+            validate(self.root)
+
+    def test_aggregate_conflation_with_fresh_freshness_fails(self) -> None:
+        """Declaring the lagging aggregate 'fresh' while it disagrees with
+        the per-URL inspection count must fail."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["page_indexing_observations"][0]["data_freshness"] = "fresh"
+        artifact["latest_projection"]["page_indexing_data_freshness"] = "fresh"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "report_lag_or_unreconciled"):
+            validate(self.root)
+
+    def test_aggregate_overwrite_of_per_url_total_fails(self) -> None:
+        """Replacing the five positive per-URL inspection total with the
+        aggregate count of four must fail the prose binding."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["observations"][-1]["url_inspection"]["canonical_urls_total"] = 4
+        artifact["observations"][-1]["url_inspection"]["canonical_urls_on_google"] = 4
+        artifact["latest_projection"]["canonical_urls_total"] = 4
+        artifact["latest_projection"]["canonical_urls_on_google"] = 4
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "missing bound phrase.*URL inspection canonical count"):
+            validate(self.root)
+
+    def test_page_indexing_projection_must_match_latest_observation(self) -> None:
+        """The latest_projection page_indexing_indexed must match the latest
+        page indexing observation."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["latest_projection"]["page_indexing_indexed"] = 99
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "page_indexing_indexed disagrees"):
+            validate(self.root)
+
+    def test_page_indexing_reason_projection_must_match(self) -> None:
+        """The latest_projection page_indexing_reason must match the latest
+        page indexing observation's first reason row."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["latest_projection"]["page_indexing_reason"] = "Different reason"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "page_indexing_reason disagrees"):
+            validate(self.root)
+
+    def test_page_indexing_example_url_projection_must_match(self) -> None:
+        """The latest_projection page_indexing_example_url must match the
+        latest page indexing observation's first example URL."""
+        path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
+        artifact = json.loads(path.read_text())
+        artifact["latest_projection"]["page_indexing_example_url"] = "https://example.com/"
+        path.write_text(json.dumps(artifact, indent=2) + "\n")
+        with self.assertRaisesRegex(ObservationError, "page_indexing_example_url disagrees"):
+            validate(self.root)
+
+    def test_visibility_binding_includes_page_indexing_aggregate(self) -> None:
+        """The visibility binding phrases must include the page indexing
+        aggregate counts and lag state."""
+        artifact = json.loads(self.files["SEARCH_CONSOLE_OBSERVATIONS.json"])
+        projection = validate_artifact(artifact)
+        phrases = visibility_binding_phrases(projection)
+        phrase_texts = [p[0] for p in phrases]
+        self.assertIn("4 indexed", phrase_texts)
+        self.assertIn("1 not indexed", phrase_texts)
+        self.assertIn("lagging Page indexing aggregate", phrase_texts)
+        self.assertIn("Crawled — currently not indexed", phrase_texts)
+
+    def test_roadmap_binding_includes_page_indexing_aggregate(self) -> None:
+        """The roadmap binding phrases must include the page indexing
+        aggregate counts and lag state."""
+        artifact = json.loads(self.files["SEARCH_CONSOLE_OBSERVATIONS.json"])
+        projection = validate_artifact(artifact)
+        phrases = roadmap_binding_phrases(projection)
+        phrase_texts = [p[0] for p in phrases]
+        self.assertIn("4 indexed", phrase_texts)
+        self.assertIn("1 not indexed", phrase_texts)
+        self.assertIn("lagging Page indexing aggregate", phrase_texts)
+
+    def test_corrupted_visibility_page_indexing_count_fails(self) -> None:
+        """Corrupting the page indexing aggregate count in the visibility
+        Current interpretation while leaving the artifact unchanged must
+        fail."""
+        path = self.root / "docs" / "SEARCH_VISIBILITY.md"
+        text = path.read_text()
+        corrupted = text.replace("4 indexed and 1 not indexed", "3 indexed and 2 not indexed", 1)
+        self.assertNotEqual(text, corrupted)
+        path.write_text(corrupted)
+        with self.assertRaisesRegex(ObservationError, "missing bound phrase.*page indexing aggregate"):
+            validate(self.root)
+
+    def test_corrupted_roadmap_page_indexing_count_fails(self) -> None:
+        """Corrupting the page indexing aggregate count in the roadmap while
+        leaving the artifact unchanged must fail."""
+        path = self.root / "docs" / "ROADMAP.md"
+        text = path.read_text()
+        corrupted = text.replace("4 indexed and 1 not indexed", "3 indexed and 2 not indexed", 1)
+        self.assertNotEqual(text, corrupted)
+        path.write_text(corrupted)
+        with self.assertRaisesRegex(ObservationError, "missing bound phrase.*page indexing aggregate"):
+            validate(self.root)
+
 
 class SearchConsoleObservationEntrypointTests(unittest.TestCase):
     """Exercise the real CLI entrypoint end-to-end through a subprocess."""
