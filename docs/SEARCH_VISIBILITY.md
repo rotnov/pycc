@@ -259,6 +259,30 @@ added together. GitHub may backfill a window after an earlier request; preserve
 both observations instead of rewriting the earlier response. Clone activity can
 include CI, agents, and other automation and is not treated as human discovery.
 
+The [machine-readable GitHub traffic artifact](./GITHUB_TRAFFIC_OBSERVATIONS.json)
+is the structured source of truth for every traffic observation. It reuses the
+same sanitized immutable evidence envelope as the Search Console artifact:
+`artifact_version`, `provenance`, `observations`, and `latest_projection`. Each
+observation preserves `observed_at` in UTC, the requested GitHub API version,
+the data-through date, endpoint totals for views and clones with `count` and
+`uniques` separate, every returned daily views and clones row, returned popular
+referrers and popular paths, repository stars/forks/watchers as separate
+point-in-time counters, and an explicit `collection_status` so unavailable or
+unauthorized data is `unknown`, never zero. Observations are append-only: if
+GitHub later backfills a previously returned day, a new snapshot is stored and
+the older response is preserved. Comparisons are derived by matching identical
+UTC calendar dates across snapshots — never by adding or subtracting aggregate
+rolling totals to infer lifetime or daily traffic. Daily `count` rows reconcile
+to the endpoint total; daily `uniques` are not additive because the same actor
+can appear on multiple days, so the endpoint's rolling `uniques` value remains
+authoritative. The current clone series is labeled `automation-heavy /
+unattributed` and is not claimed as SEO lift without query or referrer evidence
+that supports it. `scripts/check_github_traffic_observations.py` (with mutation
+tests in `scripts/test_check_github_traffic_observations.py`) validates the
+artifact format, the history table binding, and the prose projection, and
+rejects forbidden wording that equates clones with humans, visits, clicks, or
+SEO acquisition.
+
 | Collected at (UTC) | API data through | Views / unique | Clones / unique | Stars / forks / watchers | Referrers |
 |---|---|---:|---:|---:|---|
 | 2026-07-24T23:08:42Z | 2026-07-24 | 0 / 0 | 0 / 0 | 0 / 0 / 0 | none returned |
@@ -342,4 +366,8 @@ rank or proof of demand, and the withheld rows prevent attribution of the two
 clicks. Sitemap processing remains unsuccessful even though the public sitemap
 is valid, reinforcing that query performance, per-URL indexing, and sitemap
 processing are independent signals. The traffic window remains too
-automation-heavy and low-uniqueness to attribute to SEO.
+automation-heavy and low-uniqueness to attribute to SEO. The structured
+GitHub traffic artifact ([`GITHUB_TRAFFIC_OBSERVATIONS.json`](./GITHUB_TRAFFIC_OBSERVATIONS.json))
+preserves daily views and clones rows alongside the rolling 14-day endpoint
+totals; clone activity is not treated as human discovery and is not claimed as
+SEO lift without query or referrer evidence that supports it.

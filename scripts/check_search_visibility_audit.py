@@ -110,7 +110,7 @@ BOOTSTRAP_FILE_SHA256 = {
         "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77"
     ),
     "SEARCH_VISIBILITY.md": (
-        "b65d925acbffa0562e47e4d3fe32a376ff9453db001850fe1b92145b775c13fc"
+        "a79f71fc7eeb200fa1898a16af963df0509be091d7e4dae935fa6186e5f992fb"
     ),
     "SEARCH_VISIBILITY_CHECKPOINTS.json": (
         "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
