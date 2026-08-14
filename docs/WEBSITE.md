@@ -398,6 +398,77 @@ that proposal. Both files link to the evidence pages, including the
 source-backed compiler comparison, and must preserve the landing page's status
 and AI-authorship disclosures.
 
+### llms.txt bounded expansion contract (issue #207)
+
+The live `llms.txt` is a hand-read content map and an experimental
+inference-time artifact. A reference consumer that expands its non-optional
+links (`llms_txt2ctx`) previously assembled a **2,171,690-byte** context
+dominated by GitHub application-shell HTML and duplicated Pages HTML, because
+every tracked Markdown document was linked to its GitHub blob page (hundreds of
+kilobytes of navigation and UI chrome) instead of its raw Markdown body, and
+the canonical landing was expanded as both HTML and Markdown. The same
+reference parser also truncated the three-line blockquote summary after its
+first physical line. This defeated the file's inference-time purpose: a
+constrained client received more than 2 MB of irrelevant markup before any
+bounded project context.
+
+The supported consumer contract is now explicit and enforced:
+
+- **Hand-read content-map behavior.** A human or agent reading `llms.txt`
+  directly sees a concise project summary, AI-authorship disclosure, current
+  status, and a categorized link list. The file remains valid, readable
+  Markdown.
+- **Parser grammar/compatibility target.** The H1 title and blockquote summary
+  are single physical lines so the proposal's reference parser
+  (`llms_txt2ctx`) returns the complete intended summary in its `summary`
+  field rather than truncating after the first line and pushing the remainder
+  into `info` with literal `>` prefixes. `scripts/check-site.sh` rejects a
+  multi-line blockquote summary.
+- **Default versus optional expansion semantics.** Only the `## Project` and
+  `## Specifications` sections are non-optional (expanded by a default
+  consumer). The `## Optional` section holds human-navigation and larger
+  resources (the canonical HTML landing, the GitHub repository UI page, the
+  four evidence-page HTML representations, and the MIT license) that a client
+  expands only when it explicitly requests more context.
+- **Representation preference.** Non-optional inference links are
+  Markdown/plain-text-first: tracked Markdown documents use
+  `raw.githubusercontent.com` URLs so the fetched body is the intended
+  Markdown artifact, not a GitHub blob/application page. GitHub blob URLs
+  (`github.com/.../blob/...`) are rejected in non-optional sections. The
+  Markdown landing (`index.html.md`) is the clean first-party representation of
+  the landing page; the canonical HTML landing is kept in Optional so the
+  default expansion does not download both representations of the same page.
+- **Explicit context-size budget.** A reviewed **256 KiB** ceiling bounds the
+  complete non-optional expanded context. The ceiling is enforced hermetically
+  by `scripts/check-site.sh` against `site/llms-txt-context-manifest.json`, a
+  reviewed fixture that binds each non-optional link to its local source file,
+  representation role, and per-resource byte budget. The validator computes
+  actual byte counts from the checked-out repository (the same content
+  `raw.githubusercontent.com` serves for `main`) and fails closed when the
+  aggregate or any per-resource budget is breached. No pull-request CI fetches
+  the live site, GitHub, PyPI, or the mutable reference parser; the budget is
+  pinned to the commit's content. The manifest is the deterministic record of
+  per-document and total byte counts.
+- **Human-navigation discoverability.** The public repository, canonical site,
+  and human-readable GitHub links remain discoverable in the Optional section.
+  Optimizing inference representation does not remove navigation or source
+  provenance.
+
+`scripts/check-site.sh` enforces the contract: it parses the non-optional
+sections, matches their link set against the manifest, rejects GitHub blob
+URLs, rejects HTML representations, rejects duplicate HTML+Markdown
+representations of the same page in the default expansion, computes actual
+byte counts from the checked-out files, and fails closed on per-resource or
+aggregate budget breaches. `scripts/test-check-site.sh` provides negative
+controls for each failure mode: a GitHub blob URL in a non-optional section, a
+large human-navigation-only resource moved into the default set, a duplicate
+HTML+Markdown landing in the default expansion, an oversized document
+breaching its per-resource budget, an aggregate expansion breaching the total
+budget, a representation changed from Markdown to HTML, and a non-optional
+link removed so the manifest and file drift. Positive controls retain the
+complete project summary, the authorship and current-status boundaries, and
+human-navigation URLs remaining discoverable in Optional.
+
 ### Markdown landing semantic contract (issue #206)
 
 `site/index.html.md` is publicly described (in `site/llms.txt` and above) as

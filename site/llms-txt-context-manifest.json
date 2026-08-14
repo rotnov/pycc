@@ -1,0 +1,55 @@
+{
+  "schema": "pycc-llms-txt-context-manifest/v1",
+  "description": "Hermetic, reviewed fixture that binds every non-optional llms.txt inference link to its local source file, representation role, and per-resource byte budget. scripts/check-site.sh parses site/llms.txt, matches its non-optional (Project and Specifications) links against this manifest, computes the actual byte count from each local_path, and fails closed when a representation is not Markdown/plain text, a GitHub blob/application URL is used where a raw tracked document is expected, a per-resource or aggregate budget is breached, or the non-optional link set drifts from the manifest. No pull-request CI fetches the live site, GitHub, or the mutable reference parser; the byte counts are computed from the checked-out repository so the budget is enforced hermetically against the exact content in the commit.",
+  "budget_kib": 256,
+  "non_optional_documents": [
+    {
+      "label": "Markdown landing",
+      "url": "https://rotnov.github.io/pycc/index.html.md",
+      "section": "Project",
+      "representation": "markdown",
+      "local_path": "site/index.html.md",
+      "budget_bytes": 16384
+    },
+    {
+      "label": "README",
+      "url": "https://raw.githubusercontent.com/rotnov/pycc/main/README.md",
+      "section": "Project",
+      "representation": "markdown",
+      "local_path": "README.md",
+      "budget_bytes": 32768
+    },
+    {
+      "label": "Specification index",
+      "url": "https://raw.githubusercontent.com/rotnov/pycc/main/docs/SPEC.md",
+      "section": "Specifications",
+      "representation": "markdown",
+      "local_path": "docs/SPEC.md",
+      "budget_bytes": 16384
+    },
+    {
+      "label": "Compiler architecture",
+      "url": "https://raw.githubusercontent.com/rotnov/pycc/main/docs/ARCHITECTURE.md",
+      "section": "Specifications",
+      "representation": "markdown",
+      "local_path": "docs/ARCHITECTURE.md",
+      "budget_bytes": 32768
+    },
+    {
+      "label": "Python standards matrix",
+      "url": "https://raw.githubusercontent.com/rotnov/pycc/main/docs/PYTHON_STANDARDS.md",
+      "section": "Specifications",
+      "representation": "markdown",
+      "local_path": "docs/PYTHON_STANDARDS.md",
+      "budget_bytes": 45056
+    },
+    {
+      "label": "Roadmap",
+      "url": "https://raw.githubusercontent.com/rotnov/pycc/main/docs/ROADMAP.md",
+      "section": "Specifications",
+      "representation": "markdown",
+      "local_path": "docs/ROADMAP.md",
+      "budget_bytes": 196608
+    }
+  ]
+}

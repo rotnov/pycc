@@ -30,21 +30,21 @@ interpreted as released features.
 ## Project (Markdown-first)
 
 - [Markdown landing](https://rotnov.github.io/pycc/index.html.md): Clean text equivalent of the landing page for agents and constrained clients.
-- [README](https://github.com/rotnov/pycc/blob/main/README.md): Project positioning, current capabilities, build instructions, and quality policy.
-- [Source repository](https://github.com/rotnov/pycc): Public source, tests, issues, pull requests, and development history.
+- [README](https://raw.githubusercontent.com/rotnov/pycc/main/README.md): Project positioning, current capabilities, build instructions, and quality policy.
 
 ## Specifications (Markdown)
 
-- [Specification index](https://github.com/rotnov/pycc/blob/main/docs/SPEC.md): Map of the documents that define project behavior.
-- [Compiler architecture](https://github.com/rotnov/pycc/blob/main/docs/ARCHITECTURE.md): Pipeline, crate boundaries, and platform model.
-- [Python standards matrix](https://github.com/rotnov/pycc/blob/main/docs/PYTHON_STANDARDS.md): Targeted Python 3.14 language standards and implementation status.
-- [Roadmap](https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md): Delivery stages and acceptance criteria toward v1.0.
+- [Specification index](https://raw.githubusercontent.com/rotnov/pycc/main/docs/SPEC.md): Map of the documents that define project behavior.
+- [Compiler architecture](https://raw.githubusercontent.com/rotnov/pycc/main/docs/ARCHITECTURE.md): Pipeline, crate boundaries, and platform model.
+- [Python standards matrix](https://raw.githubusercontent.com/rotnov/pycc/main/docs/PYTHON_STANDARDS.md): Targeted Python 3.14 language standards and implementation status.
+- [Roadmap](https://raw.githubusercontent.com/rotnov/pycc/main/docs/ROADMAP.md): Delivery stages and acceptance criteria toward v1.0.
 
-## Optional (HTML pages — larger context when expanded)
+## Optional (HTML pages and human navigation — larger context when expanded)
 
 - [Canonical website](https://rotnov.github.io/pycc/): Human-readable project overview and current status.
+- [Source repository](https://github.com/rotnov/pycc): Public source, tests, issues, pull requests, and development history.
 - [Current implementation status](https://rotnov.github.io/pycc/status/): Commit-relative account of working behavior, missing v0.1 features, CI, and coverage evidence.
 - [Compiler architecture](https://rotnov.github.io/pycc/architecture/): Implemented Rust and LLVM pipeline separated from the target architecture.
 - [Python AOT compiler comparison](https://rotnov.github.io/pycc/python-aot-compilers/): Source-backed map of pycc, LPython, Codon, Nuitka, mypyc, and Cython by language contract, artifact, runtime model, and current positioning.
 - [AI-native experiment](https://rotnov.github.io/pycc/ai-native/): Authorship boundary, operating loop, governance, and public evidence for the fully AI-created, human-managed development model.
-- [MIT license](https://github.com/rotnov/pycc/blob/main/LICENSE): Terms for using and contributing to pycc.
+- [MIT license](https://raw.githubusercontent.com/rotnov/pycc/main/LICENSE): Terms for using and contributing to pycc.
