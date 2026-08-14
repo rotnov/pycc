@@ -10,7 +10,8 @@ harden runs ONCE, at the end.
 
 The host project's own workflow appends to `.harden/findings/<task>.jsonl`,
 one JSON object per finding per round, at the moment the round's verdicts are
-known. Append-only; never rewritten:
+known. Append-only; never rewritten — and committed on the task branch before
+its pull request merges, or the pile dies with the branch:
 
 ```json
 {"round": 2, "file": "src/x.py", "line": 41, "category": "error-handling",

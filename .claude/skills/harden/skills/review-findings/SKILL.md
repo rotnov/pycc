@@ -44,8 +44,10 @@ mechanics stay here and in the contract, never inlined there:
   every class that repeats or matches a topic the full harden cycle, run the
   mini-trace on any blocker even alone, and seed every remaining singleton
   class as `.harden/incidents/<topic>/` entry with verdict pending;
-  artefacts and journal entries land as commits on this same branch and
-  ride into the pull request*. Never anchor on a bare "the
+  artefacts, journal entries and the findings file itself land as commits
+  on this same branch and ride into the pull request* — a findings file
+  first committed after the merge stays behind on a dead branch
+  (field-measured twice, two repos). Never anchor on a bare "the
   loop" — anaphora unbinds over distance: field-reviewed, a page below the
   loop's definition with other loops around, it pointed nowhere.
 
