@@ -460,7 +460,7 @@ if web_page.get("name") != title:
     raise SystemExit("WebPage JSON-LD name must match the page title")
 if web_page.get("description") != metadata["description"][0]["content"]:
     raise SystemExit("WebPage JSON-LD description must match the meta description")
-if web_page.get("dateModified") != "2026-08-12":
+if web_page.get("dateModified") != "2026-08-14":
     raise SystemExit("Landing WebPage dateModified is stale")
 if web_page.get("mainEntity") != {"@id": project_id}:
     raise SystemExit("WebPage JSON-LD must identify the pycc project as its main entity")
@@ -571,7 +571,7 @@ ROBOTS = (
 PAGE_SPECS = {
     "status": {
         "canonical": f"{ROOT}status/",
-        "date_modified": "2026-08-12",
+        "date_modified": "2026-08-14",
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
@@ -598,7 +598,7 @@ PAGE_SPECS = {
     },
     "architecture": {
         "canonical": f"{ROOT}architecture/",
-        "date_modified": "2026-08-12",
+        "date_modified": "2026-08-14",
         "title": "pycc architecture — typed Python to LLVM native binaries",
         "description": (
             "Explore pycc's implemented Rust and LLVM compiler pipeline, "
@@ -620,7 +620,7 @@ PAGE_SPECS = {
     },
     "python-aot-compilers": {
         "canonical": f"{ROOT}python-aot-compilers/",
-        "date_modified": "2026-08-12",
+        "date_modified": "2026-08-14",
         "title": "Python AOT compilers compared — where pycc fits",
         "description": (
             "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from "
@@ -665,7 +665,7 @@ PAGE_SPECS = {
     },
     "ai-native": {
         "canonical": f"{ROOT}ai-native/",
-        "date_modified": "2026-08-12",
+        "date_modified": "2026-08-14",
         "title": (
             "pycc AI-native experiment — software built entirely by AI"
         ),

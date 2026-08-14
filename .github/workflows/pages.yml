@@ -28,6 +28,8 @@ on:
       - "scripts/test_check_indexnow_test_binding.rb"
       - "scripts/check_markdown_landing.rb"
       - "scripts/test_check_markdown_landing.rb"
+      - "scripts/check_sitemap_lastmod.rb"
+      - "scripts/test_check_sitemap_lastmod.rb"
   pull_request:
     paths:
       - "site/**"
@@ -54,6 +56,8 @@ on:
       - "scripts/test_check_indexnow_test_binding.rb"
       - "scripts/check_markdown_landing.rb"
       - "scripts/test_check_markdown_landing.rb"
+      - "scripts/check_sitemap_lastmod.rb"
+      - "scripts/test_check_sitemap_lastmod.rb"
   workflow_dispatch:
 
 permissions:
