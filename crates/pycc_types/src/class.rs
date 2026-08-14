@@ -17,7 +17,9 @@
 
 use crate::{Environment, infer_expr_in, is_assignable};
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{HirClassDef, HirExpr, HirModule, Ty, extract_class_names, is_builtin_type_name};
+use pycc_hir::{
+    HirClassDef, HirExpr, HirModule, ProtocolMember, Ty, extract_class_names, is_builtin_type_name,
+};
 
 /// Populates `env`'s class table from `hir.class_defs` -- called once by
 /// every `Environment` constructor this crate has (`check_with_signatures`'s
@@ -27,6 +29,284 @@ pub(crate) fn bind_classes(env: &mut Environment, hir: &HirModule) {
     for (name, class_def) in &hir.class_defs {
         env.bind_class(name.clone(), class_def.clone());
     }
+}
+
+/// #380 (PR-20): Checks whether a concrete class structurally conforms to
+/// a protocol. A class conforms if, for every protocol member (method or
+/// attribute), the class has a member of the same name with a compatible
+/// type. Method compatibility requires matching parameter count and
+/// assignable parameter/return types. Attribute compatibility requires
+/// an assignable attribute type. Members are looked up through the
+/// class's MRO (inherited methods and attributes count toward
+/// conformance). Returns `Ok(())` if the class conforms, or a `T0046`
+/// diagnostic identifying the first missing or incompatible member.
+pub(crate) fn check_protocol_conformance(
+    env: &Environment,
+    class_name: &str,
+    protocol_name: &str,
+) -> Result<(), Diagnostic> {
+    let class_def = env
+        .lookup_class(class_name)
+        .expect("pycc_types: internal error: class was not registered -- check_protocol_conformance should only be called with a known class");
+    let proto_def = env
+        .lookup_class(protocol_name)
+        .expect("pycc_types: internal error: protocol was not registered -- check_protocol_conformance should only be called with a known protocol");
+    // The protocol's members are already merged (including inherited
+    // members from base protocols) at HIR-lowering time.
+    for member in &proto_def.protocol_members {
+        match member {
+            ProtocolMember::Method {
+                name: method_name,
+                param_tys: proto_param_tys,
+                return_ty: proto_return_ty,
+            } => {
+                // Look up the method through the MRO.
+                let found = lookup_method_through_mro(env, &class_def.mro, method_name);
+                let Some((concrete_param_tys, concrete_return_ty)) = found else {
+                    return Err(Diagnostic::error(
+                        "T0046",
+                        format!(
+                            "class `{class_name}` does not conform to protocol \
+                             `{protocol_name}`: missing method `{method_name}`"
+                        ),
+                        Span::new(0, 0),
+                    ));
+                };
+                // Check parameter count (excluding `self`).
+                // `concrete_param_tys` includes `self`; `proto_param_tys`
+                // excludes it (stripped at HIR-lowering time).
+                let concrete_non_self: Vec<Ty> = concrete_param_tys
+                    .iter()
+                    .skip_while(|(_, n)| n == "self")
+                    .map(|(t, _)| t.clone())
+                    .collect();
+                if concrete_non_self.len() != proto_param_tys.len() {
+                    return Err(Diagnostic::error(
+                        "T0046",
+                        format!(
+                            "class `{class_name}` does not conform to protocol \
+                             `{protocol_name}`: method `{method_name}` has {} parameter(s), \
+                             expected {}",
+                            concrete_non_self.len(),
+                            proto_param_tys.len()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                // Check parameter types (contravariant — a caller through
+                // the protocol may pass any value of the protocol's declared
+                // parameter type, so the concrete method must accept at least
+                // that type: the protocol param type must be assignable to
+                // the concrete param type).
+                for (i, (cp, pp)) in concrete_non_self
+                    .iter()
+                    .zip(proto_param_tys.iter())
+                    .enumerate()
+                {
+                    if !is_assignable(pp.clone(), cp.clone()) {
+                        return Err(Diagnostic::error(
+                            "T0046",
+                            format!(
+                                "class `{class_name}` does not conform to protocol \
+                                 `{protocol_name}`: method `{method_name}` parameter {} has \
+                                 type `{}`, expected `{}`",
+                                i + 1,
+                                cp.name(),
+                                pp.name()
+                            ),
+                            Span::new(0, 0),
+                        ));
+                    }
+                }
+                // Check return type (covariant — concrete return must be
+                // assignable to protocol return).
+                if !is_assignable(concrete_return_ty.clone(), proto_return_ty.clone()) {
+                    return Err(Diagnostic::error(
+                        "T0046",
+                        format!(
+                            "class `{class_name}` does not conform to protocol \
+                             `{protocol_name}`: method `{method_name}` return type is `{}`, \
+                             expected `{}`",
+                            concrete_return_ty.name(),
+                            proto_return_ty.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+            }
+            ProtocolMember::Attribute {
+                name: attr_name,
+                ty: proto_attr_ty,
+            } => {
+                // Look up the attribute through the MRO.
+                let found = lookup_attr_through_mro(env, &class_def.mro, attr_name);
+                let Some(concrete_attr_ty) = found else {
+                    return Err(Diagnostic::error(
+                        "T0046",
+                        format!(
+                            "class `{class_name}` does not conform to protocol \
+                             `{protocol_name}`: missing attribute `{attr_name}`"
+                        ),
+                        Span::new(0, 0),
+                    ));
+                };
+                if !is_assignable(concrete_attr_ty.clone(), proto_attr_ty.clone()) {
+                    return Err(Diagnostic::error(
+                        "T0046",
+                        format!(
+                            "class `{class_name}` does not conform to protocol \
+                             `{protocol_name}`: attribute `{attr_name}` has type `{}`, \
+                             expected `{}`",
+                            concrete_attr_ty.name(),
+                            proto_attr_ty.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Looks up a method through the MRO, returning its parameter types
+/// (including `self`) and return type. Walks the MRO most-derived-first
+/// and returns the first match.
+fn lookup_method_through_mro(
+    env: &Environment,
+    mro: &[String],
+    method_name: &str,
+) -> Option<(Vec<(Ty, String)>, Ty)> {
+    for mro_class in mro {
+        // Every class in the MRO was defined earlier in the module and
+        // is present in the `Environment`'s class table — the C3 MRO is
+        // built from already-lowered class definitions. Using `.expect`
+        // (whose panic path lives in libcore, outside this crate's
+        // instrumented regions) avoids a permanently-uncovered `?`-None
+        // region under D-014's 100 %-coverage gate.
+        let mro_def = env
+            .lookup_class(mro_class)
+            .expect("MRO classes are always in the environment");
+        if let Some(mangled) = mro_def
+            .methods
+            .iter()
+            .find(|(name, _)| name == method_name)
+            .map(|(_, mangled)| mangled.as_str())
+            && let Some((param_tys, return_ty)) = env.lookup_function(mangled)
+        {
+            // `param_tys` is `Vec<Ty>` (just types, no names). We
+            // pair each with an empty name since conformance
+            // checking only needs the types. The `self` parameter
+            // is identified by position (first), not by name.
+            let named: Vec<(Ty, String)> = param_tys
+                .iter()
+                .enumerate()
+                .map(|(i, ty)| {
+                    (
+                        ty.clone(),
+                        if i == 0 {
+                            "self".to_string()
+                        } else {
+                            String::new()
+                        },
+                    )
+                })
+                .collect();
+            return Some((named, return_ty.clone()));
+        }
+    }
+    None
+}
+
+/// Looks up an attribute type through the MRO. Walks the MRO
+/// most-derived-first and returns the first match.
+fn lookup_attr_through_mro(env: &Environment, mro: &[String], attr_name: &str) -> Option<Ty> {
+    for mro_class in mro {
+        // Same invariant as `lookup_method_through_mro` above: every
+        // class in the MRO is present in the `Environment`'s class table.
+        let mro_def = env
+            .lookup_class(mro_class)
+            .expect("MRO classes are always in the environment");
+        if let Some((_, ty)) = mro_def.attrs.iter().find(|(name, _)| name == attr_name) {
+            return Some(ty.clone());
+        }
+        // A @property satisfies an attribute requirement just as a direct
+        // attribute does — `eval_isinstance_protocol` already checks both,
+        // and the conformance check must be consistent with it (#380 W2).
+        if let Some(prop) = mro_def.properties.iter().find(|p| p.name == attr_name) {
+            let (_, return_ty) = env.lookup_function(&prop.getter).unwrap_or_else(|| {
+                panic!(
+                    "pycc_types: internal error: property getter `{}` is in class `{mro_class}`'s \
+                     own property table but was not registered as an ordinary function",
+                    prop.getter
+                )
+            });
+            return Some(return_ty.clone());
+        }
+    }
+    None
+}
+
+/// #380 (PR-20): Checks assignability with protocol conformance support.
+/// Delegates to `is_assignable` for non-protocol cases. When `to` is
+/// `Ty::Protocol(name)` and `from` is `Ty::Instance(class_name)`, checks
+/// structural conformance via `check_protocol_conformance`. Returns
+/// `true` if assignable, `false` otherwise. For detailed error messages,
+/// call `check_protocol_conformance` directly.
+pub(crate) fn is_assignable_env(env: &Environment, from: &Ty, to: &Ty) -> bool {
+    // Protocol conformance: Instance -> Protocol
+    if let (Ty::Instance(class_name), Ty::Protocol(protocol_name)) = (from, to) {
+        return check_protocol_conformance(env, class_name, protocol_name).is_ok();
+    }
+    // Protocol to Protocol: same protocol or inherited
+    if let (Ty::Protocol(from_name), Ty::Protocol(to_name)) = (from, to) {
+        if from_name == to_name {
+            return true;
+        }
+        // Check if from_name's MRO includes to_name
+        if let Some(from_def) = env.lookup_class(from_name)
+            && from_def.mro.iter().any(|m| m.as_str() == to_name.as_str())
+        {
+            return true;
+        }
+        return false;
+    }
+    // For all other cases, use the plain `is_assignable`.
+    is_assignable(from.clone(), to.clone())
+}
+
+/// #380 (PR-20): Returns a `T0046` diagnostic for a protocol conformance
+/// failure, or a `T0021` for a general type mismatch. Called when
+/// `is_assignable_env` returns `false` to produce a detailed error.
+pub(crate) fn assignable_error(env: &Environment, from: &Ty, to: &Ty) -> Diagnostic {
+    if let (Ty::Instance(class_name), Ty::Protocol(protocol_name)) = (from, to) {
+        // `assignable_error` is only called when `is_assignable_env`
+        // returned `false`, which means `check_protocol_conformance`
+        // already returned `Err`.  Using `.expect()` (whose panic path
+        // lives in libcore, outside this crate's instrumented regions)
+        // avoids a permanently-uncovered `unwrap_or_else` closure under
+        // D-014's 100 %-region coverage gate.
+        return check_protocol_conformance(env, class_name, protocol_name)
+            .expect_err("is_assignable_env already returned false, so check_protocol_conformance must return Err");
+    }
+    if let (Ty::Protocol(from_name), Ty::Protocol(to_name)) = (from, to)
+        && from_name != to_name
+    {
+        return Diagnostic::error(
+            "T0046",
+            format!("protocol `{from_name}` does not conform to protocol `{to_name}`"),
+            Span::new(0, 0),
+        );
+    }
+    Diagnostic::error(
+        "T0021",
+        format!(
+            "type mismatch: `{}` is not assignable to `{}`",
+            from.name(),
+            to.name()
+        ),
+        Span::new(0, 0),
+    )
 }
 
 fn t0043_not_an_instance(action: &str, ty: &Ty) -> Diagnostic {
@@ -125,6 +405,33 @@ pub(crate) fn resolve_instantiation(
              infer_expr_in should have checked lookup_class before calling this"
         )
     });
+    // #380 (PR-20, PEP 3119): an abstract class (`is_abstract`) cannot be
+    // instantiated — it must be subclassed with concrete implementations
+    // of all abstract methods first.
+    if class_def.is_abstract {
+        return Err(Diagnostic::error(
+            "C0001",
+            format!(
+                "cannot instantiate abstract class `{class_name}` -- \
+                 it has unimplemented abstract methods; subclass it and \
+                 override all `@abstractmethod`-decorated methods first"
+            ),
+            Span::new(0, 0),
+        ));
+    }
+    // #380 (PR-20, PEP 544): a protocol class cannot be instantiated —
+    // it is a compile-time-only interface description.
+    if class_def.is_protocol {
+        return Err(Diagnostic::error(
+            "C0001",
+            format!(
+                "cannot instantiate protocol class `{class_name}` -- \
+                 a protocol is a compile-time-only interface description, \
+                 not an instantiable class"
+            ),
+            Span::new(0, 0),
+        ));
+    }
     // #432: walk the MRO to find the first class with an `__init__` method.
     let mangled = class_def
         .mro
@@ -177,6 +484,20 @@ pub(crate) fn resolve_attr_get(
     base_ty: &Ty,
     attr: &str,
 ) -> Result<Ty, Diagnostic> {
+    // #380 (PR-20, PEP 544): protocol-typed variable attribute access.
+    // When `base_ty` is `Ty::Protocol(P)`, look up the attribute in
+    // `P`'s `protocol_members`.
+    if let Ty::Protocol(protocol_name) = base_ty {
+        let proto_def = expect_class(env, protocol_name);
+        for member in &proto_def.protocol_members {
+            if let ProtocolMember::Attribute { name, ty } = member
+                && name == attr
+            {
+                return Ok(ty.clone());
+            }
+        }
+        return Err(t0044_unknown_member("attribute", protocol_name, attr));
+    }
     let Ty::Instance(class_name) = base_ty else {
         return Err(t0043_not_an_instance("read an attribute", base_ty));
     };
@@ -229,6 +550,26 @@ pub(crate) fn resolve_method_call(
     method: &str,
     arg_tys: &[Ty],
 ) -> Result<Ty, Diagnostic> {
+    // #380 (PR-20, PEP 544): protocol-typed variable method call.
+    // When `base_ty` is `Ty::Protocol(P)`, look up the method in
+    // `P`'s `protocol_members` and check arguments against the
+    // protocol method's signature.
+    if let Ty::Protocol(protocol_name) = base_ty {
+        let proto_def = expect_class(env, protocol_name);
+        for member in &proto_def.protocol_members {
+            if let ProtocolMember::Method {
+                name: member_name,
+                param_tys: proto_param_tys,
+                return_ty: proto_return_ty,
+            } = member
+                && member_name == method
+            {
+                check_call_args(method, arg_tys, proto_param_tys)?;
+                return Ok(proto_return_ty.clone());
+            }
+        }
+        return Err(t0044_unknown_member("method", protocol_name, method));
+    }
     let Ty::Instance(class_name) = base_ty else {
         return Err(t0043_not_an_instance("call a method", base_ty));
     };
@@ -543,9 +884,9 @@ pub(crate) fn check_attr_set(
 // ---------------------------------------------------------------------------
 
 /// Validates a class name argument to `isinstance`/`issubclass`: it must be
-/// either a registered user-defined class or one of the builtin scalar type
-/// names (`int`, `str`, `float`, `bool`). Returns `Ok(())` if valid, or a
-/// `T0001` diagnostic if the name is unknown.
+/// either a registered user-defined class (including protocols) or one of
+/// the builtin scalar type names (`int`, `str`, `float`, `bool`). Returns
+/// `Ok(())` if valid, or a `T0001` diagnostic if the name is unknown.
 fn validate_class_name(env: &Environment, name: &str) -> Result<(), Diagnostic> {
     if env.lookup_class(name).is_some() || is_builtin_type_name(name) {
         Ok(())
@@ -612,6 +953,24 @@ pub(crate) fn check_isinstance(
     // Validate each class name.
     for name in &class_names {
         validate_class_name(env, name)?;
+        // #380 (PR-20, PEP 544): `isinstance` against a protocol class is
+        // only valid if the protocol is `@runtime_checkable`. A
+        // non-runtime-checkable protocol used with `isinstance` is
+        // rejected with `C0001`.
+        if let Some(class_def) = env.lookup_class(name)
+            && class_def.is_protocol
+            && !class_def.runtime_checkable
+        {
+            return Err(Diagnostic::error(
+                "C0001",
+                format!(
+                    "`isinstance` against protocol `{name}` is not valid -- the protocol is \
+                     not `@runtime_checkable`; add `@runtime_checkable` to the protocol \
+                     class declaration to use it with `isinstance`"
+                ),
+                Span::new(0, 0),
+            ));
+        }
     }
     // The result is always `Ty::Bool`. The actual compile-time boolean value
     // is computed by `eval_isinstance_single` at MIR lowering time.
@@ -660,9 +1019,40 @@ pub(crate) fn check_issubclass(env: &Environment, args: &[HirExpr]) -> Result<Ty
     })?;
     // Validate the first argument's class name.
     validate_class_name(env, &cls_name)?;
+    // #380 (PR-20, PEP 544): `issubclass` against a protocol class is
+    // rejected — protocols use structural typing, not nominal
+    // inheritance, so `issubclass` does not apply.
+    if let Some(class_def) = env.lookup_class(&cls_name)
+        && class_def.is_protocol
+    {
+        return Err(Diagnostic::error(
+            "C0001",
+            format!(
+                "`issubclass` with protocol `{cls_name}` as the first argument is not valid \
+                 -- protocols use structural typing, not nominal inheritance; use \
+                 `isinstance` with a `@runtime_checkable` protocol instead"
+            ),
+            Span::new(0, 0),
+        ));
+    }
     // Validate each target class name.
     for name in &target_names {
         validate_class_name(env, name)?;
+        // #380 (PR-20): `issubclass` against a protocol as the target is
+        // also rejected.
+        if let Some(class_def) = env.lookup_class(name)
+            && class_def.is_protocol
+        {
+            return Err(Diagnostic::error(
+                "C0001",
+                format!(
+                    "`issubclass` against protocol `{name}` is not valid -- protocols use \
+                     structural typing, not nominal inheritance; use `isinstance` with a \
+                     `@runtime_checkable` protocol instead"
+                ),
+                Span::new(0, 0),
+            ));
+        }
     }
     Ok(Ty::Bool)
 }
@@ -746,6 +1136,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             )],
         }
@@ -1157,6 +1552,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             )],
         };
@@ -1227,6 +1627,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             )],
         };
@@ -1501,6 +1906,11 @@ mod tests {
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
         ));
         check_and_resolve(&hir).expect(
@@ -1605,6 +2015,11 @@ mod tests {
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
         );
         let _ = super::resolve_instantiation(&env, "Ghost", &[]);
@@ -1649,6 +2064,11 @@ mod tests {
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
         );
         let _ = super::resolve_instantiation(&env, "Ghost", &[]);
@@ -1673,6 +2093,11 @@ mod tests {
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
         );
         let _ = super::resolve_method_call(
@@ -1713,6 +2138,11 @@ mod tests {
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
         );
         let _ = super::resolve_attr_get(&env, &Ty::Instance(Box::new("Ghost".to_string())), "x");
@@ -1749,6 +2179,11 @@ mod tests {
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
         );
         // `base` must infer as a `Ghost` instance so `check_attr_set`
@@ -1805,6 +2240,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
             env.bind_class(
@@ -1822,6 +2262,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
             env.bind_function(
@@ -1851,6 +2296,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
             env.bind_class(
@@ -1868,6 +2318,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
         });
@@ -1892,6 +2347,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
             env.bind_class(
@@ -1909,6 +2369,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
         });
@@ -1937,6 +2402,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
             env.bind_class(
@@ -1954,6 +2424,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
         });
@@ -1978,6 +2453,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
             env.bind_class(
@@ -1995,6 +2475,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
             env.bind_function(
@@ -2027,6 +2512,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
             env.bind_class(
@@ -2044,6 +2534,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
         });
@@ -2069,6 +2564,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
             env.bind_class(
@@ -2086,6 +2586,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             );
         });
@@ -2165,6 +2670,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             )],
         }
@@ -2221,6 +2731,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             )],
         }
@@ -2570,6 +3085,11 @@ mod tests {
                         enum_members: Vec::new(),
                         is_dataclass: false,
                         dataclass_fields: Vec::new(),
+                        is_protocol: false,
+                        runtime_checkable: false,
+                        protocol_members: Vec::new(),
+                        abstract_methods: Vec::new(),
+                        is_abstract: false,
                     },
                 ),
                 (
@@ -2590,6 +3110,11 @@ mod tests {
                         enum_members: Vec::new(),
                         is_dataclass: false,
                         dataclass_fields: Vec::new(),
+                        is_protocol: false,
+                        runtime_checkable: false,
+                        protocol_members: Vec::new(),
+                        abstract_methods: Vec::new(),
+                        is_abstract: false,
                     },
                 ),
             ],
@@ -2708,6 +3233,11 @@ mod tests {
                         enum_members: Vec::new(),
                         is_dataclass: false,
                         dataclass_fields: Vec::new(),
+                        is_protocol: false,
+                        runtime_checkable: false,
+                        protocol_members: Vec::new(),
+                        abstract_methods: Vec::new(),
+                        is_abstract: false,
                     },
                 ),
                 (
@@ -2725,6 +3255,11 @@ mod tests {
                         enum_members: Vec::new(),
                         is_dataclass: false,
                         dataclass_fields: Vec::new(),
+                        is_protocol: false,
+                        runtime_checkable: false,
+                        protocol_members: Vec::new(),
+                        abstract_methods: Vec::new(),
+                        is_abstract: false,
                     },
                 ),
             ],
@@ -2847,6 +3382,11 @@ mod tests {
                         enum_members: Vec::new(),
                         is_dataclass: false,
                         dataclass_fields: Vec::new(),
+                        is_protocol: false,
+                        runtime_checkable: false,
+                        protocol_members: Vec::new(),
+                        abstract_methods: Vec::new(),
+                        is_abstract: false,
                     },
                 ),
                 (
@@ -2864,6 +3404,11 @@ mod tests {
                         enum_members: Vec::new(),
                         is_dataclass: false,
                         dataclass_fields: Vec::new(),
+                        is_protocol: false,
+                        runtime_checkable: false,
+                        protocol_members: Vec::new(),
+                        abstract_methods: Vec::new(),
+                        is_abstract: false,
                     },
                 ),
             ],
@@ -2922,6 +3467,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             )],
         }
@@ -3112,6 +3662,11 @@ mod tests {
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
         );
         let diagnostic =
@@ -3151,6 +3706,11 @@ mod tests {
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
         );
         assert!(!super::has_static_or_class_method(&env, "C", "nonexistent"));
@@ -3177,6 +3737,11 @@ mod tests {
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
         );
         // `Ghost` is in the MRO but not registered — the defensive
@@ -3211,6 +3776,11 @@ mod tests {
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
         );
         let _ = super::resolve_static_or_class_method_call(&env, "C", "create", &[Ty::Int]);
@@ -3240,6 +3810,11 @@ mod tests {
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
         );
         let _ = super::resolve_static_or_class_method_call(&env, "C", "greet", &[Ty::Int]);
@@ -3608,6 +4183,11 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: true,
                     dataclass_fields: vec![("x".to_string(), Ty::Int)],
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             )],
         };
@@ -3694,10 +4274,428 @@ mod tests {
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
                 },
             )],
         };
         let diagnostic = check(&hir).unwrap_err();
         assert_eq!(diagnostic.code, "T0021");
+    }
+
+    // -- PEP 544 (#380): Protocol conformance checking --------------------
+
+    /// Parses and lowers source code, then type-checks it with
+    /// `check_and_resolve`. Returns the resolved HIR on success or the
+    /// diagnostic on failure.
+    fn check_source(source: &str) -> Result<pycc_hir::HirModule, pycc_diag::Diagnostic> {
+        let module = pycc_parser::parse(source).expect("test fixture must parse");
+        let hir = pycc_hir::lower_checked(&module).expect("test fixture must lower");
+        check_and_resolve(&hir)
+    }
+
+    #[test]
+    fn protocol_conformance_with_wrong_parameter_count_is_t0046() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self, x: int) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\nc: P = C()\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0046");
+        assert!(
+            err.message.contains("parameter"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn protocol_conformance_with_wrong_parameter_type_is_t0046() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self, x: int) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self, x: str) -> int:\n        return 1\nc: P = C()\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0046");
+        assert!(
+            err.message.contains("parameter 1 has type"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn protocol_conformance_with_wrong_return_type_is_t0046() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> str:\n        return \"hi\"\nc: P = C()\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0046");
+        assert!(
+            err.message.contains("return type is"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn protocol_conformance_with_missing_attribute_is_t0046() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    x: int\nclass C:\n    def __init__(self) -> None:\n        self.y = 0\nc: P = C()\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0046");
+        assert!(
+            err.message.contains("missing attribute"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn protocol_conformance_with_wrong_attribute_type_is_t0046() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    x: int\nclass C:\n    def __init__(self) -> None:\n        self.x = \"hi\"\nc: P = C()\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0046");
+        assert!(
+            err.message.contains("attribute `x` has type"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn protocol_conformance_with_contravariant_param_narrowing_is_t0046() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self, x: int) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self, x: bool) -> int:\n        return 1\nc: P = C()\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0046");
+        assert!(
+            err.message.contains("parameter 1 has type"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn protocol_conformance_with_matching_method_succeeds() {
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self, x: int) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self, x: int) -> int:\n        return x\nc: P = C()\n",
+        );
+        assert!(result.is_ok(), "conforming class should type-check");
+    }
+
+    #[test]
+    fn protocol_conformance_with_matching_attribute_succeeds() {
+        let result = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    x: int\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\nc: P = C()\n",
+        );
+        assert!(result.is_ok(), "conforming class should type-check");
+    }
+
+    #[test]
+    fn protocol_to_protocol_assignability_with_different_protocols_is_t0046() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass Q(Protocol):\n    def bar(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\nc: P = C()\nq: Q = c\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0046");
+    }
+
+    #[test]
+    fn protocol_cannot_be_instantiated() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\np = P()\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message.contains("cannot instantiate protocol"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn abstract_class_cannot_be_instantiated() {
+        // #380 (PR-20): exercises `resolve_instantiation`'s
+        // `is_abstract` error path. Covered here as a unit test to
+        // avoid cargo-llvm-cov issue #276.
+        let err = check_source(
+            "from abc import ABC, abstractmethod\nclass A(ABC):\n    def __init__(self) -> None:\n        self.x = 0\n    @abstractmethod\n    def foo(self) -> int: ...\na = A()\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message.contains("cannot instantiate abstract class"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn protocol_typed_variable_unknown_attribute_is_t0044() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\nc: P = C()\nprint(c.bar)\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0044");
+    }
+
+    #[test]
+    fn protocol_typed_variable_unknown_method_is_t0044() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\nc: P = C()\nc.bar()\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0044");
+    }
+
+    #[test]
+    fn protocol_typed_variable_method_call_wrong_arity_is_t0023() {
+        // #380 (PR-20): exercises `resolve_method_call`'s `check_call_args`
+        // error path for a protocol-typed variable — calling a protocol
+        // method with the wrong number of arguments. Covered here as a
+        // unit test to avoid cargo-llvm-cov issue #276.
+        //
+        // NOTE: A top-level `c: P = C()` binds `c` as the concrete
+        // `Ty::Instance("C")` (D-040 sticky representation), so the call
+        // resolves through the instance-method path, not the protocol
+        // path.  To exercise the *protocol* branch of
+        // `resolve_method_call` (line 551), the receiver must be a
+        // function parameter annotated `x: P`, which is bound as
+        // `Ty::Protocol("P")` in the function body.
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef f(x: P) -> int:\n    return x.foo(99)\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn protocol_typed_param_method_call_wrong_arg_type_is_t0021() {
+        // #380 (PR-20): exercises the `check_call_args` *type-mismatch*
+        // error path (not just arity) inside `resolve_method_call`'s
+        // protocol branch.  The receiver is a function parameter typed
+        // `x: P`, so it is bound as `Ty::Protocol("P")` and the protocol
+        // branch at line 551 is entered.  The argument count matches
+        // (1 == 1) but the type (`str` vs `int`) does not, so
+        // `check_call_args` returns a type-mismatch T0021.
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self, x: int) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self, x: int) -> int:\n        return x\ndef f(x: P) -> int:\n    return x.foo(\"hello\")\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("argument 1"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn isinstance_against_non_runtime_checkable_protocol_is_c0001() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\nc = C()\nprint(isinstance(c, P))\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message.contains("not `@runtime_checkable`"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn issubclass_with_protocol_first_arg_is_c0001() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nprint(issubclass(P, int))\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message.contains("`issubclass` with protocol"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn issubclass_against_protocol_target_is_c0001() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\nprint(issubclass(C, P))\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message.contains("`issubclass` against protocol"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    // -- #380 W2: @property satisfies a protocol attribute requirement -----
+
+    /// Verifies that a class with a `@property` getter (but no direct
+    /// attribute slot) satisfies a protocol's attribute requirement.
+    /// This exercises the `properties` check added to
+    /// `lookup_attr_through_mro` (lines 233-242): the protocol requires
+    /// attribute `x: int`, the class has no `x` in its `attrs` table, but
+    /// it does have a `@property` getter for `x` whose return type is
+    /// `int`. `check_protocol_conformance` should return `Ok(())`.
+    #[test]
+    fn protocol_conformance_with_property_satisfying_attribute_succeeds() {
+        use pycc_hir::PropertyDef;
+
+        // --- Protocol "P": requires attribute `x: int` ---
+        let proto_def = HirClassDef {
+            name: "P".to_string(),
+            bases: Vec::new(),
+            mro: vec!["P".to_string()],
+            attrs: Vec::new(),
+            methods: Vec::new(),
+            type_param: None,
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
+            is_protocol: true,
+            runtime_checkable: false,
+            protocol_members: vec![pycc_hir::ProtocolMember::Attribute {
+                name: "x".to_string(),
+                ty: Ty::Int,
+            }],
+            abstract_methods: Vec::new(),
+            is_abstract: false,
+        };
+
+        // --- Concrete class "C": `@property` getter for `x`, no `x` attr ---
+        let c_self_ty = Ty::Instance(Box::new("C".to_string()));
+        let c_init = HirItem::Function {
+            name: "C.__init__".to_string(),
+            params: vec![("self".to_string(), c_self_ty.clone())],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "_val".to_string(),
+                    value: HirExpr::IntLiteral(0),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let c_getter = HirItem::Function {
+            name: "C.x".to_string(),
+            params: vec![("self".to_string(), c_self_ty.clone())],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("self".to_string())),
+                attr: "_val".to_string(),
+            }))],
+        };
+        let c_def = HirClassDef {
+            name: "C".to_string(),
+            bases: Vec::new(),
+            mro: vec!["C".to_string()],
+            // Deliberately NO `x` in `attrs` — the property must satisfy
+            // the protocol requirement, not a direct attribute slot.
+            attrs: vec![("_val".to_string(), Ty::Int)],
+            methods: vec![("__init__".to_string(), "C.__init__".to_string())],
+            type_param: None,
+            properties: vec![PropertyDef {
+                name: "x".to_string(),
+                getter: "C.x".to_string(),
+                setter: None,
+            }],
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: Vec::new(),
+            abstract_methods: Vec::new(),
+            is_abstract: false,
+        };
+
+        // --- Trigger `check_protocol_conformance` via `c: P = C()` ---
+        let hir = HirModule {
+            items: vec![
+                c_init,
+                c_getter,
+                top_level(HirStmt::AnnAssign {
+                    target: "c".to_string(),
+                    annotation: Ty::Protocol(Box::new("P".to_string())),
+                    value: Some(HirExpr::Call {
+                        callee: "C".to_string(),
+                        args: vec![],
+                    }),
+                    is_final: false,
+                }),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![
+                ("P".to_string(), proto_def),
+                ("C".to_string(), c_def),
+            ],
+        };
+
+        check(&hir).expect(
+            "a class with a @property getter should satisfy a protocol \
+             attribute requirement",
+        );
+    }
+
+    /// #380 W2: covers the defensive panic in `lookup_attr_through_mro`
+    /// (lines 234-239) — a property's getter is in the class's own
+    /// property table but was never registered in
+    /// `Environment::functions`. This "declared shape and Environment
+    /// disagree" scenario is unreachable from any real `check`-validated
+    /// program, mirroring `resolve_attr_get`'s own analogous panic test.
+    #[test]
+    #[should_panic(expected = "was not registered as an ordinary function")]
+    fn lookup_attr_through_mro_panics_when_a_property_getter_is_not_registered() {
+        use pycc_hir::PropertyDef;
+        let mut env = crate::Environment::new();
+        env.bind_class(
+            "Ghost".to_string(),
+            HirClassDef {
+                name: "Ghost".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Ghost".to_string()],
+                attrs: vec![],
+                methods: vec![("__init__".to_string(), "Ghost.__init__".to_string())],
+                type_param: None,
+                properties: vec![PropertyDef {
+                    name: "x".to_string(),
+                    getter: "Ghost.x".to_string(),
+                    setter: None,
+                }],
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        );
+        let _ = super::lookup_attr_through_mro(
+            &env,
+            &["Ghost".to_string()],
+            "x",
+        );
     }
 }

@@ -113,7 +113,7 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 | `tuple[A, B]` | fixed heterogeneous | inline struct (stack when non-escaping) |
 | `list[T]` / `set[T]` / `dict[K, V]` | homogeneous, invariant | native vec / swiss-table (insertion-ordered dict) |
 | `class` | nominal | struct; fields fixed at compile time (`__slots__` semantics implicit) |
-| `Protocol` | structural | static dispatch via monomorphization; vtable only for explicit `dyn`-like use |
+| `Protocol` | structural | compile-time-only interface; no runtime vtable or protocol object. **Current state (#380, PR-20):** `class P(Protocol):` with method declarations (`...`/`pass` bodies) and attribute annotations is implemented. Structural conformance is checked at compile time when a concrete class is assigned to, passed to, or returned as a protocol type. `@runtime_checkable` enables compile-time `isinstance` against a protocol (presence-only structural check). Protocol inheritance (`class Q(P):` where `P` is a protocol) is supported. Protocol-typed variables and function parameters use monomorphization — the concrete type is bound for MIR dispatch. `abc.ABC` and `@abstractmethod` are compile-time-only markers. Generic protocols, `issubclass` with protocols, and runtime dispatch are not supported. |
 | unions `A \| B` | tagged | discriminant + payload; niche optimization for `T \| None` |
 | `Callable[...]` | first-class functions | fn pointer / closure struct |
 | `enum.Enum` | per CPython | integer discriminant + const table. **Current state (#379, PR-19):** scoped `class C(Enum):` with integer-literal member values is implemented — members are compile-time singletons (`Ty::Instance(C)`), `C.MEMBER.value` returns the `int` literal, `C.MEMBER.name` returns the member name as a `str`, and `for c in C:` iterates members in declaration order (unrolled before MIR). Non-integer values, duplicate names, multiple bases, generic enums, and method definitions in enum bodies are rejected with `C0001`. `enum.Enum` module import is not yet supported (bare `Enum` marker only). |
@@ -125,6 +125,24 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 - PEP 695 syntax (`def f[T](x: T) -> T`, `type Alias[T] = ...`) and legacy `TypeVar` both supported; PEP 696 defaults honored. **This bullet describes the v1.0 target model, not current behavior** — see the v0.2 thin-slice paragraph immediately above for what actually ships today.
 - Variance: inferred per PEP 695 rules; containers invariant, as in the typing spec.
 - Code-size control: polymorphic-by-vtable fallback for cold generic code under `--opt-size` (compiler-internal, semantics unchanged).
+
+### Protocols and structural typing (#380, PEP 544)
+
+pycc implements PEP 544 protocols as **compile-time-only structural interfaces**. No runtime protocol object, vtable, or dynamic dispatch machinery is introduced — protocol conformance is checked statically, and protocol-typed values are dispatched via monomorphization (D-006, D-166).
+
+**Protocol definition:** `class P(Protocol):` with method declarations (`...` or `pass` bodies only) and attribute annotations (`x: int`). A protocol method with an implementation body is rejected with `C0001`. A protocol attribute with a default value is rejected with `C0001`. `__init__` is not allowed in a protocol class. Generic protocol classes (`class P[T](Protocol):`) are not supported in v0.3.
+
+**Protocol inheritance:** `class Q(P):` where `P` is a protocol creates a sub-protocol that inherits `P`'s protocol members. A class conforming to `Q` must satisfy both `P`'s and `Q`'s members.
+
+**Structural conformance:** A concrete class `C` conforms to a protocol `P` if every required method (with matching parameter count, parameter types, and return type) and every required attribute (with a compatible type) exists through `C`'s MRO. Non-conformance is reported with `T0046`, identifying the concrete class, the protocol, and the missing or incompatible member.
+
+**Protocol-typed variables and parameters:** When a value is assigned to a protocol-typed variable or passed to a protocol-typed parameter, the concrete (inferred) type is bound in the MIR — the protocol type is a compile-time-only annotation. This enables static dispatch through the concrete class's method table without any runtime vtable.
+
+**`@runtime_checkable` and `isinstance`:** A protocol decorated with `@runtime_checkable` can be used in `isinstance`. The check is evaluated at compile time as a structural conformance check (presence-only — method and attribute type compatibility is verified separately during static assignment/conformance checks). `isinstance` against a non-`@runtime_checkable` protocol is rejected with `C0001`. `@runtime_checkable` on a non-protocol class is rejected with `C0001`.
+
+**`issubclass` with protocols:** `issubclass` involving a protocol as either the source or target is rejected with `C0001` — protocols use structural typing, not nominal inheritance.
+
+**`abc.ABC` and `@abstractmethod`:** `ABC` is a compile-time-only marker base class (like `Enum` and `Protocol`). `@abstractmethod` marks a method as abstract — a concrete subclass that does not override every inherited abstract method is rejected with `C0001`. Instantiating a class with unoverridden abstract methods is rejected with `C0001`. An abstract method's body must be declaration-style (`...` or `pass`).
 
 ## Narrowing & flow typing
 
