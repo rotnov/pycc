@@ -1,0 +1,82 @@
+{
+  "artifact_version": 1,
+  "provenance": {
+    "source": "engine_qualified_visibility_observations",
+    "sanitized": true,
+    "collection_method": "manual_owner_inspection_and_search_surface_capture",
+    "collected_at": "2026-08-14T21:41:21Z",
+    "sanitization_note": "All credentials, API keys, and tokens removed. Only owner-facing engine-qualified visibility observations are retained. No search ranking, visibility, or LLM citation data is fabricated; unavailable fields are marked unknown. This artifact is a template with no observations until real manual captures are appended."
+  },
+  "query_suite": [
+    {
+      "id": "exact-entity-rotnov-pycc",
+      "intent_class": "exact_entity",
+      "kpi_role": "diagnostic",
+      "prompt": "rotnov/pycc",
+      "rationale": "Exact entity diagnostic; measures whether the project surfaces for its own name."
+    },
+    {
+      "id": "named-product-pycc-aot",
+      "intent_class": "named_product",
+      "kpi_role": "product_acquisition",
+      "prompt": "pycc Python AOT compiler",
+      "rationale": "Named product query; measures whether the project surfaces for its branded product description."
+    },
+    {
+      "id": "product-category-python-aot",
+      "intent_class": "product_category",
+      "kpi_role": "product_acquisition",
+      "prompt": "python aot compiler",
+      "rationale": "Product category query; measures category-level discovery."
+    },
+    {
+      "id": "feature-intent-typed-native",
+      "intent_class": "feature_intent",
+      "kpi_role": "product_acquisition",
+      "prompt": "typed Python compiler native binary",
+      "rationale": "Feature intent query; measures discovery for a specific capability."
+    },
+    {
+      "id": "ai-authorship-diagnostic",
+      "intent_class": "authorship_narrative",
+      "kpi_role": "excluded",
+      "prompt": "\"fully AI-created\" \"pycc\"",
+      "rationale": "AI-authorship diagnostic; never counted as a product-acquisition KPI."
+    }
+  ],
+  "surfaces": {
+    "chatgpt_search": {
+      "provider": "openai",
+      "transport": "chatgpt_web_search_surface",
+      "result_window": "first_page_or_answer"
+    },
+    "google_web_search": {
+      "provider": "google",
+      "transport": "google_web_search",
+      "result_window": "first_page"
+    },
+    "bing_web_search": {
+      "provider": "microsoft",
+      "transport": "bing_web_search",
+      "result_window": "first_page"
+    },
+    "perplexity_search": {
+      "provider": "perplexity",
+      "transport": "perplexity_answer_engine",
+      "result_window": "answer_with_citations"
+    },
+    "unknown_web_provider": {
+      "provider": "unknown",
+      "transport": "unidentified_web_search",
+      "result_window": "first_page"
+    }
+  },
+  "observations": [],
+  "latest_projection": {
+    "observation_count": 0,
+    "surfaces_observed": [],
+    "latest_observed_at": null,
+    "pycc_surfaced_any": false,
+    "pycc_cited_any": false
+  }
+}

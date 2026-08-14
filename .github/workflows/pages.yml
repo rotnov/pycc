@@ -23,6 +23,9 @@ on:
       - "scripts/check_github_traffic_observations.py"
       - "scripts/test_check_github_traffic_observations.py"
       - "docs/GITHUB_TRAFFIC_OBSERVATIONS.json"
+      - "scripts/check_engine_visibility_observations.py"
+      - "scripts/test_check_engine_visibility_observations.py"
+      - "docs/ENGINE_VISIBILITY_OBSERVATIONS.json"
       - "docs/SEARCH_VISIBILITY.md"
       - "docs/ROADMAP.md"
       - "scripts/check_package_identity.rb"
@@ -54,6 +57,9 @@ on:
       - "scripts/check_github_traffic_observations.py"
       - "scripts/test_check_github_traffic_observations.py"
       - "docs/GITHUB_TRAFFIC_OBSERVATIONS.json"
+      - "scripts/check_engine_visibility_observations.py"
+      - "scripts/test_check_engine_visibility_observations.py"
+      - "docs/ENGINE_VISIBILITY_OBSERVATIONS.json"
       - "docs/SEARCH_VISIBILITY.md"
       - "docs/ROADMAP.md"
       - "scripts/check_package_identity.rb"
@@ -112,6 +118,8 @@ jobs:
           python3 scripts/test_check_search_console_observations.py
           python3 scripts/check_github_traffic_observations.py
           python3 scripts/test_check_github_traffic_observations.py
+          python3 scripts/check_engine_visibility_observations.py
+          python3 scripts/test_check_engine_visibility_observations.py
           ruby scripts/check_package_identity.rb
           ruby scripts/test_check_package_identity.rb
           ruby scripts/check_indexnow_test_binding.rb
