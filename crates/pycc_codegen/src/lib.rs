@@ -199,6 +199,26 @@ struct UserFunction<'ctx> {
     direct_value: Option<FunctionValue<'ctx>>,
 }
 
+/// #382 (PR-22 Part 2): A pending `finally` target that `return`
+/// statements inside a `try` body must route through before completing.
+/// When a `MirStmt::Return` is emitted and the `finally_stack` is
+/// non-empty, the return value is stored to `ret_slot` (if non-`None`),
+/// the `is_returning` flag is set to `1`, and control branches to
+/// `finally_bb` instead of emitting `ret` directly. After the finally
+/// body runs, the codegen checks `is_returning`: if set, it loads the
+/// return value and emits `ret` (or propagates to an enclosing finally).
+#[derive(Clone)]
+struct FinallyTarget<'ctx> {
+    /// The finally block to branch to instead of emitting `ret`.
+    finally_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    /// Alloca holding the return value (`None` for `Ty::None` / void
+    /// functions, where `build_return(None)` is emitted instead).
+    ret_slot: Option<PointerValue<'ctx>>,
+    /// Alloca i8 flag: `1` = a `return` was intercepted, `0` = normal
+    /// completion (fall-through to finally).
+    is_returning: PointerValue<'ctx>,
+}
+
 #[derive(Clone)]
 struct StorageSlot<'ctx> {
     ptr: PointerValue<'ctx>,
@@ -576,14 +596,8 @@ fn declare_rt_functions<'ctx>(
             "pycc_rt_exception_active",
             context.i8_type().fn_type(&[], false),
         ),
-        exception_value: declare(
-            "pycc_rt_exception_value",
-            ptr_type.fn_type(&[], false),
-        ),
-        exception_clear: declare(
-            "pycc_rt_exception_clear",
-            void_type.fn_type(&[], false),
-        ),
+        exception_value: declare("pycc_rt_exception_value", ptr_type.fn_type(&[], false)),
+        exception_clear: declare("pycc_rt_exception_clear", void_type.fn_type(&[], false)),
         exception_alloc: declare(
             "pycc_rt_exception_alloc",
             ptr_type.fn_type(&[context.i8_type().into(), ptr_type.into()], false),
@@ -598,7 +612,9 @@ fn declare_rt_functions<'ctx>(
         ),
         exception_type_matches: declare(
             "pycc_rt_exception_type_matches",
-            context.i8_type().fn_type(&[ptr_type.into(), context.i8_type().into()], false),
+            context
+                .i8_type()
+                .fn_type(&[ptr_type.into(), context.i8_type().into()], false),
         ),
         exception_print_and_exit: declare(
             "pycc_rt_exception_print_and_exit",
@@ -1685,10 +1701,7 @@ fn emit_expr<'ctx>(
         // comparison. `None` is not a bound variable — it is a constant
         // `i8 0` carrier (D-075), emitted inline exactly like `math.pi`
         // above rather than looked up in `locals`.
-        MirExpr::Name {
-            name,
-            ty: Ty::None,
-        } if name == "None" => {
+        MirExpr::Name { name, ty: Ty::None } if name == "None" => {
             Scalar::Bool(context.i8_type().const_zero())
         }
         MirExpr::Name { name, ty } => {
@@ -3501,6 +3514,23 @@ fn truthy<'ctx>(
         .expect("build_int_compare should not fail comparing two i8 operands")
 }
 
+/// #382 (PR-22 Part 2): If the current block's terminator is an
+/// `unreachable` (placed by `MirStmt::Raise`/`RaiseFrom`/`Reraise`),
+/// erase it so the caller can append an exception check (conditional
+/// branch) in this block. Returns `true` if an `unreachable` was erased
+/// (meaning a raise happened and the exception is active), `false`
+/// otherwise. After erasing, the block has no terminator and the caller
+/// can build its exception-check conditional branch normally.
+fn erase_unreachable_if_present<'ctx>(builder: &inkwell::builder::Builder<'ctx>) -> bool {
+    if let Some(term) = builder.get_insert_block().unwrap().get_terminator() {
+        if term.get_opcode() == inkwell::values::InstructionOpcode::Unreachable {
+            term.erase_from_basic_block();
+            return true;
+        }
+    }
+    false
+}
+
 /// Allocates a local slot in the current function's entry block, which
 /// dominates every branch, loop, and merge that may read it. String slots are
 /// initialized to null so the first emitted decref is a safe no-op. A guarded
@@ -3815,6 +3845,7 @@ fn emit_body<'ctx>(
     locals: &mut HashMap<String, StorageSlot<'ctx>>,
     body: &[MirStmt],
     expected_return_ty: pycc_mir::Ty,
+    finally_stack: &mut Vec<FinallyTarget<'ctx>>,
 ) -> Result<(), String> {
     for stmt in body {
         emit_stmt(
@@ -3826,6 +3857,7 @@ fn emit_body<'ctx>(
             locals,
             stmt,
             expected_return_ty.clone(),
+            finally_stack,
         )?;
         if builder
             .get_insert_block()
@@ -3860,6 +3892,7 @@ fn emit_body_then_branch<'ctx>(
     body: &[MirStmt],
     dest: inkwell::basic_block::BasicBlock<'ctx>,
     expected_return_ty: pycc_mir::Ty,
+    finally_stack: &mut Vec<FinallyTarget<'ctx>>,
 ) -> Result<bool, String> {
     emit_body(
         context,
@@ -3870,6 +3903,7 @@ fn emit_body_then_branch<'ctx>(
         locals,
         body,
         expected_return_ty,
+        finally_stack,
     )?;
     let falls_through = builder
         .get_insert_block()
@@ -4101,7 +4135,12 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         }
         // #382 (PR-22 Part 1): try/except/else/finally — recurse into all
         // nested bodies to collect any bindings introduced within them.
-        MirStmt::Try { body, handlers, orelse, finalbody } => {
+        MirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
             for stmt in body {
                 collect_stmt_bindings(stmt, bindings);
             }
@@ -4560,7 +4599,11 @@ fn compile_to_object_with_observer(
         None,
         "__pycc_saved_exception",
     );
-    saved_exc_global.set_initializer(&context.ptr_type(inkwell::AddressSpace::default()).const_null());
+    saved_exc_global.set_initializer(
+        &context
+            .ptr_type(inkwell::AddressSpace::default())
+            .const_null(),
+    );
     rt.saved_exc = Some(saved_exc_global);
 
     let entry_fn_type = i64_type.fn_type(&[], false);
@@ -4598,14 +4641,17 @@ fn compile_to_object_with_observer(
                     &mut top_level_locals,
                     stmt,
                     pycc_mir::Ty::None,
+                    &mut Vec::new(),
                 )?;
                 // #382: After each top-level statement, check for an active
                 // exception. A `raise` (or a converted runtime failure like
                 // division by zero) sets the global exception state and
-                // branches to a continuation block (no terminator). This
+                // terminates the block with `unreachable`. Erase the
+                // `unreachable` so the exception check can run here. This
                 // check intercepts it at the top level: if an exception is
                 // active, print it and exit. Inside a `try`, the try's own
                 // post-body check intercepts first.
+                erase_unreachable_if_present(&builder);
                 if builder
                     .get_insert_block()
                     .unwrap()
@@ -4626,10 +4672,8 @@ fn compile_to_object_with_observer(
                             "top_has_exc",
                         )
                         .expect("build_int_compare should not fail");
-                    let exc_exit_bb =
-                        context.append_basic_block(entry_fn, "top_exc_exit");
-                    let cont_bb =
-                        context.append_basic_block(entry_fn, "top_exc_cont");
+                    let exc_exit_bb = context.append_basic_block(entry_fn, "top_exc_exit");
+                    let cont_bb = context.append_basic_block(entry_fn, "top_exc_cont");
                     builder
                         .build_conditional_branch(has_exc, exc_exit_bb, cont_bb)
                         .expect("build_conditional_branch should not fail");
@@ -4804,6 +4848,7 @@ fn compile_to_object_with_observer(
                 &mut fn_locals,
                 body,
                 return_ty.clone(),
+                &mut Vec::new(),
             )?;
             // A `None`-returning function falling through its last
             // statement without an explicit `return` is ordinary, legal
@@ -5120,6 +5165,7 @@ fn emit_stmt<'ctx>(
     locals: &mut HashMap<String, StorageSlot<'ctx>>,
     stmt: &MirStmt,
     expected_return_ty: pycc_mir::Ty,
+    finally_stack: &mut Vec<FinallyTarget<'ctx>>,
 ) -> Result<(), String> {
     match stmt {
         MirStmt::ExprStmt(MirExpr::Call { callee, args, .. }) if callee == "print" => {
@@ -5240,6 +5286,7 @@ fn emit_stmt<'ctx>(
                 body,
                 merge_bb,
                 expected_return_ty.clone(),
+                finally_stack,
             )?;
 
             let else_falls_through = if orelse.is_empty() {
@@ -5256,6 +5303,7 @@ fn emit_stmt<'ctx>(
                     orelse,
                     merge_bb,
                     expected_return_ty,
+                    finally_stack,
                 )?
             };
 
@@ -5296,6 +5344,7 @@ fn emit_stmt<'ctx>(
                 body,
                 test_bb,
                 expected_return_ty,
+                finally_stack,
             )?;
 
             builder.position_at_end(after_bb);
@@ -5383,6 +5432,7 @@ fn emit_stmt<'ctx>(
                 locals,
                 body,
                 expected_return_ty,
+                finally_stack,
             )?;
             // `ForRange`'s own inline copy of `emit_body_then_branch`'s
             // terminator-safety guard (see that function's own doc comment
@@ -5508,6 +5558,7 @@ fn emit_stmt<'ctx>(
                 locals,
                 body,
                 expected_return_ty,
+                finally_stack,
             )?;
             // `ForRange`'s own terminator-safety guard, for the identical
             // reason (see that arm's comment): a `Return` inside `body`
@@ -5537,6 +5588,12 @@ fn emit_stmt<'ctx>(
             Ok(())
         }
         MirStmt::Return(value) => {
+            // #382 (PR-22 Part 2): If inside a try-with-finally, route the
+            // return through the finally block instead of emitting `ret`
+            // directly. Store the return value to the finally's ret_slot,
+            // set the is_returning flag, and branch to the finally block.
+            // After the finally body runs, the codegen emits the `ret`.
+            let finally_target = finally_stack.last().cloned();
             match value {
                 Some(expr) => {
                     let scalar =
@@ -5554,9 +5611,18 @@ fn emit_stmt<'ctx>(
                         // intentionally discarded here. Returning it as an
                         // `i8` previously built invalid IR that only the
                         // non-Windows verifier caught (D-029).
-                        builder
-                            .build_return(None)
-                            .expect("build_return should not fail for a None return value");
+                        if let Some(ft) = finally_target {
+                            builder
+                                .build_store(ft.is_returning, context.i8_type().const_int(1, false))
+                                .expect("build_store should not fail for is_returning");
+                            builder.build_unconditional_branch(ft.finally_bb).expect(
+                                "build_unconditional_branch should not fail for finally routing",
+                            );
+                        } else {
+                            builder
+                                .build_return(None)
+                                .expect("build_return should not fail for a None return value");
+                        }
                         return Ok(());
                     }
                     let basic_value: inkwell::values::BasicValueEnum = match scalar {
@@ -5601,9 +5667,25 @@ fn emit_stmt<'ctx>(
                         // `set[T]`-returning one.
                         Scalar::Instance(v) => v.into(),
                     };
-                    builder
-                        .build_return(Some(&basic_value))
-                        .expect("build_return should not fail for a well-formed return value");
+                    if let Some(ft) = finally_target {
+                        // Route through finally: store the return value,
+                        // set the is_returning flag, and branch to finally.
+                        if let Some(slot) = ft.ret_slot {
+                            builder
+                                .build_store(slot, basic_value)
+                                .expect("build_store should not fail for ret_slot");
+                        }
+                        builder
+                            .build_store(ft.is_returning, context.i8_type().const_int(1, false))
+                            .expect("build_store should not fail for is_returning");
+                        builder.build_unconditional_branch(ft.finally_bb).expect(
+                            "build_unconditional_branch should not fail for finally routing",
+                        );
+                    } else {
+                        builder
+                            .build_return(Some(&basic_value))
+                            .expect("build_return should not fail for a well-formed return value");
+                    }
                 }
                 None => {
                     // #380 (PR-20): an abstract method has a `Return(None)`
@@ -5615,14 +5697,37 @@ fn emit_stmt<'ctx>(
                     // is well-typed; the abstract method is never called,
                     // so the value doesn't matter.
                     if expected_return_ty == pycc_mir::Ty::None {
-                        builder
-                            .build_return(None)
-                            .expect("build_return should not fail for a bare `return`");
+                        if let Some(ft) = finally_target {
+                            builder
+                                .build_store(ft.is_returning, context.i8_type().const_int(1, false))
+                                .expect("build_store should not fail for is_returning");
+                            builder.build_unconditional_branch(ft.finally_bb).expect(
+                                "build_unconditional_branch should not fail for finally routing",
+                            );
+                        } else {
+                            builder
+                                .build_return(None)
+                                .expect("build_return should not fail for a bare `return`");
+                        }
                     } else {
                         let default = default_value_for_type(context, expected_return_ty.clone());
-                        builder
-                            .build_return(Some(&default))
-                            .expect("build_return should not fail for a default return value");
+                        if let Some(ft) = finally_target {
+                            if let Some(slot) = ft.ret_slot {
+                                builder
+                                    .build_store(slot, default)
+                                    .expect("build_store should not fail for ret_slot");
+                            }
+                            builder
+                                .build_store(ft.is_returning, context.i8_type().const_int(1, false))
+                                .expect("build_store should not fail for is_returning");
+                            builder.build_unconditional_branch(ft.finally_bb).expect(
+                                "build_unconditional_branch should not fail for finally routing",
+                            );
+                        } else {
+                            builder
+                                .build_return(Some(&default))
+                                .expect("build_return should not fail for a default return value");
+                        }
                     }
                 }
             }
@@ -5811,6 +5916,7 @@ fn emit_stmt<'ctx>(
                 locals,
                 body,
                 expected_return_ty,
+                finally_stack,
             )?;
             // `ForList`'s own terminator-safety guard, for the identical
             // reason (see that arm's comment): a `Return` inside `body`
@@ -5931,6 +6037,7 @@ fn emit_stmt<'ctx>(
                 locals,
                 body,
                 expected_return_ty,
+                finally_stack,
             )?;
             // `ForList`'s own terminator-safety guard, for the identical
             // reason (see that arm's comment): a `Return` inside `body`
@@ -6191,8 +6298,8 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_conditional_branch(cont, body_bb, after_bb)
                         .expect(
-                            "build_conditional_branch should not fail for a well-formed i1 condition",
-                        );
+                        "build_conditional_branch should not fail for a well-formed i1 condition",
+                    );
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
@@ -6257,8 +6364,8 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_conditional_branch(cont, body_bb, after_bb)
                         .expect(
-                            "build_conditional_branch should not fail for a well-formed i1 condition",
-                        );
+                        "build_conditional_branch should not fail for a well-formed i1 condition",
+                    );
 
                     builder.position_at_end(body_bb);
                     let key_ptr = builder
@@ -6316,8 +6423,8 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_conditional_branch(cont, body_bb, after_bb)
                         .expect(
-                            "build_conditional_branch should not fail for a well-formed i1 condition",
-                        );
+                        "build_conditional_branch should not fail for a well-formed i1 condition",
+                    );
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
@@ -6601,8 +6708,8 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_conditional_branch(cont, body_bb, after_bb)
                         .expect(
-                            "build_conditional_branch should not fail for a well-formed i1 condition",
-                        );
+                        "build_conditional_branch should not fail for a well-formed i1 condition",
+                    );
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
@@ -6657,8 +6764,8 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_conditional_branch(cont, body_bb, after_bb)
                         .expect(
-                            "build_conditional_branch should not fail for a well-formed i1 condition",
-                        );
+                        "build_conditional_branch should not fail for a well-formed i1 condition",
+                    );
 
                     builder.position_at_end(body_bb);
                     let key_ptr = builder
@@ -6715,8 +6822,8 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_conditional_branch(cont, body_bb, after_bb)
                         .expect(
-                            "build_conditional_branch should not fail for a well-formed i1 condition",
-                        );
+                        "build_conditional_branch should not fail for a well-formed i1 condition",
+                    );
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
@@ -6980,8 +7087,8 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_conditional_branch(cont, body_bb, after_bb)
                         .expect(
-                            "build_conditional_branch should not fail for a well-formed i1 condition",
-                        );
+                        "build_conditional_branch should not fail for a well-formed i1 condition",
+                    );
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
@@ -7042,8 +7149,8 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_conditional_branch(cont, body_bb, after_bb)
                         .expect(
-                            "build_conditional_branch should not fail for a well-formed i1 condition",
-                        );
+                        "build_conditional_branch should not fail for a well-formed i1 condition",
+                    );
 
                     builder.position_at_end(body_bb);
                     let key_ptr = builder
@@ -7100,8 +7207,8 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_conditional_branch(cont, body_bb, after_bb)
                         .expect(
-                            "build_conditional_branch should not fail for a well-formed i1 condition",
-                        );
+                        "build_conditional_branch should not fail for a well-formed i1 condition",
+                    );
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
@@ -7241,6 +7348,7 @@ fn emit_stmt<'ctx>(
                     locals,
                     stmt,
                     expected_return_ty.clone(),
+                    finally_stack,
                 )?;
             }
             Ok(())
@@ -7254,8 +7362,19 @@ fn emit_stmt<'ctx>(
         // just sets the state and transfers control to a fresh block, and
         // the nearest enclosing check point (try post-body or top-level
         // post-statement) intercepts it.
-        MirStmt::Raise { exc_type_tag, message } => {
-            let msg_scalar = emit_expr(context, builder, module, rt, user_functions, locals, message);
+        MirStmt::Raise {
+            exc_type_tag,
+            message,
+        } => {
+            let msg_scalar = emit_expr(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                message,
+            );
             let msg_ptr = match msg_scalar {
                 Scalar::Str(p) => p,
                 _ => {
@@ -7264,7 +7383,11 @@ fn emit_stmt<'ctx>(
             };
             let tag_val = context.i8_type().const_int(*exc_type_tag as u64, false);
             let exc_obj = builder
-                .build_call(rt.exception_alloc, &[tag_val.into(), msg_ptr.into()], "exc_alloc")
+                .build_call(
+                    rt.exception_alloc,
+                    &[tag_val.into(), msg_ptr.into()],
+                    "exc_alloc",
+                )
                 .expect("build_call should not fail for exception_alloc")
                 .try_as_basic_value()
                 .expect_basic("pycc_rt_exception_alloc returns a pointer")
@@ -7272,26 +7395,49 @@ fn emit_stmt<'ctx>(
             builder
                 .build_call(rt.exception_raise, &[exc_obj.into()], "")
                 .expect("build_call should not fail for exception_raise");
-            // Branch to a fresh continuation block (no terminator). The
-            // enclosing check point will detect the active exception.
-            let function = builder.get_insert_block().unwrap().get_parent().unwrap();
-            let cont_bb = context.append_basic_block(function, "raise_cont");
+            // Terminate the block with `unreachable` — the exception is
+            // already set in the global state, and the enclosing try's
+            // post-body check (or the function's post-call check) will
+            // detect it. Do NOT position at a new block after the
+            // unreachable: the caller checks `get_terminator().is_none()`
+            // to decide if the block falls through, and an unreachable
+            // block correctly does not fall through.
             builder
-                .build_unconditional_branch(cont_bb)
-                .expect("build_unconditional_branch should not fail");
-            builder.position_at_end(cont_bb);
+                .build_unreachable()
+                .expect("build_unreachable should not fail after raise");
             Ok(())
         }
         // #382: `raise ExceptionType("msg") from CauseType("cause")` —
         // allocate both exception and cause objects, then raise with cause.
-        // Same continuation-block approach as `Raise`.
-        MirStmt::RaiseFrom { exc_type_tag, message, cause_type_tag, cause_message } => {
-            let msg_scalar = emit_expr(context, builder, module, rt, user_functions, locals, message);
+        // Same `unreachable` approach as `Raise`.
+        MirStmt::RaiseFrom {
+            exc_type_tag,
+            message,
+            cause_type_tag,
+            cause_message,
+        } => {
+            let msg_scalar = emit_expr(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                message,
+            );
             let msg_ptr = match msg_scalar {
                 Scalar::Str(p) => p,
                 _ => return Err("raise message must be a string".to_string()),
             };
-            let cause_msg_scalar = emit_expr(context, builder, module, rt, user_functions, locals, cause_message);
+            let cause_msg_scalar = emit_expr(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                cause_message,
+            );
             let cause_msg_ptr = match cause_msg_scalar {
                 Scalar::Str(p) => p,
                 _ => return Err("raise cause message must be a string".to_string()),
@@ -7299,33 +7445,44 @@ fn emit_stmt<'ctx>(
             let exc_tag = context.i8_type().const_int(*exc_type_tag as u64, false);
             let cause_tag = context.i8_type().const_int(*cause_type_tag as u64, false);
             let exc_obj = builder
-                .build_call(rt.exception_alloc, &[exc_tag.into(), msg_ptr.into()], "exc_alloc")
+                .build_call(
+                    rt.exception_alloc,
+                    &[exc_tag.into(), msg_ptr.into()],
+                    "exc_alloc",
+                )
                 .expect("build_call should not fail for exception_alloc")
                 .try_as_basic_value()
                 .expect_basic("pycc_rt_exception_alloc returns a pointer")
                 .into_pointer_value();
             let cause_obj = builder
-                .build_call(rt.exception_alloc, &[cause_tag.into(), cause_msg_ptr.into()], "cause_alloc")
+                .build_call(
+                    rt.exception_alloc,
+                    &[cause_tag.into(), cause_msg_ptr.into()],
+                    "cause_alloc",
+                )
                 .expect("build_call should not fail for exception_alloc")
                 .try_as_basic_value()
                 .expect_basic("pycc_rt_exception_alloc returns a pointer")
                 .into_pointer_value();
             builder
-                .build_call(rt.exception_raise_with_cause, &[exc_obj.into(), cause_obj.into()], "")
+                .build_call(
+                    rt.exception_raise_with_cause,
+                    &[exc_obj.into(), cause_obj.into()],
+                    "",
+                )
                 .expect("build_call should not fail for exception_raise_with_cause");
-            // Branch to a fresh continuation block (no terminator).
-            let function = builder.get_insert_block().unwrap().get_parent().unwrap();
-            let cont_bb = context.append_basic_block(function, "raisefrom_cont");
+            // Terminate the block with `unreachable` — the exception is
+            // already set in the global state. See `Raise`'s comment for
+            // the rationale (same approach).
             builder
-                .build_unconditional_branch(cont_bb)
-                .expect("build_unconditional_branch should not fail");
-            builder.position_at_end(cont_bb);
+                .build_unreachable()
+                .expect("build_unreachable should not fail after raise_from");
             Ok(())
         }
         // #382: Bare `raise` (re-raise) — load the saved exception value
-        // from the global, re-raise it, then branch to a fresh continuation
-        // block (no terminator). The enclosing check point will detect the
-        // active exception and handle it.
+        // from the global, re-raise it, then terminate the block with
+        // `unreachable`. The enclosing check point will detect the active
+        // exception and handle it.
         MirStmt::Reraise => {
             // Load the saved exception value and re-raise it.
             // `saved_exc` is always set by `compile_to_object_with_observer`
@@ -7344,13 +7501,12 @@ fn emit_stmt<'ctx>(
             builder
                 .build_call(rt.exception_raise, &[exc_val.into()], "")
                 .expect("build_call should not fail for exception_raise");
-            // Branch to a fresh continuation block (no terminator).
-            let function = builder.get_insert_block().unwrap().get_parent().unwrap();
-            let cont_bb = context.append_basic_block(function, "reraise_cont");
+            // Terminate the block with `unreachable` — the exception is
+            // already set in the global state. See `Raise`'s comment for
+            // the rationale (same approach).
             builder
-                .build_unconditional_branch(cont_bb)
-                .expect("build_unconditional_branch should not fail");
-            builder.position_at_end(cont_bb);
+                .build_unreachable()
+                .expect("build_unreachable should not fail after reraise");
             Ok(())
         }
         // #382 (PR-22 Part 1): `try`/`except`/`else`/`finally` codegen.
@@ -7363,7 +7519,12 @@ fn emit_stmt<'ctx>(
         // body runs only if no exception was raised. The `finally` body
         // always runs (implemented as a shared merge block that both the
         // normal-completion and exception paths branch to before exiting).
-        MirStmt::Try { body, handlers, orelse, finalbody } => {
+        MirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
             let function = builder.get_insert_block().unwrap().get_parent().unwrap();
 
             // Allocate blocks for the try body, handler dispatch, else,
@@ -7373,6 +7534,48 @@ fn emit_stmt<'ctx>(
             let else_bb = context.append_basic_block(function, "try_else");
             let finally_bb = context.append_basic_block(function, "try_finally");
             let after_bb = context.append_basic_block(function, "try_after");
+
+            // #382 (PR-22 Part 2): If there is a finally body, set up a
+            // `FinallyTarget` so `return` statements inside the try body,
+            // handlers, and else body route through the finally block
+            // before completing. The `is_returning` flag distinguishes a
+            // return (which should emit `ret` after finally) from normal
+            // completion (which branches to `after_bb`).
+            let has_finally = !finalbody.is_empty();
+            // Saved fields from the FinallyTarget, needed after the finally
+            // body runs (the target itself is popped before emitting the
+            // finally body to prevent self-interception).
+            let saved_is_returning: Option<PointerValue<'ctx>>;
+            let saved_ret_slot: Option<PointerValue<'ctx>>;
+            if has_finally {
+                let is_returning = builder
+                    .build_alloca(context.i8_type(), "try_is_returning")
+                    .expect("build_alloca should not fail for is_returning flag");
+                builder
+                    .build_store(is_returning, context.i8_type().const_zero())
+                    .expect("build_store should not fail for is_returning init");
+                let ret_slot = if expected_return_ty == pycc_mir::Ty::None {
+                    None
+                } else {
+                    let slot = builder
+                        .build_alloca(
+                            ty_to_basic_type(context, expected_return_ty.clone()),
+                            "try_ret_slot",
+                        )
+                        .expect("build_alloca should not fail for ret_slot");
+                    Some(slot)
+                };
+                saved_is_returning = Some(is_returning);
+                saved_ret_slot = ret_slot;
+                finally_stack.push(FinallyTarget {
+                    finally_bb,
+                    ret_slot,
+                    is_returning,
+                });
+            } else {
+                saved_is_returning = None;
+                saved_ret_slot = None;
+            }
 
             // Enter the try body.
             builder
@@ -7391,7 +7594,11 @@ fn emit_stmt<'ctx>(
                 locals,
                 body,
                 expected_return_ty.clone(),
+                finally_stack,
             )?;
+            // #382: A `raise` inside the body terminates the block with
+            // `unreachable`. Erase it so the exception check can run here.
+            erase_unreachable_if_present(builder);
             let body_falls_through = builder
                 .get_insert_block()
                 .unwrap()
@@ -7439,8 +7646,10 @@ fn emit_stmt<'ctx>(
                 let mut dispatch_bbs: Vec<inkwell::basic_block::BasicBlock> = Vec::new();
                 let mut handler_body_bbs: Vec<inkwell::basic_block::BasicBlock> = Vec::new();
                 for i in 0..handlers.len() {
-                    dispatch_bbs.push(context.append_basic_block(function, &format!("try_dispatch_{i}")));
-                    handler_body_bbs.push(context.append_basic_block(function, &format!("try_handler_{i}")));
+                    dispatch_bbs
+                        .push(context.append_basic_block(function, &format!("try_dispatch_{i}")));
+                    handler_body_bbs
+                        .push(context.append_basic_block(function, &format!("try_handler_{i}")));
                 }
                 let no_match_bb = context.append_basic_block(function, "try_no_match");
 
@@ -7517,6 +7726,31 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_call(rt.exception_clear, &[], "")
                         .expect("build_call should not fail for exception_clear");
+                    // #382: If the handler has an `as` binding (e.g.
+                    // `except ValueError as e:`), allocate a local slot
+                    // for it and store the exception value there so the
+                    // handler body can reference `e`. The slot is a
+                    // pointer-typed alloca (all exception objects are
+                    // pointer-represented, like class instances).
+                    if let Some(binding_name) = &handler.binding_name {
+                        let exc_slot = builder
+                            .build_alloca(
+                                context.ptr_type(inkwell::AddressSpace::default()),
+                                binding_name,
+                            )
+                            .expect("build_alloca should not fail for an exception binding slot");
+                        builder
+                            .build_store(exc_slot, exc_val)
+                            .expect("build_store should not fail for an exception binding");
+                        locals.insert(
+                            binding_name.clone(),
+                            StorageSlot {
+                                ptr: exc_slot,
+                                ty: pycc_mir::Ty::Instance(Box::new("Exception".to_string())),
+                                initialized: None,
+                            },
+                        );
+                    }
                     emit_body(
                         context,
                         builder,
@@ -7526,7 +7760,12 @@ fn emit_stmt<'ctx>(
                         locals,
                         &handler.body,
                         expected_return_ty.clone(),
+                        finally_stack,
                     )?;
+                    // #382: A `raise`/`reraise` inside the handler body
+                    // terminates the block with `unreachable`. Erase it so
+                    // the handler-completion check can run here.
+                    erase_unreachable_if_present(builder);
                     let handler_falls_through = builder
                         .get_insert_block()
                         .unwrap()
@@ -7559,7 +7798,12 @@ fn emit_stmt<'ctx>(
                     locals,
                     orelse,
                     expected_return_ty.clone(),
+                    finally_stack,
                 )?;
+                // #382: A `raise` inside the else body terminates the
+                // block with `unreachable`. Erase it so the
+                // else-completion check can run here.
+                erase_unreachable_if_present(builder);
                 let else_falls_through = builder
                     .get_insert_block()
                     .unwrap()
@@ -7572,16 +7816,21 @@ fn emit_stmt<'ctx>(
                 }
             }
 
-            // Finally body: always runs. After finally, check if an
-            // exception is still active (re-raised or never caught) and
-            // propagate, or continue normally.
+            // Pop the FinallyTarget before emitting the finally body —
+            // a `return` inside the finally body should NOT be intercepted
+            // by this same finally (it would loop).
+            if has_finally {
+                finally_stack.pop();
+            }
+
+            // Finally body: always runs. After finally, check if a return
+            // was intercepted (is_returning flag) or branch to after_bb
+            // for normal completion. The exception state is global and
+            // will be checked by the next statement's codegen.
             builder.position_at_end(finally_bb);
             if finalbody.is_empty() {
-                // No finally body — just check for active exception.
+                // No finally body — just check is_returning / branch.
             } else {
-                // Save whether an exception was active before finally, so
-                // we can re-raise it after the finally body runs (simplified:
-                // we just check after the finally body).
                 emit_body(
                     context,
                     builder,
@@ -7591,47 +7840,116 @@ fn emit_stmt<'ctx>(
                     locals,
                     finalbody,
                     expected_return_ty.clone(),
+                    finally_stack,
                 )?;
             }
+            // #382: A `raise` inside the finally body terminates the
+            // block with `unreachable`. Erase it so the
+            // finally-completion check can run here.
+            erase_unreachable_if_present(builder);
             let finally_falls_through = builder
                 .get_insert_block()
                 .unwrap()
                 .get_terminator()
                 .is_none();
             if finally_falls_through {
-                // Check if an exception is still active after finally.
-                let active = builder
-                    .build_call(rt.exception_active, &[], "finally_exc_active")
-                    .expect("build_call should not fail for exception_active")
-                    .try_as_basic_value()
-                    .expect_basic("pycc_rt_exception_active returns i8")
-                    .into_int_value();
-                let has_exc = builder
-                    .build_int_compare(
-                        inkwell::IntPredicate::NE,
-                        active,
-                        context.i8_type().const_zero(),
-                        "finally_has_exc",
-                    )
-                    .expect("build_int_compare should not fail");
-                let exc_exit_bb = context.append_basic_block(function, "try_exc_exit");
-                builder
-                    .build_conditional_branch(has_exc, exc_exit_bb, after_bb)
-                    .expect("build_conditional_branch should not fail");
-                // Exception exit: print and exit (uncaught after try).
-                builder.position_at_end(exc_exit_bb);
-                let exc_val = builder
-                    .build_call(rt.exception_value, &[], "try_exit_exc_val")
-                    .expect("build_call should not fail for exception_value")
-                    .try_as_basic_value()
-                    .expect_basic("pycc_rt_exception_value returns a pointer")
-                    .into_pointer_value();
-                builder
-                    .build_call(rt.exception_print_and_exit, &[exc_val.into()], "")
-                    .expect("build_call should not fail for exception_print_and_exit");
-                builder
-                    .build_unreachable()
-                    .expect("build_unreachable should terminate a noreturn block");
+                if has_finally {
+                    // Check if a return was intercepted: if so, load the
+                    // return value and emit `ret` (or propagate to an
+                    // enclosing finally). Otherwise, branch to after_bb.
+                    let is_returning = saved_is_returning.unwrap();
+                    let ret_slot = saved_ret_slot;
+                    let flag_val = builder
+                        .build_load(context.i8_type(), is_returning, "finally_ret_flag")
+                        .expect("build_load should not fail for is_returning flag")
+                        .into_int_value();
+                    let is_ret = builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            flag_val,
+                            context.i8_type().const_zero(),
+                            "finally_is_ret",
+                        )
+                        .expect("build_int_compare should not fail");
+                    let ret_bb = context.append_basic_block(function, "try_finally_ret");
+                    builder
+                        .build_conditional_branch(is_ret, ret_bb, after_bb)
+                        .expect("build_conditional_branch should not fail");
+                    // Return block: load the saved return value and emit
+                    // `ret`, or propagate to an enclosing finally.
+                    builder.position_at_end(ret_bb);
+                    if let Some(slot) = ret_slot {
+                        let ret_val = builder
+                            .build_load(
+                                ty_to_basic_type(context, expected_return_ty.clone()),
+                                slot,
+                                "finally_ret_val",
+                            )
+                            .expect("build_load should not fail for ret_slot");
+                        if let Some(outer) = finally_stack.last_mut() {
+                            // Propagate to the enclosing finally: store the
+                            // return value to the outer's ret_slot, set its
+                            // is_returning flag, and branch to its finally_bb.
+                            if let Some(outer_slot) = outer.ret_slot {
+                                builder
+                                    .build_store(outer_slot, ret_val)
+                                    .expect("build_store should not fail for outer ret_slot");
+                            }
+                            builder
+                                .build_store(
+                                    outer.is_returning,
+                                    context.i8_type().const_int(1, false),
+                                )
+                                .expect("build_store should not fail for outer is_returning");
+                            builder
+                                .build_unconditional_branch(outer.finally_bb)
+                                .expect("build_unconditional_branch should not fail");
+                        } else {
+                            builder
+                                .build_return(Some(&ret_val))
+                                .expect("build_return should not fail for a finally-routed return");
+                        }
+                    } else {
+                        // Void function (Ty::None) or top-level code (main
+                        // returns i64). `ret_slot` is None because
+                        // `expected_return_ty` is `Ty::None`. For a void
+                        // function, emit `ret void`. For top-level `main`
+                        // (which returns i64), this block is dead code (no
+                        // `return` is allowed at top level), so emit
+                        // `unreachable` to satisfy the verifier.
+                        if let Some(outer) = finally_stack.last_mut() {
+                            builder
+                                .build_store(
+                                    outer.is_returning,
+                                    context.i8_type().const_int(1, false),
+                                )
+                                .expect("build_store should not fail for outer is_returning");
+                            builder
+                                .build_unconditional_branch(outer.finally_bb)
+                                .expect("build_unconditional_branch should not fail");
+                        } else if function.get_type().get_return_type().is_none() {
+                            // LLVM void function — emit `ret void`.
+                            builder.build_return(None).expect(
+                                "build_return should not fail for a finally-routed void return",
+                            );
+                        } else {
+                            // Non-void LLVM function (e.g. `main` returns
+                            // i64) with no `ret_slot` — dead code (no
+                            // `return` was intercepted). Emit
+                            // `unreachable` to satisfy the verifier.
+                            builder
+                                .build_unreachable()
+                                .expect("build_unreachable should not fail for dead ret_bb");
+                        }
+                    }
+                } else {
+                    // No finally body — branch to after_bb unconditionally.
+                    // The exception state is global and will be checked by
+                    // the next statement's codegen.
+                    builder
+                        .build_unconditional_branch(after_bb)
+                        .expect("build_unconditional_branch should not fail");
+                }
             }
 
             builder.position_at_end(after_bb);
@@ -18039,10 +18357,7 @@ mod tests {
             &context,
             pycc_mir::Ty::Instance(Box::new("Foo".to_string())),
         );
-        let _ = default_value_for_type(
-            &context,
-            pycc_mir::Ty::Protocol(Box::new("P".to_string())),
-        );
+        let _ = default_value_for_type(&context, pycc_mir::Ty::Protocol(Box::new("P".to_string())));
         let _ = default_value_for_type(
             &context,
             pycc_mir::Ty::Tuple(Box::new(vec![pycc_mir::Ty::Int, pycc_mir::Ty::Str])),
@@ -18059,7 +18374,10 @@ mod tests {
             items: vec![
                 MirItem::Function {
                     name: "Animal.sound".to_string(),
-                    params: vec![("self".to_string(), Ty::Instance(Box::new("Animal".to_string())))],
+                    params: vec![(
+                        "self".to_string(),
+                        Ty::Instance(Box::new("Animal".to_string())),
+                    )],
                     return_ty: Ty::Str,
                     body: vec![MirStmt::Return(None)],
                 },
@@ -18073,24 +18391,24 @@ mod tests {
             class_defs: vec![(
                 "Animal".to_string(),
                 pycc_mir::HirClassDef {
-                name: "Animal".to_string(),
-                bases: Vec::new(),
-                mro: vec!["Animal".to_string()],
-                attrs: Vec::new(),
-                methods: vec![("sound".to_string(), "Animal.sound".to_string())],
-                type_param: None,
-                properties: Vec::new(),
-                static_methods: Vec::new(),
-                class_methods: Vec::new(),
-                enum_members: Vec::new(),
-                is_dataclass: false,
-                dataclass_fields: Vec::new(),
-                is_protocol: false,
-                runtime_checkable: false,
-                protocol_members: Vec::new(),
-                abstract_methods: vec!["sound".to_string()],
-                is_abstract: true,
-            },
+                    name: "Animal".to_string(),
+                    bases: Vec::new(),
+                    mro: vec!["Animal".to_string()],
+                    attrs: Vec::new(),
+                    methods: vec![("sound".to_string(), "Animal.sound".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
+                    enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: vec!["sound".to_string()],
+                    is_abstract: true,
+                },
             )],
         };
         let dir = tempfile_dir("abstract_default_ret");
@@ -18195,24 +18513,23 @@ mod tests {
     fn bare_except_codegen_builds_and_runs() {
         // Tests the bare `except:` path (exc_type_tag = None) in codegen.
         let mir = MirModule {
-            items: vec![
-                MirItem::TopLevelStmt(MirStmt::Try {
-                    body: vec![MirStmt::Raise {
-                        exc_type_tag: 1, // ValueError
-                        message: MirExpr::StringLiteral("test".to_string()),
-                    }],
-                    handlers: vec![MirExceptHandler {
-                        exc_type_tag: None, // bare except
-                        body: vec![MirStmt::ExprStmt(MirExpr::Call {
-                            callee: "print".to_string(),
-                            args: vec![MirExpr::StringLiteral("caught".to_string())],
-                            ty: Ty::None,
-                        })],
-                    }],
-                    orelse: Vec::new(),
-                    finalbody: Vec::new(),
-                }),
-            ],
+            items: vec![MirItem::TopLevelStmt(MirStmt::Try {
+                body: vec![MirStmt::Raise {
+                    exc_type_tag: 1, // ValueError
+                    message: MirExpr::StringLiteral("test".to_string()),
+                }],
+                handlers: vec![MirExceptHandler {
+                    exc_type_tag: None, // bare except
+                    binding_name: None,
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::StringLiteral("caught".to_string())],
+                        ty: Ty::None,
+                    })],
+                }],
+                orelse: Vec::new(),
+                finalbody: Vec::new(),
+            })],
             class_defs: Vec::new(),
         };
         let dir = tempfile_dir("bare_except_codegen");
@@ -18239,7 +18556,10 @@ mod tests {
         let dir = tempfile_dir("raise_non_str");
         let obj_path = dir.join("raise_non_str.o");
         let result = compile_to_object(&mir, &obj_path, None, false);
-        assert!(result.is_err(), "codegen should fail for non-string raise message");
+        assert!(
+            result.is_err(),
+            "codegen should fail for non-string raise message"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -18258,7 +18578,10 @@ mod tests {
         let dir = tempfile_dir("raise_from_non_str");
         let obj_path = dir.join("raise_from_non_str.o");
         let result = compile_to_object(&mir, &obj_path, None, false);
-        assert!(result.is_err(), "codegen should fail for non-string raise message");
+        assert!(
+            result.is_err(),
+            "codegen should fail for non-string raise message"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -18277,7 +18600,10 @@ mod tests {
         let dir = tempfile_dir("raise_from_non_str_cause");
         let obj_path = dir.join("raise_from_non_str_cause.o");
         let result = compile_to_object(&mir, &obj_path, None, false);
-        assert!(result.is_err(), "codegen should fail for non-string cause message");
+        assert!(
+            result.is_err(),
+            "codegen should fail for non-string cause message"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -18293,6 +18619,7 @@ mod tests {
                 body: vec![call_user_fn("nonexistent_in_try_body")],
                 handlers: vec![MirExceptHandler {
                     exc_type_tag: Some(1),
+                    binding_name: None,
                     body: vec![call_print(99)],
                 }],
                 orelse: Vec::new(),
@@ -18321,6 +18648,7 @@ mod tests {
                 body: vec![call_print(1)],
                 handlers: vec![MirExceptHandler {
                     exc_type_tag: Some(1),
+                    binding_name: None,
                     body: vec![call_user_fn("nonexistent_in_handler")],
                 }],
                 orelse: Vec::new(),
@@ -18349,6 +18677,7 @@ mod tests {
                 body: vec![call_print(1)],
                 handlers: vec![MirExceptHandler {
                     exc_type_tag: Some(1),
+                    binding_name: None,
                     body: vec![call_print(99)],
                 }],
                 orelse: vec![call_user_fn("nonexistent_in_else")],
@@ -18377,6 +18706,7 @@ mod tests {
                 body: vec![call_print(1)],
                 handlers: vec![MirExceptHandler {
                     exc_type_tag: Some(1),
+                    binding_name: None,
                     body: vec![call_print(99)],
                 }],
                 orelse: Vec::new(),
@@ -18417,6 +18747,7 @@ mod tests {
                     body: vec![return_int(1)],
                     handlers: vec![MirExceptHandler {
                         exc_type_tag: Some(1),
+                        binding_name: None,
                         body: vec![call_print(99)],
                     }],
                     orelse: Vec::new(),
@@ -18446,6 +18777,7 @@ mod tests {
                     body: vec![call_print(1)],
                     handlers: vec![MirExceptHandler {
                         exc_type_tag: Some(1),
+                        binding_name: None,
                         body: vec![return_int(2)],
                     }],
                     orelse: Vec::new(),
@@ -18475,6 +18807,7 @@ mod tests {
                     body: vec![call_print(1)],
                     handlers: vec![MirExceptHandler {
                         exc_type_tag: Some(1),
+                        binding_name: None,
                         body: vec![call_print(99)],
                     }],
                     orelse: vec![return_int(3)],
@@ -18504,6 +18837,7 @@ mod tests {
                     body: vec![call_print(1)],
                     handlers: vec![MirExceptHandler {
                         exc_type_tag: Some(1),
+                        binding_name: None,
                         body: vec![call_print(99)],
                     }],
                     orelse: Vec::new(),
@@ -18527,26 +18861,25 @@ mod tests {
         // both message and cause are string literals, so the `Scalar::Str(p)`
         // arms succeed and the full alloc/raise-with-cause sequence runs.
         let mir = MirModule {
-            items: vec![
-                MirItem::TopLevelStmt(MirStmt::Try {
-                    body: vec![MirStmt::RaiseFrom {
-                        exc_type_tag: 1, // ValueError
-                        message: MirExpr::StringLiteral("bad".to_string()),
-                        cause_type_tag: 2, // TypeError
-                        cause_message: MirExpr::StringLiteral("cause".to_string()),
-                    }],
-                    handlers: vec![MirExceptHandler {
-                        exc_type_tag: Some(1),
-                        body: vec![MirStmt::ExprStmt(MirExpr::Call {
-                            callee: "print".to_string(),
-                            args: vec![MirExpr::StringLiteral("caught".to_string())],
-                            ty: Ty::None,
-                        })],
-                    }],
-                    orelse: Vec::new(),
-                    finalbody: Vec::new(),
-                }),
-            ],
+            items: vec![MirItem::TopLevelStmt(MirStmt::Try {
+                body: vec![MirStmt::RaiseFrom {
+                    exc_type_tag: 1, // ValueError
+                    message: MirExpr::StringLiteral("bad".to_string()),
+                    cause_type_tag: 2, // TypeError
+                    cause_message: MirExpr::StringLiteral("cause".to_string()),
+                }],
+                handlers: vec![MirExceptHandler {
+                    exc_type_tag: Some(1),
+                    binding_name: None,
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::StringLiteral("caught".to_string())],
+                        ty: Ty::None,
+                    })],
+                }],
+                orelse: Vec::new(),
+                finalbody: Vec::new(),
+            })],
             class_defs: Vec::new(),
         };
         let dir = tempfile_dir("raise_from_codegen");
@@ -18566,20 +18899,19 @@ mod tests {
         // saved exception global and re-raises it.  The reraise is inside a
         // handler body, so `saved_exc` is set by the handler prologue.
         let mir = MirModule {
-            items: vec![
-                MirItem::TopLevelStmt(MirStmt::Try {
-                    body: vec![MirStmt::Raise {
-                        exc_type_tag: 1,
-                        message: MirExpr::StringLiteral("orig".to_string()),
-                    }],
-                    handlers: vec![MirExceptHandler {
-                        exc_type_tag: Some(1),
-                        body: vec![MirStmt::Reraise],
-                    }],
-                    orelse: Vec::new(),
-                    finalbody: Vec::new(),
-                }),
-            ],
+            items: vec![MirItem::TopLevelStmt(MirStmt::Try {
+                body: vec![MirStmt::Raise {
+                    exc_type_tag: 1,
+                    message: MirExpr::StringLiteral("orig".to_string()),
+                }],
+                handlers: vec![MirExceptHandler {
+                    exc_type_tag: Some(1),
+                    binding_name: None,
+                    body: vec![MirStmt::Reraise],
+                }],
+                orelse: Vec::new(),
+                finalbody: Vec::new(),
+            })],
             class_defs: Vec::new(),
         };
         let dir = tempfile_dir("reraise_codegen");
@@ -18588,7 +18920,10 @@ mod tests {
         let bin_path = dir.join("reraise");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
-        assert!(!output.status.success(), "reraise should propagate as non-zero exit");
+        assert!(
+            !output.status.success(),
+            "reraise should propagate as non-zero exit"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -18596,23 +18931,21 @@ mod tests {
     fn try_with_no_handlers_branches_to_finally() {
         // Exercises the `handlers.is_empty()` branch (lines 7423-7428):
         // a try with no handlers branches directly to finally, where the
-    // exception remains active and propagates after the finally body.
+        // exception remains active and propagates after the finally body.
         let mir = MirModule {
-            items: vec![
-                MirItem::TopLevelStmt(MirStmt::Try {
-                    body: vec![MirStmt::Raise {
-                        exc_type_tag: 1,
-                        message: MirExpr::StringLiteral("uncaught".to_string()),
-                    }],
-                    handlers: Vec::new(),
-                    orelse: Vec::new(),
-                    finalbody: vec![MirStmt::ExprStmt(MirExpr::Call {
-                        callee: "print".to_string(),
-                        args: vec![MirExpr::StringLiteral("finally".to_string())],
-                        ty: Ty::None,
-                    })],
-                }),
-            ],
+            items: vec![MirItem::TopLevelStmt(MirStmt::Try {
+                body: vec![MirStmt::Raise {
+                    exc_type_tag: 1,
+                    message: MirExpr::StringLiteral("uncaught".to_string()),
+                }],
+                handlers: Vec::new(),
+                orelse: Vec::new(),
+                finalbody: vec![MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::StringLiteral("finally".to_string())],
+                    ty: Ty::None,
+                })],
+            })],
             class_defs: Vec::new(),
         };
         let dir = tempfile_dir("try_no_handlers");
@@ -18622,7 +18955,10 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"finally\n");
-        assert!(!output.status.success(), "uncaught exception should exit non-zero");
+        assert!(
+            !output.status.success(),
+            "uncaught exception should exit non-zero"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -18634,34 +18970,34 @@ mod tests {
         // checks for `ValueError` (tag 1), so the second handler (tag 3)
         // matches.
         let mir = MirModule {
-            items: vec![
-                MirItem::TopLevelStmt(MirStmt::Try {
-                    body: vec![MirStmt::Raise {
-                        exc_type_tag: 3, // KeyError
-                        message: MirExpr::StringLiteral("key".to_string()),
-                    }],
-                    handlers: vec![
-                        MirExceptHandler {
-                            exc_type_tag: Some(1), // ValueError — does not match
-                            body: vec![MirStmt::ExprStmt(MirExpr::Call {
-                                callee: "print".to_string(),
-                                args: vec![MirExpr::StringLiteral("value".to_string())],
-                                ty: Ty::None,
-                            })],
-                        },
-                        MirExceptHandler {
-                            exc_type_tag: Some(3), // KeyError — matches
-                            body: vec![MirStmt::ExprStmt(MirExpr::Call {
-                                callee: "print".to_string(),
-                                args: vec![MirExpr::StringLiteral("key".to_string())],
-                                ty: Ty::None,
-                            })],
-                        },
-                    ],
-                    orelse: Vec::new(),
-                    finalbody: Vec::new(),
-                }),
-            ],
+            items: vec![MirItem::TopLevelStmt(MirStmt::Try {
+                body: vec![MirStmt::Raise {
+                    exc_type_tag: 3, // KeyError
+                    message: MirExpr::StringLiteral("key".to_string()),
+                }],
+                handlers: vec![
+                    MirExceptHandler {
+                        exc_type_tag: Some(1), // ValueError — does not match
+                        binding_name: None,
+                        body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                            callee: "print".to_string(),
+                            args: vec![MirExpr::StringLiteral("value".to_string())],
+                            ty: Ty::None,
+                        })],
+                    },
+                    MirExceptHandler {
+                        exc_type_tag: Some(3), // KeyError — matches
+                        binding_name: None,
+                        body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                            callee: "print".to_string(),
+                            args: vec![MirExpr::StringLiteral("key".to_string())],
+                            ty: Ty::None,
+                        })],
+                    },
+                ],
+                orelse: Vec::new(),
+                finalbody: Vec::new(),
+            })],
             class_defs: Vec::new(),
         };
         let dir = tempfile_dir("try_multi_dispatch");
@@ -18681,33 +19017,32 @@ mod tests {
         // a non-empty else body that completes normally (no return/raise)
         // branches to the finally block.
         let mir = MirModule {
-            items: vec![
-                MirItem::TopLevelStmt(MirStmt::Try {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Try {
+                body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::StringLiteral("try".to_string())],
+                    ty: Ty::None,
+                })],
+                handlers: vec![MirExceptHandler {
+                    exc_type_tag: Some(1),
+                    binding_name: None,
                     body: vec![MirStmt::ExprStmt(MirExpr::Call {
                         callee: "print".to_string(),
-                        args: vec![MirExpr::StringLiteral("try".to_string())],
+                        args: vec![MirExpr::StringLiteral("handler".to_string())],
                         ty: Ty::None,
                     })],
-                    handlers: vec![MirExceptHandler {
-                        exc_type_tag: Some(1),
-                        body: vec![MirStmt::ExprStmt(MirExpr::Call {
-                            callee: "print".to_string(),
-                            args: vec![MirExpr::StringLiteral("handler".to_string())],
-                            ty: Ty::None,
-                        })],
-                    }],
-                    orelse: vec![MirStmt::ExprStmt(MirExpr::Call {
-                        callee: "print".to_string(),
-                        args: vec![MirExpr::StringLiteral("else".to_string())],
-                        ty: Ty::None,
-                    })],
-                    finalbody: vec![MirStmt::ExprStmt(MirExpr::Call {
-                        callee: "print".to_string(),
-                        args: vec![MirExpr::StringLiteral("finally".to_string())],
-                        ty: Ty::None,
-                    })],
-                }),
-            ],
+                }],
+                orelse: vec![MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::StringLiteral("else".to_string())],
+                    ty: Ty::None,
+                })],
+                finalbody: vec![MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::StringLiteral("finally".to_string())],
+                    ty: Ty::None,
+                })],
+            })],
             class_defs: Vec::new(),
         };
         let dir = tempfile_dir("try_else_falls_through");

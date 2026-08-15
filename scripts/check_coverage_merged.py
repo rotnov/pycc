@@ -138,6 +138,22 @@ def main(argv: list[str]) -> int:
     functions = inner.get("functions", [])
     product_files = {f["filename"] for f in files}
 
+    # Fail closed: if llvm-cov produced no file or function data, the
+    # report is structurally empty (e.g. instrumentation or target-selection
+    # failure).  A 100% gate must not pass on zero measured product code.
+    if not product_files:
+        print(
+            "Coverage gate: empty report — no product files found",
+            file=sys.stderr,
+        )
+        return 1
+    if not functions:
+        print(
+            "Coverage gate: empty report — no functions found",
+            file=sys.stderr,
+        )
+        return 1
+
     missed_lines = _line_coverage(files)
     missed_regions = _region_coverage(functions, product_files)
 

@@ -269,3 +269,63 @@ fn bare_raise_outside_handler_is_rejected() {
     );
     assert!(!ok, "bare raise outside handler should be rejected");
 }
+
+// -- Return in try body routes through finally --
+
+#[test]
+fn return_in_try_routes_through_finally() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_retfin_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "retfin.py",
+        "def f() -> int:\n    try:\n        return 1\n    finally:\n        print(\"cleanup\")\n    return 2\nx = f()\nprint(x)\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"cleanup\n1\n");
+}
+
+// -- except-as binding is accessible in handler body --
+
+#[test]
+fn except_as_binding_is_accessible() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_asbind_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "asbind.py",
+        "try:\n    raise ValueError(\"caught_msg\")\nexcept ValueError as e:\n    print(\"got it\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"got it\n");
+}
+
+// -- Unknown exception type in handler is rejected --
+
+#[test]
+fn unknown_exception_type_in_handler_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_unk_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "unk.py",
+        "try:\n    pass\nexcept TypoError:\n    pass\n",
+    );
+    assert!(!ok, "unknown exception type should be rejected");
+    assert!(combined.contains("T0021"), "should mention T0021: {combined}");
+}
+
+// -- Unmatched exception propagates to outer handler --
+
+#[test]
+fn unmatched_exception_propagates_to_outer_handler() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_prop_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "prop.py",
+        "try:\n    try:\n        raise ValueError(\"inner\")\n    except TypeError:\n        print(\"inner handler\")\nexcept ValueError:\n    print(\"outer handler\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"outer handler\n");
+}

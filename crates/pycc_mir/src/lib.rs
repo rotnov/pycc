@@ -509,9 +509,14 @@ pub enum MirStmt {
 /// A single `except` handler in a MIR `try` statement (PEP 3110, #382,
 /// PR-22 Part 1). `exc_type_tag` is the resolved runtime exception type
 /// tag, or `None` for a bare `except:` (catches all exceptions).
+/// `binding_name` is the optional `as` binding name (e.g. `e` in
+/// `except ValueError as e:`), carried from `HirExceptHandler.name` so
+/// the codegen can allocate a local slot for it and store the exception
+/// value there.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirExceptHandler {
     pub exc_type_tag: Option<u8>,
+    pub binding_name: Option<String>,
     pub body: Vec<MirStmt>,
 }
 
@@ -1076,22 +1081,32 @@ fn lower_stmt(
         HirStmt::Match { subject, cases } => {
             lower_match(subject, cases, scopes, classes, current_class)
         }
-        HirStmt::Try { body, handlers, orelse, finalbody } => {
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
             let body = body
                 .iter()
                 .map(|s| lower_stmt(s, scopes, classes, current_class))
                 .collect();
-            let handlers = handlers.iter().map(|h| {
-                let exc_type_tag = h.exc_type.as_deref().and_then(resolve_exception_tag);
-                let handler_body = h.body
-                    .iter()
-                    .map(|s| lower_stmt(s, scopes, classes, current_class))
-                    .collect();
-                MirExceptHandler {
-                    exc_type_tag,
-                    body: handler_body,
-                }
-            }).collect();
+            let handlers = handlers
+                .iter()
+                .map(|h| {
+                    let exc_type_tag = h.exc_type.as_deref().and_then(resolve_exception_tag);
+                    let handler_body = h
+                        .body
+                        .iter()
+                        .map(|s| lower_stmt(s, scopes, classes, current_class))
+                        .collect();
+                    MirExceptHandler {
+                        exc_type_tag,
+                        binding_name: h.name.clone(),
+                        body: handler_body,
+                    }
+                })
+                .collect();
             let orelse = orelse
                 .iter()
                 .map(|s| lower_stmt(s, scopes, classes, current_class))
@@ -1107,9 +1122,7 @@ fn lower_stmt(
                 finalbody,
             }
         }
-        HirStmt::Raise { exc, cause } => {
-            lower_raise(exc, cause, scopes, classes, current_class)
-        }
+        HirStmt::Raise { exc, cause } => lower_raise(exc, cause, scopes, classes, current_class),
     }
 }
 
@@ -1138,14 +1151,7 @@ fn lower_match(
         target: subj_var.clone(),
         value: subj_expr,
     };
-    let chain = lower_match_chain(
-        &subj_var,
-        &subj_ty,
-        cases,
-        scopes,
-        classes,
-        current_class,
-    );
+    let chain = lower_match_chain(&subj_var, &subj_ty, cases, scopes, classes, current_class);
     MirStmt::Seq(vec![assign, chain])
 }
 
@@ -1247,13 +1253,8 @@ fn lower_match_chain(
         name: subj_var.to_string(),
         ty: subj_ty.clone(),
     };
-    let (alternatives, bindings) = lower_pattern_conds(
-        &subj_ref,
-        &case.pattern,
-        scopes,
-        classes,
-        current_class,
-    );
+    let (alternatives, bindings) =
+        lower_pattern_conds(&subj_ref, &case.pattern, scopes, classes, current_class);
     for (name, val) in &bindings {
         let ty = val.ty();
         bind_variable(scopes, name.clone(), ty);
@@ -1314,18 +1315,18 @@ fn nest_match_alternatives(
 /// Nests a single alternative's conditions into a chain of `if`
 /// statements. The innermost `then` body is `inner_body`; every `else`
 /// falls through to `else_chain`.
-fn nest_match_conds(
-    conds: &[MirExpr],
-    inner_body: Vec<MirStmt>,
-    else_chain: MirStmt,
-) -> MirStmt {
+fn nest_match_conds(conds: &[MirExpr], inner_body: Vec<MirStmt>, else_chain: MirStmt) -> MirStmt {
     if conds.is_empty() {
         return MirStmt::Seq(inner_body);
     }
     let (first, rest) = conds.split_first().unwrap();
     MirStmt::If {
         test: first.clone(),
-        body: vec![nest_match_conds(rest, inner_body.clone(), else_chain.clone())],
+        body: vec![nest_match_conds(
+            rest,
+            inner_body.clone(),
+            else_chain.clone(),
+        )],
         orelse: vec![else_chain],
     }
 }
@@ -1345,9 +1346,7 @@ fn lower_pattern_conds(
 ) -> (Vec<Vec<MirExpr>>, Vec<(String, MirExpr)>) {
     match pattern {
         HirPattern::Wildcard => (vec![vec![]], vec![]),
-        HirPattern::Capture(name) => {
-            (vec![vec![]], vec![(name.clone(), subj.clone())])
-        }
+        HirPattern::Capture(name) => (vec![vec![]], vec![(name.clone(), subj.clone())]),
         HirPattern::Literal(lit) => {
             let lowered = lower_expr(lit, scopes, classes, current_class);
             (
@@ -1384,9 +1383,14 @@ fn lower_pattern_conds(
         HirPattern::Sequence(sub_pats) => {
             lower_sequence_conds(subj, sub_pats, None, scopes, classes, current_class)
         }
-        HirPattern::SequenceStar(sub_pats, rest) => {
-            lower_sequence_conds(subj, sub_pats, rest.as_ref(), scopes, classes, current_class)
-        }
+        HirPattern::SequenceStar(sub_pats, rest) => lower_sequence_conds(
+            subj,
+            sub_pats,
+            rest.as_ref(),
+            scopes,
+            classes,
+            current_class,
+        ),
         HirPattern::Mapping(pairs, rest) => {
             lower_mapping_conds(subj, pairs, rest.as_ref(), scopes, classes, current_class)
         }
@@ -1395,7 +1399,13 @@ fn lower_pattern_conds(
             positional,
             keyword,
         } => lower_class_conds(
-            subj, class_name, positional, keyword, scopes, classes, current_class,
+            subj,
+            class_name,
+            positional,
+            keyword,
+            scopes,
+            classes,
+            current_class,
         ),
         HirPattern::Or(subs) => {
             let mut all_alts = Vec::new();
@@ -1410,8 +1420,7 @@ fn lower_pattern_conds(
             (all_alts, all_bindings)
         }
         HirPattern::As(inner, name) => {
-            let (alts, bindings) =
-                lower_pattern_conds(subj, inner, scopes, classes, current_class);
+            let (alts, bindings) = lower_pattern_conds(subj, inner, scopes, classes, current_class);
             let mut all = bindings;
             all.push((name.clone(), subj.clone()));
             (alts, all)
@@ -1431,7 +1440,11 @@ fn lower_sequence_conds(
 ) -> (Vec<Vec<MirExpr>>, Vec<(String, MirExpr)>) {
     let fixed = sub_pats.len();
     let len_cond = MirExpr::Compare {
-        op: if rest.is_some() { CmpOpKind::GtE } else { CmpOpKind::Eq },
+        op: if rest.is_some() {
+            CmpOpKind::GtE
+        } else {
+            CmpOpKind::Eq
+        },
         left: Box::new(MirExpr::Call {
             callee: "len".to_string(),
             args: vec![subj.clone()],
@@ -2584,12 +2597,10 @@ fn eval_isinstance_protocol(
                     // `is_some_and(…)` treats missing entries as not
                     // having the attribute, matching the method arm's
                     // `find_map` skip semantics.
-                    classes
-                        .get(mro_class.as_str())
-                        .is_some_and(|mro_def| {
-                            mro_def.attrs.iter().any(|(n, _)| n == attr_name)
-                                || mro_def.properties.iter().any(|p| &p.name == attr_name)
-                        })
+                    classes.get(mro_class.as_str()).is_some_and(|mro_def| {
+                        mro_def.attrs.iter().any(|(n, _)| n == attr_name)
+                            || mro_def.properties.iter().any(|p| &p.name == attr_name)
+                    })
                 });
                 if !found {
                     return false;
@@ -2653,7 +2664,10 @@ fn binop_result_ty(op: BinOpKind, left: Ty, right: Ty) -> Ty {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pycc_hir::{BinOpKind, CmpOpKind, FStringPart, HirClassDef, HirExpr, HirItem, HirMatchCase, HirModule, HirPattern, HirStmt, Ty};
+    use pycc_hir::{
+        BinOpKind, CmpOpKind, FStringPart, HirClassDef, HirExpr, HirItem, HirMatchCase, HirModule,
+        HirPattern, HirStmt, Ty,
+    };
 
     #[test]
     fn builds_an_assignment_and_a_later_name_reference() {
@@ -8603,17 +8617,15 @@ mod tests {
         let proto_ty = Ty::Protocol(Box::new("P".to_string()));
         let instance_ty = Ty::Instance(Box::new("C".to_string()));
         let hir = HirModule {
-            items: vec![
-                HirItem::TopLevelStmt(HirStmt::AnnAssign {
-                    target: "c".to_string(),
-                    annotation: proto_ty,
-                    value: Some(HirExpr::Call {
-                        callee: "C".to_string(),
-                        args: vec![],
-                    }),
-                    is_final: false,
+            items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                target: "c".to_string(),
+                annotation: proto_ty,
+                value: Some(HirExpr::Call {
+                    callee: "C".to_string(),
+                    args: vec![],
                 }),
-            ],
+                is_final: false,
+            })],
             type_aliases: Vec::new(),
             imports: Vec::new(),
             class_defs: vec![
@@ -8753,10 +8765,10 @@ mod tests {
         let mir = build(&hir);
         // The isinstance call should be lowered to a BoolLiteral(true)
         // because Circle conforms to the Drawable protocol.
-        assert!(mir
-            .items
-            .iter()
-            .any(|item| matches!(item, MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::BoolLiteral(true))))));
+        assert!(mir.items.iter().any(|item| matches!(
+            item,
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::BoolLiteral(true)))
+        )));
     }
 
     // -- #381: match statement MIR lowering coverage -----------------------
@@ -8784,7 +8796,10 @@ mod tests {
             items: vec![
                 HirItem::TopLevelStmt(HirStmt::Assign {
                     target: "x".to_string(),
-                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                    ]),
                 }),
                 HirItem::TopLevelStmt(HirStmt::Match {
                     subject: HirExpr::Name("x".to_string()),
@@ -9009,7 +9024,10 @@ mod tests {
                             pattern: HirPattern::Class {
                                 class_name: "P".to_string(),
                                 positional: vec![HirPattern::Capture("a".to_string())],
-                                keyword: vec![("a".to_string(), HirPattern::Capture("a2".to_string()))],
+                                keyword: vec![(
+                                    "a".to_string(),
+                                    HirPattern::Capture("a2".to_string()),
+                                )],
                             },
                             guard: None,
                             body: vec![],
@@ -9167,16 +9185,14 @@ mod tests {
     /// `expect_top_level_try_panics_on_non_try`.
     fn expect_top_level_try(
         item: &MirItem,
-    ) -> (
-        &[MirStmt],
-        &[MirExceptHandler],
-        &[MirStmt],
-        &[MirStmt],
-    ) {
+    ) -> (&[MirStmt], &[MirExceptHandler], &[MirStmt], &[MirStmt]) {
         match item {
-            MirItem::TopLevelStmt(MirStmt::Try { body, handlers, orelse, finalbody }) => {
-                (body, handlers, orelse, finalbody)
-            }
+            MirItem::TopLevelStmt(MirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            }) => (body, handlers, orelse, finalbody),
             _ => panic!("expected Try"),
         }
     }
@@ -9186,9 +9202,10 @@ mod tests {
     /// `expect_top_level_raise_panics_on_non_raise`.
     fn expect_top_level_raise(item: &MirItem) -> (&u8, &MirExpr) {
         match item {
-            MirItem::TopLevelStmt(MirStmt::Raise { exc_type_tag, message }) => {
-                (exc_type_tag, message)
-            }
+            MirItem::TopLevelStmt(MirStmt::Raise {
+                exc_type_tag,
+                message,
+            }) => (exc_type_tag, message),
             _ => panic!("expected Raise"),
         }
     }
@@ -9198,9 +9215,12 @@ mod tests {
     /// by `expect_top_level_raise_from_panics_on_non_raise_from`.
     fn expect_top_level_raise_from(item: &MirItem) -> (&u8, &u8, &MirExpr, &MirExpr) {
         match item {
-            MirItem::TopLevelStmt(MirStmt::RaiseFrom { exc_type_tag, cause_type_tag, message, cause_message }) => {
-                (exc_type_tag, cause_type_tag, message, cause_message)
-            }
+            MirItem::TopLevelStmt(MirStmt::RaiseFrom {
+                exc_type_tag,
+                cause_type_tag,
+                message,
+                cause_message,
+            }) => (exc_type_tag, cause_type_tag, message, cause_message),
             _ => panic!("expected RaiseFrom"),
         }
     }
