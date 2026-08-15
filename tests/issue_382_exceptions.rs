@@ -329,3 +329,4 @@ fn unmatched_exception_propagates_to_outer_handler() {
     assert!(ok, "build/run failed: {err}");
     assert_eq!(out, b"outer handler\n");
 }
+// trigger
