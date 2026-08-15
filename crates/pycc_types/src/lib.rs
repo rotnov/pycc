@@ -31140,6 +31140,18 @@ mod tests {
     }
 
     #[test]
+    fn match_join_with_maybe_binding_state_from_if_without_else() {
+        // A match case body that assigns `y` only inside an `if` without
+        // `else` leaves `y` as `Maybe` in that case's env. The join then
+        // hits the `BindingState::Maybe(t)` arm of the `states[0]` match
+        // in `join_match_branches` (line 4035).
+        let result = check_source(
+            "def f(x: int) -> None:\n    match x:\n        case 0:\n            if x > 0:\n                y = 1\n        case _:\n            pass\n",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn check_pattern_literal_with_unresolvable_name_reports_error() {
         let env = Environment::new();
         let pattern = HirPattern::Literal(HirExpr::Name("undefined".to_string()));

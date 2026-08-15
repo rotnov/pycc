@@ -4,6 +4,7 @@ use pycc_hir::{
     eval_isinstance_single, eval_issubclass_single, extract_class_names, is_builtin_type_name,
 };
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // Re-exported (not just `use`d) because `pycc_codegen` doesn't depend on
 // `pycc_hir` directly (see its Cargo.toml) -- `Ty`, `BinOpKind`, and
@@ -14,6 +15,13 @@ use std::collections::HashMap;
 // like `pycc_types` already re-exports `Ty` (`pycc_types::Ty`, its own line
 // 4) for the same reason.
 pub use pycc_hir::{BinOpKind, CmpOpKind, Ty};
+
+/// Monotonic counter for synthesized match-subject temporaries. Each
+/// `match` statement gets a unique `__match_subj_N` name, avoiding
+/// collisions between multiple matches at the same scope level (which
+/// would otherwise share the same `scopes.len()`-derived name and
+/// cause a first-assignment-wins type drift in `bind_variable`).
+static MATCH_SUBJECT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MirExpr {
@@ -1051,7 +1059,10 @@ fn lower_match(
 ) -> MirStmt {
     let subj_expr = lower_expr(subject, scopes, classes, current_class);
     let subj_ty = subj_expr.ty();
-    let subj_var = format!("__match_subj_{}", scopes.len());
+    let subj_var = format!(
+        "__match_subj_{}",
+        MATCH_SUBJECT_COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
     bind_variable(scopes, subj_var.clone(), subj_ty.clone());
     let assign = MirStmt::Assign {
         target: subj_var.clone(),
