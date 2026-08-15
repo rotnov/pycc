@@ -935,4 +935,18 @@ mod try_build_release_isolation_tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// Exercises `BindingState::Maybe` in `join_match_branches` through the
+    /// `pycc` crate's own test binary (not just `pycc_types`'s unit tests).
+    /// A match case body that assigns `y` only inside an `if` without `else`
+    /// leaves `y` as `Maybe` in that case's env, so the join calls `ty()` on
+    /// a `Maybe` binding.
+    #[test]
+    fn check_and_resolve_match_with_maybe_binding_type_checks() {
+        let source = "def f(x: int) -> None:\n    match x:\n        case 0:\n            if x > 0:\n                y = 1\n        case _:\n            pass\n";
+        let module = pycc_parser::parse(source).expect("test fixture must parse");
+        let hir = pycc_hir::lower_checked(&module).expect("test fixture must lower");
+        let result = pycc_types::check_and_resolve(&hir);
+        assert!(result.is_ok(), "match with Maybe binding should type-check");
+    }
 }

@@ -330,3 +330,23 @@ fn match_with_return_in_each_arm_builds_and_runs() {
     assert!(ok, "build/run failed: {err}");
     assert_eq!(out, b"10\n20\n0\n");
 }
+
+// -- Match with Maybe binding join (if-without-else in a case body) --
+
+#[test]
+fn match_maybe_binding_join_builds_and_runs() {
+    // A case body that assigns `y` only inside an `if` without `else`
+    // leaves `y` as `Maybe` in that case's env.  The join then hits
+    // the `BindingState::Maybe` arm, exercising the `ty()` method on
+    // a `Maybe` binding through the full pycc binary.  `y` is never
+    // read after the match, so the Maybe binding is not a T0021 error.
+    let dir = std::env::temp_dir().join(format!("pycc_381_maybe_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "maybe.py",
+        "def f(x: int) -> None:\n    match x:\n        case 0:\n            if x > 0:\n                y = 1\n        case _:\n            pass\nprint(0)\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"0\n");
+}

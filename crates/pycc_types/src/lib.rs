@@ -28,6 +28,16 @@ enum BindingState {
     Maybe(Ty),
 }
 
+impl BindingState {
+    /// Returns the inner `Ty` regardless of whether the binding is
+    /// `Definitely` or `Maybe` assigned.
+    fn ty(&self) -> &Ty {
+        match self {
+            BindingState::Definitely(t) | BindingState::Maybe(t) => t,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Environment {
     bindings: HashMap<String, BindingState>,
@@ -4031,9 +4041,7 @@ fn join_match_branches(
             .iter()
             .filter_map(|ce| ce.bindings.get(name))
             .collect();
-        let ty = match states[0] {
-            BindingState::Definitely(t) | BindingState::Maybe(t) => t.clone(),
-        };
+        let ty = states[0].ty().clone();
         let all_definite = !exhaustive
             || states.len() == case_envs.len()
                 && states.iter().all(|s| matches!(s, BindingState::Definitely(_)));
@@ -4416,20 +4424,17 @@ fn collect_enum_member_patterns<'a>(
         HirPattern::Class {
             class_name: cn,
             ..
-        } if cn == class_name => {}
+        } if cn == class_name => {
+            for (member, _) in members {
+                covered.insert(member.as_str());
+            }
+        }
         HirPattern::Or(subs) => {
             for sub in subs {
                 collect_enum_member_patterns(sub, class_name, members, covered);
             }
         }
-        _ => return,
-    }
-    if let HirPattern::Class { class_name: cn, .. } = pattern
-        && cn == class_name
-    {
-        for (member, _) in members {
-            covered.insert(member.as_str());
-        }
+        _ => {}
     }
 }
 
@@ -30539,6 +30544,86 @@ mod tests {
     }
 
     #[test]
+    fn match_enum_exhaustive_with_other_class_pattern() {
+        // A case pattern with a different class name than the enum subject
+        // exercises the guard-false branch of `collect_enum_member_patterns`'s
+        // `HirPattern::Class { class_name: cn, .. } if cn == class_name` arm.
+        let mut env = Environment::new();
+        env.bind_class("Color".to_string(), HirClassDef {
+            name: "Color".to_string(),
+            bases: Vec::new(),
+            mro: vec!["Color".to_string()],
+            attrs: Vec::new(),
+            methods: Vec::new(),
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            type_param: None,
+            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: Vec::new(),
+            abstract_methods: Vec::new(),
+            is_abstract: false,
+        });
+        env.bind_class("Other".to_string(), HirClassDef {
+            name: "Other".to_string(),
+            bases: Vec::new(),
+            mro: vec!["Other".to_string()],
+            attrs: Vec::new(),
+            methods: Vec::new(),
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            type_param: None,
+            enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: Vec::new(),
+            abstract_methods: Vec::new(),
+            is_abstract: false,
+        });
+        let cases = vec![
+            HirMatchCase {
+                pattern: HirPattern::Class {
+                    class_name: "Color".to_string(),
+                    positional: vec![],
+                    keyword: vec![],
+                },
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Class {
+                    class_name: "Color".to_string(),
+                    positional: vec![],
+                    keyword: vec![],
+                },
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Class {
+                    class_name: "Other".to_string(),
+                    positional: vec![],
+                    keyword: vec![],
+                },
+                guard: None,
+                body: vec![],
+            },
+        ];
+        assert!(check_exhaustive(
+            &env,
+            &Ty::Instance(Box::new("Color".to_string())),
+            &cases
+        ));
+    }
+
+    #[test]
     fn match_with_inferred_subject_type_checks() {
         let result = check_source(
             "x = 1\nmatch x:\n    case 1:\n        pass\n    case _:\n        pass\n",
@@ -31072,6 +31157,30 @@ mod tests {
     fn match_with_constraint_error_in_subject_reports_error() {
         let result = check_source(
             "def _f(x: int) -> None:\n    match x + \"bad\":\n        case 1:\n            pass\n        case _:\n            pass\n",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn match_with_pattern_error_through_check_match_reports_error() {
+        // Exercises the `?` error propagation from `check_pattern` inside
+        // `check_match` (line 4065).  A singleton pattern `True` against
+        // an `int` subject causes `check_pattern` to return `Err`, which
+        // `check_match` must propagate via `?`.
+        let result = check_source(
+            "def f(x: int) -> None:\n    match x:\n        case True:\n            pass\n        case _:\n            pass\n",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn match_with_guard_type_error_reports_t0021() {
+        // Exercises the `?` error propagation from `infer_expr_in` on the
+        // guard expression inside `check_match` (line 4070).  A guard with
+        // a type error (`x + "bad"` where `x: int`) causes `infer_expr_in`
+        // to return `Err`, which `check_match` must propagate via `?`.
+        let result = check_source(
+            "def f(x: int) -> None:\n    match x:\n        case 1 if x + \"bad\":\n            pass\n        case _:\n            pass\n",
         );
         assert!(result.is_err());
     }
