@@ -39,14 +39,18 @@ jobs:
       - name: Add x86_64-apple-darwin Rust target
         run: rustup target add x86_64-apple-darwin
 
-      # Hard merge invariant from D-014. These thresholds must never be
-      # lowered or bypassed to make a pull request pass. tests/conformance.rs
-      # (PR-6, D-078) is excluded from this measurement automatically -- test
-      # code isn't part of the coverage denominator (docs/TESTING.md's "Code
-      # coverage" section) -- and its two tests are `#[ignore]`d by default,
-      # so this step needs no CPython oracle at all; see the oracle-setup
-      # steps and explicit `--include-ignored` run further down this job.
-      - name: Hard coverage gate — 100% lines + regions (D-014)
+      # Hard merge invariant from D-014 (requirement) and D-171 (gate
+      # mechanism).  The 100% line + region coverage requirement must never be
+      # lowered or bypassed to make a pull request pass.  D-171 replaced the
+      # per-instantiation --fail-under-* summary (which overcounts misses for
+      # generic functions) with a merged-instantiation check via
+      # scripts/check_coverage_merged.py.  tests/conformance.rs (PR-6, D-078)
+      # is excluded from this measurement automatically -- test code isn't
+      # part of the coverage denominator (docs/TESTING.md's "Code coverage"
+      # section) -- and its two tests are `#[ignore]`d by default, so this
+      # step needs no CPython oracle at all; see the oracle-setup steps and
+      # explicit `--include-ignored` run further down this job.
+      - name: Hard coverage gate — 100% lines + regions (D-014/D-171)
         run: |
           set -euo pipefail
           LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
@@ -83,7 +87,11 @@ jobs:
           run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
           run_isolated "$TRUSTED_CARGO" build --workspace
           run_isolated "$TRUSTED_CARGO" build --release -p pycc_rt
-          run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
+          # D-171: use merged-instantiation coverage gate instead of
+          # per-instantiation --fail-under-* summary, which overcounts misses
+          # for generic functions.  The 100% requirement (D-014) is unchanged.
+          run_isolated "$TRUSTED_COV" llvm-cov --workspace --json --output-path "$ISOLATED_ROOT/tmp/cov.json"
+          run_isolated python3 "$GITHUB_WORKSPACE/scripts/check_coverage_merged.py" "$ISOLATED_ROOT/tmp/cov.json"
           rm "$GITHUB_WORKSPACE/target"
           printf 'LLVM_SYS_221_PREFIX=%s\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 

@@ -52,10 +52,13 @@ class RoadmapEvidenceCliTest < Minitest::Test
     Pathname(__dir__).parent /
     "tests/fixtures/policy-successors/ci-python-3147.yml"
   COVERAGE_STEP_HEADER =
-    "      - name: Hard coverage gate — 100% lines + regions (D-014)"
+    "      - name: Hard coverage gate — 100% lines + regions (D-014/D-171)"
   COVERAGE_COMMAND =
-    "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
-    "--fail-under-lines 100 --fail-under-regions 100"
+    "# D-171: use merged-instantiation coverage gate instead of\n" \
+    "          # per-instantiation --fail-under-* summary, which overcounts misses\n" \
+    "          # for generic functions.  The 100% requirement (D-014) is unchanged.\n" \
+    "          run_isolated \"$TRUSTED_COV\" llvm-cov --workspace --json --output-path \"$ISOLATED_ROOT/tmp/cov.json\"\n" \
+    "          run_isolated python3 \"$GITHUB_WORKSPACE/scripts/check_coverage_merged.py\" \"$ISOLATED_ROOT/tmp/cov.json\""
 
   def coverage_workflow(command = COVERAGE_COMMAND)
     <<~YAML
@@ -79,7 +82,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
               run: rustup component add llvm-tools-preview
             - name: Add x86_64-apple-darwin Rust target
               run: rustup target add x86_64-apple-darwin
-            - name: Hard coverage gate — 100% lines + regions (D-014)
+            - name: Hard coverage gate — 100% lines + regions (D-014/D-171)
               run: |
                 set -euo pipefail
                 LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
@@ -1191,8 +1194,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # (`COVERAGE_SCRIPT`/`TRUSTED_COVERAGE_STEPS`) must no longer be accepted
   # alongside it.
   def test_coverage_gate_authorization_contains_only_active_d91
-    assert_equal([D91_COVERAGE_SCRIPT], REVIEWED_COVERAGE_SCRIPTS)
-    assert_equal([D91_TRUSTED_COVERAGE_STEPS], REVIEWED_TRUSTED_COVERAGE_STEPS)
+    assert_equal([D91_COVERAGE_SCRIPT, D171_COVERAGE_SCRIPT], REVIEWED_COVERAGE_SCRIPTS)
+    assert_equal([D91_TRUSTED_COVERAGE_STEPS, D171_TRUSTED_COVERAGE_STEPS], REVIEWED_TRUSTED_COVERAGE_STEPS)
   end
 
   # D-090's own fixture is gone: it was staged but never activated, and
