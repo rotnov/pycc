@@ -17614,4 +17614,52 @@ mod tests {
         assert_eq!(output.stdout, b"10\n20\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // -- #381: None singleton pattern comparison in emit_expr ---------------
+
+    #[test]
+    fn none_singleton_comparison_emits_zero_carrier() {
+        // Exercises the `MirExpr::Name { name, ty: Ty::None } if name ==
+        // "None"` arm of `emit_expr` (line 1633).  The MIR mirrors what
+        // `lower_pattern_conds` produces for `match x: case None:`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "get_none".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::Return(Some(MirExpr::Name {
+                        name: "None".to_string(),
+                        ty: Ty::None,
+                    }))],
+                },
+                MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::Compare {
+                        op: CmpOpKind::Eq,
+                        left: Box::new(MirExpr::Call {
+                            callee: "get_none".to_string(),
+                            args: vec![],
+                            ty: Ty::None,
+                        }),
+                        right: Box::new(MirExpr::Name {
+                            name: "None".to_string(),
+                            ty: Ty::None,
+                        }),
+                        ty: Ty::Bool,
+                    },
+                    body: vec![call_print(1)],
+                    orelse: vec![call_print(0)],
+                }),
+            ],
+            class_defs: Vec::new(),
+        };
+        let dir = tempfile_dir("none_singleton_cmp");
+        let obj_path = dir.join("none_singleton_cmp.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("none_singleton_cmp");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
