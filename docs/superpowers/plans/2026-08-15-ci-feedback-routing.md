@@ -187,8 +187,9 @@
 
   Add `classify-changes` with `contents: read`, credential-free full-history
   checkout, exact event SHAs, `git cat-file -e` validation, `git diff
-  --name-only --diff-filter=ACDMRTUXB -z`, and the classifier CLI. It exports
-  the three fixed outputs.
+  --no-renames --name-only --diff-filter=ACDMRTUXB -z "$base_sha" "$head_sha"`,
+  retaining the exact base/head range, and the classifier CLI. It exports the
+  three fixed outputs.
 
 - [ ] **Step 3: Add the single required governance job**
 

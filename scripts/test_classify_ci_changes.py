@@ -7,9 +7,12 @@ skip a CI gate affected by a repository change.
 
 from __future__ import annotations
 
+import fcntl
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -196,6 +199,76 @@ class ClassifyPathsTests(unittest.TestCase):
             ),
         )
 
+    def test_cross_category_rename_keeps_compiler_selected_when_git_disables_rename_detection(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repository = Path(temporary_directory)
+            subprocess.run(["git", "init", "-q", str(repository)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repository), "config", "user.email", "test@example.test"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repository), "config", "user.name", "Classifier Test"],
+                check=True,
+            )
+            (repository / "src").mkdir()
+            (repository / "src" / "foo.rs").write_text("fn main() {}\n")
+            subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(repository), "commit", "-qm", "initial"], check=True
+            )
+            base = subprocess.run(
+                ["git", "-C", str(repository), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            (repository / "docs").mkdir()
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository),
+                    "mv",
+                    "src/foo.rs",
+                    "docs/foo.md",
+                ],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repository), "commit", "-qm", "rename"], check=True
+            )
+            head = subprocess.run(
+                ["git", "-C", str(repository), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            changed = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository),
+                    "diff",
+                    "--no-renames",
+                    "--name-only",
+                    "--diff-filter=ACDMRTUXB",
+                    "-z",
+                    base,
+                    head,
+                ],
+                check=True,
+                capture_output=True,
+            ).stdout.rstrip(b"\x00").split(b"\x00")
+
+            self.assertEqual(
+                Selection(True, False, False),
+                classify_paths(
+                    [path.decode("utf-8") for path in changed], event_name="pull_request"
+                ),
+            )
+
 
 class ClassifyCliTests(unittest.TestCase):
     SCRIPT = Path(__file__).with_name("classify_ci_changes.py")
@@ -260,6 +333,58 @@ class ClassifyCliTests(unittest.TestCase):
                 "prior=true\ncompiler=false\npages=false\nagent=false\n",
                 output_path.read_text(),
             )
+
+    def test_output_append_waits_for_an_exclusive_lock_and_writes_one_intact_block(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_path = Path(temporary_directory) / "github-output"
+            descriptor = os.open(output_path, os.O_WRONLY | os.O_CREAT, 0o600)
+            process = None
+            try:
+                os.write(descriptor, b"prior=true\n")
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-B",
+                        str(self.SCRIPT),
+                        "--event-name",
+                        "pull_request",
+                        "--github-output",
+                        str(output_path),
+                    ],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                assert process.stdin is not None
+                process.stdin.write(b"site/index.html\x00")
+                process.stdin.close()
+
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline and process.poll() is None:
+                    time.sleep(0.02)
+                self.assertIsNone(process.poll(), "CLI did not wait for the output lock")
+
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                process.wait(timeout=5)
+                assert process.stdout is not None
+                assert process.stderr is not None
+                stdout = process.stdout.read()
+                stderr = process.stderr.read()
+                process.stdout.close()
+                process.stderr.close()
+                self.assertEqual(0, process.returncode, stderr.decode("utf-8"))
+                self.assertEqual(b"", stdout)
+                self.assertEqual(
+                    "prior=true\ncompiler=false\npages=true\nagent=false\n",
+                    output_path.read_text(),
+                )
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                os.close(descriptor)
+                if process is not None and process.poll() is None:
+                    process.kill()
+                    process.wait()
 
     def test_nonterminated_pull_request_stream_fails_closed_to_everything(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
