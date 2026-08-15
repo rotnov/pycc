@@ -7,6 +7,11 @@
       "sha256": "d1c4ab9a927723c37809c4621afffcc4b15ecde52a9706cc0951376ca1faf725"
     },
     {
+      "path": "scripts/classify_ci_changes.py",
+      "source_path": "scripts/classify_ci_changes.py",
+      "sha256": "285b566245b3490e83e62d93b36262e704575a3218c7965237609374e5eb571f"
+    },
+    {
       "path": "scripts/check_ci_permissions.rb",
       "source_path": "scripts/check_ci_permissions.rb",
       "sha256": "edff9d62bef98b62c3f974db9f9ced3217632ad461bb0ba45880011db84f2085"
@@ -23,8 +28,8 @@
     },
     {
       "path": "scripts/check_roadmap_evidence.rb",
-      "source_path": "scripts/check_roadmap_evidence.rb",
-      "sha256": "070580b2d36c437f9fc3123a61a5f4e44aea8f29f013038227d4241c5dde1a06"
+      "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence-d171.rb",
+      "sha256": "70b2b286cc022435f481f1fba6585204f30148b4a2aba139e20aaf7c02292f2d"
     },
     {
       "path": "scripts/check_search_visibility_audit.py",
@@ -67,6 +72,11 @@
       "sha256": "765399a928d17375b39240c909cebe58fdf1d790a5c8f3186ff474064dee4dcd"
     },
     {
+      "path": "scripts/test_classify_ci_changes.py",
+      "source_path": "scripts/test_classify_ci_changes.py",
+      "sha256": "a2a76fbfcec745de26d5561e04e7248bfcc9905415a4059be00cbe9af68ba1f4"
+    },
+    {
       "path": "scripts/test_check_ci_permissions.rb",
       "source_path": "scripts/test_check_ci_permissions.rb",
       "sha256": "c6120dcd5ac39dba7335aeadc675cfc80312a1936fc8c4b24499ea416707c163"
@@ -83,8 +93,8 @@
     },
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
-      "source_path": "scripts/test_check_roadmap_evidence.rb",
-      "sha256": "ef755d8652d2c42539d1a70dd7e8ae84611f310739b2609b02af5d9ec3dbdcde"
+      "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-d171.rb",
+      "sha256": "cf9a6578042bf7ce07cf475233cdbd14b8a98b3dd23d551f95ba8ac9aa1c97cc"
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",
@@ -230,6 +240,11 @@
       "path": "tests/fixtures/policy-successors/ci-python-3147.yml",
       "source_path": "tests/fixtures/policy-successors/ci-python-3147.yml",
       "sha256": "d1c4ab9a927723c37809c4621afffcc4b15ecde52a9706cc0951376ca1faf725"
+    },
+    {
+      "path": "tests/fixtures/policy-successors/ci-d171.yml",
+      "source_path": "tests/fixtures/policy-successors/ci-d171.yml",
+      "sha256": "785e6415aea979ac67563589fb8295f2d7a9ce991f11d269d2054422a527e33f"
     }
   ]
 }

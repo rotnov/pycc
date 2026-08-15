@@ -903,6 +903,37 @@ calling `patch_required_status_checks` or writing `state.json`.
 
 Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
 
+**D-171 change-aware scheduling transition (staged 2026-08-15):** D-171 is
+accepted, but this tree has not activated it. The live `.github/workflows/ci.yml`
+and live roadmap-evidence checker still run and validate the existing
+every-pull-request topology. The exact classifier and its tests now live at
+their eventual paths, and the final checker, checker self-test, and CI workflow
+exist only as D-103-protected proposal files. The complete successor manifest
+stages only the checker and checker self-test for the next merge: the live CI
+target remains bound to its unchanged active bytes, while `ci-d171.yml` is a
+steady protected transitive input. The checker-activation merge must copy the
+checker and self-test, return those entries to self-source, and only then stage
+the CI target from `ci-d171.yml`; the final merge may activate that exact
+base-owned workflow and return the CI entry to self-source. After those
+separate activations, an always-run classifier may skip a heavy category only
+for an exact reviewed path set;
+unknown, empty, malformed, or unsupported input selects the complete topology,
+and the required `ci-gate` fails unless every selected job succeeds and every
+unselected job is skipped. Pushes to `main` always run the full topology.
+Every compiler input also selects the offline alpha skill evals: those evals
+execute the freshly built compiler and bind its current diagnostics and D-072
+backend boundary, so they are part of the compiler contract rather than an
+agent-assets-only check.
+
+This staged scheduling change supersedes only D-014's instruction to execute
+coverage on literally every pull request. It does not change the 100% line and
+region thresholds, the full-workspace denominator, the isolated `nobody`
+sandbox, tool pins, or whole-file exemption policy. Compiler-relevant changes
+still require the complete Tier-1 native matrix, cross-compilation build and
+verification, and paired frontend performance gates; Pages-relevant changes
+still require both Pages gates and their existing budgets. `audit` and the
+fail-closed `ci-gate` remain required throughout the transition.
+
 - Tool: `cargo llvm-cov` — a separately distributed cargo subcommand, **not** bundled with any rustup component. CI installs it explicitly and pinned (installer action or `cargo install cargo-llvm-cov --locked --version <pinned>`), plus the `llvm-tools-preview` rustup component it drives at runtime; a bare "install llvm-tools" fails with "no such command: llvm-cov" (caught by repo audit, issue #13). Independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match.
 - Gate: `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. The explicit `llvm-cov` argument is required when invoking Cargo's subcommand binary directly. CI resolves and installs the trusted tool before executing repository code, then runs the cross-target `pycc_rt` prerequisite, workspace build, and coverage under `sudo -u nobody env -i` with isolated HOME, Cargo home, temp, and target directories. The workspace and runner-owned toolchain/binary are read-only to that user, so a build script or procedural macro cannot replace the executables or write GitHub command files. The checker pins the complete environment and step prefix through the hard-gate step; regular repository policy/test steps run only afterward. The x86_64 macOS runtime is built first so the cross-compilation test cannot skip its success path, then `cargo build --workspace` supplies the normal debug `pycc_rt` used by the remaining slice-0 tests. The pinned tool's version smoke check runs immediately before entering the boundary.
 - Test code itself (`tests/`, `*_tests.rs`, `tests.rs`) is excluded from the denominator automatically — the gate measures product code exercised by tests, not tests covering themselves.
