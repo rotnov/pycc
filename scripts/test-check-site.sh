@@ -798,6 +798,12 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
+        "Still ahead for v0.3: custom exceptions are the",
+        "Still ahead for v0.3: custom exceptions and protocols are the",
+        "status page that understates landed v0.3 class-model items in the next-slice prose",
+    ),
+    (
+        site_dir / "status" / "index.html",
         "Unary operators are rejected earlier by\n              HIR lowering with a spanned <code>C0001</code> capability diagnostic,\n              including under <code>pycc check</code>.",
         "Unary operators are rejected only by the backend.",
         "status page that misattributes the unary-expression boundary",
