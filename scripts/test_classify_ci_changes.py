@@ -384,7 +384,12 @@ class ClassifyCliTests(unittest.TestCase):
                 os.close(descriptor)
                 if process is not None and process.poll() is None:
                     process.kill()
-                    process.wait()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired as error:
+                        raise AssertionError(
+                            "CLI did not terminate within five seconds after cleanup kill"
+                        ) from error
 
     def test_nonterminated_pull_request_stream_fails_closed_to_everything(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
