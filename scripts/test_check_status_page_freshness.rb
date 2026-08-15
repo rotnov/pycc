@@ -411,5 +411,28 @@ class StatusPageFreshnessTest < Minitest::Test
     end
   end
 
+  # (m) an existing feature-landing paragraph REMOVED from docs/ROADMAP.md
+  # WITHOUT a watched-page touch -> must FAIL. D-170 documents removal as
+  # a signal (set membership shrinks), and this test verifies that claim
+  # directly, complementing the addition tests (j/k) and the text-only
+  # negative control (l).
+  def test_feature_paragraph_removal_without_status_page_touch_fails
+    with_repo do |root|
+      base_sha = write_and_commit(root, { ROADMAP_PATH => BASE_ROADMAP }, "base")
+      removed_paragraph = <<~MARKDOWN.chomp
+
+        **[#999](https://github.com/rotnov/pycc/issues/999) — Test feature:** description here.
+      MARKDOWN
+      changed_roadmap = BASE_ROADMAP.sub(removed_paragraph + "\n", "")
+      write_and_commit(root, { ROADMAP_PATH => changed_roadmap }, "remove feature paragraph")
+
+      error = assert_raises(StatusPageFreshnessError) do
+        check_status_page_freshness(root, base_sha, "HEAD")
+      end
+      assert_match(/feature-landing paragraph/, error.message)
+      assert_match(/site\/status\/index\.html/, error.message)
+    end
+  end
+
   CHECKER = Pathname(__dir__) / "check_status_page_freshness.rb"
 end
