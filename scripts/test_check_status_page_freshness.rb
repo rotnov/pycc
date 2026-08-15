@@ -28,6 +28,10 @@ class StatusPageFreshnessTest < Minitest::Test
 
     - [x] `fib` compiles and matches CPython output. <!-- roadmap-evidence: conformance-fib-mandelbrot-tier1 -->
     - [ ] Some later gate is still pending. <!-- roadmap-evidence: some-later-gate -->
+
+    ## v0.3
+
+    **[#999](https://github.com/rotnov/pycc/issues/999) — Test feature:** description here.
   MARKDOWN
 
   def run_git!(root, *args)
@@ -80,7 +84,7 @@ class StatusPageFreshnessTest < Minitest::Test
       )
 
       result = check_status_page_freshness(root, base_sha, "HEAD")
-      assert_match(/roadmap milestone\/evidence signal matched/, result)
+      assert_match(/roadmap milestone\/evidence\/feature-paragraph signal matched/, result)
     end
   end
 
@@ -157,7 +161,7 @@ class StatusPageFreshnessTest < Minitest::Test
       write_and_commit(root, { ROADMAP_PATH => changed_roadmap }, "prose only")
 
       result = check_status_page_freshness(root, base_sha, "HEAD")
-      assert_match(/no roadmap milestone or evidence-checklist signal/, result)
+      assert_match(/no roadmap milestone, evidence-checklist, or feature-landing-paragraph signal/, result)
     end
   end
 
@@ -169,7 +173,7 @@ class StatusPageFreshnessTest < Minitest::Test
       write_and_commit(root, { "README.md" => "unrelated" }, "unrelated")
 
       result = check_status_page_freshness(root, base_sha, "HEAD")
-      assert_match(/no roadmap milestone or evidence-checklist signal/, result)
+      assert_match(/no roadmap milestone, evidence-checklist, or feature-landing-paragraph signal/, result)
     end
   end
 
@@ -220,7 +224,7 @@ class StatusPageFreshnessTest < Minitest::Test
       )
 
       result = check_status_page_freshness(root, base_sha, "HEAD")
-      assert_match(/roadmap milestone\/evidence signal matched/, result)
+      assert_match(/roadmap milestone\/evidence\/feature-paragraph signal matched/, result)
     end
   end
 
@@ -252,7 +256,7 @@ class StatusPageFreshnessTest < Minitest::Test
       )
 
       result = check_status_page_freshness(root, base_sha, "HEAD")
-      assert_match(/roadmap milestone\/evidence signal matched/, result)
+      assert_match(/roadmap milestone\/evidence\/feature-paragraph signal matched/, result)
       assert_match(%r{site/index\.html}, result)
     end
   end
@@ -337,6 +341,96 @@ class StatusPageFreshnessTest < Minitest::Test
       refute status.success?
       assert_empty stdout
       assert_match(%r{site/status/index\.html}, stderr)
+    end
+  end
+
+  # (j) a new feature-landing paragraph added to docs/ROADMAP.md WITHOUT a
+  # watched-page touch -> must FAIL with the expected error. This is the
+  # detection gap #522 identified: a new `**[#NNN](...) — ...:**` paragraph
+  # under an existing milestone heading changes neither the current-milestone
+  # line nor a roadmap-evidence checkbox, so the original two-signal check
+  # reported `pass` while the status page drifted.
+  def test_feature_paragraph_addition_without_status_page_touch_fails
+    with_repo do |root|
+      base_sha = write_and_commit(root, { ROADMAP_PATH => BASE_ROADMAP }, "base")
+      added_paragraph = <<~MARKDOWN.chomp
+
+        **[#1001](https://github.com/rotnov/pycc/issues/1001) — New feature:** description here.
+      MARKDOWN
+      changed_roadmap = BASE_ROADMAP + added_paragraph + "\n"
+      write_and_commit(root, { ROADMAP_PATH => changed_roadmap }, "feature paragraph only")
+
+      error = assert_raises(StatusPageFreshnessError) do
+        check_status_page_freshness(root, base_sha, "HEAD")
+      end
+      assert_match(/feature-landing paragraph/, error.message)
+      assert_match(/site\/status\/index\.html/, error.message)
+    end
+  end
+
+  # (k) a new feature-landing paragraph added to docs/ROADMAP.md WITH a
+  # watched-page touch -> must PASS.
+  def test_feature_paragraph_addition_with_status_page_touch_passes
+    with_repo do |root|
+      base_sha = write_and_commit(root, { ROADMAP_PATH => BASE_ROADMAP }, "base")
+      added_paragraph = <<~MARKDOWN.chomp
+
+        **[#1001](https://github.com/rotnov/pycc/issues/1001) — New feature:** description here.
+      MARKDOWN
+      changed_roadmap = BASE_ROADMAP + added_paragraph + "\n"
+      write_and_commit(
+        root,
+        {
+          ROADMAP_PATH => changed_roadmap,
+          "site/status/index.html" => "<html>updated</html>"
+        },
+        "feature paragraph + status page"
+      )
+
+      result = check_status_page_freshness(root, base_sha, "HEAD")
+      assert_match(/feature-paragraph signal matched/, result)
+    end
+  end
+
+  # (l) a text-only modification to an existing feature-landing paragraph
+  # (same issue number, different description) WITHOUT a watched-page touch
+  # -> must PASS (negative control). This pins the design choice that set
+  # membership -- not text -- is the signal, so a description-only edit to
+  # an existing paragraph does not fire.
+  def test_feature_paragraph_text_only_edit_without_status_page_touch_passes
+    with_repo do |root|
+      base_sha = write_and_commit(root, { ROADMAP_PATH => BASE_ROADMAP }, "base")
+      changed_roadmap = BASE_ROADMAP.sub(
+        "description here.",
+        "revised description with more detail."
+      )
+      write_and_commit(root, { ROADMAP_PATH => changed_roadmap }, "text-only paragraph edit")
+
+      result = check_status_page_freshness(root, base_sha, "HEAD")
+      assert_match(/no roadmap milestone, evidence-checklist, or feature-landing-paragraph signal/, result)
+    end
+  end
+
+  # (m) an existing feature-landing paragraph REMOVED from docs/ROADMAP.md
+  # WITHOUT a watched-page touch -> must FAIL. D-170 documents removal as
+  # a signal (set membership shrinks), and this test verifies that claim
+  # directly, complementing the addition tests (j/k) and the text-only
+  # negative control (l).
+  def test_feature_paragraph_removal_without_status_page_touch_fails
+    with_repo do |root|
+      base_sha = write_and_commit(root, { ROADMAP_PATH => BASE_ROADMAP }, "base")
+      removed_paragraph = <<~MARKDOWN.chomp
+
+        **[#999](https://github.com/rotnov/pycc/issues/999) — Test feature:** description here.
+      MARKDOWN
+      changed_roadmap = BASE_ROADMAP.sub(removed_paragraph + "\n", "")
+      write_and_commit(root, { ROADMAP_PATH => changed_roadmap }, "remove feature paragraph")
+
+      error = assert_raises(StatusPageFreshnessError) do
+        check_status_page_freshness(root, base_sha, "HEAD")
+      end
+      assert_match(/feature-landing paragraph/, error.message)
+      assert_match(/site\/status\/index\.html/, error.message)
     end
   end
 

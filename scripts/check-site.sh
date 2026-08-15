@@ -614,7 +614,7 @@ ROBOTS = (
 PAGE_SPECS = {
     "status": {
         "canonical": f"{ROOT}status/",
-        "date_modified": "2026-08-14",
+        "date_modified": "2026-08-15",
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
@@ -627,10 +627,12 @@ PAGE_SPECS = {
             "Implemented v0.1 subset",
             "Validated frontend codes",
             "byte-exact CLI snapshots cover",
-            "The rest of v0.3's class model and the full conformance matrix are next.",
+            "Custom exceptions and the full conformance matrix are next.",
             "v0.1 and v0.2's acceptance criteria are both met, and v0.3's class model core has landed",
             "v0.2 acceptance criteria met",
             "v0.3 in progress",
+            "Only custom exceptions remain planned.",
+            "Still ahead for v0.3: custom exceptions are the",
             "the full multi-version conformance matrix, differential fuzzing, and corpus testing remain planned test-depth work carried over from v0.1 and v0.2.",
             "Unary operators are rejected earlier by HIR lowering with a spanned C0001 capability diagnostic, including under pycc check",
             "The 100% line/region coverage gate and the required",

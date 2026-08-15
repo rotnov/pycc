@@ -29,7 +29,7 @@
     {
       "path": "scripts/check_search_visibility_audit.py",
       "source_path": "scripts/check_search_visibility_audit.py",
-      "sha256": "c40936042c0364e2b726fc50389d9b2efc7133350858a4a6204177d43ce6bfec"
+      "sha256": "3ea740e1997c6667f815bc35a5d29cdff9efd2fd0732c76e0963be8aa11027d3"
     },
     {
       "path": "scripts/check_site_accessibility.rb",
@@ -159,7 +159,7 @@
     {
       "path": "tests/fixtures/pages-performance-manifest.json",
       "source_path": "tests/fixtures/pages-performance-manifest.json",
-      "sha256": "e5a9b831f06389606c3ed3c06151e31d7edf40c44cb9d1107e9a525f3bc09126"
+      "sha256": "6d87382e0542a412a7c7ef83a095cac1d29c805166558b5b32476f08b73c08ad"
     },
     {
       "path": "tests/fixtures/workflow-policy-search-ledger.yml",
@@ -224,7 +224,7 @@
     {
       "path": "tests/fixtures/policy-successors/pages-performance-manifest.json",
       "source_path": "tests/fixtures/policy-successors/pages-performance-manifest.json",
-      "sha256": "e5a9b831f06389606c3ed3c06151e31d7edf40c44cb9d1107e9a525f3bc09126"
+      "sha256": "6d87382e0542a412a7c7ef83a095cac1d29c805166558b5b32476f08b73c08ad"
     }
   ]
 }

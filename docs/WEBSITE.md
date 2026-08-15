@@ -45,9 +45,8 @@ lower the same implemented language surface through MIR → LLVM → host linker
 native executable. `docs/ROADMAP.md`'s v0.1 and v0.2 acceptance criteria are
 both met, and v0.3's class model core (#385) has landed; the project remains
 pre-alpha because the documented representation and lifetime gaps, the full
-multi-version conformance testkit, named demos, and the rest of v0.3's class
-model (inheritance, `@property`, dataclasses, enums, protocols, structural
-pattern matching, and custom exceptions) remain unfinished. These facts must
+multi-version conformance testkit, named demos, and the last of v0.3's class
+model (custom exceptions) remain unfinished. These facts must
 move with the authoritative roadmap whenever implementation depth changes; see
 "Status-page freshness enforcement" below for how a stale claim like this one
 is now caught mechanically instead of relying on a reviewer to notice.
@@ -379,14 +378,17 @@ current milestone and acceptance status in prose; nothing previously enforced
 that they stayed in sync with it, and both pages drifted silently past the
 v0.2 acceptance milestone and into v0.3 before #401 caught it (D-156).
 `scripts/check_status_page_freshness.rb` closes that gap with a narrowly
-scoped, two-signal check: it watches a pull request's or push's diff to
+scoped, three-signal check: it watches a pull request's or push's diff to
 `docs/ROADMAP.md` for (1) the `**Current milestone: ...**` bold line changing,
-or (2) a `<!-- roadmap-evidence: ... -->`-tagged checklist line's checked
+(2) a `<!-- roadmap-evidence: ... -->`-tagged checklist line's checked
 state flipping or a new evidence-marker line being added, using the same
 `EVIDENCE_MARKER` regex as `scripts/check_roadmap_evidence.rb` (duplicated
 byte-for-byte, not shared via `require_relative`, so the two must be kept in
-sync by hand). When
-either signal fires and the same diff touches neither `site/status/index.html`
+sync by hand), or (3) a new feature-landing paragraph
+(`**[#NNN](https://github.com/rotnov/pycc/issues/NNN) — <feature>:**`) being
+added under an existing `## vX.Y` heading, or an existing one being removed
+(D-170, #522). When
+any signal fires and the same diff touches neither `site/status/index.html`
 nor `site/index.html`, the check fails with a message pointing back at this
 document and at [issue #401](https://github.com/rotnov/pycc/issues/401).
 Full auto-generation of the status pages from `docs/ROADMAP.md` was

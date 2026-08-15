@@ -50,7 +50,7 @@
             "name": "pycc status — what the Python AOT compiler can do today",
             "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete for v0.1 and what's planned next, and the CI evidence behind each claim.",
             "inLanguage": "en",
-            "dateModified": "2026-08-14",
+            "dateModified": "2026-08-15",
             "isPartOf": {
               "@id": "https://rotnov.github.io/pycc/#webpage"
             },
@@ -110,7 +110,7 @@
       </nav>
 
       <header class="page-hero">
-        <p class="eyebrow">Evidence page · Updated 2026-08-14</p>
+        <p class="eyebrow">Evidence page · Updated 2026-08-15</p>
         <h1>What pycc can do <span>today.</span></h1>
         <p class="page-lede">
           pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14.
@@ -217,9 +217,9 @@
                 <p>
                   <code>Ty::Instance</code>, HIR class definitions, and
                   single-class instantiation, attribute access, and methods
-                  have landed. Inheritance, <code>@property</code>,
-                  dataclasses, enums, protocols, structural pattern
-                  matching, and custom exceptions remain planned.
+                  have landed, alongside inheritance, <code>@property</code>,
+                  dataclasses, enums, protocols, and structural pattern
+                  matching. Only custom exceptions remain planned.
                 </p>
               </div>
             </div>
@@ -327,17 +327,16 @@
 
           <section id="next">
             <p class="section-kicker">Planned next</p>
-            <h2>The rest of v0.3's class model and the full conformance matrix are next.</h2>
+            <h2>Custom exceptions and the full conformance matrix are next.</h2>
             <p>
               v0.1 and v0.2's acceptance criteria are both met, and v0.3's
               class model core has landed — see
               <a href="#implemented">Implemented now</a> above for what that
-              covers today. Still ahead for v0.3: inheritance,
-              <code>@property</code>, dataclasses, enums, protocols,
-              structural pattern matching, and custom exceptions. Beyond the
-              class model, the full multi-version conformance matrix,
-              differential fuzzing, and corpus testing remain planned test-depth
-              work carried over from v0.1 and v0.2. See the
+              covers today. Still ahead for v0.3: custom exceptions are the
+              last remaining class-model item. Beyond the class model, the
+              full multi-version conformance matrix, differential fuzzing,
+              and corpus testing remain planned test-depth work carried over
+              from v0.1 and v0.2. See the
               <a href="https://github.com/rotnov/pycc/blob/main/docs/DELIVERY_PLAN.md">delivery plan</a>
               for the exact sequence.
             </p>
