@@ -312,7 +312,385 @@ indexed, so this ledger records those states independently.
 | 2026-07-25T16:43:18Z | The live `/python-aot-compilers/` URL reports “URL is on Google,” HTTPS valid, and one valid breadcrumb item. Googlebot Smartphone last crawled it at 13:58:20 UTC; fetch and indexing permission succeeded, and Google selected the inspected canonical | Public `/sitemap.xml` still returns `200 application/xml` with all 5 canonical URLs. Search Console still reports “Couldn’t fetch,” 0 discovered pages, and a temporary processing error for the page's sitemap discovery field | The processed 3-month web report is updated about 5 hours before this observation and still reports 0 clicks, 0 impressions, and no query rows; therefore no Google query position exists yet |
 | 2026-07-25T17:49:31Z | No new URL Inspection was run; the latest authoritative evidence remains the positive inspection state for all 5 canonical URLs recorded above | Public `/sitemap.xml` returns `200 application/xml` with all 5 canonical URLs. Search Console still reports “Couldn’t fetch,” no processing date, and 0 discovered pages | The processed 3-month web report is updated about 4.5 hours before this observation and still reports 0 clicks, 0 impressions, and no query rows; therefore no Google query position exists yet |
 | 2026-07-25T19:10:03Z | No new URL Inspection was run; the latest authoritative evidence remains the positive inspection state for all 5 canonical URLs recorded above | Public `/sitemap.xml` returns `200 application/xml` with all 5 canonical URLs. Search Console still reports “Couldn’t fetch,” no processing date, and 0 discovered pages | The processed 3-month web report is updated about 5 hours before this observation and still reports 0 clicks, 0 impressions, and no query rows; therefore no Google query position exists yet |
-| 2026-07-29T10:25:27Z | No new URL Inspection was run; all 5 canonical URLs retain the latest positive per-URL evidence above | Search Console still reports the submitted `/sitemap.xml` as failed to process with 0 discovered pages, while the public resource remains independently valid; investigation continues in #193 | Maintainer-attested processed web data for 2026-07-23 through 2026-07-26 reports 15 impressions, 2 clicks, 13.3% CTR, and average position 5.7. The only disclosed query row is `python aot compiler`: 0 clicks, 3 impressions, average position 6.3. Low-volume rows are withheld, so the clicks cannot be attributed to named queries; #163 owns stronger immutable evidence. |
+| 2026-07-29T10:25:27Z | No new URL Inspection was run; all 5 canonical URLs retain the latest positive per-URL evidence above | Search Console still reports the submitted `/sitemap.xml` as failed to process with 0 discovered pages, while the public resource remains independently valid; investigation continues in #193 | Maintainer-attested processed web data for 2026-07-23 through 2026-07-26 reports 15 impressions, 2 clicks, 13.3% CTR, and average position 5.7. The only disclosed query row is `python aot compiler`: 0 clicks, 3 impressions, average position 6.3. Low-volume rows are withheld, so the clicks cannot be attributed to named queries; #163 owns stronger immutable evidence. The structured artifact now preserves page, country, device, date, and search-appearance dimension tables separately from the property aggregate: the page table displays 19 page-level impressions across 4 rows (property total 15), the device table shows 6 mobile and 9 desktop impressions, the country table shows 5 US impressions plus 10 across 8 other countries, the date table shows 0 impressions on 2026-07-23, 1 on 2026-07-24, 5 on 2026-07-25, and 9 on 2026-07-26, and search appearance reports no data. These marginals are independent observations and must not be joined into synthetic multi-dimensional rows. |
+
+## Page indexing aggregate history
+
+The Search Console **Page indexing** report is a report-level dataset, distinct
+from URL Inspection, live URL tests, sitemap processing, HTTPS aggregates,
+performance data, and search appearance. Google documents that the report's
+totals describe the report state, not the current index status of any specific
+URL, and warns not to expect immediate indexing. The report exposes a
+report-level "last updated" date and example-level dates that must be preserved
+exactly as displayed; they are never collapsed into a single timestamp.
+
+The [machine-readable artifact](./SEARCH_CONSOLE_OBSERVATIONS.json) preserves
+each Page indexing aggregate snapshot in a separate append-only
+`page_indexing_observations` series, reusing the same sanitized provenance
+envelope as the per-URL observation series. Each snapshot records the verified
+property, collection timestamp, UI/API transport and locale, selected page
+scope or sitemap filter, report last-updated date, report-level totals,
+filters, data freshness state, and each reason row independently — exact
+reason, source, validation state, affected-page count, first-detected date,
+displayed examples with their last-crawl dates, and row/example limits with
+sampled/truncated flags.
+
+Cross-report reconciliation rules:
+
+- A Page indexing aggregate does not overwrite a newer per-URL inspection.
+- A per-URL inspection does not rewrite the historical aggregate snapshot.
+- Performance proves an appearance in its measured period, not permanent
+  current index membership.
+- Public HTTP/canonical/sitemap checks are implementation evidence, not
+  substitutes for owner-facing index state.
+- A stale contradiction is represented explicitly as
+  `report_lag_or_unreconciled`, not silently "fixed" by selecting one number.
+- The Page indexing aggregate is separate from #193's sitemap-processing
+  state; neither report proves or causes the other.
+- "Validate fix" is not started for a Google-systems reason unless a current
+  diagnosis identifies a deployed site-side change and the validation action
+  is bounded and recorded.
+
+| Collected at (UTC) | Report last updated | Indexed | Not indexed | Data freshness | Reason | Source | Validation | Affected | First detected | Example URL | Example last crawl |
+|---|---|---:|---:|---|---|---|---|---:|---|---|---|
+| 2026-07-29T11:59:42Z | 2026-07-24 | 4 | 1 | report_lag_or_unreconciled | Crawled — currently not indexed | Google systems | not_started | 1 | 2026-07-25 | `https://rotnov.github.io/pycc/python-aot-compilers/` | 2026-07-25 |
+
+The 2026-07-29 baseline preserves the lagging 4 indexed / 1 not indexed
+aggregate exactly as displayed. The example URL is the comparison page whose
+fresh URL Inspection reports it as indexed, so the aggregate lags behind the
+per-URL evidence; this is recorded as `report_lag_or_unreconciled`, not as a
+live-site regression. The displayed examples are a sample, not a complete
+lifetime URL inventory.
+
+## Engine-qualified visibility
+
+Indexability, public result visibility, and answer-engine citation are
+different signals and must remain separate. A successful HTTP fetch proves
+crawl access, not ranking. Search Console owner data proves Google indexing
+and performance, not ChatGPT citation. `llms.txt` is a concise
+machine-readable content map, not a claimed ranking lever. One volatile
+answer-engine result is not a stable position.
+
+The [machine-readable engine-visibility artifact](./ENGINE_VISIBILITY_OBSERVATIONS.json)
+is the structured source of truth for engine-qualified web-search and
+LLM answer-engine visibility observations. It reuses the same sanitized
+immutable evidence envelope as the Search Console and GitHub traffic
+artifacts: `artifact_version`, `provenance`, `observations`, and
+`latest_projection`. It also defines a `query_suite` with a stable
+prompt/query set and a `surfaces` map with explicitly qualified engine
+contracts.
+
+### Surfaces
+
+Each observation must name an explicitly qualified surface. The supported
+surfaces are:
+
+- `chatgpt_search` — the ChatGPT web-search surface (OpenAI);
+- `google_web_search` — Google web search (distinct from Search Console
+  owner data);
+- `bing_web_search` — Bing web search (Microsoft);
+- `perplexity_search` — Perplexity answer engine;
+- `unknown_web_provider` — an unidentified web-search provider, used only
+  when provenance is not disclosed. `unknown_web_provider` must never be
+  labeled as Google, Bing, or another named engine.
+
+A web observation without a defined surface/provider is invalid.
+
+### Query suite
+
+The stable prompt/query suite covers five intent classes:
+
+- exact entity (`rotnov/pycc`) — diagnostic, never a product-acquisition KPI;
+- named product (`pycc Python AOT compiler`) — product acquisition;
+- product category (`python aot compiler`) — product acquisition;
+- feature intent (`typed Python compiler native binary`) — product
+  acquisition;
+- AI-authorship diagnostic (`"fully AI-created" "pycc"`) — excluded from
+  the product-acquisition KPI, never counted as product progress.
+
+The intent/KPI compatibility matrix is closed: an unrecognized intent or
+any other pairing is invalid and cannot enter the acquisition denominator.
+
+### Outcome vocabulary
+
+Each observation records one outcome from a separate vocabulary that
+distinguishes indexability from visibility from citation:
+
+- `crawlable` — the resource is reachable by a crawler;
+- `indexed_owner_visible` — owner-visible indexing evidence (e.g. Search
+  Console URL Inspection);
+- `returned_in_result_set` — the project appeared in the observed result
+  window;
+- `cited_in_answer` — an answer engine cited the project with a captured
+  URL;
+- `not_surfaced_in_observed_window` — the project did not appear in the
+  observed result or answer window;
+- `unknown` — the outcome could not be determined.
+
+`crawlable` and `indexed_owner_visible` are indexability signals, not
+citation evidence. They must never be treated as `cited_in_answer`. A
+`cited_in_answer` outcome requires at least one captured cited URL.
+
+### Observation fields
+
+Every answer/search observation is stored append-only with:
+
+- `observed_at` UTC timestamp;
+- `query_suite_id` referencing the stable query suite;
+- `surface` naming the explicitly qualified engine;
+- `prompt` — the exact user prompt or query;
+- `model_product_version` — model/product/version when exposed, or
+  `unknown`;
+- `locale` and `country` — when known, or `unknown`;
+- `personalization_state` — signed-in/personalization state when known, or
+  `unknown`;
+- `result_window` — description of the result/citation window observed;
+- `outcome` — one of the vocabulary above;
+- `pycc_surfaced` — whether pycc appeared in the observed window;
+- `cited_urls` — cited URL(s) when surfaced with a citation outcome;
+- `citation_order` — citation/source order when surfaced, or `null`;
+- `competing_entities` — returned competing entities when absent;
+- `transport_tool` — transport/tool used for the observation;
+- `query_rewriting_disclosed` — `yes`, `no`, or `unknown`.
+
+Unavailable fields use `unknown` (or `null` for `citation_order`) rather
+than invented values. Observations are append-only: timestamps must be
+nondecreasing and earlier observations are never rewritten or deleted.
+
+### Current state
+
+The artifact is a template with no engine-qualified visibility observations
+recorded yet. The 2026-07-29 ChatGPT search baseline described in issue #195
+is preserved in that issue's body, not in this artifact, because it predates
+the contract and was not captured under this schema. When real manual
+captures are appended, they must pass the same local schema validator
+(`scripts/check_engine_visibility_observations.py`) before they enter the
+ledger. Repeated observations on a bounded cadence are required before
+changing public positioning solely because of answer-engine output.
+
+## Pages visit measurement
+
+The three discovery signals above — GitHub repository search, GitHub
+Traffic, Google Search Console, and engine-qualified visibility — do not
+measure visits to the **GitHub Pages site** from Yandex, DuckDuckGo,
+Perplexity, ChatGPT, other answer engines, ordinary referrals, or direct
+navigation. The five-page production artifact has no pageview/visit
+analytics integration, and the project has no owner-facing Pages request
+log. This leaves a material measurement gap: the project cannot tell
+whether a Yandex rank or an answer-engine citation produced a visit,
+which page became the entry page, or whether a visitor continued to
+GitHub (issue #208, [D-168](./decisions/D-168-pages-visit-measurement-capability-contract.md)).
+
+The [machine-readable Pages visit artifact](./PAGES_VISIT_OBSERVATIONS.json)
+is the structured source of truth for owner-facing GitHub Pages visit
+analytics. It reuses the same sanitized immutable evidence envelope as
+the Search Console, GitHub traffic, and engine-visibility artifacts:
+`artifact_version`, `provenance`, `observations`, and
+`latest_projection`. It also carries a `measurement_contract` block that
+defines the reporting timezone, canonical pages, primary conversion,
+source-class vocabulary, collection-status vocabulary, data-minimization
+boundary, and separation rules.
+
+### Current analytics decision
+
+The current explicit analytics decision is **keep no site analytics**
+(D-168). The site has no project-selected analytics script, cookie, or
+external beacon. The roadmap and this document state that non-Google
+landing visits remain unobservable. "Keep no site analytics" is a valid
+explicit decision; a future PR that activates analytics must record a
+superseding ADR that justifies the visitor-data, retention, and
+external-service policy, add an accurate public privacy/analytics
+disclosure before or with collection, and establish the activation
+baseline at deployment time without synthesizing pre-installation
+history.
+
+### Measurement contract
+
+The minimum measurement contract, defined before choosing fields:
+
+- **Timestamp/date and reporting timezone**: `observed_at` in UTC and
+  `data_through_date` in `YYYY-MM-DD` form; `reporting_timezone` is UTC.
+- **Canonical entry page**: each observation records a `per_page`
+  breakdown keyed by canonical URL.
+- **Pageviews and visit/unique as separate metrics**: `pageviews`,
+  `visits`, and `uniques` are separate fields; `unique_definition`
+  records the provider's exact unique-visitor definition so it is not
+  silently compared with GitHub's `uniques` or another provider's.
+- **Coarse referrer/source class**: `source_classes` uses a closed
+  vocabulary (`google`, `yandex`, `bing`, `duckduckgo`, `perplexity`,
+  `chatgpt`, `other_answer_engine`, `other_search`, `referral`,
+  `direct_or_unattributed`, `unknown`). A referrer domain supports a
+  coarse source classification; it does not expose the search query.
+  Missing referrer data is `direct_or_unattributed`, not proof of direct
+  navigation.
+- **Coarse country and device**: `country` and `device` dimensions are
+  permitted only if supplied by the provider without expanding the
+  chosen privacy boundary.
+- **Primary conversion**: a click from a canonical Pages page to
+  `https://github.com/rotnov/pycc`, recorded as
+  `primary_conversion_clicks`. This is the only instrumented interaction;
+  no speculative per-interaction tracking.
+- **Collection status**: `available`, `delayed`, `blocked`,
+  `unauthorized`, `provider_error`, or `unknown`. A non-zeroable status
+  (`blocked`, `delayed`, `unauthorized`, `provider_error`, `unknown`)
+  must never be converted to zero pageviews or zero visits; unavailable
+  data is `null`, not `0`.
+
+### Data-minimization boundary
+
+Unless a separately accepted decision justifies them, the artifact must
+not collect or retain: names, email/account identifiers, form contents,
+full IP addresses, full user agents, cookies, fingerprints, persistent
+cross-site IDs, session replay, arbitrary query strings/fragments, or
+raw search queries not supplied by a provider-owned search report. The
+`data_minimization_boundary` block in the artifact records this
+forbidden-fields list and a note explaining the scope.
+
+### Separation rules
+
+This source is separate from Google Search Console, GitHub repository
+traffic, and direct-provider SERP/answer observations. Those systems
+must never be joined at a person/session level, and no cross-provider
+funnel may be manufactured from marginal totals. A provider-specific
+unique visitor is not comparable with GitHub's `uniques` or another
+provider unless definitions are proven equivalent. A Pages visit after a
+Yandex or other engine observation is correlation only unless the
+analytics source exposes a corresponding referrer or UTM signal.
+Browser blocking, script failure, network loss, and provider filtering
+make client-side analytics incomplete; counts must not be presented as a
+census. Analytics must not be described as a ranking factor or as
+evidence that `llms.txt`, schema, or a content edit caused visibility.
+
+### Current state
+
+The artifact is a template with no Pages visit observations recorded
+yet. When a privacy-scoped analytics source is activated and real data
+is collected, observations must pass the local schema validator
+(`scripts/check_pages_visit_observations.py`) before they enter the
+ledger. The validator rejects a non-zeroable collection status converted
+to zero, an invalid source class, a non-append-only observation
+sequence, a `latest_projection` that disagrees with the latest
+observation, and prose that conflates repository views with Pages visits
+or Search Console clicks with all-provider visits.
+
+## Earned-authority evidence and launch readiness gate (issue #209)
+
+The measurements above record visibility, traffic, indexing, and
+answer-engine state. They do not answer when the pre-alpha project is ready
+for an honest public launch, what qualifies as earned independent authority,
+or how to prevent automated agents from turning distribution into spam. The
+[earned-authority evidence artifact](./EARNED_AUTHORITY_EVIDENCE.json) is the
+append-only structured source of truth for external-mention evidence and the
+launch readiness gate. It reuses #163's provenance-bearing evidence envelope
+and #195's provider-qualified vocabulary; it does not invent an incompatible
+"SEO authority score." This section does not authorize posting, messaging
+third parties, or manufacturing links.
+
+### Classification vocabulary
+
+Every external mention is classified into one closed category so
+self-authored and owned references can never inflate an earned count:
+
+- `owned` — a project-owned surface (the repository, the Pages site, or a
+  project-controlled mirror);
+- `self_authored_external` — an external post, issue, comment, or social
+  entry written by the repository owner or a known project author;
+- `independent_editorial` — an unsolicited, independently authored
+  recommendation, review, or article;
+- `community` — a community reference (forum, discussion, Q&A) that is not
+  self-authored and not a directory listing;
+- `directory` — a directory or catalog listing;
+- `automated_mirror` — an automated mirror, copied README, or scraper page;
+- `spam` — link spam, bought links, or manufactured references;
+- `unknown` — the relationship could not be determined from public
+  information.
+
+A maintainer's upstream bug report, GitHub comment, social post, or
+project-owned mirror must not increment an earned or independent count. The
+`independent_editorial`, `community`, and `directory` classifications are
+the only classifications that count toward `independent_mention_count`;
+`self_authored_external` and `owned` are tracked separately and never
+contribute to the independent count.
+
+### Observation fields
+
+Each observation is stored append-only with at least:
+
+- `observed_at` UTC timestamp;
+- `kind` — `window_audit`, `mention`, or `owner_inventory`;
+- `discovery_surface` and exact bounded query/export;
+- `source_url` and normalized `canonical_destination` (null for window
+  audits with zero rows);
+- `target_project_url`;
+- `source_owner_relationship` when publicly knowable;
+- `classification` from the closed vocabulary above;
+- `link_state` — `live`, `redirect`, `removed`, or `not_applicable`;
+- `link_exposed` and `nofollow_sponsored_state` — `known_nofollow`,
+  `known_dofollow`, `known_sponsored`, `unknown`, or `not_applicable`;
+- `first_seen_at` and `last_verified_at` timestamps;
+- `claim_accuracy_check` against current status/roadmap;
+- `source_limitations` and `sample_truncation_status`.
+
+Unavailable fields use `unknown` or `not_applicable` rather than invented
+values. Observations are append-only: timestamps must be nondecreasing and
+earlier observations are never rewritten or deleted. A zero-row window audit
+is preserved as a window result (`returned_rows: 0`), never rewritten as
+a zero-backlink claim — a bounded public search window is not an exhaustive
+backlink search, and the sampled Search Console Links report is not a
+complete inventory.
+
+### Launch readiness gate
+
+The launch readiness gate is human-reviewed and remains closed until at
+least:
+
+- #196 reconciles release/tag/roadmap status;
+- #197 provides an executable, tested flagship quick start;
+- the landing and status pages agree on current behavior and pre-alpha
+  limitations;
+- canonical URLs and live links pass their existing checks;
+- the launch text names the actual product category (ahead-of-time compiler
+  for typed Python) and does not position pycc as an AI compiler;
+- the message clearly discloses pre-alpha readiness and AI-created/human-
+  managed provenance without turning provenance into the product keyword.
+
+The gate cannot be opened while #196 or #197 remains open. No automated
+posting, commenting, voting, starring, reviewing, or account creation is
+authorized. The repository may prepare evidence and copy, but external
+publication requires explicit human authorization for that destination and
+message.
+
+### Distribution checklist
+
+Every candidate community, directory, or publication must have an audience
+fit explanation, current posting/submission rules, a useful audience-facing
+artifact to share, a named human approval point before any external action,
+and a non-promotional fallback when self-submission is prohibited. The
+checklist is currently empty: no candidate has been reviewed or approved.
+
+### Current state
+
+The current defensible state is `no_independent_mention_in_observed_windows`
+and `owner_backlink_inventory = unavailable`. The 2026-07-29 bounded
+observations are seeded in the artifact: GitHub code, commit, and issue
+search windows returned zero independent rows (the three issue/PR rows are
+self-authored upstream bug reports by the repository owner, classified
+`self_authored_external`), and the two Google excluded-site queries returned
+"did not match any documents." The Search Console Links report was still
+processing and its export was disabled, so the owner-facing backlink
+inventory is unavailable, not zero. The GitHub Traffic rolling top-referrer
+list contained only `github.com` and `rotnov.github.io`, which are owned
+surfaces classified `owned`, not independent referrers. Zero returned rows
+in a bounded window is preserved as a window result, not as a zero-backlink
+claim. `scripts/check_earned_authority_evidence.py` (with mutation tests
+in `scripts/test_check_earned_authority_evidence.py`) validates the schema,
+the launch gate, the append-only contract, the projection counts, and the
+prose bindings, rejecting self-authored or owned references counted as
+independent, a zero-row window rewritten as a zero-backlink claim, the sampled
+Search Console Links report treated as complete, invented `nofollow` or
+author independence, a launch gate opened while #196 or #197 is open, launch
+copy that describes pycc as an AI compiler or hides pre-alpha status, and a
+roadmap projection that contradicts the latest structured evidence.
 
 ## Change log
 
@@ -363,9 +741,36 @@ Console data now contains 15 impressions and 2 clicks; its only disclosed
 query row, `python aot compiler`, has 3 impressions, 0 clicks, and average
 position 6.3. That small disclosed row is product-intent evidence, not a stable
 rank or proof of demand, and the withheld rows prevent attribution of the two
-clicks. Sitemap processing remains unsuccessful even though the public sitemap
-is valid, reinforcing that query performance, per-URL indexing, and sitemap
-processing are independent signals. The traffic window remains too
+clicks. The structured artifact preserves 19 page-level impressions across 4
+page rows separately from the 15-impression property total: Search Console
+counts the property-level result once, while page-level aggregation counts
+each unique URL, so the page sum legitimately exceeds the property total. The
+device marginal shows both clicks on mobile (6 mobile impressions, 9 desktop
+impressions), and the country marginal shows both clicks from the United States
+(5 US impressions, 10 across 8 other countries). The date marginal shows 0
+impressions on 2026-07-23, 1 on 2026-07-24, 5 on 2026-07-25, and 9 on
+2026-07-26. Search appearance reports no data, which is categorical absence
+rather than a numeric zero. These dimension tables are independent marginal
+observations and must not be joined into synthetic page×country,
+page×device, or query×country rows; the individual page, query, country, and
+device identity of each click remains unknown. Sitemap processing remains unsuccessful even though the public sitemap is valid, reinforcing that query
+performance, per-URL indexing, and sitemap processing are independent signals.
+The lagging Page indexing aggregate (report last updated 2026-07-24, collected
+2026-07-29T11:59:42Z) still shows 4 indexed and 1 not indexed, with the single
+not-indexed reason row "Crawled — currently not indexed" (source: Google
+systems, validation not started, 1 affected page, first detected 2026-07-25)
+whose displayed example is the comparison page
+`https://rotnov.github.io/pycc/python-aot-compilers/` (example last crawl
+2026-07-25). That example URL is the same page whose fresh URL Inspection
+reports it as indexed, so the aggregate lags behind the per-URL evidence; this
+is recorded as `report_lag_or_unreconciled`, not as a live-site regression or a
+reason to request indexing again or click "Validate fix". The aggregate count
+of 4 indexed does not overwrite the five positive per-URL inspections, and the
+per-URL inspection does not rewrite the historical aggregate snapshot. The
+displayed examples are a sample, not a complete lifetime URL inventory, and the
+report, crawl, inspection, and performance dates are preserved separately
+rather than collapsed into one timestamp.
+The traffic window remains too
 automation-heavy and low-uniqueness to attribute to SEO. The structured
 GitHub traffic artifact ([`GITHUB_TRAFFIC_OBSERVATIONS.json`](./GITHUB_TRAFFIC_OBSERVATIONS.json))
 preserves daily views and clones rows alongside the rolling 14-day endpoint

@@ -5,7 +5,7 @@
     "sanitized": true,
     "collection_method": "manual_owner_inspection_and_search_console_export",
     "collected_at": "2026-07-29T10:25:27Z",
-    "sanitization_note": "All credentials, API keys, and tokens removed. Only owner-facing Search Console observations and public sitemap verification results are retained."
+    "sanitization_note": "All credentials, API keys, and tokens removed. Only owner-facing Search Console observations and public sitemap verification results are retained. Page indexing report aggregates are preserved as a separate append-only series from per-URL inspection, sitemap, and performance evidence; an aggregate snapshot never overwrites a newer per-URL inspection."
   },
   "observations": [
     {
@@ -29,7 +29,10 @@
         "impressions": null,
         "ctr_percent": null,
         "avg_position": null,
-        "query_rows": []
+        "query_rows": [],
+        "aggregation_type": null,
+        "report_scope": null,
+        "dimension_tables": null
       }
     },
     {
@@ -54,7 +57,10 @@
         "impressions": null,
         "ctr_percent": null,
         "avg_position": null,
-        "query_rows": []
+        "query_rows": [],
+        "aggregation_type": null,
+        "report_scope": null,
+        "dimension_tables": null
       }
     },
     {
@@ -79,7 +85,10 @@
         "impressions": 0,
         "ctr_percent": null,
         "avg_position": null,
-        "query_rows": []
+        "query_rows": [],
+        "aggregation_type": null,
+        "report_scope": null,
+        "dimension_tables": null
       }
     },
     {
@@ -104,7 +113,10 @@
         "impressions": 0,
         "ctr_percent": null,
         "avg_position": null,
-        "query_rows": []
+        "query_rows": [],
+        "aggregation_type": null,
+        "report_scope": null,
+        "dimension_tables": null
       }
     },
     {
@@ -129,7 +141,10 @@
         "impressions": 0,
         "ctr_percent": null,
         "avg_position": null,
-        "query_rows": []
+        "query_rows": [],
+        "aggregation_type": null,
+        "report_scope": null,
+        "dimension_tables": null
       }
     },
     {
@@ -154,7 +169,10 @@
         "impressions": 0,
         "ctr_percent": null,
         "avg_position": null,
-        "query_rows": []
+        "query_rows": [],
+        "aggregation_type": null,
+        "report_scope": null,
+        "dimension_tables": null
       }
     },
     {
@@ -186,7 +204,194 @@
             "impressions": 3,
             "avg_position": 6.3
           }
-        ]
+        ],
+        "aggregation_type": "property",
+        "report_scope": {
+          "property": "https://rotnov.github.io/pycc/",
+          "search_type": "web",
+          "selected_date_range": "3_months",
+          "data_start_date": "2026-07-23",
+          "data_through_date": "2026-07-26",
+          "granularity": "daily",
+          "filters": "none",
+          "transport": "manual_ui_inspection",
+          "locale": "unknown",
+          "freshness_note": "updated about 4 hours earlier"
+        },
+        "dimension_tables": {
+          "page": {
+            "dimension": "page",
+            "aggregation_type": "page",
+            "rows": [
+              {
+                "page": "https://rotnov.github.io/pycc/",
+                "clicks": 1,
+                "impressions": 10
+              },
+              {
+                "page": "https://rotnov.github.io/pycc/python-aot-compilers/",
+                "clicks": 1,
+                "impressions": 2
+              },
+              {
+                "page": "https://rotnov.github.io/pycc/architecture/",
+                "clicks": 0,
+                "impressions": 5
+              },
+              {
+                "page": "https://rotnov.github.io/pycc/status/",
+                "clicks": 0,
+                "impressions": 2
+              }
+            ],
+            "displayed_row_sum": {
+              "clicks": 2,
+              "impressions": 19
+            },
+            "missing_rows": [
+              {
+                "page": "https://rotnov.github.io/pycc/ai-native/",
+                "semantics": "not_returned_in_observed_table"
+              }
+            ],
+            "row_limit": null,
+            "export_method": "manual_ui_export",
+            "truncated": false,
+            "anonymized_rows_withheld": false
+          },
+          "device": {
+            "dimension": "device",
+            "aggregation_type": "device",
+            "rows": [
+              {
+                "device": "Mobile",
+                "clicks": 2,
+                "impressions": 6
+              },
+              {
+                "device": "Desktop",
+                "clicks": 0,
+                "impressions": 9
+              }
+            ],
+            "displayed_row_sum": {
+              "clicks": 2,
+              "impressions": 15
+            },
+            "missing_rows": [],
+            "row_limit": null,
+            "export_method": "manual_ui_export",
+            "truncated": false,
+            "anonymized_rows_withheld": false
+          },
+          "country": {
+            "dimension": "country",
+            "aggregation_type": "country",
+            "rows": [
+              {
+                "country": "United States",
+                "clicks": 2,
+                "impressions": 5
+              },
+              {
+                "country": "Belarus",
+                "clicks": 0,
+                "impressions": 2
+              },
+              {
+                "country": "France",
+                "clicks": 0,
+                "impressions": 2
+              },
+              {
+                "country": "Poland",
+                "clicks": 0,
+                "impressions": 1
+              },
+              {
+                "country": "Croatia",
+                "clicks": 0,
+                "impressions": 1
+              },
+              {
+                "country": "Russia",
+                "clicks": 0,
+                "impressions": 1
+              },
+              {
+                "country": "Singapore",
+                "clicks": 0,
+                "impressions": 1
+              },
+              {
+                "country": "United Kingdom",
+                "clicks": 0,
+                "impressions": 1
+              },
+              {
+                "country": "Algeria",
+                "clicks": 0,
+                "impressions": 1
+              }
+            ],
+            "displayed_row_sum": {
+              "clicks": 2,
+              "impressions": 15
+            },
+            "missing_rows": [],
+            "row_limit": null,
+            "export_method": "manual_ui_export",
+            "truncated": false,
+            "anonymized_rows_withheld": false
+          },
+          "date": {
+            "dimension": "date",
+            "aggregation_type": "date",
+            "rows": [
+              {
+                "date": "2026-07-23",
+                "clicks": 0,
+                "impressions": 0
+              },
+              {
+                "date": "2026-07-24",
+                "clicks": 0,
+                "impressions": 1
+              },
+              {
+                "date": "2026-07-25",
+                "clicks": 2,
+                "impressions": 5
+              },
+              {
+                "date": "2026-07-26",
+                "clicks": 0,
+                "impressions": 9
+              }
+            ],
+            "displayed_row_sum": {
+              "clicks": 2,
+              "impressions": 15
+            },
+            "missing_rows": [],
+            "row_limit": null,
+            "export_method": "manual_ui_export",
+            "truncated": false,
+            "anonymized_rows_withheld": false
+          },
+          "search_appearance": {
+            "dimension": "search_appearance",
+            "aggregation_type": "search_appearance",
+            "state": "no_data",
+            "rows": [],
+            "displayed_row_sum": null,
+            "missing_rows": [],
+            "row_limit": null,
+            "export_method": "manual_ui_export",
+            "truncated": false,
+            "anonymized_rows_withheld": false
+          }
+        }
       }
     }
   ],
@@ -203,6 +408,54 @@
     "disclosed_query": "python aot compiler",
     "disclosed_query_clicks": 0,
     "disclosed_query_impressions": 3,
-    "disclosed_query_avg_position": 6.3
-  }
+    "disclosed_query_avg_position": 6.3,
+    "page_indexing_report_last_updated": "2026-07-24",
+    "page_indexing_indexed": 4,
+    "page_indexing_not_indexed": 1,
+    "page_indexing_data_freshness": "report_lag_or_unreconciled",
+    "page_indexing_reason": "Crawled — currently not indexed",
+    "page_indexing_example_url": "https://rotnov.github.io/pycc/python-aot-compilers/",
+    "page_indexing_example_last_crawl": "2026-07-25",
+    "performance_aggregation_type": "property",
+    "page_dimension_impressions_sum": 19,
+    "page_dimension_row_count": 4,
+    "page_dimension_missing_row_count": 1,
+    "search_appearance_state": "no_data"
+  },
+  "page_indexing_observations": [
+    {
+      "collected_at": "2026-07-29T11:59:42Z",
+      "property": "https://rotnov.github.io/pycc/",
+      "transport": "search_console_ui",
+      "locale": "en",
+      "page_scope": "all_pages",
+      "sitemap_filter": null,
+      "report_last_updated": "2026-07-24",
+      "data_freshness": "report_lag_or_unreconciled",
+      "totals": {
+        "indexed": 4,
+        "not_indexed": 1
+      },
+      "filters": [],
+      "reason_rows": [
+        {
+          "reason": "Crawled — currently not indexed",
+          "source": "Google systems",
+          "validation_state": "not_started",
+          "affected_pages": 1,
+          "first_detected": "2026-07-25",
+          "examples": [
+            {
+              "url": "https://rotnov.github.io/pycc/python-aot-compilers/",
+              "last_crawl": "2026-07-25"
+            }
+          ],
+          "row_limit": null,
+          "example_limit": null,
+          "sampled": false,
+          "truncated": false
+        }
+      ]
+    }
+  ]
 }

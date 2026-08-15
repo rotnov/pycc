@@ -5,7 +5,7 @@ mod class;
 mod expr;
 mod stmt;
 
-pub use class::{HirClassDef, PropertyDef};
+pub use class::{HirClassDef, PropertyDef, ProtocolMember};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -91,6 +91,16 @@ pub enum Ty {
     /// this variant does not move `size_of::<Ty>()` past the D-109 16-byte
     /// ceiling (see `ty_size_stays_within_d109_ceiling` below).
     Instance(Box<String>),
+    /// A protocol-typed value (PEP 544, #380, PR-20). Carries the protocol
+    /// class name. Distinct from `Ty::Instance` so that `is_assignable` and
+    /// every match arm can distinguish "this value is an instance of a
+    /// concrete class" from "this value is typed as a protocol." A
+    /// protocol-typed value's concrete representation is determined by the
+    /// first assignment (D-040 sticky-representation rule) or by
+    /// monomorphization at each call site (D-006/D-134). Boxed as
+    /// `Box<String>`, mirroring `Ty::Instance`'s own documented reasoning
+    /// exactly — maintains the D-109 16-byte `size_of::<Ty>()` ceiling.
+    Protocol(Box<String>),
 }
 
 impl Ty {
@@ -111,6 +121,7 @@ impl Ty {
                 elems.iter().map(Ty::name).collect::<Vec<_>>().join(", ")
             ),
             Ty::Instance(class_name) => class_name.to_string(),
+            Ty::Protocol(name) => name.to_string(),
         }
     }
 }
@@ -437,6 +448,33 @@ pub fn is_enum_base_name(name: &str) -> bool {
     name == "Enum"
 }
 
+/// Returns `true` if `name` is the builtin `Protocol` base name recognized
+/// by `lower_class` as a marker that a class is a PEP 544 protocol (#380,
+/// PR-20). `Protocol` is not a user-defined class in `class_defs` -- it is
+/// a builtin base name consumed as a marker, not recorded in the class's
+/// `bases`/`mro`. `pycc_std` registers `typing.Protocol` as a
+/// `ProtocolMarker` symbol so `from typing import Protocol` resolves (the
+/// import is a no-op binding — `Protocol` is never a first-class value,
+/// only a base class marker). The bare name `Protocol` (without any
+/// import) is also accepted, matching pycc's existing textual-resolution
+/// precedent for `Enum`.
+pub fn is_protocol_base_name(name: &str) -> bool {
+    name == "Protocol"
+}
+
+/// Returns `true` if `name` is the builtin `ABC` base name recognized by
+/// `lower_class` as a marker that a class is abstract (PEP 3119, #380,
+/// PR-20). `ABC` is not a user-defined class in `class_defs` -- it is a
+/// builtin base name consumed as a marker, not recorded in the class's
+/// `bases`/`mro`. `pycc_std` registers `abc.ABC` as an `AbcMarker` symbol
+/// so `from abc import ABC` resolves (the import is a no-op binding —
+/// `ABC` is never a first-class value, only a base class marker). The bare
+/// name `ABC` (without any import) is also accepted, matching pycc's
+/// existing textual-resolution precedent for `Enum`/`Protocol`.
+pub fn is_abc_base_name(name: &str) -> bool {
+    name == "ABC"
+}
+
 /// Computes the compile-time result of `isinstance(obj, target_class)`.
 ///
 /// `obj_ty` is the inferred static type of the object expression.
@@ -752,7 +790,13 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     let mut class_defs: Vec<(String, HirClassDef)> = Vec::new();
     let mut items = Vec::with_capacity(module.body.len());
     for stmt in &module.body {
-        if let Some((name, ty)) = lower_type_alias_stmt(stmt, &aliases)? {
+        // #380 (PR-20): build a `(name, is_protocol)` slice for
+        // `annotation_to_ty` to resolve cross-class annotations.
+        let class_name_defs: Vec<(String, bool)> = class_defs
+            .iter()
+            .map(|(name, def)| (name.clone(), def.is_protocol))
+            .collect();
+        if let Some((name, ty)) = lower_type_alias_stmt(stmt, &aliases, &class_name_defs)? {
             // D-068 review finding on #385, second round: the class-vs-alias
             // check below (at the `Stmt::ClassDef` arm) only ever catches a
             // class defined *after* a same-named alias -- without this
@@ -772,7 +816,9 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
             aliases.push((name, ty));
             continue;
         }
-        if let Some((name, ty)) = lower_legacy_type_alias_ann_assign(stmt, &aliases)? {
+        if let Some((name, ty)) =
+            lower_legacy_type_alias_ann_assign(stmt, &aliases, &class_name_defs)?
+        {
             // Same reverse-direction check as the `type X = ...` arm above,
             // for the legacy `X: TypeAlias = <expr>` spelling.
             if class_defs.iter().any(|(class_name, _)| *class_name == name) {
@@ -900,10 +946,16 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
             ));
         }
         let item = match stmt {
-            Stmt::FunctionDef(def) => lower_function(def, &aliases)?,
-            other => {
-                HirItem::TopLevelStmt(stmt::lower_stmt(other, &aliases, false, false, None, None)?)
-            }
+            Stmt::FunctionDef(def) => lower_function(def, &aliases, &class_name_defs)?,
+            other => HirItem::TopLevelStmt(stmt::lower_stmt(
+                other,
+                &aliases,
+                false,
+                false,
+                None,
+                None,
+                &class_name_defs,
+            )?),
         };
         items.push(item);
     }
@@ -1041,6 +1093,7 @@ fn lower_import_stmt(stmt: &Stmt) -> Result<Option<Vec<ImportBinding>>, Diagnost
 fn lower_type_alias_stmt(
     stmt: &Stmt,
     aliases: &[(String, Ty)],
+    class_defs: &[(String, bool)],
 ) -> Result<Option<(String, Ty)>, Diagnostic> {
     let Stmt::TypeAlias(type_alias) = stmt else {
         return Ok(None);
@@ -1079,7 +1132,7 @@ fn lower_type_alias_stmt(
         .name
         .as_name_expr()
         .expect("ruff always parses a `type` statement's name as Expr::Name");
-    let ty = annotation_to_ty(&type_alias.value, None, None, aliases)?;
+    let ty = annotation_to_ty(&type_alias.value, None, None, aliases, class_defs)?;
     Ok(Some((name.id.to_string(), ty)))
 }
 
@@ -1108,6 +1161,7 @@ fn lower_type_alias_stmt(
 fn lower_legacy_type_alias_ann_assign(
     stmt: &Stmt,
     aliases: &[(String, Ty)],
+    class_defs: &[(String, bool)],
 ) -> Result<Option<(String, Ty)>, Diagnostic> {
     let Stmt::AnnAssign(ann) = stmt else {
         return Ok(None);
@@ -1124,13 +1178,14 @@ fn lower_legacy_type_alias_ann_assign(
     let Expr::Name(target) = ann.target.as_ref() else {
         return Ok(None);
     };
-    let ty = annotation_to_ty(value, None, None, aliases)?;
+    let ty = annotation_to_ty(value, None, None, aliases, class_defs)?;
     Ok(Some((target.id.to_string(), ty)))
 }
 
 fn lower_function(
     def: &pycc_ast::StmtFunctionDef,
     aliases: &[(String, Ty)],
+    class_defs: &[(String, bool)],
 ) -> Result<HirItem, Diagnostic> {
     if def.is_async {
         return Err(unsupported(
@@ -1163,6 +1218,7 @@ fn lower_function(
         def.name.as_str(),
         type_param.as_deref(),
         aliases,
+        class_defs,
     )?;
     let return_ty = lower_return_annotation(
         def.returns.as_deref(),
@@ -1171,8 +1227,17 @@ fn lower_function(
         type_param.as_deref(),
         None,
         aliases,
+        class_defs,
     )?;
-    let body = stmt::lower_body(&def.body, aliases, false, true, None, type_param.as_deref())?;
+    let body = stmt::lower_body(
+        &def.body,
+        aliases,
+        false,
+        true,
+        None,
+        type_param.as_deref(),
+        class_defs,
+    )?;
     Ok(HirItem::Function {
         name: def.name.to_string(),
         params,
@@ -1218,6 +1283,7 @@ fn lower_params(
     fn_name: &str,
     type_param: Option<&str>,
     aliases: &[(String, Ty)],
+    class_defs: &[(String, bool)],
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     // Every parameter kind and default value below is silently absent from
     // `parameters.args`/`ParameterWithDefault::default` -- an earlier version
@@ -1262,6 +1328,7 @@ fn lower_params(
         type_param,
         None,
         aliases,
+        class_defs,
     )?;
     params.extend(lower_arg_list(
         &parameters.args,
@@ -1270,6 +1337,7 @@ fn lower_params(
         type_param,
         None,
         aliases,
+        class_defs,
     )?);
     Ok(params)
 }
@@ -1291,6 +1359,7 @@ pub(crate) fn lower_arg_list(
     type_param: Option<&str>,
     class_name: Option<&str>,
     aliases: &[(String, Ty)],
+    class_defs: &[(String, bool)],
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     args.iter()
         .map(|param| {
@@ -1304,7 +1373,7 @@ pub(crate) fn lower_arg_list(
             match &param.parameter.annotation {
                 Some(ann) => Ok((
                     name.to_string(),
-                    annotation_to_ty(ann, type_param, class_name, aliases)?,
+                    annotation_to_ty(ann, type_param, class_name, aliases, class_defs)?,
                 )),
                 None if is_public => Err(Diagnostic::error(
                     "T0001",
@@ -1327,9 +1396,10 @@ fn lower_return_annotation(
     type_param: Option<&str>,
     class_name: Option<&str>,
     aliases: &[(String, Ty)],
+    class_defs: &[(String, bool)],
 ) -> Result<Ty, Diagnostic> {
     match returns {
-        Some(ann) => annotation_to_ty(ann, type_param, class_name, aliases),
+        Some(ann) => annotation_to_ty(ann, type_param, class_name, aliases, class_defs),
         None if is_public => Err(Diagnostic::error(
             "T0001",
             format!("public function `{fn_name}` needs a return type annotation"),
@@ -1355,11 +1425,22 @@ fn lower_return_annotation(
 /// (module-level `AnnAssign`, type aliases), where `"Self"` and a bare class
 /// name remain unrecognized (C0001), matching CPython's own scope rule that
 /// `Self` is only valid inside a class body.
+///
+/// `class_defs` is the `(name, is_protocol)` slice of already-defined
+/// classes (#380, PR-20): a bare name matching a known class resolves to
+/// `Ty::Instance` (or `Ty::Protocol` if the class is a protocol). This
+/// fixes the pre-existing gap where cross-class annotations
+/// (`def f(a: A) -> int` where `A` is a user-defined class) produced `C0001`.
+/// Checked after the builtin/`Self`/self-referential arms and before the
+/// alias table, so a class name takes priority over an alias of the same
+/// name (matching Python's own scope rule where class definitions bind the
+/// class name in the enclosing namespace).
 pub(crate) fn annotation_to_ty(
     annotation: &Expr,
     type_param: Option<&str>,
     class_name: Option<&str>,
     aliases: &[(String, Ty)],
+    class_defs: &[(String, bool)],
 ) -> Result<Ty, Diagnostic> {
     match annotation {
         Expr::NoneLiteral(_) => Ok(Ty::None),
@@ -1393,17 +1474,32 @@ pub(crate) fn annotation_to_ty(
                     .to_string(),
                 Span::new(0, 0),
             )),
-            other => aliases
-                .iter()
-                .rev()
-                .find(|(alias_name, _)| alias_name == other)
-                .map(|(_, ty)| ty.clone())
-                .ok_or_else(|| {
-                    unsupported(
-                        format!("type annotation `{other}` is not supported yet"),
-                        pycc_ast::expr_range(annotation),
-                    )
-                }),
+            other => {
+                // #380 (PR-20): resolve a bare name matching a known class
+                // to `Ty::Instance` (or `Ty::Protocol` if the class is a
+                // protocol). This fixes the pre-existing gap where
+                // cross-class annotations (`def f(a: A) -> int` where `A`
+                // is a user-defined class) produced `C0001`. Checked before
+                // the alias table so a class name takes priority over an
+                // alias of the same name.
+                if let Some((_, is_protocol)) = class_defs.iter().find(|(n, _)| n == other) {
+                    if *is_protocol {
+                        return Ok(Ty::Protocol(Box::new(other.to_string())));
+                    }
+                    return Ok(Ty::Instance(Box::new(other.to_string())));
+                }
+                aliases
+                    .iter()
+                    .rev()
+                    .find(|(alias_name, _)| alias_name == other)
+                    .map(|(_, ty)| ty.clone())
+                    .ok_or_else(|| {
+                        unsupported(
+                            format!("type annotation `{other}` is not supported yet"),
+                            pycc_ast::expr_range(annotation),
+                        )
+                    })
+            }
         },
         // Issue #435 (Part D, __class_getitem__): `ClassName[type_arg]` as a
         // type annotation (PEP 560). A class that defines `__class_getitem__`
@@ -1446,7 +1542,7 @@ pub(crate) fn annotation_to_ty(
                             pycc_ast::expr_range(&sub.slice),
                         ));
                     }
-                    annotation_to_ty(&tuple.elts[0], type_param, class_name, aliases)
+                    annotation_to_ty(&tuple.elts[0], type_param, class_name, aliases, class_defs)
                 }
                 // PEP 591 (#383): `Final[X]` unwraps to `X`. `Final` is a
                 // binding-level property (this name may not be reassigned),
@@ -1467,7 +1563,7 @@ pub(crate) fn annotation_to_ty(
                         Expr::Tuple(tuple) => &tuple.elts[0],
                         other => other,
                     };
-                    annotation_to_ty(x, type_param, class_name, aliases)
+                    annotation_to_ty(x, type_param, class_name, aliases, class_defs)
                 }
                 // The class name resolves the same way a bare-name annotation
                 // does — through the alias table or as a known class name. We
@@ -1479,6 +1575,7 @@ pub(crate) fn annotation_to_ty(
                     type_param,
                     class_name,
                     aliases,
+                    class_defs,
                 ),
             }
         }
@@ -1587,6 +1684,39 @@ mod tests {
             Ty::Instance(Box::new("MyClass".to_string())).name(),
             "MyClass"
         );
+        // #380 (PR-20): `Ty::Protocol` name — covered here as a unit test
+        // to avoid cargo-llvm-cov issue #276 (instantiation merging).
+        assert_eq!(
+            Ty::Protocol(Box::new("MyProto".to_string())).name(),
+            "MyProto"
+        );
+    }
+
+    #[test]
+    fn lowers_a_protocol_typed_parameter_annotation() {
+        // #380 (PR-20): exercises `annotation_to_ty`'s `Ty::Protocol`
+        // return path (line 1487) — a bare name matching a known protocol
+        // class resolves to `Ty::Protocol`, not `Ty::Instance`. Covered
+        // here as a unit test to avoid cargo-llvm-cov issue #276.
+        let module = pycc_parser_test_helper::parse(
+            "from typing import Protocol\n\
+             class P(Protocol):\n    def f(self) -> int: ...\n\
+             def _marker() -> None:\n    pass\n\
+             def g(x: P) -> None:\n    pass\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+        // The function `g` should have a parameter typed as `Ty::Protocol`.
+        // A `_marker` function precedes `g` so that the `None` arm of the
+        // match is also exercised (protocol methods do not produce HIR
+        // items, so without `_marker` the `None` arm would be unreachable).
+        let func = hir.items.iter().find_map(|item| match item {
+            HirItem::Function { name, params, .. } if name == "g" => Some(params),
+            _ => None,
+        });
+        let params = func.expect("function `g` should exist");
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].0, "x");
+        assert_eq!(params[0].1, Ty::Protocol(Box::new("P".to_string())));
     }
 
     #[test]
@@ -2760,10 +2890,7 @@ mod tests {
             hir.items,
             vec![HirItem::Function {
                 name: "f".to_string(),
-                params: vec![
-                    ("a".to_string(), Ty::Int),
-                    ("b".to_string(), Ty::Int),
-                ],
+                params: vec![("a".to_string(), Ty::Int), ("b".to_string(), Ty::Int),],
                 return_ty: Ty::Int,
                 body: vec![HirStmt::Return(Some(HirExpr::BinOp {
                     op: BinOpKind::Add,
@@ -3274,8 +3401,9 @@ mod tests {
         // metadata. `Annotated` is recognized as a bare name without
         // requiring `from typing import Annotated`, matching the existing
         // `TypeAlias`/`Any` precedent.
-        let module =
-            pycc_parser_test_helper::parse("def f(x: Annotated[int, \"meta\"]) -> int:\n    return x\n");
+        let module = pycc_parser_test_helper::parse(
+            "def f(x: Annotated[int, \"meta\"]) -> int:\n    return x\n",
+        );
         let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
@@ -3303,8 +3431,9 @@ mod tests {
     fn annotated_with_multiple_metadata_args_discards_all_metadata() {
         // PEP 593 (#383): `Annotated[X, 1, "x", 2]` unwraps to `X`, discarding
         // all metadata arguments.
-        let module =
-            pycc_parser_test_helper::parse("def f(x: Annotated[int, 1, \"x\", 2]) -> int:\n    return x\n");
+        let module = pycc_parser_test_helper::parse(
+            "def f(x: Annotated[int, 1, \"x\", 2]) -> int:\n    return x\n",
+        );
         let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,

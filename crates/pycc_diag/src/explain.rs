@@ -577,6 +577,45 @@ def f() -> None:
 ",
     },
     DiagnosticExplanation {
+        code: "T0046",
+        severity: Severity::Error,
+        summary: "class does not conform to a protocol (PEP 544 structural typing)",
+        explanation: "\
+T0046 fires when a value of a concrete class type is used where a protocol \
+type is expected (PEP 544, issue #380) and the concrete class does not \
+structurally conform to the protocol -- i.e. it is missing one or more of \
+the protocol's required methods or attributes, or a method/attribute it \
+does provide has an incompatible signature/type. pycc's protocols are \
+compile-time-only structural interfaces (D-166): no runtime protocol \
+object or vtable is generated. Conformance is checked when assigning, \
+passing, or returning a value against a `Ty::Protocol` annotation, and \
+when using `isinstance` with a `@runtime_checkable` protocol. A protocol \
+is declared with `class P(Protocol):` and may contain method signatures \
+(declaration-only bodies: `...` or `pass`) and annotated attributes (no \
+default value). Protocol inheritance (`class Q(P):`) copies and may \
+redeclare the base protocol's members. `@runtime_checkable` enables \
+`isinstance` checks against the protocol (presence-only, matching \
+CPython's own `@runtime_checkable` semantics). `issubclass` with a \
+protocol is always rejected, since protocols use structural typing, not \
+nominal inheritance.",
+        example: "\
+from typing import Protocol
+
+class Drawable(Protocol):
+    def draw(self) -> None: ...
+
+class Circle:
+    def draw(self) -> None:
+        pass
+
+class Square:
+    pass
+
+d: Drawable = Circle()  # OK -- Circle has draw()
+d: Drawable = Square()  # T0046 -- Square lacks draw()
+",
+    },
+    DiagnosticExplanation {
         code: "O0201",
         severity: Severity::Error,
         summary: "value used after move across scope boundary",

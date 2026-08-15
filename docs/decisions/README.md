@@ -16,7 +16,7 @@ current.
 | [D-003](./D-003-parser-vendor-ruff-python-parser-for-v0-1-0-5.md) | Parser: vendor `ruff_python_parser` for v0.1–0.5 velocity; replace with own parser in v0.6 (grammar-coverage gate proves parity) | proposed |
 | [D-004](./D-004-memory-rc-inferred-ownership-moves-borrows.md) | Memory: RC + inferred ownership (moves, borrows, elision) + Bacon-Rajan cycle collector for the residue. No tracing GC, ever | proposed |
 | [D-005](./D-005-exceptions-native-unwinding-itanium-seh-zero-cost.md) | Exceptions: native unwinding (Itanium/SEH), zero-cost happy path — not result-codes | proposed |
-| [D-006](./D-006-generics-monomorphization-vtable-dispatch-only.md) | Generics: monomorphization; vtable dispatch only for explicit dynamic-Protocol use and `--opt-size` cold code | proposed |
+| [D-006](./D-006-generics-monomorphization-vtable-dispatch-only.md) | Generics: monomorphization; vtable dispatch only for explicit dynamic-Protocol use | accepted |
 | [D-007](./D-007-str-utf-8-not-pep-393-utf-32-arrays-codepoint.md) | `str` = UTF-8 (not PEP 393 UTF-32 arrays). Codepoint indexing via lazy offset index. Rationale: memory, SIMD, FFI; deviation invisible except perf profile | accepted |
 | [D-008](./D-008-no-pycc-wide-gil-in-native-execution-thread.md) | No pycc-wide GIL in native execution; thread safety = compile-time Shareable/move checks (Rust Send/Sync analog), with an embedded CPython boundary retaining its own local GIL under D-128 | proposed |
 | [D-009](./D-009-stdlib-written-in-typed-python-compiled-by-pycc.md) | Stdlib written in typed Python, compiled by pycc itself; Rust intrinsics only at the syscall/math floor | proposed |
@@ -172,3 +172,6 @@ current.
 | [D-163](./D-163-enum-scoped-singleton-model.md) | Enum scoped singleton model — compile-time members, no enum.Enum module | accepted |
 | [D-164](./D-164-dataclass-static-dispatch-narrow-scope.md) | Dataclass static dispatch and narrow scope | accepted |
 | [D-165](./D-165-preserve-daily-github-traffic-evidence.md) | Preserve daily GitHub traffic evidence in an immutable artifact | accepted |
+| [D-166](./D-166-protocols-structural-typing-compile-time-only.md) | PEP 544 protocols and structural typing: compile-time-only interface descriptions with static dispatch via monomorphization | accepted |
+| [D-167](./D-167-preserve-page-indexing-aggregates-separately.md) | Preserve Page Indexing aggregates separately from per-URL evidence | accepted |
+| [D-168](./D-168-pages-visit-measurement-capability-contract.md) | Pages visit measurement capability contract: no analytics today, schema and privacy boundary for future activation | accepted |

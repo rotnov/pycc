@@ -161,7 +161,56 @@ git commit (author date) that modified that page's source file, so a visible
 content edit that leaves the `lastmod` stale is caught before merge. The
 `check-site.sh` validator independently enforces that `lastmod` equals the
 page's JSON-LD `dateModified`, so the two checks together guarantee
-`lastmod` == `dateModified` == last content-change commit date. The social preview is `site/og.png`. Each canonical page
+`lastmod` == `dateModified` == last content-change commit date.
+
+### Repository social preview contract (issue #200)
+
+The social preview is `site/og.png`, a single canonical project-owned visual
+asset shared by the website Open Graph/X card metadata and the GitHub
+repository social preview. GitHub generates a default owner-avatar/counter
+card when no custom image is uploaded; the project replaces that generated
+card with the same `og.png` the website serves so repository shares and
+website shares present one consistent project identity.
+
+GitHub documents its upload constraints at
+<https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview>:
+PNG, JPG, or GIF under 1 MB, at least 640×320, with 1280×640 recommended for
+best display. The canonical asset is therefore PNG, exactly 1280×640, and
+held under a 960 KiB safety margin so routine recompression or metadata
+stripping cannot silently push it over GitHub's 1 MB ceiling. The asset
+leads with the product name `pycc`, the promise "Typed Python in. Native
+binaries out.", the "Rust + LLVM · pre-alpha" label, and the compiler
+pipeline graphic; it contains no volatile stars/issues/contributor counts
+and no personal owner imagery, preserving the product/provenance distinction
+(product: AOT compiler for typed Python; provenance: built by AI, managed by
+a human) owned jointly with #192.
+
+`scripts/check-site.sh` enforces the asset contract deterministically: it
+validates the PNG signature, IHDR dimensions (exactly 1280×640, rejecting
+both undersize images below 640×320 and valid PNGs at the wrong
+dimensions), and file size (rejecting anything at or above GitHub's 1 MB
+limit and anything at or above the 960 KiB safety margin). The validator
+also binds the `og:image` and `twitter:image` metadata to the canonical
+`{canonical}og.png` URL so the HTML cannot reference a different or missing
+asset. `scripts/test-check-site.sh` provides paired negative controls
+(issue #200): an oversize image at or above 1 MB, an undersize image below
+640×320, a valid PNG at wrong dimensions (640×320 instead of 1280×640), a
+non-PNG file (JPEG magic bytes), a wrong `og:image` target, a wrong
+`twitter:image` target, and a missing `og.png` that the metadata still
+references.
+
+The upload itself is performed through Repository Settings → Social preview
+on GitHub; it is a one-time manual action that cannot be automated through
+the standard repository API. After upload, the external setting is verified
+via GraphQL: `usesCustomOpenGraphImage` must report `true` and
+`openGraphImageUrl` must resolve successfully. The observation timestamp,
+source asset SHA-256, and setting verification are recorded without treating
+social-card publication as traffic or ranking evidence. The source asset
+SHA-256 for the current `site/og.png` is
+`79f47b25e40e4cc82d0d15a53fbf0828f3581942b4574be4294f053ba41a1ad7`
+(740,052 bytes, 1280×640, PNG).
+
+Each canonical page
 carries an SVG favicon (`site/favicon.svg`, `>_` brand mark) linked with
 `rel="icon"` and `type="image/svg+xml"`; the validator checks the SVG root
 element, size limit, and link attributes. The 404 error page
@@ -591,6 +640,51 @@ The same ledger records Search Console URL Inspection, sitemap-processing, and
 performance-report states independently because none of those signals is a
 substitute for the others.
 
+## Pages visit measurement gap (issue #208)
+
+The site deliberately has no project-selected analytics script, cookie,
+or external beacon (see [D-168](./decisions/D-168-pages-visit-measurement-capability-contract.md)).
+This is an explicit, reviewed decision, not an oversight. The three
+existing discovery signals — Google Search Console (Google Search
+clicks/impressions), GitHub repository traffic (repository
+views/clones), and engine-qualified visibility (SERP/answer citations) —
+do not measure visits to the GitHub Pages site from Yandex, DuckDuckGo,
+Perplexity, ChatGPT, other answer engines, ordinary referrals, or direct
+navigation. Non-Google landing visits remain unobservable, and the
+roadmap and SEO reports state this.
+
+The [machine-readable Pages visit artifact](./PAGES_VISIT_OBSERVATIONS.json)
+is a template with no observations. It defines the measurement contract
+(reporting timezone, canonical pages, primary conversion, source-class
+vocabulary, collection-status vocabulary, data-minimization boundary, and
+separation rules) so a future PR that activates analytics can append real
+observations without a schema redesign. The contract's primary conversion
+is a click from a canonical Pages page to
+`https://github.com/rotnov/pycc` — the only instrumented interaction. The
+data-minimization boundary forbids names, email/account identifiers, form
+contents, full IP addresses, full user agents, cookies, fingerprints,
+persistent cross-site IDs, session replay, arbitrary query
+strings/fragments, and raw search queries unless a separately accepted
+decision justifies them. A non-zeroable collection status (`blocked`,
+`delayed`, `unauthorized`, `provider_error`, `unknown`) must never be
+converted to zero; unavailable data is `null`, not `0`.
+
+`scripts/check_pages_visit_observations.py` validates the artifact schema
+and prose bindings. It rejects prose that conflates repository views with
+Pages visits, Search Console clicks with all-provider visits, or
+analytics with a ranking factor. Its mutation suite is
+`scripts/test_check_pages_visit_observations.py`.
+
+A future PR that activates analytics must: record a superseding ADR;
+add an accurate public privacy/analytics disclosure before or with
+collection; load the provider script non-blockingly on every canonical
+HTML page exactly once; keep content, navigation, and local `site.js`
+functional when the provider is unavailable or blocked; not expose
+dashboard/read/export credentials in the published artifact; and
+establish the activation baseline at deployment time without
+synthesizing pre-installation history. The issue explicitly does not
+request adding analytics scripts to the site in this change.
+
 ## Pages performance budget gate
 
 The website is protected by a hermetic Pages performance budget gate
@@ -775,3 +869,33 @@ resolves, and the presence of `.zenodo.json` (Zenodo is a separate,
 explicitly approved step). Its mutation suite
 (`scripts/test_check_citation_cff.rb`) provides negative controls for
 each material field.
+
+## Source link monitoring (issue #202)
+
+The Python AOT compiler comparison page cites external project
+documentation as evidence for each comparison-table cell. These source
+links can break when upstream projects reorganize their docs, but
+required PR CI must not depend on network calls to external sites.
+
+The contract has two layers:
+
+1. **Hermetic registry validator** (PR-required, in `pages.yml`):
+   `scripts/check_source_links_registry.rb` validates that
+   `site/python-aot-compilers/source-link-registry.json` covers every
+   external URL in `claims.json`, that each entry has a valid status
+   (`ok`, `broken`, or `redirect`) and `last_checked` date, and that no
+   entry has status `broken` (a known-broken link must be updated, not
+   silently kept). This check performs no network requests.
+
+2. **Scheduled live link check** (non-blocking, separate workflow):
+   `.github/workflows/link-check.yml` runs daily at 06:00 UTC and
+   executes `scripts/check_source_links_live.py` against the registry.
+   It uses `continue-on-error` so a failure surfaces a workflow warning
+   for human triage without blocking PR merges. The live checker
+   classifies each URL as `healthy`, `confirmed_missing`,
+   `blocked_or_rate_limited`, or `unknown_error`.
+
+The registry is the bridge: the hermetic validator ensures it is
+complete and well-formed, the live checker updates it, and a broken
+status in the registry blocks the hermetic validator until the link is
+fixed or the claim is updated.

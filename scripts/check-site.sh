@@ -33,6 +33,48 @@ done
 
 test -s "$site_dir/og.png"
 
+# Issue #200: validate the social preview image for format, dimensions, and
+# file size so it meets GitHub's repository social-preview upload constraints
+# (PNG/JPG/GIF under 1 MB, at least 640x320, 1280x640 recommended) and remains
+# a single canonical asset shared by the website and the repository.
+python3 - "$site_dir/og.png" <<'PY'
+import struct
+import sys
+from pathlib import Path
+
+og_path = Path(sys.argv[1])
+data = og_path.read_bytes()
+size = len(data)
+
+# GitHub requires under 1 MB; enforce a safety margin (960 KiB ceiling).
+GITHUB_LIMIT = 1_048_576
+SAFETY_CEILING = 960 * 1024
+if size >= GITHUB_LIMIT:
+    raise SystemExit(
+        f"og.png must be under 1 MB for GitHub upload; got {size} bytes"
+    )
+if size >= SAFETY_CEILING:
+    raise SystemExit(
+        f"og.png must be under 960 KiB safety margin; got {size} bytes"
+    )
+
+# Validate PNG signature and read IHDR for dimensions and format.
+PNG_SIG = b"\x89PNG\r\n\x1a\n"
+if data[:8] != PNG_SIG:
+    raise SystemExit("og.png must be a PNG file")
+if data[12:16] != b"IHDR":
+    raise SystemExit("og.png IHDR chunk must appear first")
+width, height = struct.unpack(">II", data[16:24])
+if width < 640 or height < 320:
+    raise SystemExit(
+        f"og.png dimensions must be at least 640x320; got {width}x{height}"
+    )
+if width != 1280 or height != 640:
+    raise SystemExit(
+        f"og.png dimensions must be exactly 1280x640; got {width}x{height}"
+    )
+PY
+
 python3 - "$site_dir/favicon.svg" <<'PY'
 from pathlib import Path
 import sys

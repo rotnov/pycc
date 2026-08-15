@@ -157,6 +157,56 @@ pub struct HirClassDef {
     /// with `C0001` (field defaults are deferred to a follow-up issue --
     /// the compiler has no optional-parameter mechanism yet).
     pub dataclass_fields: Vec<(String, Ty)>,
+    /// PEP 544 (#380, PR-20): `true` when this class is a protocol class
+    /// (`class P(Protocol):`). A protocol class is a compile-time-only
+    /// interface description — it is never instantiated and has no runtime
+    /// representation. Its `protocol_members` field lists the required
+    /// methods and attributes. A protocol class has `bases = []` and
+    /// `mro = [self_name]` (the `Protocol` base is consumed as a marker,
+    /// like `Enum`), unless it inherits from another user-defined protocol
+    /// (`class Q(P):` where `P` is a protocol), in which case `P` is a
+    /// real base and `Q` inherits `P`'s `protocol_members`.
+    pub is_protocol: bool,
+    /// PEP 544 (#380, PR-20): `true` when this protocol class is decorated
+    /// with `@runtime_checkable`. A `@runtime_checkable` protocol can be
+    /// used in `isinstance` checks (evaluated at compile time as a
+    /// structural conformance check). A non-`@runtime_checkable` protocol
+    /// used in `isinstance` is rejected with `T0021`. Always `false` for a
+    /// non-protocol class.
+    pub runtime_checkable: bool,
+    /// PEP 544 (#380, PR-20): the required methods and attributes of a
+    /// protocol class. Each entry is either a method requirement (name +
+    /// parameter types + return type) or an attribute requirement (name +
+    /// type). For a protocol inheriting from another protocol, this
+    /// includes inherited members. Empty for a non-protocol class.
+    pub protocol_members: Vec<ProtocolMember>,
+    /// PEP 3119 (#380, PR-20): method names decorated with
+    /// `@abstractmethod` in this class or any base class. A concrete
+    /// subclass that does not override every inherited abstract method is
+    /// rejected with `C0001` at class-definition time. Empty for a class
+    /// with no abstract methods.
+    pub abstract_methods: Vec<String>,
+    /// PEP 3119 (#380, PR-20): `true` when this class inherits from `ABC`
+    /// (`class C(ABC):`). An abstract class cannot be instantiated
+    /// (rejected with `C0001`). The `ABC` base is consumed as a marker
+    /// (like `Enum`/`Protocol`), not recorded as a real base.
+    pub is_abstract: bool,
+}
+
+/// PEP 544 (#380, PR-20): a single required member of a protocol class.
+/// Either a method requirement (name + parameter types + return type) or
+/// an attribute requirement (name + type).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProtocolMember {
+    /// A required method: name, parameter types (excluding `self`), and
+    /// return type.
+    Method {
+        name: String,
+        param_tys: Vec<Ty>,
+        return_ty: Ty,
+    },
+    /// A required attribute: name and type.
+    Attribute { name: String, ty: Ty },
 }
 
 /// A single `@property` definition (#377): the attribute name exposed to
@@ -205,6 +255,13 @@ enum MethodKind {
     /// parameter. Mangled name uses a `.classmethod` suffix to avoid
     /// colliding with a regular method of the same name.
     ClassMethod,
+    /// `@abstractmethod` (#380, PR-20, PEP 3119): an abstract method.
+    /// The method is still lowered as an ordinary mangled
+    /// `HirItem::Function`, but `lower_class` records its name in
+    /// `HirClassDef::abstract_methods`. A concrete subclass that does not
+    /// override every inherited abstract method is rejected with `C0001`.
+    /// The method body must be a declaration-style body (`...` or `pass`).
+    AbstractMethod,
 }
 
 /// Classifies a method's decorator list (#377, #432). Returns:
@@ -254,6 +311,11 @@ fn classify_decorator(
         Expr::Name(name) if name.id.as_str() == "staticmethod" => Ok(MethodKind::StaticMethod),
         // `@classmethod` (#436) -- a bare name `classmethod`.
         Expr::Name(name) if name.id.as_str() == "classmethod" => Ok(MethodKind::ClassMethod),
+        // `@abstractmethod` (#380, PR-20, PEP 3119) -- a bare name
+        // `abstractmethod`. Recognized as a bare name without requiring
+        // `from abc import abstractmethod`, matching the
+        // `Final`/`Annotated`/`Enum` precedent.
+        Expr::Name(name) if name.id.as_str() == "abstractmethod" => Ok(MethodKind::AbstractMethod),
         // `@<name>.setter` -- an attribute access on a bare name, where
         // the attribute is `"setter"`.
         Expr::Attribute(attr) => {
@@ -293,64 +355,99 @@ fn classify_decorator(
     }
 }
 
-/// PEP 3129/557/681 (#378, PR-18): classifies a class's decorator list to
-/// determine whether the class is a `@dataclass` (PEP 557) or a
-/// `@dataclass_transform(...)` (PEP 681) class. Returns:
-/// - `false` if the list is empty (an ordinary class).
-/// - `true` if the single decorator is `@dataclass` (a bare name `dataclass`)
-///   or `@dataclass_transform(...)` (a call whose callee is the bare name
-///   `dataclass_transform`).
+/// PEP 3129/557/681/544 (#378/#380, PR-18/PR-20): the result of
+/// classifying a class's decorator list. `is_dataclass` is `true` for
+/// `@dataclass`/`@dataclass_transform(...)`. `runtime_checkable` is `true`
+/// for `@runtime_checkable` (PEP 544). Both can be `false` (an ordinary
+/// class with no decorators). `@dataclass` combined with
+/// `@runtime_checkable` is rejected — a protocol class cannot be a
+/// dataclass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClassDecoratorInfo {
+    is_dataclass: bool,
+    runtime_checkable: bool,
+}
+
+/// PEP 3129/557/681/544 (#378/#380, PR-18/PR-20): classifies a class's
+/// decorator list to determine whether the class is a `@dataclass` (PEP
+/// 557), a `@dataclass_transform(...)` (PEP 681), or a
+/// `@runtime_checkable` (PEP 544) class. Returns a `ClassDecoratorInfo`
+/// struct.
 ///
-/// Any other class decorator shape (multiple decorators, a different bare
-/// name, an attribute-access decorator, `@dataclass(frozen=True)` with
-/// options) is rejected with `C0001`, preserving the pre-#378 "class
-/// decorators are not supported yet" diagnostic for everything outside
-/// `@dataclass`/`@dataclass_transform()`.
+/// Any other class decorator shape (a different bare name, an
+/// attribute-access decorator, `@dataclass(frozen=True)` with options) is
+/// rejected with `C0001`, preserving the pre-#378 "class decorators are
+/// not supported yet" diagnostic for everything outside
+/// `@dataclass`/`@dataclass_transform()`/`@runtime_checkable`.
 fn classify_class_decorator(
     decorator_list: &[Decorator],
     range: std::ops::Range<u32>,
-) -> Result<bool, Diagnostic> {
+) -> Result<ClassDecoratorInfo, Diagnostic> {
+    let mut info = ClassDecoratorInfo {
+        is_dataclass: false,
+        runtime_checkable: false,
+    };
     if decorator_list.is_empty() {
-        return Ok(false);
+        return Ok(info);
     }
-    if decorator_list.len() > 1 {
+    if decorator_list.len() > 2 {
         return Err(unsupported(
-            "multiple class decorators are not supported yet",
+            "more than two class decorators are not supported yet",
             range,
         ));
     }
-    let decorator = &decorator_list[0];
-    match &decorator.expression {
-        // `@dataclass` -- a bare name `dataclass` (PEP 557).
-        Expr::Name(name) if name.id.as_str() == "dataclass" => Ok(true),
-        // `@dataclass_transform(...)` -- a call whose callee is the bare
-        // name `dataclass_transform` (PEP 681). The keyword arguments
-        // (`eq_default`, `order_default`, `kw_only_default`,
-        // `field_specifiers`) are accepted but ignored -- pycc's dataclass
-        // implementation always generates `__init__`/`__eq__`/`__repr__`,
-        // matching the defaults.
-        Expr::Call(call) => {
-            let Expr::Name(name) = call.func.as_ref() else {
+    for decorator in decorator_list {
+        match &decorator.expression {
+            // `@dataclass` -- a bare name `dataclass` (PEP 557).
+            Expr::Name(name) if name.id.as_str() == "dataclass" => {
+                info.is_dataclass = true;
+            }
+            // `@runtime_checkable` -- a bare name `runtime_checkable`
+            // (PEP 544, #380, PR-20). Recognized as a bare name without
+            // requiring `from typing import runtime_checkable`, matching
+            // the `Final`/`Annotated`/`Enum` precedent.
+            Expr::Name(name) if name.id.as_str() == "runtime_checkable" => {
+                info.runtime_checkable = true;
+            }
+            // `@dataclass_transform(...)` -- a call whose callee is the
+            // bare name `dataclass_transform` (PEP 681). The keyword
+            // arguments are accepted but ignored -- pycc's dataclass
+            // implementation always generates `__init__`/`__eq__`/`__repr__`,
+            // matching the defaults.
+            Expr::Call(call) => {
+                let Expr::Name(name) = call.func.as_ref() else {
+                    return Err(unsupported("class decorators are not supported yet", range));
+                };
+                if name.id.as_str() == "dataclass_transform" {
+                    info.is_dataclass = true;
+                } else if name.id.as_str() == "dataclass" {
+                    // `@dataclass(frozen=True)` etc. -- rejected with C0001.
+                    return Err(unsupported(
+                        "`@dataclass` with options is not supported yet -- only a bare \
+                         `@dataclass` is supported in this version",
+                        range,
+                    ));
+                } else {
+                    return Err(unsupported("class decorators are not supported yet", range));
+                }
+            }
+            _ => {
                 return Err(unsupported("class decorators are not supported yet", range));
-            };
-            if name.id.as_str() == "dataclass_transform" {
-                Ok(true)
-            } else if name.id.as_str() == "dataclass" {
-                // `@dataclass(frozen=True)` etc. -- rejected with C0001.
-                // Dataclass options (frozen, slots, order, etc.) are out of
-                // scope for this PR (see the plan's "Explicitly out of scope"
-                // list).
-                Err(unsupported(
-                    "`@dataclass` with options is not supported yet -- only a bare `@dataclass` \
-                     is supported in this version",
-                    range,
-                ))
-            } else {
-                Err(unsupported("class decorators are not supported yet", range))
             }
         }
-        _ => Err(unsupported("class decorators are not supported yet", range)),
     }
+    // #380 (PR-20): `@dataclass` combined with `@runtime_checkable` is
+    // rejected — a protocol class cannot be a dataclass (a protocol is a
+    // compile-time-only interface description, not an instantiable class
+    // with fields).
+    if info.is_dataclass && info.runtime_checkable {
+        return Err(unsupported(
+            "`@dataclass` combined with `@runtime_checkable` is not supported -- a protocol \
+             class cannot be a dataclass",
+            range,
+        ));
+    }
+    Ok(info)
 }
 
 /// Computes the C3 linearization (MRO) for a class with the given name and
@@ -448,6 +545,266 @@ fn compute_c3_mro(
 /// #379 (PR-19): Lower a PEP 435-style enum class. An enum class body is
 /// assignments only (`RED = 1`), not method definitions. This function
 /// validates the enum body and constructs the `HirClassDef` with
+/// #380 (PR-20): Returns `true` if a method body is declaration-style
+/// (`...` (Ellipsis) or `pass`), suitable for a protocol method or an
+/// `@abstractmethod`. A body with any other content (a docstring, an
+/// assignment, a return statement, etc.) is an implementation body.
+fn is_declaration_body(body: &[Stmt]) -> bool {
+    // `pass` is filtered out by `lower_body`, so a body of just `pass`
+    // is an empty slice after filtering. But we check the raw AST here
+    // before any filtering.
+    body.iter().all(|stmt| match stmt {
+        Stmt::Pass(_) => true,
+        // `...` (Ellipsis) as an expression statement.
+        Stmt::Expr(expr_stmt) => {
+            matches!(expr_stmt.value.as_ref(), Expr::EllipsisLiteral(_))
+        }
+        _ => false,
+    }) && !body.is_empty()
+}
+
+/// #380 (PR-20): Lowers a protocol class body. Protocol methods (with
+/// `...` or `pass` bodies) are recorded as `ProtocolMember::Method` and
+/// are NOT lowered to `HirItem::Function`s. Protocol annotated assignments
+/// (`x: int`) are recorded as `ProtocolMember::Attribute`. Protocol
+/// members from base protocols are inherited. A protocol method with an
+/// implementation body is rejected with `C0001`. A protocol `__init__` is
+/// rejected with `C0001`.
+#[allow(clippy::too_many_arguments)]
+fn lower_protocol_class(
+    def: &pycc_ast::StmtClassDef,
+    class_name: String,
+    bases: Vec<String>,
+    mro: Vec<String>,
+    type_param: Option<String>,
+    runtime_checkable: bool,
+    defined_classes: &[(String, HirClassDef)],
+    class_name_defs: &[(String, bool)],
+) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
+    let mut protocol_members: Vec<ProtocolMember> = Vec::new();
+    // Inherit protocol members from base protocols.
+    for base_name in &bases {
+        // This should have been validated already in `lower_class`.
+        // Using `.expect()` (whose panic path lives in libcore, outside
+        // this crate's instrumented regions) instead of a
+        // `let .. else { panic!() }` avoids a permanently-uncovered
+        // branch under D-014's 100%-region coverage gate.
+        let base_def = &defined_classes
+            .iter()
+            .find(|(n, _)| n == base_name)
+            .expect("pycc_hir: internal error: protocol base not found in defined_classes -- lower_class should have validated this")
+            .1;
+        for member in &base_def.protocol_members {
+            // Only add inherited members that are not redeclared in this
+            // class (redeclarations are added below from the class body).
+            let name = match member {
+                ProtocolMember::Method { name, .. } => name,
+                ProtocolMember::Attribute { name, .. } => name,
+            };
+            if !protocol_members.iter().any(|m| match m {
+                ProtocolMember::Method { name: n, .. } => n == name,
+                ProtocolMember::Attribute { name: n, .. } => n == name,
+            }) {
+                protocol_members.push(member.clone());
+            }
+        }
+    }
+    for stmt in &def.body {
+        match stmt {
+            Stmt::FunctionDef(method_def) => {
+                let method_name = method_def.name.to_string();
+                // Reject `__init__` in a protocol class.
+                if method_name == "__init__" {
+                    return Err(unsupported(
+                        format!(
+                            "a protocol class `{class_name}` cannot define `__init__` -- \
+                             protocols are not instantiated"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                // Reject decorators on protocol methods.
+                if !method_def.decorator_list.is_empty() {
+                    return Err(unsupported(
+                        format!(
+                            "decorators on protocol method `{class_name}.{method_name}` are \
+                             not supported yet"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                // Reject generic protocol methods.
+                if method_def.type_params.is_some() {
+                    return Err(unsupported(
+                        format!(
+                            "a generic protocol method `{class_name}.{method_name}` is not \
+                             supported yet"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                // The method body must be declaration-style (`...` or
+                // `pass`).
+                if !is_declaration_body(&method_def.body) {
+                    return Err(unsupported(
+                        format!(
+                            "a protocol method `{class_name}.{method_name}` must have a \
+                             declaration-style body (`...` or `pass`), not an implementation"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                // Lower the method's parameter and return types.
+                // `self` is handled specially (assigned
+                // `Ty::Instance(class_name)` directly, bypassing
+                // `annotation_to_ty`), matching how `lower_method`
+                // handles it for regular methods. The remaining
+                // parameters go through `lower_arg_list`.
+                let all_args = &method_def.parameters.args;
+                let (params, return_ty) =
+                    if !all_args.is_empty() && all_args[0].parameter.name.as_str() == "self" {
+                        // Strip `self` and lower the rest.
+                        let rest = &all_args[1..];
+                        let method_is_public = !method_name.starts_with('_');
+                        let p = crate::lower_arg_list(
+                            rest,
+                            method_is_public,
+                            &method_name,
+                            type_param.as_deref(),
+                            Some(&class_name),
+                            &[],
+                            class_name_defs,
+                        )?;
+                        let r = crate::lower_return_annotation(
+                            method_def.returns.as_deref(),
+                            method_is_public,
+                            &method_name,
+                            type_param.as_deref(),
+                            Some(&class_name),
+                            &[],
+                            class_name_defs,
+                        )?;
+                        (p, r)
+                    } else {
+                        // No `self` parameter — this is unusual for a
+                        // protocol method but we handle it gracefully by
+                        // lowering all parameters.
+                        let method_is_public = !method_name.starts_with('_');
+                        let p = crate::lower_arg_list(
+                            all_args,
+                            method_is_public,
+                            &method_name,
+                            type_param.as_deref(),
+                            Some(&class_name),
+                            &[],
+                            class_name_defs,
+                        )?;
+                        let r = crate::lower_return_annotation(
+                            method_def.returns.as_deref(),
+                            method_is_public,
+                            &method_name,
+                            type_param.as_deref(),
+                            Some(&class_name),
+                            &[],
+                            class_name_defs,
+                        )?;
+                        (p, r)
+                    };
+                // Protocol member signatures exclude `self` (already
+                // stripped above).
+                let param_tys: Vec<Ty> = params.iter().map(|(_, ty)| ty.clone()).collect();
+                let member = ProtocolMember::Method {
+                    name: method_name.clone(),
+                    param_tys,
+                    return_ty,
+                };
+                // Replace if redeclared, otherwise add.
+                if let Some(existing) = protocol_members.iter().position(
+                    |m| matches!(m, ProtocolMember::Method { name, .. } if name == &method_name),
+                ) {
+                    protocol_members[existing] = member;
+                } else {
+                    protocol_members.push(member);
+                }
+            }
+            Stmt::AnnAssign(ann) => {
+                let Expr::Name(target) = ann.target.as_ref() else {
+                    return Err(unsupported(
+                        "a protocol attribute annotation must target a bare name (`x: int`), \
+                         not an attribute access, subscript, or other expression",
+                        pycc_ast::expr_range(&ann.target),
+                    ));
+                };
+                let attr_name = target.id.to_string();
+                let attr_ty = crate::annotation_to_ty(
+                    &ann.annotation,
+                    type_param.as_deref(),
+                    Some(&class_name),
+                    &[],
+                    class_name_defs,
+                )?;
+                // A protocol attribute cannot have a default value.
+                if ann.value.is_some() {
+                    return Err(unsupported(
+                        format!(
+                            "a protocol attribute `{class_name}.{attr_name}` cannot have a \
+                             default value -- protocol attributes are requirements, not \
+                             initializers"
+                        ),
+                        ann.range,
+                    ));
+                }
+                let member = ProtocolMember::Attribute {
+                    name: attr_name.clone(),
+                    ty: attr_ty,
+                };
+                if let Some(existing) = protocol_members.iter().position(
+                    |m| matches!(m, ProtocolMember::Attribute { name, .. } if name == &attr_name),
+                ) {
+                    protocol_members[existing] = member;
+                } else {
+                    protocol_members.push(member);
+                }
+            }
+            Stmt::Pass(_) => {
+                // `pass` is a no-op in a protocol body.
+            }
+            _ => {
+                return Err(unsupported(
+                    format!(
+                        "a protocol class body must contain only method definitions (`def ...`) \
+                         and annotated assignments (`x: int`) -- {:?} is not supported yet",
+                        stmt
+                    ),
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
+        }
+    }
+    Ok((
+        HirClassDef {
+            name: class_name,
+            bases,
+            mro,
+            attrs: Vec::new(),
+            methods: Vec::new(),
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            type_param,
+            enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
+            is_protocol: true,
+            runtime_checkable,
+            protocol_members,
+            abstract_methods: Vec::new(),
+            is_abstract: false,
+        },
+        Vec::new(),
+    ))
+}
+
 /// `enum_members` populated. Extracted from `lower_class` to isolate the
 /// enum-specific code paths (see cargo-llvm-cov#276 for the coverage
 /// instantiation issue that motivated the extraction).
@@ -565,6 +922,11 @@ fn lower_enum_class(
             enum_members,
             is_dataclass: false,
             dataclass_fields: Vec::new(),
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: Vec::new(),
+            abstract_methods: Vec::new(),
+            is_abstract: false,
         },
         Vec::new(),
     ))
@@ -575,10 +937,19 @@ pub(crate) fn lower_class(
     aliases: &[(String, Ty)],
     defined_classes: &[(String, HirClassDef)],
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
-    // PEP 3129/557/681 (#378, PR-18): classify the class's decorator list.
-    // `@dataclass` and `@dataclass_transform(...)` are recognized; any other
-    // class decorator is rejected with C0001.
-    let is_dataclass = classify_class_decorator(&def.decorator_list, def.range.into())?;
+    // #380 (PR-20): build a `(name, is_protocol)` slice for
+    // `annotation_to_ty` to resolve cross-class annotations (including
+    // protocol-typed annotations).
+    let class_name_defs: Vec<(String, bool)> = defined_classes
+        .iter()
+        .map(|(name, def)| (name.clone(), def.is_protocol))
+        .collect();
+    // PEP 3129/557/681/544 (#378/#380, PR-18/PR-20): classify the class's
+    // decorator list. `@dataclass`/`@dataclass_transform(...)` and
+    // `@runtime_checkable` are recognized; any other class decorator is
+    // rejected with C0001.
+    let decorator_info = classify_class_decorator(&def.decorator_list, def.range.into())?;
+    let is_dataclass = decorator_info.is_dataclass;
     // PEP 695 (#387): a generic class (`class C[T]:`) with exactly one type
     // parameter is now supported, reusing PR-13's `Ty::Param` call-site-
     // substitution mechanism (D-133/D-134). More than one type parameter is
@@ -658,6 +1029,64 @@ pub(crate) fn lower_class(
         // has no real inheritance, and set `mro = [self_name]`.
         bases.clear();
     }
+    // #380 (PR-20): PEP 544 protocol detection. A class whose sole base is
+    // the bare name `Protocol` (`class P(Protocol):`) is a protocol class.
+    // `Protocol` is a builtin base name (see `is_protocol_base_name`), not
+    // a user-defined class — intercepted here, before the unknown-base
+    // rejection below. A protocol class has `bases = []` and
+    // `mro = [self_name]` (the `Protocol` base is consumed as a marker,
+    // like `Enum`). Multiple bases with `Protocol` are rejected —
+    // `Protocol` must be the sole base. A generic protocol is also
+    // rejected. A protocol class with `@dataclass` is rejected (a protocol
+    // is a compile-time-only interface, not an instantiable class with
+    // fields).
+    let is_protocol = bases.len() == 1 && crate::is_protocol_base_name(&bases[0]);
+    if is_protocol {
+        if type_param.is_some() {
+            return Err(unsupported(
+                format!(
+                    "generic protocol class `{class_name}` is not supported -- protocols cannot \
+                     have type parameters in this version"
+                ),
+                def.range,
+            ));
+        }
+        if is_dataclass {
+            return Err(unsupported(
+                format!(
+                    "protocol class `{class_name}` cannot be a `@dataclass` -- a protocol is a \
+                     compile-time-only interface description, not an instantiable class with fields"
+                ),
+                def.range,
+            ));
+        }
+        // Consume the `Protocol` base as a marker: clear `bases` so the
+        // class has no real inheritance, and set `mro = [self_name]`.
+        bases.clear();
+    }
+    // #380 (PR-20): PEP 3119 ABC detection. A class with `ABC` among its
+    // bases (`class C(ABC):` or `class C(ABC, Base):`) is abstract. `ABC`
+    // is a builtin base name (see `is_abc_base_name`), consumed as a
+    // marker — removed from `bases` so it is not treated as a real base
+    // class. Unlike `Enum`/`Protocol`, `ABC` can coexist with other bases
+    // (`class C(ABC, Base):` is valid — `Base` is a real base, `ABC` is
+    // just a marker).
+    let is_abstract = bases.iter().any(|b| crate::is_abc_base_name(b));
+    if is_abstract {
+        // Remove `ABC` from bases — it is a marker, not a real base.
+        bases.retain(|b| !crate::is_abc_base_name(b));
+    }
+    // #380 (PR-20): `@runtime_checkable` on a non-protocol class is
+    // rejected — `runtime_checkable` is only valid on protocol classes.
+    if decorator_info.runtime_checkable && !is_protocol {
+        return Err(unsupported(
+            format!(
+                "`@runtime_checkable` on class `{class_name}` is not valid -- \
+                 `@runtime_checkable` is only valid on protocol classes (`class P(Protocol):`)"
+            ),
+            def.range,
+        ));
+    }
     // #432: A generic class (from #387) with base classes is not supported
     // yet — `instantiate_generic_class_methods` creates a monomorphized
     // `HirClassDef` with empty `bases`/`mro`, silently dropping inheritance.
@@ -707,6 +1136,33 @@ pub(crate) fn lower_class(
             ));
         }
     }
+    // #380 (PR-20): protocol inheritance detection. A class that inherits
+    // from a user-defined protocol (`class Q(P):` where `P` is a protocol)
+    // is itself a protocol. This check runs after the `Protocol` marker
+    // base consumption above (which handles `class P(Protocol):`) and
+    // after the base validation loop (which ensures every base is a known
+    // class). If any base is a protocol, this class is a protocol too —
+    // it inherits the base's `protocol_members` and adds its own.
+    let inherits_protocol = bases.iter().any(|base_name| {
+        defined_classes
+            .iter()
+            .any(|(n, d)| n == base_name && d.is_protocol)
+    });
+    let is_protocol = is_protocol || inherits_protocol;
+    if inherits_protocol {
+        // A protocol inheriting from a protocol cannot also be a dataclass.
+        if is_dataclass {
+            return Err(unsupported(
+                format!(
+                    "protocol class `{class_name}` cannot be a `@dataclass` -- a protocol is a \
+                     compile-time-only interface description, not an instantiable class with fields"
+                ),
+                def.range,
+            ));
+        }
+        // `@runtime_checkable` is valid on a protocol inheriting from
+        // another protocol — no extra check needed here.
+    }
     // #432: compute the C3 linearization (MRO). A `None` return means the
     // inheritance order is inconsistent (a C3 conflict), which is also
     // rejected as a circular/inconsistent inheritance error.
@@ -727,12 +1183,33 @@ pub(crate) fn lower_class(
     let mut class_methods: Vec<(String, String)> = Vec::new();
     let enum_members: Vec<(String, i64)> = Vec::new();
     let mut dataclass_fields: Vec<(String, Ty)> = Vec::new();
+    let mut abstract_methods: Vec<String> = Vec::new();
     let mut init_seen = false;
     // #379 (PR-19): an enum class body is assignments only (`RED = 1`),
     // not method definitions. Handle this in a separate function before the
     // regular class-body loop below, which rejects non-`def` statements.
     if is_enum {
         return lower_enum_class(def, class_name, bases, mro, type_param);
+    }
+    // #380 (PR-20): a protocol class body contains method definitions
+    // (with `...` or `pass` bodies) and annotated assignments
+    // (`x: int`). Methods are recorded as `ProtocolMember::Method` and
+    // are NOT lowered to `HirItem::Function`s. Annotated assignments are
+    // recorded as `ProtocolMember::Attribute`. A protocol method with an
+    // implementation body (anything other than `...` or `pass`) is
+    // rejected with `C0001`. A protocol `__init__` is rejected with
+    // `C0001`. Protocol members from base protocols are inherited.
+    if is_protocol {
+        return lower_protocol_class(
+            def,
+            class_name,
+            bases,
+            mro,
+            type_param,
+            decorator_info.runtime_checkable,
+            defined_classes,
+            &class_name_defs,
+        );
     }
     // #378 (PR-18): a `@dataclass` class inheriting from a non-dataclass
     // base is rejected -- the base must also be a dataclass for field
@@ -802,6 +1279,7 @@ pub(crate) fn lower_class(
                 type_param.as_deref(),
                 Some(&class_name),
                 aliases,
+                &class_name_defs,
             )?;
             // #378 (PR-18): a dataclass field's type must be a scalar slot
             // type (int/float/bool/str, or a generic type parameter `T`
@@ -914,12 +1392,19 @@ pub(crate) fn lower_class(
         )?;
         // #436: `@staticmethod` and `@classmethod` on `__init__` are
         // rejected -- a constructor must be a regular instance method.
+        // #380 (PR-20): `@abstractmethod` on `__init__` is also rejected
+        // -- an abstract `__init__` would prevent instantiation of any
+        // subclass, which is not a meaningful pattern in pycc's
+        // compile-time-only ABC model.
         if method_name == "__init__"
-            && matches!(kind, MethodKind::StaticMethod | MethodKind::ClassMethod)
+            && matches!(
+                kind,
+                MethodKind::StaticMethod | MethodKind::ClassMethod | MethodKind::AbstractMethod
+            )
         {
             return Err(unsupported(
-                "`@staticmethod` and `@classmethod` cannot decorate `__init__` -- \
-                 the constructor must be a regular instance method",
+                "`@staticmethod`, `@classmethod`, and `@abstractmethod` cannot decorate \
+                 `__init__` -- the constructor must be a regular instance method",
                 method_def.range,
             ));
         }
@@ -929,6 +1414,7 @@ pub(crate) fn lower_class(
             type_param.as_deref(),
             aliases,
             &kind,
+            &class_name_defs,
         )?;
         if method_name == "__init__" {
             init_seen = true;
@@ -1192,6 +1678,35 @@ pub(crate) fn lower_class(
                     class_methods.push((method_name.clone(), mangled));
                 }
             }
+            // #380 (PR-20, PEP 3119): an `@abstractmethod`. Registered
+            // in `methods` (it is still a regular method for dispatch
+            // purposes — a subclass overrides it with a regular method of
+            // the same name) AND in `abstract_methods` (so `lower_class`
+            // can verify concrete subclasses override every inherited
+            // abstract method). The method body must be declaration-style
+            // (`...` or `pass`).
+            MethodKind::AbstractMethod => {
+                // Verify the method body is declaration-style (`...` or
+                // `pass`). A non-declaration body is rejected with C0001
+                // — an abstract method with an implementation is a
+                // contradiction in pycc's compile-time-only ABC model.
+                if !is_declaration_body(&method_def.body) {
+                    return Err(unsupported(
+                        format!(
+                            "an `@abstractmethod` `{class_name}.{method_name}` must have a \
+                             declaration-style body (`...` or `pass`), not an implementation"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                let mangled = format!("{class_name}.{method_name}");
+                if let Some(entry) = methods.iter_mut().find(|(name, _)| name == &method_name) {
+                    *entry = (method_name.clone(), mangled.clone());
+                } else {
+                    methods.push((method_name.clone(), mangled));
+                }
+                abstract_methods.push(method_name.clone());
+            }
         }
         items.push(item);
     }
@@ -1254,6 +1769,49 @@ pub(crate) fn lower_class(
         items.push(repr_item);
         // Store the merged field list for downstream consumers.
         dataclass_fields = merged_fields;
+    }
+    // #380 (PR-20, PEP 3119): collect inherited abstract methods from the
+    // MRO. A concrete (non-abstract) class must override every inherited
+    // abstract method — a concrete subclass missing an override is
+    // rejected with `C0001`. An abstract class (`is_abstract`) can have
+    // unimplemented abstract methods (they are inherited by subclasses).
+    let mut all_abstract_methods: Vec<String> = abstract_methods.clone();
+    // Iterate over MRO entries (beyond the class itself), finding each in
+    // `defined_classes`.  Using `filter_map` avoids a conditional with an
+    // unreachable `else` branch — every MRO class is always in
+    // `defined_classes`, but `filter_map` skips any that aren't without
+    // creating a permanently-uncovered region under D-014.
+    for (_, base_def) in mro
+        .iter()
+        .skip(1)
+        .filter_map(|mro_class| defined_classes.iter().find(|(n, _)| n == mro_class))
+    {
+        for am in &base_def.abstract_methods {
+            if !all_abstract_methods.contains(am) {
+                all_abstract_methods.push(am.clone());
+            }
+        }
+    }
+    // A concrete class must override every inherited abstract method.
+    // "Override" means the method name appears in this class's own
+    // `methods` (not just inherited). `is_abstract` classes are exempt.
+    if !is_abstract {
+        for am in &all_abstract_methods {
+            // Check if this class overrides the abstract method with a
+            // concrete (non-abstract) method.
+            let overridden =
+                methods.iter().any(|(name, _)| name == am) && !abstract_methods.contains(am);
+            if !overridden {
+                return Err(unsupported(
+                    format!(
+                        "concrete class `{class_name}` does not override abstract method \
+                         `{am}` inherited from a base class -- all abstract methods must be \
+                         overridden in a concrete class"
+                    ),
+                    def.range,
+                ));
+            }
+        }
     }
     if !is_dataclass && !methods.iter().any(|(name, _)| name == "__init__") {
         // #432: a derived class without its own `__init__` inherits the
@@ -1327,6 +1885,11 @@ pub(crate) fn lower_class(
             enum_members,
             is_dataclass,
             dataclass_fields,
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: Vec::new(),
+            abstract_methods: all_abstract_methods,
+            is_abstract,
         },
         items,
     ))
@@ -1361,6 +1924,7 @@ fn lower_method(
     type_param: Option<&str>,
     aliases: &[(String, Ty)],
     kind: &MethodKind,
+    class_defs: &[(String, bool)],
 ) -> Result<(HirItem, Vec<(String, Ty)>), Diagnostic> {
     if def.is_async {
         return Err(unsupported(
@@ -1423,6 +1987,7 @@ fn lower_method(
                 type_param,
                 Some(class_name),
                 aliases,
+                class_defs,
             )?;
             p.extend(lower_arg_list(
                 &parameters.args,
@@ -1431,6 +1996,7 @@ fn lower_method(
                 type_param,
                 Some(class_name),
                 aliases,
+                class_defs,
             )?);
             p
         }
@@ -1480,6 +2046,7 @@ fn lower_method(
                 type_param,
                 Some(class_name),
                 aliases,
+                class_defs,
             )?);
             p.extend(lower_arg_list(
                 args_rest,
@@ -1488,6 +2055,7 @@ fn lower_method(
                 type_param,
                 Some(class_name),
                 aliases,
+                class_defs,
             )?);
             p
         }
@@ -1556,6 +2124,7 @@ fn lower_method(
                 type_param,
                 Some(class_name),
                 aliases,
+                class_defs,
             )?);
             p.extend(lower_arg_list(
                 args_rest,
@@ -1564,6 +2133,7 @@ fn lower_method(
                 type_param,
                 Some(class_name),
                 aliases,
+                class_defs,
             )?);
             p
         }
@@ -1575,15 +2145,29 @@ fn lower_method(
         type_param,
         Some(class_name),
         aliases,
+        class_defs,
     )?;
-    let body = crate::stmt::lower_body(
-        &def.body,
-        aliases,
-        false,
-        true,
-        Some(class_name),
-        type_param,
-    )?;
+    let body = if matches!(kind, MethodKind::AbstractMethod) {
+        // #380 (PR-20): an `@abstractmethod` has a declaration-style
+        // body (`...` or `pass`) that is already validated in
+        // `lower_class`. Skip body lowering — the abstract method is
+        // registered as a function (for dispatch/mangling purposes)
+        // but its body is never called. Use a `Return(None)` so the
+        // function has a terminator for codegen; the type checker
+        // skips the return-value check for abstract methods (see
+        // `check_stmt_in_function`'s `Return(None)` arm).
+        vec![crate::HirStmt::Return(None)]
+    } else {
+        crate::stmt::lower_body(
+            &def.body,
+            aliases,
+            false,
+            true,
+            Some(class_name),
+            type_param,
+            class_defs,
+        )?
+    };
     // #377/#436: compute the mangled name based on the method kind. A
     // regular method uses `<Class>.<name>`. A property getter uses the
     // same `<Class>.<name>`. A property setter uses
@@ -1593,7 +2177,9 @@ fn lower_method(
     // prevent collision with a regular method of the same name, since a
     // real Python identifier can never contain a `.`.
     let mangled_name = match kind {
-        MethodKind::Regular { .. } | MethodKind::PropertyGetter { .. } => {
+        MethodKind::Regular { .. }
+        | MethodKind::PropertyGetter { .. }
+        | MethodKind::AbstractMethod => {
             format!("{class_name}.{method_name}")
         }
         MethodKind::PropertySetter { prop_name } => {
@@ -2485,10 +3071,7 @@ mod tests {
             .expect("C.m.static must be lowered");
         assert_eq!(
             m,
-            vec![
-                ("x".to_string(), Ty::Int),
-                ("y".to_string(), Ty::Int),
-            ]
+            vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int),]
         );
     }
 
@@ -2612,6 +3195,11 @@ mod tests {
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             }
         );
         // Direct value comparison, not a `let PATTERN = .. else { panic!(..) }`
@@ -3724,6 +4312,11 @@ mod tests {
             enum_members: Vec::new(),
             is_dataclass: false,
             dataclass_fields: Vec::new(),
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: Vec::new(),
+            abstract_methods: Vec::new(),
+            is_abstract: false,
         };
         let defined_classes = vec![("A".to_string(), fake_a)];
         let diagnostic = super::lower_class(def, &[], &defined_classes).unwrap_err();
@@ -3884,6 +4477,68 @@ mod tests {
     #[test]
     fn enum_member_with_non_literal_value_is_rejected() {
         assert_c0001("x = 1\nclass C(Enum):\n    RED = x\n");
+    }
+
+    // -- #379: enum error paths covered via unit tests (not integration
+    //    tests) to avoid cargo-llvm-cov issue #276 (instantiation merging) --
+
+    #[test]
+    fn enum_body_with_method_is_rejected_via_unit_test() {
+        // Exercises the "enum class body must contain only member
+        // assignments" error path (lines 828-832).
+        assert_c0001("class Color(Enum):\n    RED = 1\n    def f(self) -> int:\n        return 1\n");
+    }
+
+    #[test]
+    fn duplicate_enum_member_is_rejected_via_unit_test() {
+        // Exercises the "duplicate enum member" error path (lines 854-860).
+        assert_c0001("class Color(Enum):\n    RED = 1\n    RED = 2\n");
+    }
+
+    #[test]
+    fn enum_member_float_value_is_rejected_via_unit_test() {
+        // Exercises the "non-integer value" error path (lines 884-893).
+        assert_c0001("class Color(Enum):\n    RED = 1.5\n");
+    }
+
+    #[test]
+    fn enum_member_bool_value_is_rejected_via_unit_test() {
+        // Exercises the "non-integer value" error path (lines 884-893)
+        // with a `bool` literal, a distinct match arm from `float`.
+        assert_c0001("class Color(Enum):\n    RED = True\n");
+    }
+
+    #[test]
+    fn valid_enum_class_lowers_via_unit_test() {
+        // Covers `lower_enum_class`'s `Ok` return path (lines 911-932)
+        // inside this crate's own unit-test binary, working around
+        // cargo-llvm-cov issue #276 (instantiation-merge gap between
+        // the library and integration-test binaries).
+        let hir = lower_ok("class Color(Enum):\n    RED = 1\n    GREEN = 2\n    BLUE = 3\n");
+        assert_eq!(hir.class_defs.len(), 1);
+        let (_, class_def) = &hir.class_defs[0];
+        assert!(!class_def.is_protocol);
+        assert_eq!(class_def.enum_members.len(), 3);
+        assert_eq!(class_def.enum_members[0].0, "RED");
+        assert_eq!(class_def.enum_members[0].1, 1);
+    }
+
+    #[test]
+    fn single_member_enum_class_lowers_via_unit_test() {
+        // Additional `lower_enum_class` `Ok` return coverage with a
+        // minimal single-member enum.
+        let hir = lower_ok("class Color(Enum):\n    RED = 0\n");
+        let (_, class_def) = &hir.class_defs[0];
+        assert_eq!(class_def.enum_members.len(), 1);
+        assert_eq!(class_def.enum_members[0].0, "RED");
+        assert_eq!(class_def.enum_members[0].1, 0);
+    }
+
+    #[test]
+    fn runtime_checkable_on_non_protocol_is_rejected_via_unit_test() {
+        // Covers the `@runtime_checkable` on a non-protocol class error
+        // path (lines 1082-1089) inside this crate's own unit-test binary.
+        assert_c0001("@runtime_checkable\nclass C:\n    pass\n");
     }
 
     // -- #378 (PR-18): dataclass (PEP 557) lowering -----------------------
@@ -4075,7 +4730,9 @@ mod tests {
 
     #[test]
     fn multiple_decorators_on_a_dataclass_are_rejected() {
-        assert_c0001("@dataclass\n@dataclass\nclass C:\n    x: int\n");
+        // #380 (PR-20): `@dataclass` combined with `@runtime_checkable`
+        // is rejected — a protocol class cannot be a dataclass.
+        assert_c0001("@dataclass\n@runtime_checkable\nclass C:\n    x: int\n");
     }
 
     #[test]
@@ -4163,5 +4820,432 @@ mod tests {
             "unexpected message: {}",
             diagnostic.message
         );
+    }
+
+    // -- PEP 544 (#380): Protocol class lowering ---------------------------
+
+    #[test]
+    fn a_protocol_class_with_a_pass_body_lowers_successfully() {
+        let hir = lower_ok("from typing import Protocol\nclass P(Protocol):\n    pass\n");
+        assert_eq!(hir.class_defs.len(), 1);
+        assert!(hir.class_defs[0].1.is_protocol);
+        assert!(hir.class_defs[0].1.protocol_members.is_empty());
+    }
+
+    #[test]
+    fn a_protocol_class_with_a_method_and_attribute_lowers_successfully() {
+        let hir = lower_ok(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\n    x: str\n",
+        );
+        let def = &hir.class_defs[0].1;
+        assert!(def.is_protocol);
+        assert_eq!(def.protocol_members.len(), 2);
+    }
+
+    #[test]
+    fn a_protocol_method_with_a_parameter_lowers_successfully() {
+        // Exercises the `params.iter().map(|(_, ty)| ty.clone())` closure
+        // on line 715 — when a protocol method has parameters besides
+        // `self`, the closure body is entered to collect parameter types
+        // into `ProtocolMember::Method::param_tys`.
+        let hir = lower_ok(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self, x: int) -> int: ...\n",
+        );
+        let def = &hir.class_defs[0].1;
+        assert!(def.is_protocol);
+        assert_eq!(def.protocol_members.len(), 1);
+    }
+
+    #[test]
+    fn a_protocol_class_with_init_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from typing import Protocol\nclass P(Protocol):\n    def __init__(self) -> None: ...\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot define `__init__`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_protocol_method_with_a_decorator_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from typing import Protocol\nclass P(Protocol):\n    @staticmethod\n    def foo(self) -> int: ...\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("decorators on protocol method"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_generic_protocol_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo[T](self) -> int: ...\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("generic protocol method"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_protocol_method_with_an_implementation_body_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int:\n        return 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("declaration-style body"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_protocol_class_with_an_unsupported_statement_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from typing import Protocol\nclass P(Protocol):\n    x = 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn a_protocol_class_with_an_attribute_with_a_default_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from typing import Protocol\nclass P(Protocol):\n    x: int = 0\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot have a default value"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_generic_protocol_class_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from typing import Protocol\nclass P[T](Protocol):\n    def foo(self) -> int: ...\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("generic protocol class"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_dataclass_protocol_class_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from typing import Protocol\n@dataclass\nclass P(Protocol):\n    def foo(self) -> int: ...\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot be a `@dataclass`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_protocol_class_inheriting_and_redeclaring_a_method_lowers() {
+        let hir = lower_ok(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass Q(P):\n    def foo(self) -> str: ...\n",
+        );
+        let q_def = hir.class_defs.iter().find(|(n, _)| n == "Q").unwrap();
+        assert!(q_def.1.is_protocol);
+        // Q inherits P's `foo` but redeclares it with a different return type.
+        // The redeclared version should replace the inherited one.
+        assert_eq!(q_def.1.protocol_members.len(), 1);
+    }
+
+    #[test]
+    fn a_protocol_class_inheriting_an_attribute_lowers() {
+        let hir = lower_ok(
+            "from typing import Protocol\nclass P(Protocol):\n    x: int\nclass Q(P):\n    def foo(self) -> int: ...\n",
+        );
+        let q_def = hir.class_defs.iter().find(|(n, _)| n == "Q").unwrap();
+        assert!(q_def.1.is_protocol);
+        // Q inherits P's `x` attribute and adds its own `foo` method.
+        assert_eq!(q_def.1.protocol_members.len(), 2);
+    }
+
+    // -- PEP 3119 (#380): ABC and @abstractmethod lowering ----------------
+
+    #[test]
+    fn an_abc_class_with_an_abstract_method_lowers_successfully() {
+        let hir = lower_ok(
+            "from abc import ABC, abstractmethod\nclass A(ABC):\n    @abstractmethod\n    def foo(self) -> int: ...\n    def __init__(self) -> None:\n        return\n",
+        );
+        let def = &hir.class_defs[0].1;
+        assert!(def.is_abstract);
+        assert!(def.abstract_methods.contains(&"foo".to_string()));
+    }
+
+    #[test]
+    fn an_abstract_method_with_an_implementation_body_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from abc import ABC, abstractmethod\nclass A(ABC):\n    @abstractmethod\n    def foo(self) -> int:\n        return 1\n    def __init__(self) -> None:\n        return\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("declaration-style body"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_concrete_subclass_inheriting_an_unoverridden_abstract_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from abc import ABC, abstractmethod\nclass A(ABC):\n    @abstractmethod\n    def foo(self) -> int: ...\n    def __init__(self) -> None:\n        return\nclass B(A):\n    def __init__(self) -> None:\n        return\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("abstract"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_class_with_more_than_two_decorators_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from typing import Protocol, runtime_checkable\n@runtime_checkable\n@dataclass\n@runtime_checkable\nclass P(Protocol):\n    def foo(self) -> int: ...\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("more than two class decorators"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_protocol_method_with_a_pass_body_lowers_successfully() {
+        let hir = lower_ok(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int:\n        pass\n",
+        );
+        let def = &hir.class_defs[0].1;
+        assert!(def.is_protocol);
+        assert_eq!(def.protocol_members.len(), 1);
+    }
+
+    #[test]
+    fn a_protocol_method_without_self_lowers_successfully() {
+        let hir = lower_ok(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo() -> int: ...\n",
+        );
+        let def = &hir.class_defs[0].1;
+        assert!(def.is_protocol);
+        assert_eq!(def.protocol_members.len(), 1);
+    }
+
+    #[test]
+    fn a_protocol_attribute_with_a_non_name_target_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from typing import Protocol\nclass P(Protocol):\n    self.x: int\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("must target a bare name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_protocol_class_redeclaring_an_inherited_attribute_lowers() {
+        let hir = lower_ok(
+            "from typing import Protocol\nclass P(Protocol):\n    x: int\nclass Q(P):\n    x: str\n",
+        );
+        let q_def = hir.class_defs.iter().find(|(n, _)| n == "Q").unwrap();
+        assert!(q_def.1.is_protocol);
+        // Q redeclares P's `x` with a different type. The redeclared
+        // version should replace the inherited one.
+        assert_eq!(q_def.1.protocol_members.len(), 1);
+    }
+
+    #[test]
+    fn a_protocol_class_inheriting_a_method_with_own_attribute_lowers() {
+        // This covers the Attribute arm in the inherited-member dedup
+        // check (line 606 in lower_protocol_body).
+        let hir = lower_ok(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass Q(P):\n    x: str\n",
+        );
+        let q_def = hir.class_defs.iter().find(|(n, _)| n == "Q").unwrap();
+        assert!(q_def.1.is_protocol);
+        // Q inherits P's `foo` method and adds its own `x` attribute.
+        assert_eq!(q_def.1.protocol_members.len(), 2);
+    }
+
+    #[test]
+    fn a_dataclass_inheriting_from_a_protocol_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\n@dataclass\nclass Q(P):\n    x: int\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot be a `@dataclass`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn an_abstract_method_redefined_in_the_same_class_is_accepted() {
+        // Redefining an abstract method in the same class should update
+        // the method binding (matching regular method redefinition
+        // semantics) and keep it in abstract_methods.
+        let hir = lower_ok(
+            "from abc import ABC, abstractmethod\nclass A(ABC):\n    @abstractmethod\n    def foo(self) -> int: ...\n    @abstractmethod\n    def foo(self) -> str: ...\n    def __init__(self) -> None:\n        return\n",
+        );
+        let def = &hir.class_defs[0].1;
+        assert!(def.is_abstract);
+        assert!(def.abstract_methods.contains(&"foo".to_string()));
+    }
+
+    #[test]
+    fn a_concrete_subclass_overriding_an_inherited_abstract_method_lowers() {
+        let hir = lower_ok(
+            "from abc import ABC, abstractmethod\nclass A(ABC):\n    @abstractmethod\n    def foo(self) -> int: ...\n    def __init__(self) -> None:\n        return\nclass B(A):\n    def foo(self) -> int:\n        return 1\n    def __init__(self) -> None:\n        return\n",
+        );
+        let b_def = hir.class_defs.iter().find(|(n, _)| n == "B").unwrap();
+        // B is concrete (not abstract) because it overrides foo.
+        assert!(!b_def.1.is_abstract);
+        // B's abstract_methods includes inherited ones from A, but B
+        // overrides foo with a concrete method.
+        assert!(b_def.1.abstract_methods.contains(&"foo".to_string()));
+    }
+
+    #[test]
+    fn a_protocol_inheriting_from_two_protocols_with_overlapping_methods_lowers() {
+        // This exercises the dedup check in the inherited-member loop
+        // (class.rs lines 604-606): when two base protocols declare the
+        // same method, the second inheritance skips the duplicate.
+        let hir = lower_ok(
+            "from typing import Protocol\nclass P1(Protocol):\n    def foo(self) -> int: ...\nclass P2(Protocol):\n    def foo(self) -> int: ...\nclass Q(P1, P2):\n    def bar(self) -> int: ...\n",
+        );
+        let q_def = hir.class_defs.iter().find(|(n, _)| n == "Q").unwrap();
+        assert!(q_def.1.is_protocol);
+        // Q should have `foo` (from P1/P2, deduplicated) and `bar` (own).
+        assert_eq!(q_def.1.protocol_members.len(), 2);
+    }
+
+    #[test]
+    fn a_protocol_inheriting_from_two_protocols_with_overlapping_attributes_lowers() {
+        // This exercises the Attribute arm of the dedup check in the
+        // inherited-member loop (class.rs line 606): when two base
+        // protocols declare the same attribute, the second inheritance
+        // skips the duplicate.
+        let hir = lower_ok(
+            "from typing import Protocol\nclass P1(Protocol):\n    x: int\nclass P2(Protocol):\n    x: int\nclass Q(P1, P2):\n    y: str\n",
+        );
+        let q_def = hir.class_defs.iter().find(|(n, _)| n == "Q").unwrap();
+        assert!(q_def.1.is_protocol);
+        // Q should have `x` (from P1/P2, deduplicated) and `y` (own).
+        assert_eq!(q_def.1.protocol_members.len(), 2);
+    }
+
+    #[test]
+    fn a_protocol_method_with_self_and_unsupported_param_annotation_is_rejected() {
+        // This exercises the `?` error path on lower_arg_list in the
+        // `self` branch of protocol method lowering (line 677).
+        assert_c0001(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self, x: Frobnicate) -> int: ...\n",
+        );
+    }
+
+    #[test]
+    fn a_protocol_method_with_self_and_unsupported_return_annotation_is_rejected() {
+        // This exercises the `?` error path on lower_return_annotation
+        // in the `self` branch of protocol method lowering (line 686).
+        assert_c0001(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> Frobnicate: ...\n",
+        );
+    }
+
+    #[test]
+    fn a_protocol_method_without_self_and_unsupported_param_annotation_is_rejected() {
+        // This exercises the `?` error path on lower_arg_list in the
+        // no-`self` branch of protocol method lowering (line 701).
+        assert_c0001(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(x: Frobnicate) -> int: ...\n",
+        );
+    }
+
+    #[test]
+    fn a_protocol_method_without_self_and_unsupported_return_annotation_is_rejected() {
+        // This exercises the `?` error path on lower_return_annotation
+        // in the no-`self` branch of protocol method lowering (line 710).
+        assert_c0001(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo() -> Frobnicate: ...\n",
+        );
+    }
+
+    #[test]
+    fn a_protocol_attribute_with_unsupported_annotation_is_rejected() {
+        // This exercises the `?` error path on annotation_to_ty in
+        // protocol attribute lowering (line 745).
+        assert_c0001("from typing import Protocol\nclass P(Protocol):\n    x: Frobnicate\n");
+    }
+
+    #[test]
+    fn a_protocol_method_with_a_docstring_body_is_rejected() {
+        // A docstring is a `Stmt::Expr` whose value is a string literal,
+        // not an `EllipsisLiteral`.  This exercises the `false` branch of
+        // the `matches!` inside `is_declaration_body` (line 560), which
+        // causes the protocol-method body check to reject it.
+        assert_c0001(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int:\n        \"docstring\"\n",
+        );
+    }
+
+    #[test]
+    fn an_abstract_method_with_a_docstring_body_is_rejected() {
+        // Same `is_declaration_body` false branch, reached via the
+        // `@abstractmethod` lowering path (line 1693).
+        assert_c0001(
+            "from abc import ABC, abstractmethod\nclass A(ABC):\n    @abstractmethod\n    def foo(self) -> int:\n        \"docstring\"\n",
+        );
+    }
+
+    #[test]
+    fn a_concrete_subclass_inheriting_abstract_method_from_grandparent_lowers() {
+        // This exercises the abstract method inheritance loop (line 1786)
+        // by having a three-level inheritance chain: A (abstract) -> B
+        // (abstract, explicitly inherits ABC) -> C (concrete, overrides).
+        // The loop iterates over MRO entries beyond the first, finding
+        // inherited abstract methods from both A and B.
+        let hir = lower_ok(
+            "from abc import ABC, abstractmethod\nclass A(ABC):\n    @abstractmethod\n    def foo(self) -> int: ...\n    def __init__(self) -> None:\n        return\nclass B(A, ABC):\n    @abstractmethod\n    def bar(self) -> int: ...\n    def __init__(self) -> None:\n        return\nclass C(B):\n    def foo(self) -> int:\n        return 1\n    def bar(self) -> int:\n        return 2\n    def __init__(self) -> None:\n        return\n",
+        );
+        let c_def = hir.class_defs.iter().find(|(n, _)| n == "C").unwrap();
+        assert!(!c_def.1.is_abstract);
+        assert!(c_def.1.abstract_methods.contains(&"foo".to_string()));
+        assert!(c_def.1.abstract_methods.contains(&"bar".to_string()));
     }
 }
