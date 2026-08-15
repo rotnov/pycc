@@ -4,6 +4,7 @@
 require "pathname"
 require "psych"
 require "digest"
+require "json"
 
 class RoadmapEvidenceError < StandardError; end
 
@@ -1077,6 +1078,15 @@ D171_CONCURRENCY = {
     "ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}",
   "cancel-in-progress" => "${{ github.event_name == 'pull_request' }}"
 }.freeze
+D171_TOP_LEVEL_KEYS = %w[name on permissions concurrency env jobs].freeze
+D171_TRIGGERS = {
+  "push" => { "branches" => ["main"] },
+  "pull_request" => ""
+}.freeze
+D171_ENV = {
+  "CARGO_LLVM_COV_VERSION" => "0.8.7",
+  "LLVM_VERSION" => "22.1.1"
+}.freeze
 D171_CLASSIFIER_OUTPUTS = {
   "compiler" => "${{ steps.classify.outputs.compiler }}",
   "pages" => "${{ steps.classify.outputs.pages }}",
@@ -1140,12 +1150,33 @@ D171_CHECKOUT_COUNTS = {
   "pages-performance" => 1,
   "pages-accessibility" => 1
 }.freeze
+D171_JOB_NAMES = [
+  "classify-changes",
+  "governance",
+  *D171_OPTIONAL_ROUTING.keys,
+  "ci-gate"
+].freeze
+D171_JOB_BODY_SHA256S = {
+  "governance" => "02153e40dd8c808d90a010ecf958b46d51a00ae1f23f1165df93a4236a1514c3",
+  "build-test-coverage" => "68c97f28128266224195f091d9992add05186d6bc84ef75c500d92103459af94",
+  "native-build-test" => "8f13b95ff869a085e4239360c8d5e16d36ef357cca6e475bae21faa35788fa52",
+  "cross-compile-build" => "b0ef76e4a4dee6a0c1255be9bc7b4b0846a54ff786c2ba6a6bce0c83a6d9bedd",
+  "cross-compile-verify" => "18cde75ed226966ae96336f6b7898c6bacb26294d070074012fc58e7fe27ae35",
+  "frontend-perf-measure" => "c4fc6a1575f8e18480f79a902e0d5e6a9fa0ea0cee88293c25121c8ddf41b962",
+  "frontend-perf-gate" => "4db6345a6deb7a8c4ffff31f06aea4d1d7b279b16a7ad4f75a658fae60926bc3",
+  "pages-performance" => "609568e141cf60f06d398953f39d43fcf640c7b3aef6866595348685691dfc41",
+  "pages-accessibility" => "576c7a1fd01a8924689d7723a271ac4b83ac603a52eec414d9cd5c6eafc34016"
+}.freeze
 D171_TIER1_MATRIX = [
   { "os" => "ubuntu-latest", "target" => "x86_64-unknown-linux-gnu" },
   { "os" => "ubuntu-24.04-arm", "target" => "aarch64-unknown-linux-gnu" },
   { "os" => "macos-15-intel", "target" => "x86_64-apple-darwin" },
   { "os" => "windows-latest", "target" => "x86_64-pc-windows-msvc" }
 ].freeze
+D171_TIER1_STRATEGY = {
+  "fail-fast" => "false",
+  "matrix" => { "include" => D171_TIER1_MATRIX }
+}.freeze
 D171_CI_GATE_NEEDS = [
   "classify-changes",
   "governance",
@@ -1369,6 +1400,23 @@ def d171_normalize_expression(expression)
   expression.to_s.gsub(/\s+/, " ").strip
 end
 
+def d171_canonical_value(value)
+  case value
+  when Hash
+    value.keys.sort.each_with_object({}) do |key, canonical|
+      canonical[key] = d171_canonical_value(value[key])
+    end
+  when Array
+    value.map { |entry| d171_canonical_value(entry) }
+  else
+    value
+  end
+end
+
+def d171_canonical_sha256(value)
+  Digest::SHA256.hexdigest(JSON.generate(d171_canonical_value(value)))
+end
+
 def validate_d171_ci_routing(workflow_text, source)
   stream = Psych.parse_stream(workflow_text, filename: source)
   if stream.children.length != 1 || stream.children.first.root.nil?
@@ -1380,6 +1428,14 @@ def validate_d171_ci_routing(workflow_text, source)
   jobs = d171_mapping(workflow["jobs"], "#{source} jobs")
 
   d171_require_equal(
+    workflow.keys.sort,
+    D171_TOP_LEVEL_KEYS.sort,
+    "#{source} top-level keys"
+  )
+  d171_require_equal(workflow["name"], "CI", "#{source} workflow name")
+  d171_require_equal(workflow["on"], D171_TRIGGERS, "#{source} triggers")
+  d171_require_equal(workflow["env"], D171_ENV, "#{source} workflow environment")
+  d171_require_equal(
     workflow["permissions"],
     { "contents" => "read" },
     "#{source} workflow permissions"
@@ -1388,6 +1444,38 @@ def validate_d171_ci_routing(workflow_text, source)
     workflow["concurrency"],
     D171_CONCURRENCY,
     "#{source} concurrency"
+  )
+  D171_JOB_NAMES.each do |job_name|
+    d171_mapping(jobs[job_name], "#{source} #{job_name}")
+  end
+  d171_require_equal(jobs.keys.sort, D171_JOB_NAMES.sort, "#{source} job set")
+
+  checkout_counts = Hash.new(0)
+  jobs.each do |job_name, job|
+    next unless job.is_a?(Hash)
+
+    Array(job["steps"]).each do |step|
+      next unless step.is_a?(Hash)
+      next unless /\Aactions\/checkout@/i.match?(step.fetch("uses", ""))
+
+      d171_require_equal(
+        step["uses"],
+        PINNED_CHECKOUT_ACTION,
+        "#{source} #{job_name} checkout pin"
+      )
+      with = d171_mapping(step["with"], "#{source} #{job_name} checkout inputs")
+      d171_require_equal(
+        with["persist-credentials"],
+        "false",
+        "#{source} #{job_name} checkout credentials"
+      )
+      checkout_counts[job_name] += 1
+    end
+  end
+  d171_require_equal(
+    checkout_counts,
+    D171_CHECKOUT_COUNTS,
+    "#{source} checkout locations"
   )
 
   classifier = d171_mapping(jobs["classify-changes"], "#{source} classify-changes")
@@ -1479,6 +1567,11 @@ def validate_d171_ci_routing(workflow_text, source)
       "#{source} governance agent condition"
     )
   end
+  d171_require_equal(
+    d171_canonical_sha256(governance),
+    D171_JOB_BODY_SHA256S.fetch("governance"),
+    "#{source} governance body"
+  )
 
   D171_OPTIONAL_ROUTING.each do |job_name, (output, expected_needs)|
     job = d171_mapping(jobs[job_name], "#{source} #{job_name}")
@@ -1495,37 +1588,9 @@ def validate_d171_ci_routing(workflow_text, source)
   end
 
   d171_require_equal(
-    jobs.dig("native-build-test", "strategy", "matrix", "include"),
-    D171_TIER1_MATRIX,
-    "#{source} Tier-1 matrix"
-  )
-
-  checkout_counts = Hash.new(0)
-  jobs.each do |job_name, job|
-    next unless job.is_a?(Hash)
-
-    Array(job["steps"]).each do |step|
-      next unless step.is_a?(Hash)
-      next unless step.fetch("uses", "").start_with?("actions/checkout@")
-
-      d171_require_equal(
-        step["uses"],
-        PINNED_CHECKOUT_ACTION,
-        "#{source} #{job_name} checkout pin"
-      )
-      with = d171_mapping(step["with"], "#{source} #{job_name} checkout inputs")
-      d171_require_equal(
-        with["persist-credentials"],
-        "false",
-        "#{source} #{job_name} checkout credentials"
-      )
-      checkout_counts[job_name] += 1
-    end
-  end
-  d171_require_equal(
-    checkout_counts,
-    D171_CHECKOUT_COUNTS,
-    "#{source} checkout locations"
+    jobs.dig("native-build-test", "strategy"),
+    D171_TIER1_STRATEGY,
+    "#{source} Tier-1 strategy"
   )
 
   ci_gate = d171_mapping(jobs["ci-gate"], "#{source} ci-gate")
@@ -1589,6 +1654,13 @@ def validate_d171_ci_routing(workflow_text, source)
   end
   validate_source_aware_perf_gate_lifecycle(unrouted_text, source)
   validate_pages_performance_lifecycle(unrouted_text, source)
+  D171_OPTIONAL_ROUTING.each_key do |job_name|
+    d171_require_equal(
+      d171_canonical_sha256(unrouted_jobs.fetch(job_name)),
+      D171_JOB_BODY_SHA256S.fetch(job_name),
+      "#{source} #{job_name} body"
+    )
+  end
   true
 end
 

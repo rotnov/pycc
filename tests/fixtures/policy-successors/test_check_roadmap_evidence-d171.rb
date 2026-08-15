@@ -82,15 +82,20 @@ class RoadmapEvidenceCliTest < Minitest::Test
   D171_PAGES_JOBS = %w[pages-performance pages-accessibility].freeze
 
   def d171_workflow
-    workflow = Psych.safe_load(D171_WORKFLOW_FIXTURE.read)
+    stream = Psych.parse_stream(
+      D171_WORKFLOW_FIXTURE.read,
+      filename: D171_WORKFLOW_FIXTURE.to_s
+    )
+    workflow = yaml_value(stream.children.first.root, D171_WORKFLOW_FIXTURE.to_s)
     yield workflow if block_given?
     workflow
   end
 
-  def assert_d171_routing_rejected(workflow, label)
-    assert_raises(RoadmapEvidenceError, label) do
+  def assert_d171_routing_rejected(workflow, label, expected_context:)
+    error = assert_raises(RoadmapEvidenceError, label) do
       validate_d171_ci_routing(workflow.to_yaml, "ci-d171.yml")
     end
+    assert_includes error.message, expected_context, label
   end
 
   def d171_checkout_locations(workflow)
@@ -3462,11 +3467,19 @@ class RoadmapEvidenceCliTest < Minitest::Test
     locations.each do |job_name, index|
       workflow = d171_workflow
       workflow.dig("jobs", job_name, "steps", index)["uses"] = "actions/checkout@v6"
-      assert_d171_routing_rejected(workflow, "mutable checkout in #{job_name}")
+      assert_d171_routing_rejected(
+        workflow,
+        "mutable checkout in #{job_name}",
+        expected_context: "checkout pin"
+      )
 
       workflow = d171_workflow
       workflow.dig("jobs", job_name, "steps", index, "with")["persist-credentials"] = true
-      assert_d171_routing_rejected(workflow, "persisted checkout credentials in #{job_name}")
+      assert_d171_routing_rejected(
+        workflow,
+        "persisted checkout credentials in #{job_name}",
+        expected_context: "checkout credentials"
+      )
     end
   end
 
@@ -3488,7 +3501,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
     mutations.each do |label, mutate|
       workflow = d171_workflow
       mutate.call(workflow)
-      assert_d171_routing_rejected(workflow, label)
+      assert_d171_routing_rejected(
+        workflow,
+        label,
+        expected_context: "classify-changes"
+      )
     end
   end
 
@@ -3506,7 +3523,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
         step["id"] == "classify"
       end
       classify.fetch("env")[variable] = "${{ github.ref }}"
-      assert_d171_routing_rejected(workflow, "classifier #{variable}")
+      assert_d171_routing_rejected(
+        workflow,
+        "classifier #{variable}",
+        expected_context: "classify-changes job"
+      )
     end
   end
 
@@ -3523,7 +3544,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
         step["id"] == "classify"
       end
       classify["run"] = classify.fetch("run").sub(before, after)
-      assert_d171_routing_rejected(workflow, label)
+      assert_d171_routing_rejected(
+        workflow,
+        label,
+        expected_context: "classify-changes job"
+      )
     end
   end
 
@@ -3531,13 +3556,21 @@ class RoadmapEvidenceCliTest < Minitest::Test
     %w[compiler pages agent].each do |output|
       workflow = d171_workflow
       workflow.dig("jobs", "classify-changes", "outputs").delete(output)
-      assert_d171_routing_rejected(workflow, "missing #{output} output")
+      assert_d171_routing_rejected(
+        workflow,
+        "missing #{output} output",
+        expected_context: "classify-changes outputs"
+      )
 
       workflow = d171_workflow
       wrong_output = output == "compiler" ? "pages" : "compiler"
       workflow.dig("jobs", "classify-changes", "outputs")[output] =
         "${{ steps.classify.outputs.#{wrong_output} }}"
-      assert_d171_routing_rejected(workflow, "misdirected #{output} output")
+      assert_d171_routing_rejected(
+        workflow,
+        "misdirected #{output} output",
+        expected_context: "classify-changes outputs"
+      )
     end
   end
 
@@ -3545,12 +3578,20 @@ class RoadmapEvidenceCliTest < Minitest::Test
     ["${{ always() }}", "${{ !failure() }}"].each do |condition|
       workflow = d171_workflow
       workflow.dig("jobs", "governance")["if"] = condition
-      assert_d171_routing_rejected(workflow, "governance condition #{condition}")
+      assert_d171_routing_rejected(
+        workflow,
+        "governance condition #{condition}",
+        expected_context: "governance cancellation condition"
+      )
     end
 
     workflow = d171_workflow
     workflow.dig("jobs", "governance").delete("needs")
-    assert_d171_routing_rejected(workflow, "governance classifier dependency")
+    assert_d171_routing_rejected(
+      workflow,
+      "governance classifier dependency",
+      expected_context: "governance dependency"
+    )
   end
 
   def test_d171_requires_every_optional_job_condition_and_classifier_dependency
@@ -3562,7 +3603,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
         workflow = d171_workflow
         workflow.dig("jobs", job_name)["if"] =
           "needs.classify-changes.outputs.#{output} != 'false'"
-        assert_d171_routing_rejected(workflow, "#{job_name} condition")
+        assert_d171_routing_rejected(
+          workflow,
+          "#{job_name} condition",
+          expected_context: "#{job_name} condition"
+        )
 
         workflow = d171_workflow
         job = workflow.dig("jobs", job_name)
@@ -3571,7 +3616,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
         else
           job.delete("needs")
         end
-        assert_d171_routing_rejected(workflow, "#{job_name} classifier dependency")
+        assert_d171_routing_rejected(
+          workflow,
+          "#{job_name} classifier dependency",
+          expected_context: "#{job_name} dependency"
+        )
       end
     end
   end
@@ -3580,7 +3629,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
     %w[classify-changes governance].each do |dependency|
       workflow = d171_workflow
       workflow.dig("jobs", "ci-gate", "needs").delete(dependency)
-      assert_d171_routing_rejected(workflow, "ci-gate #{dependency} dependency")
+      assert_d171_routing_rejected(
+        workflow,
+        "ci-gate #{dependency} dependency",
+        expected_context: "ci-gate needs"
+      )
     end
   end
 
@@ -3592,7 +3645,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
         "needs.#{job_name}.result != 'success'",
         "needs.#{job_name}.result == 'failure'"
       )
-      assert_d171_routing_rejected(workflow, "ci-gate #{job_name} success")
+      assert_d171_routing_rejected(
+        workflow,
+        "ci-gate #{job_name} success",
+        expected_context: "ci-gate truth table"
+      )
     end
   end
 
@@ -3608,7 +3665,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
           "needs.#{job_name}.result != 'success'",
           "needs.#{job_name}.result != 'skipped'"
         )
-        assert_d171_routing_rejected(workflow, "selected #{job_name} result")
+        assert_d171_routing_rejected(
+          workflow,
+          "selected #{job_name} result",
+          expected_context: "ci-gate truth table"
+        )
 
         workflow = d171_workflow
         gate = workflow.dig("jobs", "ci-gate", "steps").first
@@ -3616,7 +3677,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
           "needs.#{job_name}.result != 'skipped'",
           "needs.#{job_name}.result != 'success'"
         )
-        assert_d171_routing_rejected(workflow, "unselected #{job_name} result")
+        assert_d171_routing_rejected(
+          workflow,
+          "unselected #{job_name} result",
+          expected_context: "ci-gate truth table"
+        )
       end
     end
   end
@@ -3625,11 +3690,18 @@ class RoadmapEvidenceCliTest < Minitest::Test
     %w[compiler pages agent].each do |output|
       workflow = d171_workflow
       gate = workflow.dig("jobs", "ci-gate", "steps").first
-      gate["if"] = gate.fetch("if").sub(
-        "outputs.#{output} != 'false'",
-        "outputs.#{output} != 'true'"
+      original = gate.fetch("if")
+      guard = %r{\s*\|\|\s*\(needs\.classify-changes\.outputs\.#{output} != 'true'\s*&&\s*needs\.classify-changes\.outputs\.#{output} != 'false'\)}
+      gate["if"] = original.sub(
+        guard,
+        ""
       )
-      assert_d171_routing_rejected(workflow, "malformed #{output} output")
+      refute_equal original, gate["if"], "missing #{output} guard mutation must apply"
+      assert_d171_routing_rejected(
+        workflow,
+        "malformed #{output} output",
+        expected_context: "ci-gate truth table"
+      )
     end
   end
 
@@ -3649,7 +3721,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
     mutations.each do |label, mutate|
       workflow = d171_workflow
       mutate.call(workflow)
-      assert_d171_routing_rejected(workflow, label)
+      assert_d171_routing_rejected(
+        workflow,
+        label,
+        expected_context: "concurrency"
+      )
     end
   end
 
@@ -3665,7 +3741,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
         candidate["name"] == COVERAGE_STEP
       end
       step["run"] = step.fetch("run").sub(before, after)
-      assert_d171_routing_rejected(workflow, label)
+      assert_d171_routing_rejected(
+        workflow,
+        label,
+        expected_context: "coverage"
+      )
     end
   end
 
@@ -3674,7 +3754,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
       workflow = d171_workflow
       workflow.dig("jobs", "native-build-test", "strategy", "matrix", "include")
               .delete_at(index)
-      assert_d171_routing_rejected(workflow, "matrix leg #{index}")
+      assert_d171_routing_rejected(
+        workflow,
+        "matrix leg #{index}",
+        expected_context: "Tier-1"
+      )
     end
   end
 
@@ -3685,24 +3769,247 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
     checkout.fetch("with")["ref"] = "${{ github.event.pull_request.head.sha }}"
 
-    assert_d171_routing_rejected(workflow, "candidate performance provenance")
+    assert_d171_routing_rejected(
+      workflow,
+      "candidate performance provenance",
+      expected_context: "source-aware measurement job"
+    )
   end
 
   def test_d171_rejects_pages_gate_removal_and_reviewed_body_drift
     D171_PAGES_JOBS.each do |job_name|
       workflow = d171_workflow
       workflow.fetch("jobs").delete(job_name)
-      assert_d171_routing_rejected(workflow, "missing #{job_name}")
+      assert_d171_routing_rejected(
+        workflow,
+        "missing #{job_name}",
+        expected_context: job_name
+      )
     end
 
-    workflow = d171_workflow
-    workflow.dig("jobs", "pages-performance", "steps").reject! do |step|
-      step["name"] == "Run hermetic Lighthouse pages performance budget gate"
+    {
+      "pages-performance" => "Run hermetic Lighthouse pages performance budget gate",
+      "pages-accessibility" => "Run hermetic Lighthouse accessibility gate"
+    }.each do |job_name, step_name|
+      workflow = d171_workflow
+      workflow.dig("jobs", job_name, "steps").reject! do |step|
+        step["name"] == step_name
+      end
+      assert_d171_routing_rejected(
+        workflow,
+        "missing #{job_name} command",
+        expected_context: "#{job_name} body"
+      )
     end
-    _stdout, _stderr, status = run_checker(
-      roadmap: "# pycc Roadmap\n",
-      workflow: workflow.to_yaml
+  end
+
+  def test_d171_ast_round_trip_preserves_triggers_and_is_accepted
+    workflow = d171_workflow
+
+    assert_equal(
+      {
+        "push" => { "branches" => ["main"] },
+        "pull_request" => ""
+      },
+      workflow["on"]
     )
-    refute status.success?
+    assert validate_d171_ci_routing(workflow.to_yaml, "ci-d171-round-trip.yml")
+  end
+
+  def test_d171_rejects_trigger_widening_and_workflow_dispatch
+    mutations = {
+      "workflow dispatch" => lambda do |workflow|
+        workflow.fetch("on")["workflow_dispatch"] = ""
+      end,
+      "filtered pull request" => lambda do |workflow|
+        workflow.fetch("on")["pull_request"] = { "branches" => ["main"] }
+      end,
+      "all push branches" => lambda do |workflow|
+        workflow.fetch("on")["push"] = ""
+      end
+    }
+
+    mutations.each do |label, mutate|
+      workflow = d171_workflow
+      mutate.call(workflow)
+      assert_d171_routing_rejected(
+        workflow,
+        label,
+        expected_context: "triggers"
+      )
+    end
+  end
+
+  def test_d171_rejects_extra_top_level_keys_jobs_and_job_keys
+    workflow = d171_workflow
+    workflow["unexpected-policy"] = "enabled"
+    assert_d171_routing_rejected(
+      workflow,
+      "extra top-level key",
+      expected_context: "top-level keys"
+    )
+
+    workflow = d171_workflow
+    workflow.fetch("jobs")["unexpected-job"] = {
+      "runs-on" => "ubuntu-latest",
+      "steps" => [{ "run" => "true" }]
+    }
+    assert_d171_routing_rejected(
+      workflow,
+      "extra job",
+      expected_context: "job set"
+    )
+
+    workflow = d171_workflow
+    workflow.dig("jobs", "native-build-test")["timeout-minutes"] = "5"
+    assert_d171_routing_rejected(
+      workflow,
+      "extra job key",
+      expected_context: "native-build-test body"
+    )
+  end
+
+  def test_d171_rejects_extra_or_widened_permissions
+    workflow = d171_workflow
+    workflow.fetch("permissions")["actions"] = "read"
+    assert_d171_routing_rejected(
+      workflow,
+      "extra workflow permission",
+      expected_context: "workflow permissions"
+    )
+
+    workflow = d171_workflow
+    workflow.dig("jobs", "governance", "permissions")["actions"] = "read"
+    assert_d171_routing_rejected(
+      workflow,
+      "extra governance permission",
+      expected_context: "governance permissions"
+    )
+
+    workflow = d171_workflow
+    workflow.dig("jobs", "pages-performance", "permissions")["actions"] = "write"
+    assert_d171_routing_rejected(
+      workflow,
+      "widened Pages permission",
+      expected_context: "pages-performance"
+    )
+  end
+
+  def test_d171_rejects_governance_failure_suppression_and_extra_steps
+    workflow = d171_workflow
+    workflow.dig("jobs", "governance")["continue-on-error"] = "true"
+    assert_d171_routing_rejected(
+      workflow,
+      "governance continue-on-error",
+      expected_context: "governance body"
+    )
+
+    workflow = d171_workflow
+    workflow.dig("jobs", "governance", "steps") << {
+      "name" => "Unexpected policy escape",
+      "run" => "true"
+    }
+    assert_d171_routing_rejected(
+      workflow,
+      "extra governance step",
+      expected_context: "governance body"
+    )
+  end
+
+  def test_d171_rejects_each_missing_conditioned_or_replaced_governance_policy_body
+    policy_steps = [
+      "Check agent policy",
+      "Check workflow permission policy",
+      "Check roadmap evidence",
+      "Check README coverage badge binding (issue"
+    ]
+
+    policy_steps.each do |step_name|
+      workflow = d171_workflow
+      removed = workflow.dig("jobs", "governance", "steps").reject! do |step|
+        step["name"] == step_name
+      end
+      refute_nil removed, "missing #{step_name} mutation must apply"
+      assert_d171_routing_rejected(
+        workflow,
+        "missing #{step_name}",
+        expected_context: "governance body"
+      )
+
+      workflow = d171_workflow
+      step = workflow.dig("jobs", "governance", "steps").find do |candidate|
+        candidate["name"] == step_name
+      end
+      step["if"] = "github.event_name == 'push'"
+      assert_d171_routing_rejected(
+        workflow,
+        "conditioned #{step_name}",
+        expected_context: "governance body"
+      )
+
+      workflow = d171_workflow
+      step = workflow.dig("jobs", "governance", "steps").find do |candidate|
+        candidate["name"] == step_name
+      end
+      step["run"] = "true"
+      assert_d171_routing_rejected(
+        workflow,
+        "replaced #{step_name}",
+        expected_context: "governance body"
+      )
+    end
+  end
+
+  def test_d171_rejects_matrix_fail_fast_drift
+    workflow = d171_workflow
+    workflow.dig("jobs", "native-build-test", "strategy")["fail-fast"] = "true"
+
+    assert_d171_routing_rejected(
+      workflow,
+      "matrix fail-fast",
+      expected_context: "Tier-1 strategy"
+    )
+  end
+
+  def test_d171_rejects_cross_build_artifact_removal_and_cross_verify_weakening
+    workflow = d171_workflow
+    workflow.dig("jobs", "cross-compile-build", "steps").reject! do |step|
+      step["name"] == "Upload the cross-compiled binary"
+    end
+    assert_d171_routing_rejected(
+      workflow,
+      "cross artifact upload",
+      expected_context: "cross-compile-build body"
+    )
+
+    workflow = d171_workflow
+    verify = workflow.dig("jobs", "cross-compile-verify", "steps").find do |step|
+      step["name"] == "Verify it runs natively and prints the right output"
+    end
+    original = verify.fetch("run")
+    verify["run"] = original.sub(
+      'if [ "$output" != "42" ]; then',
+      'if false; then'
+    )
+    refute_equal original, verify["run"]
+    assert_d171_routing_rejected(
+      workflow,
+      "cross verification weakened",
+      expected_context: "cross-compile-verify body"
+    )
+  end
+
+  def test_d171_rejects_case_variant_checkout_action
+    workflow = d171_workflow
+    checkout = workflow.dig("jobs", "native-build-test", "steps").find do |step|
+      step.fetch("uses", "").start_with?("actions/checkout@")
+    end
+    checkout["uses"] = checkout.fetch("uses").sub("actions/checkout", "Actions/Checkout")
+
+    assert_d171_routing_rejected(
+      workflow,
+      "case-variant checkout",
+      expected_context: "checkout pin"
+    )
   end
 end
