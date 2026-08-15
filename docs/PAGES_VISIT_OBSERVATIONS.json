@@ -1,0 +1,83 @@
+{
+  "artifact_version": 1,
+  "provenance": {
+    "source": "github_pages_visit_analytics_owner_data",
+    "sanitized": true,
+    "collection_method": "manual_owner_inspection_and_analytics_export",
+    "collected_at": "2026-08-14T23:55:10Z",
+    "sanitization_note": "All credentials, API keys, and tokens removed. Only owner-facing Pages visit observations are retained. No pageview, visit, or visitor data is fabricated; unavailable fields are marked unknown. This artifact is a template with no observations until a privacy-scoped analytics source is activated and real data is collected under the measurement contract."
+  },
+  "measurement_contract": {
+    "reporting_timezone": "UTC",
+    "canonical_pages": [
+      "https://rotnov.github.io/pycc/",
+      "https://rotnov.github.io/pycc/status/",
+      "https://rotnov.github.io/pycc/architecture/",
+      "https://rotnov.github.io/pycc/python-aot-compilers/",
+      "https://rotnov.github.io/pycc/ai-native/"
+    ],
+    "primary_conversion": {
+      "description": "click from a canonical Pages page to https://github.com/rotnov/pycc",
+      "target_url": "https://github.com/rotnov/pycc"
+    },
+    "source_classes": [
+      "google",
+      "yandex",
+      "bing",
+      "duckduckgo",
+      "perplexity",
+      "chatgpt",
+      "other_answer_engine",
+      "other_search",
+      "referral",
+      "direct_or_unattributed",
+      "unknown"
+    ],
+    "collection_status_values": [
+      "available",
+      "delayed",
+      "blocked",
+      "unauthorized",
+      "provider_error",
+      "unknown"
+    ],
+    "data_minimization_boundary": {
+      "forbidden_fields": [
+        "names",
+        "email_or_account_identifiers",
+        "form_contents",
+        "full_ip_addresses",
+        "full_user_agents",
+        "cookies",
+        "fingerprints",
+        "persistent_cross_site_ids",
+        "session_replay",
+        "arbitrary_query_strings",
+        "arbitrary_fragments",
+        "raw_search_queries_not_from_provider_report"
+      ],
+      "note": "Unless a separately accepted decision justifies them, these fields must not be collected or retained. Coarse country and device dimensions are permitted only if supplied by the provider without expanding the chosen privacy boundary."
+    },
+    "separation_rules": [
+      "This source is separate from Google Search Console, GitHub repository traffic, and direct-provider SERP/answer observations.",
+      "Never join those systems at a person/session level or manufacture a cross-provider funnel from marginal totals.",
+      "A provider-specific unique visitor is not comparable with GitHub uniques or another provider unless definitions are proven equivalent.",
+      "A Pages visit after a Yandex or other engine observation is correlation only unless the analytics source exposes a corresponding referrer or UTM signal.",
+      "Missing referrer data is direct_or_unattributed, not proof of direct navigation.",
+      "Browser blocking, script failure, network loss, and provider filtering make client-side analytics incomplete; counts must not be presented as a census.",
+      "Analytics must not be described as a ranking factor or as evidence that llms.txt, schema, or a content edit caused visibility."
+    ]
+  },
+  "observations": [],
+  "latest_projection": {
+    "observation_count": 0,
+    "latest_observed_at": null,
+    "collection_status": "unknown",
+    "total_pageviews": null,
+    "total_visits": null,
+    "total_uniques": null,
+    "primary_conversion_clicks": null,
+    "entry_pages_observed": [],
+    "source_classes_observed": []
+  }
+}

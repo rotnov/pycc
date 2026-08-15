@@ -174,3 +174,4 @@ current.
 | [D-165](./D-165-preserve-daily-github-traffic-evidence.md) | Preserve daily GitHub traffic evidence in an immutable artifact | accepted |
 | [D-166](./D-166-protocols-structural-typing-compile-time-only.md) | PEP 544 protocols and structural typing: compile-time-only interface descriptions with static dispatch via monomorphization | accepted |
 | [D-167](./D-167-preserve-page-indexing-aggregates-separately.md) | Preserve Page Indexing aggregates separately from per-URL evidence | accepted |
+| [D-168](./D-168-pages-visit-measurement-capability-contract.md) | Pages visit measurement capability contract: no analytics today, schema and privacy boundary for future activation | accepted |

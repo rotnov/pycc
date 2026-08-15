@@ -640,6 +640,51 @@ The same ledger records Search Console URL Inspection, sitemap-processing, and
 performance-report states independently because none of those signals is a
 substitute for the others.
 
+## Pages visit measurement gap (issue #208)
+
+The site deliberately has no project-selected analytics script, cookie,
+or external beacon (see [D-168](./decisions/D-168-pages-visit-measurement-capability-contract.md)).
+This is an explicit, reviewed decision, not an oversight. The three
+existing discovery signals — Google Search Console (Google Search
+clicks/impressions), GitHub repository traffic (repository
+views/clones), and engine-qualified visibility (SERP/answer citations) —
+do not measure visits to the GitHub Pages site from Yandex, DuckDuckGo,
+Perplexity, ChatGPT, other answer engines, ordinary referrals, or direct
+navigation. Non-Google landing visits remain unobservable, and the
+roadmap and SEO reports state this.
+
+The [machine-readable Pages visit artifact](./PAGES_VISIT_OBSERVATIONS.json)
+is a template with no observations. It defines the measurement contract
+(reporting timezone, canonical pages, primary conversion, source-class
+vocabulary, collection-status vocabulary, data-minimization boundary, and
+separation rules) so a future PR that activates analytics can append real
+observations without a schema redesign. The contract's primary conversion
+is a click from a canonical Pages page to
+`https://github.com/rotnov/pycc` — the only instrumented interaction. The
+data-minimization boundary forbids names, email/account identifiers, form
+contents, full IP addresses, full user agents, cookies, fingerprints,
+persistent cross-site IDs, session replay, arbitrary query
+strings/fragments, and raw search queries unless a separately accepted
+decision justifies them. A non-zeroable collection status (`blocked`,
+`delayed`, `unauthorized`, `provider_error`, `unknown`) must never be
+converted to zero; unavailable data is `null`, not `0`.
+
+`scripts/check_pages_visit_observations.py` validates the artifact schema
+and prose bindings. It rejects prose that conflates repository views with
+Pages visits, Search Console clicks with all-provider visits, or
+analytics with a ranking factor. Its mutation suite is
+`scripts/test_check_pages_visit_observations.py`.
+
+A future PR that activates analytics must: record a superseding ADR;
+add an accurate public privacy/analytics disclosure before or with
+collection; load the provider script non-blockingly on every canonical
+HTML page exactly once; keep content, navigation, and local `site.js`
+functional when the provider is unavailable or blocked; not expose
+dashboard/read/export credentials in the published artifact; and
+establish the activation baseline at deployment time without
+synthesizing pre-installation history. The issue explicitly does not
+request adding analytics scripts to the site in this change.
+
 ## Pages performance budget gate
 
 The website is protected by a hermetic Pages performance budget gate
