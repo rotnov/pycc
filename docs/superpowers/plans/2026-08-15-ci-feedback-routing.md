@@ -77,8 +77,9 @@
       )
   ```
 
-  Cover `src/**`, `crates/**`, Cargo/lock/toolchain/build files, `tests/**`,
-  `benches/**`, compiler/performance scripts, `site/**`, every Lighthouse
+  Cover `src/**`, `crates/**`, Cargo/lock/toolchain/build files, the executable
+  `docs/DIAGNOSTICS.md` registry input, `tests/**`, `benches/**`,
+  compiler/performance scripts, `site/**`, every Lighthouse
   validator/fixture, agent roots, policy-successor fixtures, general docs,
   other workflow files, `.github/workflows/ci.yml`, classifier/test self
   changes, empty input, absolute/parent paths, embedded NUL/newline, added,

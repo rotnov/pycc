@@ -64,6 +64,7 @@ COMPILER_FILES = frozenset(
         "Cargo.toml",
         "Cargo.lock",
         "build.rs",
+        "docs/DIAGNOSTICS.md",
         "rust-toolchain",
         "rust-toolchain.toml",
     }

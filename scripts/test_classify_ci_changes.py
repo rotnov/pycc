@@ -51,6 +51,7 @@ class ClassifyPathsTests(unittest.TestCase):
             "rust-toolchain.toml",
             ".cargo/config.toml",
             "build.rs",
+            "docs/DIAGNOSTICS.md",
             "tests/conformance.rs",
             "benches/check_bench.rs",
         ):

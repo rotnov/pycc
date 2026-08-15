@@ -78,7 +78,8 @@ post-merge evidence remains intact.
 The outputs are:
 
 - `compiler`: Rust source, Cargo/toolchain/build configuration, Rust tests and
-  fixtures, compiler benchmarks, the classifier itself, or any unknown path.
+  fixtures, compiler benchmarks, the executable `docs/DIAGNOSTICS.md` registry
+  input, the classifier itself, or any unknown path.
 - `pages`: website source plus the scripts and fixtures that define the two
   hermetic Lighthouse gates.
 - `agent`: repository-owned agent skills, adapters, policies, and their
@@ -186,12 +187,15 @@ pull requests, following PRs #555, #556, and #557:
    them to the manifest in steady state, and add the superseding ADR and
    documentation plus exact inert successors for
    `check_roadmap_evidence.rb`, its self-test, and `ci.yml`. Update the
-   complete manifest so the three existing protected targets point at their
-   staged successors. Existing live protected targets do not change. This PR
-   does not close #558.
+   complete manifest so only the existing checker and checker-test targets
+   point at their staged successors. Keep the live CI target self-sourced and
+   register `ci-d171.yml` as a steady protected transitive input. Existing live
+   protected targets do not change. This PR does not close #558.
 2. **Activate the checker.** Copy the staged checker and self-test byte for
    byte into their live paths and return their manifest entries to steady
-   state. The live CI workflow remains unchanged. This PR does not close #558.
+   state. Redirect the still-unmodified CI target to the protected
+   `ci-d171.yml` successor; the live CI workflow itself remains unchanged. This
+   PR does not close #558.
 3. **Activate CI.** Copy the staged CI workflow byte for byte into its live
    path, return its manifest entry to steady state, and apply the
    manifest-unlisted standalone workflow cleanup. This PR carries `Fixes

@@ -9,7 +9,7 @@
     {
       "path": "scripts/classify_ci_changes.py",
       "source_path": "scripts/classify_ci_changes.py",
-      "sha256": "03ce7b31262b23a22975e1bd8ca3595ace86de7a29b11e54d9b27d8c88145c6e"
+      "sha256": "285b566245b3490e83e62d93b36262e704575a3218c7965237609374e5eb571f"
     },
     {
       "path": "scripts/check_ci_permissions.rb",
@@ -74,7 +74,7 @@
     {
       "path": "scripts/test_classify_ci_changes.py",
       "source_path": "scripts/test_classify_ci_changes.py",
-      "sha256": "e757f6c92fae2ec88ac6f9978ca0d734632e3810f8d77a14a0aaf3136673b7e1"
+      "sha256": "a2a76fbfcec745de26d5561e04e7248bfcc9905415a4059be00cbe9af68ba1f4"
     },
     {
       "path": "scripts/test_check_ci_permissions.rb",
