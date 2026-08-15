@@ -1,9 +1,10 @@
 pub use pycc_hir::HirClassDef;
 use pycc_hir::{
-    CompIter, FStringPart, HirExpr, HirItem, HirModule, HirStmt, eval_isinstance_single,
-    eval_issubclass_single, extract_class_names, is_builtin_type_name,
+    CompIter, FStringPart, HirExpr, HirItem, HirMatchCase, HirModule, HirPattern, HirStmt,
+    eval_isinstance_single, eval_issubclass_single, extract_class_names, is_builtin_type_name,
 };
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // Re-exported (not just `use`d) because `pycc_codegen` doesn't depend on
 // `pycc_hir` directly (see its Cargo.toml) -- `Ty`, `BinOpKind`, and
@@ -14,6 +15,13 @@ use std::collections::HashMap;
 // like `pycc_types` already re-exports `Ty` (`pycc_types::Ty`, its own line
 // 4) for the same reason.
 pub use pycc_hir::{BinOpKind, CmpOpKind, Ty};
+
+/// Monotonic counter for synthesized match-subject temporaries. Each
+/// `match` statement gets a unique `__match_subj_N` name, avoiding
+/// collisions between multiple matches at the same scope level (which
+/// would otherwise share the same `scopes.len()`-derived name and
+/// cause a first-assignment-wins type drift in `bind_variable`).
+static MATCH_SUBJECT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MirExpr {
@@ -347,7 +355,7 @@ impl MirExpr {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MirStmt {
     ExprStmt(MirExpr),
     Assign {
@@ -465,6 +473,10 @@ pub enum MirStmt {
         slot: usize,
         value: MirExpr,
     },
+    /// PEP 634-636 (#381, PR-21): A sequence of statements executed in
+    /// order — used by `match` lowering to pair the subject-temporary
+    /// assignment with the nested `if` chain.
+    Seq(Vec<MirStmt>),
 }
 
 /// A comprehension's already-resolved iterable source (PR-12, D-117) --
@@ -478,7 +490,7 @@ pub enum MirStmt {
 /// established (one node, internal branching on the resolved type in
 /// `pycc_codegen`), avoiding a 3x4 combinatorial explosion for no
 /// benefit.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CompSource {
     Range {
         start: MirExpr,
@@ -1025,10 +1037,369 @@ fn lower_stmt(
                 });
             MirStmt::AttrSet { base, slot, value }
         }
+        HirStmt::Match { subject, cases } => {
+            lower_match(subject, cases, scopes, classes, current_class)
+        }
     }
 }
 
-/// #379 (PR-19): Try to lower `Color.RED` (an enum member accessed by name
+/// PEP 634-636 (#381, PR-21): Lowers a `match` statement into nested
+/// `MirStmt::If` chains. The subject is evaluated once and stored in a
+/// synthesized temporary (`__match_subj_N`); each case becomes an `if`
+/// branch whose test is the pattern-match condition, whose body is the
+/// case body (preceded by binding assignments), and whose `orelse` is
+/// the next case (or `NoOp` for the final arm). Guards are handled via
+/// a nested `if` inside the matched arm's body, since MIR has no `and`.
+fn lower_match(
+    subject: &HirExpr,
+    cases: &[HirMatchCase],
+    scopes: &mut Vec<HashMap<String, Ty>>,
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) -> MirStmt {
+    let subj_expr = lower_expr(subject, scopes, classes, current_class);
+    let subj_ty = subj_expr.ty();
+    let subj_var = format!(
+        "__match_subj_{}",
+        MATCH_SUBJECT_COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+    bind_variable(scopes, subj_var.clone(), subj_ty.clone());
+    let assign = MirStmt::Assign {
+        target: subj_var.clone(),
+        value: subj_expr,
+    };
+    let chain = lower_match_chain(
+        &subj_var,
+        &subj_ty,
+        cases,
+        scopes,
+        classes,
+        current_class,
+    );
+    MirStmt::Seq(vec![assign, chain])
+}
+
+/// Builds the nested `if` chain for match cases. Each case's pattern
+/// produces a list of alternative condition-lists (any alternative's
+/// conditions all being true is sufficient); these are nested as `if`
+/// statements, with the innermost body containing the bindings and case
+/// body (or a guard `if` if present).
+fn lower_match_chain(
+    subj_var: &str,
+    subj_ty: &Ty,
+    cases: &[HirMatchCase],
+    scopes: &mut Vec<HashMap<String, Ty>>,
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) -> MirStmt {
+    if cases.is_empty() {
+        return MirStmt::NoOp;
+    }
+    let case = &cases[0];
+    let rest = &cases[1..];
+    let subj_ref = MirExpr::Name {
+        name: subj_var.to_string(),
+        ty: subj_ty.clone(),
+    };
+    let (alternatives, bindings) = lower_pattern_conds(
+        &subj_ref,
+        &case.pattern,
+        scopes,
+        classes,
+        current_class,
+    );
+    for (name, val) in &bindings {
+        let ty = val.ty();
+        bind_variable(scopes, name.clone(), ty);
+    }
+    let binding_stmts: Vec<MirStmt> = bindings
+        .iter()
+        .map(|(name, value)| MirStmt::Assign {
+            target: name.clone(),
+            value: value.clone(),
+        })
+        .collect();
+    let case_body: Vec<MirStmt> = case
+        .body
+        .iter()
+        .map(|s| lower_stmt(s, scopes, classes, current_class))
+        .collect();
+    let else_chain = lower_match_chain(subj_var, subj_ty, rest, scopes, classes, current_class);
+    let inner_body = if let Some(guard) = &case.guard {
+        let guard_cond = lower_expr(guard, scopes, classes, current_class);
+        let mut body = binding_stmts;
+        body.push(MirStmt::If {
+            test: guard_cond,
+            body: case_body,
+            orelse: vec![else_chain.clone()],
+        });
+        body
+    } else {
+        let mut body = binding_stmts;
+        body.extend(case_body);
+        body
+    };
+    nest_match_alternatives(&alternatives, inner_body, else_chain)
+}
+
+/// Nests alternative condition-lists into a chain of `if` statements.
+/// Each alternative is a conjunction (all conditions must be true); the
+/// alternatives are combined as a disjunction (any one matching is
+/// sufficient). The innermost `then` body is `inner_body`; each
+/// alternative's `else` falls through to the next alternative, and the
+/// last alternative's `else` falls through to `else_chain`.
+fn nest_match_alternatives(
+    alternatives: &[Vec<MirExpr>],
+    inner_body: Vec<MirStmt>,
+    else_chain: MirStmt,
+) -> MirStmt {
+    if alternatives.is_empty() {
+        return MirStmt::Seq(inner_body);
+    }
+    let (first, rest) = alternatives.split_first().unwrap();
+    let next_else = if rest.is_empty() {
+        else_chain.clone()
+    } else {
+        nest_match_alternatives(rest, inner_body.clone(), else_chain.clone())
+    };
+    nest_match_conds(first, inner_body, next_else)
+}
+
+/// Nests a single alternative's conditions into a chain of `if`
+/// statements. The innermost `then` body is `inner_body`; every `else`
+/// falls through to `else_chain`.
+fn nest_match_conds(
+    conds: &[MirExpr],
+    inner_body: Vec<MirStmt>,
+    else_chain: MirStmt,
+) -> MirStmt {
+    if conds.is_empty() {
+        return MirStmt::Seq(inner_body);
+    }
+    let (first, rest) = conds.split_first().unwrap();
+    MirStmt::If {
+        test: first.clone(),
+        body: vec![nest_match_conds(rest, inner_body.clone(), else_chain.clone())],
+        orelse: vec![else_chain],
+    }
+}
+
+/// Lowers a pattern into a list of alternative condition-lists (each
+/// inner list is a conjunction; the outer list is a disjunction) and a
+/// list of binding assignments. For irrefutable patterns (wildcard,
+/// capture), the alternatives list contains a single empty inner list
+/// (always matches). For Or-patterns, each sub-pattern's alternatives
+/// are flattened into the outer list.
+fn lower_pattern_conds(
+    subj: &MirExpr,
+    pattern: &HirPattern,
+    scopes: &[HashMap<String, Ty>],
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) -> (Vec<Vec<MirExpr>>, Vec<(String, MirExpr)>) {
+    match pattern {
+        HirPattern::Wildcard => (vec![vec![]], vec![]),
+        HirPattern::Capture(name) => {
+            (vec![vec![]], vec![(name.clone(), subj.clone())])
+        }
+        HirPattern::Literal(lit) => {
+            let lowered = lower_expr(lit, scopes, classes, current_class);
+            (
+                vec![vec![MirExpr::Compare {
+                    op: CmpOpKind::Eq,
+                    left: Box::new(subj.clone()),
+                    right: Box::new(lowered),
+                    ty: Ty::Bool,
+                }]],
+                vec![],
+            )
+        }
+        HirPattern::Singleton(b) => (
+            vec![vec![MirExpr::Compare {
+                op: CmpOpKind::Eq,
+                left: Box::new(subj.clone()),
+                right: Box::new(MirExpr::BoolLiteral(*b)),
+                ty: Ty::Bool,
+            }]],
+            vec![],
+        ),
+        HirPattern::NoneSingleton => (
+            vec![vec![MirExpr::Compare {
+                op: CmpOpKind::Eq,
+                left: Box::new(subj.clone()),
+                right: Box::new(MirExpr::Name {
+                    name: "None".to_string(),
+                    ty: Ty::None,
+                }),
+                ty: Ty::Bool,
+            }]],
+            vec![],
+        ),
+        HirPattern::Sequence(sub_pats) => {
+            lower_sequence_conds(subj, sub_pats, None, scopes, classes, current_class)
+        }
+        HirPattern::SequenceStar(sub_pats, rest) => {
+            lower_sequence_conds(subj, sub_pats, rest.as_ref(), scopes, classes, current_class)
+        }
+        HirPattern::Mapping(pairs, rest) => {
+            lower_mapping_conds(subj, pairs, rest.as_ref(), scopes, classes, current_class)
+        }
+        HirPattern::Class {
+            class_name,
+            positional,
+            keyword,
+        } => lower_class_conds(
+            subj, class_name, positional, keyword, scopes, classes, current_class,
+        ),
+        HirPattern::Or(subs) => {
+            let mut all_alts = Vec::new();
+            let mut all_bindings = Vec::new();
+            for sub in subs {
+                let (alts, b) = lower_pattern_conds(subj, sub, scopes, classes, current_class);
+                all_alts.extend(alts);
+                if all_bindings.is_empty() {
+                    all_bindings = b;
+                }
+            }
+            (all_alts, all_bindings)
+        }
+        HirPattern::As(inner, name) => {
+            let (alts, bindings) =
+                lower_pattern_conds(subj, inner, scopes, classes, current_class);
+            let mut all = bindings;
+            all.push((name.clone(), subj.clone()));
+            (alts, all)
+        }
+    }
+}
+
+/// Lowers a sequence pattern into conditions: a length check plus
+/// per-element sub-pattern conditions.
+fn lower_sequence_conds(
+    subj: &MirExpr,
+    sub_pats: &[HirPattern],
+    rest: Option<&String>,
+    scopes: &[HashMap<String, Ty>],
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) -> (Vec<Vec<MirExpr>>, Vec<(String, MirExpr)>) {
+    let fixed = sub_pats.len();
+    let len_cond = MirExpr::Compare {
+        op: if rest.is_some() { CmpOpKind::GtE } else { CmpOpKind::Eq },
+        left: Box::new(MirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![subj.clone()],
+            ty: Ty::Int,
+        }),
+        right: Box::new(MirExpr::IntLiteral(fixed as i64)),
+        ty: Ty::Bool,
+    };
+    let mut conds = vec![len_cond];
+    let mut bindings = Vec::new();
+    for (i, sub_pat) in sub_pats.iter().enumerate() {
+        let elem = MirExpr::Subscript {
+            base: Box::new(subj.clone()),
+            index: Box::new(MirExpr::IntLiteral(i as i64)),
+        };
+        let (alts, b) = lower_pattern_conds(&elem, sub_pat, scopes, classes, current_class);
+        for alt in alts {
+            conds.extend(alt);
+        }
+        bindings.extend(b);
+    }
+    if let Some(rest_name) = rest {
+        bindings.push((rest_name.clone(), subj.clone()));
+    }
+    (vec![conds], bindings)
+}
+
+/// Lowers a mapping pattern into per-key-value check conditions.
+fn lower_mapping_conds(
+    subj: &MirExpr,
+    pairs: &[(HirExpr, HirPattern)],
+    rest: Option<&String>,
+    scopes: &[HashMap<String, Ty>],
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) -> (Vec<Vec<MirExpr>>, Vec<(String, MirExpr)>) {
+    let mut conds = Vec::new();
+    let mut bindings = Vec::new();
+    for (key_expr, val_pat) in pairs {
+        let key_lowered = lower_expr(key_expr, scopes, classes, current_class);
+        let val = MirExpr::DictGet {
+            dict: Box::new(subj.clone()),
+            key: Box::new(key_lowered),
+        };
+        let (alts, b) = lower_pattern_conds(&val, val_pat, scopes, classes, current_class);
+        for alt in alts {
+            conds.extend(alt);
+        }
+        bindings.extend(b);
+    }
+    if let Some(rest_name) = rest {
+        bindings.push((rest_name.clone(), subj.clone()));
+    }
+    (vec![conds], bindings)
+}
+
+/// Lowers a class pattern into per-attribute check conditions.
+#[allow(clippy::expect_fun_call)]
+fn lower_class_conds(
+    subj: &MirExpr,
+    class_name: &str,
+    positional: &[HirPattern],
+    keyword: &[(String, HirPattern)],
+    scopes: &[HashMap<String, Ty>],
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) -> (Vec<Vec<MirExpr>>, Vec<(String, MirExpr)>) {
+    let class_def = classes.get(class_name).expect(&format!(
+        "pycc_mir: internal error: class `{class_name}` has no registered HirClassDef -- \
+         pycc_types::check should have rejected this HIR before it reached pycc_mir"
+    ));
+    let flat_attrs = mro_attrs(class_def, classes);
+    let mut conds = Vec::new();
+    let mut bindings = Vec::new();
+    for (i, sub_pat) in positional.iter().enumerate() {
+        let (_, ty) = flat_attrs.get(i).expect(&format!(
+            "pycc_mir: internal error: class `{class_name}` has fewer attributes than \
+             positional patterns -- pycc_types::check should have rejected this HIR \
+             before it reached pycc_mir"
+        ));
+        let attr_val = MirExpr::AttrGet {
+            base: Box::new(subj.clone()),
+            slot: i,
+            ty: ty.clone(),
+        };
+        let (alts, b) = lower_pattern_conds(&attr_val, sub_pat, scopes, classes, current_class);
+        for alt in alts {
+            conds.extend(alt);
+        }
+        bindings.extend(b);
+    }
+    for (attr_name, sub_pat) in keyword {
+        let (slot, (_, ty)) = flat_attrs
+            .iter()
+            .enumerate()
+            .find(|(_, (name, _))| name == attr_name)
+            .expect(&format!(
+                "pycc_mir: internal error: attribute `{attr_name}` not declared on class \
+                 `{class_name}` or any base in its MRO -- pycc_types::check should have \
+                 rejected this HIR before it reached pycc_mir"
+            ));
+        let attr_val = MirExpr::AttrGet {
+            base: Box::new(subj.clone()),
+            slot,
+            ty: ty.clone(),
+        };
+        let (alts, b) = lower_pattern_conds(&attr_val, sub_pat, scopes, classes, current_class);
+        for alt in alts {
+            conds.extend(alt);
+        }
+        bindings.extend(b);
+    }
+    (vec![conds], bindings)
+}
 /// on the enum class) to `MirExpr::Name` reading the synthetic
 /// `<Class>.<Member>.enum_member` global. Returns `None` if `base` is not
 /// an enum class name or `attr` is not one of its members. Extracted from
@@ -2136,7 +2507,7 @@ fn binop_result_ty(op: BinOpKind, left: Ty, right: Ty) -> Ty {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pycc_hir::{BinOpKind, CmpOpKind, FStringPart, HirExpr, HirItem, HirModule, HirStmt, Ty};
+    use pycc_hir::{BinOpKind, CmpOpKind, FStringPart, HirClassDef, HirExpr, HirItem, HirMatchCase, HirModule, HirPattern, HirStmt, Ty};
 
     #[test]
     fn builds_an_assignment_and_a_later_name_reference() {
@@ -8240,5 +8611,387 @@ mod tests {
             .items
             .iter()
             .any(|item| matches!(item, MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::BoolLiteral(true))))));
+    }
+
+    // -- #381: match statement MIR lowering coverage -----------------------
+
+    fn match_module(cases: Vec<HirMatchCase>) -> HirModule {
+        HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Match {
+                    subject: HirExpr::Name("x".to_string()),
+                    cases,
+                }),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        }
+    }
+
+    fn match_module_list(cases: Vec<HirMatchCase>) -> HirModule {
+        HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Match {
+                    subject: HirExpr::Name("x".to_string()),
+                    cases,
+                }),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        }
+    }
+
+    fn match_module_dict(cases: Vec<HirMatchCase>) -> HirModule {
+        HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::DictLiteral(vec![(
+                        HirExpr::StringLiteral("k".to_string()),
+                        HirExpr::IntLiteral(1),
+                    )]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Match {
+                    subject: HirExpr::Name("x".to_string()),
+                    cases,
+                }),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn lowers_match_with_literal_pattern_to_mir() {
+        let hir = match_module(vec![
+            HirMatchCase {
+                pattern: HirPattern::Literal(HirExpr::IntLiteral(1)),
+                guard: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                })],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Wildcard,
+                guard: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::IntLiteral(0)],
+                })],
+            },
+        ]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_singleton_pattern_to_mir() {
+        let hir = match_module(vec![
+            HirMatchCase {
+                pattern: HirPattern::Singleton(true),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Singleton(false),
+                guard: None,
+                body: vec![],
+            },
+        ]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_none_singleton_pattern_to_mir() {
+        let hir = match_module(vec![HirMatchCase {
+            pattern: HirPattern::NoneSingleton,
+            guard: None,
+            body: vec![],
+        }]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_capture_pattern_to_mir() {
+        let hir = match_module(vec![HirMatchCase {
+            pattern: HirPattern::Capture("y".to_string()),
+            guard: None,
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Name("y".to_string())],
+            })],
+        }]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_sequence_pattern_to_mir() {
+        let hir = match_module_list(vec![
+            HirMatchCase {
+                pattern: HirPattern::Sequence(vec![
+                    HirPattern::Capture("a".to_string()),
+                    HirPattern::Capture("b".to_string()),
+                ]),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Wildcard,
+                guard: None,
+                body: vec![],
+            },
+        ]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_sequence_star_pattern_to_mir() {
+        let hir = match_module_list(vec![
+            HirMatchCase {
+                pattern: HirPattern::SequenceStar(
+                    vec![HirPattern::Capture("a".to_string())],
+                    Some("rest".to_string()),
+                ),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Wildcard,
+                guard: None,
+                body: vec![],
+            },
+        ]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_mapping_pattern_to_mir() {
+        let hir = match_module_dict(vec![
+            HirMatchCase {
+                pattern: HirPattern::Mapping(
+                    vec![(
+                        HirExpr::StringLiteral("k".to_string()),
+                        HirPattern::Capture("v".to_string()),
+                    )],
+                    None,
+                ),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Wildcard,
+                guard: None,
+                body: vec![],
+            },
+        ]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_mapping_rest_pattern_to_mir() {
+        let hir = match_module_dict(vec![
+            HirMatchCase {
+                pattern: HirPattern::Mapping(
+                    vec![(
+                        HirExpr::StringLiteral("k".to_string()),
+                        HirPattern::Capture("v".to_string()),
+                    )],
+                    Some("rest".to_string()),
+                ),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Wildcard,
+                guard: None,
+                body: vec![],
+            },
+        ]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_class_pattern_to_mir() {
+        let class_def = HirClassDef {
+            name: "P".to_string(),
+            bases: Vec::new(),
+            mro: vec!["P".to_string()],
+            attrs: vec![("a".to_string(), Ty::Int)],
+            methods: vec![("__init__".to_string(), "P.__init__".to_string())],
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            type_param: None,
+            enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: Vec::new(),
+            abstract_methods: Vec::new(),
+            is_abstract: false,
+        };
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Match {
+                    subject: HirExpr::Name("x".to_string()),
+                    cases: vec![
+                        HirMatchCase {
+                            pattern: HirPattern::Class {
+                                class_name: "P".to_string(),
+                                positional: vec![HirPattern::Capture("a".to_string())],
+                                keyword: vec![("a".to_string(), HirPattern::Capture("a2".to_string()))],
+                            },
+                            guard: None,
+                            body: vec![],
+                        },
+                        HirMatchCase {
+                            pattern: HirPattern::Wildcard,
+                            guard: None,
+                            body: vec![],
+                        },
+                    ],
+                }),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("P".to_string(), class_def)],
+        };
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_or_pattern_to_mir() {
+        let hir = match_module(vec![
+            HirMatchCase {
+                pattern: HirPattern::Or(vec![
+                    HirPattern::Literal(HirExpr::IntLiteral(1)),
+                    HirPattern::Literal(HirExpr::IntLiteral(2)),
+                    HirPattern::Literal(HirExpr::IntLiteral(3)),
+                ]),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Wildcard,
+                guard: None,
+                body: vec![],
+            },
+        ]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_as_pattern_to_mir() {
+        let hir = match_module(vec![
+            HirMatchCase {
+                pattern: HirPattern::As(
+                    Box::new(HirPattern::Literal(HirExpr::IntLiteral(1))),
+                    "y".to_string(),
+                ),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Wildcard,
+                guard: None,
+                body: vec![],
+            },
+        ]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_guard_to_mir() {
+        let hir = match_module(vec![
+            HirMatchCase {
+                pattern: HirPattern::Capture("y".to_string()),
+                guard: Some(HirExpr::Compare {
+                    op: CmpOpKind::Gt,
+                    left: Box::new(HirExpr::Name("y".to_string())),
+                    right: Box::new(HirExpr::IntLiteral(3)),
+                }),
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Name("y".to_string())],
+                })],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Wildcard,
+                guard: None,
+                body: vec![],
+            },
+        ]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_empty_cases_to_mir() {
+        let hir = match_module(vec![]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn lowers_match_with_wildcard_only_to_mir() {
+        let hir = match_module(vec![HirMatchCase {
+            pattern: HirPattern::Wildcard,
+            guard: None,
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::IntLiteral(0)],
+            })],
+        }]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
+    }
+
+    #[test]
+    fn nest_match_alternatives_with_empty_alternatives_returns_seq() {
+        let inner_body = vec![MirStmt::ExprStmt(MirExpr::IntLiteral(0))];
+        let else_chain = MirStmt::ExprStmt(MirExpr::IntLiteral(1));
+        let result = nest_match_alternatives(&[], inner_body, else_chain);
+        assert!(matches!(result, MirStmt::Seq(body) if body.len() == 1));
+    }
+
+    #[test]
+    fn lowers_match_with_or_pattern_with_bindings_to_mir() {
+        let hir = match_module(vec![HirMatchCase {
+            pattern: HirPattern::Or(vec![
+                HirPattern::Capture("a".to_string()),
+                HirPattern::Capture("b".to_string()),
+            ]),
+            guard: None,
+            body: vec![],
+        }]);
+        let mir = build(&hir);
+        assert!(!mir.items.is_empty());
     }
 }

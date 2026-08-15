@@ -293,14 +293,15 @@ def f() -> None:
         severity: Severity::Error,
         summary: "non-exhaustive `match` (missing cases listed)",
         explanation: "\
-T0030 is reserved for a `match` statement (PEP 634 structural pattern \
+T0030 is emitted when a `match` statement (PEP 634 structural pattern \
 matching) whose patterns do not cover every possible value of the matched \
-expression's type, with the missing cases listed in the diagnostic. It is \
-not currently emitted: pycc's parser and HIR lowering do not implement \
-`match` statements at all yet (PEP 634-636 support is unchecked in \
-`docs/PYTHON_STANDARDS.md`'s own conformance table), so there is no \
-exhaustiveness check to run. The registry entry reserves this code's \
-meaning ahead of that implementation.",
+expression's type. An unguarded irrefutable pattern (`_`, a capture, or \
+an `Or` containing one) is always exhaustive. A `bool` subject is \
+exhaustive when both `True` and `False` are covered. An enum subject is \
+exhaustive when all enum members are covered. All other types require an \
+irrefutable pattern to be exhaustive. Non-exhaustive matches are rejected \
+by the type checker — add a `case _:` wildcard or cover all remaining \
+cases.",
         example: "\
 def describe(n: int) -> str:
     match n:

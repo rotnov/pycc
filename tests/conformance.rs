@@ -957,3 +957,23 @@ fn pep_3119_abc_matches_cpython_3_14_6_byte_for_byte() {
         "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_3119_abc.py"
     );
 }
+
+// PEP 634-636 (#381, PR-21): structural pattern matching (`match`/`case`).
+// Literal, singleton, capture, wildcard, guard, and or-pattern forms.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0634_match_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0634_match.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0634_match_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0634_match.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0634_match_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0634_match.py"
+    );
+}
