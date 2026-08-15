@@ -92,10 +92,14 @@ an unsupported event, or an invalid output destination exits non-zero or emits
 the complete topology. Filenames are never interpolated into shell command
 text.
 
-The classifier and its test are staged as D-103 protected policy inputs before
-their exact reviewed bytes are activated with the workflow that relies on
-them. Open PR #518's `.agents/`, `.claude/`, and `.harden/` paths classify as
-agent/governance inputs, not as irrelevant changes.
+The classifier and its test land at their final live paths in the staging PR,
+before any workflow relies on them, and enter the D-103 manifest in steady
+state. D-103 cannot stage a brand-new absent target: the trusted checker
+requires every candidate manifest target to exist as a regular file. Once the
+staging PR merges, those exact bytes are base-owned and protected before the
+later CI activation uses them. Open PR #518's `.agents/`, `.claude/`, and
+`.harden/` paths classify as agent/governance inputs, not as irrelevant
+changes.
 
 ### Required lightweight jobs
 
@@ -174,18 +178,20 @@ head from consuming all Tier-1 runners without erasing post-merge evidence.
 D-103 and the base-owned roadmap-evidence checker require three sequential
 pull requests, following PRs #555, #556, and #557:
 
-1. **Stage.** Add the superseding ADR and documentation plus exact inert
-   successors for the classifier, its test, `check_roadmap_evidence.rb`, its
-   self-test, and `ci.yml`. Update the complete manifest so every new or
-   existing protected/transitive target points at its staged successor. Live
-   protected targets do not change. This PR does not close #558.
+1. **Stage.** Add the classifier and its test at their final live paths, add
+   them to the manifest in steady state, and add the superseding ADR and
+   documentation plus exact inert successors for
+   `check_roadmap_evidence.rb`, its self-test, and `ci.yml`. Update the
+   complete manifest so the three existing protected targets point at their
+   staged successors. Existing live protected targets do not change. This PR
+   does not close #558.
 2. **Activate the checker.** Copy the staged checker and self-test byte for
    byte into their live paths and return their manifest entries to steady
    state. The live CI workflow remains unchanged. This PR does not close #558.
-3. **Activate CI.** Copy the staged classifier, classifier test, and CI
-   workflow byte for byte into their live paths, return their manifest entries
-   to steady state, and apply the manifest-unlisted standalone workflow
-   cleanup. This PR carries `Fixes #558`.
+3. **Activate CI.** Copy the staged CI workflow byte for byte into its live
+   path, return its manifest entry to steady state, and apply the
+   manifest-unlisted standalone workflow cleanup. This PR carries `Fixes
+   #558`.
 
 Every phase starts from the then-current `origin/main`, receives a full local
 validation and independent deep review, passes `audit` and `ci-gate`, and is
