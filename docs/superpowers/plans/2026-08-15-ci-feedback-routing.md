@@ -196,15 +196,22 @@
   Move broad Python policy discovery plus workflow/roadmap/README policy checks
   out of `build-test-coverage` into `governance`. Keep unique validation
   commands unchanged. Run the compiler build and both alpha skill evals only
-  when `agent == 'true'`.
+  when `agent == 'true'`. Give `governance` the exact job-level condition
+  `${{ !cancelled() }}` so classifier failure does not suppress the required
+  policy evidence while PR concurrency cancellation still stops obsolete work.
 
 - [ ] **Step 4: Condition every heavy job**
 
   Add `needs: classify-changes` and job-level `if` to coverage, native matrix,
   cross build/verify, and frontend measure/gate for `compiler == 'true'`.
   Add the equivalent Pages condition to both Lighthouse jobs. Preserve all
-  existing steps inside each selected job byte-for-byte except for the policy
-  commands moved in Step 3.
+  existing command and gate bodies inside each selected job byte-for-byte
+  except for the policy commands moved in Step 3. The two inherited mutable
+  `actions/checkout@v4` steps in `native-build-test` and
+  `cross-compile-build` are the explicit structural exception: pin both to
+  the repository's reviewed checkout v6 SHA and set
+  `persist-credentials: false`, as required by the global untrusted-input
+  invariant.
 
 - [ ] **Step 5: Implement the exact `ci-gate` truth table**
 
@@ -218,7 +225,8 @@
   Parse the fixture with Ruby's safe YAML loader used by the checker. Diff the
   coverage shell body, Tier-1 matrix values, paired-performance commands,
   artifact boundaries, Pages commands, and thresholds against active
-  `ci.yml`; only routing and moved governance steps may differ.
+  `ci.yml`; only routing, moved governance steps, and the two explicit
+  checkout-hardening changes may differ.
 
 ### Task 3: Stage PR — extend the trusted checker with tests first
 
@@ -234,11 +242,13 @@
 
   Copy the live checker self-test to the D-171 successor and point its staged
   workflow fixture constant at `ci-d171.yml`. Add tests that mutate one property
-  at a time: classifier permission/checkout/diff, each optional job condition,
-  missing classifier/governance dependency, every selected/skipped result
-  branch, malformed/missing output, PR cancellation disabled, main cancellation
-  enabled, coverage threshold/workspace/sandbox changes, matrix leg removal,
-  performance provenance drift, and Pages gate removal.
+  at a time: classifier permission/checkout/diff; every workflow checkout made
+  mutable or changed to persist credentials; governance changed back to
+  `always()` or otherwise made cancellation-incompatible; each optional job
+  condition; missing classifier/governance dependency; every selected/skipped
+  result branch; malformed/missing output; PR cancellation disabled; main
+  cancellation enabled; coverage threshold/workspace/sandbox changes; matrix
+  leg removal; performance provenance drift; and Pages gate removal.
 
 - [ ] **Step 2: Verify RED against a copied unmodified checker**
 
