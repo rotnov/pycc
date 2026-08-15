@@ -93,8 +93,13 @@ def _selection_for_path(path: str) -> Selection | None:
         return EMPTY_SELECTION
     if path == "tests/fixtures/policy-successor-manifest.json":
         return EMPTY_SELECTION
-    if path in COMPILER_GATE_SCRIPTS or path in COMPILER_FILES or path.startswith(COMPILER_ROOTS):
+    if path in COMPILER_GATE_SCRIPTS:
         return Selection(True, False, False)
+    if path in COMPILER_FILES or path.startswith(COMPILER_ROOTS):
+        # The offline agent contract evals execute the freshly built compiler
+        # and bind diagnostics/backend boundaries (including D-072), so every
+        # compiler input must select those evals as well as the compiler jobs.
+        return Selection(True, False, True)
     if path in PAGES_GATE_SCRIPTS or path.startswith("site/"):
         return Selection(False, True, False)
     if path in AGENT_GATE_SCRIPTS or path in AGENT_FILES or path.startswith(AGENT_ROOTS):

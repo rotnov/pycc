@@ -69,7 +69,7 @@
 
   def test_mixed_site_and_compiler_change_unions_categories(self):
       self.assertEqual(
-          Selection(True, True, False),
+          Selection(True, True, True),
           classify_paths(
               ["crates/pycc_hir/src/lib.rs", "site/index.html"],
               event_name="pull_request",
@@ -117,7 +117,9 @@
   ```
 
   Treat general `scripts/**` changes as governance inputs, but explicitly
-  select compiler or Pages for scripts consumed by those gates. This remains
+  select compiler or Pages for scripts consumed by those gates. Every compiler
+  input selects both `compiler` and `agent`, because the offline alpha evals
+  execute the fresh compiler and bind D-072 diagnostics/backend behavior. This remains
   safe for a newly added CI script because changing `ci.yml` itself selects the
   complete topology; checker tests must bind every existing executed heavy-gate
   script to a reviewed category.

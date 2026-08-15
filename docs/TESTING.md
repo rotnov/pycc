@@ -920,6 +920,10 @@ for an exact reviewed path set;
 unknown, empty, malformed, or unsupported input selects the complete topology,
 and the required `ci-gate` fails unless every selected job succeeds and every
 unselected job is skipped. Pushes to `main` always run the full topology.
+Every compiler input also selects the offline alpha skill evals: those evals
+execute the freshly built compiler and bind its current diagnostics and D-072
+backend boundary, so they are part of the compiler contract rather than an
+agent-assets-only check.
 
 This staged scheduling change supersedes only D-014's instruction to execute
 coverage on literally every pull request. It does not change the 100% line and

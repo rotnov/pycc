@@ -82,8 +82,9 @@ The outputs are:
 - `pages`: website source plus the scripts and fixtures that define the two
   hermetic Lighthouse gates.
 - `agent`: repository-owned agent skills, adapters, policies, and their
-  validators, used to decide whether the offline alpha skill evals need a
-  compiler binary.
+  validators, plus every compiler input because the offline alpha skill evals
+  execute the freshly built compiler and bind its diagnostics/backend
+  boundaries (including D-072).
 
 Classification is fail-closed. The implementation recognizes a bounded set of
 known non-compiler roots and files; a path that matches no reviewed rule sets
@@ -112,7 +113,10 @@ pull-request-controlled path text crosses a job output boundary.
 `governance` performs the repository's Python policy suite and the Ruby
 workflow, roadmap-evidence, and README binding checks once on Ubuntu. When
 `agent=true`, it also builds the compiler binary and runs both offline alpha
-skill evals. The macOS coverage job no longer repeats those policy checks.
+skill evals. Compiler inputs deliberately set both `compiler=true` and
+`agent=true`; changing the compiler cannot skip the agent contracts that
+execute its fresh binary. The macOS coverage job no longer repeats those policy
+checks.
 
 The standalone `Agent policy` and `Agent assets` workflows retain
 `validate_agent_policies.py`, `validate_agent_assets.py`, the CI-monitoring

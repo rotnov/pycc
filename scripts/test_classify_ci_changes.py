@@ -34,14 +34,14 @@ class ClassifyPathsTests(unittest.TestCase):
 
     def test_mixed_site_and_compiler_change_unions_categories(self):
         self.assertEqual(
-            Selection(True, True, False),
+            Selection(True, True, True),
             classify_paths(
                 ["crates/pycc_hir/src/lib.rs", "site/index.html"],
                 event_name="pull_request",
             ),
         )
 
-    def test_compiler_inputs_select_only_compiler(self):
+    def test_compiler_inputs_also_select_agent_evals_for_the_fresh_binary(self):
         for path in (
             "src/main.rs",
             "crates/pycc_hir/src/lib.rs",
@@ -56,7 +56,7 @@ class ClassifyPathsTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertEqual(
-                    Selection(True, False, False),
+                    Selection(True, False, True),
                     classify_paths([path], event_name="pull_request"),
                 )
 
@@ -186,7 +186,7 @@ class ClassifyPathsTests(unittest.TestCase):
 
     def test_added_deleted_and_renamed_path_pairs_union_categories(self):
         self.assertEqual(
-            Selection(True, False, False),
+            Selection(True, False, True),
             classify_paths(
                 ["src/added.rs", "src/deleted.rs", "crates/old.rs", "crates/new.rs"],
                 event_name="pull_request",
@@ -263,7 +263,7 @@ class ClassifyPathsTests(unittest.TestCase):
             ).stdout.rstrip(b"\x00").split(b"\x00")
 
             self.assertEqual(
-                Selection(True, False, False),
+                Selection(True, False, True),
                 classify_paths(
                     [path.decode("utf-8") for path in changed], event_name="pull_request"
                 ),
@@ -303,6 +303,22 @@ class ClassifyCliTests(unittest.TestCase):
                 output_path.read_text(),
             )
             self.assertNotIn(b"site/index.html", result.stdout + result.stderr)
+
+    def test_nul_delimited_compiler_change_selects_fresh_binary_agent_evals(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_path = Path(temporary_directory) / "github-output"
+            result = self.run_cli(
+                stream=b"src/main.rs\x00",
+                event_name="pull_request",
+                output_path=output_path,
+            )
+
+            self.assertEqual(0, result.returncode)
+            self.assertEqual(
+                "compiler=true\npages=false\nagent=true\n",
+                output_path.read_text(),
+            )
+            self.assertNotIn(b"src/main.rs", result.stdout + result.stderr)
 
     def test_push_selects_everything_regardless_of_path_stream(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
