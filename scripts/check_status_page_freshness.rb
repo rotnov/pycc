@@ -21,6 +21,14 @@ CHECKBOX_PREFIX = /\A\s*-\s*\[(?<mark>.)\]/
 # needed in `roadmap_signal?`.
 MILESTONE_MARKER = /\*\*Current milestone:/
 
+# A feature-landing paragraph in docs/ROADMAP.md opens with a bold issue
+# reference and an em dash, e.g.
+#   **[#432](https://github.com/rotnov/pycc/issues/432) — Inheritance, ...:**
+# The captured issue number is the stable identity used for set comparison,
+# so a text-only edit to an existing paragraph (same issue number, different
+# description) does not fire -- only additions and removals do.
+FEATURE_PARAGRAPH_MARKER = /\*\*\[#(\d+)\]\(https:\/\/github\.com\/rotnov\/pycc\/issues\/\d+\)\s*—/
+
 ROADMAP_PATH = "docs/ROADMAP.md"
 WATCHED_PAGES = %w[site/status/index.html site/index.html].freeze
 ISSUE_REFERENCE = "https://github.com/rotnov/pycc/issues/401"
@@ -95,9 +103,24 @@ def evidence_checklist_states(text)
   states
 end
 
+# Collect the sorted issue numbers of every feature-landing paragraph
+# (`**[#NNN](...) — ...:**`) in `text`. A sorted array (rather than a Set)
+# avoids needing `require "set"`; the existing script only requires `open3`
+# and `pathname`. Set membership -- not text -- is the signal, so a
+# description-only edit to an existing paragraph (same issue number) leaves
+# the array unchanged and does not fire.
+def feature_paragraph_ids(text)
+  ids = []
+  text.each_line do |line|
+    line.scan(FEATURE_PARAGRAPH_MARKER) { ids << Regexp.last_match[1] }
+  end
+  ids.sort
+end
+
 def roadmap_signal?(base_text, head_text)
   milestone_line(base_text) != milestone_line(head_text) ||
-    evidence_checklist_states(base_text) != evidence_checklist_states(head_text)
+    evidence_checklist_states(base_text) != evidence_checklist_states(head_text) ||
+    feature_paragraph_ids(base_text) != feature_paragraph_ids(head_text)
 end
 
 def check_status_page_freshness(root, base_revision, head_revision, diff_fetcher: method(:diff_name_only))
@@ -107,29 +130,29 @@ def check_status_page_freshness(root, base_revision, head_revision, diff_fetcher
   base_roadmap = read_file_at_revision(root, base_revision, ROADMAP_PATH)
   head_roadmap = read_file_at_revision(root, head_revision, ROADMAP_PATH)
 
-  return "no roadmap milestone or evidence-checklist signal" unless roadmap_signal?(base_roadmap, head_roadmap)
+  return "no roadmap milestone, evidence-checklist, or feature-landing-paragraph signal" unless roadmap_signal?(base_roadmap, head_roadmap)
 
   changed_files = diff_fetcher.call(root, base_revision, head_revision)
   if changed_files.empty?
     raise StatusPageFreshnessError,
-          "docs/ROADMAP.md's milestone line or evidence checklist changed between " \
-          "#{base_revision} and #{head_revision}, but the base...head diff reported no " \
-          "changed files at all -- treating this as a diff-base failure rather than " \
-          "silently passing"
+          "docs/ROADMAP.md's milestone line, evidence checklist, or feature-landing " \
+          "paragraphs changed between #{base_revision} and #{head_revision}, but the " \
+          "base...head diff reported no changed files at all -- treating this as a " \
+          "diff-base failure rather than silently passing"
   end
 
   touched = WATCHED_PAGES.select { |page| changed_files.include?(page) }
   if touched.empty?
     raise StatusPageFreshnessError, <<~MESSAGE.strip
-      docs/ROADMAP.md's current-milestone line or a roadmap-evidence checklist entry
-      changed in this diff, but neither #{WATCHED_PAGES.join(' nor ')} was updated in
-      the same diff. See #{ISSUE_REFERENCE} for why the GitHub Pages status and landing
-      pages must stay in sync with docs/ROADMAP.md, and #{GUIDANCE_DOC} for how those
-      pages are maintained.
+      docs/ROADMAP.md's current-milestone line, a roadmap-evidence checklist entry, or a
+      feature-landing paragraph changed in this diff, but neither #{WATCHED_PAGES.join(' nor ')}
+      was updated in the same diff. See #{ISSUE_REFERENCE} for why the GitHub Pages status
+      and landing pages must stay in sync with docs/ROADMAP.md, and #{GUIDANCE_DOC} for how
+      those pages are maintained.
     MESSAGE
   end
 
-  "roadmap milestone/evidence signal matched by an update to #{touched.join(' and ')}"
+  "roadmap milestone/evidence/feature-paragraph signal matched by an update to #{touched.join(' and ')}"
 end
 
 def main(arguments)

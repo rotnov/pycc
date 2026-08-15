@@ -783,9 +783,9 @@ mutations = (
     (
         site_dir / "status" / "index.html",
         (
-            "the full multi-version conformance matrix,\n              "
-            "differential fuzzing, and corpus testing remain planned "
-            "test-depth\n              work carried over from v0.1 and v0.2."
+            "full multi-version conformance matrix, differential fuzzing,\n"
+            "              and corpus testing remain planned test-depth work carried over\n"
+            "              from v0.1 and v0.2."
         ),
         "The full multi-version conformance matrix is already complete.",
         "status page that overclaims conformance-matrix completion",

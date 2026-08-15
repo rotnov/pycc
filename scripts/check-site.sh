@@ -627,7 +627,7 @@ PAGE_SPECS = {
             "Implemented v0.1 subset",
             "Validated frontend codes",
             "byte-exact CLI snapshots cover",
-            "The rest of v0.3's class model and the full conformance matrix are next.",
+            "Custom exceptions and the full conformance matrix are next.",
             "v0.1 and v0.2's acceptance criteria are both met, and v0.3's class model core has landed",
             "v0.2 acceptance criteria met",
             "v0.3 in progress",

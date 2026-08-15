@@ -176,3 +176,4 @@ current.
 | [D-167](./D-167-preserve-page-indexing-aggregates-separately.md) | Preserve Page Indexing aggregates separately from per-URL evidence | accepted |
 | [D-168](./D-168-pages-visit-measurement-capability-contract.md) | Pages visit measurement capability contract: no analytics today, schema and privacy boundary for future activation | accepted |
 | [D-169](./D-169-match-exhaustiveness-per-arm-coverage-check.md) | Match exhaustiveness: per-arm coverage check instead of decision-tree compilation | accepted |
+| [D-170](./D-170-status-page-freshness-third-signal-feature-paragraphs.md) | Extend the status-page freshness check with a third signal: feature-landing paragraph set changes (#522) | accepted |

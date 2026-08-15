@@ -1,7 +1,8 @@
 name: Status page freshness
 
-# Enforces D-156 (#401): when docs/ROADMAP.md's current-milestone line or a
-# roadmap-evidence checklist entry changes, the same diff must also touch
+# Enforces D-156/D-170 (#401/#522): when docs/ROADMAP.md's current-milestone
+# line, a roadmap-evidence checklist entry, or a feature-landing paragraph
+# (**[#NNN](...) — <feature>:**) changes, the same diff must also touch
 # site/status/index.html or site/index.html -- the two GitHub Pages surfaces
 # that restate the roadmap's status. Deliberately its own workflow, not
 # ci.yml (a D-103 protected target) and not workflow-policy.yml (the
