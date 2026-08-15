@@ -238,13 +238,21 @@ D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256 =
 # -- the live ci.yml is untouched by this staging round.
 D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256 =
   "a22d8845e4f755bfc50e75e0bb6cc3ae285da7c9aea35ced95bf7a83c39c4b46"
+# Python 3.14.7 oracle refresh: the active D211 workflow with both Tier-1
+# setup-python pins and their exact-version assertions advanced from 3.14.6
+# to 3.14.7. D-103 requires this digest to become base-owned before the
+# reviewed workflow bytes can be activated; D-012's 3.14 language gate is
+# unchanged.
+PY3147_ORACLE_CI_WORKFLOW_SHA256 =
+  "d1c4ab9a927723c37809c4621afffcc4b15ecde52a9706cc0951376ca1faf725"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
   D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
   D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
   D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256,
-  D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256
+  D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
+  PY3147_ORACLE_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"

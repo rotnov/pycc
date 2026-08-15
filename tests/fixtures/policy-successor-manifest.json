@@ -3,8 +3,8 @@
   "targets": [
     {
       "path": ".github/workflows/ci.yml",
-      "source_path": ".github/workflows/ci.yml",
-      "sha256": "a22d8845e4f755bfc50e75e0bb6cc3ae285da7c9aea35ced95bf7a83c39c4b46"
+      "source_path": "tests/fixtures/policy-successors/ci-python-3147.yml",
+      "sha256": "d1c4ab9a927723c37809c4621afffcc4b15ecde52a9706cc0951376ca1faf725"
     },
     {
       "path": "scripts/check_ci_permissions.rb",
@@ -23,7 +23,7 @@
     },
     {
       "path": "scripts/check_roadmap_evidence.rb",
-      "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence-python-3147-stage1.rb",
+      "source_path": "scripts/check_roadmap_evidence.rb",
       "sha256": "070580b2d36c437f9fc3123a61a5f4e44aea8f29f013038227d4241c5dde1a06"
     },
     {
@@ -83,7 +83,7 @@
     },
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
-      "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence-python-3147-stage1.rb",
+      "source_path": "scripts/test_check_roadmap_evidence.rb",
       "sha256": "ef755d8652d2c42539d1a70dd7e8ae84611f310739b2609b02af5d9ec3dbdcde"
     },
     {
