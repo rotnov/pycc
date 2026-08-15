@@ -6,7 +6,7 @@
 # runtime_checkable protocol (True for conforming, False for
 # non-conforming), and a protocol-typed function parameter.
 #
-# Both pycc and CPython 3.14.6 produce identical stdout: the protocol is
+# Both pycc and CPython 3.14.7 produce identical stdout: the protocol is
 # a compile-time-only interface in pycc and a deferred-annotation type
 # hint in CPython, so neither emits anything for the protocol definition
 # itself — only the concrete class method calls and isinstance results

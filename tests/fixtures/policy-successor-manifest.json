@@ -3,7 +3,7 @@
   "targets": [
     {
       "path": ".github/workflows/ci.yml",
-      "source_path": "tests/fixtures/policy-successors/ci-python-3147.yml",
+      "source_path": ".github/workflows/ci.yml",
       "sha256": "d1c4ab9a927723c37809c4621afffcc4b15ecde52a9706cc0951376ca1faf725"
     },
     {

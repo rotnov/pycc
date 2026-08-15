@@ -42,7 +42,7 @@ existing D-072 should-panic unit test remains the negative control that
 - Runner: for each supported language level, select that configuration's
   cumulative fixture range and pinned oracle → compile (`--debug` and
   `--release` both, once `--release` exists — see below) → execute → diff. The
-  v1.0 Python 3.14 run covers `py30/` through `py314/` against CPython 3.14.6.
+  v1.0 Python 3.14 run covers `py30/` through `py314/` against CPython 3.14.7.
   After the v1.x adoption gate opens, the Python 3.15 run covers `py30/`
   through `py315/` against a pinned current Python 3.15 patch; the separate
   Python 3.14 compatibility run remains required. Outputs are recorded and
@@ -50,15 +50,11 @@ existing D-072 should-panic unit test remains the negative control that
 - A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand.
 - **v0.1 exception:** `--release`/LTO doesn't exist until v0.2 (see ROADMAP.md), so the "both profiles" rule only binds from v0.2 on. Every v0.1 PEP/feature flips to ✅ on `--debug` alone; nothing in v0.1 is held to a `--release` bar that has nothing to build against (see DELIVERY_PLAN.md, "Debug/release conformance").
 
-**Python 3.14.7 oracle transition (checker activated 2026-08-15):** Python
-3.14.7 is the next reviewed patch oracle. Because the Tier-1 oracle pins are
-part of the D-103-protected `ci.yml`, the transition is split into base-owned
-rounds. The first round staged the exact 3.14.7 workflow bytes and a checker
-successor that authorizes their SHA-256. This round activates that checker and
-stages the reviewed workflow as the live CI successor while leaving the live
-workflow and documented 3.14.6 baseline unchanged. The next activation round
-advances the live oracle, re-records the conformance contract, and updates
-`PYTHON_STANDARDS.md` and `ROADMAP.md` together. The transition does not expand
+**Python 3.14.7 oracle transition (activated 2026-08-15):** the three-round
+D-103 sequence first staged the exact reviewed workflow and checker successors,
+then activated the checker, and finally advanced the live Tier-1 workflow and
+conformance contract to Python 3.14.7. `PYTHON_STANDARDS.md` and `ROADMAP.md`
+move with the activation. This patch-level oracle refresh does not expand
 D-012's Python 3.14 language level.
 
 **PR-9 status (2026-07-30):** the `pycc_testkit` crate above remains unbuilt — D-102 extended the existing flat `tests/conformance.rs` integration test in place instead (11 fixtures at the time: the 2 pre-existing plus 9 new PEP fixtures), judging that PR-9's own needs (compile both profiles, run, diff against CPython) were still fully covered by that file's existing helper and didn't justify a new workspace crate. The "matrix file is updated by CI, not by hand" policy above has no automation behind it yet (verified: nothing currently writes `PYTHON_STANDARDS.md`'s status column); D-102's accepted interim policy is to flip a row by hand only once its fixture is observed green on a real, already-completed CI run across all 5 Tier-1 targets in both profiles — never speculatively. Building the real `pycc_testkit` crate and CI-owned status automation both remain deferred to whenever the v1.0-scale, multi-language-level harness this section describes is actually needed.

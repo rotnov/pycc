@@ -2,17 +2,18 @@
 
 Every language standard (PEP) that defines Python up to the v1.0 target,
 **3.14**, mapped to a conformance test. Accepted Python 3.15 standards are
-tracked separately as a post-v1.0 preview. This file is the single source of
-truth for what pycc must implement. A feature is "supported" only when its test
-passes; a feature is "rejected by design" only when its *negative* test asserts
-the exact diagnostic.
+tracked separately as a post-v1.0 preview, and later accepted language
+standards are kept in a non-gating watchlist. This file is the single source
+of truth for what pycc must implement. A feature is "supported" only when its
+test passes; a feature is "rejected by design" only when its *negative* test
+asserts the exact diagnostic.
 
 **Conventions**
 
 - Test path: `tests/conformance/pyXY/pep_NNNN_slug.py`. Every supported
   language level runs all fixture directories through that level and compares
   them with its pinned oracle. The v1.0 Python 3.14 run therefore covers
-  `py30/` through `py314/` against CPython 3.14.6. After the v1.x gate opens,
+  `py30/` through `py314/` against CPython 3.14.7. After the v1.x gate opens,
   the Python 3.15 run covers `py30/` through `py315/` against its pinned
   current 3.15 patch, while the independent 3.14 compatibility run remains
   required. This describes the eventual v1.0-scale, language-level-selecting
@@ -29,17 +30,19 @@ Reference: [PEP index](https://peps.python.org/), [What's New in Python](https:/
 ## Upstream release baseline
 
 Last reviewed against the official Python release pages, release-schedule PEPs,
-and What's New documents on **2026-07-24**:
+and What's New documents on **2026-08-15**:
 
 | Track | Upstream checkpoint | pycc consequence |
 |---|---|---|
-| v1 stable oracle | Python **3.14.6** final, released 2026-06-10 | Conformance recordings and CI oracle setup are pinned to 3.14.6 (moved from 3.14.3 in PR-6); re-record outputs again whenever the oracle version next changes. |
-| Post-v1 preview | Python **3.15.0b4**, released 2026-07-18 | Feature-frozen since 3.15.0b1; track only Final/Accepted Standards Track PEPs below until 3.15.0 final. |
+| v1 stable oracle | Python **3.14.7** final, released 2026-08-05 | Conformance recordings and CI oracle setup are pinned to 3.14.7; the maintenance-release changelog was reviewed before advancing from 3.14.6. |
+| Post-v1 preview | Python **3.15.0rc1**, released 2026-08-04 | Feature-frozen since 3.15.0b1; track only Final/Accepted Standards Track PEPs below until 3.15.0 final. |
+| Future watchlist | Python **3.16** development | Record accepted language standards such as PEP 828 for planning only; this track has no supported-language or conformance gate yet. |
 
-D-012 remains unchanged: v1 accepts exactly Python 3.14. The 3.15 rows do not
-expand the v1 grammar or acceptance gate. Promoting them into a supported
-language level requires Python 3.15 final, the post-v1 roadmap gate, and a new
-ADR that supersedes D-012.
+D-012 remains unchanged: v1 accepts exactly Python 3.14. The 3.15 preview and
+3.16 watchlist rows do not expand the v1 grammar or acceptance gate. Promoting
+Python 3.15 into a supported language level requires Python 3.15 final, the
+post-v1 roadmap gate, and a new ADR that supersedes D-012. Python 3.16 requires
+its own later roadmap gate and superseding ADR after the 3.15 adoption decision.
 
 The gate-opening change must also add a machine-readable supported-language
 registry consumed by project-configuration validation and `pycc_testkit`. For
@@ -57,7 +60,11 @@ For each newly observed upstream release:
 3. For a 3.15 prerelease after feature freeze, add newly Final/Accepted
    Standards Track PEPs to the preview section; Draft, Deferred, and Rejected
    proposals are not implementation commitments.
-4. Do not flip conformance statuses by hand; CI still owns the status column.
+4. Record later Accepted/Final language standards in a versioned watchlist,
+   without expanding the supported-language registry or acceptance gates.
+   Packaging and process standards outside the compiler's language/runtime
+   contract are reviewed but do not become conformance rows.
+5. Do not flip conformance statuses by hand; CI still owns the status column.
    [D-102](./decisions/D-102-extend-tests-conformance-rs-for-pr-9-s-9-new-pep.md)
    is the one accepted interim exception: no automation backs this column
    today, so PR-9's 9 rows were flipped by hand, only after each fixture was
@@ -224,7 +231,7 @@ the pinned interpreter's own GIL only for CPython-backed operations (D-128).*
 
 ## Python 3.15 preview (post-v1.0)
 
-These rows reflect the feature-frozen 3.15.0b4 surface. They are planning
+These rows reflect the feature-frozen 3.15.0rc1 surface. They are planning
 inputs for the post-v1.0 language-level upgrade and are not part of the Python
 3.14 v1 acceptance gate.
 
@@ -247,6 +254,20 @@ inputs for the post-v1.0 language-level upgrade and are not part of the Python
 free-threaded stable ABI, and unified C slots), and 831 (CPython frame-pointer
 build policy). Revisit the C API items only for the v0.7+ CPython interop
 boundary.*
+
+## Python 3.16 watchlist (planning only)
+
+This section records accepted language work early enough for design planning.
+It does not make Python 3.16 a supported input level, add a Python 3.16 oracle,
+or change the Python 3.14 v1 acceptance gate.
+
+| PEP | Feature | Cat | Test | St |
+|---|---|---|---|---|
+| [828](https://peps.python.org/pep-0828/) | `yield from` delegation in asynchronous generators | syntax | `py316/pep_0828_async_yield_from.py` | ☐ |
+
+*Reviewed but excluded from this language/compiler matrix: PEP 833 is a Final
+packaging interoperability standard for the Simple Repository API, not a
+Python language or runtime-semantics feature.*
 
 ## Rejected by design → negative tests
 
