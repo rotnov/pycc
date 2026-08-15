@@ -55,10 +55,10 @@ next reviewed patch oracle. Because the Tier-1 oracle pins are part of the
 D-103-protected `ci.yml`, the transition is split into base-owned rounds. The
 first round stages the exact 3.14.7 workflow bytes and a checker successor that
 authorizes their SHA-256 while leaving the live workflow and the documented
-3.14.6 baseline unchanged. A later activation round advances the live oracle,
-re-records the conformance contract, and updates `PYTHON_STANDARDS.md` and
-`ROADMAP.md` together. This staging step does not expand D-012's Python 3.14
-language level.
+3.14.6 baseline unchanged. Subsequent rounds first activate that checker, then
+advance the live oracle, re-record the conformance contract, and update
+`PYTHON_STANDARDS.md` and `ROADMAP.md` together. This staging step does not
+expand D-012's Python 3.14 language level.
 
 **PR-9 status (2026-07-30):** the `pycc_testkit` crate above remains unbuilt — D-102 extended the existing flat `tests/conformance.rs` integration test in place instead (11 fixtures at the time: the 2 pre-existing plus 9 new PEP fixtures), judging that PR-9's own needs (compile both profiles, run, diff against CPython) were still fully covered by that file's existing helper and didn't justify a new workspace crate. The "matrix file is updated by CI, not by hand" policy above has no automation behind it yet (verified: nothing currently writes `PYTHON_STANDARDS.md`'s status column); D-102's accepted interim policy is to flip a row by hand only once its fixture is observed green on a real, already-completed CI run across all 5 Tier-1 targets in both profiles — never speculatively. Building the real `pycc_testkit` crate and CI-owned status automation both remain deferred to whenever the v1.0-scale, multi-language-level harness this section describes is actually needed.
 
