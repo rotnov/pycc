@@ -237,12 +237,12 @@ D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256 =
 # only authorizes the shape for a future ci.yml activation (Merge 2 of #211)
 # -- the live ci.yml is untouched by this staging round.
 D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256 =
-  "97bfe5eb3273e3bdf05d7831513c1c9ec24942eb79039d224837e486a144a3c8"
+  "eee032080ffa98d55c79d86e00110eeedd3439b0e1682a69aa96e79e9a2ed59f"
 # Python 3.14.7 oracle refresh: the active D211 workflow with both Tier-1
 # setup-python pins and their exact-version assertions advanced from 3.14.6
-# to 3.14.7. D-103 requires this digest to become base-owned before the
-# reviewed workflow bytes can be activated; D-012's 3.14 language gate is
-# unchanged.
+# to 3.14.7, plus D-171 merged-instantiation coverage gate. D-103 requires
+# this digest to become base-owned before the reviewed workflow bytes can
+# be activated; D-012's 3.14 language gate is unchanged.
 PY3147_ORACLE_CI_WORKFLOW_SHA256 =
   "d1c4ab9a927723c37809c4621afffcc4b15ecde52a9706cc0951376ca1faf725"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [

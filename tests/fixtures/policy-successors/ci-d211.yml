@@ -146,18 +146,18 @@ jobs:
       # network-fetched interpreter inside that gate's isolated `nobody`
       # sandbox would expand a trust boundary that's reviewed and pinned
       # (scripts/check_roadmap_evidence.rb's TRUSTED_COVERAGE_STEPS /
-      # COVERAGE_SCRIPT). Pinned to the exact same 3.14.6 the local oracle
+      # COVERAGE_SCRIPT). Pinned to the exact same 3.14.7 the local oracle
       # uses (docs/ROADMAP.md's "v1 stable oracle" row).
-      - name: Set up CPython 3.14.6 conformance oracle
+      - name: Set up CPython 3.14.7 conformance oracle
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14.6"
+          python-version: "3.14.7"
 
       - name: Verify oracle version
         shell: bash
         run: |
-          python3.14 --version | grep -qx "Python 3.14.6" || {
-            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.6'"
+          python3.14 --version | grep -qx "Python 3.14.7" || {
+            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.7'"
             python3.14 --version
             exit 1
           }
@@ -331,12 +331,12 @@ jobs:
 
       # tests/conformance.rs (PR-6, D-078) shells out to a hardcoded
       # "python3.14" oracle binary via cargo test --workspace below, on every
-      # Tier-1 target alike -- pinned here to the exact same 3.14.6 the local
+      # Tier-1 target alike -- pinned here to the exact same 3.14.7 the local
       # oracle uses (docs/ROADMAP.md's "v1 stable oracle" row).
-      - name: Set up CPython 3.14.6 conformance oracle
+      - name: Set up CPython 3.14.7 conformance oracle
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14.6"
+          python-version: "3.14.7"
 
       # actions/setup-python only produces a plain "python.exe" on Windows --
       # unlike its Unix installs, it never creates a version-suffixed
@@ -360,8 +360,8 @@ jobs:
       - name: Verify oracle version
         shell: bash
         run: |
-          python3.14 --version | grep -qx "Python 3.14.6" || {
-            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.6'"
+          python3.14 --version | grep -qx "Python 3.14.7" || {
+            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.7'"
             python3.14 --version
             exit 1
           }

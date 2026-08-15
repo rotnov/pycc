@@ -237,14 +237,22 @@ D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256 =
 # only authorizes the shape for a future ci.yml activation (Merge 2 of #211)
 # -- the live ci.yml is untouched by this staging round.
 D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256 =
-  "a22d8845e4f755bfc50e75e0bb6cc3ae285da7c9aea35ced95bf7a83c39c4b46"
+  "eee032080ffa98d55c79d86e00110eeedd3439b0e1682a69aa96e79e9a2ed59f"
+# Python 3.14.7 oracle refresh: the active D211 workflow with both Tier-1
+# setup-python pins and their exact-version assertions advanced from 3.14.6
+# to 3.14.7, plus D-171 merged-instantiation coverage gate. D-103 requires
+# this digest to become base-owned before the reviewed workflow bytes can
+# be activated; D-012's 3.14 language gate is unchanged.
+PY3147_ORACLE_CI_WORKFLOW_SHA256 =
+  "d1c4ab9a927723c37809c4621afffcc4b15ecde52a9706cc0951376ca1faf725"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
   D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
   D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
   D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256,
-  D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256
+  D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
+  PY3147_ORACLE_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -1058,8 +1066,17 @@ ACCEPTED_PERF_CI_GATE_JOBS = [
   D199_PAGES_ACCESSIBILITY_CI_GATE_JOB
 ].freeze
 COVERAGE_JOB = "build-test-coverage"
-COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
+COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014/D-171)"
+# Pre-D171 step name, still accepted for historical fixture shapes.
+COVERAGE_STEP_PRE_D171 = "Hard coverage gate — 100% lines + regions (D-014)"
 COVERAGE_COMMAND =
+  "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace --json " \
+  "--output-path \"$ISOLATED_ROOT/tmp/cov.json\"\n" \
+  "          run_isolated python3 " \
+  "\"$GITHUB_WORKSPACE/scripts/check_coverage_merged.py\" " \
+  "\"$ISOLATED_ROOT/tmp/cov.json\""
+# Pre-D171 command, still accepted for historical fixture shapes.
+COVERAGE_COMMAND_PRE_D171 =
   "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
   "--fail-under-lines 100 --fail-under-regions 100"
 COVERAGE_SCRIPT = <<~SHELL.strip
@@ -1097,7 +1114,7 @@ COVERAGE_SCRIPT = <<~SHELL.strip
   cd "$GITHUB_WORKSPACE"
   run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
   run_isolated "$TRUSTED_CARGO" build --workspace
-  #{COVERAGE_COMMAND}
+  #{COVERAGE_COMMAND_PRE_D171}
   rm "$GITHUB_WORKSPACE/target"
   printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 SHELL
@@ -1149,11 +1166,59 @@ D91_COVERAGE_SCRIPT = <<~SHELL.strip
   run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
   run_isolated "$TRUSTED_CARGO" build --workspace
   run_isolated "$TRUSTED_CARGO" build --release -p pycc_rt
-  #{COVERAGE_COMMAND}
+  #{COVERAGE_COMMAND_PRE_D171}
   rm "$GITHUB_WORKSPACE/target"
   printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 SHELL
-REVIEWED_COVERAGE_SCRIPTS = [D91_COVERAGE_SCRIPT].freeze
+# D-171: the live ci.yml now uses the merged-instantiation coverage gate
+# (scripts/check_coverage_merged.py) instead of --fail-under-lines/regions.
+# The old D91 shape (with --fail-under-*) is kept as a historical fixture
+# shape; the new D171 shape is the live one.
+D171_COVERAGE_SCRIPT = <<~SHELL.strip
+  set -euo pipefail
+  LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
+  TRUSTED_CARGO="$(rustup which cargo)"
+  TRUSTED_RUSTC="$(rustup which rustc)"
+  TRUSTED_RUSTDOC="$(rustup which rustdoc)"
+  TRUSTED_COV="/Users/runner/.cargo/bin/cargo-llvm-cov"
+  TRUSTED_TOOLCHAIN="$(dirname "$(dirname "$TRUSTED_CARGO")")"
+  cd "$RUNNER_TEMP"
+  RUSTC="$TRUSTED_RUSTC" RUSTDOC="$TRUSTED_RUSTDOC" "$TRUSTED_CARGO" install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
+  "$TRUSTED_COV" llvm-cov --version
+  sudo chmod o+x /Users/runner /Users/runner/.cargo /Users/runner/.cargo/bin /Users/runner/.rustup /Users/runner/.rustup/toolchains
+  sudo chmod -R o+rX "$TRUSTED_TOOLCHAIN"
+  sudo chmod o+rx "$TRUSTED_COV"
+  ISOLATED_ROOT="$RUNNER_TEMP/pycc-coverage"
+  mkdir -p "$ISOLATED_ROOT/home" "$ISOLATED_ROOT/tmp" "$ISOLATED_ROOT/cargo-home" "$ISOLATED_ROOT/target"
+  sudo chown -R nobody:nobody "$ISOLATED_ROOT"
+  ISOLATED_ENV=(
+    "HOME=$ISOLATED_ROOT/home"
+    "TMPDIR=$ISOLATED_ROOT/tmp/"
+    "CARGO_HOME=$ISOLATED_ROOT/cargo-home"
+    "CARGO_TARGET_DIR=$ISOLATED_ROOT/target"
+    "CARGO=$TRUSTED_CARGO"
+    "RUSTC=$TRUSTED_RUSTC"
+    "RUSTDOC=$TRUSTED_RUSTDOC"
+    "LLVM_SYS_221_PREFIX=$LLVM_SYS_221_PREFIX_VALUE"
+    "PATH=$(dirname "$TRUSTED_CARGO"):/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+  )
+  run_isolated() {
+    sudo -u nobody env -i "${ISOLATED_ENV[@]}" "$@"
+  }
+  ln -s "$ISOLATED_ROOT/target" "$GITHUB_WORKSPACE/target"
+  cd "$GITHUB_WORKSPACE"
+  run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
+  run_isolated "$TRUSTED_CARGO" build --workspace
+  run_isolated "$TRUSTED_CARGO" build --release -p pycc_rt
+  # D-171: use merged-instantiation coverage gate instead of
+  # per-instantiation --fail-under-* summary, which overcounts misses
+  # for generic functions.  The 100% requirement (D-014) is unchanged.
+  run_isolated "$TRUSTED_COV" llvm-cov --workspace --json --output-path "$ISOLATED_ROOT/tmp/cov.json"
+  run_isolated python3 "$GITHUB_WORKSPACE/scripts/check_coverage_merged.py" "$ISOLATED_ROOT/tmp/cov.json"
+  rm "$GITHUB_WORKSPACE/target"
+  printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
+SHELL
+REVIEWED_COVERAGE_SCRIPTS = [D91_COVERAGE_SCRIPT, D171_COVERAGE_SCRIPT].freeze
 TRUSTED_COVERAGE_ENV = {
   "CARGO_LLVM_COV_VERSION" => "0.8.7",
   "LLVM_VERSION" => "22.1.1"
@@ -1187,11 +1252,19 @@ TRUSTED_COVERAGE_STEPS = [
 D91_TRUSTED_COVERAGE_STEPS =
   (TRUSTED_COVERAGE_STEPS[0..-2] + [
     {
-      "name" => COVERAGE_STEP,
+      "name" => COVERAGE_STEP_PRE_D171,
       "run" => D91_COVERAGE_SCRIPT
     }
   ]).freeze
-REVIEWED_TRUSTED_COVERAGE_STEPS = [D91_TRUSTED_COVERAGE_STEPS].freeze
+D171_TRUSTED_COVERAGE_STEPS =
+  (TRUSTED_COVERAGE_STEPS[0..-2] + [
+    {
+      "name" => COVERAGE_STEP,
+      "run" => D171_COVERAGE_SCRIPT
+    }
+  ]).freeze
+REVIEWED_TRUSTED_COVERAGE_STEPS =
+  [D91_TRUSTED_COVERAGE_STEPS, D171_TRUSTED_COVERAGE_STEPS].freeze
 
 def yaml_mapping(node, context)
   raise RoadmapEvidenceError, "#{context} must be a mapping" unless node.is_a?(Psych::Nodes::Mapping)
@@ -1306,7 +1379,8 @@ def coverage_gate_present?(workflow_text, source)
     step = yaml_mapping(step_node, "#{source} step")
     next unless step["name"] && step["run"]
 
-    next unless yaml_scalar(step["name"], "#{source} step name") == COVERAGE_STEP
+    step_name = yaml_scalar(step["name"], "#{source} step name")
+    next unless [COVERAGE_STEP, COVERAGE_STEP_PRE_D171].include?(step_name)
     next unless REVIEWED_COVERAGE_SCRIPTS.include?(
       yaml_scalar(step["run"], "#{source} step run").strip
     )

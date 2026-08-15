@@ -18,7 +18,8 @@
 use crate::{Environment, infer_expr_in, is_assignable};
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
-    HirClassDef, HirExpr, HirModule, ProtocolMember, Ty, extract_class_names, is_builtin_type_name,
+    HirClassDef, HirExpr, HirModule, ProtocolMember, Ty, extract_class_names,
+    is_builtin_type_name,
 };
 
 /// Populates `env`'s class table from `hir.class_defs` -- called once by
@@ -28,6 +29,58 @@ use pycc_hir::{
 pub(crate) fn bind_classes(env: &mut Environment, hir: &HirModule) {
     for (name, class_def) in &hir.class_defs {
         env.bind_class(name.clone(), class_def.clone());
+    }
+    // #382 (PR-22 Part 1): register builtin exception classes so that
+    // `raise ValueError("msg")` and `except ValueError` type-check.
+    register_builtin_exceptions(env);
+}
+
+/// #382 (PR-22 Part 1): registers the builtin exception classes
+/// (`Exception`, `ValueError`, `TypeError`, `KeyError`, `IndexError`,
+/// `ZeroDivisionError`, `RuntimeError`) as minimal `HirClassDef` entries
+/// in `env`'s class table. Each has an empty `attrs`/`methods` table (no
+/// `__init__` — `resolve_instantiation` handles builtin exception
+/// construction specially) and the correct `bases`/`mro` for the flat
+/// hierarchy: `Exception` is the root, every other builtin exception
+/// inherits from `Exception`.
+fn register_builtin_exceptions(env: &mut Environment) {
+    let names = [
+        "Exception",
+        "ValueError",
+        "TypeError",
+        "KeyError",
+        "IndexError",
+        "ZeroDivisionError",
+        "RuntimeError",
+    ];
+    for name in names {
+        let parent = pycc_hir::builtin_exception_parent(name);
+        let bases = parent.map(|p| vec![p.to_string()]).unwrap_or_default();
+        let mro = if let Some(p) = parent {
+            vec![name.to_string(), p.to_string()]
+        } else {
+            vec![name.to_string()]
+        };
+        let class_def = HirClassDef {
+            name: name.to_string(),
+            bases,
+            mro,
+            attrs: vec![],
+            methods: vec![],
+            properties: vec![],
+            static_methods: vec![],
+            class_methods: vec![],
+            type_param: None,
+            enum_members: vec![],
+            is_dataclass: false,
+            dataclass_fields: vec![],
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: vec![],
+            abstract_methods: vec![],
+            is_abstract: false,
+        };
+        env.bind_class(name.to_string(), class_def);
     }
 }
 
@@ -405,6 +458,17 @@ pub(crate) fn resolve_instantiation(
              infer_expr_in should have checked lookup_class before calling this"
         )
     });
+    // #382 (PR-22 Part 1): builtin exception classes have no `__init__`
+    // method in the HIR (they are not user-defined classes). Their
+    // construction is validated directly in `check_raise_operand` (the
+    // only context where a builtin exception call is valid — a `raise`
+    // statement). A standalone `ValueError("x")` expression never reaches
+    // `resolve_instantiation` because `infer_expr_in`'s `HirExpr::Call`
+    // arm classifies it as C0001 (unsupported callable builtin) before
+    // the `lookup_class` path is reached on the concrete fast path, and
+    // `collect_expr_constraints` does the same on the solver path. So
+    // there is nothing to do here for builtin exceptions — fall through
+    // to the ordinary user-defined-class `__init__` resolution below.
     // #380 (PR-20, PEP 3119): an abstract class (`is_abstract`) cannot be
     // instantiated — it must be subclassed with concrete implementations
     // of all abstract methods first.

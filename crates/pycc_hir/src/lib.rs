@@ -475,6 +475,43 @@ pub fn is_abc_base_name(name: &str) -> bool {
     name == "ABC"
 }
 
+/// #382 (PR-22 Part 1): Returns `true` if `name` is one of the builtin
+/// exception class names this compiler recognizes: `Exception`,
+/// `ValueError`, `TypeError`, `KeyError`, `IndexError`,
+/// `ZeroDivisionError`, `RuntimeError`. These are not user-defined classes
+/// in `class_defs` — they are registered as builtin class entries by
+/// `pycc_types`'s `register_builtin_exceptions` so that
+/// `raise ValueError("msg")` type-checks as a valid class instantiation
+/// and `except ValueError` resolves to a known exception type.
+pub fn is_builtin_exception_class(name: &str) -> bool {
+    matches!(
+        name,
+        "Exception"
+            | "ValueError"
+            | "TypeError"
+            | "KeyError"
+            | "IndexError"
+            | "ZeroDivisionError"
+            | "RuntimeError"
+    )
+}
+
+/// #382 (PR-22 Part 1): Returns the builtin exception class's parent
+/// class name, or `None` for `Exception` itself (the root). Every builtin
+/// exception except `Exception` inherits from `Exception`.
+pub fn builtin_exception_parent(name: &str) -> Option<&'static str> {
+    match name {
+        "Exception" => None,
+        "ValueError"
+        | "TypeError"
+        | "KeyError"
+        | "IndexError"
+        | "ZeroDivisionError"
+        | "RuntimeError" => Some("Exception"),
+        _ => None,
+    }
+}
+
 /// Computes the compile-time result of `isinstance(obj, target_class)`.
 ///
 /// `obj_ty` is the inferred static type of the object expression.
@@ -694,6 +731,24 @@ pub enum HirStmt {
         subject: HirExpr,
         cases: Vec<HirMatchCase>,
     },
+    /// `try`/`except`/`else`/`finally` (PEP 3110, #382, PR-22 Part 1).
+    /// The body is executed; if an exception is raised, each handler is
+    /// checked in order. The `orelse` runs only if no exception was raised.
+    /// The `finalbody` always runs, whether the try completed normally, an
+    /// exception was caught, or an exception is propagating.
+    Try {
+        body: Vec<HirStmt>,
+        handlers: Vec<HirExceptHandler>,
+        orelse: Vec<HirStmt>,
+        finalbody: Vec<HirStmt>,
+    },
+    /// `raise` (PEP 3110, #382). `exc` is the exception expression to raise;
+    /// `None` means a bare re-raise (only valid inside an except handler).
+    /// `cause` is the optional `raise ... from cause` expression (PEP 409).
+    Raise {
+        exc: Option<HirExpr>,
+        cause: Option<HirExpr>,
+    },
 }
 
 /// PEP 634-636 (#381, PR-21): a single `match` case's pattern, lowered from
@@ -743,6 +798,17 @@ pub enum HirPattern {
 pub struct HirMatchCase {
     pub pattern: HirPattern,
     pub guard: Option<HirExpr>,
+    pub body: Vec<HirStmt>,
+}
+
+/// A single `except` handler in a `try` statement (PEP 3110, #382, PR-22
+/// Part 1). `exc_type` is the exception class name (e.g. `"ValueError"`) or
+/// `None` for a bare `except:`. `name` is the optional `as` binding name
+/// (e.g. `except ValueError as e:`). `body` is the handler's statement list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirExceptHandler {
+    pub exc_type: Option<String>,
+    pub name: Option<String>,
     pub body: Vec<HirStmt>,
 }
 
@@ -6084,6 +6150,45 @@ mod tests {
         assert_eq!(cases.len(), 2);
         let inner_cases = match_cases(&cases[0].body[0]);
         assert_eq!(inner_cases.len(), 2);
+    }
+
+    // -- #382 coverage tests --
+
+    #[test]
+    fn builtin_exception_parent_returns_none_for_exception_root() {
+        assert_eq!(builtin_exception_parent("Exception"), None);
+    }
+
+    #[test]
+    fn builtin_exception_parent_returns_exception_for_subclasses() {
+        assert_eq!(builtin_exception_parent("ValueError"), Some("Exception"));
+        assert_eq!(builtin_exception_parent("TypeError"), Some("Exception"));
+        assert_eq!(builtin_exception_parent("KeyError"), Some("Exception"));
+        assert_eq!(builtin_exception_parent("IndexError"), Some("Exception"));
+        assert_eq!(builtin_exception_parent("ZeroDivisionError"), Some("Exception"));
+        assert_eq!(builtin_exception_parent("RuntimeError"), Some("Exception"));
+    }
+
+    #[test]
+    fn builtin_exception_parent_returns_none_for_unknown_class() {
+        assert_eq!(builtin_exception_parent("NotAnException"), None);
+    }
+
+    #[test]
+    fn is_builtin_exception_class_recognizes_all_builtins() {
+        assert!(is_builtin_exception_class("Exception"));
+        assert!(is_builtin_exception_class("ValueError"));
+        assert!(is_builtin_exception_class("TypeError"));
+        assert!(is_builtin_exception_class("KeyError"));
+        assert!(is_builtin_exception_class("IndexError"));
+        assert!(is_builtin_exception_class("ZeroDivisionError"));
+        assert!(is_builtin_exception_class("RuntimeError"));
+    }
+
+    #[test]
+    fn is_builtin_exception_class_rejects_unknown_names() {
+        assert!(!is_builtin_exception_class("NotAnException"));
+        assert!(!is_builtin_exception_class(""));
     }
 }
 

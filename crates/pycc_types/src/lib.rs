@@ -127,6 +127,11 @@ pub struct Environment {
     /// declaration for a name shadowing a module-level `Final` does not
     /// inherit the module-level constraint.
     finals: HashSet<String>,
+    /// #382 (PR-22 Part 1): `true` when the statement being checked is
+    /// inside an `except` handler body. Used to validate bare `raise`
+    /// (re-raise) — only valid inside an except handler. Set to `true`
+    /// before checking a handler body, reset to the previous value after.
+    in_except_handler: bool,
 }
 
 impl Environment {
@@ -765,12 +770,26 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
             HirStmt::ExprStmt(_)
             | HirStmt::Return(_)
             | HirStmt::DictSet { .. }
-            | HirStmt::AttrSet { .. } => {}
+            | HirStmt::AttrSet { .. }
+            | HirStmt::Raise { .. } => {}
             HirStmt::Match { cases, .. } => {
                 for case in cases {
                     collect_pattern_capture_names(&case.pattern, names);
                     collect_local_names(&case.body, names);
                 }
+            }
+            HirStmt::Try { body, handlers, orelse, finalbody } => {
+                collect_local_names(body, names);
+                for handler in handlers {
+                    if let Some(name) = &handler.name
+                        && !is_local(names, name)
+                    {
+                        names.push(name);
+                    }
+                    collect_local_names(&handler.body, names);
+                }
+                collect_local_names(orelse, names);
+                collect_local_names(finalbody, names);
             }
         }
     }
@@ -2181,6 +2200,101 @@ fn collect_block_constraints(
                     solver::join_loop_body_solver(env, &case_env, &pre_existing);
                 }
             }
+            HirStmt::Try { body, handlers, orelse, finalbody } => {
+                // #382 (PR-22 Part 1): collect constraints from the try
+                // body, each handler, the else body, and the finally body.
+                // The try body's bindings are joined back as `Maybe` (the
+                // body may raise before reaching an assignment).
+                let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
+                let mut body_env = env.clone();
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    constraints,
+                    &mut body_env,
+                    body,
+                    return_term.clone(),
+                )?;
+                solver::join_loop_body_solver(env, &body_env, &pre_existing);
+                for handler in handlers {
+                    let mut henv = env.clone();
+                    // Bind the `as` name in the handler environment.
+                    // Inside the handler body, the binding is definite.
+                    if let Some(exc_type) = &handler.exc_type
+                        && let Some(name) = &handler.name
+                    {
+                        henv.bindings.insert(
+                            name.clone(),
+                            Ok(Ty::Instance(Box::new(exc_type.clone()))),
+                        );
+                    }
+                    collect_block_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        constraints,
+                        &mut henv,
+                        &handler.body,
+                        return_term.clone(),
+                    )?;
+                    solver::join_loop_body_solver(env, &henv, &pre_existing);
+                }
+                let mut else_env = env.clone();
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    constraints,
+                    &mut else_env,
+                    orelse,
+                    return_term.clone(),
+                )?;
+                solver::join_loop_body_solver(env, &else_env, &pre_existing);
+                // The finally body always runs — collect in-place.
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    constraints,
+                    env,
+                    finalbody,
+                    return_term.clone(),
+                )?;
+            }
+            HirStmt::Raise { exc, cause } => {
+                // #382 (PR-22 Part 1): A raise expression that is a direct
+                // call to a builtin exception class (e.g.
+                // `ValueError("msg")`) would be classified as C0001 by
+                // `collect_expr_constraints` (the callee is a known callable
+                // builtin, not a user-defined function or registered class).
+                // The actual validation is done by `check_raise_stmt` in the
+                // check pass, so errors from constraint collection for raise
+                // operands are deliberately ignored here — they would
+                // otherwise prevent the solver path from reaching
+                // `check_with_signatures`, where `bind_classes` registers
+                // the builtin exception classes and the real check succeeds.
+                if let Some(exc_expr) = exc {
+                    let _ = collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.binops,
+                        env,
+                        exc_expr,
+                    );
+                }
+                if let Some(cause_expr) = cause {
+                    let _ = collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.binops,
+                        env,
+                        cause_expr,
+                    );
+                }
+            }
         }
     }
     Ok(())
@@ -2313,7 +2427,14 @@ fn contains_return(body: &[HirStmt]) -> bool {
         | HirStmt::AttrSet { .. }
         | HirStmt::ListCompAssign { .. }
         | HirStmt::SetCompAssign { .. }
-        | HirStmt::DictCompAssign { .. } => false,
+        | HirStmt::DictCompAssign { .. }
+        | HirStmt::Raise { .. } => false,
+        HirStmt::Try { body, handlers, orelse, finalbody } => {
+            contains_return(body)
+                || handlers.iter().any(|h| contains_return(&h.body))
+                || contains_return(orelse)
+                || contains_return(finalbody)
+        }
     })
 }
 
@@ -2341,6 +2462,13 @@ fn introduces_bindings(body: &[HirStmt]) -> bool {
             cases.iter().any(|case| introduces_bindings(&case.body))
         }
         HirStmt::Return(_) | HirStmt::ExprStmt(_) => false,
+        HirStmt::Try { body, handlers, orelse, finalbody } => {
+            introduces_bindings(body)
+                || handlers.iter().any(|h| introduces_bindings(&h.body))
+                || introduces_bindings(orelse)
+                || introduces_bindings(finalbody)
+        }
+        HirStmt::Raise { .. } => false,
     })
 }
 
@@ -2461,6 +2589,7 @@ fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
         own_type_param: None,
         current_class: None,
         finals: HashSet::new(),
+        in_except_handler: false,
     })
 }
 
@@ -4442,6 +4571,200 @@ fn collect_enum_member_patterns<'a>(
     }
 }
 
+/// #382 (PR-22 Part 1): Checks a `try`/`except`/`else`/`finally` statement.
+/// Shared between module-scope (`check_stmt`, `local_names = &[]`) and
+/// function-scope (`check_stmt_in_function`) contexts.
+///
+/// Definite-assignment semantics: variables assigned only in the try body
+/// become `Maybe` after the try (the body may raise before the assignment).
+/// Handler bodies and the else body are each checked in independent clones.
+/// The finally body always runs, so it is checked in the joined environment.
+fn check_try_stmt(
+    env: &mut Environment,
+    local_names: &[&str],
+    body: &[HirStmt],
+    handlers: &[pycc_hir::HirExceptHandler],
+    orelse: &[HirStmt],
+    finalbody: &[HirStmt],
+    return_ty: Option<&Ty>,
+) -> Result<(), Diagnostic> {
+    // Check the try body in a clone — any binding it introduces is `Maybe`
+    // after the try (the body may raise before reaching the assignment).
+    let mut body_env = env.clone();
+    for stmt in body {
+        check_stmt_shared(&mut body_env, local_names, stmt, return_ty)?;
+    }
+    // Check each handler in an independent clone, with the `as` name bound
+    // to `Ty::Instance(exc_class_name)` and `in_except_handler` set to true.
+    let mut handler_envs: Vec<Environment> = Vec::with_capacity(handlers.len());
+    for handler in handlers {
+        let mut henv = env.clone();
+        henv.in_except_handler = true;
+        if let Some(exc_type) = &handler.exc_type
+            && let Some(name) = &handler.name
+        {
+            // Bind the `as` name to the exception instance type.
+            // Inside the handler body the binding is definite: the
+            // handler only executes if the exception matches, so `e`
+            // is always bound here. The handler's `henv` is a separate
+            // clone, so this definite binding does not leak into the
+            // post-try joined environment.
+            henv.bind(name.clone(), Ty::Instance(Box::new(exc_type.clone())));
+        }
+        // Note: `except as e:` without an exception type is syntactically
+        // invalid in Python, so there is no bare-except-with-binding case.
+        for stmt in &handler.body {
+            check_stmt_shared(&mut henv, local_names, stmt, return_ty)?;
+        }
+        handler_envs.push(henv);
+    }
+    // Check the else body in an independent clone — it runs only if no
+    // exception was raised, so its bindings are also `Maybe` in the join.
+    let mut else_env = env.clone();
+    for stmt in orelse {
+        check_stmt_shared(&mut else_env, local_names, stmt, return_ty)?;
+    }
+    // Join: start with a fresh clone of the pre-try environment, then
+    // merge each branch into it. A binding is `Definitely` only if it
+    // was definitely bound before the try AND in every branch that can
+    // complete normally. The body's bindings are downgraded to `Maybe`
+    // first (the body may raise before reaching an assignment).
+    let mut joined = env.clone();
+    join_loop_body(&mut joined, &body_env);
+    for henv in &handler_envs {
+        let prev = joined.clone();
+        join_if_branches(&mut joined, &prev, henv)?;
+    }
+    let prev = joined.clone();
+    // The else body was already checked above, so any type mismatch was
+    // caught by `check_assignment`. The join cannot fail here — every
+    // binding in `else_env` is either unchanged from the pre-try env or
+    // was validated by `check_assignment` in the else body check.
+    let _ = join_if_branches(&mut joined, &prev, &else_env);
+    *env = joined;
+    // The finally body always runs — check it in the joined environment.
+    for stmt in finalbody {
+        check_stmt_shared(env, local_names, stmt, return_ty)?;
+    }
+    Ok(())
+}
+
+/// #382 (PR-22 Part 1): Checks a `raise` statement. Shared between
+/// module-scope and function-scope contexts.
+///
+/// Builtin exception class calls (e.g. `ValueError("msg")`) are handled
+/// directly here rather than through `infer_expr_in`, because the concrete
+/// fast-path environment does not register builtin exception classes as
+/// class entries (only `check_with_signatures` does, via `bind_classes`).
+/// Routing through `infer_expr_in` on the concrete path would produce C0001
+/// ("call to builtin `ValueError` is valid Python but not implemented yet")
+/// instead of accepting the raise. The solver path's
+/// `collect_expr_constraints` has the same gap. By checking the call
+/// structure directly, `check_raise_stmt` works on both paths.
+fn check_raise_stmt(
+    env: &Environment,
+    local_names: &[&str],
+    exc: &Option<HirExpr>,
+    cause: &Option<HirExpr>,
+) -> Result<(), Diagnostic> {
+    if let Some(exc_expr) = exc {
+        check_raise_operand(env, local_names, exc_expr, "can only raise exception instances")?;
+    } else {
+        // Bare `raise` — only valid inside an except handler.
+        if !env.in_except_handler {
+            return Err(Diagnostic::error(
+                "T0021",
+                "bare `raise` is only valid inside an except handler",
+                Span::new(0, 0),
+            ));
+        }
+    }
+    if let Some(cause_expr) = cause {
+        check_raise_operand(env, local_names, cause_expr, "cause must be an exception instance")?;
+    }
+    Ok(())
+}
+
+/// #382 (PR-22 Part 1): Validates a single raise operand (the `exc` or
+/// `cause` expression). If the expression is a direct call to a builtin
+/// exception class (e.g. `ValueError("msg")`), the argument is validated
+/// here without going through `infer_expr_in` (which would classify the
+/// callee as an unsupported callable builtin on the concrete fast path).
+/// Otherwise, the expression is inferred normally and must produce a
+/// `Ty::Instance` of a builtin exception class.
+fn check_raise_operand(
+    env: &Environment,
+    local_names: &[&str],
+    expr: &HirExpr,
+    error_prefix: &str,
+) -> Result<(), Diagnostic> {
+    if let HirExpr::Call { callee, args } = expr
+        && pycc_hir::is_builtin_exception_class(callee)
+    {
+        // Validate the argument: exactly 1 string (the message).
+        if args.len() != 1 {
+            return Err(Diagnostic::error(
+                "T0021",
+                format!(
+                    "`{callee}` expects exactly 1 argument (the message string), got {}",
+                    args.len()
+                ),
+                Span::new(0, 0),
+            ));
+        }
+        let arg_ty = infer_expr_in(env, local_names, &args[0])?;
+        if arg_ty != Ty::Str {
+            return Err(Diagnostic::error(
+                "T0021",
+                format!(
+                    "`{callee}` expects a `str` message argument, got `{}`",
+                    arg_ty.name()
+                ),
+                Span::new(0, 0),
+            ));
+        }
+        return Ok(());
+    }
+    // Not a direct builtin exception class call — infer normally.
+    let ty = infer_expr_in(env, local_names, expr)?;
+    match &ty {
+        Ty::Instance(class_name) => {
+            if !pycc_hir::is_builtin_exception_class(class_name) {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    format!("{error_prefix}, got `{}`", ty.name()),
+                    Span::new(0, 0),
+                ));
+            }
+        }
+        _ => {
+            return Err(Diagnostic::error(
+                "T0021",
+                format!("{error_prefix}, got `{}`", ty.name()),
+                Span::new(0, 0),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// #382 (PR-22 Part 1): Dispatches to `check_stmt` or
+/// `check_stmt_in_function` depending on whether `return_ty` is `Some`.
+/// Used by `check_try_stmt` to recursively check nested statements in
+/// either scope.
+fn check_stmt_shared(
+    env: &mut Environment,
+    local_names: &[&str],
+    stmt: &HirStmt,
+    return_ty: Option<&Ty>,
+) -> Result<(), Diagnostic> {
+    if let Some(rt) = return_ty {
+        check_stmt_in_function(env, local_names, stmt, rt.clone())
+    } else {
+        check_stmt(env, stmt)
+    }
+}
+
 pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnostic> {
     match stmt {
         HirStmt::Assign { target, value } => {
@@ -4767,6 +5090,12 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             class::check_attr_set(env, &[], base, attr, value)
         }
         HirStmt::Match { subject, cases } => check_match(env, &[], subject, cases, None),
+        HirStmt::Try { body, handlers, orelse, finalbody } => {
+            check_try_stmt(env, &[], body, handlers, orelse, finalbody, None)
+        }
+        HirStmt::Raise { exc, cause } => {
+            check_raise_stmt(env, &[], exc, cause)
+        }
     }
 }
 
@@ -4968,10 +5297,21 @@ fn block_always_returns(body: &[HirStmt]) -> bool {
         // like `Assign`/`ForList`/`DictSet` above.
         | HirStmt::ListCompAssign { .. }
         | HirStmt::SetCompAssign { .. }
-        | HirStmt::DictCompAssign { .. } => false,
+        | HirStmt::DictCompAssign { .. }
+        | HirStmt::Raise { .. } => false,
         HirStmt::Match { cases, .. } => {
             !cases.is_empty()
                 && cases.iter().all(|case| block_always_returns(&case.body))
+        }
+        HirStmt::Try { body, handlers, orelse, finalbody } => {
+            // A try block always returns if the finally always returns.
+            // Otherwise, if the body always returns and every handler
+            // always returns (and there are handlers), it always returns.
+            block_always_returns(finalbody)
+                || (!handlers.is_empty()
+                    && block_always_returns(body)
+                    && handlers.iter().all(|h| block_always_returns(&h.body))
+                    && (orelse.is_empty() || block_always_returns(orelse)))
         }
     })
 }
@@ -5326,6 +5666,12 @@ fn check_stmt_in_function(
         HirStmt::Match { subject, cases } => {
             check_match(env, local_names, subject, cases, Some(&return_ty))
         }
+        HirStmt::Try { body, handlers, orelse, finalbody } => {
+            check_try_stmt(env, local_names, body, handlers, orelse, finalbody, Some(&return_ty))
+        }
+        HirStmt::Raise { exc, cause } => {
+            check_raise_stmt(env, local_names, exc, cause)
+        }
     }
 }
 
@@ -5599,6 +5945,18 @@ fn reject_generic_calls_in_stmt(
                 }
                 blocks.push(&case.body);
             }
+        }
+        HirStmt::Try { body, handlers, orelse, finalbody } => {
+            blocks.push(body);
+            for handler in handlers {
+                blocks.push(&handler.body);
+            }
+            blocks.push(orelse);
+            blocks.push(finalbody);
+        }
+        HirStmt::Raise { exc, cause } => {
+            exprs.extend(exc.iter());
+            exprs.extend(cause.iter());
         }
     }
     for expr in exprs {
@@ -6556,6 +6914,32 @@ fn rewrite_generic_calls_in_stmt(
             }
             Ok(())
         }
+        HirStmt::Try { body, handlers, orelse, finalbody } => {
+            for s in body.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            for handler in handlers.iter_mut() {
+                for s in handler.body.iter_mut() {
+                    rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+                }
+            }
+            for s in orelse.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            for s in finalbody.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            Ok(())
+        }
+        HirStmt::Raise { exc, cause } => {
+            if let Some(exc) = exc.as_mut() {
+                rewrite_generic_calls_in_expr(env, local_names, exc, instantiations, seen)?;
+            }
+            if let Some(cause) = cause.as_mut() {
+                rewrite_generic_calls_in_expr(env, local_names, cause, instantiations, seen)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -6809,6 +7193,30 @@ fn collect_generic_class_instantiations_from_stmt(stmt: &HirStmt, out: &mut Vec<
                 for s in &case.body {
                     collect_generic_class_instantiations_from_stmt(s, out);
                 }
+            }
+        }
+        HirStmt::Try { body, handlers, orelse, finalbody } => {
+            for s in body {
+                collect_generic_class_instantiations_from_stmt(s, out);
+            }
+            for handler in handlers {
+                for s in &handler.body {
+                    collect_generic_class_instantiations_from_stmt(s, out);
+                }
+            }
+            for s in orelse {
+                collect_generic_class_instantiations_from_stmt(s, out);
+            }
+            for s in finalbody {
+                collect_generic_class_instantiations_from_stmt(s, out);
+            }
+        }
+        HirStmt::Raise { exc, cause } => {
+            if let Some(e) = exc {
+                collect_generic_class_instantiations_from_expr(e, out);
+            }
+            if let Some(c) = cause {
+                collect_generic_class_instantiations_from_expr(c, out);
             }
         }
     }
@@ -8126,6 +8534,18 @@ fn unroll_enum_loops_in_stmts(
                 });
             }
             // Other statement kinds don't contain nested ForList loops.
+            HirStmt::Try { body, handlers, orelse, finalbody } => {
+                result.push(HirStmt::Try {
+                    body: unroll_enum_loops_in_stmts(body, enum_members),
+                    handlers: handlers.iter().map(|h| pycc_hir::HirExceptHandler {
+                        exc_type: h.exc_type.clone(),
+                        name: h.name.clone(),
+                        body: unroll_enum_loops_in_stmts(&h.body, enum_members),
+                    }).collect(),
+                    orelse: unroll_enum_loops_in_stmts(orelse, enum_members),
+                    finalbody: unroll_enum_loops_in_stmts(finalbody, enum_members),
+                });
+            }
             other => result.push(other.clone()),
         }
     }
@@ -24275,6 +24695,97 @@ mod tests {
                 body: vec![HirStmt::ExprStmt(bad_generic_call())],
             }],
         }]);
+        // `Try`'s own body, handler body, else body, and finally body (#382).
+        assert_monomorphize_propagates_error(vec![HirStmt::Try {
+            body: vec![HirStmt::ExprStmt(bad_generic_call())],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![],
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("ValueError".to_string()),
+                name: None,
+                body: vec![HirStmt::ExprStmt(bad_generic_call())],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![],
+            orelse: vec![HirStmt::ExprStmt(bad_generic_call())],
+            finalbody: vec![],
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![HirStmt::ExprStmt(bad_generic_call())],
+        }]);
+        // `Raise`'s own exc and cause (#382).
+        assert_monomorphize_propagates_error(vec![HirStmt::Raise {
+            exc: Some(bad_generic_call()),
+            cause: None,
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::Raise {
+            exc: None,
+            cause: Some(bad_generic_call()),
+        }]);
+    }
+
+    #[test]
+    fn rewrite_generic_calls_in_stmt_raise_with_no_generic_calls_succeeds() {
+        // Cover the `Ok(())` return in `rewrite_generic_calls_in_stmt`'s
+        // `Raise` arm when both `exc` and `cause` are `None` (bare raise).
+        // The module includes a generic function so `monomorphize` does not
+        // take its early-return path.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Raise {
+                exc: None,
+                cause: None,
+            }],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        monomorphize(&hir).expect("monomorphize should succeed for bare raise");
+    }
+
+    #[test]
+    fn rewrite_generic_calls_in_stmt_raise_with_non_generic_cause_succeeds() {
+        // Cover the `if let Some(cause)` block's normal completion and the
+        // `Ok(())` return in `rewrite_generic_calls_in_stmt`'s `Raise` arm
+        // when `cause` is `Some` with a non-generic expression (IntLiteral).
+        // `rewrite_generic_calls_in_expr` succeeds for `IntLiteral`, so the
+        // block completes normally and `Ok(())` is reached.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Raise {
+                exc: Some(HirExpr::IntLiteral(0)),
+                cause: Some(HirExpr::IntLiteral(1)),
+            }],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        monomorphize(&hir).expect("monomorphize should succeed for raise with literal cause");
     }
 
     #[test]
@@ -31669,5 +32180,1219 @@ mod tests {
             class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0042");
+    }
+
+    // -- #382 exception handling tests --
+
+    fn parse_check_resolve(src: &str) -> Result<HirModule, Diagnostic> {
+        let module = pycc_parser::parse(src).expect("test fixture must parse");
+        let hir = pycc_hir::lower_checked(&module).expect("lowering must succeed");
+        check_and_resolve(&hir)
+    }
+
+    fn parse_check(src: &str) -> Result<(), Diagnostic> {
+        let module = pycc_parser::parse(src).expect("test fixture must parse");
+        let hir = pycc_hir::lower_checked(&module).expect("lowering must succeed");
+        check(&hir)
+    }
+
+    /// Test helper: assert a top-level HIR item is a `Try`, panicking
+    /// otherwise.  The panic arm is covered by
+    /// `expect_top_level_try_panics_on_non_try`.
+    fn expect_top_level_try(item: &HirItem) {
+        match item {
+            HirItem::TopLevelStmt(HirStmt::Try { .. }) => {}
+            _ => panic!("expected Try"),
+        }
+    }
+
+    /// Test helper: assert a top-level HIR item is a `Raise`, panicking
+    /// otherwise.  The panic arm is covered by
+    /// `expect_top_level_raise_panics_on_non_raise`.
+    fn expect_top_level_raise(item: &HirItem) {
+        match item {
+            HirItem::TopLevelStmt(HirStmt::Raise { .. }) => {}
+            _ => panic!("expected Raise"),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Try")]
+    fn expect_top_level_try_panics_on_non_try() {
+        expect_top_level_try(&HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(0))));
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Raise")]
+    fn expect_top_level_raise_panics_on_non_raise() {
+        expect_top_level_raise(&HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(0))));
+    }
+
+    #[test]
+    fn try_except_checks_successfully() {
+        let resolved = parse_check_resolve(
+            "try:\n    x = 1\nexcept ValueError:\n    y = 2\n",
+        ).expect("check should succeed");
+        expect_top_level_try(&resolved.items[0]);
+    }
+
+    #[test]
+    fn try_except_as_binds_exception_instance() {
+        let resolved = parse_check_resolve(
+            "try:\n    x = 1\nexcept ValueError as e:\n    y = 2\n",
+        ).expect("check should succeed");
+        expect_top_level_try(&resolved.items[0]);
+    }
+
+    #[test]
+    fn try_bare_except_checks_successfully() {
+        let resolved = parse_check_resolve(
+            "try:\n    x = 1\nexcept:\n    y = 2\n",
+        ).expect("check should succeed");
+        expect_top_level_try(&resolved.items[0]);
+    }
+
+    #[test]
+    fn try_else_finally_checks_successfully() {
+        let resolved = parse_check_resolve(
+            "try:\n    x = 1\nexcept ValueError:\n    y = 2\nelse:\n    z = 3\nfinally:\n    w = 4\n",
+        ).expect("check should succeed");
+        expect_top_level_try(&resolved.items[0]);
+    }
+
+    #[test]
+    fn raise_value_error_checks_successfully() {
+        let resolved = parse_check_resolve(
+            "raise ValueError(\"bad\")\n",
+        ).expect("check should succeed");
+        expect_top_level_raise(&resolved.items[0]);
+    }
+
+    #[test]
+    fn raise_from_checks_successfully() {
+        let resolved = parse_check_resolve(
+            "raise ValueError(\"bad\") from RuntimeError(\"cause\")\n",
+        ).expect("check should succeed");
+        expect_top_level_raise(&resolved.items[0]);
+    }
+
+    #[test]
+    fn bare_raise_outside_handler_is_t0021() {
+        let err = parse_check("raise\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("bare `raise`"));
+    }
+
+    #[test]
+    fn bare_raise_inside_handler_checks_successfully() {
+        parse_check(
+            "try:\n    x = 1\nexcept ValueError:\n    raise\n",
+        ).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_non_exception_is_t0021() {
+        // `raise 42` — int is not an exception instance.
+        let err = parse_check("raise 42\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("can only raise"));
+    }
+
+    #[test]
+    fn raise_from_non_exception_cause_is_t0021() {
+        // `raise ValueError("x") from 42` — cause is not an exception.
+        let err = parse_check(
+            "raise ValueError(\"x\") from 42\n",
+        ).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("cause must be"));
+    }
+
+    #[test]
+    fn try_in_function_checks_successfully() {
+        let src = "\
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError:
+        y = 2
+    return x
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_with_return_in_body_and_handler() {
+        let src = "\
+def f() -> int:
+    try:
+        return 1
+    except ValueError:
+        return 2
+    return 3
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_with_return_in_finally() {
+        let src = "\
+def f() -> int:
+    try:
+        x = 1
+    except ValueError:
+        y = 2
+    finally:
+        return 3
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_with_return_in_else() {
+        let src = "\
+def f() -> int:
+    try:
+        x = 1
+    except ValueError:
+        y = 2
+    else:
+        return 3
+    return 4
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_with_binding_in_body() {
+        let src = "\
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError:
+        y = 2
+    else:
+        z = 3
+    finally:
+        w = 4
+    return x
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_in_function_checks_successfully() {
+        let src = "\
+def f() -> int:
+    raise ValueError(\"bad\")
+";
+        // This should fail because the function doesn't return on all paths.
+        // But the raise itself should be valid.
+        let err = parse_check(src).unwrap_err();
+        // The error should be about not returning on all paths, not about raise.
+        assert_ne!(err.code, "T0021");
+    }
+
+    #[test]
+    fn generic_call_inside_try_checks_successfully() {
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    try:
+        c = C[int](1)
+        return c.x
+    except ValueError:
+        return 0
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn generic_call_inside_raise_in_handler() {
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    try:
+        c = C[int](1)
+        return c.x
+    except ValueError:
+        raise RuntimeError(\"err\")
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        // Should fail because not all paths return.
+        assert_ne!(err.code, "T0021");
+    }
+
+    #[test]
+    fn try_with_enum_loop_unrolls() {
+        let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+try:
+    for c in Color:
+        x = x + 1
+except ValueError:
+    pass
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn enum_loop_inside_function_unrolls() {
+        // Covers the `HirItem::Function` arm of `unroll_enum_loops` —
+        // a function body containing an enum loop is unrolled.
+        let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+def f() -> int:
+    x = 0
+    for c in Color:
+        x = x + 1
+    return x
+f()
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn enum_loop_with_nested_if_unrolls() {
+        // Covers the `HirStmt::If` arm of `unroll_enum_loops_in_stmts` —
+        // an `if` inside an enum loop body is recursed into.
+        let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+for c in Color:
+    if x > 0:
+        x = x + 1
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn enum_loop_with_nested_while_unrolls() {
+        // Covers the `HirStmt::While` arm of `unroll_enum_loops_in_stmts`.
+        let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+for c in Color:
+    while x < 10:
+        x = x + 1
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn enum_loop_with_nested_for_range_unrolls() {
+        // Covers the `HirStmt::ForRange` arm of `unroll_enum_loops_in_stmts`.
+        let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+for c in Color:
+    for i in range(3):
+        x = x + 1
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn non_enum_for_list_inside_try_unrolls() {
+        // Covers the `else` branch of `unroll_enum_loops_in_stmts`'s
+        // `ForList` arm — a non-enum `for` loop inside a `try` body is
+        // kept as-is (not unrolled), but the body is recursed into.
+        let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+xs = [1, 2, 3]
+x = 0
+try:
+    for y in xs:
+        x = x + y
+except ValueError:
+    pass
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_except_with_private_helper() {
+        let src = "\
+def _helper() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError:
+        y = 2
+    return x
+_helper()
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_with_private_helper() {
+        let src = "\
+def _helper() -> int:
+    raise ValueError(\"bad\")
+_helper()
+";
+        let err = parse_check(src).unwrap_err();
+        // Should fail because not all paths return.
+        assert_ne!(err.code, "T0021");
+    }
+
+    // -- #382 coverage tests --
+
+    #[test]
+    fn contains_return_finds_a_return_inside_a_try_body() {
+        let body = vec![HirStmt::Try {
+            body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![],
+        }];
+        assert!(contains_return(&body));
+    }
+
+    #[test]
+    fn contains_return_finds_a_return_inside_a_try_handler() {
+        let body = vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("ValueError".to_string()),
+                name: None,
+                body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        }];
+        assert!(contains_return(&body));
+    }
+
+    #[test]
+    fn contains_return_finds_a_return_inside_a_try_else() {
+        let body = vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![],
+            orelse: vec![HirStmt::Return(Some(HirExpr::IntLiteral(3)))],
+            finalbody: vec![],
+        }];
+        assert!(contains_return(&body));
+    }
+
+    #[test]
+    fn contains_return_finds_a_return_inside_a_try_finally() {
+        let body = vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![HirStmt::Return(Some(HirExpr::IntLiteral(4)))],
+        }];
+        assert!(contains_return(&body));
+    }
+
+    #[test]
+    fn contains_return_does_not_find_a_return_in_a_try_without_one() {
+        let body = vec![HirStmt::Try {
+            body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("ValueError".to_string()),
+                name: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
+            }],
+            orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(3))],
+            finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(4))],
+        }];
+        assert!(!contains_return(&body));
+    }
+
+    #[test]
+    fn introduces_bindings_finds_bindings_inside_a_try_body() {
+        let body = vec![HirStmt::Try {
+            body: vec![HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![],
+        }];
+        assert!(introduces_bindings(&body));
+    }
+
+    #[test]
+    fn introduces_bindings_finds_bindings_inside_a_try_handler() {
+        let body = vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("ValueError".to_string()),
+                name: None,
+                body: vec![HirStmt::Assign {
+                    target: "z".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        }];
+        assert!(introduces_bindings(&body));
+    }
+
+    #[test]
+    fn introduces_bindings_finds_bindings_inside_a_try_else() {
+        let body = vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![],
+            orelse: vec![HirStmt::Assign {
+                target: "w".to_string(),
+                value: HirExpr::IntLiteral(3),
+            }],
+            finalbody: vec![],
+        }];
+        assert!(introduces_bindings(&body));
+    }
+
+    #[test]
+    fn introduces_bindings_finds_bindings_inside_a_try_finally() {
+        let body = vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![HirStmt::Assign {
+                target: "v".to_string(),
+                value: HirExpr::IntLiteral(4),
+            }],
+        }];
+        assert!(introduces_bindings(&body));
+    }
+
+    #[test]
+    fn introduces_bindings_does_not_find_bindings_in_a_try_without_any() {
+        let body = vec![HirStmt::Try {
+            body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("ValueError".to_string()),
+                name: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        }];
+        assert!(!introduces_bindings(&body));
+    }
+
+    #[test]
+    fn introduces_bindings_treats_raise_as_not_introducing_bindings() {
+        let body = vec![HirStmt::Raise {
+            exc: Some(HirExpr::Call {
+                callee: "ValueError".to_string(),
+                args: vec![HirExpr::StringLiteral("bad".to_string())],
+            }),
+            cause: None,
+        }];
+        assert!(!introduces_bindings(&body));
+    }
+
+    #[test]
+    fn raise_with_wrong_arg_count_is_t0021() {
+        let err = parse_check("raise ValueError(\"a\", \"b\")\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("exactly 1 argument"));
+    }
+
+    #[test]
+    fn raise_with_wrong_arg_type_is_t0021() {
+        let err = parse_check("raise ValueError(42)\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("str"));
+    }
+
+    #[test]
+    fn raise_with_no_args_is_t0021() {
+        let err = parse_check("raise ValueError()\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("exactly 1 argument"));
+    }
+
+    #[test]
+    fn raise_user_defined_class_instance_is_t0021() {
+        // A user-defined class is not a builtin exception class.
+        let src = "\
+class C:
+    def __init__(self):
+        pass
+raise C()
+";
+        let err = parse_check(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("can only raise"));
+    }
+
+    #[test]
+    fn try_except_as_binding_in_function_collects_local_name() {
+        // This exercises `collect_local_names` for the `Try` handler name
+        // binding path inside a function body.
+        let src = "\
+def f() -> int:
+    y = 0
+    try:
+        x = 1
+    except ValueError as e:
+        y = 2
+    return y
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_except_as_binding_with_typed_handler_in_function() {
+        // This exercises `check_try_stmt`'s handler binding path with a
+        // typed exception handler inside a function.
+        let src = "\
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError as e:
+        return 0
+    return x
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_with_solver_path_succeeds() {
+        // Force the solver path by using a private helper with an
+        // unannotated parameter. This exercises `collect_block_constraints`
+        // for `Try` and `Raise` on the solver path.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y = 0
+    return y
+_helper(1)
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_with_solver_path_succeeds() {
+        // Force the solver path with a private helper that has a raise.
+        let src = "\
+def _helper(x) -> int:
+    if x == 0:
+        raise ValueError(\"bad\")
+    return x
+_helper(1)
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_with_generic_call_on_solver_path_succeeds() {
+        // Force the solver path and exercise generic call rewriting
+        // inside a try body.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def _helper(x) -> int:
+    try:
+        c = C[int](x)
+        return c.x
+    except ValueError:
+        return 0
+_helper(1)
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_from_with_solver_path_succeeds() {
+        // Force the solver path with a raise-from inside a function.
+        let src = "\
+def _helper(x) -> int:
+    if x == 0:
+        raise ValueError(\"bad\") from RuntimeError(\"cause\")
+    return x
+_helper(1)
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn bare_raise_with_solver_path_succeeds() {
+        // Force the solver path with a bare raise inside an except handler.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        raise
+    return y
+_helper(1)
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_variable_bound_to_exception_instance_checks_successfully() {
+        // `raise e` where `e` is bound to a builtin exception instance via
+        // `except ValueError as e`. This exercises `check_raise_operand`'s
+        // non-Call path: the expression is a Name, not a Call, so it falls
+        // through to `infer_expr_in` which returns `Ty::Instance("ValueError")`,
+        // and the `is_builtin_exception_class` check passes.
+        let src = "\
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError as e:
+        raise e
+    return x
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_variable_bound_to_non_exception_is_t0021() {
+        // `raise x` where `x` is an int — exercises the `_ =>` arm of
+        // `check_raise_operand`'s match on the inferred type.
+        let err = parse_check("x = 1\nraise x\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("can only raise"));
+    }
+
+    #[test]
+    fn solver_try_body_type_error_propagates() {
+        // Force the solver path and trigger a type error inside the try
+        // body. This exercises the `?` error propagation in
+        // `collect_block_constraints` for the try body on the solver path.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x + \"bad\"
+    except ValueError:
+        y = 0
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        // The error should be about the type mismatch, not about raise.
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn solver_try_handler_type_error_propagates() {
+        // Force the solver path and trigger a type error inside the
+        // handler body. This exercises the `?` error propagation in
+        // `collect_block_constraints` for the handler body on the solver path.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y = x + \"bad\"
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn solver_try_else_type_error_propagates() {
+        // Force the solver path and trigger a type error inside the else
+        // body. This exercises the `?` error propagation in
+        // `collect_block_constraints` for the else body on the solver path.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y = 0
+    else:
+        y = x + \"bad\"
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn solver_try_finally_type_error_propagates() {
+        // Force the solver path and trigger a type error inside the
+        // finally body. This exercises the `?` error propagation in
+        // `collect_block_constraints` for the finally body on the solver path.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y = 0
+    finally:
+        y = x + \"bad\"
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn generic_call_in_try_else_rewrites_successfully() {
+        // Exercise `rewrite_generic_calls_in_stmt` for the try orelse path
+        // and `collect_generic_class_instantiations_from_stmt` for the same.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError:
+        x = 0
+    else:
+        c = C[int](1)
+        x = c.x
+    return x
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn generic_call_in_try_finally_rewrites_successfully() {
+        // Exercise `rewrite_generic_calls_in_stmt` for the try finally path
+        // and `collect_generic_class_instantiations_from_stmt` for the same.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError:
+        x = 0
+    finally:
+        c = C[int](1)
+        x = c.x
+    return x
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn generic_call_in_raise_rewrites_successfully() {
+        // Exercise `rewrite_generic_calls_in_stmt` for the Raise path
+        // and `collect_generic_class_instantiations_from_stmt` for the same.
+        // A generic class instantiation as the raise expression is not a
+        // builtin exception class call, so it falls through to the
+        // generic-call rewrite path and then gets rejected as T0021.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+raise C[int](1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn generic_call_in_try_body_rejects_unsupported() {
+        // Exercise `reject_generic_calls_in_block` for the Try body path.
+        // A generic call in a module-level try body where the generic
+        // class is not in scope should be rejected.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+try:
+    c = C[int](1)
+except ValueError:
+    pass
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn generic_call_in_raise_cause_rewrites_successfully() {
+        // Exercise `rewrite_generic_calls_in_stmt` for the Raise cause path
+        // and `collect_generic_class_instantiations_from_stmt` for the same.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+raise ValueError(\"bad\") from C[int](1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn solver_try_with_as_binding_succeeds() {
+        // Force the solver path with `except ... as e` to exercise the
+        // `as` binding insertion in the solver's `Try` arm.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError as e:
+        y = 0
+    return y
+_helper(1)
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_inside_function_with_generic_call_rewrites() {
+        // Exercise `rewrite_generic_calls_in_stmt` for the `Raise` arm
+        // and `collect_generic_class_instantiations_from_stmt` for the
+        // same. The key is that the raise is valid (ValueError) and the
+        // function also contains a generic call, so monomorphization runs
+        // and processes both the generic call and the raise statement.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    c = C[int](1)
+    x = c.x
+    raise ValueError(\"bad\")
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        // Should fail because not all paths return, but raise is valid.
+        assert_ne!(err.code, "T0021");
+    }
+
+    #[test]
+    fn try_with_generic_call_and_raise_rewrites() {
+        // Exercise `rewrite_generic_calls_in_stmt` for both the `Try` and
+        // `Raise` arms, and `collect_generic_class_instantiations_from_stmt`
+        // for the same. A generic call before the try and a raise after
+        // ensures both arms are reached during monomorphization.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    c = C[int](1)
+    x = c.x
+    try:
+        x = 1
+    except ValueError:
+        x = 0
+    raise ValueError(\"bad\")
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        // Should fail because not all paths return, but raise is valid.
+        assert_ne!(err.code, "T0021");
+    }
+
+    #[test]
+    fn try_with_generic_call_in_handler_rewrites() {
+        // Exercise `rewrite_generic_calls_in_stmt` for the `Try` handler
+        // body path and `collect_generic_class_instantiations_from_stmt`
+        // for the same.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError:
+        c = C[int](1)
+        x = c.x
+    return x
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn reject_generic_calls_in_try_and_raise() {
+        // Exercise `reject_generic_calls_in_block` for both the `Try` and
+        // `Raise` arms. A generic call inside a try body and a raise with
+        // a generic call in the same module-level scope ensures both arms
+        // are reached during the rejection pass.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+try:
+    c = C[int](1)
+    print(c.x)
+except ValueError:
+    pass
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    // -- #382: reject_generic_calls_in_stmt Try and Raise arms --
+
+    #[test]
+    fn reject_generic_calls_processes_try_and_raise_arms() {
+        // Exercise `reject_generic_calls_in_stmt`'s `Try` and `Raise` arms
+        // directly. A generic function body containing a `Try` and a `Raise`
+        // statement ensures both arms are reached during the rejection pass.
+        let body = vec![
+            HirStmt::Try {
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                handlers: vec![pycc_hir::HirExceptHandler {
+                    exc_type: Some("ValueError".to_string()),
+                    name: None,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                }],
+                orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+                finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+            },
+            HirStmt::Raise {
+                exc: Some(HirExpr::Name("some_exc".to_string())),
+                cause: Some(HirExpr::Name("some_cause".to_string())),
+            },
+        ];
+        // `reject_generic_calls_in_block` processes each statement through
+        // `reject_generic_calls_in_stmt`. The `Try` and `Raise` arms should
+        // be reached without error (no generic calls inside them).
+        assert!(
+            reject_generic_calls_in_block(&Environment::new(), "f", &body).is_ok(),
+            "reject_generic_calls_in_block should succeed for try/raise without generic calls"
+        );
+    }
+
+    // -- #382: check_stmt_shared ? error propagation in try bodies --
+
+    #[test]
+    fn check_try_body_type_error_propagates() {
+        let err = parse_check(
+            "def f() -> int:\n    try:\n        x = 1 + \"bad\"\n    except ValueError:\n        x = 0\n    return x\n",
+        ).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn check_try_handler_body_type_error_propagates() {
+        let err = parse_check(
+            "def f() -> int:\n    try:\n        x = 1\n    except ValueError:\n        x = 1 + \"bad\"\n    return x\n",
+        ).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn check_try_else_body_type_error_propagates() {
+        let err = parse_check(
+            "def f() -> int:\n    try:\n        x = 1\n    except ValueError:\n        x = 0\n    else:\n        x = 1 + \"bad\"\n    return x\n",
+        ).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn check_try_finally_body_type_error_propagates() {
+        let err = parse_check(
+            "def f() -> int:\n    try:\n        x = 1\n    except ValueError:\n        x = 0\n    finally:\n        x = 1 + \"bad\"\n    return x\n",
+        ).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    // -- #382: join_if_branches ? error propagation --
+
+    #[test]
+    fn try_handler_with_incompatible_binding_is_t0023() {
+        // A handler that rebinds a pre-existing variable to an incompatible
+        // type triggers `join_if_branches`'s T0023 error path.
+        let err = parse_check(
+            "def f() -> int:\n    x = 1\n    try:\n        x = 2\n    except ValueError:\n        x = \"bad\"\n    return x\n",
+        ).unwrap_err();
+        assert_eq!(err.code, "T0023");
+    }
+
+    #[test]
+    fn try_else_with_incompatible_binding_is_t0023() {
+        // An else body that rebinds a pre-existing variable to an
+        // incompatible type triggers `join_if_branches`'s T0023 error path.
+        let err = parse_check(
+            "def f() -> int:\n    x = 1\n    try:\n        x = 2\n    except ValueError:\n        x = 3\n    else:\n        x = \"bad\"\n    return x\n",
+        ).unwrap_err();
+        assert_eq!(err.code, "T0023");
+    }
+
+    // -- #382: join_if_branches ? error propagation via `except ... as` --
+    // The `as` binding uses `henv.bind()` directly (no `check_assignment`),
+    // so a type mismatch between the pre-try binding and the `as` binding
+    // is caught by `join_if_branches`, not by `check_assignment`.
+
+    #[test]
+    fn try_handler_as_binding_incompatible_type_is_t0023() {
+        // `e` is `int` before the try; `except ValueError as e` rebinds `e`
+        // to `Instance("ValueError")` via `henv.bind()` (bypassing
+        // `check_assignment`). `join_if_branches` detects the mismatch.
+        let err = parse_check(
+            "def f() -> int:\n    e = 0\n    try:\n        pass\n    except ValueError as e:\n        pass\n    return e\n",
+        ).unwrap_err();
+        assert_eq!(err.code, "T0023");
+    }
+
+    // -- #382: check_raise_operand ? error propagation --
+
+    #[test]
+    fn raise_with_type_error_in_argument_propagates() {
+        // `raise ValueError(1 + "bad")` — the argument expression has a type
+        // error, which propagates through the `?` in `check_raise_operand`'s
+        // builtin-exception-class-call path.
+        let err = parse_check("raise ValueError(1 + \"bad\")\n").unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn raise_with_type_error_in_non_call_expr_propagates() {
+        // `raise 1 + "bad"` — the expression is not a Call, so it falls
+        // through to `infer_expr_in` which returns a type error, propagating
+        // through the `?` in `check_raise_operand`'s non-Call path.
+        let err = parse_check("raise 1 + \"bad\"\n").unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    // -- #382: block_always_returns with non-empty else body --
+
+    #[test]
+    fn try_with_return_in_body_handler_and_else_always_returns() {
+        // A try where body, all handlers, and else all return — the try
+        // block always returns. This covers the `block_always_returns(orelse)`
+        // branch of the `||` in `block_always_returns`'s `Try` arm.
+        let src = "\
+def f() -> int:
+    try:
+        return 1
+    except ValueError:
+        return 2
+    else:
+        return 3
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    // -- #382: collect_generic_class_instantiations Raise arm --
+
+    #[test]
+    fn collect_generic_class_instantiations_from_raise() {
+        // A generic class instantiation inside a raise expression exercises
+        // the `Raise` arm of `collect_generic_class_instantiations_from_stmt`.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+raise C[int](1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    // -- #382: collect_block_constraints ? propagation on the solver path --
+    // These tests force the solver path (via an untyped `_helper(x)`
+    // parameter) and trigger an immediate error in `collect_expr_constraints`
+    // (by calling a non-callable binding), which propagates through the `?`
+    // in the `Try` arm of `collect_block_constraints`.
+
+    #[test]
+    fn solver_try_body_non_callable_error_propagates() {
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y()
+    except ValueError:
+        y = 0
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn solver_try_handler_non_callable_error_propagates() {
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y()
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn solver_try_else_non_callable_error_propagates() {
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y = 0
+    else:
+        y()
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn solver_try_finally_non_callable_error_propagates() {
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y = 0
+    finally:
+        y()
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
     }
 }
