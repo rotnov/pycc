@@ -124,7 +124,7 @@ fn time_command(mut command: Command) -> Timings {
     Timings { wall, cpu }
 }
 
-/// The pinned CPython 3.14.6 oracle (D-001's "python3.14" pin). Duplicated
+/// The pinned CPython 3.14.7 oracle (D-001's "python3.14" pin). Duplicated
 /// from `tests/conformance.rs` rather than shared through a common module --
 /// this repository's existing integration-test convention (e.g.
 /// `tests/pycc_toml_release_default.rs`'s own private `pycc_bin()`) is each
@@ -156,8 +156,8 @@ fn oracle_python_bin() -> PathBuf {
         .unwrap_or_else(|e| panic!("nbody benchmark oracle `python3.14` not found on PATH: {e}"));
     let version = String::from_utf8_lossy(&output.stdout);
     assert!(
-        version.trim() == "Python 3.14.6",
-        "nbody benchmark oracle must be exactly Python 3.14.6, found {version:?}"
+        version.trim() == "Python 3.14.7",
+        "nbody benchmark oracle must be exactly Python 3.14.7, found {version:?}"
     );
     bin
 }
@@ -222,7 +222,7 @@ fn assert_relative_eq(pycc: [f64; 3], cpython: [f64; 3]) {
         let relative_diff = (p - c).abs() / c.abs().max(f64::MIN_POSITIVE);
         assert!(
             relative_diff <= RELATIVE_TOLERANCE,
-            "pycc and CPython 3.14.6 disagree on tests/fixtures/nbody.py's output value #{index} \
+            "pycc and CPython 3.14.7 disagree on tests/fixtures/nbody.py's output value #{index} \
              beyond the {RELATIVE_TOLERANCE:e} relative tolerance -- a fast but wrong binary must \
              not pass this speedup gate (pycc={p}, cpython={c}, relative difference={relative_diff:e})"
         );
@@ -347,7 +347,7 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// D-094's nbody measurement contract (design doc's own §1): same-machine
 /// paired comparison, `K = 7` runs each (raised from the design doc's
 /// original `K = 5` by D-140), ratio of medians, `--release` pycc
-/// vs. the pinned CPython 3.14.6 oracle, gate at ratio >= 20 -- preceded by
+/// vs. the pinned CPython 3.14.7 oracle, gate at ratio >= 20 -- preceded by
 /// one untimed correctness check (D-097) that verifies both sides compute
 /// matching output, within a small relative tolerance (D-098, superseding
 /// D-097's original exact-byte comparison), before any ratio is trusted.
