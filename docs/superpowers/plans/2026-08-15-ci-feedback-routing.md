@@ -308,10 +308,12 @@
 - [ ] **Step 3: Update the complete D-103 manifest**
 
   Add the live classifier and test as steady-state protected targets. Point
-  the existing checker, checker self-test, and CI target entries at their D-171
-  proposal files with exact lowercase SHA-256 values. Add proposal files as
-  protected inputs where the current manifest convention requires it. Keep
-  every existing target and entry unchanged otherwise.
+  only the existing checker and checker self-test entries at their D-171
+  proposal files with exact lowercase SHA-256 values. Keep the live CI target
+  self-sourced at its existing digest, and add `ci-d171.yml` as a steady-state
+  protected transitive target. Add other proposal files as protected inputs
+  only where the current manifest convention requires it. Keep every existing
+  target and entry unchanged otherwise.
 
 - [ ] **Step 4: Verify the stage tree against the base-owned checker**
 
@@ -327,8 +329,12 @@
   ```
 
   Also run the trusted audit locally with a temporary candidate tree if the
-  checker provides that fixture helper. Expected: active protected targets are
-  unchanged; the manifest validates all new digests.
+  checker provides that fixture helper. First prove Stage 1 passes against the
+  `origin/main` base while every active protected target is unchanged. Then
+  treat the Stage 1 tree and manifest as the trusted base: prove a candidate
+  can copy only the checker and self-test successors, return those two entries
+  to self-source, and stage the still-unchanged CI target from `ci-d171.yml`.
+  Also prove premature CI activation and omitted checker copies fail closed.
 
 - [ ] **Step 5: Self-review and commit the stage deliverable**
 
@@ -394,8 +400,10 @@
 - [ ] **Step 2: Activate checker and test byte-for-byte**
 
   Copy the two base-owned successors to their live paths. Verify with `cmp` and
-  SHA-256. Return only those two manifest entries to `source_path == path` with
-  their active digests. Keep the CI target pointing at `ci-d171.yml`.
+  SHA-256. Return those two manifest entries to `source_path == path` with their
+  active digests, and redirect the still-unchanged CI target to the base-owned
+  `ci-d171.yml` digest. Do not modify the live CI workflow or either standalone
+  agent workflow in this PR.
 
 - [ ] **Step 3: Update phase-state docs and run full local gates**
 
@@ -430,8 +438,10 @@
 - [ ] **Step 2: Activate CI byte-for-byte**
 
   Copy `ci-d171.yml` to `.github/workflows/ci.yml`, prove `cmp` equality, and
-  return the CI manifest entry to steady state. Do not edit the live CI file
-  after the byte comparison; any required change restarts staging.
+  return the CI manifest entry to `source_path == path` with that active digest.
+  Do not edit the live CI file after the byte comparison; any required change
+  restarts staging. The standalone workflow cleanup and final active-state docs
+  remain later steps in this same final PR, not part of checker activation.
 
 - [ ] **Step 3: Remove only duplicated standalone-workflow discovery**
 

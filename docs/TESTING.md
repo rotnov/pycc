@@ -909,9 +909,14 @@ and live roadmap-evidence checker still run and validate the existing
 every-pull-request topology. The exact classifier and its tests now live at
 their eventual paths, and the final checker, checker self-test, and CI workflow
 exist only as D-103-protected proposal files. The complete successor manifest
-binds those reviewed bytes so later activation can only copy base-owned inputs.
-After the checker and workflow are activated in separate merges, an always-run
-classifier may skip a heavy category only for an exact reviewed path set;
+stages only the checker and checker self-test for the next merge: the live CI
+target remains bound to its unchanged active bytes, while `ci-d171.yml` is a
+steady protected transitive input. The checker-activation merge must copy the
+checker and self-test, return those entries to self-source, and only then stage
+the CI target from `ci-d171.yml`; the final merge may activate that exact
+base-owned workflow and return the CI entry to self-source. After those
+separate activations, an always-run classifier may skip a heavy category only
+for an exact reviewed path set;
 unknown, empty, malformed, or unsupported input selects the complete topology,
 and the required `ci-gate` fails unless every selected job succeeds and every
 unselected job is skipped. Pushes to `main` always run the full topology.
