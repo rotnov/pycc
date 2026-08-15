@@ -4044,7 +4044,9 @@ fn join_match_branches(
         let ty = states[0].ty().clone();
         let all_definite = !exhaustive
             || states.len() == case_envs.len()
-                && states.iter().all(|s| matches!(s, BindingState::Definitely(_)));
+                && states
+                    .iter()
+                    .all(|s| matches!(*s, BindingState::Definitely(_)));
         if all_definite {
             joined.insert(name.clone(), BindingState::Definitely(ty));
         } else {
@@ -4424,9 +4426,11 @@ fn collect_enum_member_patterns<'a>(
         HirPattern::Class {
             class_name: cn,
             ..
-        } if cn == class_name => {
-            for (member, _) in members {
-                covered.insert(member.as_str());
+        } => {
+            if cn == class_name {
+                for (member, _) in members {
+                    covered.insert(member.as_str());
+                }
             }
         }
         HirPattern::Or(subs) => {
@@ -31532,6 +31536,39 @@ mod tests {
                 pattern: HirPattern::Wildcard,
                 guard: None,
                 body: vec![],
+            }],
+        }];
+        let err = collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut constraints,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn collect_block_constraints_propagates_error_from_match_case_body() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut constraints = SolverConstraints::default();
+        let mut env = ConstraintEnvironment {
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
+            bindings: HashMap::new(),
+            local_names: &["z"],
+        };
+        let body = vec![HirStmt::Match {
+            subject: HirExpr::IntLiteral(0),
+            cases: vec![HirMatchCase {
+                pattern: HirPattern::Wildcard,
+                guard: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::Name("z".to_string()))],
             }],
         }];
         let err = collect_block_constraints(
