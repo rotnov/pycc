@@ -903,20 +903,17 @@ calling `patch_required_status_checks` or writing `state.json`.
 
 Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
 
-**D-171 change-aware scheduling transition (staged 2026-08-15):** D-171 is
-accepted, but this tree has not activated it. The live `.github/workflows/ci.yml`
-and live roadmap-evidence checker still run and validate the existing
-every-pull-request topology. The exact classifier and its tests now live at
-their eventual paths, and the final checker, checker self-test, and CI workflow
-exist only as D-103-protected proposal files. The complete successor manifest
-stages only the checker and checker self-test for the next merge: the live CI
-target remains bound to its unchanged active bytes, while `ci-d171.yml` is a
-steady protected transitive input. The checker-activation merge must copy the
-checker and self-test, return those entries to self-source, and only then stage
-the CI target from `ci-d171.yml`; the final merge may activate that exact
-base-owned workflow and return the CI entry to self-source. After those
-separate activations, an always-run classifier may skip a heavy category only
-for an exact reviewed path set;
+**D-171 change-aware scheduling transition (checker active, CI staged
+2026-08-15):** D-171 is accepted, and this tree activates its exact
+roadmap-evidence checker and checker self-test. The live
+`.github/workflows/ci.yml` remains byte-identical to the prior topology and
+still runs every heavy job on every pull request. The exact classifier and its
+tests are live, and the final CI workflow remains a D-103-protected proposal.
+The complete successor manifest self-sources the active checker and self-test
+while staging the still-live CI target from base-owned `ci-d171.yml`. The final
+merge may activate only that exact workflow and return the CI entry to
+self-source. After that activation, an always-run classifier may skip a heavy
+category only for an exact reviewed path set;
 unknown, empty, malformed, or unsupported input selects the complete topology,
 and the required `ci-gate` fails unless every selected job succeeds and every
 unselected job is skipped. Pushes to `main` always run the full topology.

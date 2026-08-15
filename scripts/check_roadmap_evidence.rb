@@ -4,6 +4,7 @@
 require "pathname"
 require "psych"
 require "digest"
+require "json"
 
 class RoadmapEvidenceError < StandardError; end
 
@@ -245,6 +246,12 @@ D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256 =
 # unchanged.
 PY3147_ORACLE_CI_WORKFLOW_SHA256 =
   "d1c4ab9a927723c37809c4621afffcc4b15ecde52a9706cc0951376ca1faf725"
+# D-171 change-aware routing successor. This exact staged workflow adds the
+# base-reviewed classifier, cancellation-compatible governance, conditional
+# heavy jobs, and the fail-closed ci-gate truth table while retaining every
+# existing hard-gate body.
+D171_CHANGE_AWARE_CI_WORKFLOW_SHA256 =
+  "785e6415aea979ac67563589fb8295f2d7a9ce991f11d269d2054422a527e33f"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
@@ -252,7 +259,8 @@ REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
   D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256,
   D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
-  PY3147_ORACLE_CI_WORKFLOW_SHA256
+  PY3147_ORACLE_CI_WORKFLOW_SHA256,
+  D171_CHANGE_AWARE_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -1065,6 +1073,136 @@ ACCEPTED_PERF_CI_GATE_JOBS = [
   D229_PAIRED_PERF_CI_GATE_JOB,
   D199_PAGES_ACCESSIBILITY_CI_GATE_JOB
 ].freeze
+D171_CONCURRENCY = {
+  "group" =>
+    "ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}",
+  "cancel-in-progress" => "${{ github.event_name == 'pull_request' }}"
+}.freeze
+D171_TOP_LEVEL_KEYS = %w[name on permissions concurrency env jobs].freeze
+D171_TRIGGERS = {
+  "push" => { "branches" => ["main"] },
+  "pull_request" => ""
+}.freeze
+D171_ENV = {
+  "CARGO_LLVM_COV_VERSION" => "0.8.7",
+  "LLVM_VERSION" => "22.1.1"
+}.freeze
+D171_CLASSIFIER_OUTPUTS = {
+  "compiler" => "${{ steps.classify.outputs.compiler }}",
+  "pages" => "${{ steps.classify.outputs.pages }}",
+  "agent" => "${{ steps.classify.outputs.agent }}"
+}.freeze
+D171_CLASSIFIER_ENV = {
+  "PR_BASE_SHA" => "${{ github.event.pull_request.base.sha }}",
+  "PR_HEAD_SHA" => "${{ github.event.pull_request.head.sha }}",
+  "PUSH_BASE_SHA" => "${{ github.event.before }}",
+  "PUSH_HEAD_SHA" => "${{ github.sha }}"
+}.freeze
+D171_CLASSIFIER_RUN = <<~'SHELL'.strip
+  set -euo pipefail
+  case "$GITHUB_EVENT_NAME" in
+    pull_request)
+      base_sha="$PR_BASE_SHA"
+      head_sha="$PR_HEAD_SHA"
+      ;;
+    push)
+      base_sha="$PUSH_BASE_SHA"
+      head_sha="$PUSH_HEAD_SHA"
+      ;;
+    *)
+      echo "unsupported CI event: $GITHUB_EVENT_NAME" >&2
+      exit 1
+      ;;
+  esac
+  for revision in "$base_sha" "$head_sha"; do
+    if ! printf '%s\n' "$revision" | grep -Eq '^[0-9a-f]{40}$' ||
+       [ "$revision" = "0000000000000000000000000000000000000000" ]; then
+      echo "could not resolve exact CI base/head revisions" >&2
+      exit 1
+    fi
+    git cat-file -e "${revision}^{commit}"
+  done
+  git diff --no-renames --name-only --diff-filter=ACDMRTUXB -z "$base_sha" "$head_sha" |
+    python3 -B scripts/classify_ci_changes.py \
+      --event-name "$GITHUB_EVENT_NAME" \
+      --github-output "$GITHUB_OUTPUT"
+SHELL
+D171_OPTIONAL_ROUTING = {
+  "build-test-coverage" => ["compiler", "classify-changes"],
+  "native-build-test" => ["compiler", "classify-changes"],
+  "cross-compile-build" => ["compiler", "classify-changes"],
+  "cross-compile-verify" =>
+    ["compiler", ["classify-changes", "cross-compile-build"]],
+  "frontend-perf-measure" => ["compiler", "classify-changes"],
+  "frontend-perf-gate" =>
+    ["compiler", ["classify-changes", "frontend-perf-measure"]],
+  "pages-performance" => ["pages", "classify-changes"],
+  "pages-accessibility" => ["pages", "classify-changes"]
+}.freeze
+D171_CHECKOUT_COUNTS = {
+  "classify-changes" => 1,
+  "governance" => 1,
+  "build-test-coverage" => 1,
+  "native-build-test" => 1,
+  "cross-compile-build" => 1,
+  "frontend-perf-measure" => 2,
+  "frontend-perf-gate" => 1,
+  "pages-performance" => 1,
+  "pages-accessibility" => 1
+}.freeze
+D171_JOB_NAMES = [
+  "classify-changes",
+  "governance",
+  *D171_OPTIONAL_ROUTING.keys,
+  "ci-gate"
+].freeze
+D171_JOB_BODY_SHA256S = {
+  "governance" => "02153e40dd8c808d90a010ecf958b46d51a00ae1f23f1165df93a4236a1514c3",
+  "build-test-coverage" => "68c97f28128266224195f091d9992add05186d6bc84ef75c500d92103459af94",
+  "native-build-test" => "8f13b95ff869a085e4239360c8d5e16d36ef357cca6e475bae21faa35788fa52",
+  "cross-compile-build" => "b0ef76e4a4dee6a0c1255be9bc7b4b0846a54ff786c2ba6a6bce0c83a6d9bedd",
+  "cross-compile-verify" => "18cde75ed226966ae96336f6b7898c6bacb26294d070074012fc58e7fe27ae35",
+  "frontend-perf-measure" => "c4fc6a1575f8e18480f79a902e0d5e6a9fa0ea0cee88293c25121c8ddf41b962",
+  "frontend-perf-gate" => "4db6345a6deb7a8c4ffff31f06aea4d1d7b279b16a7ad4f75a658fae60926bc3",
+  "pages-performance" => "609568e141cf60f06d398953f39d43fcf640c7b3aef6866595348685691dfc41",
+  "pages-accessibility" => "576c7a1fd01a8924689d7723a271ac4b83ac603a52eec414d9cd5c6eafc34016"
+}.freeze
+D171_TIER1_MATRIX = [
+  { "os" => "ubuntu-latest", "target" => "x86_64-unknown-linux-gnu" },
+  { "os" => "ubuntu-24.04-arm", "target" => "aarch64-unknown-linux-gnu" },
+  { "os" => "macos-15-intel", "target" => "x86_64-apple-darwin" },
+  { "os" => "windows-latest", "target" => "x86_64-pc-windows-msvc" }
+].freeze
+D171_TIER1_STRATEGY = {
+  "fail-fast" => "false",
+  "matrix" => { "include" => D171_TIER1_MATRIX }
+}.freeze
+D171_CI_GATE_NEEDS = [
+  "classify-changes",
+  "governance",
+  *D171_OPTIONAL_ROUTING.keys
+].freeze
+D171_CI_GATE_FAILURE_CONDITION = [
+  "needs.classify-changes.result != 'success'",
+  "needs.governance.result != 'success'",
+  *D171_CLASSIFIER_OUTPUTS.keys.map do |output|
+    "(needs.classify-changes.outputs.#{output} != 'true' && " \
+      "needs.classify-changes.outputs.#{output} != 'false')"
+  end,
+  *D171_OPTIONAL_ROUTING.flat_map do |job_name, (output, _needs)|
+    [
+      "(needs.classify-changes.outputs.#{output} == 'true' && " \
+        "needs.#{job_name}.result != 'success')",
+      "(needs.classify-changes.outputs.#{output} == 'false' && " \
+        "needs.#{job_name}.result != 'skipped')"
+    ]
+  end
+].join(" || ").freeze
+D171_CI_GATE_RUN = <<~'SHELL'.strip
+  echo "required CI jobs or exact change routing did not succeed:"
+  echo '${{ toJSON(needs) }}'
+  exit 1
+SHELL
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
 COVERAGE_COMMAND =
@@ -1238,6 +1376,292 @@ def yaml_value(node, context)
   else
     raise RoadmapEvidenceError, "#{context} contains an unsupported YAML value"
   end
+end
+
+def d171_mapping(value, context)
+  return value if value.is_a?(Hash)
+
+  raise RoadmapEvidenceError, "#{context} must be a mapping for D-171"
+end
+
+def d171_sequence(value, context)
+  return value if value.is_a?(Array)
+
+  raise RoadmapEvidenceError, "#{context} must be a sequence for D-171"
+end
+
+def d171_require_equal(actual, expected, context)
+  return if actual == expected
+
+  raise RoadmapEvidenceError, "#{context} does not match the reviewed D-171 routing"
+end
+
+def d171_normalize_expression(expression)
+  expression.to_s.gsub(/\s+/, " ").strip
+end
+
+def d171_canonical_value(value)
+  case value
+  when Hash
+    value.keys.sort.each_with_object({}) do |key, canonical|
+      canonical[key] = d171_canonical_value(value[key])
+    end
+  when Array
+    value.map { |entry| d171_canonical_value(entry) }
+  else
+    value
+  end
+end
+
+def d171_canonical_sha256(value)
+  Digest::SHA256.hexdigest(JSON.generate(d171_canonical_value(value)))
+end
+
+def validate_d171_ci_routing(workflow_text, source)
+  stream = Psych.parse_stream(workflow_text, filename: source)
+  if stream.children.length != 1 || stream.children.first.root.nil?
+    raise RoadmapEvidenceError, "#{source} must contain exactly one YAML document for D-171"
+  end
+
+  workflow = yaml_value(stream.children.first.root, source)
+  workflow = d171_mapping(workflow, source)
+  jobs = d171_mapping(workflow["jobs"], "#{source} jobs")
+
+  d171_require_equal(
+    workflow.keys.sort,
+    D171_TOP_LEVEL_KEYS.sort,
+    "#{source} top-level keys"
+  )
+  d171_require_equal(workflow["name"], "CI", "#{source} workflow name")
+  d171_require_equal(workflow["on"], D171_TRIGGERS, "#{source} triggers")
+  d171_require_equal(workflow["env"], D171_ENV, "#{source} workflow environment")
+  d171_require_equal(
+    workflow["permissions"],
+    { "contents" => "read" },
+    "#{source} workflow permissions"
+  )
+  d171_require_equal(
+    workflow["concurrency"],
+    D171_CONCURRENCY,
+    "#{source} concurrency"
+  )
+  D171_JOB_NAMES.each do |job_name|
+    d171_mapping(jobs[job_name], "#{source} #{job_name}")
+  end
+  d171_require_equal(jobs.keys.sort, D171_JOB_NAMES.sort, "#{source} job set")
+
+  checkout_counts = Hash.new(0)
+  jobs.each do |job_name, job|
+    next unless job.is_a?(Hash)
+
+    Array(job["steps"]).each do |step|
+      next unless step.is_a?(Hash)
+      next unless /\Aactions\/checkout@/i.match?(step.fetch("uses", ""))
+
+      d171_require_equal(
+        step["uses"],
+        PINNED_CHECKOUT_ACTION,
+        "#{source} #{job_name} checkout pin"
+      )
+      with = d171_mapping(step["with"], "#{source} #{job_name} checkout inputs")
+      d171_require_equal(
+        with["persist-credentials"],
+        "false",
+        "#{source} #{job_name} checkout credentials"
+      )
+      checkout_counts[job_name] += 1
+    end
+  end
+  d171_require_equal(
+    checkout_counts,
+    D171_CHECKOUT_COUNTS,
+    "#{source} checkout locations"
+  )
+
+  classifier = d171_mapping(jobs["classify-changes"], "#{source} classify-changes")
+  d171_require_equal(
+    classifier.keys.sort,
+    %w[outputs permissions runs-on steps].sort,
+    "#{source} classify-changes keys"
+  )
+  d171_require_equal(
+    classifier["runs-on"],
+    "ubuntu-latest",
+    "#{source} classify-changes runner"
+  )
+  d171_require_equal(
+    classifier["permissions"],
+    { "contents" => "read" },
+    "#{source} classify-changes permissions"
+  )
+  d171_require_equal(
+    classifier["outputs"],
+    D171_CLASSIFIER_OUTPUTS,
+    "#{source} classify-changes outputs"
+  )
+  classifier_steps = d171_sequence(
+    classifier["steps"],
+    "#{source} classify-changes steps"
+  )
+  d171_require_equal(
+    classifier_steps,
+    [
+      {
+        "name" => "Check out exact event head with full history",
+        "uses" => PINNED_CHECKOUT_ACTION,
+        "with" => {
+          "persist-credentials" => "false",
+          "fetch-depth" => "0",
+          "ref" =>
+            "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+        }
+      },
+      {
+        "name" => "Classify exact changed paths",
+        "id" => "classify",
+        "env" => D171_CLASSIFIER_ENV,
+        "run" => D171_CLASSIFIER_RUN
+      }
+    ],
+    "#{source} classify-changes job"
+  )
+
+  governance = d171_mapping(jobs["governance"], "#{source} governance")
+  d171_require_equal(
+    governance["needs"],
+    "classify-changes",
+    "#{source} governance dependency"
+  )
+  d171_require_equal(
+    governance["if"],
+    "${{ !cancelled() }}",
+    "#{source} governance cancellation condition"
+  )
+  d171_require_equal(
+    governance["runs-on"],
+    "ubuntu-latest",
+    "#{source} governance runner"
+  )
+  d171_require_equal(
+    governance["permissions"],
+    { "contents" => "read" },
+    "#{source} governance permissions"
+  )
+  governance_steps = d171_sequence(governance["steps"], "#{source} governance steps")
+  agent_steps = governance_steps.select do |step|
+    [
+      "Install LLVM 22 for offline alpha skill contract evals",
+      "cargo build --workspace for offline alpha skill contract evals",
+      "Run offline alpha skill contract evals"
+    ].include?(step["name"])
+  end
+  d171_require_equal(
+    agent_steps.length,
+    3,
+    "#{source} governance agent steps"
+  )
+  agent_steps.each do |step|
+    d171_require_equal(
+      step["if"],
+      "needs.classify-changes.outputs.agent == 'true'",
+      "#{source} governance agent condition"
+    )
+  end
+  d171_require_equal(
+    d171_canonical_sha256(governance),
+    D171_JOB_BODY_SHA256S.fetch("governance"),
+    "#{source} governance body"
+  )
+
+  D171_OPTIONAL_ROUTING.each do |job_name, (output, expected_needs)|
+    job = d171_mapping(jobs[job_name], "#{source} #{job_name}")
+    d171_require_equal(
+      job["needs"],
+      expected_needs,
+      "#{source} #{job_name} dependency"
+    )
+    d171_require_equal(
+      job["if"],
+      "needs.classify-changes.outputs.#{output} == 'true'",
+      "#{source} #{job_name} condition"
+    )
+  end
+
+  d171_require_equal(
+    jobs.dig("native-build-test", "strategy"),
+    D171_TIER1_STRATEGY,
+    "#{source} Tier-1 strategy"
+  )
+
+  ci_gate = d171_mapping(jobs["ci-gate"], "#{source} ci-gate")
+  d171_require_equal(
+    ci_gate.keys.sort,
+    %w[if needs permissions runs-on steps].sort,
+    "#{source} ci-gate keys"
+  )
+  d171_require_equal(ci_gate["needs"], D171_CI_GATE_NEEDS, "#{source} ci-gate needs")
+  d171_require_equal(ci_gate["if"], "always()", "#{source} ci-gate condition")
+  d171_require_equal(ci_gate["runs-on"], "ubuntu-latest", "#{source} ci-gate runner")
+  d171_require_equal(ci_gate["permissions"], {}, "#{source} ci-gate permissions")
+  gate_steps = d171_sequence(ci_gate["steps"], "#{source} ci-gate steps")
+  d171_require_equal(gate_steps.length, 1, "#{source} ci-gate step count")
+  gate_step = d171_mapping(gate_steps.first, "#{source} ci-gate fail step")
+  d171_require_equal(
+    gate_step.keys.sort,
+    %w[if name run].sort,
+    "#{source} ci-gate fail-step keys"
+  )
+  d171_require_equal(
+    gate_step["name"],
+    "Fail unless required jobs and exact routing succeeded",
+    "#{source} ci-gate fail-step name"
+  )
+  d171_require_equal(
+    d171_normalize_expression(gate_step["if"]),
+    d171_normalize_expression(D171_CI_GATE_FAILURE_CONDITION),
+    "#{source} ci-gate truth table"
+  )
+  d171_require_equal(gate_step["run"], D171_CI_GATE_RUN, "#{source} ci-gate failure")
+
+  # Strip only the D-171 scheduling envelope, then delegate the unchanged
+  # coverage, performance provenance, aggregate predecessor, and Pages
+  # invariants to their established validators.
+  unrouted = Marshal.load(Marshal.dump(workflow))
+  unrouted.delete("concurrency")
+  unrouted_jobs = unrouted.fetch("jobs")
+  unrouted_jobs.delete("classify-changes")
+  unrouted_jobs.delete("governance")
+  D171_OPTIONAL_ROUTING.each_key do |job_name|
+    job = unrouted_jobs.fetch(job_name)
+    job.delete("if")
+    needs = job["needs"]
+    if needs.is_a?(Array)
+      remaining = needs.reject { |need| need == "classify-changes" }
+      if remaining.empty?
+        job.delete("needs")
+      else
+        job["needs"] = remaining.length == 1 ? remaining.first : remaining
+      end
+    else
+      job.delete("needs")
+    end
+  end
+  unrouted_jobs["ci-gate"] = Marshal.load(Marshal.dump(D199_PAGES_ACCESSIBILITY_CI_GATE_JOB))
+  unrouted_text = unrouted.to_yaml
+
+  unless coverage_gate_present?(unrouted_text, source)
+    raise RoadmapEvidenceError, "#{source}: D-171 does not retain the exact coverage gate"
+  end
+  validate_source_aware_perf_gate_lifecycle(unrouted_text, source)
+  validate_pages_performance_lifecycle(unrouted_text, source)
+  D171_OPTIONAL_ROUTING.each_key do |job_name|
+    d171_require_equal(
+      d171_canonical_sha256(unrouted_jobs.fetch(job_name)),
+      D171_JOB_BODY_SHA256S.fetch(job_name),
+      "#{source} #{job_name} body"
+    )
+  end
+  true
 end
 
 def coverage_gate_present?(workflow_text, source)
@@ -1817,11 +2241,19 @@ end
 def validate_evidence(root, _evidence_ids)
   workflow = root / ".github/workflows/ci.yml"
   workflow_text = workflow.read
+  digest = Digest::SHA256.hexdigest(workflow_text)
+  if digest == D171_CHANGE_AWARE_CI_WORKFLOW_SHA256
+    unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
+      raise RoadmapEvidenceError,
+            "#{workflow}: D-171 workflow digest is not in the reviewed coexistence set"
+    end
+    validate_d171_ci_routing(workflow_text, workflow.to_s)
+    return
+  end
   unless coverage_gate_present?(workflow_text, workflow.to_s)
     raise RoadmapEvidenceError,
           "#{workflow}: evidence does not provide the exact 100% line and region gate"
   end
-  digest = Digest::SHA256.hexdigest(workflow_text)
   unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
     raise RoadmapEvidenceError,
           "#{workflow}: does not match a reviewed active-or-staged performance CI workflow"
