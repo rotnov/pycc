@@ -573,6 +573,125 @@ sequence, a `latest_projection` that disagrees with the latest
 observation, and prose that conflates repository views with Pages visits
 or Search Console clicks with all-provider visits.
 
+## Earned-authority evidence and launch readiness gate (issue #209)
+
+The measurements above record visibility, traffic, indexing, and
+answer-engine state. They do not answer when the pre-alpha project is ready
+for an honest public launch, what qualifies as earned independent authority,
+or how to prevent automated agents from turning distribution into spam. The
+[earned-authority evidence artifact](./EARNED_AUTHORITY_EVIDENCE.json) is the
+append-only structured source of truth for external-mention evidence and the
+launch readiness gate. It reuses #163's provenance-bearing evidence envelope
+and #195's provider-qualified vocabulary; it does not invent an incompatible
+"SEO authority score." This section does not authorize posting, messaging
+third parties, or manufacturing links.
+
+### Classification vocabulary
+
+Every external mention is classified into one closed category so
+self-authored and owned references can never inflate an earned count:
+
+- `owned` — a project-owned surface (the repository, the Pages site, or a
+  project-controlled mirror);
+- `self_authored_external` — an external post, issue, comment, or social
+  entry written by the repository owner or a known project author;
+- `independent_editorial` — an unsolicited, independently authored
+  recommendation, review, or article;
+- `community` — a community reference (forum, discussion, Q&A) that is not
+  self-authored and not a directory listing;
+- `directory` — a directory or catalog listing;
+- `automated_mirror` — an automated mirror, copied README, or scraper page;
+- `spam` — link spam, bought links, or manufactured references;
+- `unknown` — the relationship could not be determined from public
+  information.
+
+A maintainer's upstream bug report, GitHub comment, social post, or
+project-owned mirror must not increment an earned or independent count. The
+`independent_editorial`, `community`, and `directory` classifications are
+the only classifications that count toward `independent_mention_count`;
+`self_authored_external` and `owned` are tracked separately and never
+contribute to the independent count.
+
+### Observation fields
+
+Each observation is stored append-only with at least:
+
+- `observed_at` UTC timestamp;
+- `kind` — `window_audit`, `mention`, or `owner_inventory`;
+- `discovery_surface` and exact bounded query/export;
+- `source_url` and normalized `canonical_destination` (null for window
+  audits with zero rows);
+- `target_project_url`;
+- `source_owner_relationship` when publicly knowable;
+- `classification` from the closed vocabulary above;
+- `link_state` — `live`, `redirect`, `removed`, or `not_applicable`;
+- `link_exposed` and `nofollow_sponsored_state` — `known_nofollow`,
+  `known_dofollow`, `known_sponsored`, `unknown`, or `not_applicable`;
+- `first_seen_at` and `last_verified_at` timestamps;
+- `claim_accuracy_check` against current status/roadmap;
+- `source_limitations` and `sample_truncation_status`.
+
+Unavailable fields use `unknown` or `not_applicable` rather than invented
+values. Observations are append-only: timestamps must be nondecreasing and
+earlier observations are never rewritten or deleted. A zero-row window audit
+is preserved as a window result (`returned_rows: 0`), never rewritten as
+a zero-backlink claim — a bounded public search window is not an exhaustive
+backlink search, and the sampled Search Console Links report is not a
+complete inventory.
+
+### Launch readiness gate
+
+The launch readiness gate is human-reviewed and remains closed until at
+least:
+
+- #196 reconciles release/tag/roadmap status;
+- #197 provides an executable, tested flagship quick start;
+- the landing and status pages agree on current behavior and pre-alpha
+  limitations;
+- canonical URLs and live links pass their existing checks;
+- the launch text names the actual product category (ahead-of-time compiler
+  for typed Python) and does not position pycc as an AI compiler;
+- the message clearly discloses pre-alpha readiness and AI-created/human-
+  managed provenance without turning provenance into the product keyword.
+
+The gate cannot be opened while #196 or #197 remains open. No automated
+posting, commenting, voting, starring, reviewing, or account creation is
+authorized. The repository may prepare evidence and copy, but external
+publication requires explicit human authorization for that destination and
+message.
+
+### Distribution checklist
+
+Every candidate community, directory, or publication must have an audience
+fit explanation, current posting/submission rules, a useful audience-facing
+artifact to share, a named human approval point before any external action,
+and a non-promotional fallback when self-submission is prohibited. The
+checklist is currently empty: no candidate has been reviewed or approved.
+
+### Current state
+
+The current defensible state is `no_independent_mention_in_observed_windows`
+and `owner_backlink_inventory = unavailable`. The 2026-07-29 bounded
+observations are seeded in the artifact: GitHub code, commit, and issue
+search windows returned zero independent rows (the three issue/PR rows are
+self-authored upstream bug reports by the repository owner, classified
+`self_authored_external`), and the two Google excluded-site queries returned
+"did not match any documents." The Search Console Links report was still
+processing and its export was disabled, so the owner-facing backlink
+inventory is unavailable, not zero. The GitHub Traffic rolling top-referrer
+list contained only `github.com` and `rotnov.github.io`, which are owned
+surfaces classified `owned`, not independent referrers. Zero returned rows
+in a bounded window is preserved as a window result, not as a zero-backlink
+claim. `scripts/check_earned_authority_evidence.py` (with mutation tests
+in `scripts/test_check_earned_authority_evidence.py`) validates the schema,
+the launch gate, the append-only contract, the projection counts, and the
+prose bindings, rejecting self-authored or owned references counted as
+independent, a zero-row window rewritten as a zero-backlink claim, the sampled
+Search Console Links report treated as complete, invented `nofollow` or
+author independence, a launch gate opened while #196 or #197 is open, launch
+copy that describes pycc as an AI compiler or hides pre-alpha status, and a
+roadmap projection that contradicts the latest structured evidence.
+
 ## Change log
 
 Record meaningful discovery-surface changes separately from observations so a
