@@ -8,9 +8,11 @@ enforce the normal delivery path.
 - Pull request required; direct pushes are rejected.
 - The branch must be current with `main` before merge.
 - Required status checks: `ci-gate` and the trusted `audit` context. `ci-gate`
-  (D-032) is a single stable-named job that fans in every job in `ci.yml`,
-  including `build-test-coverage` (which runs the agent-policy tests and
-  clean-clone validator) and the four-target `native-build-test`/
+  (D-032/D-171) is a single stable-named, fail-closed job: it always requires
+  `classify-changes` and `governance` to succeed, requires every selected
+  compiler, Pages, and agent-dependent job to succeed, and requires every
+  unselected conditional job to be skipped. Compiler routing fans in
+  `build-test-coverage` and the four-target `native-build-test`/
   `cross-compile-build`/`cross-compile-verify` Tier-1 matrix -- named directly
   rather than each matrix leg, since a matrix job's GitHub-generated check
   name bakes in its matrix values and would go stale the moment an
@@ -27,24 +29,25 @@ enforce the normal delivery path.
   revision, benchmark-contract, executable-input identity, artifact-identity,
   file-set, or comparison drift. D-062's fixed-replicate contract addresses the
   residual changed-source single-observation variance tracked in open issue
-  #109 with five fixed runs per revision and a median-of-five aggregate; that
-  job content remains embedded unchanged in D-100, which composes D-091's
-  release-runtime/manifest-relaxation changes with D-099's Windows vcpkg cache
-  after D-099 activated first on `main`. Only D-100's exact reviewed
-  whole-workflow digest is authorized; superseded whole-workflow digests are
-  historical audit evidence only. The reviewed search-ledger trust anchor is
-  active. Its base-owned checker fetches protected head inputs as Git data,
-  requires exact regular-file modes, rejects checkout-affecting attributes,
-  and audits the query registry, ledger, checkpoints, and complete successor
-  manifest without executing candidate code. The one-use activation bridge and
-  superseded roadmap-only workflow digest are retired. The
-  standalone `agent-policy` job provides faster
+  #109 with five fixed runs per revision and a median-of-five aggregate. D-171
+  keeps that reviewed performance boundary inside change-aware routing, while
+  the base-owned D-172 audit validates named security, coverage, Tier-1,
+  performance, Pages/accessibility, and aggregate-gate properties instead of a
+  complete `ci.yml` digest. Historical whole-workflow digests remain audit
+  evidence only. The reviewed search-ledger trust anchor remains active. It
+  fetches protected head inputs as regular, non-executable Git data, rejects
+  checkout-affecting attributes, and audits the query registry, ledger, and
+  checkpoints without executing candidate code. The successor manifest is a
+  bounded historical input inventory, not authority that can force a later PR
+  to activate exact bytes. The active D-171 matrix preserves macOS Intel as a
+  Tier-1 native leg. The standalone `agent-policy` job provides faster
   feedback until its exact context has run successfully on `main` and is
   added to branch protection.
 - Zero approving reviews are required while this is a solo-maintainer repository.
   Requiring the author's own approval would deadlock every pull request. Enable one
   independent approval, stale-approval dismissal, and last-push approval when a
-  second human maintainer is available.
+  second human maintainer is available. Significant changes still require the
+  repository's pinned local review loop before publication.
 - All review conversations must be resolved.
 - Administrators are included; force pushes and branch deletion are disabled.
 
@@ -114,28 +117,18 @@ accommodate v0.2 PR-10's real, one-time `Ty`-migration cost -- see the
 current governance contract, and issue #296 for the plan to lower it back
 toward 2% once that one-time cost is absorbed into every future baseline.
 
-The active `.github/workflows/ci.yml` is byte-identical to the reviewed
-[`d114-frontend-perf-threshold-ci.yml`](../tests/fixtures/d114-frontend-perf-threshold-ci.yml)
-(D-112: `frontend-perf-measure`/`frontend-perf-gate` moved from `macos-14` to
-`ubuntu-latest`, confirmed by five real shadow-measurement runs before
-activation; D-114: the gate's regression threshold raised from 2% to 7% to
-accommodate v0.2 PR-10's real, one-time `Ty`-migration cost, not runner
-noise — issue #296 tracks lowering it back toward 2% once that one-time cost
-is absorbed into every future baseline). The allowlist currently accepts
-D-100's, D-112's, and D-114's whole-workflow digests (a deliberate coexist
-window per D-103's propose/activate discipline — a single PR cannot both
-change a protected target's bytes and authorize that change), pending a
-later, separate round that retires D-100 and D-112. `frontend-perf-gate`'s
-comparator logic and D-062's five-replicate sample plan are unchanged; the
-regression threshold itself is now `>7%` (D-114, not D-062's original `>2%`),
-and the job's runner, LLVM install step, and comparator threshold argument
-all differ from the D-062 fixture, so its content is no longer byte-identical
-to that fixture, though the reviewed sampling behavior it exercises is the
-same. D-051, D-056, D-062, D-080, D-084, pre-D-100 D-091, pre-D-100 D-099,
-D-100, and D-112 itself all remain historical audit evidence; D-048 remains
-absent. Every pull request and `main` push still measures both exact
-revisions inside its own run, so no successful external baseline artifact or
-administrative bootstrap state is required.
+The active `.github/workflows/ci.yml` uses D-171 change-aware routing. For a
+compiler-relevant change, its `frontend-perf-measure` and isolated
+`frontend-perf-gate` retain D-112's Ubuntu runner, D-062's five-replicate
+sample plan, and D-114's `>7%` regression threshold. The D-172 audit validates
+the exact predecessor/candidate bindings, artifact identities, reviewed
+comparator, threshold command, routing dependency, and `ci-gate` result
+branches as named properties; it does not authorize the active workflow by a
+whole-file digest. D-051, D-056, D-062, D-080, D-084, pre-D-100 D-091,
+pre-D-100 D-099, D-100, D-112, and D-114 fixtures remain historical evidence;
+D-048 remains absent. Every selected pull request and every `main` push still
+measures both exact revisions inside its own run, so no successful external
+baseline artifact or administrative bootstrap state is required.
 
 PR #131 and its post-merge main run later gave contradictory `+0.10%` and
 `+3.66%` outcomes for byte-identical Git trees, proving that one paired median
@@ -239,6 +232,16 @@ remained enabled. [PR #119](https://github.com/rotnov/pycc/pull/119) merged as
 the app-bound `audit` plus `ci-gate` set within seconds, and the full settings
 readback is attached to the incident. The exception is closed and grants no
 permission for any future bypass.
+
+D-172 records a second, distinct one-use authorization for the #558 recovery.
+Because that pull request itself removes D-103's exact-byte deadlock, D-125's
+external-state-only scope does not apply. The repository owner authorized an
+agent-operated D-024 window for that recovery PR only: remove only `audit` from
+the required set, merge at most the exact reviewed head within ten minutes,
+never relax `ci-gate`, prevent another merge during the window, restore the
+complete captured protection snapshot immediately, and publish an independent
+post-restore verification. This authorization is exhausted by that operation
+and grants no standing bypass permission.
 
 ## Session-driven temporary bypass
 

@@ -109,7 +109,7 @@ current.
 | [D-100](./D-100-compose-d-091-with-d-099-into-one-reviewed-digest.md) | Compose D-091 with D-099 into one reviewed digest after D-099 activated first | accepted |
 | [D-101](./D-101-lower-the-nbody-gate-for-ubuntu-24-04-arm-too.md) | Lower the nbody gate for `ubuntu-24.04-arm` too, evidence-based but mechanism-unconfirmed | accepted |
 | [D-102](./D-102-extend-tests-conformance-rs-for-pr-9-s-9-new-pep.md) | Extend `tests/conformance.rs` for PR-9's 9 new PEP fixtures; no `pycc_testkit` crate | accepted |
-| [D-103](./D-103-keep-search-policy-successors-base-owned-through.md) | Keep search-policy successors base-owned through a complete two-merge manifest | accepted |
+| [D-103](./D-103-keep-search-policy-successors-base-owned-through.md) | Keep search-policy successors base-owned through a complete two-merge manifest | superseded |
 | [D-104](./D-104-defer-the-generic-function-type-parameter-ty.md) | Defer the generic function type-parameter `Ty` placeholder to PR-13 | accepted |
 | [D-105](./D-105-v0-2-s-list-t-thin-slice-scope-cuts-and-runtime.md) | v0.2's `list[T]` thin slice — scope cuts and runtime-representation choice | accepted |
 | [D-106](./D-106-pyintlistobj-s-element-index-representation-is.md) | `PyIntListObj`'s element/index representation is raw untagged `i64`, not D-061-tagged; the boundary conversion and its bigint exclusion are `pycc_codegen`'s job | superseded |
@@ -178,3 +178,4 @@ current.
 | [D-169](./D-169-match-exhaustiveness-per-arm-coverage-check.md) | Match exhaustiveness: per-arm coverage check instead of decision-tree compilation | accepted |
 | [D-170](./D-170-status-page-freshness-third-signal-feature-paragraphs.md) | Extend the status-page freshness check with a third signal: feature-landing paragraph set changes (#522) | accepted |
 | [D-171](./D-171-change-aware-ci-gate-scheduling.md) | Change-aware CI gate scheduling | accepted |
+| [D-172](./D-172-nonblocking-property-based-ci-policy-audit.md) | Use a base-owned property audit without forced CI successor activation | accepted |
