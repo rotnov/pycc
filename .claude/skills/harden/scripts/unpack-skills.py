@@ -108,6 +108,11 @@ def place(name: str, dst: Path, *, force: bool) -> str | None:
     """Lay the full copy at dst; return a 'kept' message, or None on success."""
     src = BUNDLED / name
     if dst.is_symlink():
+        if not force:
+            return (
+                f"kept — {dst} is a project-owned symlink "
+                "(--force to replace)"
+            )
         dst.unlink()
     if dst.exists() and (dst / "SKILL.md").is_file():
         theirs = (dst / "SKILL.md").read_text(encoding="utf-8", errors="replace")

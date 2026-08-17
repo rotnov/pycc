@@ -17,6 +17,7 @@ so two agents writing at once never touch the same file.
 Usage:
   uv run .claude/skills/sessions/scripts/session-snapshot.py --slug context-compaction
   uv run .claude/skills/sessions/scripts/session-snapshot.py --slug handoff --dir docs/sessions
+  uv run .claude/skills/sessions/scripts/session-snapshot.py --root /path/to/repo --slug handoff
 """
 import argparse
 import subprocess
@@ -107,11 +108,15 @@ def main() -> int:
     a = ap.parse_args()
 
     root = a.root.resolve()
-    a.dir.mkdir(parents=True, exist_ok=True)
+    if not root.is_dir():
+        print(f"not a directory: {root}")
+        return 2
+    output_dir = a.dir if a.dir.is_absolute() else root / a.dir
+    output_dir.mkdir(parents=True, exist_ok=True)
     date = datetime.now(UTC).strftime("%Y-%m-%d")
     slug = "".join(c if c.isalnum() or c == "-" else "-" for c in a.slug.lower()).strip("-")
 
-    path = write_next(a.dir, date, slug or "checkpoint", render(date, slug, root))
+    path = write_next(output_dir, date, slug or "checkpoint", render(date, slug, root))
     print(f"snapshot drafted: {path}")
     return 0
 
