@@ -1145,6 +1145,14 @@ D171_JOB_NAMES = [
   *D171_OPTIONAL_ROUTING.keys,
   "ci-gate"
 ].freeze
+D171_FORBIDDEN_JOB_EXECUTION_KEYS = %w[container defaults env].freeze
+D171_CANDIDATE_CHECKOUT_JOBS = %w[
+  governance
+  native-build-test
+  cross-compile-build
+  pages-performance
+  pages-accessibility
+].freeze
 D171_GOVERNANCE_POLICY_STEPS = {
   "Check agent policy" => <<~'SHELL'.strip,
     python3 -B -m unittest discover -s scripts -p 'test_*.py'
@@ -1561,6 +1569,11 @@ def validate_d171_ci_routing(workflow_text, source)
   D171_JOB_NAMES.each do |job_name|
     job = d171_mapping(jobs[job_name], "#{source} #{job_name}")
     d171_require_failure_propagation(job, "#{source} #{job_name}")
+    d171_require_equal(
+      job.keys & D171_FORBIDDEN_JOB_EXECUTION_KEYS,
+      [],
+      "#{source} #{job_name} inherited execution context"
+    )
     Array(job["steps"]).each_with_index do |step, index|
       next unless step.is_a?(Hash)
 
@@ -1590,6 +1603,30 @@ def validate_d171_ci_routing(workflow_text, source)
         "#{source} #{job_name} checkout credentials"
       )
     end
+  end
+
+  D171_CANDIDATE_CHECKOUT_JOBS.each do |job_name|
+    steps = d171_sequence(
+      jobs.dig(job_name, "steps"),
+      "#{source} #{job_name} steps"
+    )
+    checkouts = steps.select do |step|
+      step.is_a?(Hash) &&
+        /\Aactions\/checkout@/i.match?(step.fetch("uses", ""))
+    end
+    d171_require_equal(
+      checkouts.length,
+      1,
+      "#{source} #{job_name} candidate checkout count"
+    )
+    d171_require_equal(
+      checkouts.first,
+      {
+        "uses" => PINNED_CHECKOUT_ACTION,
+        "with" => { "persist-credentials" => "false" }
+      },
+      "#{source} #{job_name} candidate checkout"
+    )
   end
 
   classifier = d171_mapping(jobs["classify-changes"], "#{source} classify-changes")
@@ -1724,6 +1761,11 @@ def validate_d171_ci_routing(workflow_text, source)
     jobs["native-build-test"],
     "#{source} native-build-test"
   )
+  d171_require_equal(
+    native["runs-on"],
+    "${{ matrix.os }}",
+    "#{source} Tier-1 runner binding"
+  )
   D171_NATIVE_REQUIRED_RUN_STEPS.each do |name, expected|
     step = d171_named_step(native, name, "#{source} native-build-test")
     d171_require_equal(
@@ -1833,6 +1875,11 @@ def validate_d171_ci_routing(workflow_text, source)
     "#{source} cross-compile-verify"
   )
   d171_require_equal(
+    verify.keys.sort,
+    %w[name run].sort,
+    "#{source} cross-compile-verify native output check keys"
+  )
+  d171_require_equal(
     verify["run"],
     D171_CROSS_VERIFY_RUN,
     "#{source} cross-compile-verify native output check"
@@ -1840,7 +1887,17 @@ def validate_d171_ci_routing(workflow_text, source)
 
   D171_PAGES_GATE_RUNS.each do |job_name, (step_name, run)|
     page_job = d171_mapping(jobs[job_name], "#{source} #{job_name}")
+    d171_require_equal(
+      page_job["runs-on"],
+      "ubuntu-latest",
+      "#{source} #{job_name} runner"
+    )
     step = d171_named_step(page_job, step_name, "#{source} #{job_name}")
+    d171_require_equal(
+      step.keys.sort,
+      %w[name run].sort,
+      "#{source} #{job_name} proof-step keys"
+    )
     d171_require_equal(
       step["run"],
       run,

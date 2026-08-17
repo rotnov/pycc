@@ -135,6 +135,11 @@ The structural policy must enforce at least these invariants:
   unexpected outputs cannot turn required work into a successful skip.
 - The `governance` job runs whenever the workflow has not been cancelled and
   propagates policy failures.
+- Required jobs cannot replace their execution context through inherited job
+  `env`, `defaults`, or `container` settings, and required proof steps cannot
+  be made conditional.
+- Each required candidate-workspace job uses the event-default checkout rather
+  than displacing it to another ref or repository.
 - Compiler-relevant changes retain Linux coverage, macOS Apple Silicon native
   coverage, and macOS Intel cross/verification coverage.
 - Documentation-only and other classified changes may skip unrelated heavy

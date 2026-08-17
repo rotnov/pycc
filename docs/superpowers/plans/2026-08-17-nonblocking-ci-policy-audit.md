@@ -310,12 +310,18 @@
   - retain the historical `D171_CHANGE_AWARE_CI_WORKFLOW_SHA256` and fixture digest assertion;
   - replace `D171_JOB_NAMES` equality with a required-name subset check;
   - remove `D171_JOB_BODY_SHA256S`, `d171_canonical_value`, and `d171_canonical_sha256` from active validation;
-  - scan every checkout present rather than comparing exact checkout counts;
+  - scan every checkout present, and require each required candidate-workspace
+    job to have exactly one checkout with no `ref`, `repository`, or path
+    displacement (without imposing a global checkout count on informational
+    jobs);
   - keep the classifier steps, outputs, exact base/head bindings, concurrency, optional routing conditions/dependencies, Tier-1 matrix, and `ci-gate` truth table exact;
   - require each required job to propagate failures;
+  - reject inherited job `env`, `defaults`, or `container` execution context;
   - require the four governance policy steps exactly once, with their reviewed `run` blocks and no step-level `if`; allow additional unprivileged steps;
   - keep the three agent-only governance steps conditional on `agent == 'true'`;
-  - require the cross-build upload and cross-verify download Actions at their reviewed SHAs, exact artifact name/path, `macos-14` build runner, `macos-15-intel` verification runner, and the exact native-output check that exits unless output is `42`;
+  - bind `native-build-test` to `${{ matrix.os }}` and both Pages proof jobs to `ubuntu-latest`;
+  - require the cross-build upload and cross-verify download Actions at their reviewed SHAs, exact artifact name/path, `macos-14` build runner, `macos-15-intel` verification runner, and the unconditional exact native-output check that exits unless output is `42`;
+  - require both Pages proof commands to remain unconditional exact `name`/`run` steps;
   - continue delegating coverage, performance provenance, Pages performance, and Pages accessibility to their existing property validators.
 
   Implement the helpers with these contracts:

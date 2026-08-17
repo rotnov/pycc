@@ -3503,6 +3503,39 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  def test_d171_rejects_required_checkout_ref_displacement
+    %w[
+      governance
+      native-build-test
+      cross-compile-build
+      pages-performance
+      pages-accessibility
+    ].each do |job_name|
+      workflow = d171_workflow
+      checkout = workflow.dig("jobs", job_name, "steps").find do |step|
+        step.fetch("uses", "").start_with?("actions/checkout@")
+      end
+      checkout.fetch("with")["ref"] = "main"
+      assert_d171_routing_rejected(
+        workflow,
+        "#{job_name} checkout displaced from the event revision",
+        expected_context: "#{job_name} candidate checkout"
+      )
+
+      workflow = d171_workflow
+      steps = workflow.dig("jobs", job_name, "steps")
+      checkout = steps.find do |step|
+        step.fetch("uses", "").start_with?("actions/checkout@")
+      end
+      steps << Marshal.load(Marshal.dump(checkout))
+      assert_d171_routing_rejected(
+        workflow,
+        "#{job_name} duplicate checkout",
+        expected_context: "#{job_name} candidate checkout count"
+      )
+    end
+  end
+
   def test_d171_rejects_classifier_permission_checkout_and_history_drift
     mutations = {
       "write permission" => lambda do |workflow|
@@ -3780,6 +3813,14 @@ class RoadmapEvidenceCliTest < Minitest::Test
         expected_context: "Tier-1"
       )
     end
+
+    workflow = d171_workflow
+    workflow.dig("jobs", "native-build-test")["runs-on"] = "ubuntu-latest"
+    assert_d171_routing_rejected(
+      workflow,
+      "Tier-1 matrix runner binding",
+      expected_context: "Tier-1 runner binding"
+    )
   end
 
   def test_d171_delegates_performance_provenance_validation
@@ -3812,6 +3853,14 @@ class RoadmapEvidenceCliTest < Minitest::Test
       "pages-accessibility" => "Run hermetic Lighthouse accessibility gate"
     }.each do |job_name, step_name|
       workflow = d171_workflow
+      workflow.dig("jobs", job_name)["runs-on"] = "windows-latest"
+      assert_d171_routing_rejected(
+        workflow,
+        "#{job_name} runner drift",
+        expected_context: "#{job_name} runner"
+      )
+
+      workflow = d171_workflow
       workflow.dig("jobs", job_name, "steps").reject! do |step|
         step["name"] == step_name
       end
@@ -3819,6 +3868,32 @@ class RoadmapEvidenceCliTest < Minitest::Test
         workflow,
         "missing #{job_name} command",
         expected_context: "#{job_name} step"
+      )
+    end
+  end
+
+  def test_d171_rejects_conditioned_pages_proof_steps
+    {
+      "pages-performance" => [
+        "Run hermetic Lighthouse pages performance budget gate",
+        "Upload Lighthouse reports"
+      ],
+      "pages-accessibility" => [
+        "Run hermetic Lighthouse accessibility gate",
+        "Upload Lighthouse accessibility reports"
+      ]
+    }.each do |job_name, (proof_name, upload_name)|
+      workflow = d171_workflow
+      steps = workflow.dig("jobs", job_name, "steps")
+      proof = steps.find { |step| step["name"] == proof_name }
+      upload = steps.find { |step| step["name"] == upload_name }
+      proof["if"] = "false"
+      upload["if"] = "false"
+
+      assert_d171_routing_rejected(
+        workflow,
+        "skipped #{job_name} proof",
+        expected_context: "#{job_name} proof-step keys"
       )
     end
   end
@@ -3904,6 +3979,31 @@ class RoadmapEvidenceCliTest < Minitest::Test
       "governance continue-on-error",
       expected_context: "governance failure propagation"
     )
+  end
+
+  def test_d171_rejects_inherited_execution_context_on_required_jobs
+    {
+      "defaults" => { "run" => { "shell" => "bash {0} || true" } },
+      "env" => { "BASH_ENV" => "${{ github.workspace }}/ci-bypass.sh" },
+      "container" => "unreviewed.example/ci:latest"
+    }.each do |key, value|
+      %w[
+        governance
+        native-build-test
+        cross-compile-build
+        cross-compile-verify
+        pages-performance
+        pages-accessibility
+      ].each do |job_name|
+        workflow = d171_workflow
+        workflow.dig("jobs", job_name)[key] = value
+        assert_d171_routing_rejected(
+          workflow,
+          "#{job_name} inherited #{key}",
+          expected_context: "#{job_name} inherited execution context"
+        )
+      end
+    end
   end
 
   def test_d171_rejects_weakened_agent_governance_commands
@@ -4027,6 +4127,17 @@ class RoadmapEvidenceCliTest < Minitest::Test
       workflow,
       "cross verification weakened",
       expected_context: "cross-compile-verify native output check"
+    )
+
+    workflow = d171_workflow
+    verify = workflow.dig("jobs", "cross-compile-verify", "steps").find do |step|
+      step["name"] == "Verify it runs natively and prints the right output"
+    end
+    verify["if"] = "false"
+    assert_d171_routing_rejected(
+      workflow,
+      "cross verification skipped",
+      expected_context: "cross-compile-verify native output check keys"
     )
   end
 

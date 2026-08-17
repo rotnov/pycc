@@ -288,8 +288,12 @@ mentions.
 The `ci-tier1-cross-compile` evidence is enforced by D-172's base-owned
 property audit. It requires the exact five-target Tier-1 matrix, the macOS
 arm64-to-Intel cross-host build and native execution proof, immutable Actions,
-read-only checkout credentials, fail-closed D-171 routing, and the aggregate
-`ci-gate` truth table. The audit binds the commands and dependencies that
+read-only checkout credentials, event-default candidate checkouts for required
+workspace jobs, fail-closed D-171 routing, and the aggregate
+`ci-gate` truth table. Required jobs cannot inherit an alternate job-level
+`env`, `defaults`, or `container`; the native matrix and Pages jobs retain
+their reviewed runner bindings; and the Intel and Pages proof commands cannot
+be made conditional. The audit binds the commands and dependencies that
 produce those properties instead of authorizing a complete `ci.yml` byte
 digest. Historical workflow digests remain immutable regression fixtures only;
 they cannot force a later pull request to activate their bytes.

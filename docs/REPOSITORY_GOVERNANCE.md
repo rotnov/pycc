@@ -10,8 +10,9 @@ enforce the normal delivery path.
 - Required status checks: `ci-gate` and the trusted `audit` context. `ci-gate`
   (D-032/D-171) is a single stable-named, fail-closed job: it always requires
   `classify-changes` and `governance` to succeed, requires every selected
-  compiler, Pages, and agent-dependent job to succeed, and requires every
-  unselected conditional job to be skipped. Compiler routing fans in
+  compiler or Pages job to succeed, runs agent-dependent checks inside
+  `governance`, and requires every unselected conditional job to be skipped.
+  Compiler routing fans in
   `build-test-coverage` and the four-target `native-build-test`/
   `cross-compile-build`/`cross-compile-verify` Tier-1 matrix -- named directly
   rather than each matrix leg, since a matrix job's GitHub-generated check
