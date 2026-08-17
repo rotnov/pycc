@@ -1139,33 +1139,128 @@ D171_OPTIONAL_ROUTING = {
   "pages-performance" => ["pages", "classify-changes"],
   "pages-accessibility" => ["pages", "classify-changes"]
 }.freeze
-D171_CHECKOUT_COUNTS = {
-  "classify-changes" => 1,
-  "governance" => 1,
-  "build-test-coverage" => 1,
-  "native-build-test" => 1,
-  "cross-compile-build" => 1,
-  "frontend-perf-measure" => 2,
-  "frontend-perf-gate" => 1,
-  "pages-performance" => 1,
-  "pages-accessibility" => 1
-}.freeze
 D171_JOB_NAMES = [
   "classify-changes",
   "governance",
   *D171_OPTIONAL_ROUTING.keys,
   "ci-gate"
 ].freeze
-D171_JOB_BODY_SHA256S = {
-  "governance" => "02153e40dd8c808d90a010ecf958b46d51a00ae1f23f1165df93a4236a1514c3",
-  "build-test-coverage" => "68c97f28128266224195f091d9992add05186d6bc84ef75c500d92103459af94",
-  "native-build-test" => "8f13b95ff869a085e4239360c8d5e16d36ef357cca6e475bae21faa35788fa52",
-  "cross-compile-build" => "b0ef76e4a4dee6a0c1255be9bc7b4b0846a54ff786c2ba6a6bce0c83a6d9bedd",
-  "cross-compile-verify" => "18cde75ed226966ae96336f6b7898c6bacb26294d070074012fc58e7fe27ae35",
-  "frontend-perf-measure" => "c4fc6a1575f8e18480f79a902e0d5e6a9fa0ea0cee88293c25121c8ddf41b962",
-  "frontend-perf-gate" => "4db6345a6deb7a8c4ffff31f06aea4d1d7b279b16a7ad4f75a658fae60926bc3",
-  "pages-performance" => "609568e141cf60f06d398953f39d43fcf640c7b3aef6866595348685691dfc41",
-  "pages-accessibility" => "576c7a1fd01a8924689d7723a271ac4b83ac603a52eec414d9cd5c6eafc34016"
+D171_GOVERNANCE_POLICY_STEPS = {
+  "Check agent policy" => <<~'SHELL'.strip,
+    python3 -B -m unittest discover -s scripts -p 'test_*.py'
+    python3 -B scripts/validate_agent_policies.py
+  SHELL
+  "Check workflow permission policy" => <<~'SHELL'.strip,
+    ruby scripts/test_check_ci_permissions.rb
+    ruby scripts/check_ci_permissions.rb
+  SHELL
+  "Check roadmap evidence" => <<~'SHELL'.strip,
+    ruby scripts/test_check_roadmap_evidence.rb
+    ruby scripts/check_roadmap_evidence.rb
+  SHELL
+  "Check README coverage badge binding (issue" => <<~'SHELL'.strip
+    ruby scripts/check_readme_coverage_badge.rb
+    ruby scripts/test_check_readme_coverage_badge.rb
+  SHELL
+}.freeze
+D171_GOVERNANCE_AGENT_STEPS = {
+  "Install LLVM 22 for offline alpha skill contract evals" => <<~'SHELL'.strip,
+    wget https://apt.llvm.org/llvm.sh
+    chmod +x llvm.sh
+    sudo ./llvm.sh 22
+    # llvm.sh's own packages don't pull in Polly's static lib; llvm-sys
+    # links it explicitly, so it must be installed separately here.
+    sudo apt-get install -y libpolly-22-dev
+    echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+  SHELL
+  "cargo build --workspace for offline alpha skill contract evals" =>
+    "cargo build --workspace",
+  "Run offline alpha skill contract evals" => <<~'SHELL'.strip
+    python3 scripts/run_alpha_skill_evals.py \
+      --client codex --pycc-bin target/debug/pycc
+    python3 scripts/run_alpha_skill_evals.py \
+      --client claude --pycc-bin target/debug/pycc
+  SHELL
+}.freeze
+D171_PINNED_SETUP_PYTHON_ACTION =
+  "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+D171_LEGACY_SETUP_PYTHON_ACTION = "actions/setup-python@v5"
+D171_NATIVE_REQUIRED_RUN_STEPS = {
+  "Build pycc_rt for own triple (Linux, D-031)" => {
+    "if" => "runner.os == 'Linux'",
+    "run" => "cargo build --target ${{ matrix.target }} -p pycc_rt"
+  },
+  "cargo build --workspace" => {
+    "run" => "cargo build --workspace"
+  },
+  "Build pycc_rt (release, for tests/nbody_bench.rs's --release build)" => {
+    "run" => "cargo build --release -p pycc_rt"
+  },
+  "cargo test --workspace" => {
+    "if" => "runner.os != 'Windows'",
+    "run" => "cargo test --workspace -- --include-ignored"
+  },
+  "cargo test --workspace (single-threaded, see D-029)" => {
+    "if" => "runner.os == 'Windows'",
+    "run" => "cargo test --workspace -- --test-threads=1 --include-ignored"
+  },
+  "cargo clippy --workspace" => {
+    "run" => <<~'SHELL'.strip
+      rustup component add clippy
+      cargo clippy --workspace --all-targets -- -D warnings
+    SHELL
+  }
+}.freeze
+D171_CROSS_REQUIRED_RUN_STEPS = {
+  "Add x86_64-apple-darwin Rust target" =>
+    "rustup target add x86_64-apple-darwin",
+  "Build pycc_rt for x86_64-apple-darwin" =>
+    "cargo build --target x86_64-apple-darwin -p pycc_rt",
+  "Build pycc (native)" => "cargo build -p pycc",
+  "Cross-compile the slice-0 fixture" => <<~'SHELL'.strip
+    mkdir -p /tmp/cross_fixture
+    printf 'print(42)\n' > /tmp/cross_fixture/hello.py
+    ./target/debug/pycc build /tmp/cross_fixture/hello.py -o /tmp/cross_fixture/hello --target x86_64-apple-darwin
+    file /tmp/cross_fixture/hello
+  SHELL
+}.freeze
+D171_LEGACY_ARTIFACT_UPLOAD_ACTION = "actions/upload-artifact@v4"
+D171_LEGACY_ARTIFACT_DOWNLOAD_ACTION = "actions/download-artifact@v4"
+D171_CROSS_ARTIFACT_NAME = "cross-compiled-x86_64-apple-darwin"
+D171_CROSS_ARTIFACT_BUILD_PATH = "/tmp/cross_fixture/hello"
+D171_CROSS_ARTIFACT_VERIFY_PATH = "/tmp/cross_fixture"
+D171_CROSS_VERIFY_RUN = <<~'SHELL'.strip
+  chmod +x /tmp/cross_fixture/hello
+  file /tmp/cross_fixture/hello
+  output="$(/tmp/cross_fixture/hello)"
+  if [ "$output" != "42" ]; then
+    echo "expected '42', got '${output}'"
+    exit 1
+  fi
+  echo "cross-compiled binary verified on its native x86_64 runner"
+SHELL
+D171_PAGES_GATE_RUNS = {
+  "pages-performance" => [
+    "Run hermetic Lighthouse pages performance budget gate",
+    <<~'SHELL'.strip
+      python3 scripts/run_pages_lighthouse.py \
+        --output-dir /tmp/lighthouse-results \
+        --site-dir site
+      ruby scripts/check_pages_performance_budget.rb \
+        --lhr-dir /tmp/lighthouse-results
+    SHELL
+  ],
+  "pages-accessibility" => [
+    "Run hermetic Lighthouse accessibility gate",
+    <<~'SHELL'.strip
+      python3 scripts/run_pages_lighthouse_accessibility.py \
+        --output-dir /tmp/lighthouse-a11y-results \
+        --site-dir site
+      ruby scripts/check_site_accessibility.rb \
+        --lhr-dir /tmp/lighthouse-a11y-results \
+        --site-dir site
+    SHELL
+  ]
 }.freeze
 D171_TIER1_MATRIX = [
   { "os" => "ubuntu-latest", "target" => "x86_64-unknown-linux-gnu" },
@@ -1400,21 +1495,37 @@ def d171_normalize_expression(expression)
   expression.to_s.gsub(/\s+/, " ").strip
 end
 
-def d171_canonical_value(value)
-  case value
-  when Hash
-    value.keys.sort.each_with_object({}) do |key, canonical|
-      canonical[key] = d171_canonical_value(value[key])
-    end
-  when Array
-    value.map { |entry| d171_canonical_value(entry) }
-  else
-    value
+def d171_named_step(job, name, context)
+  steps = d171_sequence(job["steps"], "#{context} steps")
+  matches = steps.select do |step|
+    step.is_a?(Hash) && step["name"] == name
   end
+  d171_require_equal(matches.length, 1, "#{context} step #{name.inspect}")
+  matches.first
 end
 
-def d171_canonical_sha256(value)
-  Digest::SHA256.hexdigest(JSON.generate(d171_canonical_value(value)))
+def d171_require_failure_propagation(mapping, context)
+  return unless mapping.key?("continue-on-error")
+
+  d171_require_equal(
+    mapping["continue-on-error"],
+    "false",
+    "#{context} failure propagation"
+  )
+end
+
+def d171_routed_workflow?(workflow_text, source)
+  stream = Psych.parse_stream(workflow_text, filename: source)
+  if stream.children.length != 1 || stream.children.first.root.nil?
+    raise RoadmapEvidenceError,
+          "#{source} must contain exactly one YAML document for D-171 routing"
+  end
+
+  workflow = d171_mapping(yaml_value(stream.children.first.root, source), source)
+  jobs = workflow["jobs"]
+  return false unless jobs.is_a?(Hash)
+
+  jobs.key?("classify-changes") || jobs.key?("governance")
 end
 
 def validate_d171_ci_routing(workflow_text, source)
@@ -1426,6 +1537,8 @@ def validate_d171_ci_routing(workflow_text, source)
   workflow = yaml_value(stream.children.first.root, source)
   workflow = d171_mapping(workflow, source)
   jobs = d171_mapping(workflow["jobs"], "#{source} jobs")
+  historical_fixture =
+    Digest::SHA256.hexdigest(workflow_text) == D171_CHANGE_AWARE_CI_WORKFLOW_SHA256
 
   d171_require_equal(
     workflow.keys.sort,
@@ -1446,11 +1559,18 @@ def validate_d171_ci_routing(workflow_text, source)
     "#{source} concurrency"
   )
   D171_JOB_NAMES.each do |job_name|
-    d171_mapping(jobs[job_name], "#{source} #{job_name}")
-  end
-  d171_require_equal(jobs.keys.sort, D171_JOB_NAMES.sort, "#{source} job set")
+    job = d171_mapping(jobs[job_name], "#{source} #{job_name}")
+    d171_require_failure_propagation(job, "#{source} #{job_name}")
+    Array(job["steps"]).each_with_index do |step, index|
+      next unless step.is_a?(Hash)
 
-  checkout_counts = Hash.new(0)
+      d171_require_failure_propagation(
+        step,
+        "#{source} #{job_name} step #{index}"
+      )
+    end
+  end
+
   jobs.each do |job_name, job|
     next unless job.is_a?(Hash)
 
@@ -1469,14 +1589,8 @@ def validate_d171_ci_routing(workflow_text, source)
         "false",
         "#{source} #{job_name} checkout credentials"
       )
-      checkout_counts[job_name] += 1
     end
   end
-  d171_require_equal(
-    checkout_counts,
-    D171_CHECKOUT_COUNTS,
-    "#{source} checkout locations"
-  )
 
   classifier = d171_mapping(jobs["classify-changes"], "#{source} classify-changes")
   d171_require_equal(
@@ -1548,12 +1662,21 @@ def validate_d171_ci_routing(workflow_text, source)
     "#{source} governance permissions"
   )
   governance_steps = d171_sequence(governance["steps"], "#{source} governance steps")
+  D171_GOVERNANCE_POLICY_STEPS.each do |name, run|
+    step = d171_named_step(governance, name, "#{source} governance")
+    d171_require_equal(
+      step.keys.sort,
+      %w[name run].sort,
+      "#{source} governance step #{name.inspect} keys"
+    )
+    d171_require_equal(
+      step["run"],
+      run,
+      "#{source} governance step #{name.inspect} command"
+    )
+  end
   agent_steps = governance_steps.select do |step|
-    [
-      "Install LLVM 22 for offline alpha skill contract evals",
-      "cargo build --workspace for offline alpha skill contract evals",
-      "Run offline alpha skill contract evals"
-    ].include?(step["name"])
+    D171_GOVERNANCE_AGENT_STEPS.key?(step["name"])
   end
   d171_require_equal(
     agent_steps.length,
@@ -1561,18 +1684,23 @@ def validate_d171_ci_routing(workflow_text, source)
     "#{source} governance agent steps"
   )
   agent_steps.each do |step|
+    name = step["name"]
+    d171_require_equal(
+      step.keys.sort,
+      %w[if name run].sort,
+      "#{source} governance agent step #{name.inspect} keys"
+    )
     d171_require_equal(
       step["if"],
       "needs.classify-changes.outputs.agent == 'true'",
       "#{source} governance agent condition"
     )
+    d171_require_equal(
+      step["run"],
+      D171_GOVERNANCE_AGENT_STEPS.fetch(name),
+      "#{source} governance agent command"
+    )
   end
-  d171_require_equal(
-    d171_canonical_sha256(governance),
-    D171_JOB_BODY_SHA256S.fetch("governance"),
-    "#{source} governance body"
-  )
-
   D171_OPTIONAL_ROUTING.each do |job_name, (output, expected_needs)|
     job = d171_mapping(jobs[job_name], "#{source} #{job_name}")
     d171_require_equal(
@@ -1592,6 +1720,133 @@ def validate_d171_ci_routing(workflow_text, source)
     D171_TIER1_STRATEGY,
     "#{source} Tier-1 strategy"
   )
+  native = d171_mapping(
+    jobs["native-build-test"],
+    "#{source} native-build-test"
+  )
+  D171_NATIVE_REQUIRED_RUN_STEPS.each do |name, expected|
+    step = d171_named_step(native, name, "#{source} native-build-test")
+    d171_require_equal(
+      step,
+      { "name" => name }.merge(expected),
+      "#{source} native-build-test step #{name.inspect}"
+    )
+  end
+  oracle = d171_named_step(
+    native,
+    "Set up CPython 3.14.7 conformance oracle",
+    "#{source} native-build-test"
+  )
+  accepted_oracle_actions = [D171_PINNED_SETUP_PYTHON_ACTION]
+  accepted_oracle_actions << D171_LEGACY_SETUP_PYTHON_ACTION if historical_fixture
+  unless accepted_oracle_actions.include?(oracle["uses"])
+    raise RoadmapEvidenceError,
+          "#{source} native-build-test oracle action does not match the reviewed D-171 routing"
+  end
+  d171_require_equal(
+    oracle.keys.sort,
+    %w[name uses with].sort,
+    "#{source} native-build-test oracle keys"
+  )
+  d171_require_equal(
+    oracle["with"],
+    { "python-version" => "3.14.7" },
+    "#{source} native-build-test oracle version"
+  )
+
+  cross_build = d171_mapping(
+    jobs["cross-compile-build"],
+    "#{source} cross-compile-build"
+  )
+  d171_require_equal(
+    cross_build["runs-on"],
+    "macos-14",
+    "#{source} cross-compile-build runner"
+  )
+  D171_CROSS_REQUIRED_RUN_STEPS.each do |name, run|
+    step = d171_named_step(
+      cross_build,
+      name,
+      "#{source} cross-compile-build"
+    )
+    d171_require_equal(
+      step,
+      { "name" => name, "run" => run },
+      "#{source} cross-compile-build step #{name.inspect}"
+    )
+  end
+  upload = d171_named_step(
+    cross_build,
+    "Upload the cross-compiled binary",
+    "#{source} cross-compile-build"
+  )
+  accepted_upload_actions = [PINNED_ARTIFACT_UPLOAD_ACTION]
+  if historical_fixture
+    accepted_upload_actions << D171_LEGACY_ARTIFACT_UPLOAD_ACTION
+  end
+  unless accepted_upload_actions.include?(upload["uses"])
+    raise RoadmapEvidenceError,
+          "#{source} cross-compile-build artifact upload action does not match the reviewed D-171 routing"
+  end
+  d171_require_equal(
+    upload["with"],
+    {
+      "name" => D171_CROSS_ARTIFACT_NAME,
+      "path" => D171_CROSS_ARTIFACT_BUILD_PATH
+    },
+    "#{source} cross-compile-build artifact upload"
+  )
+
+  cross_verify = d171_mapping(
+    jobs["cross-compile-verify"],
+    "#{source} cross-compile-verify"
+  )
+  d171_require_equal(
+    cross_verify["runs-on"],
+    "macos-15-intel",
+    "#{source} cross-compile-verify runner"
+  )
+  download = d171_named_step(
+    cross_verify,
+    "Download the cross-compiled binary",
+    "#{source} cross-compile-verify"
+  )
+  accepted_download_actions = [PINNED_ARTIFACT_DOWNLOAD_ACTION]
+  if historical_fixture
+    accepted_download_actions << D171_LEGACY_ARTIFACT_DOWNLOAD_ACTION
+  end
+  unless accepted_download_actions.include?(download["uses"])
+    raise RoadmapEvidenceError,
+          "#{source} cross-compile-verify artifact download action does not match the reviewed D-171 routing"
+  end
+  d171_require_equal(
+    download["with"],
+    {
+      "name" => D171_CROSS_ARTIFACT_NAME,
+      "path" => D171_CROSS_ARTIFACT_VERIFY_PATH
+    },
+    "#{source} cross-compile-verify artifact download"
+  )
+  verify = d171_named_step(
+    cross_verify,
+    "Verify it runs natively and prints the right output",
+    "#{source} cross-compile-verify"
+  )
+  d171_require_equal(
+    verify["run"],
+    D171_CROSS_VERIFY_RUN,
+    "#{source} cross-compile-verify native output check"
+  )
+
+  D171_PAGES_GATE_RUNS.each do |job_name, (step_name, run)|
+    page_job = d171_mapping(jobs[job_name], "#{source} #{job_name}")
+    step = d171_named_step(page_job, step_name, "#{source} #{job_name}")
+    d171_require_equal(
+      step["run"],
+      run,
+      "#{source} #{job_name} body"
+    )
+  end
 
   ci_gate = d171_mapping(jobs["ci-gate"], "#{source} ci-gate")
   d171_require_equal(
@@ -1654,13 +1909,6 @@ def validate_d171_ci_routing(workflow_text, source)
   end
   validate_source_aware_perf_gate_lifecycle(unrouted_text, source)
   validate_pages_performance_lifecycle(unrouted_text, source)
-  D171_OPTIONAL_ROUTING.each_key do |job_name|
-    d171_require_equal(
-      d171_canonical_sha256(unrouted_jobs.fetch(job_name)),
-      D171_JOB_BODY_SHA256S.fetch(job_name),
-      "#{source} #{job_name} body"
-    )
-  end
   true
 end
 
@@ -2242,11 +2490,7 @@ def validate_evidence(root, _evidence_ids)
   workflow = root / ".github/workflows/ci.yml"
   workflow_text = workflow.read
   digest = Digest::SHA256.hexdigest(workflow_text)
-  if digest == D171_CHANGE_AWARE_CI_WORKFLOW_SHA256
-    unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
-      raise RoadmapEvidenceError,
-            "#{workflow}: D-171 workflow digest is not in the reviewed coexistence set"
-    end
+  if d171_routed_workflow?(workflow_text, workflow.to_s)
     validate_d171_ci_routing(workflow_text, workflow.to_s)
     return
   end

@@ -3,7 +3,33 @@ name: Agent assets
 on:
   push:
     branches: [main]
+    paths:
+      - ".github/workflows/agent-assets.yml"
+      - ".agents/**"
+      - ".claude/**"
+      - ".codex/**"
+      - ".ievo/**"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "docs/AGENT_TOOLING.md"
+      - "scripts/validate_agent_assets.py"
+      - "scripts/check-codex-marketplace.sh"
+      - "scripts/check-claude-marketplace.sh"
+      - "scripts/test-gh-status-check.sh"
   pull_request:
+    paths:
+      - ".github/workflows/agent-assets.yml"
+      - ".agents/**"
+      - ".claude/**"
+      - ".codex/**"
+      - ".ievo/**"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "docs/AGENT_TOOLING.md"
+      - "scripts/validate_agent_assets.py"
+      - "scripts/check-codex-marketplace.sh"
+      - "scripts/check-claude-marketplace.sh"
+      - "scripts/test-gh-status-check.sh"
 
 permissions:
   contents: read
@@ -17,19 +43,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Validate agent skills and plugin pins
-        run: |
-          python3 -m unittest discover -s scripts -p 'test_*.py'
-          python3 scripts/validate_agent_assets.py
+        run: python3 scripts/validate_agent_assets.py
 
       - name: Validate CI-monitoring tooling scripts
         run: |
           sh .claude/skills/gha-watch-ci-pr/scripts/test-ci-watch.sh
           sh scripts/test-gh-status-check.sh
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
 

@@ -3,8 +3,8 @@
   "targets": [
     {
       "path": ".github/workflows/ci.yml",
-      "source_path": "tests/fixtures/policy-successors/ci-d171.yml",
-      "sha256": "785e6415aea979ac67563589fb8295f2d7a9ce991f11d269d2054422a527e33f"
+      "source_path": ".github/workflows/ci.yml",
+      "sha256": "38c9d59632cd2a50e378acc162d71762ec084b14a1a4ceb610075da77925ab1c"
     },
     {
       "path": "scripts/classify_ci_changes.py",

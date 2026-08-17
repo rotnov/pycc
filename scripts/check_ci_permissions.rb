@@ -13,6 +13,8 @@ TRUST_ANCHOR_FILENAME = "workflow-policy.yml"
 TRUST_ANCHOR_SHA256_ALLOWLIST = %w[
   f8d60936438c48362d0a5dc11ee709c9dd5354c3f697038bc36b620c266f0688
 ].freeze
+FULL_ACTION_COMMIT =
+  /\A(?:[A-Za-z0-9_.-]+\/)+(?:[A-Za-z0-9_.-]+)@[0-9a-f]{40}\z/
 TRUSTED_EVENT_AND_REF_GUARD = /\A(?:\$\{\{\s*)?github\.event_name\s*==\s*(['"])push\1\s*&&\s*github\.ref\s*==\s*(['"])refs\/heads\/main\2\s*(?:\}\})?\z/
 
 def mapping_entries(node, context)
@@ -31,6 +33,14 @@ def mapping_entries(node, context)
     entries[key] = value_node
   end
   entries
+end
+
+def sequence_entries(node, context)
+  unless node.is_a?(Psych::Nodes::Sequence)
+    raise PolicyError, "#{context} must be a sequence"
+  end
+
+  node.children
 end
 
 def scalar_value(node, context)
@@ -97,6 +107,43 @@ def trusted_ref_guard?(node)
   TRUSTED_EVENT_AND_REF_GUARD.match?(guard)
 end
 
+def validate_action_reference(node, context)
+  reference = scalar_value(node, context).strip
+  return reference if reference.start_with?("./")
+  return reference if FULL_ACTION_COMMIT.match?(reference)
+
+  raise PolicyError, "#{context} must use a full commit SHA"
+end
+
+def validate_job_action_references(entries, context)
+  if entries["uses"]
+    validate_action_reference(entries["uses"], "#{context} reusable workflow")
+  end
+  return unless entries["steps"]
+
+  sequence_entries(entries["steps"], "#{context} steps").each_with_index do |step_node, index|
+    step = mapping_entries(step_node, "#{context} step #{index}")
+    next unless step["uses"]
+
+    reference = validate_action_reference(
+      step["uses"], "#{context} step #{index} action"
+    )
+    next unless reference.split("@", 2).first.downcase == "actions/checkout"
+
+    with = step["with"] &&
+           mapping_entries(step["with"], "#{context} checkout inputs")
+    persisted = with && with["persist-credentials"] &&
+                scalar_value(
+                  with["persist-credentials"],
+                  "#{context} checkout persist-credentials"
+                )
+    unless persisted == "false"
+      raise PolicyError,
+            "#{context} checkout must set persist-credentials to false"
+    end
+  end
+end
+
 def privileged_job?(entries, job_node, context)
   permissions = entries["permissions"]
   if permissions
@@ -156,6 +203,7 @@ def validate_workflow(text, source = "(workflow)")
 
   mapping_entries(jobs_node, "jobs").each do |job_name, job_node|
     entries = mapping_entries(job_node, "job #{job_name.inspect}")
+    validate_job_action_references(entries, "job #{job_name.inspect}")
     next unless privileged_job?(entries, job_node, "job #{job_name.inspect}")
     next if trusted_ref_guard?(entries["if"])
 

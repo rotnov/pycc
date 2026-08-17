@@ -47,6 +47,50 @@ class WorkflowPermissionsTest < Minitest::Test
     validate_workflow(workflow)
   end
 
+  def test_rejects_mutable_and_short_action_references
+    [
+      "actions/setup-python@v5",
+      "actions/setup-python@main",
+      "actions/setup-python@a26af69"
+    ].each do |reference|
+      text = workflow(
+        "runs-on: ubuntu-latest\nsteps:\n  - uses: #{reference}"
+      )
+      error = assert_raises(PolicyError) { validate_workflow(text) }
+      assert_match(/full commit SHA/, error.message)
+    end
+  end
+
+  def test_accepts_full_sha_and_local_action_references
+    validate_workflow(workflow(<<~YAML))
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        - uses: ./local-action
+    YAML
+  end
+
+  def test_rejects_mutable_reusable_workflow_reference
+    error = assert_raises(PolicyError) do
+      validate_workflow(
+        workflow("uses: owner/repo/.github/workflows/test.yml@main")
+      )
+    end
+    assert_match(/full commit SHA/, error.message)
+  end
+
+  def test_checkout_requires_non_persisted_credentials_even_with_case_drift
+    [
+      "steps:\n  - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+      "steps:\n  - uses: Actions/Checkout@d23441a48e516b6c34aea4fa41551a30e30af803\n    with:\n      persist-credentials: true"
+    ].each do |steps|
+      error = assert_raises(PolicyError) do
+        validate_workflow(workflow("runs-on: ubuntu-latest\n#{steps}"))
+      end
+      assert_match(/persist-credentials.*false/, error.message)
+    end
+  end
+
   def test_accepts_explicit_empty_baseline
     validate_workflow(
       workflow.sub("permissions:\n  contents: read", "permissions: {}")
