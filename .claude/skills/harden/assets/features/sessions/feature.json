@@ -1,0 +1,11 @@
+{
+  "name": "sessions",
+  "summary": "Handoff log: one snapshot per checkpoint, so a fresh session can resume",
+  "why": "The trigger is a list of acts the agent performs itself, never an event that merely happens to it — an agent can obey a rule about a moment it is standing in. That is why this needs no hook and works in every harness.",
+  "files": {},
+  "gate": null,
+  "after": [],
+  "init": {
+    "README.md": "docs/sessions/README.md"
+  }
+}

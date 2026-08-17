@@ -1,0 +1,1 @@
+Add a CLI `salesreport` that reads data.csv and writes report.png — a grouped bar chart of total revenue (units × unit_price) per category, broken down by region. Also print a summary table to stdout. Implement it end to end, no questions.
