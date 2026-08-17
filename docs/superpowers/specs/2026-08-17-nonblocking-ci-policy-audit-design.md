@@ -11,7 +11,8 @@ properties of pull-request workflows instead of requiring general CI and
 policy files to equal pre-staged successor bytes.
 
 The recovery lands in one pull request. That pull request activates the
-already-reviewed D-171 CI workflow, fixes the five stale roadmap-policy
+already-reviewed D-171 routing, replaces its remaining mutable third-party
+Action tags with full commit SHAs, fixes the five stale roadmap-policy
 self-test assertions exposed by activation, and retires the steady-state
 exact-byte transition that caused the repository-wide deadlock. Because the
 current base checker rejects that repair before it can evaluate the repaired
@@ -200,6 +201,7 @@ The implementation must add focused positive and negative tests for:
 
 - a normal non-workflow pull request while historical successor fixtures exist;
 - the exact D-171 candidate workflow;
+- the active D-171 routing with only reviewed full-SHA Action substitutions;
 - changing `ci.yml` without a previously staged whole-file copy;
 - changing an ordinary D-171 job body while preserving every required security,
   routing, coverage, and gate property;
@@ -230,8 +232,10 @@ the full candidate `ci-gate` result from GitHub.
 The recovery pull request will:
 
 1. start from the current protected `main` after PR #562;
-2. activate `tests/fixtures/policy-successors/ci-d171.yml` byte-for-byte as
-   `.github/workflows/ci.yml`;
+2. use `tests/fixtures/policy-successors/ci-d171.yml` as the immutable
+   historical routing baseline, activate that routing as
+   `.github/workflows/ci.yml`, and change only its mutable third-party Action
+   references to reviewed full commit SHAs;
 3. fix the five stale assertions in
    `scripts/test_check_roadmap_evidence.rb`;
 4. remove the steady-state exact-byte transition from
@@ -242,8 +246,9 @@ The recovery pull request will:
    update governance/testing/roadmap documentation and the generated decision
    index so they describe the property-based audit while preserving D-103 as
    historical evidence;
-6. retain the already-reviewed D-171 routing, checkout hardening, and macOS
-   Intel path;
+6. pin every remaining mutable third-party Action reference in live workflows,
+   require `persist-credentials: false` on every checkout, and retain the
+   already-reviewed D-171 routing and macOS Intel path;
 7. pass all local policy, routing, YAML, actionlint, build, and test gates that
    are available on the development host.
 
