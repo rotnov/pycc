@@ -138,9 +138,11 @@ class TestCheckSitemapLastmod < Minitest::Test
   def test_rejects_lastmod_after_content_change
     # The sitemap has the original lastmod, but a subsequent commit
     # modifies a source file with a newer author date. The validator
-    # must reject the now-stale lastmod.
+    # must reject the now-stale lastmod. The change date must be newer
+    # than the status page's live lastmod (2026-08-15) to create a real
+    # staleness gap.
     text = live_sitemap
-    status, output = run_checker_after_content_change(text, LIVE_LASTMOD, "2026-08-15")
+    status, output = run_checker_after_content_change(text, LIVE_LASTMOD, "2026-08-16")
     refute_equal 0, status, "accepted stale lastmod after content change:\n#{output}"
     assert_match(/status/, output, "error should name the stale page")
   end

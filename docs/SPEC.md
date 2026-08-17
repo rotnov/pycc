@@ -5,7 +5,7 @@ Entry point to the full spec. Development model is AI-first (D-013): the normati
 | Doc | Contents | Drives |
 |---|---|---|
 | [README.md](../README.md) | Vision, compiler-landscape positioning, quick start | everything |
-| [PYTHON_STANDARDS.md](./PYTHON_STANDARDS.md) | Language PEPs 3.0→3.14 plus the Python 3.15 preview track, one conformance test each; rejected-by-design list; OSS corpus tiers | `tests/conformance`, `tests/diagnostics` |
+| [PYTHON_STANDARDS.md](./PYTHON_STANDARDS.md) | Language PEPs 3.0→3.14 plus the Python 3.15 preview and Python 3.16 watchlist, one conformance test each; rejected-by-design list; OSS corpus tiers | `tests/conformance`, `tests/diagnostics` |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Pipeline, crates, incremental/parallel design, **cross-platform Tier-1 matrix** | workspace layout, CI matrix |
 | [TYPE_SYSTEM.md](./TYPE_SYSTEM.md) | Strictness rules, type↔representation table, generics, narrowing | `pycc_types` |
 | [MEMORY_OWNERSHIP.md](./MEMORY_OWNERSHIP.md) | Inferred ownership, RC elision, cycles, GIL-free native thread safety | `pycc_own`, `pycc_rt` |
@@ -14,6 +14,7 @@ Entry point to the full spec. Development model is AI-first (D-013): the normati
 | [DIAGNOSTICS.md](./DIAGNOSTICS.md) | Error-code registry, quality bar, stability rules | `pycc_diag` |
 | [STDLIB_PLAN.md](./STDLIB_PLAN.md) | Builtins + module tiers with target versions, compat policy | `pycc_std` |
 | [TESTING.md](./TESTING.md) | 7 test layers, conformance harness, differential fuzzing, corpus bot | CI, `pycc_testkit` |
+| [CI feedback routing design](./superpowers/specs/2026-08-15-ci-feedback-routing-design.md) | Fail-closed change classification, required-gate topology, cancellation, and the protected three-merge activation sequence | `scripts/classify_ci_changes.py`, CI workflow, D-103 policy successors |
 | [ROADMAP.md](./ROADMAP.md) | Delivery status for the repository tree in the containing commit plus v0.1→v1.0 milestones with binary acceptance criteria | releases |
 | [decisions/](./decisions/README.md) | ADR log, one file per decision — see the generated index for the full list | irreversible calls |
 | [DELIVERY_PLAN.md](./DELIVERY_PLAN.md) | Milestone decomposition, verified environment baseline, v0.1 crate scope + PR breakdown, v0.2 execution strategy + PR-8..PR-14 breakdown, v0.3 execution strategy + PR-15..PR-23 breakdown (design detail in [`superpowers/specs/`](./superpowers/specs/)), autonomy policy | execution order, PR sequencing |

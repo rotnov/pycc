@@ -5,7 +5,7 @@
 # subclass with constructor parameters, super().__init__() chaining,
 # and instantiation + method calls on the concrete subclasses.
 #
-# Both pycc and CPython 3.14.6 produce identical stdout: the ABC and
+# Both pycc and CPython 3.14.7 produce identical stdout: the ABC and
 # @abstractmethod are compile-time-only markers in pycc and runtime
 # enforcement mechanisms in CPython, but neither emits anything for the
 # class definitions themselves — only the concrete method calls produce

@@ -783,12 +783,24 @@ mutations = (
     (
         site_dir / "status" / "index.html",
         (
-            "the full multi-version conformance matrix,\n              "
-            "differential fuzzing, and corpus testing remain planned "
-            "test-depth\n              work carried over from v0.1 and v0.2."
+            "full multi-version conformance matrix, differential fuzzing,\n"
+            "              and corpus testing remain planned test-depth work carried over\n"
+            "              from v0.1 and v0.2."
         ),
         "The full multi-version conformance matrix is already complete.",
         "status page that overclaims conformance-matrix completion",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "Only custom exceptions remain planned.",
+        "Only custom exceptions and protocols remain planned.",
+        "status page that understates landed v0.3 class-model items",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "Still ahead for v0.3: custom exceptions are the",
+        "Still ahead for v0.3: custom exceptions and protocols are the",
+        "status page that understates landed v0.3 class-model items in the next-slice prose",
     ),
     (
         site_dir / "status" / "index.html",

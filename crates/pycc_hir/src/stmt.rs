@@ -41,8 +41,10 @@ use crate::expr::{
     is_zero_arg_super_call, lower_dict_comp_assign, lower_expr, lower_list_comp_assign,
     lower_range_call, lower_set_comp_assign,
 };
-use crate::{HirStmt, Ty, annotation_to_ty, context_invalid, unsupported};
-use pycc_ast::{ElifElseClause, Expr, Stmt};
+use crate::{
+    HirExpr, HirMatchCase, HirPattern, HirStmt, Ty, annotation_to_ty, context_invalid, unsupported,
+};
+use pycc_ast::{ElifElseClause, Expr, Pattern, Singleton, Stmt, StmtMatch};
 use pycc_diag::Diagnostic;
 
 pub(crate) fn lower_stmt(
@@ -393,6 +395,15 @@ pub(crate) fn lower_stmt(
                 )
             });
         }
+        Stmt::Match(match_stmt) => lower_match(
+            match_stmt,
+            aliases,
+            in_loop,
+            in_function,
+            class_name,
+            type_param,
+            class_defs,
+        )?,
         other => {
             return Err(unsupported(
                 "statement kind not supported yet",
@@ -482,5 +493,325 @@ pub(crate) fn lower_elif_else_clauses(
                 class_defs,
             )
         }
+    }
+}
+
+/// PEP 634-636 (#381, PR-21): lowers a `Stmt::Match` into `HirStmt::Match`.
+/// The subject is lowered once via `lower_expr`; each case's pattern is
+/// lowered via `lower_pattern`, its guard via `lower_expr`, and its body via
+/// `lower_body` (which filters `Stmt::Pass`).
+fn lower_match(
+    match_stmt: &StmtMatch,
+    aliases: &[(String, Ty)],
+    in_loop: bool,
+    in_function: bool,
+    class_name: Option<&str>,
+    type_param: Option<&str>,
+    class_defs: &[(String, bool)],
+) -> Result<HirStmt, Diagnostic> {
+    let subject = lower_expr(&match_stmt.subject, in_function, class_name)?;
+    let mut cases = Vec::with_capacity(match_stmt.cases.len());
+    for case in &match_stmt.cases {
+        let pattern = lower_pattern(&case.pattern, in_function, class_name)?;
+        let guard = case
+            .guard
+            .as_deref()
+            .map(|g| lower_expr(g, in_function, class_name))
+            .transpose()?;
+        let body = lower_body(
+            &case.body,
+            aliases,
+            in_loop,
+            in_function,
+            class_name,
+            type_param,
+            class_defs,
+        )?;
+        cases.push(HirMatchCase {
+            pattern,
+            guard,
+            body,
+        });
+    }
+    Ok(HirStmt::Match { subject, cases })
+}
+
+/// PEP 634-636 (#381, PR-21): lowers a `ruff_python_ast::Pattern` into an
+/// `HirPattern`. See `HirPattern`'s own doc comment for the per-variant
+/// mapping. Unsupported pattern sub-shapes (e.g. a non-literal in
+/// `MatchValue`, a non-`Expr::Name` class in `MatchClass`) produce `C0001`.
+fn lower_pattern(
+    pattern: &Pattern,
+    in_function: bool,
+    class_name: Option<&str>,
+) -> Result<HirPattern, Diagnostic> {
+    match pattern {
+        Pattern::MatchValue(value) => {
+            let expr = lower_expr(&value.value, in_function, class_name)?;
+            match &expr {
+                HirExpr::IntLiteral(_)
+                | HirExpr::FloatLiteral(_)
+                | HirExpr::StringLiteral(_)
+                | HirExpr::BoolLiteral(_) => Ok(HirPattern::Literal(expr)),
+                _ => Err(unsupported(
+                    "only a literal value pattern is supported so far",
+                    pycc_ast::expr_range(&value.value),
+                )),
+            }
+        }
+        Pattern::MatchSingleton(singleton) => match singleton.value {
+            Singleton::True => Ok(HirPattern::Singleton(true)),
+            Singleton::False => Ok(HirPattern::Singleton(false)),
+            Singleton::None => Ok(HirPattern::NoneSingleton),
+        },
+        Pattern::MatchSequence(seq) => {
+            let has_star = seq
+                .patterns
+                .iter()
+                .any(|p| matches!(p, Pattern::MatchStar(_)));
+            if has_star {
+                let mut rest: Option<String> = None;
+                let mut fixed: Vec<HirPattern> = Vec::new();
+                for p in &seq.patterns {
+                    if let Pattern::MatchStar(star) = p {
+                        rest = star.name.as_ref().map(|n| n.id.to_string());
+                    } else {
+                        fixed.push(lower_pattern(p, in_function, class_name)?);
+                    }
+                }
+                Ok(HirPattern::SequenceStar(fixed, rest))
+            } else {
+                let sub_patterns = seq
+                    .patterns
+                    .iter()
+                    .map(|p| lower_pattern(p, in_function, class_name))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(HirPattern::Sequence(sub_patterns))
+            }
+        }
+        Pattern::MatchMapping(mapping) => {
+            let mut pairs = Vec::with_capacity(mapping.keys.len());
+            for (key, pat) in mapping.keys.iter().zip(mapping.patterns.iter()) {
+                let key_expr = lower_expr(key, in_function, class_name)?;
+                let val_pat = lower_pattern(pat, in_function, class_name)?;
+                pairs.push((key_expr, val_pat));
+            }
+            let rest = mapping.rest.as_ref().map(|n| n.id.to_string());
+            Ok(HirPattern::Mapping(pairs, rest))
+        }
+        Pattern::MatchClass(class) => {
+            let Expr::Name(name) = class.cls.as_ref() else {
+                return Err(unsupported(
+                    "only a bare-name class pattern is supported so far",
+                    pycc_ast::expr_range(&class.cls),
+                ));
+            };
+            let class_name = name.id.to_string();
+            let positional = class
+                .arguments
+                .patterns
+                .iter()
+                .map(|p| lower_pattern(p, in_function, None))
+                .collect::<Result<Vec<_>, _>>()?;
+            let keyword = class
+                .arguments
+                .keywords
+                .iter()
+                .map(|kw| {
+                    lower_pattern(&kw.pattern, in_function, None)
+                        .map(|p| (kw.attr.to_string(), p))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(HirPattern::Class {
+                class_name,
+                positional,
+                keyword,
+            })
+        }
+        Pattern::MatchStar(_) => Err(unsupported(
+            "a `*` pattern is only valid inside a sequence pattern",
+            0..0,
+        )),
+        Pattern::MatchAs(as_pat) => match (&as_pat.pattern, &as_pat.name) {
+            (None, None) => Ok(HirPattern::Wildcard),
+            (None, Some(name)) => Ok(HirPattern::Capture(name.id.to_string())),
+            (Some(inner), name) => {
+                let inner_pat = lower_pattern(inner, in_function, class_name)?;
+                let name = name
+                    .as_ref()
+                    .map(|n| n.id.to_string())
+                    .unwrap_or_default();
+                Ok(HirPattern::As(Box::new(inner_pat), name))
+            }
+        },
+        Pattern::MatchOr(or_pat) => {
+            let sub = or_pat
+                .patterns
+                .iter()
+                .map(|p| lower_pattern(p, in_function, class_name))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(HirPattern::Or(sub))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lower_pattern_rejects_bare_match_star() {
+        let star = Pattern::MatchStar(pycc_ast::PatternMatchStar {
+            node_index: Default::default(),
+            range: Default::default(),
+            name: None,
+        });
+        let err = lower_pattern(&star, false, None).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("a `*` pattern is only valid inside a sequence pattern"));
+    }
+
+    #[test]
+    fn lower_pattern_as_with_no_name_produces_empty_name() {
+        let inner = Pattern::MatchValue(pycc_ast::PatternMatchValue {
+            node_index: Default::default(),
+            range: Default::default(),
+            value: Box::new(Expr::NumberLiteral(pycc_ast::ExprNumberLiteral {
+                node_index: Default::default(),
+                range: Default::default(),
+                value: pycc_ast::Number::Float(1.0),
+            })),
+        });
+        let as_pat = Pattern::MatchAs(pycc_ast::PatternMatchAs {
+            node_index: Default::default(),
+            range: Default::default(),
+            pattern: Some(Box::new(inner)),
+            name: None,
+        });
+        let result = lower_pattern(&as_pat, false, None).unwrap();
+        assert_eq!(
+            result,
+            HirPattern::As(
+                Box::new(HirPattern::Literal(HirExpr::FloatLiteral(1.0))),
+                String::new(),
+            )
+        );
+    }
+
+    #[test]
+    fn lower_match_with_unsupported_body_emits_c0001() {
+        let module = pycc_parser::parse(
+            "x = 1\nmatch x:\n    case 1:\n        while True:\n            pass\n        else:\n            pass\n    case _:\n        pass\n",
+        ).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn lower_match_subject_expr_error_propagates() {
+        // `{**x}` is a dict-unpacking expression that `lower_expr` rejects
+        // with C0001; used as the match subject it propagates through the
+        // `?` on the subject expression.
+        let module = pycc_parser::parse(
+            "match {**x}:\n    case _:\n        pass\n",
+        ).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn lower_match_guard_expr_error_propagates() {
+        // `{**y}` as a guard expression causes `lower_expr` to fail with
+        // C0001, propagating through the `?` on the guard.
+        let module = pycc_parser::parse(
+            "x = 1\nmatch x:\n    case 1 if {**y}:\n        pass\n    case _:\n        pass\n",
+        ).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn lower_match_value_pattern_expr_error_propagates() {
+        // `case -1:` is a value pattern with a unary minus expression;
+        // `lower_expr` does not handle unary operators and rejects with C0001.
+        let module = pycc_parser::parse(
+            "x = 1\nmatch x:\n    case -1:\n        pass\n    case _:\n        pass\n",
+        ).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn lower_match_mapping_key_expr_error_propagates() {
+        // A mapping key `-1` is a unary minus expression that `lower_expr`
+        // rejects with C0001, propagating through the `?` on the key.
+        let module = pycc_parser::parse(
+            "x = {1: 2}\nmatch x:\n    case {-1: v}:\n        pass\n    case _:\n        pass\n",
+        ).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn lower_match_sequence_subpattern_error_propagates() {
+        let module = pycc_parser::parse(
+            "x = [1]\nmatch x:\n    case [foo.bar]:\n        pass\n    case _:\n        pass\n",
+        ).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn lower_match_sequence_star_subpattern_error_propagates() {
+        let module = pycc_parser::parse(
+            "x = [1]\nmatch x:\n    case [foo.bar, *rest]:\n        pass\n    case _:\n        pass\n",
+        ).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn lower_match_mapping_value_pattern_error_propagates() {
+        let module = pycc_parser::parse(
+            "x = {\"k\": 1}\nmatch x:\n    case {\"k\": foo.bar}:\n        pass\n    case _:\n        pass\n",
+        ).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn lower_match_class_positional_subpattern_error_propagates() {
+        let module = pycc_parser::parse(
+            "class P:\n    def __init__(self):\n        pass\nx = P()\nmatch x:\n    case P(foo.bar):\n        pass\n    case _:\n        pass\n",
+        ).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn lower_match_class_keyword_subpattern_error_propagates() {
+        let module = pycc_parser::parse(
+            "class P:\n    def __init__(self):\n        pass\nx = P()\nmatch x:\n    case P(a=foo.bar):\n        pass\n    case _:\n        pass\n",
+        ).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn lower_match_as_pattern_inner_error_propagates() {
+        let module = pycc_parser::parse(
+            "x = 1\nmatch x:\n    case foo.bar as y:\n        pass\n    case _:\n        pass\n",
+        ).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn lower_match_or_pattern_subpattern_error_propagates() {
+        let module = pycc_parser::parse(
+            "x = 1\nmatch x:\n    case foo.bar | 1:\n        pass\n    case _:\n        pass\n",
+        ).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
     }
 }

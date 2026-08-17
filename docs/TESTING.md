@@ -42,13 +42,20 @@ existing D-072 should-panic unit test remains the negative control that
 - Runner: for each supported language level, select that configuration's
   cumulative fixture range and pinned oracle → compile (`--debug` and
   `--release` both, once `--release` exists — see below) → execute → diff. The
-  v1.0 Python 3.14 run covers `py30/` through `py314/` against CPython 3.14.6.
+  v1.0 Python 3.14 run covers `py30/` through `py314/` against CPython 3.14.7.
   After the v1.x adoption gate opens, the Python 3.15 run covers `py30/`
   through `py315/` against a pinned current Python 3.15 patch; the separate
   Python 3.14 compatibility run remains required. Outputs are recorded and
   re-recorded on oracle patch bumps.
 - A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand.
 - **v0.1 exception:** `--release`/LTO doesn't exist until v0.2 (see ROADMAP.md), so the "both profiles" rule only binds from v0.2 on. Every v0.1 PEP/feature flips to ✅ on `--debug` alone; nothing in v0.1 is held to a `--release` bar that has nothing to build against (see DELIVERY_PLAN.md, "Debug/release conformance").
+
+**Python 3.14.7 oracle transition (activated 2026-08-15):** the three-round
+D-103 sequence first staged the exact reviewed workflow and checker successors,
+then activated the checker, and finally advanced the live Tier-1 workflow and
+conformance contract to Python 3.14.7. `PYTHON_STANDARDS.md` and `ROADMAP.md`
+move with the activation. This patch-level oracle refresh does not expand
+D-012's Python 3.14 language level.
 
 **PR-9 status (2026-07-30):** the `pycc_testkit` crate above remains unbuilt — D-102 extended the existing flat `tests/conformance.rs` integration test in place instead (11 fixtures at the time: the 2 pre-existing plus 9 new PEP fixtures), judging that PR-9's own needs (compile both profiles, run, diff against CPython) were still fully covered by that file's existing helper and didn't justify a new workspace crate. The "matrix file is updated by CI, not by hand" policy above has no automation behind it yet (verified: nothing currently writes `PYTHON_STANDARDS.md`'s status column); D-102's accepted interim policy is to flip a row by hand only once its fixture is observed green on a real, already-completed CI run across all 5 Tier-1 targets in both profiles — never speculatively. Building the real `pycc_testkit` crate and CI-owned status automation both remain deferred to whenever the v1.0-scale, multi-language-level harness this section describes is actually needed.
 
@@ -278,16 +285,18 @@ without any planned marker, roadmap bot checked while testing says
 planned, and positive controls for planned markers that legitimize
 mentions.
 
-The `ci-tier1-cross-compile` evidence binds an allowlist of exact reviewed
-`ci.yml` byte digests that provide the five Tier-1 native targets, cross-host
-build and execution proof, and aggregate `ci-gate`. Because a workflow can
-preserve plausible job names while bypassing their commands, any future change
-to that evidence is staged: first append the reviewed prospective digest while
-retaining the current digest in the trusted checker, then change the workflow
-and roadmap claim, and finally remove the superseded digest. A digest is
-retired immediately if later repository requirements make that workflow
-incomplete; a transition window is valid only while both versions satisfy the
-current contract.
+The `ci-tier1-cross-compile` evidence is enforced by D-172's base-owned
+property audit. It requires the exact five-target Tier-1 matrix, the macOS
+arm64-to-Intel cross-host build and native execution proof, immutable Actions,
+read-only checkout credentials, event-default candidate checkouts for required
+workspace jobs, fail-closed D-171 routing, and the aggregate
+`ci-gate` truth table. Required jobs cannot inherit an alternate job-level
+`env`, `defaults`, or `container`; the native matrix and Pages jobs retain
+their reviewed runner bindings; and the Intel and Pages proof commands cannot
+be made conditional. The audit binds the commands and dependencies that
+produce those properties instead of authorizing a complete `ci.yml` byte
+digest. Historical workflow digests remain immutable regression fixtures only;
+they cannot force a later pull request to activate their bytes.
 
 D-100 composes D-091
 (release-mode `pycc_rt` build step, relaxed `frontend-perf-measure` manifest
@@ -313,10 +322,10 @@ restore/save keys and paths are paired, and that removing either the hosted
 image or LLVM component of the key is rejected by the public checker.
 
 The `conformance-fib-mandelbrot-tier1` and `check-throughput-1k-loc-75ms`
-evidence bind the same reviewed `ci.yml` digest as `ci-tier1-cross-compile`,
-so proving the digest is reviewed and current also proves these two steps
-execute for real: the fib/mandelbrot-ascii byte-for-byte CPython differential
-(`tests/conformance.rs`, D-085/D-080) runs via `cargo test -- --include-ignored`
+evidence is checked as part of the same active D-171 structure. The
+base-owned validator requires the command that runs the fib/mandelbrot-ascii
+byte-for-byte CPython differential (`tests/conformance.rs`, D-085/D-080) via
+`cargo test -- --include-ignored`
 in both `build-test-coverage` and every `native-build-test` matrix leg, i.e.
 on all five Tier-1 targets, while the `pycc check` <75ms/1000 LOC
 absolute-throughput-floor step (`scripts/check_frontend_throughput.rb`,
@@ -325,7 +334,7 @@ the tier1 claim above, this roadmap item's own wording does not assert the
 floor holds on every target, only that it holds. The
 `cli-spec-diagnostic-match` evidence instead binds
 the `cli_spec_example` diagnostic-snapshot test (`tests/diagnostics_test.rs`,
-D-083), which runs inside the same digest-pinned, 100%-coverage-gated
+D-083), which runs inside the same structurally required, 100%-coverage-gated
 `cargo test`/`cargo llvm-cov` step `ci-build-test-coverage-100`'s evidence
 already requires -- none of these three add a second, evidence-ID-specific
 repository check beyond the roadmap claim/section binding every evidence ID
@@ -342,21 +351,14 @@ D-056 retained the same boundary, and D-062 keeps it while changing only the
 fixed sample plan and comparator. Artifact and checkout actions remain immutable
 reviewed pins.
 
-The active `.github/workflows/ci.yml` is byte-identical to
-`tests/fixtures/d112-ubuntu-frontend-perf-ci.yml` (D-112: `frontend-perf-measure`/
-`frontend-perf-gate` moved from `macos-14` to `ubuntu-latest`, confirmed by
-five real shadow-measurement runs before activation -- see
-`docs/decisions/D-112-move-frontend-perf-measure-frontend-perf-gate.md`).
-Its performance jobs keep D-062's comparator logic and five-replicate/`>2%`
-contract unchanged, but their runner and LLVM install step differ from the
-D-062 fixture, so job content is no longer byte-identical to it. The checker
-allowlist currently accepts both active D-112 and D-100 (a deliberate D-103
-coexist window pending a later, separate round that retires D-100), while
-structural mutation tests exercise the active fixed-replicate and cache
-boundaries plus D-100's, D-091's, D-099's, and D-056's retained audit
-fixtures. The retired D-051, D-056, D-062, D-080, D-084, pre-D-100 D-091, and
-pre-D-100 D-099 whole-file digests remain historical audit evidence, but the
-public policy rejects them.
+The active `.github/workflows/ci.yml` uses D-171 change-aware routing while its
+performance jobs retain D-112's Ubuntu runner, D-062's five-replicate
+comparator, and D-114's current `>7%` threshold. D-172 validates their exact
+predecessor/candidate bindings, source-aware comparator, artifact identities,
+routing dependency, and aggregate result branches as named properties. The
+retired D-051, D-056, D-062, D-080, D-084, pre-D-100 D-091, pre-D-100 D-099,
+D-100, D-112, and D-114 whole-workflow digests remain historical mutation-test
+evidence; none authorizes the live workflow.
 The D-048 steady-state, pre-split, and activation fixtures, their digests, and
 their bootstrap tests are absent.
 The retired D-048 mean comparator and its standalone test are absent too;
@@ -473,31 +475,32 @@ propose/activate sequence to accommodate v0.2 PR-10's real, one-time
 `Ty`-migration cost (D-109), not runner noise. Every historical `2%`
 reference above still accurately describes what that specific decision
 changed at the time; only the currently-active threshold has moved.
-`REVIEWED_PERF_CI_WORKFLOW_SHA256S` now coexists `[D100, D112, D114]`;
-`.github/workflows/ci.yml` matches D-114's shape. Issue #296 tracks
+The active D-171 workflow preserves D-114's threshold and D-062's measurement
+properties without being authorized by `REVIEWED_PERF_CI_WORKFLOW_SHA256S`.
+Issue #296 tracks
 lowering the threshold back toward 2.0% once this one-time cost is
 absorbed into every future baseline.
 
-The byte-exact activation retired the D-048 workflow digest and fixture. No
-administrative bootstrap is required because each run of the active workflow
-(D-114, formerly D-112, formerly D-100) uses D-062's embedded contract to
+The historical byte-exact activation retired the D-048 workflow digest and
+fixture. No administrative bootstrap is required because each compiler-selected
+run of the active D-171 workflow uses D-062's embedded contract to
 measure both sides of its own comparison. D-054's one-shot
 staging recovery is historical audit
 evidence only; normal `audit` plus `ci-gate` protection was restored before this
 activation branch was created and is not encoded in repository configuration.
 A pull request that changes a bound manifest, local build script, lockfile,
-toolchain, Cargo configuration, or benchmark source must first stage a
-reviewed transition for that benchmark contract; the gate intentionally does
-not guess whether such a change affects only product code or also the
-measurement harness.
+toolchain, Cargo configuration, or benchmark source must preserve the
+source-aware benchmark properties and pass the base-owned audit in that same
+pull request; the gate intentionally does not guess whether such a change
+affects only product code or also the measurement harness.
 
-Regular CI runs the self-tests and repository checker after the hard coverage
-step for fast feedback; placing a head-controlled script before that step would
-violate the trusted setup sequence. The authority is the required read-only
-`Workflow policy` job: it checks out the base revision, downloads the head
-revision's workflows and `docs/ROADMAP.md` as non-executable data, then runs the
-base revision's roadmap tests and checker against those inputs. A pull request
-that replaces its own checker therefore cannot replace the implementation that
+Regular CI runs the self-tests and repository checker in the always-run
+`governance` job for fast feedback, independently of whether compiler-heavy
+coverage is selected. The authority is the required read-only `Workflow
+policy` job: it checks out the base revision, downloads the head revision's
+workflows and `docs/ROADMAP.md` as non-executable data, then runs the base
+revision's roadmap tests and checker against those inputs. A pull request that
+replaces its own checker therefore cannot replace the implementation that
 authorizes its checked roadmap markers.
 
 ### Agent hook lifecycle
@@ -565,8 +568,7 @@ baseline. The baseline may contain only read or `none` scopes, or
 `permissions: {}`; a job that needs an elevated scope must opt in at job level
 and satisfy the trust-boundary rules in `AGENTS.md`.
 
-Regular CI runs both commands after the isolated hard-coverage boundary and
-before the ordinary post-gate build:
+Regular CI runs both commands in the always-run, read-only `governance` job:
 
 ```sh
 ruby scripts/test_check_ci_permissions.rb
@@ -604,20 +606,17 @@ required evidence path returned by the Git tree API to be an exact
 approved bytes while breaking the next trusted checkout. The steady-state
 successor also rejects every root or nested `.gitattributes` entry on every
 pull request before checkout rules can rewrite a byte-identical workflow.
-It reads the trusted base's complete
-`tests/fixtures/policy-successor-manifest.json`, downloads every protected
-policy executable and repository input plus the candidate's proposed next
-manifest sources as non-executable `100644` data, and compares active targets
-only with the base-staged sources and SHA-256 values. A candidate manifest
-cannot authorize a target changed in that same pull request or remove any
-already protected target. Under D-103, a legitimate policy-bundle update uses two
-merges: first stage proposal files and the next complete manifest while active
-targets remain unchanged; only a later pull request may activate those bytes,
-after they are part of the trusted base. The later activation may reset each
-source to its now-active target for the next cycle. This keeps future checker,
-self-test, workflow-input, and fixture revisions under the same base-owned
-transition boundary as initial activation instead of trusting whatever code a
-pull request would make authoritative after merge. It then runs the base-owned
+It reads the trusted base's
+`tests/fixtures/policy-successor-manifest.json` as a bounded inventory of
+historical policy inputs and downloads candidate workflows and protected inputs
+as non-executable `100644` data. D-172 supersedes D-103's forced exact-byte
+two-merge transition for general CI and checker changes: the base-owned checker
+validates named permissions, Action pins, checkout credentials, trusted-event
+guards, D-171 routing, Tier-1 coverage, and aggregate-gate properties in one
+pull request. The candidate manifest cannot authorize its own bytes, and no
+manifest entry forces a later activation. The separately pinned
+`workflow-policy.yml` trust anchor retains its own staged update boundary. The
+audit then runs the base-owned
 `check_search_visibility_audit.py` against the checked-out base ledger. The
 audit rejects a rewritten history prefix, invalid checkpoints, mutable surface
 or activation contracts, incorrect rank deltas, and replay metadata whose
@@ -716,25 +715,22 @@ pipes, line separators, and the retired `AI-native compiler` authorship
 diagnostic. Google retirement remains activation/clock-bounded until the
 registry gains a Google snapshot series.
 
-Activation copied the reviewed fixture byte-for-byte to
+The historical activation copied the reviewed fixture byte-for-byte to
 `workflow-policy.yml`, proved the required `audit` run, and retired the older
-roadmap-only digest plus the one-use bridge. The active policy checker and its
-self-test are the exact deterministic steady-state variants staged by the base;
-their transition-only call and tests are absent. Every policy executable,
-self-test, workflow input, and transitive repository fixture is bound by the
-complete D-103 successor manifest. On every pull request, the base-owned audit
-downloads those inputs as non-executable Git data, requires `100644 blob` modes,
-rejects root or nested `.gitattributes`, and runs the isolated Python auditor
-against the trusted base ledger. A candidate cannot replace a checker, change
-one protected target while authorizing it from its own manifest, or shrink the
-bundle in one merge. Future protected-bundle changes therefore retain the same
-two-merge proposal-then-activation protocol.
+roadmap-only digest plus the one-use bridge. That trust-anchor workflow remains
+exactly pinned. Under D-172, its base-owned checker downloads candidate
+workflows and protected inputs as non-executable Git data, requires `100644
+blob` modes, rejects root or nested `.gitattributes`, and runs the isolated
+Python auditor against the trusted base ledger. General CI/checker changes are
+authorized by the named policy properties in one pull request; the successor
+manifest remains historical bounded-input inventory, not a future-byte
+activation mechanism.
 
 The regular PR job runs this checker for fast feedback only; pull-request code
 can change its own workflow. The authoritative `Workflow policy` workflow uses
 `pull_request_target` on every pull request, checks out the trusted base commit,
-downloads the head revision's workflows, search evidence, complete successor
-manifest, and every protected target/source through the read-only GitHub API,
+downloads the head revision's workflows, search evidence, successor-manifest
+inventory, and protected inputs through the read-only GitHub API,
 and treats them as data. It never checks out or executes
 pull-request code, so the check can remain required without path-filtered runs
 getting stuck as pending. Its checkout uses `github.sha`, which
@@ -894,10 +890,33 @@ calling `patch_required_status_checks` or writing `state.json`.
 
 ## Code coverage (D-014)
 
-Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
+Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every compiler-relevant pull request selected by the fail-closed classifier and every push to `main`.
+
+**D-171 change-aware scheduling (active 2026-08-15):** The active workflow is
+validated by D-172's base-owned named-property audit rather than by equality to
+the historical `ci-d171.yml` fixture or a live whole-file digest.
+An always-run classifier may skip a heavy category only for an exact reviewed path set;
+unknown, empty, malformed, or unsupported input selects the complete topology,
+and the required `ci-gate` fails unless every selected job succeeds and every
+unselected job is skipped. Pushes to `main` always run the full topology.
+Every compiler input also selects the offline alpha skill evals: those evals
+execute the freshly built compiler and bind its current diagnostics and D-072
+backend boundary, so they are part of the compiler contract rather than an
+agent-assets-only check.
+
+This active scheduling change supersedes only D-014's instruction to execute
+coverage on literally every pull request: coverage remains mandatory for every
+compiler-relevant pull request selected by the classifier and every push to
+`main`. It does not change the 100% line and
+region thresholds, the full-workspace denominator, the isolated `nobody`
+sandbox, tool pins, or whole-file exemption policy. Compiler-relevant changes
+still require the complete Tier-1 native matrix, cross-compilation build and
+verification, and paired frontend performance gates; Pages-relevant changes
+still require both Pages gates and their existing budgets. `audit` and the
+fail-closed `ci-gate` remain required.
 
 - Tool: `cargo llvm-cov` — a separately distributed cargo subcommand, **not** bundled with any rustup component. CI installs it explicitly and pinned (installer action or `cargo install cargo-llvm-cov --locked --version <pinned>`), plus the `llvm-tools-preview` rustup component it drives at runtime; a bare "install llvm-tools" fails with "no such command: llvm-cov" (caught by repo audit, issue #13). Independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match.
-- Gate: `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. The explicit `llvm-cov` argument is required when invoking Cargo's subcommand binary directly. CI resolves and installs the trusted tool before executing repository code, then runs the cross-target `pycc_rt` prerequisite, workspace build, and coverage under `sudo -u nobody env -i` with isolated HOME, Cargo home, temp, and target directories. The workspace and runner-owned toolchain/binary are read-only to that user, so a build script or procedural macro cannot replace the executables or write GitHub command files. The checker pins the complete environment and step prefix through the hard-gate step; regular repository policy/test steps run only afterward. The x86_64 macOS runtime is built first so the cross-compilation test cannot skip its success path, then `cargo build --workspace` supplies the normal debug `pycc_rt` used by the remaining slice-0 tests. The pinned tool's version smoke check runs immediately before entering the boundary.
+- Gate: `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. The explicit `llvm-cov` argument is required when invoking Cargo's subcommand binary directly. CI resolves and installs the trusted tool before executing repository code, then runs the cross-target `pycc_rt` prerequisite, workspace build, and coverage under `sudo -u nobody env -i` with isolated HOME, Cargo home, temp, and target directories. The workspace and runner-owned toolchain/binary are read-only to that user, so a build script or procedural macro cannot replace the executables or write GitHub command files. The checker pins the complete environment and step prefix through the hard-gate step; no head-controlled policy step runs earlier in this coverage job, while the separate always-run governance job remains unprivileged. The x86_64 macOS runtime is built first so the cross-compilation test cannot skip its success path, then `cargo build --workspace` supplies the normal debug `pycc_rt` used by the remaining slice-0 tests. The pinned tool's version smoke check runs immediately before entering the boundary.
 - Test code itself (`tests/`, `*_tests.rs`, `tests.rs`) is excluded from the denominator automatically — the gate measures product code exercised by tests, not tests covering themselves.
 - Exemptions are whole-file only, via `--ignore-filename-regex` (no per-function opt-out exists on stable Rust — see D-014). Each exemption needs a named entry here:
 

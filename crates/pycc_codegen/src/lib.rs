@@ -1626,6 +1626,16 @@ fn emit_expr<'ctx>(
         } if name == "math.pi" => {
             Scalar::Float(context.f64_type().const_float(std::f64::consts::PI))
         }
+        // PEP 634-636 (#381, PR-21): `None` singleton in a match pattern
+        // comparison. `None` is not a bound variable — it is a constant
+        // `i8 0` carrier (D-075), emitted inline exactly like `math.pi`
+        // above rather than looked up in `locals`.
+        MirExpr::Name {
+            name,
+            ty: Ty::None,
+        } if name == "None" => {
+            Scalar::Bool(context.i8_type().const_zero())
+        }
         MirExpr::Name { name, ty } => {
             let slot = locals.get(name).unwrap_or_else(|| {
                 panic!("pycc_codegen: internal error: `{name}` has no local slot")
@@ -4029,6 +4039,11 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                 .or_insert(pycc_mir::Ty::Set(Box::new(elt.ty())));
         }
         MirStmt::ExprStmt(_) | MirStmt::Return(_) | MirStmt::NoOp => {}
+        MirStmt::Seq(stmts) => {
+            for stmt in stmts {
+                collect_stmt_bindings(stmt, bindings);
+            }
+        }
     }
 }
 
@@ -7076,6 +7091,21 @@ fn emit_stmt<'ctx>(
             //    `ListCompAssign`'s own "point 5" comment above for why this
             //    is deferred all the way to here).
             emit_assign(context, builder, locals, target, Scalar::Dict(new_dict));
+            Ok(())
+        }
+        MirStmt::Seq(stmts) => {
+            for stmt in stmts {
+                emit_stmt(
+                    context,
+                    builder,
+                    module,
+                    rt,
+                    user_functions,
+                    locals,
+                    stmt,
+                    expected_return_ty.clone(),
+                )?;
+            }
             Ok(())
         }
     }
@@ -17542,6 +17572,94 @@ mod tests {
         compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         // The binary is never run — the abstract method is never called.
         // We only need to verify that codegen produces valid LLVM IR.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -- #381: MirStmt::Seq error propagation in emit_stmt ---------------
+
+    #[test]
+    fn calling_an_undefined_function_inside_a_seq_is_rejected() {
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Seq(vec![
+                call_print(1),
+                call_user_fn("does_not_exist_in_seq"),
+            ]))],
+            class_defs: Vec::new(),
+        };
+        let dir = tempfile_dir("seq_undefined_fn");
+        let obj_path = dir.join("seq_undefined_fn.o");
+        let err = compile_to_object(&mir, &obj_path, None, false).expect_err("should be rejected");
+        assert!(
+            err.contains("does_not_exist_in_seq"),
+            "error should name the offending function: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn seq_with_valid_statements_compiles_and_runs() {
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Seq(vec![
+                call_print(10),
+                call_print(20),
+            ]))],
+            class_defs: Vec::new(),
+        };
+        let dir = tempfile_dir("seq_valid");
+        let obj_path = dir.join("seq_valid.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("seq_valid");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"10\n20\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -- #381: None singleton pattern comparison in emit_expr ---------------
+
+    #[test]
+    fn none_singleton_comparison_emits_zero_carrier() {
+        // Exercises the `MirExpr::Name { name, ty: Ty::None } if name ==
+        // "None"` arm of `emit_expr` (line 1633).  The MIR mirrors what
+        // `lower_pattern_conds` produces for `match x: case None:`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "get_none".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::Return(Some(MirExpr::Name {
+                        name: "None".to_string(),
+                        ty: Ty::None,
+                    }))],
+                },
+                MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::Compare {
+                        op: CmpOpKind::Eq,
+                        left: Box::new(MirExpr::Call {
+                            callee: "get_none".to_string(),
+                            args: vec![],
+                            ty: Ty::None,
+                        }),
+                        right: Box::new(MirExpr::Name {
+                            name: "None".to_string(),
+                            ty: Ty::None,
+                        }),
+                        ty: Ty::Bool,
+                    },
+                    body: vec![call_print(1)],
+                    orelse: vec![call_print(0)],
+                }),
+            ],
+            class_defs: Vec::new(),
+        };
+        let dir = tempfile_dir("none_singleton_cmp");
+        let obj_path = dir.join("none_singleton_cmp.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("none_singleton_cmp");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

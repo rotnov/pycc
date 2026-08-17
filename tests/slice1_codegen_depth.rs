@@ -496,7 +496,7 @@ print(\"x\", 1, 2.5, True)
 fn float_of_an_int_bool_and_float_prints_the_correct_value() {
     // #181: `float(x)` for `x: int | float | bool` in a public,
     // fully-annotated function body. Expected output verified directly
-    // against CPython 3.14.6: `str(float(3))` == "3.0", `str(float(True))`
+    // against CPython 3.14.7: `str(float(3))` == "3.0", `str(float(True))`
     // == "1.0", `str(float(2.5))` == "2.5" -- identity for an
     // already-`float` argument, not just narrowing.
     let source = "\
@@ -776,7 +776,7 @@ fn mandelbrot_ascii_produces_a_grid_of_the_expected_dimensions_and_palette() {
     // recursion-free numeric function. This test only proves the shape
     // (dimensions + palette characters used); the exact-value CPython
     // differential lives in `tests/conformance.rs`'s
-    // `mandelbrot_ascii_matches_cpython_3_14_6_byte_for_byte` (PR-6).
+    // `mandelbrot_ascii_matches_cpython_3_14_7_byte_for_byte` (PR-6).
     //
     // Deviation from the plan brief: the brief's fixture wrote the
     // plane offsets as unary-minus literals (`-2.0`, `-1.0`). Unary

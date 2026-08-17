@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # Pinned per D-014 / TESTING.md "Code coverage" -- never a bare "latest".
   CARGO_LLVM_COV_VERSION: "0.8.7"
@@ -15,10 +19,118 @@ env:
   LLVM_VERSION: "22.1.1"
 
 jobs:
+  classify-changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      compiler: ${{ steps.classify.outputs.compiler }}
+      pages: ${{ steps.classify.outputs.pages }}
+      agent: ${{ steps.classify.outputs.agent }}
+    steps:
+      - name: Check out exact event head with full history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Classify exact changed paths
+        id: classify
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              base_sha="$PR_BASE_SHA"
+              head_sha="$PR_HEAD_SHA"
+              ;;
+            push)
+              base_sha="$PUSH_BASE_SHA"
+              head_sha="$PUSH_HEAD_SHA"
+              ;;
+            *)
+              echo "unsupported CI event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          for revision in "$base_sha" "$head_sha"; do
+            if ! printf '%s\n' "$revision" | grep -Eq '^[0-9a-f]{40}$' ||
+               [ "$revision" = "0000000000000000000000000000000000000000" ]; then
+              echo "could not resolve exact CI base/head revisions" >&2
+              exit 1
+            fi
+            git cat-file -e "${revision}^{commit}"
+          done
+          git diff --no-renames --name-only --diff-filter=ACDMRTUXB -z "$base_sha" "$head_sha" |
+            python3 -B scripts/classify_ci_changes.py \
+              --event-name "$GITHUB_EVENT_NAME" \
+              --github-output "$GITHUB_OUTPUT"
+
+  governance:
+    needs: classify-changes
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Check agent policy
+        run: |
+          python3 -B -m unittest discover -s scripts -p 'test_*.py'
+          python3 -B scripts/validate_agent_policies.py
+
+      - name: Check workflow permission policy
+        run: |
+          ruby scripts/test_check_ci_permissions.rb
+          ruby scripts/check_ci_permissions.rb
+
+      - name: Check roadmap evidence
+        run: |
+          ruby scripts/test_check_roadmap_evidence.rb
+          ruby scripts/check_roadmap_evidence.rb
+
+      - name: Check README coverage badge binding (issue #211)
+        run: |
+          ruby scripts/check_readme_coverage_badge.rb
+          ruby scripts/test_check_readme_coverage_badge.rb
+
+      - name: Install LLVM 22 for offline alpha skill contract evals
+        if: needs.classify-changes.outputs.agent == 'true'
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          # llvm.sh's own packages don't pull in Polly's static lib; llvm-sys
+          # links it explicitly, so it must be installed separately here.
+          sudo apt-get install -y libpolly-22-dev
+          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+
+      - name: cargo build --workspace for offline alpha skill contract evals
+        if: needs.classify-changes.outputs.agent == 'true'
+        run: cargo build --workspace
+
+      - name: Run offline alpha skill contract evals
+        if: needs.classify-changes.outputs.agent == 'true'
+        run: |
+          python3 scripts/run_alpha_skill_evals.py \
+            --client codex --pycc-bin target/debug/pycc
+          python3 scripts/run_alpha_skill_evals.py \
+            --client claude --pycc-bin target/debug/pycc
+
   # Coverage gate lives on exactly one target, per D-014 ("at least one
   # Tier-1 target"). This job also builds/tests/lints -- it's the primary
   # dev host's own architecture (macOS arm64), unchanged from PR-1/PR-2.
   build-test-coverage:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.compiler == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -87,26 +199,6 @@ jobs:
           rm "$GITHUB_WORKSPACE/target"
           printf 'LLVM_SYS_221_PREFIX=%s\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 
-      - name: Check agent policy
-        run: |
-          python3 -B -m unittest discover -s scripts -p 'test_*.py'
-          python3 -B scripts/validate_agent_policies.py
-
-      - name: Check workflow permission policy
-        run: |
-          ruby scripts/test_check_ci_permissions.rb
-          ruby scripts/check_ci_permissions.rb
-
-      - name: Check roadmap evidence
-        run: |
-          ruby scripts/test_check_roadmap_evidence.rb
-          ruby scripts/check_roadmap_evidence.rb
-
-      - name: Check README coverage badge binding (issue #211)
-        run: |
-          ruby scripts/check_readme_coverage_badge.rb
-          ruby scripts/test_check_readme_coverage_badge.rb
-
       # Rebuild outside the coverage boundary so the regular cargo test below
       # exercises the same cross-target success path.
       - name: Build pycc_rt for x86_64-apple-darwin
@@ -125,31 +217,24 @@ jobs:
       - name: Build pycc_rt (release, for tests/nbody_bench.rs's --release build)
         run: cargo build --release -p pycc_rt
 
-      - name: Run offline alpha skill contract evals
-        run: |
-          python3 scripts/run_alpha_skill_evals.py \
-            --client codex --pycc-bin target/debug/pycc
-          python3 scripts/run_alpha_skill_evals.py \
-            --client claude --pycc-bin target/debug/pycc
-
       # tests/conformance.rs (PR-6, D-078) shells out to a hardcoded
       # "python3.14" oracle binary. Deliberately set up here, after the
       # coverage gate above rather than before it -- installing a
       # network-fetched interpreter inside that gate's isolated `nobody`
       # sandbox would expand a trust boundary that's reviewed and pinned
       # (scripts/check_roadmap_evidence.rb's TRUSTED_COVERAGE_STEPS /
-      # COVERAGE_SCRIPT). Pinned to the exact same 3.14.6 the local oracle
+      # COVERAGE_SCRIPT). Pinned to the exact same 3.14.7 the local oracle
       # uses (docs/ROADMAP.md's "v1 stable oracle" row).
-      - name: Set up CPython 3.14.6 conformance oracle
-        uses: actions/setup-python@v5
+      - name: Set up CPython 3.14.7 conformance oracle
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.14.6"
+          python-version: "3.14.7"
 
       - name: Verify oracle version
         shell: bash
         run: |
-          python3.14 --version | grep -qx "Python 3.14.6" || {
-            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.6'"
+          python3.14 --version | grep -qx "Python 3.14.7" || {
+            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.7'"
             python3.14 --version
             exit 1
           }
@@ -180,6 +265,8 @@ jobs:
   # PR-3: native build+test+lint on the other 4 Tier-1 targets. No coverage
   # requirement here -- that's build-test-coverage's job alone, per D-014.
   native-build-test:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.compiler == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -194,7 +281,9 @@ jobs:
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Show pinned toolchain
         run: rustup show
@@ -206,7 +295,7 @@ jobs:
       # This sets up the same environment vcvarsall.bat would.
       - name: Set up MSVC Developer Command Prompt (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       - name: Install LLVM 22 (Linux, via apt.llvm.org)
         if: runner.os == 'Linux'
@@ -323,12 +412,12 @@ jobs:
 
       # tests/conformance.rs (PR-6, D-078) shells out to a hardcoded
       # "python3.14" oracle binary via cargo test --workspace below, on every
-      # Tier-1 target alike -- pinned here to the exact same 3.14.6 the local
+      # Tier-1 target alike -- pinned here to the exact same 3.14.7 the local
       # oracle uses (docs/ROADMAP.md's "v1 stable oracle" row).
-      - name: Set up CPython 3.14.6 conformance oracle
-        uses: actions/setup-python@v5
+      - name: Set up CPython 3.14.7 conformance oracle
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.14.6"
+          python-version: "3.14.7"
 
       # actions/setup-python only produces a plain "python.exe" on Windows --
       # unlike its Unix installs, it never creates a version-suffixed
@@ -352,8 +441,8 @@ jobs:
       - name: Verify oracle version
         shell: bash
         run: |
-          python3.14 --version | grep -qx "Python 3.14.6" || {
-            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.6'"
+          python3.14 --version | grep -qx "Python 3.14.7" || {
+            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.7'"
             python3.14 --version
             exit 1
           }
@@ -406,9 +495,13 @@ jobs:
   # arm64 runner, cross-compiles for x86_64-apple-darwin using its own
   # --target flag -- same-OS/cross-arch, not cross-OS (see D-026 for why).
   cross-compile-build:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.compiler == 'true'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Install LLVM 22
         run: |
@@ -432,7 +525,7 @@ jobs:
           file /tmp/cross_fixture/hello
 
       - name: Upload the cross-compiled binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cross-compiled-x86_64-apple-darwin
           path: /tmp/cross_fixture/hello
@@ -441,11 +534,14 @@ jobs:
   # on one host, executed and verified on its native runner" per
   # docs/DELIVERY_PLAN.md's PR-3 row, not just "codegen didn't error."
   cross-compile-verify:
-    needs: cross-compile-build
+    needs:
+      - classify-changes
+      - cross-compile-build
+    if: needs.classify-changes.outputs.compiler == 'true'
     runs-on: macos-15-intel
     steps:
       - name: Download the cross-compiled binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: cross-compiled-x86_64-apple-darwin
           path: /tmp/cross_fixture
@@ -483,6 +579,8 @@ jobs:
   # changed, without selecting retries after seeing a result. The separate gate
   # job never executes compiler/build code from the PR.
   frontend-perf-measure:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.compiler == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -716,7 +814,10 @@ jobs:
   # measurement only as JSON data and verifies immutable hashes for the
   # reviewed comparator and its tests before executing them.
   frontend-perf-gate:
-    needs: frontend-perf-measure
+    needs:
+      - classify-changes
+      - frontend-perf-measure
+    if: needs.classify-changes.outputs.compiler == 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -821,12 +922,14 @@ jobs:
             "7.0"
 
   # Issue #229: hermetic Pages performance budget gate.  Runs on every
-  # pull request and push to main, unprivileged (contents: read only).
+  # Pages-relevant pull request and push to main, unprivileged (contents: read only).
   # Uses a pinned Lighthouse 12.8.2 mobile profile against the hermetic
   # local server to enforce LCP/CLS/TBT/performance-score thresholds and
   # resource budgets.  No continue-on-error: failures propagate to
   # ci-gate, which requires this job's literal 'success'.
   pages-performance:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.pages == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -858,13 +961,15 @@ jobs:
           retention-days: 90
 
   # Issue #199: hermetic site accessibility gate.  Runs on every
-  # pull request and push to main, unprivileged (contents: read only).
+  # Pages-relevant pull request and push to main, unprivileged (contents: read only).
   # Uses a pinned Lighthouse 12.8.2 mobile accessibility profile, a
   # W3C Nu ARIA conformance evaluator, and a Puppeteer reduced-motion
   # evaluator against the hermetic local server.  No continue-on-error:
   # failures propagate to ci-gate, which requires this job's literal
   # 'success'.
   pages-accessibility:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.pages == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -898,6 +1003,8 @@ jobs:
 
   ci-gate:
     needs:
+      - classify-changes
+      - governance
       - build-test-coverage
       - native-build-test
       - cross-compile-build
@@ -913,26 +1020,52 @@ jobs:
     # so it gets none of that access rather than an unused inherited grant.
     permissions: {}
     steps:
-      # Checks each named job's result equals 'success' explicitly, rather
-      # than blocklisting contains(needs.*.result, 'failure' | 'cancelled'):
-      # cross-compile-verify has no `if:` of its own, so when its own
-      # dependency (cross-compile-build) fails, GitHub marks
-      # cross-compile-verify itself 'skipped', not 'failure' -- a
-      # failure-only blocklist would miss that cascade and pass the gate.
-      # Requiring literal 'success' per job catches skipped/cancelled/
-      # timed_out/failure alike without having to enumerate every non-
-      # success state by name.
-      - name: Fail unless every required job succeeded
+      # The classifier and governance jobs must succeed. Every classifier
+      # output must be a literal boolean, every selected optional job must
+      # succeed, and every unselected optional job must be skipped.
+      - name: Fail unless required jobs and exact routing succeeded
         if: >-
-          needs.build-test-coverage.result != 'success' ||
-          needs.native-build-test.result != 'success' ||
-          needs.cross-compile-build.result != 'success' ||
-          needs.cross-compile-verify.result != 'success' ||
-          needs.frontend-perf-measure.result != 'success' ||
-          needs.frontend-perf-gate.result != 'success' ||
-          needs.pages-performance.result != 'success' ||
-          needs.pages-accessibility.result != 'success'
+          needs.classify-changes.result != 'success' ||
+          needs.governance.result != 'success' ||
+          (needs.classify-changes.outputs.compiler != 'true' &&
+           needs.classify-changes.outputs.compiler != 'false') ||
+          (needs.classify-changes.outputs.pages != 'true' &&
+           needs.classify-changes.outputs.pages != 'false') ||
+          (needs.classify-changes.outputs.agent != 'true' &&
+           needs.classify-changes.outputs.agent != 'false') ||
+          (needs.classify-changes.outputs.compiler == 'true' &&
+           needs.build-test-coverage.result != 'success') ||
+          (needs.classify-changes.outputs.compiler == 'false' &&
+           needs.build-test-coverage.result != 'skipped') ||
+          (needs.classify-changes.outputs.compiler == 'true' &&
+           needs.native-build-test.result != 'success') ||
+          (needs.classify-changes.outputs.compiler == 'false' &&
+           needs.native-build-test.result != 'skipped') ||
+          (needs.classify-changes.outputs.compiler == 'true' &&
+           needs.cross-compile-build.result != 'success') ||
+          (needs.classify-changes.outputs.compiler == 'false' &&
+           needs.cross-compile-build.result != 'skipped') ||
+          (needs.classify-changes.outputs.compiler == 'true' &&
+           needs.cross-compile-verify.result != 'success') ||
+          (needs.classify-changes.outputs.compiler == 'false' &&
+           needs.cross-compile-verify.result != 'skipped') ||
+          (needs.classify-changes.outputs.compiler == 'true' &&
+           needs.frontend-perf-measure.result != 'success') ||
+          (needs.classify-changes.outputs.compiler == 'false' &&
+           needs.frontend-perf-measure.result != 'skipped') ||
+          (needs.classify-changes.outputs.compiler == 'true' &&
+           needs.frontend-perf-gate.result != 'success') ||
+          (needs.classify-changes.outputs.compiler == 'false' &&
+           needs.frontend-perf-gate.result != 'skipped') ||
+          (needs.classify-changes.outputs.pages == 'true' &&
+           needs.pages-performance.result != 'success') ||
+          (needs.classify-changes.outputs.pages == 'false' &&
+           needs.pages-performance.result != 'skipped') ||
+          (needs.classify-changes.outputs.pages == 'true' &&
+           needs.pages-accessibility.result != 'success') ||
+          (needs.classify-changes.outputs.pages == 'false' &&
+           needs.pages-accessibility.result != 'skipped')
         run: |
-          echo "one or more required jobs did not succeed:"
+          echo "required CI jobs or exact change routing did not succeed:"
           echo '${{ toJSON(needs) }}'
           exit 1
