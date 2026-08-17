@@ -3,8 +3,8 @@
   "targets": [
     {
       "path": ".github/workflows/ci.yml",
-      "source_path": "tests/fixtures/policy-successors/ci-d171.yml",
-      "sha256": "785e6415aea979ac67563589fb8295f2d7a9ce991f11d269d2054422a527e33f"
+      "source_path": ".github/workflows/ci.yml",
+      "sha256": "38c9d59632cd2a50e378acc162d71762ec084b14a1a4ceb610075da77925ab1c"
     },
     {
       "path": "scripts/classify_ci_changes.py",
@@ -14,7 +14,7 @@
     {
       "path": "scripts/check_ci_permissions.rb",
       "source_path": "scripts/check_ci_permissions.rb",
-      "sha256": "edff9d62bef98b62c3f974db9f9ced3217632ad461bb0ba45880011db84f2085"
+      "sha256": "6df471fa3181419f42415525c10eb5a7fcb40247a5201ae9c044c267615a39ea"
     },
     {
       "path": "scripts/check_pages_performance_budget.rb",
@@ -29,7 +29,7 @@
     {
       "path": "scripts/check_roadmap_evidence.rb",
       "source_path": "scripts/check_roadmap_evidence.rb",
-      "sha256": "70b2b286cc022435f481f1fba6585204f30148b4a2aba139e20aaf7c02292f2d"
+      "sha256": "15b028b62a67ca81be96ce1bdb92c2bf5cdc8fcfb4e3df6f8a09b1fd57dea12d"
     },
     {
       "path": "scripts/check_search_visibility_audit.py",
@@ -79,7 +79,7 @@
     {
       "path": "scripts/test_check_ci_permissions.rb",
       "source_path": "scripts/test_check_ci_permissions.rb",
-      "sha256": "c6120dcd5ac39dba7335aeadc675cfc80312a1936fc8c4b24499ea416707c163"
+      "sha256": "2a13b5d56f52ffe00ad5d60c305f894a8690e1857e7adb631bd682d1e1ea9055"
     },
     {
       "path": "scripts/test_check_pages_performance_budget.rb",
@@ -94,7 +94,7 @@
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
       "source_path": "scripts/test_check_roadmap_evidence.rb",
-      "sha256": "cf9a6578042bf7ce07cf475233cdbd14b8a98b3dd23d551f95ba8ac9aa1c97cc"
+      "sha256": "8ba6988b754341d351b93d6a525cec869f05081d7bc70bf6953d5f8d0599753a"
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",
