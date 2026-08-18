@@ -259,6 +259,15 @@ struct RtFns<'ctx> {
     float_pow: FunctionValue<'ctx>,
     str_from_literal: FunctionValue<'ctx>,
     str_concat: FunctionValue<'ctx>,
+    /// #575 (Part 2 of #123): `pycc_rt_str_repeat`, the `str * int` /
+    /// `int * str` primitive. Declared beside `str_concat` because the
+    /// two share the same shape apart from the count: one `str` pointer
+    /// in, one brand-new `str` pointer out. The count parameter is a
+    /// **raw** `i64`, already decoded by `build_untag_checked`, matching
+    /// every other raw runtime counter this table declares (list index,
+    /// slice bound, `range` step) rather than pushing D-141's classifier
+    /// into a second place.
+    str_repeat: FunctionValue<'ctx>,
     str_cmp: FunctionValue<'ctx>,
     str_truthy: FunctionValue<'ctx>,
     str_incref: FunctionValue<'ctx>,
@@ -451,6 +460,10 @@ fn declare_rt_functions<'ctx>(
         str_concat: declare(
             "pycc_rt_str_concat",
             ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false),
+        ),
+        str_repeat: declare(
+            "pycc_rt_str_repeat",
+            ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
         ),
         str_cmp: declare(
             "pycc_rt_str_cmp",
@@ -2064,33 +2077,55 @@ fn emit_expr_unchecked<'ctx>(
                     }
                 }
                 Ty::Str => {
-                    // #574 (Part 1 of #123): `pycc_types` accepts string
-                    // repetition (`str * int` / `int * str`, `bool` count
-                    // included) and `pycc_mir::binop_result_ty` types it
-                    // `str`, but codegen does not lower it yet -- there is
-                    // no `pycc_rt_str_repeat` primitive (#575). This is an
-                    // explicit, *named* D-072 "not supported yet" boundary
-                    // (exit 101, enumerated in `docs/CLI_SPEC.md`), not an
-                    // internal error.
+                    // #575 (Part 2 of #123): string repetition. `pycc_types`
+                    // accepts `str * int` / `int * str` (with `bool` as the
+                    // count, since `bool <: int`) and
+                    // `pycc_mir::binop_result_ty` types it `str`; this arm
+                    // now emits it rather than stopping at Part 1's named
+                    // D-072 boundary. MIR needs no repetition node of its
+                    // own: `BinOp { op: Mul, ty: Ty::Str }` *is* the
+                    // repetition, and this `match ty` is what distinguishes
+                    // it from numeric multiplication.
                     //
-                    // Tested *before* the two operand destructures below on
-                    // purpose: the repetition count evaluates to a
-                    // `Scalar::Int`/`Scalar::Bool`, so leaving it to fall
-                    // through would report the destructures' "internal
-                    // error: str BinOp operand did not evaluate to str"
-                    // message, which D-072 does not sanction and which
-                    // `pycc-feedback` would mis-triage as a compiler defect.
-                    //
-                    // Review note: ordering this test first also shadows the
-                    // more precise `str Mul str` message below for hand-built
-                    // MIR whose two operands are both genuine `Scalar::Str`.
-                    // That shape is unreachable from any real pipeline
-                    // (`pycc_types` rejects `str * str` with `T0021`), so the
-                    // shadowing is accepted rather than worked around.
+                    // Handled *before* the two operand destructures below on
+                    // purpose: the count evaluates to a `Scalar::Int`/
+                    // `Scalar::Bool`, so leaving it to fall through would
+                    // report the destructures' "internal error" message.
                     if *op == pycc_mir::BinOpKind::Mul {
-                        panic!(
-                            "pycc_codegen: string repetition (`str * int`) is not supported yet"
-                        );
+                        // Both operand orders land here -- whichever side is
+                        // the `str` becomes the operand, the other the count.
+                        //
+                        // Review note: a `str * str` pair (unreachable from
+                        // any real pipeline, since `pycc_types` rejects it
+                        // with `T0021`) matches the first arm and then fails
+                        // inside `to_numeric_encoded_int` with its own
+                        // "expected an int-or-bool operand, got str" message
+                        // rather than the `str {op} str` message below. That
+                        // shadowing is accepted, exactly as Part 1 accepted
+                        // it, rather than worked around for a shape no
+                        // type-checked program can produce.
+                        let (operand, count) = match (l, r) {
+                            (Scalar::Str(operand), count) => (operand, count),
+                            (count, Scalar::Str(operand)) => (operand, count),
+                            _ => panic!(
+                                "pycc_codegen: internal error: a str-result `*` had no str operand"
+                            ),
+                        };
+                        // `to_numeric_encoded_int` promotes a `bool` count to
+                        // the same D-141 encoding an `int` count already
+                        // carries (`"ab" * True` is `"ab"`), and
+                        // `build_untag_checked` decodes it to the raw counter
+                        // `pycc_rt_str_repeat` expects -- keeping bigint
+                        // rejection in D-141's single runtime-owned
+                        // classifier instead of duplicating it here.
+                        let encoded = to_numeric_encoded_int(context, builder, count);
+                        let raw = build_untag_checked(builder, rt, encoded, "str_repeat_count");
+                        let result = builder
+                            .build_call(rt.str_repeat, &[operand.into(), raw.into()], "str_repeat")
+                            .expect("build_call should not fail for a well-formed repetition")
+                            .try_as_basic_value()
+                            .expect_basic("pycc_rt_str_repeat returns a non-void pointer");
+                        return Scalar::Str(result.into_pointer_value());
                     }
                     let Scalar::Str(l) = l else {
                         panic!(
@@ -14340,30 +14375,86 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_codegen: string repetition (`str * int`) is not supported yet")]
-    fn string_repetition_stops_at_a_named_boundary() {
-        // `x = "a" * 3` -- #574 (Part 1 of #123) makes `pycc_types` accept
-        // this and `pycc_mir::binop_result_ty` type it `str`, so unlike the
-        // three tests above this MIR *is* what a real `pycc build` produces.
-        // Codegen has no repetition primitive yet (#575), so it stops at an
-        // explicit, named D-072 boundary (exit 101, enumerated in
-        // `docs/CLI_SPEC.md`) rather than at the `Scalar::Str` destructure's
-        // "internal error" message, which the `int` count would otherwise
-        // trigger.
+    fn compiles_string_repetition_in_both_operand_orders() {
+        // `x = "a" * 3` and `y = 3 * "a"` -- #575 (Part 2 of #123) replaces
+        // Part 1's named D-072 boundary with real emission, so this MIR
+        // (exactly what a real `pycc build` produces) now compiles. Both
+        // operand orders go through the same `match (l, r)` in the `Ty::Str`
+        // arm, so both are exercised here rather than only the `str`-first
+        // one.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(MirExpr::StringLiteral("a".to_string())),
+                        right: Box::new(MirExpr::IntLiteral(3)),
+                        ty: Ty::Str,
+                    },
+                }),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "y".to_string(),
+                    value: MirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(MirExpr::IntLiteral(3)),
+                        right: Box::new(MirExpr::StringLiteral("a".to_string())),
+                        ty: Ty::Str,
+                    },
+                }),
+            ],
+            class_defs: Vec::new(),
+        };
+        let dir = tempfile_dir("str_binop_repetition");
+        let obj_path = dir.join("str_binop_repetition.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    }
+
+    #[test]
+    fn compiles_string_repetition_with_a_bool_count() {
+        // `x = "a" * True` -- `bool` is an `int` subtype, so `pycc_types`
+        // types this `str` too. Exercises `to_numeric_encoded_int`'s own
+        // `Scalar::Bool` arm from the repetition site, which the `int`-count
+        // test above cannot reach.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "x".to_string(),
                 value: MirExpr::BinOp {
                     op: BinOpKind::Mul,
                     left: Box::new(MirExpr::StringLiteral("a".to_string())),
+                    right: Box::new(MirExpr::BoolLiteral(true)),
+                    ty: Ty::Str,
+                },
+            })],
+            class_defs: Vec::new(),
+        };
+        let dir = tempfile_dir("str_binop_repetition_bool");
+        let obj_path = dir.join("str_binop_repetition_bool.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_codegen: internal error: a str-result `*` had no str operand")]
+    fn a_str_result_multiplication_without_a_str_operand_is_an_internal_error() {
+        // `2 * 3` claiming a `str` result -- unreachable from any
+        // type-checked program (`pycc_types` types `int * int` as `int`), so
+        // this is a genuine internal-error arm, reached only through
+        // hand-built MIR. Covered rather than left as an unexecuted region,
+        // per D-014.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(MirExpr::IntLiteral(2)),
                     right: Box::new(MirExpr::IntLiteral(3)),
                     ty: Ty::Str,
                 },
             })],
             class_defs: Vec::new(),
         };
-        let dir = tempfile_dir("str_binop_repetition_panics");
-        let obj_path = dir.join("str_binop_repetition_panics.o");
+        let dir = tempfile_dir("str_repetition_without_str_operand");
+        let obj_path = dir.join("str_repetition_without_str_operand.o");
         let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
@@ -14528,6 +14619,60 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert!(output.status.success(), "should run without crashing");
+    }
+
+    #[test]
+    fn a_repeated_string_prints_its_repetition() {
+        // `print("ab" * 3)`, `print(0 * "ab")`, `print("ab" * True)` and
+        // `print("ab" * n)` for `n = 0 - 2` -- the executable half of #575.
+        // The negative count comes from `0 - 2` rather than a `-2` literal
+        // because unary negation is still unlowered (#573); it is a real
+        // reachable program today, and CPython prints an empty line for it.
+        let repeat = |left: MirExpr, right: MirExpr| {
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    ty: Ty::Str,
+                }],
+                ty: Ty::None,
+            }))
+        };
+        let mir = MirModule {
+            items: vec![
+                repeat(
+                    MirExpr::StringLiteral("ab".to_string()),
+                    MirExpr::IntLiteral(3),
+                ),
+                repeat(
+                    MirExpr::IntLiteral(0),
+                    MirExpr::StringLiteral("ab".to_string()),
+                ),
+                repeat(
+                    MirExpr::StringLiteral("ab".to_string()),
+                    MirExpr::BoolLiteral(true),
+                ),
+                repeat(
+                    MirExpr::StringLiteral("ab".to_string()),
+                    MirExpr::BinOp {
+                        op: BinOpKind::Sub,
+                        left: Box::new(MirExpr::IntLiteral(0)),
+                        right: Box::new(MirExpr::IntLiteral(2)),
+                        ty: Ty::Int,
+                    },
+                ),
+            ],
+            class_defs: Vec::new(),
+        };
+        let dir = tempfile_dir("str_repeat_prints");
+        let obj_path = dir.join("str_repeat_prints.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("str_repeat_prints");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"ababab\n\nab\n\n");
     }
 
     #[test]

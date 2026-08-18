@@ -861,6 +861,40 @@ pub unsafe extern "C" fn pycc_rt_str_concat(a: *mut PyStrObj, b: *mut PyStrObj) 
     new_pystr(&combined)
 }
 
+/// Repeats a `str` object `count` times into a brand-new one (Python's `*`
+/// on `str`, #575 / Part 2 of #123) -- never mutates the operand.
+///
+/// `count` arrives already decoded to a raw `i64`: `pycc_codegen` untags the
+/// D-141-encoded operand with `pycc_rt_int_untag_checked` before the call,
+/// exactly as it already does for every other raw runtime counter (list
+/// index, slice bound, `range` step). That keeps the bigint rejection in the
+/// one place D-141 puts it rather than duplicating the classifier here.
+///
+/// A non-positive `count` yields the empty string, matching CPython: `"ab" *
+/// 0` and `"ab" * -3` are both `""`. Negative counts are reachable from real
+/// source even though a `-3` literal is not (#573 leaves unary negation
+/// unlowered) -- `n = 0 - 3` types as `int` and lowers today -- so this is a
+/// live semantic path, not a defensive one.
+///
+/// Like every other `pycc_rt_str_*` function (see `pycc_rt_str_from_literal`'s
+/// own doc comment), this needs no private-logic/public-wrapper split: it has
+/// no failure mode that unwinds. An oversized result aborts inside the global
+/// allocator, precisely as `pycc_rt_str_concat`'s own `Vec` growth already
+/// does.
+///
+/// # Safety
+/// `s` must be a live `PyStrObj` pointer -- every `pycc_codegen` call site
+/// only ever passes a value it just evaluated from a well-typed `Ty::Str`
+/// expression.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_str_repeat(s: *mut PyStrObj, count: i64) -> *mut PyStrObj {
+    let bytes = unsafe { &*s }.bytes();
+    if count <= 0 {
+        return new_pystr(b"");
+    }
+    new_pystr(&bytes.repeat(count as usize))
+}
+
 /// Lexicographic byte-wise ordering (Task 7's `str` comparison codegen) --
 /// `-1`/`0`/`1`, matching `pycc_rt_int_cmp`'s own convention.
 ///
@@ -2355,6 +2389,43 @@ mod tests {
             pycc_rt_str_decref(a);
             pycc_rt_str_decref(b);
             pycc_rt_str_decref(joined);
+        }
+    }
+
+    #[test]
+    fn repeat_concatenates_the_operand_count_times() {
+        unsafe {
+            let s = pycc_rt_str_from_literal(b"ab".as_ptr(), 2);
+            let thrice = pycc_rt_str_repeat(s, 3);
+            assert_eq!((*thrice).bytes(), b"ababab");
+            let once = pycc_rt_str_repeat(s, 1);
+            assert_eq!((*once).bytes(), b"ab");
+            // Past D-059's 22-byte inline cap, so the heap payload branch of
+            // `new_pystr` is exercised through repetition too, not only
+            // through a long literal.
+            let long = pycc_rt_str_repeat(s, 12);
+            assert_eq!((*long).bytes(), "ab".repeat(12).as_bytes());
+            pycc_rt_str_decref(s);
+            pycc_rt_str_decref(thrice);
+            pycc_rt_str_decref(once);
+            pycc_rt_str_decref(long);
+        }
+    }
+
+    #[test]
+    fn repeat_yields_the_empty_string_for_a_non_positive_count() {
+        // CPython: `"ab" * 0` and `"ab" * -3` are both `""`. The negative
+        // case is reachable from real source (`n = 0 - 3`) even though a
+        // `-3` literal is not yet lowered (#573).
+        unsafe {
+            let s = pycc_rt_str_from_literal(b"ab".as_ptr(), 2);
+            let zero = pycc_rt_str_repeat(s, 0);
+            let negative = pycc_rt_str_repeat(s, -3);
+            assert_eq!((*zero).bytes(), b"");
+            assert_eq!((*negative).bytes(), b"");
+            pycc_rt_str_decref(s);
+            pycc_rt_str_decref(zero);
+            pycc_rt_str_decref(negative);
         }
     }
 
