@@ -50,7 +50,7 @@
             "name": "pycc status — what the Python AOT compiler can do today",
             "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete for v0.1 and what's planned next, and the CI evidence behind each claim.",
             "inLanguage": "en",
-            "dateModified": "2026-08-15",
+            "dateModified": "2026-08-18",
             "isPartOf": {
               "@id": "https://rotnov.github.io/pycc/#webpage"
             },
@@ -338,7 +338,12 @@
               and corpus testing remain planned test-depth work carried over
               from v0.1 and v0.2. See the
               <a href="https://github.com/rotnov/pycc/blob/main/docs/DELIVERY_PLAN.md">delivery plan</a>
-              for the exact sequence.
+              for the exact sequence. The conformance matrix itself stands at
+              25 of the 37 rows v0.3 requires; three further PEP fixtures
+              (557 dataclasses, 698 <code>@override</code>, 3129 class
+              decorators) are now registered and run against the pinned
+              CPython oracle, and their rows flip once a completed green
+              <code>main</code> run records the evidence.
             </p>
             <p>
               The 100% line/region coverage gate and the required
