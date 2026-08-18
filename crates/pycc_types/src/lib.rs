@@ -30079,6 +30079,53 @@ mod tests {
         check_and_resolve(&hir)
     }
 
+    // -- #579 (Part 3 of #572): the stdlib decorator-marker surface -----
+    //
+    // pycc recognizes `@dataclass`/`@override`/`@dataclass_transform()` as
+    // bare names without an import (the `Final`/`Annotated`/`Enum`
+    // precedent). What #579 adds is that the *import* CPython itself
+    // requires now resolves, so the PEP 557/698/3129 conformance fixtures
+    // can carry it and still run under the pinned oracle. These tests pin
+    // the composed shape -- import plus decorator in one program -- rather
+    // than only the registry lookup, which `pycc_std`'s own tests cover.
+
+    #[test]
+    fn dataclasses_import_composes_with_a_dataclass_decorated_class() {
+        let result = check_source(
+            "from dataclasses import dataclass\n@dataclass\nclass Point:\n    x: int\n    y: int\np = Point(1, 2)\nprint(p)\n",
+        );
+        assert!(
+            result.is_ok(),
+            "`from dataclasses import dataclass` plus `@dataclass` must type-check: {result:?}"
+        );
+    }
+
+    #[test]
+    fn typing_override_import_composes_with_an_override_decorated_method() {
+        let result = check_source(
+            "from typing import override\nclass Base:\n    def __init__(self) -> None:\n        self.x = 0\n    def f(self) -> int:\n        return 1\nclass Derived(Base):\n    def __init__(self) -> None:\n        return\n    @override\n    def f(self) -> int:\n        return 2\nd = Derived()\nprint(d.f())\n",
+        );
+        assert!(
+            result.is_ok(),
+            "`from typing import override` plus `@override` must type-check: {result:?}"
+        );
+    }
+
+    #[test]
+    fn typing_dataclass_transform_import_composes_with_its_decorator() {
+        // The `@dataclass_transform()`-as-`@dataclass` treatment is a
+        // deliberate semantic approximation (tracked as #248) and is why
+        // no byte-for-byte fixture exercises it; the import resolving is
+        // still in scope here, and this pins it.
+        let result = check_source(
+            "from typing import dataclass_transform\n@dataclass_transform()\nclass Tagged:\n    tag: int\nt = Tagged(1)\nprint(t.tag)\n",
+        );
+        assert!(
+            result.is_ok(),
+            "`from typing import dataclass_transform` plus its decorator must type-check: {result:?}"
+        );
+    }
+
     #[test]
     fn protocol_typed_parameter_function_call_triggers_monomorphization() {
         // This exercises the rewrite_protocol_calls_in_expr and

@@ -41,25 +41,77 @@ def run_git(root, args, context)
   stdout.force_encoding(Encoding::UTF_8)
 end
 
+# Transient failures that a bounded retry can plausibly clear. The shallow
+# case is the one actually observed in CI: two concurrent git operations on
+# the same shallow checkout race, and the loser aborts with "shallow file
+# has changed since we read it" without ever contacting the remote. The
+# network cases are the ordinary transport flakes GitHub's git endpoint
+# produces under load. Anything else -- a genuinely unresolvable revision,
+# a missing `origin` remote -- fails on the first attempt, so a real
+# misconfiguration is still reported immediately instead of being retried.
+# Git's generic "Could not read from remote repository." line is
+# deliberately absent: it accompanies a missing remote just as often as a
+# transport flake, and every transport flake worth retrying already
+# carries one of the more specific lines above.
+TRANSIENT_FETCH_PATTERNS = [
+  /shallow file has changed/i,
+  /the remote end hung up/i,
+  /early EOF/i,
+  /connection (?:reset|timed out|refused)/i,
+  /unable to access/i,
+  /RPC failed/i,
+  /HTTP 5\d\d/i
+].freeze
+FETCH_ATTEMPTS = 3
+FETCH_RETRY_DELAYS = [1, 2].freeze
+
+def revision_present?(root, revision)
+  _stdout, _stderr, status = Open3.capture3(
+    "git", "cat-file", "-e", "#{revision}^{commit}", chdir: root.to_s
+  )
+  status.success?
+end
+
+def transient_fetch_failure?(stderr)
+  TRANSIENT_FETCH_PATTERNS.any? { |pattern| pattern.match?(stderr) }
+end
+
 # Make sure `revision` is resolvable as a commit in `root`'s repository.
 # A shallow CI checkout only has the PR's own history, so the base
 # revision usually needs an explicit fetch; a local full-history checkout
 # (used by this script's own tests and by manual validation runs) already
 # has it and should not need network access.
-def ensure_revision_available(root, revision)
-  _stdout, _stderr, status = Open3.capture3(
-    "git", "cat-file", "-e", "#{revision}^{commit}", chdir: root.to_s
-  )
-  return if status.success?
+#
+# The fetch is retried a bounded number of times, but only for the
+# transient failures listed above -- see TRANSIENT_FETCH_PATTERNS. The
+# presence check is repeated before each retry because a concurrent
+# operation on the same checkout may have landed the object meanwhile,
+# which is precisely the situation the shallow-file race describes.
+# `sleeper` is injectable so the tests exercise the retry path without
+# paying the real backoff.
+def ensure_revision_available(root, revision, attempts: FETCH_ATTEMPTS, sleeper: ->(seconds) { sleep(seconds) })
+  return if revision_present?(root, revision)
 
-  _stdout, stderr, fetch_status = Open3.capture3(
-    "git", "fetch", "--no-tags", "--depth=1", "origin", revision, chdir: root.to_s
-  )
-  return if fetch_status.success?
+  last_stderr = ""
+  attempts.times do |attempt|
+    _stdout, stderr, fetch_status = Open3.capture3(
+      "git", "fetch", "--no-tags", "--depth=1", "origin", revision, chdir: root.to_s
+    )
+    return if fetch_status.success?
+
+    last_stderr = stderr.strip
+    # A concurrent operation on the same checkout may have landed the
+    # object even though this fetch aborted, which is exactly what the
+    # shallow-file race describes.
+    return if revision_present?(root, revision)
+    break unless transient_fetch_failure?(last_stderr) && attempt < attempts - 1
+
+    sleeper.call(FETCH_RETRY_DELAYS[attempt] || FETCH_RETRY_DELAYS.last)
+  end
 
   raise StatusPageFreshnessError,
         "could not resolve revision #{revision.inspect} locally or via " \
-        "'git fetch origin #{revision} --depth=1': #{stderr.strip}"
+        "'git fetch origin #{revision} --depth=1': #{last_stderr}"
 end
 
 def read_file_at_revision(root, revision, relative_path)

@@ -977,3 +977,74 @@ fn pep_0634_match_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0634_match.py"
     );
 }
+
+// PEP 557 (#579, Part 3 of #572): dataclasses. `@dataclass` with required
+// annotated fields, the synthesized `__init__`/`__eq__`/`__repr__`, and
+// dataclass inheritance (parent fields first). The fixture carries
+// `from dataclasses import dataclass` because CPython evaluates decorators
+// eagerly and would otherwise raise `NameError`; pycc recognizes the bare
+// name without the import and only needs the import itself to resolve.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn pep_0557_dataclasses_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0557_dataclasses.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0557_dataclasses_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/pep_0557_dataclasses.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0557_dataclasses_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0557_dataclasses.py"
+    );
+}
+
+// PEP 698 (#579, Part 3 of #572): `@override`. A pure runtime marker in
+// CPython (it returns the decorated function unchanged), so the observable
+// output comes entirely from ordinary method overriding; pycc additionally
+// verifies at compile time that the decorated name exists in a base class.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn pep_0698_override_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0698_override.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0698_override_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/pep_0698_override.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0698_override_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0698_override.py"
+    );
+}
+
+// PEP 3129 (#579, Part 3 of #572): class decorators. Exercises the one
+// class-decorator form pycc supports and CPython agrees with (`@dataclass`);
+// `@dataclass_transform()` is deliberately absent because pycc treats it as
+// `@dataclass` while CPython synthesizes nothing, a divergence that cannot
+// appear in a byte-for-byte fixture and is tracked as #248.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn pep_3129_class_deco_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_3129_class_deco.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_3129_class_deco_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/pep_3129_class_deco.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_3129_class_deco_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_3129_class_deco.py"
+    );
+}

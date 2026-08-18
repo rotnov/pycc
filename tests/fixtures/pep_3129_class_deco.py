@@ -3,14 +3,25 @@
 # This fixture exercises pycc's narrow class-decorator support:
 #   - `@dataclass` (PEP 557) is recognized and triggers auto-generated
 #     `__init__`, `__eq__`, and `__repr__`.
-#   - `@dataclass_transform()` (PEP 681) is recognized and treated as
-#     equivalent to `@dataclass`.
 #   - Any other class decorator is rejected with C0001.
 #   - `@dataclass(frozen=True)` and other option-bearing forms are
 #     rejected with C0001.
 #
-# Only the `@dataclass` and `@dataclass_transform()` forms are executable
-# in this fixture; the rejected forms are documented below as comments.
+# Only the `@dataclass` form is executable in this fixture; the rejected
+# forms are documented below as comments.
+#
+# The import is required by CPython, which evaluates decorators eagerly;
+# pycc recognizes the bare name `dataclass` without it (#579).
+#
+# `@dataclass_transform()` (PEP 681) is deliberately *not* exercised here.
+# pycc treats it as equivalent to `@dataclass` (docs/ROADMAP.md), while
+# CPython's own `typing.dataclass_transform` is a pure marker that
+# synthesizes nothing -- so a class built that way diverges from the
+# oracle by construction and cannot appear in a byte-for-byte conformance
+# fixture at all. That divergence is tracked separately as #248, and PEP
+# 681 keeps its own matrix row and its own fixture.
+from dataclasses import dataclass
+
 
 @dataclass
 class Point:
@@ -21,15 +32,6 @@ p = Point(3, 4)
 print(p.x)
 print(p.y)
 print(p)
-
-# PEP 681: `@dataclass_transform()` is equivalent to `@dataclass`.
-@dataclass_transform()
-class Tagged:
-    tag: int
-    value: int
-
-t = Tagged(1, 42)
-print(t)
 
 # Rejected forms (not executed -- documented for conformance reference):
 #

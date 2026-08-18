@@ -44,6 +44,16 @@ pub enum StdModule {
     /// symbol. Both are recognized as bare names without requiring the
     /// import.
     Abc,
+    /// The `dataclasses` module, recognized so `from dataclasses import
+    /// dataclass` resolves (#579, Part 3 of #572). `dataclass` is a
+    /// decorator-marker symbol. Like every other marker in this registry
+    /// it is also recognized as a bare name without requiring the import
+    /// (`pycc_hir`'s class-decorator classifier matches the bare name
+    /// `dataclass`), so registering the module changes nothing about how
+    /// pycc lowers `@dataclass` -- it only makes the import CPython
+    /// itself requires resolve, which is what lets the PEP 557/698/3129
+    /// conformance fixtures run under the pinned oracle at all.
+    Dataclasses,
 }
 
 /// The scalar shape of a registered symbol's argument/return type, kept
@@ -145,6 +155,21 @@ const REGISTRY: &[StdSymbol] = &[
         name: "abstractmethod",
         kind: StdSymbolKind::DecoratorMarker,
     },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "override",
+        kind: StdSymbolKind::DecoratorMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "dataclass_transform",
+        kind: StdSymbolKind::DecoratorMarker,
+    },
+    StdSymbol {
+        module: StdModule::Dataclasses,
+        name: "dataclass",
+        kind: StdSymbolKind::DecoratorMarker,
+    },
 ];
 
 /// Resolves a dotted-import module name (e.g. `"math"`) to a [`StdModule`],
@@ -156,6 +181,7 @@ pub fn resolve_module(name: &str) -> Option<StdModule> {
         "enum" => Some(StdModule::Enum),
         "typing" => Some(StdModule::Typing),
         "abc" => Some(StdModule::Abc),
+        "dataclasses" => Some(StdModule::Dataclasses),
         _ => None,
     }
 }
@@ -200,6 +226,54 @@ mod tests {
     #[test]
     fn resolve_module_recognizes_abc() {
         assert_eq!(resolve_module("abc"), Some(StdModule::Abc));
+    }
+
+    #[test]
+    fn resolve_module_recognizes_dataclasses() {
+        assert_eq!(resolve_module("dataclasses"), Some(StdModule::Dataclasses));
+    }
+
+    #[test]
+    fn resolve_symbol_finds_dataclasses_dataclass() {
+        let sym = resolve_symbol(StdModule::Dataclasses, "dataclass")
+            .expect("dataclasses.dataclass is registered");
+        assert_eq!(sym.module, StdModule::Dataclasses);
+        assert_eq!(sym.name, "dataclass");
+        assert_eq!(sym.kind, StdSymbolKind::DecoratorMarker);
+    }
+
+    #[test]
+    fn resolve_symbol_rejects_unregistered_symbol_in_dataclasses_module() {
+        // `field`/`asdict`/`replace` are real `dataclasses` names that pycc
+        // does not implement; they must stay `C0002`, not resolve silently.
+        assert_eq!(resolve_symbol(StdModule::Dataclasses, "field"), None);
+        assert_eq!(resolve_symbol(StdModule::Dataclasses, "asdict"), None);
+    }
+
+    #[test]
+    fn resolve_symbol_finds_typing_override() {
+        let sym =
+            resolve_symbol(StdModule::Typing, "override").expect("typing.override is registered");
+        assert_eq!(sym.module, StdModule::Typing);
+        assert_eq!(sym.name, "override");
+        assert_eq!(sym.kind, StdSymbolKind::DecoratorMarker);
+    }
+
+    #[test]
+    fn resolve_symbol_finds_typing_dataclass_transform() {
+        let sym = resolve_symbol(StdModule::Typing, "dataclass_transform")
+            .expect("typing.dataclass_transform is registered");
+        assert_eq!(sym.module, StdModule::Typing);
+        assert_eq!(sym.name, "dataclass_transform");
+        assert_eq!(sym.kind, StdSymbolKind::DecoratorMarker);
+    }
+
+    #[test]
+    fn dataclass_is_not_reachable_through_the_typing_module() {
+        // `dataclass` lives in `dataclasses`, not `typing`; the registry is
+        // keyed on (module, name), so the module half must actually matter.
+        assert_eq!(resolve_symbol(StdModule::Typing, "dataclass"), None);
+        assert_eq!(resolve_symbol(StdModule::Dataclasses, "override"), None);
     }
 
     #[test]

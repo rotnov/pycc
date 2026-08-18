@@ -410,6 +410,20 @@ that registration is a deliberate, separate follow-up performed only after
 the workflow is observed green on a real push-to-main run and red on a real
 violating pull request.
 
+Because the workflow runs on a shallow checkout, the base revision it must
+diff against is usually absent locally and has to be fetched. That fetch
+shares the checkout with whatever else `actions/checkout` is still doing,
+and on 2026-08-18 it lost that race on a content-correct head: `git fetch`
+aborted with `fatal: shallow file has changed since we read it`, so the
+check failed before evaluating any signal at all. `ensure_revision_available`
+therefore retries the fetch up to `FETCH_ATTEMPTS` times with a short
+backoff, re-checking whether a concurrent operation landed the object
+between attempts. The retry is deliberately narrow: only the transient
+failures listed in `TRANSIENT_FETCH_PATTERNS` are retried, so a genuinely
+unresolvable revision or a missing `origin` remote still fails on the first
+attempt rather than costing the run three fetches before reporting the same
+misconfiguration.
+
 GitHub project Pages are served below `/pycc/`, while the robots exclusion
 protocol only discovers `robots.txt` at the origin root. The page-level robots
 meta tag is therefore the effective crawl directive on the default
