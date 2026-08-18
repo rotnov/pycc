@@ -297,6 +297,96 @@ class StatusPageFreshnessTest < Minitest::Test
     end
   end
 
+  # (h2) The bounded retry ensure_revision_available performs for transient
+  # fetch failures. Observed in CI on 2026-08-18: the checker's own fetch
+  # raced with the shallow checkout and died with "shallow file has changed
+  # since we read it" before evaluating anything, so a content-correct head
+  # was reported as unresolvable. `git fetch` is stubbed rather than made
+  # genuinely flaky, and `sleeper` is injected, so these tests are
+  # deterministic and pay no backoff.
+
+  FakeStatus = Struct.new(:success?)
+
+  # Intercept `git fetch` invocations, replaying +responses+ (each a
+  # [stderr, success] pair) in order. Every other git invocation --
+  # including the `cat-file -e` presence checks -- runs for real.
+  def with_stubbed_fetch(responses)
+    remaining = responses.dup
+    original = Open3.method(:capture3)
+    Open3.singleton_class.send(:define_method, :capture3) do |*args, **kwargs|
+      if args[1] == "fetch"
+        stderr, success = remaining.shift
+        ["", stderr, FakeStatus.new(success)]
+      else
+        original.call(*args, **kwargs)
+      end
+    end
+    yield
+  ensure
+    Open3.singleton_class.send(:define_method, :capture3) do |*args, **kwargs|
+      original.call(*args, **kwargs)
+    end
+  end
+
+  SHALLOW_RACE = "fatal: shallow file has changed since we read it"
+
+  def test_transient_fetch_failure_is_retried_and_can_then_succeed
+    with_repo do |root|
+      write_and_commit(root, { ROADMAP_PATH => BASE_ROADMAP }, "base")
+      slept = []
+      with_stubbed_fetch([[SHALLOW_RACE, false], ["", true]]) do
+        ensure_revision_available(
+          root,
+          "0000000000000000000000000000000000000000",
+          sleeper: ->(seconds) { slept << seconds }
+        )
+      end
+      assert_equal 1, slept.length, "expected exactly one backoff before the successful retry"
+    end
+  end
+
+  def test_non_transient_fetch_failure_is_not_retried
+    with_repo do |root|
+      write_and_commit(root, { ROADMAP_PATH => BASE_ROADMAP }, "base")
+      slept = []
+      error = assert_raises(StatusPageFreshnessError) do
+        ensure_revision_available(
+          root,
+          "0000000000000000000000000000000000000000",
+          sleeper: ->(seconds) { slept << seconds }
+        )
+      end
+      assert_match(/could not resolve revision/, error.message)
+      assert_empty slept, "a missing `origin` remote is not transient and must not be retried"
+    end
+  end
+
+  def test_transient_fetch_failure_raises_after_the_attempt_budget_is_exhausted
+    with_repo do |root|
+      write_and_commit(root, { ROADMAP_PATH => BASE_ROADMAP }, "base")
+      slept = []
+      error = assert_raises(StatusPageFreshnessError) do
+        with_stubbed_fetch([[SHALLOW_RACE, false]] * FETCH_ATTEMPTS) do
+          ensure_revision_available(
+            root,
+            "0000000000000000000000000000000000000000",
+            sleeper: ->(seconds) { slept << seconds }
+          )
+        end
+      end
+      assert_match(/could not resolve revision/, error.message)
+      assert_match(/shallow file has changed/, error.message)
+      assert_equal FETCH_ATTEMPTS - 1, slept.length,
+                   "the attempt budget should back off once between each pair of attempts"
+    end
+  end
+
+  def test_transient_fetch_failure_patterns_cover_the_observed_ci_message
+    assert transient_fetch_failure?(SHALLOW_RACE)
+    assert transient_fetch_failure?("fatal: unable to access 'https://github.com/': HTTP 502")
+    refute transient_fetch_failure?("fatal: 'origin' does not appear to be a git repository")
+  end
+
   # (i) main()'s CLI success/failure paths with real <base-revision>
   # [head-revision] [repository-root] arguments, mirroring
   # scripts/test_check_roadmap_evidence.rb's Open3.capture3(RbConfig.ruby,
