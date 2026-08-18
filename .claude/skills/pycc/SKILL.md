@@ -103,11 +103,11 @@ pipeline stage failed from current source and stderr instead of guessing.
   as a nested expression is not supported yet` panic (e.g. `value =
   print(42)`) as an intentional temporary alpha boundary. Explain that
   boundary and do not route it to feedback. `docs/CLI_SPEC.md` § Exit codes
-  lists the named D-072 boundaries of this kind -- it also lists
-  ``pycc_codegen: string repetition (`str * int`) is not supported yet``
-  (#574 types `str * int` / `int * str` as `str`; lowering is #575) -- so
-  consult that list, not this bullet's single example, before classifying a
-  `... is not supported yet` panic. That list is hand-maintained and not
+  lists the named D-072 boundaries of this kind -- consult that list, not this
+  bullet's single example, before classifying a `... is not supported yet`
+  panic. A boundary can also be retired: string repetition (`str * int` /
+  `int * str`) was one until #575 lowered it to `pycc_rt_str_repeat`, so a
+  panic naming it today would be a real defect, not an accepted gap. That list is hand-maintained and not
   guaranteed exhaustive: treat an unlisted `pycc_codegen: ... is not
   supported yet` panic that names a construct as a probable alpha boundary
   and verify it against `crates/pycc_codegen/src/lib.rs` rather than routing

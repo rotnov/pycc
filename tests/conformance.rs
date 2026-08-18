@@ -1079,3 +1079,27 @@ fn pep_3129_class_deco_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_3129_class_deco.py"
     );
 }
+
+// #575 (Part 2 of #123): `str * int` / `int * str` repetition. Covers both
+// operand orders for literal, variable, boolean, zero, and negative counts,
+// a repetition result that crosses D-059's 22-byte inline payload threshold,
+// and repetition composed with concatenation, an f-string, and a function
+// return. Negative counts are spelled `0 - 2` because unary negation is
+// still unlowered (#573).
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn str_repetition_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/str_repetition.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("str_repetition_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/str_repetition.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("str_repetition_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/str_repetition.py"
+    );
+}

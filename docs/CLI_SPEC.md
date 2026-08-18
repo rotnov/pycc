@@ -176,10 +176,6 @@ against `crates/pycc_codegen/src/lib.rs` before being treated as a defect:
   and D-131; what remains unlowered is `print()`'s **call result
   specifically**, which codegen never materializes at all (the panic is
   unconditional on the callee being `print`).
-- ``pycc_codegen: string repetition (`str * int`) is not supported yet`` --
-  `str * int` and `int * str` (with a `bool` count) type-check to `str` as of
-  #574, but codegen has no repetition primitive yet; native repetition lands
-  with #575.
 - ``pycc_codegen: string conversion of a class instance without `__repr__` is
   not supported yet`` -- `print(p)` type-checks for any argument, and
   `pycc_mir`'s `rewrite_instance_to_repr` is a no-op for a class that defines
