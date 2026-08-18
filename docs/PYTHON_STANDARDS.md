@@ -81,6 +81,17 @@ For each newly observed upstream release:
    [32053825412](https://github.com/rotnov/pycc/actions/runs/32053825412), the
    fully green `main` push run for `006fd786`, which executed every one of their
    fixtures across all 5 Tier-1 targets in both profiles.
+7. Three further rows — PEPs 557 (`dataclasses`), 698 (`@override`) and 3129
+   (class decorators) — were flipped on the same rule 5 basis against run
+   [32188392693](https://github.com/rotnov/pycc/actions/runs/32188392693), the
+   fully green `main` push run for `59600d5`, the merge of
+   [#584](https://github.com/rotnov/pycc/pull/584) that registered the stdlib
+   decorator surface those three fixtures depend on. Their test paths are
+   rewritten from the aspirational `pyXY/` layout to the flat
+   `tests/fixtures/` filenames the fixtures actually occupy, matching every
+   other passing row and the `tests/conformance_matrix_guard.rs` check, which
+   is scoped to `✅` rows per
+   [D-175](./decisions/D-175-scope-the-conformance-matrix-fixture-guard-to-green.md).
 
 ## Python 3.0–3.2 (foundations)
 
@@ -94,7 +105,7 @@ For each newly observed upstream release:
 | [3110](https://peps.python.org/pep-3110/) | `try`/`except`/`else`/`finally`, `raise`, bare `raise` (#382) | sem | `issue_382_exceptions.rs` | ☐ |
 | [3115](https://peps.python.org/pep-3115/) | Metaclasses (`metaclass=`) | sem | `py30/pep_3115_metaclass.py` | ☐ |
 | [3119](https://peps.python.org/pep-3119/) | ABCs, `isinstance` hooks | sem | `pep_3119_abc.py` | ✅ |
-| [3129](https://peps.python.org/pep-3129/) | Class decorators | syntax | `py30/pep_3129_class_deco.py` | ☐ |
+| [3129](https://peps.python.org/pep-3129/) | Class decorators | syntax | `pep_3129_class_deco.py` | ✅ |
 | [3131](https://peps.python.org/pep-3131/) | Non-ASCII identifiers | syntax | `pep_3131_unicode_ids.py` | ✅ |
 | [3132](https://peps.python.org/pep-3132/) | Extended unpacking `a, *b = ...` | syntax | `py30/pep_3132_unpack.py` | ☐ |
 | [3135](https://peps.python.org/pep-3135/) | Zero-argument `super()` | sem | `pep_3135_super.py` (authored and registered by [#580](https://github.com/rotnov/pycc/issues/580); the row flips per D-102 once a completed green `main` run can be cited) | ☐ |
@@ -147,7 +158,7 @@ For each newly observed upstream release:
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
 | [553](https://peps.python.org/pep-0553/) | `breakpoint()` | rt | `py37/pep_0553_breakpoint.py` | ☐ |
-| [557](https://peps.python.org/pep-0557/) | **dataclasses** | sem | `py37/pep_0557_dataclasses.py` | ☐ |
+| [557](https://peps.python.org/pep-0557/) | **dataclasses** | sem | `pep_0557_dataclasses.py` | ✅ |
 | [560](https://peps.python.org/pep-0560/) | `__class_getitem__` typing support | typing | `py37/pep_0560_class_getitem.py` — unauthored: `__class_getitem__` is never dispatched in expression position, so no fixture can exercise it against the oracle ([#586](https://github.com/rotnov/pycc/issues/586)) | ☐ |
 | [562](https://peps.python.org/pep-0562/) | Module `__getattr__` | sem | `py37/pep_0562_mod_getattr.py` | ☐ |
 | [563](https://peps.python.org/pep-0563/) | `from __future__ import annotations` (superseded by 649) | typing | `py37/pep_0563_lazy_annotations.py` | ☐ |
@@ -207,7 +218,7 @@ For each newly observed upstream release:
 | [692](https://peps.python.org/pep-0692/) | `Unpack[TypedDict]` for `**kwargs` | typing | `py312/pep_0692_kwargs.py` | ☐ |
 | [695](https://peps.python.org/pep-0695/) | **`type` statement + generic functions** `def f[T](x: T) -> T` (v0.2 scope per D-088 — no class support exists yet) | typing | `pep_0695_generics.py` | ✅ |
 | [695](https://peps.python.org/pep-0695/) | Generic classes `class C[T]` (#387 Part 3) — single type param, scalar-only instantiation, monomorphized at compile time | typing | `pep_0695_generic_classes.py` | ✅ |
-| [698](https://peps.python.org/pep-0698/) | `@override` | typing | `py312/pep_0698_override.py` | ☐ |
+| [698](https://peps.python.org/pep-0698/) | `@override` | typing | `pep_0698_override.py` | ✅ |
 | [701](https://peps.python.org/pep-0701/) | Formalized f-string grammar | syntax | `py312/pep_0701_fstring_grammar.py` | ☐ |
 | [709](https://peps.python.org/pep-0709/) | Comprehension inlining semantics -- pycc has no bytecode/frame model to "inline" the way CPython's own PEP 709 change does; this row instead verifies the one CPython-observable, statically-testable guarantee PEP 709 depends on: a comprehension's own loop variable does not leak into an enclosing same-named binding (D-117/D-120) | sem | `pep_0709_comp_inline.py` | ✅ |
 
