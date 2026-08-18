@@ -7,7 +7,7 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | Layer | Location | What it proves |
 |---|---|---|
 | 1. Unit (Rust) | per-crate `#[cfg(test)]` | lexer/parser/checker/MIR internals |
-| 2. Conformance | `tests/conformance/pyXY/` | each supported language level compiles and runs its cumulative fixture set; `stdout ==` that level's pinned CPython oracle |
+| 2. Conformance | `tests/conformance/pyXY/` *(planned; today flat at `tests/fixtures/`)* | each supported language level compiles and runs its cumulative fixture set; `stdout ==` that level's pinned CPython oracle |
 | 3. Diagnostics | `tests/diagnostics/` | rejected constructs fail with the exact code + span (insta-style snapshots) |
 | 4. Differential fuzzing *(planned)* | `tests/fuzz/` *(not yet created)* | generated typed-Python programs: pycc binary output ≡ CPython output; crashes/mismatches auto-minimized |
 | 5. Runtime property tests | `pycc_rt` proptest | str/list/dict/RC/cycle-collector invariants |
@@ -18,6 +18,25 @@ Layers 4 and 6 are planned and not yet implemented on current `main`; no
 `tests/fuzz/` directory or nightly corpus workflow exists. Their table rows
 describe the target architecture, not a live system — see the dedicated
 planned sections below for the current status of each.
+
+Layer 2's `tests/conformance/pyXY/` location is the same kind of row: it
+describes the eventual v1.0-scale, language-level-selecting harness, not what
+runs today. Every conformance fixture currently lives **flat** at
+`tests/fixtures/pep_NNNN_slug.py` and is run directly by `tests/conformance.rs`
+(D-102); no `pyXY/` directory exists anywhere in this repository, and the only
+subdirectory under `tests/fixtures/` is `policy-successors/`. This is already
+recorded for the PR-13 fixtures below, and it is the settled convention rather
+than an accident of those two files.
+
+`docs/PYTHON_STANDARDS.md`'s matrix follows the same split, and
+`tests/conformance_matrix_guard.rs` is what now holds the line (see
+[D-175](./decisions/D-175-scope-the-conformance-matrix-fixture-guard-to-green.md)):
+a `☐` row's `pyNN/`-prefixed path is a *planned* path for a fixture nobody has
+authored yet and is deliberately not asserted to exist, while a `✅` row claims
+its fixture passes and so must cite a path that resolves under `tests/fixtures/`
+and is registered in `tests/conformance.rs`. The guard also runs the inverse
+direction — every `tests/fixtures/pep_*.py` must be registered in
+`tests/conformance.rs` or carry an allowlist entry recording why it is not.
 
 The focused D-094 release regression in `pycc_codegen` observes the same
 production codegen helper immediately before object emission. Debug codegen
@@ -39,15 +58,17 @@ existing D-072 should-panic unit test remains the negative control that
 ## Conformance harness (`pycc_testkit`)
 
 - Each test = single `.py` file, header comment: PEP, category, min pycc milestone.
-- Runner: for each supported language level, select that configuration's
-  cumulative fixture range and pinned oracle → compile (`--debug` and
-  `--release` both, once `--release` exists — see below) → execute → diff. The
+- Runner *(planned shape; see the flat-layout note under **Layers** for what
+  actually runs today)*: for each supported language level, select that
+  configuration's cumulative fixture range and pinned oracle → compile
+  (`--debug` and `--release` both, once `--release` exists — see below) →
+  execute → diff. The
   v1.0 Python 3.14 run covers `py30/` through `py314/` against CPython 3.14.7.
   After the v1.x adoption gate opens, the Python 3.15 run covers `py30/`
   through `py315/` against a pinned current Python 3.15 patch; the separate
   Python 3.14 compatibility run remains required. Outputs are recorded and
   re-recorded on oracle patch bumps.
-- A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand.
+- A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand (no automation backs this yet — see the PR-9 status note below for D-102's accepted interim by-hand policy). Whichever way a row is flipped, `tests/conformance_matrix_guard.rs` requires the newly-green row to cite a real flat fixture that is registered in `tests/conformance.rs`.
 - **v0.1 exception:** `--release`/LTO doesn't exist until v0.2 (see ROADMAP.md), so the "both profiles" rule only binds from v0.2 on. Every v0.1 PEP/feature flips to ✅ on `--debug` alone; nothing in v0.1 is held to a `--release` bar that has nothing to build against (see DELIVERY_PLAN.md, "Debug/release conformance").
 
 **Python 3.14.7 oracle transition (activated 2026-08-15):** the three-round
