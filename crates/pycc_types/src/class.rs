@@ -4643,10 +4643,7 @@ mod tests {
             ],
             type_aliases: Vec::new(),
             imports: Vec::new(),
-            class_defs: vec![
-                ("P".to_string(), proto_def),
-                ("C".to_string(), c_def),
-            ],
+            class_defs: vec![("P".to_string(), proto_def), ("C".to_string(), c_def)],
         };
 
         check(&hir).expect(
@@ -4692,10 +4689,6 @@ mod tests {
                 is_abstract: false,
             },
         );
-        let _ = super::lookup_attr_through_mro(
-            &env,
-            &["Ghost".to_string()],
-            "x",
-        );
+        let _ = super::lookup_attr_through_mro(&env, &["Ghost".to_string()], "x");
     }
 }

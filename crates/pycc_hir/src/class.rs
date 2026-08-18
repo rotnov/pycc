@@ -4486,7 +4486,9 @@ mod tests {
     fn enum_body_with_method_is_rejected_via_unit_test() {
         // Exercises the "enum class body must contain only member
         // assignments" error path (lines 828-832).
-        assert_c0001("class Color(Enum):\n    RED = 1\n    def f(self) -> int:\n        return 1\n");
+        assert_c0001(
+            "class Color(Enum):\n    RED = 1\n    def f(self) -> int:\n        return 1\n",
+        );
     }
 
     #[test]

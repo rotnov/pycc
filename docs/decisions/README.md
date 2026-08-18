@@ -15,7 +15,7 @@ current.
 | [D-002](./D-002-backend-llvm-inkwell-as-the-only-v1-backend.md) | Backend: LLVM (inkwell) as the only v1 backend. Cranelift for debug builds = post-1.0 experiment | proposed |
 | [D-003](./D-003-parser-vendor-ruff-python-parser-for-v0-1-0-5.md) | Parser: vendor `ruff_python_parser` for v0.1–0.5 velocity; replace with own parser in v0.6 (grammar-coverage gate proves parity) | proposed |
 | [D-004](./D-004-memory-rc-inferred-ownership-moves-borrows.md) | Memory: RC + inferred ownership (moves, borrows, elision) + Bacon-Rajan cycle collector for the residue. No tracing GC, ever | proposed |
-| [D-005](./D-005-exceptions-native-unwinding-itanium-seh-zero-cost.md) | Exceptions: native unwinding (Itanium/SEH), zero-cost happy path — not result-codes | proposed |
+| [D-005](./D-005-exceptions-native-unwinding-itanium-seh-zero-cost.md) | Exceptions: native unwinding (Itanium/SEH), zero-cost happy path — not result-codes | superseded |
 | [D-006](./D-006-generics-monomorphization-vtable-dispatch-only.md) | Generics: monomorphization; vtable dispatch only for explicit dynamic-Protocol use | accepted |
 | [D-007](./D-007-str-utf-8-not-pep-393-utf-32-arrays-codepoint.md) | `str` = UTF-8 (not PEP 393 UTF-32 arrays). Codepoint indexing via lazy offset index. Rationale: memory, SIMD, FFI; deviation invisible except perf profile | accepted |
 | [D-008](./D-008-no-pycc-wide-gil-in-native-execution-thread.md) | No pycc-wide GIL in native execution; thread safety = compile-time Shareable/move checks (Rust Send/Sync analog), with an embedded CPython boundary retaining its own local GIL under D-128 | proposed |
@@ -179,3 +179,4 @@ current.
 | [D-170](./D-170-status-page-freshness-third-signal-feature-paragraphs.md) | Extend the status-page freshness check with a third signal: feature-landing paragraph set changes (#522) | accepted |
 | [D-171](./D-171-change-aware-ci-gate-scheduling.md) | Change-aware CI gate scheduling | accepted |
 | [D-172](./D-172-nonblocking-property-based-ci-policy-audit.md) | Use a base-owned property audit without forced CI successor activation | accepted |
+| [D-173](./D-173-exception-propagation-via-global-state-superseding-d-005.md) | Exception propagation via explicit per-thread state, superseding D-005 | accepted |

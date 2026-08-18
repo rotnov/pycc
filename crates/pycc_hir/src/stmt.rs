@@ -37,6 +37,8 @@
 //! enum, but is refined by D-149: this module is not left untouched by an
 //! `expr.rs`-side flag the way that framing might suggest.
 
+mod exception;
+
 use crate::expr::{
     is_zero_arg_super_call, lower_dict_comp_assign, lower_expr, lower_list_comp_assign,
     lower_range_call, lower_set_comp_assign,
@@ -44,6 +46,7 @@ use crate::expr::{
 use crate::{
     HirExpr, HirMatchCase, HirPattern, HirStmt, Ty, annotation_to_ty, context_invalid, unsupported,
 };
+use exception::lower_except_handler;
 use pycc_ast::{ElifElseClause, Expr, Pattern, Singleton, Stmt, StmtMatch};
 use pycc_diag::Diagnostic;
 
@@ -404,6 +407,75 @@ pub(crate) fn lower_stmt(
             type_param,
             class_defs,
         )?,
+        Stmt::Try(try_stmt) => {
+            if try_stmt.is_star {
+                return Err(unsupported(
+                    "except* (exception groups) is not supported yet",
+                    try_stmt.range,
+                ));
+            }
+            let body = lower_body(
+                &try_stmt.body,
+                aliases,
+                in_loop,
+                in_function,
+                class_name,
+                type_param,
+                class_defs,
+            )?;
+            let handlers = try_stmt
+                .handlers
+                .iter()
+                .map(|h| {
+                    lower_except_handler(
+                        h,
+                        aliases,
+                        in_loop,
+                        in_function,
+                        class_name,
+                        type_param,
+                        class_defs,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let orelse = lower_body(
+                &try_stmt.orelse,
+                aliases,
+                in_loop,
+                in_function,
+                class_name,
+                type_param,
+                class_defs,
+            )?;
+            let finalbody = lower_body(
+                &try_stmt.finalbody,
+                aliases,
+                in_loop,
+                in_function,
+                class_name,
+                type_param,
+                class_defs,
+            )?;
+            HirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            }
+        }
+        Stmt::Raise(raise_stmt) => {
+            let exc = raise_stmt
+                .exc
+                .as_deref()
+                .map(|e| lower_expr(e, in_function, class_name))
+                .transpose()?;
+            let cause = raise_stmt
+                .cause
+                .as_deref()
+                .map(|e| lower_expr(e, in_function, class_name))
+                .transpose()?;
+            HirStmt::Raise { exc, cause }
+        }
         other => {
             return Err(unsupported(
                 "statement kind not supported yet",
@@ -618,8 +690,7 @@ fn lower_pattern(
                 .keywords
                 .iter()
                 .map(|kw| {
-                    lower_pattern(&kw.pattern, in_function, None)
-                        .map(|p| (kw.attr.to_string(), p))
+                    lower_pattern(&kw.pattern, in_function, None).map(|p| (kw.attr.to_string(), p))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(HirPattern::Class {
@@ -637,10 +708,7 @@ fn lower_pattern(
             (None, Some(name)) => Ok(HirPattern::Capture(name.id.to_string())),
             (Some(inner), name) => {
                 let inner_pat = lower_pattern(inner, in_function, class_name)?;
-                let name = name
-                    .as_ref()
-                    .map(|n| n.id.to_string())
-                    .unwrap_or_default();
+                let name = name.as_ref().map(|n| n.id.to_string()).unwrap_or_default();
                 Ok(HirPattern::As(Box::new(inner_pat), name))
             }
         },
@@ -668,7 +736,10 @@ mod tests {
         });
         let err = lower_pattern(&star, false, None).unwrap_err();
         assert_eq!(err.code, "C0001");
-        assert!(err.message.contains("a `*` pattern is only valid inside a sequence pattern"));
+        assert!(
+            err.message
+                .contains("a `*` pattern is only valid inside a sequence pattern")
+        );
     }
 
     #[test]
@@ -712,9 +783,8 @@ mod tests {
         // `{**x}` is a dict-unpacking expression that `lower_expr` rejects
         // with C0001; used as the match subject it propagates through the
         // `?` on the subject expression.
-        let module = pycc_parser::parse(
-            "match {**x}:\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        let module = pycc_parser::parse("match {**x}:\n    case _:\n        pass\n")
+            .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
@@ -725,7 +795,8 @@ mod tests {
         // C0001, propagating through the `?` on the guard.
         let module = pycc_parser::parse(
             "x = 1\nmatch x:\n    case 1 if {**y}:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        )
+        .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
@@ -736,7 +807,8 @@ mod tests {
         // `lower_expr` does not handle unary operators and rejects with C0001.
         let module = pycc_parser::parse(
             "x = 1\nmatch x:\n    case -1:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        )
+        .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
@@ -747,7 +819,8 @@ mod tests {
         // rejects with C0001, propagating through the `?` on the key.
         let module = pycc_parser::parse(
             "x = {1: 2}\nmatch x:\n    case {-1: v}:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        )
+        .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
@@ -756,7 +829,8 @@ mod tests {
     fn lower_match_sequence_subpattern_error_propagates() {
         let module = pycc_parser::parse(
             "x = [1]\nmatch x:\n    case [foo.bar]:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        )
+        .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
@@ -801,7 +875,8 @@ mod tests {
     fn lower_match_as_pattern_inner_error_propagates() {
         let module = pycc_parser::parse(
             "x = 1\nmatch x:\n    case foo.bar as y:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        )
+        .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
@@ -810,7 +885,8 @@ mod tests {
     fn lower_match_or_pattern_subpattern_error_propagates() {
         let module = pycc_parser::parse(
             "x = 1\nmatch x:\n    case foo.bar | 1:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        )
+        .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }

@@ -1,4 +1,9 @@
 pub use pycc_hir::HirClassDef;
+mod exception;
+#[cfg(test)]
+use exception::lower_exception_value;
+pub use exception::{MirExceptHandler, MirExceptionValue};
+use exception::{lower_raise, resolve_exception_tag};
 use pycc_hir::{
     CompIter, FStringPart, HirExpr, HirItem, HirMatchCase, HirModule, HirPattern, HirStmt,
     eval_isinstance_single, eval_issubclass_single, extract_class_names, is_builtin_type_name,
@@ -367,6 +372,12 @@ pub enum MirStmt {
     /// nothing observable for either (confirmed empirically during PR-9
     /// planning: no store, no allocation, nothing an oracle diff could see).
     NoOp,
+    /// A continuation that the validated HIR proves cannot be reached. The
+    /// match lowerer uses this for the no-case fallback of an exhaustive
+    /// `match`: preserving the proof in MIR keeps later fallthrough analysis
+    /// aligned with the type checker instead of inventing a synthetic `NoOp`
+    /// path after all exhaustive alternatives failed.
+    Unreachable,
     If {
         test: MirExpr,
         body: Vec<MirStmt>,
@@ -477,6 +488,27 @@ pub enum MirStmt {
     /// order — used by `match` lowering to pair the subject-temporary
     /// assignment with the nested `if` chain.
     Seq(Vec<MirStmt>),
+    /// `try`/`except`/`else`/`finally` (PEP 3110, #382, PR-22 Part 1).
+    /// Each handler's `exc_type_tag` is the resolved runtime exception
+    /// type tag (matching `pycc_rt`'s `EXCEPTION_TYPE_*` constants), or
+    /// `None` for a bare `except:`.
+    Try {
+        body: Vec<MirStmt>,
+        handlers: Vec<MirExceptHandler>,
+        orelse: Vec<MirStmt>,
+        finalbody: Vec<MirStmt>,
+    },
+    /// `raise <exception>` (PEP 3110, #382).
+    Raise {
+        exception: MirExceptionValue,
+    },
+    /// `raise <exception> from <cause>` (PEP 409, #382).
+    RaiseFrom {
+        exception: MirExceptionValue,
+        cause: MirExceptionValue,
+    },
+    /// Bare `raise` (re-raise, #382). Only valid inside an except handler.
+    Reraise,
 }
 
 /// A comprehension's already-resolved iterable source (PR-12, D-117) --
@@ -1040,6 +1072,68 @@ fn lower_stmt(
         HirStmt::Match { subject, cases } => {
             lower_match(subject, cases, scopes, classes, current_class)
         }
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            let body = body
+                .iter()
+                .map(|s| lower_stmt(s, scopes, classes, current_class))
+                .collect();
+            let handlers = handlers
+                .iter()
+                .map(|h| {
+                    let exc_type_tag = h.exc_type.as_deref().map(|name| {
+                        resolve_exception_tag(name)
+                            .expect("pycc_types rejects unknown exception handler types before MIR")
+                    });
+                    if let (Some(exc_type), Some(name)) = (&h.exc_type, &h.name) {
+                        // The type checker binds `except T as name` only in
+                        // the handler's cloned environment. MIR maintains
+                        // its own type scopes, so record the same binding
+                        // before lowering expressions in the handler body.
+                        // A bare handler cannot have an `as` name in Python.
+                        bind(
+                            scopes,
+                            name.clone(),
+                            Ty::Instance(Box::new(exc_type.clone())),
+                        );
+                    }
+                    let handler_body = h
+                        .body
+                        .iter()
+                        .map(|s| lower_stmt(s, scopes, classes, current_class))
+                        .collect();
+                    MirExceptHandler {
+                        exc_type_tag,
+                        binding_name: h.name.clone(),
+                        binding_ty: h
+                            .name
+                            .as_ref()
+                            .zip(h.exc_type.as_ref())
+                            .map(|_| Ty::Instance(Box::new(h.exc_type.clone().unwrap()))),
+                        body: handler_body,
+                    }
+                })
+                .collect();
+            let orelse = orelse
+                .iter()
+                .map(|s| lower_stmt(s, scopes, classes, current_class))
+                .collect();
+            let finalbody = finalbody
+                .iter()
+                .map(|s| lower_stmt(s, scopes, classes, current_class))
+                .collect();
+            MirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            }
+        }
+        HirStmt::Raise { exc, cause } => lower_raise(exc, cause, scopes, classes, current_class),
     }
 }
 
@@ -1068,14 +1162,7 @@ fn lower_match(
         target: subj_var.clone(),
         value: subj_expr,
     };
-    let chain = lower_match_chain(
-        &subj_var,
-        &subj_ty,
-        cases,
-        scopes,
-        classes,
-        current_class,
-    );
+    let chain = lower_match_chain(&subj_var, &subj_ty, cases, scopes, classes, current_class);
     MirStmt::Seq(vec![assign, chain])
 }
 
@@ -1093,7 +1180,11 @@ fn lower_match_chain(
     current_class: Option<&str>,
 ) -> MirStmt {
     if cases.is_empty() {
-        return MirStmt::NoOp;
+        // `pycc_types::check` rejects every non-exhaustive match before MIR
+        // lowering (T0030), including guarded-only coverage. Reaching the
+        // end of the validated case chain is therefore statically
+        // impossible and must remain terminal in MIR.
+        return MirStmt::Unreachable;
     }
     let case = &cases[0];
     let rest = &cases[1..];
@@ -1101,13 +1192,8 @@ fn lower_match_chain(
         name: subj_var.to_string(),
         ty: subj_ty.clone(),
     };
-    let (alternatives, bindings) = lower_pattern_conds(
-        &subj_ref,
-        &case.pattern,
-        scopes,
-        classes,
-        current_class,
-    );
+    let (alternatives, bindings) =
+        lower_pattern_conds(&subj_ref, &case.pattern, scopes, classes, current_class);
     for (name, val) in &bindings {
         let ty = val.ty();
         bind_variable(scopes, name.clone(), ty);
@@ -1168,18 +1254,18 @@ fn nest_match_alternatives(
 /// Nests a single alternative's conditions into a chain of `if`
 /// statements. The innermost `then` body is `inner_body`; every `else`
 /// falls through to `else_chain`.
-fn nest_match_conds(
-    conds: &[MirExpr],
-    inner_body: Vec<MirStmt>,
-    else_chain: MirStmt,
-) -> MirStmt {
+fn nest_match_conds(conds: &[MirExpr], inner_body: Vec<MirStmt>, else_chain: MirStmt) -> MirStmt {
     if conds.is_empty() {
         return MirStmt::Seq(inner_body);
     }
     let (first, rest) = conds.split_first().unwrap();
     MirStmt::If {
         test: first.clone(),
-        body: vec![nest_match_conds(rest, inner_body.clone(), else_chain.clone())],
+        body: vec![nest_match_conds(
+            rest,
+            inner_body.clone(),
+            else_chain.clone(),
+        )],
         orelse: vec![else_chain],
     }
 }
@@ -1199,9 +1285,7 @@ fn lower_pattern_conds(
 ) -> (Vec<Vec<MirExpr>>, Vec<(String, MirExpr)>) {
     match pattern {
         HirPattern::Wildcard => (vec![vec![]], vec![]),
-        HirPattern::Capture(name) => {
-            (vec![vec![]], vec![(name.clone(), subj.clone())])
-        }
+        HirPattern::Capture(name) => (vec![vec![]], vec![(name.clone(), subj.clone())]),
         HirPattern::Literal(lit) => {
             let lowered = lower_expr(lit, scopes, classes, current_class);
             (
@@ -1238,9 +1322,14 @@ fn lower_pattern_conds(
         HirPattern::Sequence(sub_pats) => {
             lower_sequence_conds(subj, sub_pats, None, scopes, classes, current_class)
         }
-        HirPattern::SequenceStar(sub_pats, rest) => {
-            lower_sequence_conds(subj, sub_pats, rest.as_ref(), scopes, classes, current_class)
-        }
+        HirPattern::SequenceStar(sub_pats, rest) => lower_sequence_conds(
+            subj,
+            sub_pats,
+            rest.as_ref(),
+            scopes,
+            classes,
+            current_class,
+        ),
         HirPattern::Mapping(pairs, rest) => {
             lower_mapping_conds(subj, pairs, rest.as_ref(), scopes, classes, current_class)
         }
@@ -1249,7 +1338,13 @@ fn lower_pattern_conds(
             positional,
             keyword,
         } => lower_class_conds(
-            subj, class_name, positional, keyword, scopes, classes, current_class,
+            subj,
+            class_name,
+            positional,
+            keyword,
+            scopes,
+            classes,
+            current_class,
         ),
         HirPattern::Or(subs) => {
             let mut all_alts = Vec::new();
@@ -1264,8 +1359,7 @@ fn lower_pattern_conds(
             (all_alts, all_bindings)
         }
         HirPattern::As(inner, name) => {
-            let (alts, bindings) =
-                lower_pattern_conds(subj, inner, scopes, classes, current_class);
+            let (alts, bindings) = lower_pattern_conds(subj, inner, scopes, classes, current_class);
             let mut all = bindings;
             all.push((name.clone(), subj.clone()));
             (alts, all)
@@ -1285,7 +1379,11 @@ fn lower_sequence_conds(
 ) -> (Vec<Vec<MirExpr>>, Vec<(String, MirExpr)>) {
     let fixed = sub_pats.len();
     let len_cond = MirExpr::Compare {
-        op: if rest.is_some() { CmpOpKind::GtE } else { CmpOpKind::Eq },
+        op: if rest.is_some() {
+            CmpOpKind::GtE
+        } else {
+            CmpOpKind::Eq
+        },
         left: Box::new(MirExpr::Call {
             callee: "len".to_string(),
             args: vec![subj.clone()],
@@ -2438,12 +2536,10 @@ fn eval_isinstance_protocol(
                     // `is_some_and(…)` treats missing entries as not
                     // having the attribute, matching the method arm's
                     // `find_map` skip semantics.
-                    classes
-                        .get(mro_class.as_str())
-                        .is_some_and(|mro_def| {
-                            mro_def.attrs.iter().any(|(n, _)| n == attr_name)
-                                || mro_def.properties.iter().any(|p| &p.name == attr_name)
-                        })
+                    classes.get(mro_class.as_str()).is_some_and(|mro_def| {
+                        mro_def.attrs.iter().any(|(n, _)| n == attr_name)
+                            || mro_def.properties.iter().any(|p| &p.name == attr_name)
+                    })
                 });
                 if !found {
                     return false;
@@ -2507,7 +2603,10 @@ fn binop_result_ty(op: BinOpKind, left: Ty, right: Ty) -> Ty {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pycc_hir::{BinOpKind, CmpOpKind, FStringPart, HirClassDef, HirExpr, HirItem, HirMatchCase, HirModule, HirPattern, HirStmt, Ty};
+    use pycc_hir::{
+        BinOpKind, CmpOpKind, FStringPart, HirClassDef, HirExpr, HirItem, HirMatchCase, HirModule,
+        HirPattern, HirStmt, Ty,
+    };
 
     #[test]
     fn builds_an_assignment_and_a_later_name_reference() {
@@ -8457,17 +8556,15 @@ mod tests {
         let proto_ty = Ty::Protocol(Box::new("P".to_string()));
         let instance_ty = Ty::Instance(Box::new("C".to_string()));
         let hir = HirModule {
-            items: vec![
-                HirItem::TopLevelStmt(HirStmt::AnnAssign {
-                    target: "c".to_string(),
-                    annotation: proto_ty,
-                    value: Some(HirExpr::Call {
-                        callee: "C".to_string(),
-                        args: vec![],
-                    }),
-                    is_final: false,
+            items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                target: "c".to_string(),
+                annotation: proto_ty,
+                value: Some(HirExpr::Call {
+                    callee: "C".to_string(),
+                    args: vec![],
                 }),
-            ],
+                is_final: false,
+            })],
             type_aliases: Vec::new(),
             imports: Vec::new(),
             class_defs: vec![
@@ -8607,10 +8704,10 @@ mod tests {
         let mir = build(&hir);
         // The isinstance call should be lowered to a BoolLiteral(true)
         // because Circle conforms to the Drawable protocol.
-        assert!(mir
-            .items
-            .iter()
-            .any(|item| matches!(item, MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::BoolLiteral(true))))));
+        assert!(mir.items.iter().any(|item| matches!(
+            item,
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::BoolLiteral(true)))
+        )));
     }
 
     // -- #381: match statement MIR lowering coverage -----------------------
@@ -8638,7 +8735,10 @@ mod tests {
             items: vec![
                 HirItem::TopLevelStmt(HirStmt::Assign {
                     target: "x".to_string(),
-                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                    ]),
                 }),
                 HirItem::TopLevelStmt(HirStmt::Match {
                     subject: HirExpr::Name("x".to_string()),
@@ -8863,7 +8963,10 @@ mod tests {
                             pattern: HirPattern::Class {
                                 class_name: "P".to_string(),
                                 positional: vec![HirPattern::Capture("a".to_string())],
-                                keyword: vec![("a".to_string(), HirPattern::Capture("a2".to_string()))],
+                                keyword: vec![(
+                                    "a".to_string(),
+                                    HirPattern::Capture("a2".to_string()),
+                                )],
                             },
                             guard: None,
                             body: vec![],
@@ -8993,5 +9096,340 @@ mod tests {
         }]);
         let mir = build(&hir);
         assert!(!mir.items.is_empty());
+    }
+
+    // #382 (PR-22 Part 1): MIR lowering tests for exception handling.
+
+    fn try_module(
+        body: Vec<HirStmt>,
+        handlers: Vec<pycc_hir::HirExceptHandler>,
+        orelse: Vec<HirStmt>,
+        finalbody: Vec<HirStmt>,
+    ) -> HirModule {
+        HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            })],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        }
+    }
+
+    /// Test helper: extract a `Try` statement from a top-level MIR item,
+    /// panicking if the item is not a `Try`.  The panic arm is covered by
+    /// `expect_top_level_try_panics_on_non_try`.
+    fn expect_top_level_try(
+        item: &MirItem,
+    ) -> (&[MirStmt], &[MirExceptHandler], &[MirStmt], &[MirStmt]) {
+        match item {
+            MirItem::TopLevelStmt(MirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            }) => (body, handlers, orelse, finalbody),
+            _ => panic!("expected Try"),
+        }
+    }
+
+    /// Test helper: extract a `Raise` statement from a top-level MIR item,
+    /// panicking if the item is not a `Raise`.  The panic arm is covered by
+    /// `expect_top_level_raise_panics_on_non_raise`.
+    fn expect_top_level_raise(item: &MirItem) -> &MirExceptionValue {
+        match item {
+            MirItem::TopLevelStmt(MirStmt::Raise { exception }) => exception,
+            _ => panic!("expected Raise"),
+        }
+    }
+
+    /// Test helper: extract a `RaiseFrom` statement from a top-level MIR item,
+    /// panicking if the item is not a `RaiseFrom`.  The panic arm is covered
+    /// by `expect_top_level_raise_from_panics_on_non_raise_from`.
+    fn expect_top_level_raise_from(item: &MirItem) -> (&MirExceptionValue, &MirExceptionValue) {
+        match item {
+            MirItem::TopLevelStmt(MirStmt::RaiseFrom { exception, cause }) => (exception, cause),
+            _ => panic!("expected RaiseFrom"),
+        }
+    }
+
+    fn expect_constructed_exception(value: &MirExceptionValue) -> (&u8, &MirExpr) {
+        match value {
+            MirExceptionValue::Constructed { type_tag, message } => (type_tag, message),
+            MirExceptionValue::Existing(_) => panic!("expected constructed exception"),
+        }
+    }
+
+    /// Test helper: assert a top-level MIR item is a `Reraise`, panicking
+    /// otherwise.  The panic arm is covered by
+    /// `expect_top_level_reraise_panics_on_non_reraise`.
+    fn expect_top_level_reraise(item: &MirItem) {
+        match item {
+            MirItem::TopLevelStmt(MirStmt::Reraise) => {}
+            _ => panic!("expected Reraise"),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Try")]
+    fn expect_top_level_try_panics_on_non_try() {
+        expect_top_level_try(&MirItem::TopLevelStmt(MirStmt::NoOp));
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Raise")]
+    fn expect_top_level_raise_panics_on_non_raise() {
+        expect_top_level_raise(&MirItem::TopLevelStmt(MirStmt::NoOp));
+    }
+
+    #[test]
+    #[should_panic(expected = "expected RaiseFrom")]
+    fn expect_top_level_raise_from_panics_on_non_raise_from() {
+        expect_top_level_raise_from(&MirItem::TopLevelStmt(MirStmt::NoOp));
+    }
+
+    #[test]
+    #[should_panic(expected = "expected constructed exception")]
+    fn expect_constructed_exception_panics_on_an_existing_exception() {
+        expect_constructed_exception(&MirExceptionValue::Existing(MirExpr::IntLiteral(0)));
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Reraise")]
+    fn expect_top_level_reraise_panics_on_non_reraise() {
+        expect_top_level_reraise(&MirItem::TopLevelStmt(MirStmt::NoOp));
+    }
+
+    /// Test helper: assert a `MirExpr` is a `StringLiteral`, returning
+    /// the inner string.  Panicking otherwise.  The panic arm is covered
+    /// by `expect_string_literal_panics_on_non_string`.
+    fn expect_string_literal(expr: &MirExpr) -> &str {
+        match expr {
+            MirExpr::StringLiteral(s) => s,
+            _ => panic!("expected StringLiteral"),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "expected StringLiteral")]
+    fn expect_string_literal_panics_on_non_string() {
+        expect_string_literal(&MirExpr::IntLiteral(0));
+    }
+
+    #[test]
+    fn lowers_try_with_value_error_handler_to_mir() {
+        let hir = try_module(
+            vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::StringLiteral("hello".to_string())],
+            })],
+            vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("ValueError".to_string()),
+                name: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::StringLiteral("caught".to_string())],
+                })],
+            }],
+            Vec::new(),
+            Vec::new(),
+        );
+        let mir = build(&hir);
+        assert_eq!(mir.items.len(), 1);
+        let (body, handlers, orelse, finalbody) = expect_top_level_try(&mir.items[0]);
+        assert_eq!(body.len(), 1);
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(handlers[0].exc_type_tag, Some(1)); // ValueError = 1
+        assert!(orelse.is_empty());
+        assert!(finalbody.is_empty());
+    }
+
+    #[test]
+    fn lowers_try_with_bare_except_to_mir() {
+        let hir = try_module(
+            vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::StringLiteral("body".to_string())],
+            })],
+            vec![pycc_hir::HirExceptHandler {
+                exc_type: None,
+                name: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::StringLiteral("caught".to_string())],
+                })],
+            }],
+            Vec::new(),
+            Vec::new(),
+        );
+        let mir = build(&hir);
+        let (_, handlers, _, _) = expect_top_level_try(&mir.items[0]);
+        assert_eq!(handlers[0].exc_type_tag, None); // bare except
+    }
+
+    #[test]
+    fn lowers_try_with_else_and_finally_to_mir() {
+        let hir = try_module(
+            vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::StringLiteral("body".to_string())],
+            })],
+            vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("Exception".to_string()),
+                name: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::StringLiteral("handler".to_string())],
+                })],
+            }],
+            vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::StringLiteral("else".to_string())],
+            })],
+            vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::StringLiteral("finally".to_string())],
+            })],
+        );
+        let mir = build(&hir);
+        let (body, handlers, orelse, finalbody) = expect_top_level_try(&mir.items[0]);
+        assert_eq!(body.len(), 1);
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(handlers[0].exc_type_tag, Some(0)); // Exception = 0
+        assert_eq!(orelse.len(), 1);
+        assert_eq!(finalbody.len(), 1);
+    }
+
+    #[test]
+    fn lowers_raise_value_error_to_mir() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Raise {
+                exc: Some(HirExpr::Call {
+                    callee: "ValueError".to_string(),
+                    args: vec![HirExpr::StringLiteral("bad value".to_string())],
+                }),
+                cause: None,
+            })],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let mir = build(&hir);
+        let (exc_type_tag, message) =
+            expect_constructed_exception(expect_top_level_raise(&mir.items[0]));
+        assert_eq!(*exc_type_tag, 1); // ValueError = 1
+        expect_string_literal(message);
+    }
+
+    #[test]
+    fn lowers_raise_from_to_mir() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Raise {
+                exc: Some(HirExpr::Call {
+                    callee: "ValueError".to_string(),
+                    args: vec![HirExpr::StringLiteral("bad".to_string())],
+                }),
+                cause: Some(HirExpr::Call {
+                    callee: "TypeError".to_string(),
+                    args: vec![HirExpr::StringLiteral("cause".to_string())],
+                }),
+            })],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let mir = build(&hir);
+        let (exception, cause) = expect_top_level_raise_from(&mir.items[0]);
+        let (exc_type_tag, _) = expect_constructed_exception(exception);
+        let (cause_type_tag, _) = expect_constructed_exception(cause);
+        assert_eq!(*exc_type_tag, 1); // ValueError = 1
+        assert_eq!(*cause_type_tag, 2); // TypeError = 2
+    }
+
+    #[test]
+    fn lowers_bare_reraise_to_mir() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Raise {
+                exc: None,
+                cause: None,
+            })],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let mir = build(&hir);
+        expect_top_level_reraise(&mir.items[0]);
+    }
+
+    #[test]
+    fn resolve_exception_tag_maps_all_builtin_types() {
+        assert_eq!(resolve_exception_tag("Exception"), Some(0));
+        assert_eq!(resolve_exception_tag("ValueError"), Some(1));
+        assert_eq!(resolve_exception_tag("TypeError"), Some(2));
+        assert_eq!(resolve_exception_tag("KeyError"), Some(3));
+        assert_eq!(resolve_exception_tag("IndexError"), Some(4));
+        assert_eq!(resolve_exception_tag("ZeroDivisionError"), Some(5));
+        assert_eq!(resolve_exception_tag("RuntimeError"), Some(6));
+        assert_eq!(resolve_exception_tag("UnknownError"), None);
+    }
+
+    #[test]
+    fn lowers_raise_with_no_args_uses_fallback_message() {
+        // `raise ValueError()` — no args, should use "unknown" fallback.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Raise {
+                exc: Some(HirExpr::Call {
+                    callee: "ValueError".to_string(),
+                    args: vec![],
+                }),
+                cause: None,
+            })],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let mir = build(&hir);
+        let (_, message) = expect_constructed_exception(expect_top_level_raise(&mir.items[0]));
+        assert_eq!(expect_string_literal(message), "unknown");
+    }
+
+    #[test]
+    fn lowers_existing_exception_value_without_replacing_it() {
+        let mut scopes = vec![HashMap::from([(
+            "some_exc".to_string(),
+            Ty::Instance(Box::new("ValueError".to_string())),
+        )])];
+        let value = lower_exception_value(
+            &HirExpr::Name("some_exc".to_string()),
+            &mut scopes,
+            &HashMap::new(),
+            None,
+        );
+        assert!(matches!(
+            value,
+            MirExceptionValue::Existing(MirExpr::Name {
+                name,
+                ty: Ty::Instance(class_name),
+            }) if name == "some_exc" && class_name.as_str() == "ValueError"
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_types rejects unknown exception handler types before MIR")]
+    fn an_unknown_exception_handler_cannot_silently_become_a_bare_handler() {
+        let hir = try_module(
+            vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+            vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("TypoError".to_string()),
+                name: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+            }],
+            Vec::new(),
+            Vec::new(),
+        );
+        let _ = build(&hir);
     }
 }

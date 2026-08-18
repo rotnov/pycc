@@ -1,13 +1,16 @@
 mod class;
+mod exception;
 mod solver;
+
+use exception::{check_raise_stmt, check_try_stmt, is_unshadowed_builtin_exception};
 
 use pycc_diag::{Diagnostic, Span};
 #[cfg(test)]
 use pycc_hir::CmpOpKind;
 pub use pycc_hir::Ty;
 use pycc_hir::{
-    BinOpKind, CmpOpKind as CmpOp, CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirMatchCase,
-    HirModule, HirPattern, HirStmt, PropertyDef,
+    BinOpKind, CmpOpKind as CmpOp, CompIter, FStringPart, HirClassDef, HirExpr, HirItem,
+    HirMatchCase, HirModule, HirPattern, HirStmt, PropertyDef,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -127,6 +130,11 @@ pub struct Environment {
     /// declaration for a name shadowing a module-level `Final` does not
     /// inherit the module-level constraint.
     finals: HashSet<String>,
+    /// #382 (PR-22 Part 1): `true` when the statement being checked is
+    /// inside an `except` handler body. Used to validate bare `raise`
+    /// (re-raise) — only valid inside an except handler. Set to `true`
+    /// before checking a handler body, reset to the previous value after.
+    in_except_handler: bool,
 }
 
 impl Environment {
@@ -765,12 +773,31 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
             HirStmt::ExprStmt(_)
             | HirStmt::Return(_)
             | HirStmt::DictSet { .. }
-            | HirStmt::AttrSet { .. } => {}
+            | HirStmt::AttrSet { .. }
+            | HirStmt::Raise { .. } => {}
             HirStmt::Match { cases, .. } => {
                 for case in cases {
                     collect_pattern_capture_names(&case.pattern, names);
                     collect_local_names(&case.body, names);
                 }
+            }
+            HirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                collect_local_names(body, names);
+                for handler in handlers {
+                    if let Some(name) = &handler.name
+                        && !is_local(names, name)
+                    {
+                        names.push(name);
+                    }
+                    collect_local_names(&handler.body, names);
+                }
+                collect_local_names(orelse, names);
+                collect_local_names(finalbody, names);
             }
         }
     }
@@ -780,7 +807,9 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
 /// pattern (recursively), for `collect_local_names`'s pre-pass.
 fn collect_pattern_capture_names<'a>(pattern: &'a HirPattern, names: &mut Vec<&'a str>) {
     match pattern {
-        HirPattern::Wildcard | HirPattern::Literal(_) | HirPattern::Singleton(_)
+        HirPattern::Wildcard
+        | HirPattern::Literal(_)
+        | HirPattern::Singleton(_)
         | HirPattern::NoneSingleton => {}
         HirPattern::Capture(name) => {
             if !is_local(names, name) {
@@ -812,7 +841,11 @@ fn collect_pattern_capture_names<'a>(pattern: &'a HirPattern, names: &mut Vec<&'
                 names.push(rest);
             }
         }
-        HirPattern::Class { positional, keyword, .. } => {
+        HirPattern::Class {
+            positional,
+            keyword,
+            ..
+        } => {
             for sub in positional {
                 collect_pattern_capture_names(sub, names);
             }
@@ -2181,6 +2214,104 @@ fn collect_block_constraints(
                     solver::join_loop_body_solver(env, &case_env, &pre_existing);
                 }
             }
+            HirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                // #382 (PR-22 Part 1): collect constraints from the try
+                // body, each handler, the else body, and the finally body.
+                // The try body's bindings are joined back as `Maybe` (the
+                // body may raise before reaching an assignment).
+                let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
+                let mut body_env = env.clone();
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    constraints,
+                    &mut body_env,
+                    body,
+                    return_term.clone(),
+                )?;
+                solver::join_loop_body_solver(env, &body_env, &pre_existing);
+                for handler in handlers {
+                    let mut henv = env.clone();
+                    // Bind the `as` name in the handler environment.
+                    // Inside the handler body, the binding is definite.
+                    if let Some(exc_type) = &handler.exc_type
+                        && let Some(name) = &handler.name
+                    {
+                        henv.bindings
+                            .insert(name.clone(), Ok(Ty::Instance(Box::new(exc_type.clone()))));
+                    }
+                    collect_block_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        constraints,
+                        &mut henv,
+                        &handler.body,
+                        return_term.clone(),
+                    )?;
+                    solver::join_loop_body_solver(env, &henv, &pre_existing);
+                }
+                let mut else_env = env.clone();
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    constraints,
+                    &mut else_env,
+                    orelse,
+                    return_term.clone(),
+                )?;
+                solver::join_loop_body_solver(env, &else_env, &pre_existing);
+                // The finally body always runs — collect in-place.
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    constraints,
+                    env,
+                    finalbody,
+                    return_term.clone(),
+                )?;
+            }
+            HirStmt::Raise { exc, cause } => {
+                // #382 (PR-22 Part 1): A raise expression that is a direct
+                // call to a builtin exception class (e.g.
+                // `ValueError("msg")`) would be classified as C0001 by
+                // `collect_expr_constraints` (the callee is a known callable
+                // builtin, not a user-defined function or registered class).
+                // The actual validation is done by `check_raise_stmt` in the
+                // check pass, so errors from constraint collection for raise
+                // operands are deliberately ignored here — they would
+                // otherwise prevent the solver path from reaching
+                // `check_with_signatures`, where `bind_classes` registers
+                // the builtin exception classes and the real check succeeds.
+                if let Some(exc_expr) = exc {
+                    let _ = collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.binops,
+                        env,
+                        exc_expr,
+                    );
+                }
+                if let Some(cause_expr) = cause {
+                    let _ = collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.binops,
+                        env,
+                        cause_expr,
+                    );
+                }
+            }
         }
     }
     Ok(())
@@ -2303,9 +2434,7 @@ fn contains_return(body: &[HirStmt]) -> bool {
         HirStmt::While { body, .. }
         | HirStmt::ForRange { body, .. }
         | HirStmt::ForList { body, .. } => contains_return(body),
-        HirStmt::Match { cases, .. } => {
-            cases.iter().any(|case| contains_return(&case.body))
-        }
+        HirStmt::Match { cases, .. } => cases.iter().any(|case| contains_return(&case.body)),
         HirStmt::ExprStmt(_)
         | HirStmt::Assign { .. }
         | HirStmt::AnnAssign { .. }
@@ -2313,7 +2442,19 @@ fn contains_return(body: &[HirStmt]) -> bool {
         | HirStmt::AttrSet { .. }
         | HirStmt::ListCompAssign { .. }
         | HirStmt::SetCompAssign { .. }
-        | HirStmt::DictCompAssign { .. } => false,
+        | HirStmt::DictCompAssign { .. }
+        | HirStmt::Raise { .. } => false,
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            contains_return(body)
+                || handlers.iter().any(|h| contains_return(&h.body))
+                || contains_return(orelse)
+                || contains_return(finalbody)
+        }
     })
 }
 
@@ -2337,10 +2478,20 @@ fn introduces_bindings(body: &[HirStmt]) -> bool {
         HirStmt::While { body, .. } => introduces_bindings(body),
         HirStmt::ForRange { body, .. } => introduces_bindings(body),
         HirStmt::ForList { body, .. } => introduces_bindings(body),
-        HirStmt::Match { cases, .. } => {
-            cases.iter().any(|case| introduces_bindings(&case.body))
-        }
+        HirStmt::Match { cases, .. } => cases.iter().any(|case| introduces_bindings(&case.body)),
         HirStmt::Return(_) | HirStmt::ExprStmt(_) => false,
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            introduces_bindings(body)
+                || handlers.iter().any(|h| introduces_bindings(&h.body))
+                || introduces_bindings(orelse)
+                || introduces_bindings(finalbody)
+        }
+        HirStmt::Raise { .. } => false,
     })
 }
 
@@ -2461,6 +2612,7 @@ fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
         own_type_param: None,
         current_class: None,
         finals: HashSet::new(),
+        in_except_handler: false,
     })
 }
 
@@ -4026,16 +4178,9 @@ fn join_loop_body(env: &mut Environment, body_env: &Environment) {
 /// only some is `Maybe`. If not exhaustive, there is an implicit "no match"
 /// path, so every case-only binding is `Maybe`. Pre-existing bindings are
 /// preserved (first-assignment-wins, matching `join_if_branches`).
-fn join_match_branches(
-    env: &mut Environment,
-    case_envs: &[Environment],
-    exhaustive: bool,
-) {
+fn join_match_branches(env: &mut Environment, case_envs: &[Environment], exhaustive: bool) {
     let mut joined: HashMap<String, BindingState> = HashMap::new();
-    let all_names: HashSet<&String> = case_envs
-        .iter()
-        .flat_map(|ce| ce.bindings.keys())
-        .collect();
+    let all_names: HashSet<&String> = case_envs.iter().flat_map(|ce| ce.bindings.keys()).collect();
     for name in all_names {
         let states: Vec<&BindingState> = case_envs
             .iter()
@@ -4081,22 +4226,14 @@ fn check_match(
             if guard_ty != Ty::Bool {
                 return Err(Diagnostic::error(
                     "T0021",
-                    format!(
-                        "match guard must be `bool`, got `{}`",
-                        guard_ty.name()
-                    ),
+                    format!("match guard must be `bool`, got `{}`", guard_ty.name()),
                     Span::new(0, 0),
                 ));
             }
         }
         for stmt in &case.body {
             match return_ty {
-                Some(rt) => check_stmt_in_function(
-                    &mut case_env,
-                    local_names,
-                    stmt,
-                    rt.clone(),
-                )?,
+                Some(rt) => check_stmt_in_function(&mut case_env, local_names, stmt, rt.clone())?,
                 None => check_stmt(&mut case_env, stmt)?,
             }
         }
@@ -4229,7 +4366,14 @@ fn check_pattern(
             class_name,
             positional,
             keyword,
-        } => check_class_pattern(env, local_names, class_name, positional, keyword, subject_ty),
+        } => check_class_pattern(
+            env,
+            local_names,
+            class_name,
+            positional,
+            keyword,
+            subject_ty,
+        ),
         HirPattern::Or(subs) => {
             let mut all_bindings: Option<Vec<(String, Ty)>> = None;
             for sub in subs {
@@ -4244,7 +4388,8 @@ fn check_pattern(
                         if existing_names != new_names {
                             return Err(Diagnostic::error(
                                 "T0021",
-                                "or-pattern alternatives must bind the same set of names".to_string(),
+                                "or-pattern alternatives must bind the same set of names"
+                                    .to_string(),
                                 Span::new(0, 0),
                             ));
                         }
@@ -4374,7 +4519,12 @@ fn check_exhaustive(env: &Environment, subject_ty: &Ty, cases: &[HirMatchCase]) 
                     if case.guard.is_some() {
                         continue;
                     }
-                    collect_enum_member_patterns(&case.pattern, name, &class_def.enum_members, &mut covered);
+                    collect_enum_member_patterns(
+                        &case.pattern,
+                        name,
+                        &class_def.enum_members,
+                        &mut covered,
+                    );
                 }
                 class_def
                     .enum_members
@@ -4423,10 +4573,7 @@ fn collect_enum_member_patterns<'a>(
     covered: &mut HashSet<&'a str>,
 ) {
     match pattern {
-        HirPattern::Class {
-            class_name: cn,
-            ..
-        } => {
+        HirPattern::Class { class_name: cn, .. } => {
             if cn == class_name {
                 for (member, _) in members {
                     covered.insert(member.as_str());
@@ -4767,6 +4914,13 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             class::check_attr_set(env, &[], base, attr, value)
         }
         HirStmt::Match { subject, cases } => check_match(env, &[], subject, cases, None),
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => check_try_stmt(env, &[], body, handlers, orelse, finalbody, None),
+        HirStmt::Raise { exc, cause } => check_raise_stmt(env, &[], exc, cause),
     }
 }
 
@@ -4949,31 +5103,63 @@ fn check_function_in(
 }
 
 fn block_always_returns(body: &[HirStmt]) -> bool {
-    body.iter().any(|stmt| match stmt {
-        HirStmt::Return(_) => true,
-        HirStmt::If { body, orelse, .. } => {
-            !orelse.is_empty() && block_always_returns(body) && block_always_returns(orelse)
+    for stmt in body {
+        let returns = match stmt {
+            HirStmt::Return(_) => true,
+            HirStmt::If { body, orelse, .. } => {
+                !orelse.is_empty() & block_always_returns(body) & block_always_returns(orelse)
+            }
+            HirStmt::ExprStmt(_)
+            | HirStmt::Assign { .. }
+            | HirStmt::AnnAssign { .. }
+            | HirStmt::While { .. }
+            | HirStmt::ForRange { .. }
+            | HirStmt::ForList { .. }
+            | HirStmt::DictSet { .. }
+            | HirStmt::AttrSet { .. }
+            // PR-12 Task 3 (D-117): a comprehension statement never contains a
+            // `return` (its `elt`/`cond`/`key`/`value` are expressions, not
+            // statements), so it can never make a block always return, exactly
+            // like `Assign`/`ForList`/`DictSet` above.
+            | HirStmt::ListCompAssign { .. }
+            | HirStmt::SetCompAssign { .. }
+            | HirStmt::DictCompAssign { .. } => false,
+            // A raise transfers control to an exception handler/caller and
+            // cannot fall through to the function's implicit return point.
+            HirStmt::Raise { .. } => true,
+            HirStmt::Match { cases, .. } => {
+                let mut all_cases_return = !cases.is_empty();
+                for case in cases {
+                    all_cases_return &= block_always_returns(&case.body);
+                }
+                all_cases_return
+            }
+            HirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                // A terminal `finally` replaces every earlier outcome. Otherwise
+                // the normal path must terminate either in the try body itself or
+                // in its `else`, and every matching handler must terminate. With
+                // no handlers, an exception simply propagates to the caller and
+                // is already a terminal path.
+                let normal_path_terminates = block_always_returns(body)
+                    | ((!orelse.is_empty()) & block_always_returns(orelse));
+                let mut handled_paths_terminate = true;
+                for handler in handlers {
+                    handled_paths_terminate &= block_always_returns(&handler.body);
+                }
+                block_always_returns(finalbody)
+                    | (normal_path_terminates & handled_paths_terminate)
+            }
+        };
+        if returns {
+            return true;
         }
-        HirStmt::ExprStmt(_)
-        | HirStmt::Assign { .. }
-        | HirStmt::AnnAssign { .. }
-        | HirStmt::While { .. }
-        | HirStmt::ForRange { .. }
-        | HirStmt::ForList { .. }
-        | HirStmt::DictSet { .. }
-        | HirStmt::AttrSet { .. }
-        // PR-12 Task 3 (D-117): a comprehension statement never contains a
-        // `return` (its `elt`/`cond`/`key`/`value` are expressions, not
-        // statements), so it can never make a block always return, exactly
-        // like `Assign`/`ForList`/`DictSet` above.
-        | HirStmt::ListCompAssign { .. }
-        | HirStmt::SetCompAssign { .. }
-        | HirStmt::DictCompAssign { .. } => false,
-        HirStmt::Match { cases, .. } => {
-            !cases.is_empty()
-                && cases.iter().all(|case| block_always_returns(&case.body))
-        }
-    })
+    }
+    false
 }
 
 fn check_stmt_in_function(
@@ -5326,6 +5512,21 @@ fn check_stmt_in_function(
         HirStmt::Match { subject, cases } => {
             check_match(env, local_names, subject, cases, Some(&return_ty))
         }
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => check_try_stmt(
+            env,
+            local_names,
+            body,
+            handlers,
+            orelse,
+            finalbody,
+            Some(&return_ty),
+        ),
+        HirStmt::Raise { exc, cause } => check_raise_stmt(env, local_names, exc, cause),
     }
 }
 
@@ -5600,6 +5801,23 @@ fn reject_generic_calls_in_stmt(
                 blocks.push(&case.body);
             }
         }
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            blocks.push(body);
+            for handler in handlers {
+                blocks.push(&handler.body);
+            }
+            blocks.push(orelse);
+            blocks.push(finalbody);
+        }
+        HirStmt::Raise { exc, cause } => {
+            exprs.extend(exc.iter());
+            exprs.extend(cause.iter());
+        }
     }
     for expr in exprs {
         reject_generic_calls_in_expr(module_env, own_name, expr)?;
@@ -5793,10 +6011,7 @@ fn has_protocol_param(params: &[(String, Ty)], _return_ty: &Ty) -> bool {
 /// with one or more protocol→concrete substitutions, following the
 /// existing `0gen_` convention. Each substitution appends
 /// `__{protocol_name}_{concrete_name}` to the mangled name.
-fn mangle_protocol_instantiation(
-    func_name: &str,
-    substitutions: &[(String, Ty)],
-) -> String {
+fn mangle_protocol_instantiation(func_name: &str, substitutions: &[(String, Ty)]) -> String {
     let mut name = format!("0gen_{func_name}");
     for (proto_name, concrete) in substitutions {
         if let Ty::Instance(concrete_name) = concrete {
@@ -5818,10 +6033,7 @@ fn substitute_ty_protocols(ty: &Ty, substitutions: &[(String, Ty)]) -> Ty {
 
 /// #380 (PR-20): Like `substitute_body_protocol` but applies multiple
 /// protocol→concrete substitutions.
-fn substitute_body_protocols(
-    body: &[HirStmt],
-    substitutions: &[(String, Ty)],
-) -> Vec<HirStmt> {
+fn substitute_body_protocols(body: &[HirStmt], substitutions: &[(String, Ty)]) -> Vec<HirStmt> {
     body.iter()
         .map(|stmt| substitute_stmt_protocols(stmt, substitutions))
         .collect()
@@ -6542,13 +6754,7 @@ fn rewrite_generic_calls_in_stmt(
             rewrite_generic_calls_in_expr(env, local_names, subject, instantiations, seen)?;
             for case in cases.iter_mut() {
                 if let Some(guard) = case.guard.as_mut() {
-                    rewrite_generic_calls_in_expr(
-                        env,
-                        local_names,
-                        guard,
-                        instantiations,
-                        seen,
-                    )?;
+                    rewrite_generic_calls_in_expr(env, local_names, guard, instantiations, seen)?;
                 }
                 for s in case.body.iter_mut() {
                     rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
@@ -6556,7 +6762,83 @@ fn rewrite_generic_calls_in_stmt(
             }
             Ok(())
         }
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            for s in body.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            for handler in handlers.iter_mut() {
+                let mut handler_env = env.clone();
+                if let (Some(exc_type), Some(name)) = (&handler.exc_type, &handler.name) {
+                    handler_env.bind(name.clone(), Ty::Instance(Box::new(exc_type.clone())));
+                }
+                for s in handler.body.iter_mut() {
+                    rewrite_generic_calls_in_stmt(
+                        &mut handler_env,
+                        local_names,
+                        s,
+                        instantiations,
+                        seen,
+                    )?;
+                }
+            }
+            for s in orelse.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            for s in finalbody.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            Ok(())
+        }
+        HirStmt::Raise { exc, cause } => {
+            if let Some(exc) = exc.as_mut() {
+                rewrite_generic_calls_in_raise_operand(
+                    env,
+                    local_names,
+                    exc,
+                    instantiations,
+                    seen,
+                )?;
+            }
+            if let Some(cause) = cause.as_mut() {
+                rewrite_generic_calls_in_raise_operand(
+                    env,
+                    local_names,
+                    cause,
+                    instantiations,
+                    seen,
+                )?;
+            }
+            Ok(())
+        }
     }
+}
+
+/// Rewrites generic calls nested in a `raise` operand without asking the
+/// ordinary call checker to re-type-check the builtin exception constructor
+/// itself. The validation pass has already checked that constructor; only its
+/// message expression can still contain a generic call that needs rewriting.
+fn rewrite_generic_calls_in_raise_operand(
+    env: &mut Environment,
+    local_names: &[&str],
+    expr: &mut HirExpr,
+    instantiations: &mut Vec<GenericInstantiation>,
+    seen: &mut HashSet<String>,
+) -> Result<(), Diagnostic> {
+    if let HirExpr::Call { callee, args } = expr
+        && is_unshadowed_builtin_exception(env, local_names, callee)
+    {
+        for arg in args {
+            rewrite_generic_calls_in_expr(env, local_names, arg, instantiations, seen)?;
+        }
+        return Ok(());
+    }
+    rewrite_generic_calls_in_expr(env, local_names, expr, instantiations, seen)?;
+    Ok(())
 }
 
 /// `CompIter`'s own rewrite counterpart -- mirrors `resolve_comp_iter`
@@ -6809,6 +7091,35 @@ fn collect_generic_class_instantiations_from_stmt(stmt: &HirStmt, out: &mut Vec<
                 for s in &case.body {
                     collect_generic_class_instantiations_from_stmt(s, out);
                 }
+            }
+        }
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            for s in body {
+                collect_generic_class_instantiations_from_stmt(s, out);
+            }
+            for handler in handlers {
+                for s in &handler.body {
+                    collect_generic_class_instantiations_from_stmt(s, out);
+                }
+            }
+            for s in orelse {
+                collect_generic_class_instantiations_from_stmt(s, out);
+            }
+            for s in finalbody {
+                collect_generic_class_instantiations_from_stmt(s, out);
+            }
+        }
+        HirStmt::Raise { exc, cause } => {
+            if let Some(e) = exc {
+                collect_generic_class_instantiations_from_expr(e, out);
+            }
+            if let Some(c) = cause {
+                collect_generic_class_instantiations_from_expr(c, out);
             }
         }
     }
@@ -7403,8 +7714,7 @@ fn monomorphize_protocol_params(
                     .into_iter()
                     .map(String::from)
                     .collect();
-                let local_names_refs: Vec<&str> =
-                    local_names.iter().map(|s| s.as_str()).collect();
+                let local_names_refs: Vec<&str> = local_names.iter().map(|s| s.as_str()).collect();
                 let mut fn_env = env.child_for_function(&local_names_refs);
                 for (param_name, param_ty) in &params {
                     fn_env.bind(param_name.clone(), param_ty.clone());
@@ -7514,32 +7824,95 @@ fn rewrite_protocol_calls_in_stmt(
 ) {
     match stmt {
         HirStmt::ExprStmt(expr) => {
-            rewrite_protocol_calls_in_expr(expr, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                expr,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
         HirStmt::Assign { value, .. } => {
-            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                value,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
         HirStmt::AnnAssign {
             value: Some(value), ..
         } => {
-            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                value,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
         HirStmt::Return(Some(expr)) => {
-            rewrite_protocol_calls_in_expr(expr, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                expr,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
         HirStmt::If { test, body, orelse } => {
-            rewrite_protocol_calls_in_expr(test, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                test,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
             for s in body.iter_mut() {
-                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, local_names, specializations, seen);
+                rewrite_protocol_calls_in_stmt(
+                    s,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
             }
             for s in orelse.iter_mut() {
-                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, local_names, specializations, seen);
+                rewrite_protocol_calls_in_stmt(
+                    s,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
             }
         }
         HirStmt::While { test, body } => {
-            rewrite_protocol_calls_in_expr(test, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                test,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
             for s in body.iter_mut() {
-                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, local_names, specializations, seen);
+                rewrite_protocol_calls_in_stmt(
+                    s,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
             }
         }
         HirStmt::ForRange {
@@ -7549,39 +7922,138 @@ fn rewrite_protocol_calls_in_stmt(
             body,
             ..
         } => {
-            rewrite_protocol_calls_in_expr(start, protocol_funcs, env, local_names, specializations, seen);
-            rewrite_protocol_calls_in_expr(stop, protocol_funcs, env, local_names, specializations, seen);
-            rewrite_protocol_calls_in_expr(step, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                start,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+            rewrite_protocol_calls_in_expr(
+                stop,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+            rewrite_protocol_calls_in_expr(
+                step,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
             for s in body.iter_mut() {
-                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, local_names, specializations, seen);
+                rewrite_protocol_calls_in_stmt(
+                    s,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
             }
         }
         HirStmt::ForList { body, .. } => {
             for s in body.iter_mut() {
-                rewrite_protocol_calls_in_stmt(s, protocol_funcs, env, local_names, specializations, seen);
+                rewrite_protocol_calls_in_stmt(
+                    s,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
             }
         }
         HirStmt::DictSet { key, value, .. } => {
-            rewrite_protocol_calls_in_expr(key, protocol_funcs, env, local_names, specializations, seen);
-            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                key,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+            rewrite_protocol_calls_in_expr(
+                value,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
         HirStmt::AttrSet { base, value, .. } => {
-            rewrite_protocol_calls_in_expr(base, protocol_funcs, env, local_names, specializations, seen);
-            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                base,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+            rewrite_protocol_calls_in_expr(
+                value,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
-        HirStmt::ListCompAssign { cond, elt, .. }
-        | HirStmt::SetCompAssign { cond, elt, .. } => {
+        HirStmt::ListCompAssign { cond, elt, .. } | HirStmt::SetCompAssign { cond, elt, .. } => {
             if let Some(c) = cond {
-                rewrite_protocol_calls_in_expr(c, protocol_funcs, env, local_names, specializations, seen);
+                rewrite_protocol_calls_in_expr(
+                    c,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
             }
-            rewrite_protocol_calls_in_expr(elt, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                elt,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
-        HirStmt::DictCompAssign { cond, key, value, .. } => {
+        HirStmt::DictCompAssign {
+            cond, key, value, ..
+        } => {
             if let Some(c) = cond {
-                rewrite_protocol_calls_in_expr(c, protocol_funcs, env, local_names, specializations, seen);
+                rewrite_protocol_calls_in_expr(
+                    c,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
             }
-            rewrite_protocol_calls_in_expr(key, protocol_funcs, env, local_names, specializations, seen);
-            rewrite_protocol_calls_in_expr(value, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                key,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+            rewrite_protocol_calls_in_expr(
+                value,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
         _ => {}
     }
@@ -7601,7 +8073,14 @@ fn rewrite_protocol_calls_in_expr(
         HirExpr::Call { callee, args } => {
             // First, recurse into arguments (they may contain nested calls).
             for arg in args.iter_mut() {
-                rewrite_protocol_calls_in_expr(arg, protocol_funcs, env, local_names, specializations, seen);
+                rewrite_protocol_calls_in_expr(
+                    arg,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
             }
             // Check if this is a call to a protocol-parameter function.
             if let Some(func_item) = protocol_funcs.get(callee.as_str())
@@ -7631,14 +8110,10 @@ fn rewrite_protocol_calls_in_expr(
                     if seen.insert(mangled.clone()) {
                         let substituted_params: Vec<(String, Ty)> = params
                             .iter()
-                            .map(|(n, ty)| {
-                                (n.clone(), substitute_ty_protocols(ty, &substitutions))
-                            })
+                            .map(|(n, ty)| (n.clone(), substitute_ty_protocols(ty, &substitutions)))
                             .collect();
-                        let substituted_return =
-                            substitute_ty_protocols(return_ty, &substitutions);
-                        let substituted_body =
-                            substitute_body_protocols(body, &substitutions);
+                        let substituted_return = substitute_ty_protocols(return_ty, &substitutions);
+                        let substituted_body = substitute_body_protocols(body, &substitutions);
                         specializations.push(HirItem::Function {
                             name: mangled.clone(),
                             params: substituted_params,
@@ -7651,25 +8126,81 @@ fn rewrite_protocol_calls_in_expr(
             }
         }
         HirExpr::MethodCall { base, args, .. } => {
-            rewrite_protocol_calls_in_expr(base, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                base,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
             for arg in args.iter_mut() {
-                rewrite_protocol_calls_in_expr(arg, protocol_funcs, env, local_names, specializations, seen);
+                rewrite_protocol_calls_in_expr(
+                    arg,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
             }
         }
         HirExpr::AttrGet { base, .. } => {
-            rewrite_protocol_calls_in_expr(base, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                base,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
         HirExpr::BinOp { left, right, .. } => {
-            rewrite_protocol_calls_in_expr(left, protocol_funcs, env, local_names, specializations, seen);
-            rewrite_protocol_calls_in_expr(right, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                left,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+            rewrite_protocol_calls_in_expr(
+                right,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
         HirExpr::Compare { left, right, .. } => {
-            rewrite_protocol_calls_in_expr(left, protocol_funcs, env, local_names, specializations, seen);
-            rewrite_protocol_calls_in_expr(right, protocol_funcs, env, local_names, specializations, seen);
+            rewrite_protocol_calls_in_expr(
+                left,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+            rewrite_protocol_calls_in_expr(
+                right,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
         HirExpr::ListLiteral(elements) => {
             for e in elements.iter_mut() {
-                rewrite_protocol_calls_in_expr(e, protocol_funcs, env, local_names, specializations, seen);
+                rewrite_protocol_calls_in_expr(
+                    e,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
             }
         }
         _ => {}
@@ -8126,6 +8657,26 @@ fn unroll_enum_loops_in_stmts(
                 });
             }
             // Other statement kinds don't contain nested ForList loops.
+            HirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                result.push(HirStmt::Try {
+                    body: unroll_enum_loops_in_stmts(body, enum_members),
+                    handlers: handlers
+                        .iter()
+                        .map(|h| pycc_hir::HirExceptHandler {
+                            exc_type: h.exc_type.clone(),
+                            name: h.name.clone(),
+                            body: unroll_enum_loops_in_stmts(&h.body, enum_members),
+                        })
+                        .collect(),
+                    orelse: unroll_enum_loops_in_stmts(orelse, enum_members),
+                    finalbody: unroll_enum_loops_in_stmts(finalbody, enum_members),
+                });
+            }
             other => result.push(other.clone()),
         }
     }
@@ -24275,6 +24826,107 @@ mod tests {
                 body: vec![HirStmt::ExprStmt(bad_generic_call())],
             }],
         }]);
+        // `Try`'s own body, handler body, else body, and finally body (#382).
+        assert_monomorphize_propagates_error(vec![HirStmt::Try {
+            body: vec![HirStmt::ExprStmt(bad_generic_call())],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![],
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("ValueError".to_string()),
+                name: None,
+                body: vec![HirStmt::ExprStmt(bad_generic_call())],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![],
+            orelse: vec![HirStmt::ExprStmt(bad_generic_call())],
+            finalbody: vec![],
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![HirStmt::ExprStmt(bad_generic_call())],
+        }]);
+        // `Raise`'s own exc and cause (#382).
+        assert_monomorphize_propagates_error(vec![HirStmt::Raise {
+            exc: Some(bad_generic_call()),
+            cause: None,
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::Raise {
+            exc: None,
+            cause: Some(bad_generic_call()),
+        }]);
+        // The builtin exception constructor is deliberately not re-checked
+        // during monomorphization, but a bad generic call nested in its
+        // message still has to propagate its instantiation diagnostic.
+        assert_monomorphize_propagates_error(vec![HirStmt::Raise {
+            exc: Some(HirExpr::Call {
+                callee: "ValueError".to_string(),
+                args: vec![bad_generic_call()],
+            }),
+            cause: None,
+        }]);
+    }
+
+    #[test]
+    fn rewrite_generic_calls_in_stmt_raise_with_no_generic_calls_succeeds() {
+        // Cover the `Ok(())` return in `rewrite_generic_calls_in_stmt`'s
+        // `Raise` arm when both `exc` and `cause` are `None` (bare raise).
+        // The module includes a generic function so `monomorphize` does not
+        // take its early-return path.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Raise {
+                exc: None,
+                cause: None,
+            }],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        monomorphize(&hir).expect("monomorphize should succeed for bare raise");
+    }
+
+    #[test]
+    fn rewrite_generic_calls_in_stmt_raise_with_non_generic_cause_succeeds() {
+        // Cover the `if let Some(cause)` block's normal completion and the
+        // `Ok(())` return in `rewrite_generic_calls_in_stmt`'s `Raise` arm
+        // when `cause` is `Some` with a non-generic expression (IntLiteral).
+        // `rewrite_generic_calls_in_expr` succeeds for `IntLiteral`, so the
+        // block completes normally and `Ok(())` is reached.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Raise {
+                exc: Some(HirExpr::IntLiteral(0)),
+                cause: Some(HirExpr::IntLiteral(1)),
+            }],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        monomorphize(&hir).expect("monomorphize should succeed for raise with literal cause");
     }
 
     #[test]
@@ -29131,7 +29783,10 @@ mod tests {
                 })) if callee == "print"
             )
         });
-        assert!(has_unrolled, "unrolled enum loop should contain print calls");
+        assert!(
+            has_unrolled,
+            "unrolled enum loop should contain print calls"
+        );
     }
 
     #[test]
@@ -29959,7 +30614,10 @@ mod tests {
         let result = check_source(
             "from abc import ABC, abstractmethod\nclass A(ABC):\n    @abstractmethod\n    def foo(self) -> int: ...\n    def __init__(self) -> None:\n        return\n",
         );
-        assert!(result.is_ok(), "abstract method body should be skipped by check");
+        assert!(
+            result.is_ok(),
+            "abstract method body should be skipped by check"
+        );
     }
 
     // -- #380 W1: protocol monomorphization through DictSet/AttrSet/comp arms -
@@ -30428,12 +31086,21 @@ mod tests {
     fn match_or_pattern_different_bindings_reports_t0021() {
         let env = Environment::new();
         let pattern = HirPattern::Or(vec![
-            HirPattern::As(Box::new(HirPattern::Literal(HirExpr::IntLiteral(1))), "a".to_string()),
-            HirPattern::As(Box::new(HirPattern::Literal(HirExpr::IntLiteral(2))), "b".to_string()),
+            HirPattern::As(
+                Box::new(HirPattern::Literal(HirExpr::IntLiteral(1))),
+                "a".to_string(),
+            ),
+            HirPattern::As(
+                Box::new(HirPattern::Literal(HirExpr::IntLiteral(2))),
+                "b".to_string(),
+            ),
         ]);
         let err = check_pattern(&env, &[], &pattern, &Ty::Int).unwrap_err();
         assert_eq!(err.code, "T0021");
-        assert!(err.message.contains("or-pattern alternatives must bind the same set of names"));
+        assert!(
+            err.message
+                .contains("or-pattern alternatives must bind the same set of names")
+        );
     }
 
     #[test]
@@ -30463,25 +31130,28 @@ mod tests {
     #[test]
     fn match_enum_exhaustive_type_checks() {
         let mut env = Environment::new();
-        env.bind_class("Color".to_string(), HirClassDef {
-            name: "Color".to_string(),
-            bases: Vec::new(),
-            mro: vec!["Color".to_string()],
-            attrs: Vec::new(),
-            methods: Vec::new(),
-            properties: Vec::new(),
-            static_methods: Vec::new(),
-            class_methods: Vec::new(),
-            type_param: None,
-            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
-            is_dataclass: false,
-            dataclass_fields: Vec::new(),
-            is_protocol: false,
-            runtime_checkable: false,
-            protocol_members: Vec::new(),
-            abstract_methods: Vec::new(),
-            is_abstract: false,
-        });
+        env.bind_class(
+            "Color".to_string(),
+            HirClassDef {
+                name: "Color".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Color".to_string()],
+                attrs: Vec::new(),
+                methods: Vec::new(),
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                type_param: None,
+                enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        );
         let cases = vec![
             HirMatchCase {
                 pattern: HirPattern::Class {
@@ -30512,25 +31182,28 @@ mod tests {
     #[test]
     fn match_enum_non_exhaustive_reports_t0030() {
         let mut env = Environment::new();
-        env.bind_class("Color".to_string(), HirClassDef {
-            name: "Color".to_string(),
-            bases: Vec::new(),
-            mro: vec!["Color".to_string()],
-            attrs: Vec::new(),
-            methods: Vec::new(),
-            properties: Vec::new(),
-            static_methods: Vec::new(),
-            class_methods: Vec::new(),
-            type_param: None,
-            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
-            is_dataclass: false,
-            dataclass_fields: Vec::new(),
-            is_protocol: false,
-            runtime_checkable: false,
-            protocol_members: Vec::new(),
-            abstract_methods: Vec::new(),
-            is_abstract: false,
-        });
+        env.bind_class(
+            "Color".to_string(),
+            HirClassDef {
+                name: "Color".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Color".to_string()],
+                attrs: Vec::new(),
+                methods: Vec::new(),
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                type_param: None,
+                enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        );
         let cases = vec![HirMatchCase {
             pattern: HirPattern::Class {
                 class_name: "Color".to_string(),
@@ -30553,44 +31226,50 @@ mod tests {
         // exercises the guard-false branch of `collect_enum_member_patterns`'s
         // `HirPattern::Class { class_name: cn, .. } if cn == class_name` arm.
         let mut env = Environment::new();
-        env.bind_class("Color".to_string(), HirClassDef {
-            name: "Color".to_string(),
-            bases: Vec::new(),
-            mro: vec!["Color".to_string()],
-            attrs: Vec::new(),
-            methods: Vec::new(),
-            properties: Vec::new(),
-            static_methods: Vec::new(),
-            class_methods: Vec::new(),
-            type_param: None,
-            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
-            is_dataclass: false,
-            dataclass_fields: Vec::new(),
-            is_protocol: false,
-            runtime_checkable: false,
-            protocol_members: Vec::new(),
-            abstract_methods: Vec::new(),
-            is_abstract: false,
-        });
-        env.bind_class("Other".to_string(), HirClassDef {
-            name: "Other".to_string(),
-            bases: Vec::new(),
-            mro: vec!["Other".to_string()],
-            attrs: Vec::new(),
-            methods: Vec::new(),
-            properties: Vec::new(),
-            static_methods: Vec::new(),
-            class_methods: Vec::new(),
-            type_param: None,
-            enum_members: Vec::new(),
-            is_dataclass: false,
-            dataclass_fields: Vec::new(),
-            is_protocol: false,
-            runtime_checkable: false,
-            protocol_members: Vec::new(),
-            abstract_methods: Vec::new(),
-            is_abstract: false,
-        });
+        env.bind_class(
+            "Color".to_string(),
+            HirClassDef {
+                name: "Color".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Color".to_string()],
+                attrs: Vec::new(),
+                methods: Vec::new(),
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                type_param: None,
+                enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        );
+        env.bind_class(
+            "Other".to_string(),
+            HirClassDef {
+                name: "Other".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Other".to_string()],
+                attrs: Vec::new(),
+                methods: Vec::new(),
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                type_param: None,
+                enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        );
         let cases = vec![
             HirMatchCase {
                 pattern: HirPattern::Class {
@@ -30629,9 +31308,8 @@ mod tests {
 
     #[test]
     fn match_with_inferred_subject_type_checks() {
-        let result = check_source(
-            "x = 1\nmatch x:\n    case 1:\n        pass\n    case _:\n        pass\n",
-        );
+        let result =
+            check_source("x = 1\nmatch x:\n    case 1:\n        pass\n    case _:\n        pass\n");
         assert!(result.is_ok());
     }
 
@@ -30712,7 +31390,8 @@ mod tests {
     #[test]
     fn check_pattern_capture_returns_binding() {
         let env = Environment::new();
-        let result = check_pattern(&env, &[], &HirPattern::Capture("y".to_string()), &Ty::Int).unwrap();
+        let result =
+            check_pattern(&env, &[], &HirPattern::Capture("y".to_string()), &Ty::Int).unwrap();
         assert_eq!(result, vec![("y".to_string(), Ty::Int)]);
     }
 
@@ -30740,13 +31419,8 @@ mod tests {
     #[test]
     fn check_pattern_mapping_wrong_subject_reports_t0021() {
         let env = Environment::new();
-        let err = check_pattern(
-            &env,
-            &[],
-            &HirPattern::Mapping(vec![], None),
-            &Ty::Int,
-        )
-        .unwrap_err();
+        let err =
+            check_pattern(&env, &[], &HirPattern::Mapping(vec![], None), &Ty::Int).unwrap_err();
         assert_eq!(err.code, "T0021");
     }
 
@@ -30886,10 +31560,7 @@ mod tests {
     fn check_exhaustive_as_pattern_irrefutable() {
         let env = Environment::new();
         let cases = vec![HirMatchCase {
-            pattern: HirPattern::As(
-                Box::new(HirPattern::Wildcard),
-                "y".to_string(),
-            ),
+            pattern: HirPattern::As(Box::new(HirPattern::Wildcard), "y".to_string()),
             guard: None,
             body: vec![],
         }];
@@ -30910,25 +31581,28 @@ mod tests {
     #[test]
     fn check_exhaustive_instance_non_enum_not_exhaustive() {
         let mut env = Environment::new();
-        env.bind_class("P".to_string(), HirClassDef {
-            name: "P".to_string(),
-            bases: Vec::new(),
-            mro: vec!["P".to_string()],
-            attrs: Vec::new(),
-            methods: Vec::new(),
-            properties: Vec::new(),
-            static_methods: Vec::new(),
-            class_methods: Vec::new(),
-            type_param: None,
-            enum_members: Vec::new(),
-            is_dataclass: false,
-            dataclass_fields: Vec::new(),
-            is_protocol: false,
-            runtime_checkable: false,
-            protocol_members: Vec::new(),
-            abstract_methods: Vec::new(),
-            is_abstract: false,
-        });
+        env.bind_class(
+            "P".to_string(),
+            HirClassDef {
+                name: "P".to_string(),
+                bases: Vec::new(),
+                mro: vec!["P".to_string()],
+                attrs: Vec::new(),
+                methods: Vec::new(),
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                type_param: None,
+                enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        );
         let cases = vec![HirMatchCase {
             pattern: HirPattern::Class {
                 class_name: "P".to_string(),
@@ -30948,36 +31622,37 @@ mod tests {
     #[test]
     fn check_exhaustive_enum_all_covered() {
         let mut env = Environment::new();
-        env.bind_class("Color".to_string(), HirClassDef {
-            name: "Color".to_string(),
-            bases: Vec::new(),
-            mro: vec!["Color".to_string()],
-            attrs: Vec::new(),
-            methods: Vec::new(),
-            properties: Vec::new(),
-            static_methods: Vec::new(),
-            class_methods: Vec::new(),
-            type_param: None,
-            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
-            is_dataclass: false,
-            dataclass_fields: Vec::new(),
-            is_protocol: false,
-            runtime_checkable: false,
-            protocol_members: Vec::new(),
-            abstract_methods: Vec::new(),
-            is_abstract: false,
-        });
-        let cases = vec![
-            HirMatchCase {
-                pattern: HirPattern::Class {
-                    class_name: "Color".to_string(),
-                    positional: vec![],
-                    keyword: vec![],
-                },
-                guard: None,
-                body: vec![],
+        env.bind_class(
+            "Color".to_string(),
+            HirClassDef {
+                name: "Color".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Color".to_string()],
+                attrs: Vec::new(),
+                methods: Vec::new(),
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                type_param: None,
+                enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
-        ];
+        );
+        let cases = vec![HirMatchCase {
+            pattern: HirPattern::Class {
+                class_name: "Color".to_string(),
+                positional: vec![],
+                keyword: vec![],
+            },
+            guard: None,
+            body: vec![],
+        }];
         assert!(check_exhaustive(
             &env,
             &Ty::Instance(Box::new("Color".to_string())),
@@ -30988,38 +31663,37 @@ mod tests {
     #[test]
     fn check_exhaustive_enum_partial_not_exhaustive() {
         let mut env = Environment::new();
-        env.bind_class("Color".to_string(), HirClassDef {
-            name: "Color".to_string(),
-            bases: Vec::new(),
-            mro: vec!["Color".to_string()],
-            attrs: Vec::new(),
-            methods: Vec::new(),
-            properties: Vec::new(),
-            static_methods: Vec::new(),
-            class_methods: Vec::new(),
-            type_param: None,
-            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
-            is_dataclass: false,
-            dataclass_fields: Vec::new(),
-            is_protocol: false,
-            runtime_checkable: false,
-            protocol_members: Vec::new(),
-            abstract_methods: Vec::new(),
-            is_abstract: false,
-        });
-        let cases = vec![
-            HirMatchCase {
-                pattern: HirPattern::Or(vec![
-                    HirPattern::Class {
-                        class_name: "Color".to_string(),
-                        positional: vec![],
-                        keyword: vec![],
-                    },
-                ]),
-                guard: None,
-                body: vec![],
+        env.bind_class(
+            "Color".to_string(),
+            HirClassDef {
+                name: "Color".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Color".to_string()],
+                attrs: Vec::new(),
+                methods: Vec::new(),
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                type_param: None,
+                enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
             },
-        ];
+        );
+        let cases = vec![HirMatchCase {
+            pattern: HirPattern::Or(vec![HirPattern::Class {
+                class_name: "Color".to_string(),
+                positional: vec![],
+                keyword: vec![],
+            }]),
+            guard: None,
+            body: vec![],
+        }];
         assert!(check_exhaustive(
             &env,
             &Ty::Instance(Box::new("Color".to_string())),
@@ -31042,12 +31716,18 @@ mod tests {
         collect_pattern_capture_names(&p_cap, &mut names);
         let p_seq = HirPattern::Sequence(vec![HirPattern::Capture("b".to_string())]);
         collect_pattern_capture_names(&p_seq, &mut names);
-        let p_seqstar = HirPattern::SequenceStar(vec![HirPattern::Capture("c".to_string())], Some("rest".to_string()));
+        let p_seqstar = HirPattern::SequenceStar(
+            vec![HirPattern::Capture("c".to_string())],
+            Some("rest".to_string()),
+        );
         collect_pattern_capture_names(&p_seqstar, &mut names);
         let p_seqstar2 = HirPattern::SequenceStar(vec![HirPattern::Capture("d".to_string())], None);
         collect_pattern_capture_names(&p_seqstar2, &mut names);
         let p_map = HirPattern::Mapping(
-            vec![(HirExpr::StringLiteral("k".to_string()), HirPattern::Capture("e".to_string()))],
+            vec![(
+                HirExpr::StringLiteral("k".to_string()),
+                HirPattern::Capture("e".to_string()),
+            )],
             Some("mrest".to_string()),
         );
         collect_pattern_capture_names(&p_map, &mut names);
@@ -31061,7 +31741,10 @@ mod tests {
         collect_pattern_capture_names(&p_cls, &mut names);
         let p_or = HirPattern::Or(vec![HirPattern::Capture("h".to_string())]);
         collect_pattern_capture_names(&p_or, &mut names);
-        let p_as = HirPattern::As(Box::new(HirPattern::Capture("i".to_string())), "j".to_string());
+        let p_as = HirPattern::As(
+            Box::new(HirPattern::Capture("i".to_string())),
+            "j".to_string(),
+        );
         collect_pattern_capture_names(&p_as, &mut names);
         assert!(names.contains(&"a"));
         assert!(names.contains(&"b"));
@@ -31084,8 +31767,16 @@ mod tests {
         let mut has_true = false;
         let mut has_false = false;
         collect_bool_patterns(&HirPattern::Wildcard, &mut has_true, &mut has_false);
-        collect_bool_patterns(&HirPattern::Capture("x".to_string()), &mut has_true, &mut has_false);
-        collect_bool_patterns(&HirPattern::Literal(HirExpr::IntLiteral(1)), &mut has_true, &mut has_false);
+        collect_bool_patterns(
+            &HirPattern::Capture("x".to_string()),
+            &mut has_true,
+            &mut has_false,
+        );
+        collect_bool_patterns(
+            &HirPattern::Literal(HirExpr::IntLiteral(1)),
+            &mut has_true,
+            &mut has_false,
+        );
         collect_bool_patterns(&HirPattern::NoneSingleton, &mut has_true, &mut has_false);
         assert!(!has_true);
         assert!(!has_false);
@@ -31095,12 +31786,7 @@ mod tests {
     fn collect_enum_member_patterns_with_non_class_pattern_is_noop() {
         let members = [("RED".to_string(), 1), ("GREEN".to_string(), 2)];
         let mut covered: HashSet<&str> = HashSet::new();
-        collect_enum_member_patterns(
-            &HirPattern::Wildcard,
-            "Color",
-            &members,
-            &mut covered,
-        );
+        collect_enum_member_patterns(&HirPattern::Wildcard, "Color", &members, &mut covered);
         collect_enum_member_patterns(
             &HirPattern::Literal(HirExpr::IntLiteral(1)),
             "Color",
@@ -31202,7 +31888,8 @@ mod tests {
     fn match_with_final_reassignment_in_pattern_reports_t0045() {
         let mut env = Environment::new();
         // Bind "x" so the match subject infers successfully.
-        env.bindings.insert("x".to_string(), BindingState::Definitely(Ty::Int));
+        env.bindings
+            .insert("x".to_string(), BindingState::Definitely(Ty::Int));
         // Declare a Final binding for "y".
         check_stmt(
             &mut env,
@@ -31212,7 +31899,8 @@ mod tests {
                 value: Some(HirExpr::IntLiteral(1)),
                 is_final: true,
             },
-        ).unwrap();
+        )
+        .unwrap();
         // A match with a capture pattern using the same name should
         // trigger T0045 via `check_assignment`.
         let result = check_stmt(
@@ -31233,10 +31921,7 @@ mod tests {
     #[test]
     fn match_with_sequence_star_wildcard_type_checks() {
         let env = Environment::new();
-        let pattern = HirPattern::SequenceStar(
-            vec![HirPattern::Capture("a".to_string())],
-            None,
-        );
+        let pattern = HirPattern::SequenceStar(vec![HirPattern::Capture("a".to_string())], None);
         let result = check_pattern(&env, &[], &pattern, &Ty::List(Box::new(Ty::Int)));
         assert!(result.is_ok());
     }
@@ -31275,7 +31960,8 @@ mod tests {
     #[test]
     fn check_pattern_sequence_with_error_subpattern_reports_error() {
         let env = Environment::new();
-        let pattern = HirPattern::Sequence(vec![HirPattern::Literal(HirExpr::Name("u".to_string()))]);
+        let pattern =
+            HirPattern::Sequence(vec![HirPattern::Literal(HirExpr::Name("u".to_string()))]);
         let result = check_pattern(&env, &[], &pattern, &Ty::List(Box::new(Ty::Int)));
         assert!(result.is_err());
     }
@@ -31314,7 +32000,10 @@ mod tests {
     fn check_pattern_mapping_with_error_value_pattern_reports_error() {
         let env = Environment::new();
         let pattern = HirPattern::Mapping(
-            vec![(HirExpr::IntLiteral(1), HirPattern::Literal(HirExpr::Name("u".to_string())))],
+            vec![(
+                HirExpr::IntLiteral(1),
+                HirPattern::Literal(HirExpr::Name("u".to_string())),
+            )],
             None,
         );
         let result = check_pattern(&env, &[], &pattern, &Ty::Dict(Box::new((Ty::Int, Ty::Int))));
@@ -31346,112 +32035,142 @@ mod tests {
         // `check_class_pattern`: the subject type ("Base") is not the pattern
         // class ("Derived") but IS in "Derived"'s MRO.
         let mut env = Environment::new();
-        env.bind_class("Base".to_string(), HirClassDef {
-            name: "Base".to_string(),
-            bases: vec![],
-            mro: vec!["Base".to_string()],
-            attrs: vec![],
-            methods: vec![],
-            type_param: None,
-            properties: Vec::new(),
-            static_methods: Vec::new(),
-            class_methods: Vec::new(),
-            enum_members: Vec::new(),
-            is_dataclass: false,
-            dataclass_fields: Vec::new(),
-            is_protocol: false,
-            runtime_checkable: false,
-            protocol_members: Vec::new(),
-            abstract_methods: Vec::new(),
-            is_abstract: false,
-        });
-        env.bind_class("Derived".to_string(), HirClassDef {
-            name: "Derived".to_string(),
-            bases: vec!["Base".to_string()],
-            mro: vec!["Derived".to_string(), "Base".to_string()],
-            attrs: vec![],
-            methods: vec![],
-            type_param: None,
-            properties: Vec::new(),
-            static_methods: Vec::new(),
-            class_methods: Vec::new(),
-            enum_members: Vec::new(),
-            is_dataclass: false,
-            dataclass_fields: Vec::new(),
-            is_protocol: false,
-            runtime_checkable: false,
-            protocol_members: Vec::new(),
-            abstract_methods: Vec::new(),
-            is_abstract: false,
-        });
+        env.bind_class(
+            "Base".to_string(),
+            HirClassDef {
+                name: "Base".to_string(),
+                bases: vec![],
+                mro: vec!["Base".to_string()],
+                attrs: vec![],
+                methods: vec![],
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        );
+        env.bind_class(
+            "Derived".to_string(),
+            HirClassDef {
+                name: "Derived".to_string(),
+                bases: vec!["Base".to_string()],
+                mro: vec!["Derived".to_string(), "Base".to_string()],
+                attrs: vec![],
+                methods: vec![],
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        );
         let pattern = HirPattern::Class {
             class_name: "Derived".to_string(),
             positional: vec![],
             keyword: vec![],
         };
-        let result = check_pattern(&env, &[], &pattern, &Ty::Instance(Box::new("Base".to_string())));
+        let result = check_pattern(
+            &env,
+            &[],
+            &pattern,
+            &Ty::Instance(Box::new("Base".to_string())),
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn check_pattern_class_with_error_positional_subpattern_reports_error() {
         let mut env = Environment::new();
-        env.bind_class("P".to_string(), HirClassDef {
-            name: "P".to_string(),
-            bases: vec![],
-            mro: vec!["P".to_string()],
-            attrs: vec![],
-            methods: vec![],
-            type_param: None,
-            properties: Vec::new(),
-            static_methods: Vec::new(),
-            class_methods: Vec::new(),
-            enum_members: Vec::new(),
-            is_dataclass: false,
-            dataclass_fields: Vec::new(),
-            is_protocol: false,
-            runtime_checkable: false,
-            protocol_members: Vec::new(),
-            abstract_methods: Vec::new(),
-            is_abstract: false,
-        });
+        env.bind_class(
+            "P".to_string(),
+            HirClassDef {
+                name: "P".to_string(),
+                bases: vec![],
+                mro: vec!["P".to_string()],
+                attrs: vec![],
+                methods: vec![],
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        );
         let pattern = HirPattern::Class {
             class_name: "P".to_string(),
             positional: vec![HirPattern::Literal(HirExpr::Name("u".to_string()))],
             keyword: vec![],
         };
-        let result = check_pattern(&env, &[], &pattern, &Ty::Instance(Box::new("P".to_string())));
+        let result = check_pattern(
+            &env,
+            &[],
+            &pattern,
+            &Ty::Instance(Box::new("P".to_string())),
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn check_pattern_class_with_error_keyword_subpattern_reports_error() {
         let mut env = Environment::new();
-        env.bind_class("P".to_string(), HirClassDef {
-            name: "P".to_string(),
-            bases: vec![],
-            mro: vec!["P".to_string()],
-            attrs: vec![],
-            methods: vec![],
-            type_param: None,
-            properties: Vec::new(),
-            static_methods: Vec::new(),
-            class_methods: Vec::new(),
-            enum_members: Vec::new(),
-            is_dataclass: false,
-            dataclass_fields: Vec::new(),
-            is_protocol: false,
-            runtime_checkable: false,
-            protocol_members: Vec::new(),
-            abstract_methods: Vec::new(),
-            is_abstract: false,
-        });
+        env.bind_class(
+            "P".to_string(),
+            HirClassDef {
+                name: "P".to_string(),
+                bases: vec![],
+                mro: vec!["P".to_string()],
+                attrs: vec![],
+                methods: vec![],
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        );
         let pattern = HirPattern::Class {
             class_name: "P".to_string(),
             positional: vec![],
-            keyword: vec![("a".to_string(), HirPattern::Literal(HirExpr::Name("u".to_string())))],
+            keyword: vec![(
+                "a".to_string(),
+                HirPattern::Literal(HirExpr::Name("u".to_string())),
+            )],
         };
-        let result = check_pattern(&env, &[], &pattern, &Ty::Instance(Box::new("P".to_string())));
+        let result = check_pattern(
+            &env,
+            &[],
+            &pattern,
+            &Ty::Instance(Box::new("P".to_string())),
+        );
         assert!(result.is_err());
     }
 
@@ -31669,5 +32388,1231 @@ mod tests {
             class_defs: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0042");
+    }
+
+    // -- #382 exception handling tests --
+
+    fn parse_check_resolve(src: &str) -> Result<HirModule, Diagnostic> {
+        let module = pycc_parser::parse(src).expect("test fixture must parse");
+        let hir = pycc_hir::lower_checked(&module).expect("lowering must succeed");
+        check_and_resolve(&hir)
+    }
+
+    fn parse_check(src: &str) -> Result<(), Diagnostic> {
+        let module = pycc_parser::parse(src).expect("test fixture must parse");
+        let hir = pycc_hir::lower_checked(&module).expect("lowering must succeed");
+        check(&hir)
+    }
+
+    /// Test helper: assert a top-level HIR item is a `Try`, panicking
+    /// otherwise.  The panic arm is covered by
+    /// `expect_top_level_try_panics_on_non_try`.
+    fn expect_top_level_try(item: &HirItem) {
+        match item {
+            HirItem::TopLevelStmt(HirStmt::Try { .. }) => {}
+            _ => panic!("expected Try"),
+        }
+    }
+
+    /// Test helper: assert a top-level HIR item is a `Raise`, panicking
+    /// otherwise.  The panic arm is covered by
+    /// `expect_top_level_raise_panics_on_non_raise`.
+    fn expect_top_level_raise(item: &HirItem) {
+        match item {
+            HirItem::TopLevelStmt(HirStmt::Raise { .. }) => {}
+            _ => panic!("expected Raise"),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Try")]
+    fn expect_top_level_try_panics_on_non_try() {
+        expect_top_level_try(&HirItem::TopLevelStmt(HirStmt::ExprStmt(
+            HirExpr::IntLiteral(0),
+        )));
+    }
+
+    #[test]
+    #[should_panic(expected = "expected Raise")]
+    fn expect_top_level_raise_panics_on_non_raise() {
+        expect_top_level_raise(&HirItem::TopLevelStmt(HirStmt::ExprStmt(
+            HirExpr::IntLiteral(0),
+        )));
+    }
+
+    #[test]
+    fn try_except_checks_successfully() {
+        let resolved = parse_check_resolve("try:\n    x = 1\nexcept ValueError:\n    y = 2\n")
+            .expect("check should succeed");
+        expect_top_level_try(&resolved.items[0]);
+    }
+
+    #[test]
+    fn try_except_as_binds_exception_instance() {
+        let resolved = parse_check_resolve("try:\n    x = 1\nexcept ValueError as e:\n    y = 2\n")
+            .expect("check should succeed");
+        expect_top_level_try(&resolved.items[0]);
+    }
+
+    #[test]
+    fn try_bare_except_checks_successfully() {
+        let resolved = parse_check_resolve("try:\n    x = 1\nexcept:\n    y = 2\n")
+            .expect("check should succeed");
+        expect_top_level_try(&resolved.items[0]);
+    }
+
+    #[test]
+    fn unknown_exception_handler_is_t0021() {
+        let err = parse_check("try:\n    pass\nexcept UnknownError:\n    pass\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not a recognized exception class"));
+    }
+
+    #[test]
+    fn try_else_finally_checks_successfully() {
+        let resolved = parse_check_resolve(
+            "try:\n    x = 1\nexcept ValueError:\n    y = 2\nelse:\n    z = 3\nfinally:\n    w = 4\n",
+        ).expect("check should succeed");
+        expect_top_level_try(&resolved.items[0]);
+    }
+
+    #[test]
+    fn raise_value_error_checks_successfully() {
+        let resolved =
+            parse_check_resolve("raise ValueError(\"bad\")\n").expect("check should succeed");
+        expect_top_level_raise(&resolved.items[0]);
+    }
+
+    #[test]
+    fn raise_from_checks_successfully() {
+        let resolved =
+            parse_check_resolve("raise ValueError(\"bad\") from RuntimeError(\"cause\")\n")
+                .expect("check should succeed");
+        expect_top_level_raise(&resolved.items[0]);
+    }
+
+    #[test]
+    fn bare_raise_outside_handler_is_t0021() {
+        let err = parse_check("raise\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("bare `raise`"));
+    }
+
+    #[test]
+    fn bare_raise_inside_handler_checks_successfully() {
+        parse_check("try:\n    x = 1\nexcept ValueError:\n    raise\n")
+            .expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_non_exception_is_t0021() {
+        // `raise 42` — int is not an exception instance.
+        let err = parse_check("raise 42\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("can only raise"));
+    }
+
+    #[test]
+    fn raise_from_non_exception_cause_is_t0021() {
+        // `raise ValueError("x") from 42` — cause is not an exception.
+        let err = parse_check("raise ValueError(\"x\") from 42\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("cause must be"));
+    }
+
+    #[test]
+    fn try_in_function_checks_successfully() {
+        let src = "\
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError:
+        y = 2
+    return x
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_with_return_in_body_and_handler() {
+        let src = "\
+def f() -> int:
+    try:
+        return 1
+    except ValueError:
+        return 2
+    return 3
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_with_return_in_finally() {
+        let src = "\
+def f() -> int:
+    try:
+        x = 1
+    except ValueError:
+        y = 2
+    finally:
+        return 3
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_with_return_in_else() {
+        let src = "\
+def f() -> int:
+    try:
+        x = 1
+    except ValueError:
+        y = 2
+    else:
+        return 3
+    return 4
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_with_binding_in_body() {
+        let src = "\
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError:
+        y = 2
+    else:
+        z = 3
+    finally:
+        w = 4
+    return x
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_in_function_checks_successfully() {
+        let src = "\
+def f() -> int:
+    raise ValueError(\"bad\")
+";
+        parse_check(src).expect("an always-raising function cannot fall through");
+    }
+
+    #[test]
+    fn generic_call_inside_try_checks_successfully() {
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    try:
+        c = C[int](1)
+        return c.x
+    except ValueError:
+        return 0
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn generic_call_inside_raise_in_handler() {
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    try:
+        c = C[int](1)
+        return c.x
+    except ValueError:
+        raise RuntimeError(\"err\")
+";
+        parse_check_resolve(src)
+            .expect("the body returns and the handler raises, so every path terminates");
+    }
+
+    #[test]
+    fn try_with_enum_loop_unrolls() {
+        let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+try:
+    for c in Color:
+        x = x + 1
+except ValueError:
+    pass
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn enum_loop_inside_function_unrolls() {
+        // Covers the `HirItem::Function` arm of `unroll_enum_loops` —
+        // a function body containing an enum loop is unrolled.
+        let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+def f() -> int:
+    x = 0
+    for c in Color:
+        x = x + 1
+    return x
+f()
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn enum_loop_with_nested_if_unrolls() {
+        // Covers the `HirStmt::If` arm of `unroll_enum_loops_in_stmts` —
+        // an `if` inside an enum loop body is recursed into.
+        let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+for c in Color:
+    if x > 0:
+        x = x + 1
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn enum_loop_with_nested_while_unrolls() {
+        // Covers the `HirStmt::While` arm of `unroll_enum_loops_in_stmts`.
+        let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+for c in Color:
+    while x < 10:
+        x = x + 1
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn enum_loop_with_nested_for_range_unrolls() {
+        // Covers the `HirStmt::ForRange` arm of `unroll_enum_loops_in_stmts`.
+        let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+for c in Color:
+    for i in range(3):
+        x = x + 1
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn non_enum_for_list_inside_try_unrolls() {
+        // Covers the `else` branch of `unroll_enum_loops_in_stmts`'s
+        // `ForList` arm — a non-enum `for` loop inside a `try` body is
+        // kept as-is (not unrolled), but the body is recursed into.
+        let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+xs = [1, 2, 3]
+x = 0
+try:
+    for y in xs:
+        x = x + y
+except ValueError:
+    pass
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_except_with_private_helper() {
+        let src = "\
+def _helper() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError:
+        y = 2
+    return x
+_helper()
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_with_private_helper() {
+        let src = "\
+def _helper() -> int:
+    raise ValueError(\"bad\")
+_helper()
+";
+        parse_check(src).expect("an always-raising private helper cannot fall through");
+    }
+
+    // -- #382 coverage tests --
+
+    #[test]
+    fn contains_return_finds_a_return_inside_a_try_body() {
+        let body = vec![HirStmt::Try {
+            body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![],
+        }];
+        assert!(contains_return(&body));
+    }
+
+    #[test]
+    fn contains_return_finds_a_return_inside_a_try_handler() {
+        let body = vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("ValueError".to_string()),
+                name: None,
+                body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        }];
+        assert!(contains_return(&body));
+    }
+
+    #[test]
+    fn contains_return_finds_a_return_inside_a_try_else() {
+        let body = vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![],
+            orelse: vec![HirStmt::Return(Some(HirExpr::IntLiteral(3)))],
+            finalbody: vec![],
+        }];
+        assert!(contains_return(&body));
+    }
+
+    #[test]
+    fn contains_return_finds_a_return_inside_a_try_finally() {
+        let body = vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![HirStmt::Return(Some(HirExpr::IntLiteral(4)))],
+        }];
+        assert!(contains_return(&body));
+    }
+
+    #[test]
+    fn contains_return_does_not_find_a_return_in_a_try_without_one() {
+        let body = vec![HirStmt::Try {
+            body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("ValueError".to_string()),
+                name: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
+            }],
+            orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(3))],
+            finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(4))],
+        }];
+        assert!(!contains_return(&body));
+    }
+
+    #[test]
+    fn introduces_bindings_finds_bindings_inside_a_try_body() {
+        let body = vec![HirStmt::Try {
+            body: vec![HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![],
+        }];
+        assert!(introduces_bindings(&body));
+    }
+
+    #[test]
+    fn introduces_bindings_finds_bindings_inside_a_try_handler() {
+        let body = vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("ValueError".to_string()),
+                name: None,
+                body: vec![HirStmt::Assign {
+                    target: "z".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        }];
+        assert!(introduces_bindings(&body));
+    }
+
+    #[test]
+    fn introduces_bindings_finds_bindings_inside_a_try_else() {
+        let body = vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![],
+            orelse: vec![HirStmt::Assign {
+                target: "w".to_string(),
+                value: HirExpr::IntLiteral(3),
+            }],
+            finalbody: vec![],
+        }];
+        assert!(introduces_bindings(&body));
+    }
+
+    #[test]
+    fn introduces_bindings_finds_bindings_inside_a_try_finally() {
+        let body = vec![HirStmt::Try {
+            body: vec![],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![HirStmt::Assign {
+                target: "v".to_string(),
+                value: HirExpr::IntLiteral(4),
+            }],
+        }];
+        assert!(introduces_bindings(&body));
+    }
+
+    #[test]
+    fn introduces_bindings_does_not_find_bindings_in_a_try_without_any() {
+        let body = vec![HirStmt::Try {
+            body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("ValueError".to_string()),
+                name: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        }];
+        assert!(!introduces_bindings(&body));
+    }
+
+    #[test]
+    fn introduces_bindings_treats_raise_as_not_introducing_bindings() {
+        let body = vec![HirStmt::Raise {
+            exc: Some(HirExpr::Call {
+                callee: "ValueError".to_string(),
+                args: vec![HirExpr::StringLiteral("bad".to_string())],
+            }),
+            cause: None,
+        }];
+        assert!(!introduces_bindings(&body));
+    }
+
+    #[test]
+    fn raise_with_wrong_arg_count_is_t0021() {
+        let err = parse_check("raise ValueError(\"a\", \"b\")\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("exactly 1 argument"));
+    }
+
+    #[test]
+    fn raise_with_wrong_arg_type_is_t0021() {
+        let err = parse_check("raise ValueError(42)\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("str"));
+    }
+
+    #[test]
+    fn raise_with_no_args_is_t0021() {
+        let err = parse_check("raise ValueError()\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("exactly 1 argument"));
+    }
+
+    #[test]
+    fn raise_user_defined_class_instance_is_t0021() {
+        // A user-defined class is not a builtin exception class.
+        let src = "\
+class C:
+    def __init__(self):
+        pass
+raise C()
+";
+        let err = parse_check(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("can only raise"));
+    }
+
+    #[test]
+    fn try_except_as_binding_in_function_collects_local_name() {
+        // This exercises `collect_local_names` for the `Try` handler name
+        // binding path inside a function body.
+        let src = "\
+def f() -> int:
+    y = 0
+    try:
+        x = 1
+    except ValueError as e:
+        y = 2
+    return y
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_except_as_binding_with_typed_handler_in_function() {
+        // This exercises `check_try_stmt`'s handler binding path with a
+        // typed exception handler inside a function.
+        let src = "\
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError as e:
+        return 0
+    return x
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_with_solver_path_succeeds() {
+        // Force the solver path by using a private helper with an
+        // unannotated parameter. This exercises `collect_block_constraints`
+        // for `Try` and `Raise` on the solver path.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y = 0
+    return y
+_helper(1)
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_with_solver_path_succeeds() {
+        // Force the solver path with a private helper that has a raise.
+        let src = "\
+def _helper(x) -> int:
+    if x == 0:
+        raise ValueError(\"bad\")
+    return x
+_helper(1)
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_with_generic_call_on_solver_path_succeeds() {
+        // Force the solver path and exercise generic call rewriting
+        // inside a try body.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def _helper(x) -> int:
+    try:
+        c = C[int](x)
+        return c.x
+    except ValueError:
+        return 0
+_helper(1)
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_from_with_solver_path_succeeds() {
+        // Force the solver path with a raise-from inside a function.
+        let src = "\
+def _helper(x) -> int:
+    if x == 0:
+        raise ValueError(\"bad\") from RuntimeError(\"cause\")
+    return x
+_helper(1)
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn bare_raise_with_solver_path_succeeds() {
+        // Force the solver path with a bare raise inside an except handler.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        raise
+    return y
+_helper(1)
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_variable_bound_to_exception_instance_checks_successfully() {
+        // `raise e` where `e` is bound to a builtin exception instance via
+        // `except ValueError as e`. This exercises `check_raise_operand`'s
+        // non-Call path: the expression is a Name, not a Call, so it falls
+        // through to `infer_expr_in` which returns `Ty::Instance("ValueError")`,
+        // and the `is_builtin_exception_class` check passes.
+        let src = "\
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError as e:
+        raise e
+    return x
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_variable_bound_to_non_exception_is_t0021() {
+        // `raise x` where `x` is an int — exercises the `_ =>` arm of
+        // `check_raise_operand`'s match on the inferred type.
+        let err = parse_check("x = 1\nraise x\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("can only raise"));
+    }
+
+    #[test]
+    fn solver_try_body_type_error_propagates() {
+        // Force the solver path and trigger a type error inside the try
+        // body. This exercises the `?` error propagation in
+        // `collect_block_constraints` for the try body on the solver path.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x + \"bad\"
+    except ValueError:
+        y = 0
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        // The error should be about the type mismatch, not about raise.
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn solver_try_handler_type_error_propagates() {
+        // Force the solver path and trigger a type error inside the
+        // handler body. This exercises the `?` error propagation in
+        // `collect_block_constraints` for the handler body on the solver path.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y = x + \"bad\"
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn solver_try_else_type_error_propagates() {
+        // Force the solver path and trigger a type error inside the else
+        // body. This exercises the `?` error propagation in
+        // `collect_block_constraints` for the else body on the solver path.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y = 0
+    else:
+        y = x + \"bad\"
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn solver_try_finally_type_error_propagates() {
+        // Force the solver path and trigger a type error inside the
+        // finally body. This exercises the `?` error propagation in
+        // `collect_block_constraints` for the finally body on the solver path.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y = 0
+    finally:
+        y = x + \"bad\"
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn generic_call_in_try_else_rewrites_successfully() {
+        // Exercise `rewrite_generic_calls_in_stmt` for the try orelse path
+        // and `collect_generic_class_instantiations_from_stmt` for the same.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError:
+        x = 0
+    else:
+        c = C[int](1)
+        x = c.x
+    return x
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn generic_call_in_try_finally_rewrites_successfully() {
+        // Exercise `rewrite_generic_calls_in_stmt` for the try finally path
+        // and `collect_generic_class_instantiations_from_stmt` for the same.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError:
+        x = 0
+    finally:
+        c = C[int](1)
+        x = c.x
+    return x
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn generic_call_in_raise_rewrites_successfully() {
+        // Exercise `rewrite_generic_calls_in_stmt` for the Raise path
+        // and `collect_generic_class_instantiations_from_stmt` for the same.
+        // A generic class instantiation as the raise expression is not a
+        // builtin exception class call, so it falls through to the
+        // generic-call rewrite path and then gets rejected as T0021.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+raise C[int](1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn generic_call_in_try_body_rejects_unsupported() {
+        // Exercise `reject_generic_calls_in_block` for the Try body path.
+        // A generic call in a module-level try body where the generic
+        // class is not in scope should be rejected.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+try:
+    c = C[int](1)
+except ValueError:
+    pass
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn generic_call_in_raise_cause_rewrites_successfully() {
+        // Exercise `rewrite_generic_calls_in_stmt` for the Raise cause path
+        // and `collect_generic_class_instantiations_from_stmt` for the same.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+raise ValueError(\"bad\") from C[int](1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn solver_try_with_as_binding_succeeds() {
+        // Force the solver path with `except ... as e` to exercise the
+        // `as` binding insertion in the solver's `Try` arm.
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError as e:
+        y = 0
+    return y
+_helper(1)
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn raise_inside_function_with_generic_call_rewrites() {
+        // Exercise `rewrite_generic_calls_in_stmt` for the `Raise` arm
+        // and `collect_generic_class_instantiations_from_stmt` for the
+        // same. The key is that the raise is valid (ValueError) and the
+        // function also contains a generic call, so monomorphization runs
+        // and processes both the generic call and the raise statement.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    c = C[int](1)
+    x = c.x
+    raise ValueError(\"bad\")
+";
+        parse_check_resolve(src)
+            .expect("the rewritten generic call is followed by a terminal raise");
+    }
+
+    #[test]
+    fn try_with_generic_call_and_raise_rewrites() {
+        // Exercise `rewrite_generic_calls_in_stmt` for both the `Try` and
+        // `Raise` arms, and `collect_generic_class_instantiations_from_stmt`
+        // for the same. A generic call before the try and a raise after
+        // ensures both arms are reached during monomorphization.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    c = C[int](1)
+    x = c.x
+    try:
+        x = 1
+    except ValueError:
+        x = 0
+    raise ValueError(\"bad\")
+";
+        parse_check_resolve(src).expect("the final raise makes every path terminal");
+    }
+
+    #[test]
+    fn try_with_generic_call_in_handler_rewrites() {
+        // Exercise `rewrite_generic_calls_in_stmt` for the `Try` handler
+        // body path and `collect_generic_class_instantiations_from_stmt`
+        // for the same.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+def f() -> int:
+    x = 0
+    try:
+        x = 1
+    except ValueError:
+        c = C[int](1)
+        x = c.x
+    return x
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_handler_binding_is_visible_during_generic_rewrite() {
+        let src = "\
+def identity[T](value: T) -> T:
+    return value
+try:
+    raise ValueError(\"bad\")
+except ValueError as error:
+    raise error from RuntimeError(\"cause\")
+else:
+    pass
+finally:
+    pass
+";
+        parse_check_resolve(src)
+            .expect("the validated except-as binding must remain visible during rewriting");
+    }
+
+    #[test]
+    fn reject_generic_calls_in_try_and_raise() {
+        // Exercise `reject_generic_calls_in_block` for both the `Try` and
+        // `Raise` arms. A generic call inside a try body and a raise with
+        // a generic call in the same module-level scope ensures both arms
+        // are reached during the rejection pass.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+try:
+    c = C[int](1)
+    print(c.x)
+except ValueError:
+    pass
+";
+        parse_check_resolve(src).expect("check should succeed");
+    }
+
+    // -- #382: reject_generic_calls_in_stmt Try and Raise arms --
+
+    #[test]
+    fn reject_generic_calls_processes_try_and_raise_arms() {
+        // Exercise `reject_generic_calls_in_stmt`'s `Try` and `Raise` arms
+        // directly. A generic function body containing a `Try` and a `Raise`
+        // statement ensures both arms are reached during the rejection pass.
+        let body = vec![
+            HirStmt::Try {
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                handlers: vec![pycc_hir::HirExceptHandler {
+                    exc_type: Some("ValueError".to_string()),
+                    name: None,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                }],
+                orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+                finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+            },
+            HirStmt::Raise {
+                exc: Some(HirExpr::Name("some_exc".to_string())),
+                cause: Some(HirExpr::Name("some_cause".to_string())),
+            },
+        ];
+        // `reject_generic_calls_in_block` processes each statement through
+        // `reject_generic_calls_in_stmt`. The `Try` and `Raise` arms should
+        // be reached without error (no generic calls inside them).
+        assert!(
+            reject_generic_calls_in_block(&Environment::new(), "f", &body).is_ok(),
+            "reject_generic_calls_in_block should succeed for try/raise without generic calls"
+        );
+    }
+
+    // -- #382: check_stmt_shared ? error propagation in try bodies --
+
+    #[test]
+    fn check_try_body_type_error_propagates() {
+        let err = parse_check(
+            "def f() -> int:\n    try:\n        x = 1 + \"bad\"\n    except ValueError:\n        x = 0\n    return x\n",
+        ).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn check_try_handler_body_type_error_propagates() {
+        let err = parse_check(
+            "def f() -> int:\n    try:\n        x = 1\n    except ValueError:\n        x = 1 + \"bad\"\n    return x\n",
+        ).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn check_try_else_body_type_error_propagates() {
+        let err = parse_check(
+            "def f() -> int:\n    try:\n        x = 1\n    except ValueError:\n        x = 0\n    else:\n        x = 1 + \"bad\"\n    return x\n",
+        ).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn check_try_finally_body_type_error_propagates() {
+        let err = parse_check(
+            "def f() -> int:\n    try:\n        x = 1\n    except ValueError:\n        x = 0\n    finally:\n        x = 1 + \"bad\"\n    return x\n",
+        ).unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    // -- #382: join_if_branches ? error propagation --
+
+    #[test]
+    fn try_handler_with_incompatible_binding_is_t0023() {
+        // A handler that rebinds a pre-existing variable to an incompatible
+        // type triggers `join_if_branches`'s T0023 error path.
+        let err = parse_check(
+            "def f() -> int:\n    x = 1\n    try:\n        x = 2\n    except ValueError:\n        x = \"bad\"\n    return x\n",
+        ).unwrap_err();
+        assert_eq!(err.code, "T0023");
+    }
+
+    #[test]
+    fn try_else_with_incompatible_binding_is_t0023() {
+        // An else body that rebinds a pre-existing variable to an
+        // incompatible type triggers `join_if_branches`'s T0023 error path.
+        let err = parse_check(
+            "def f() -> int:\n    x = 1\n    try:\n        x = 2\n    except ValueError:\n        x = 3\n    else:\n        x = \"bad\"\n    return x\n",
+        ).unwrap_err();
+        assert_eq!(err.code, "T0023");
+    }
+
+    // -- #382: join_if_branches ? error propagation via `except ... as` --
+    // The `as` binding uses `henv.bind()` directly (no `check_assignment`),
+    // so a type mismatch between the pre-try binding and the `as` binding
+    // is caught by `join_if_branches`, not by `check_assignment`.
+
+    #[test]
+    fn try_handler_as_binding_incompatible_type_is_t0023() {
+        // `e` is `int` before the try; `except ValueError as e` rebinds `e`
+        // to `Instance("ValueError")` via `henv.bind()` (bypassing
+        // `check_assignment`). `join_if_branches` detects the mismatch.
+        let err = parse_check(
+            "def f() -> int:\n    e = 0\n    try:\n        pass\n    except ValueError as e:\n        pass\n    return e\n",
+        ).unwrap_err();
+        assert_eq!(err.code, "T0023");
+    }
+
+    // -- #382: check_raise_operand ? error propagation --
+
+    #[test]
+    fn raise_with_type_error_in_argument_propagates() {
+        // `raise ValueError(1 + "bad")` — the argument expression has a type
+        // error, which propagates through the `?` in `check_raise_operand`'s
+        // builtin-exception-class-call path.
+        let err = parse_check("raise ValueError(1 + \"bad\")\n").unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    #[test]
+    fn raise_with_type_error_in_non_call_expr_propagates() {
+        // `raise 1 + "bad"` — the expression is not a Call, so it falls
+        // through to `infer_expr_in` which returns a type error, propagating
+        // through the `?` in `check_raise_operand`'s non-Call path.
+        let err = parse_check("raise 1 + \"bad\"\n").unwrap_err();
+        assert!(err.message.contains("operator"));
+    }
+
+    // -- #382: block_always_returns with non-empty else body --
+
+    #[test]
+    fn try_with_return_in_body_handler_and_else_always_returns() {
+        // A try where body, all handlers, and else all return — the try
+        // block always returns. This covers the `block_always_returns(orelse)`
+        // branch of the `||` in `block_always_returns`'s `Try` arm.
+        let src = "\
+def f() -> int:
+    try:
+        return 1
+    except ValueError:
+        return 2
+    else:
+        return 3
+";
+        parse_check(src).expect("check should succeed");
+    }
+
+    // -- #382: collect_generic_class_instantiations Raise arm --
+
+    #[test]
+    fn collect_generic_class_instantiations_from_raise() {
+        // A generic class instantiation inside a raise expression exercises
+        // the `Raise` arm of `collect_generic_class_instantiations_from_stmt`.
+        let src = "\
+class C[T]:
+    def __init__(self, x: T):
+        self.x = x
+raise C[int](1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    // -- #382: collect_block_constraints ? propagation on the solver path --
+    // These tests force the solver path (via an untyped `_helper(x)`
+    // parameter) and trigger an immediate error in `collect_expr_constraints`
+    // (by calling a non-callable binding), which propagates through the `?`
+    // in the `Try` arm of `collect_block_constraints`.
+
+    #[test]
+    fn solver_try_body_non_callable_error_propagates() {
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y()
+    except ValueError:
+        y = 0
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn solver_try_handler_non_callable_error_propagates() {
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y()
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn solver_try_else_non_callable_error_propagates() {
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y = 0
+    else:
+        y()
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn solver_try_finally_non_callable_error_propagates() {
+        let src = "\
+def _helper(x) -> int:
+    y = 0
+    try:
+        y = x
+    except ValueError:
+        y = 0
+    finally:
+        y()
+    return y
+_helper(1)
+";
+        let err = parse_check_resolve(src).unwrap_err();
+        assert_eq!(err.code, "T0021");
     }
 }

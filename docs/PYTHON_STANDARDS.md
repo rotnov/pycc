@@ -81,6 +81,7 @@ For each newly observed upstream release:
 | [3104](https://peps.python.org/pep-3104/) | `nonlocal` | syntax | `py30/pep_3104_nonlocal.py` | ☐ |
 | [3105](https://peps.python.org/pep-3105/) | `print()` as function | syntax | `py30/pep_3105_print.py` | ✅ |
 | [3107](https://peps.python.org/pep-3107/) | Function annotations | typing | `py30/pep_3107_annotations.py` | ✅ |
+| [3110](https://peps.python.org/pep-3110/) | `try`/`except`/`else`/`finally`, `raise`, bare `raise` (#382) | sem | `issue_382_exceptions.rs` | ☐ |
 | [3115](https://peps.python.org/pep-3115/) | Metaclasses (`metaclass=`) | sem | `py30/pep_3115_metaclass.py` | ☐ |
 | [3119](https://peps.python.org/pep-3119/) | ABCs, `isinstance` hooks | sem | `py30/pep_3119_abc.py` | ☐ |
 | [3129](https://peps.python.org/pep-3129/) | Class decorators | syntax | `py30/pep_3129_class_deco.py` | ☐ |
@@ -94,7 +95,7 @@ For each newly observed upstream release:
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
 | [380](https://peps.python.org/pep-0380/) | `yield from` | syntax | `py33/pep_0380_yield_from.py` | ☐ |
-| [409](https://peps.python.org/pep-0409/) | `raise ... from None` | sem | `py33/pep_0409_from_none.py` | ☐ |
+| [409](https://peps.python.org/pep-0409/) | `raise ... from ...` cause chaining (#382); `from None` suppression is ☐ | sem | `issue_382_exceptions.rs` | ☐ |
 | [414](https://peps.python.org/pep-0414/) | `u''` literals | syntax | `py33/pep_0414_u_literal.py` | ✅ |
 | [420](https://peps.python.org/pep-0420/) | Namespace packages | import | `py33/pep_0420_ns_packages.py` | ☐ |
 | [3151](https://peps.python.org/pep-3151/) | `OSError` hierarchy | sem | `py33/pep_3151_oserror.py` | ☐ |

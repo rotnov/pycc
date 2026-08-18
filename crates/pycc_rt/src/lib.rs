@@ -30,7 +30,19 @@
 
 use std::cell::Cell;
 
+mod exception;
 mod instance;
+
+#[cfg(not(test))]
+pub use exception::pycc_rt_exception_print_and_exit;
+use exception::raise_builtin;
+pub use exception::{
+    EXCEPTION_TYPE_EXCEPTION, EXCEPTION_TYPE_INDEX_ERROR, EXCEPTION_TYPE_KEY_ERROR,
+    EXCEPTION_TYPE_RUNTIME_ERROR, EXCEPTION_TYPE_TYPE_ERROR, EXCEPTION_TYPE_VALUE_ERROR,
+    EXCEPTION_TYPE_ZERO_DIV_ERROR, PyExceptionObj, pycc_rt_exception_active,
+    pycc_rt_exception_alloc, pycc_rt_exception_clear, pycc_rt_exception_raise,
+    pycc_rt_exception_raise_with_cause, pycc_rt_exception_type_matches,
+};
 
 fn format_i64_line(value: i64) -> String {
     format!("{value}\n")
@@ -381,7 +393,13 @@ fn int_floordiv(a: i64, b: i64) -> i64 {
     let a = require_inline_int(a, "dividing");
     let b = require_inline_int(b, "dividing");
     if b == 0 {
-        panic!("pycc_rt: integer division by zero");
+        // D-173: set the pending exception flag instead of panicking.
+        // Returns a sentinel `0` (tagged smallint 0); the caller's
+        // generated code checks `pycc_rt_exception_active()` after this
+        // call and branches to the exception handler before using the
+        // result.
+        raise_builtin(EXCEPTION_TYPE_ZERO_DIV_ERROR, "integer division by zero");
+        return tag_smallint(0);
     }
     // Deviation from the task brief: the brief's own code guarded here
     // against the classic hardware trap on a raw `i64::MIN / -1` (the
@@ -418,7 +436,9 @@ fn int_floormod(a: i64, b: i64) -> i64 {
     let a = require_inline_int(a, "computing the modulo of");
     let b = require_inline_int(b, "computing the modulo of");
     if b == 0 {
-        panic!("pycc_rt: integer modulo by zero");
+        // D-173: set the pending exception flag instead of panicking.
+        raise_builtin(EXCEPTION_TYPE_ZERO_DIV_ERROR, "integer modulo by zero");
+        return tag_smallint(0);
     }
     // Deviation from the task brief: the brief's own code special-cased
     // `a == i64::MIN && b == -1` here (mirroring `int_floordiv`'s
@@ -639,11 +659,14 @@ pub extern "C" fn pycc_rt_int_untag_checked(tagged: i64) -> i64 {
 }
 
 /// Python true division rejects both positive and negative zero divisors.
-/// Until v0.3's exception machinery exists, a runtime panic becomes an
-/// explicit process failure at the plain-C ABI boundary.
+/// D-173 (#382): a zero divisor now sets the pending exception state and
+/// returns 0.0 instead of panicking. Generated code checks
+/// `pycc_rt_exception_active()` after this call.
 fn float_div(a: f64, b: f64) -> f64 {
     if b == 0.0 {
-        panic!("pycc_rt: float division by zero");
+        // D-173: set the pending exception flag instead of panicking.
+        raise_builtin(EXCEPTION_TYPE_ZERO_DIV_ERROR, "float division by zero");
+        return 0.0;
     }
     a / b
 }
@@ -658,7 +681,12 @@ pub extern "C" fn pycc_rt_float_div(a: f64, b: f64) -> f64 {
 /// naive `(a / b).floor()` for values such as `1.0 // 0.1`.
 fn float_divmod(a: f64, b: f64) -> (f64, f64) {
     if b == 0.0 {
-        panic!("pycc_rt: float division or modulo by zero");
+        // D-173: set the pending exception flag instead of panicking.
+        raise_builtin(
+            EXCEPTION_TYPE_ZERO_DIV_ERROR,
+            "float floor division or modulo by zero",
+        );
+        return (0.0, 0.0);
     }
 
     let mut modulo = a % b;
@@ -1170,15 +1198,12 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
     let items = list.items.take();
     let len = items.len();
     if index < 0 || index as usize >= len {
-        // Restore the payload before panicking. Not required for
-        // correctness in this crate's actual single-shot FFI usage (a
-        // panicking `pycc_rt_int_list_get` call aborts the whole process
-        // via the wrapper below, so the object is never touched again
-        // either way) but cheap insurance against leaving `list` with an
-        // emptied-out payload for any future caller that does catch this
-        // unwind (e.g. this file's own `#[should_panic]` tests).
+        // D-173: set the pending exception flag instead of panicking.
+        // Restore the payload before returning (not required for
+        // correctness in single-shot FFI usage, but cheap insurance).
         list.items.set(items);
-        panic!("pycc_rt: list index out of range");
+        raise_builtin(EXCEPTION_TYPE_INDEX_ERROR, "list index out of range");
+        return tag_smallint(0);
     }
     let value = items[index as usize];
     list.items.set(items);
@@ -1186,10 +1211,9 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
 }
 
 /// Reads the element at `index` (Python's `list[index]`, D-105's v0.2
-/// `list[int]` slice). Panics on an out-of-range index, matching
-/// `pycc_rt`'s established "honest panic over silently wrong data"
-/// convention (see `float_to_str`'s own doc comment for the same
-/// principle applied elsewhere in this file).
+/// `list[int]` slice). Sets the pending `IndexError` exception flag on an
+/// out-of-range index (D-173) and returns a sentinel `0`; the caller's
+/// generated code checks the flag after this call.
 ///
 /// Known v0.2 scope cut: negative indices are not supported. Real Python
 /// treats `lst[-1]` as the last element, but `pycc_types` has no way to
@@ -1451,13 +1475,17 @@ fn dict_get(dict: &PyDictObj, key: *mut PyStrObj) -> i64 {
         .find(|(k, _)| unsafe { pycc_rt_str_cmp(*k, key) } == 0)
         .map(|(_, v)| *v);
     dict.entries.set(entries);
-    found.unwrap_or_else(|| panic!("pycc_rt: dict key not found"))
+    found.unwrap_or_else(|| {
+        // D-173: set the pending exception flag instead of panicking.
+        raise_builtin(EXCEPTION_TYPE_KEY_ERROR, "dict key not found");
+        tag_smallint(0)
+    })
 }
 
-/// Linear-scan lookup (D-121). Panics if no stored key compares equal to
-/// `key` -- this compiler has no `KeyError` handling, so a missing key is
-/// an honest panic rather than a silently wrong value. The panic message
-/// is `"pycc_rt: dict key not found"`.
+/// Linear-scan lookup (D-121). Sets the pending `KeyError` exception flag
+/// if no stored key compares equal to `key` (D-173) and returns a sentinel
+/// `0`; the caller's generated code checks the flag after this call. The
+/// exception message is `"dict key not found"`.
 ///
 /// # Safety
 /// Same as `pycc_rt_dict_set`.
@@ -1875,17 +1903,23 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "division by zero")]
-    fn pycc_rt_int_floordiv_by_zero_panics() {
-        // See `pycc_rt_int_add_panics_...`'s comment above: private
-        // function called directly so the panic is a catchable unwind.
-        int_floordiv(tag_smallint(1), tag_smallint(0));
+    fn pycc_rt_int_floordiv_by_zero_sets_exception_flag() {
+        // D-173: zero division now sets the pending exception flag instead
+        // of panicking. Clear the flag first for test isolation.
+        pycc_rt_exception_clear();
+        let result = int_floordiv(tag_smallint(1), tag_smallint(0));
+        assert_eq!(pycc_rt_exception_active(), 1);
+        assert_eq!(untag_smallint(result), 0); // sentinel value
+        pycc_rt_exception_clear();
     }
 
     #[test]
-    #[should_panic(expected = "modulo by zero")]
-    fn pycc_rt_int_floormod_by_zero_panics() {
-        int_floormod(tag_smallint(1), tag_smallint(0));
+    fn pycc_rt_int_floormod_by_zero_sets_exception_flag() {
+        pycc_rt_exception_clear();
+        let result = int_floormod(tag_smallint(1), tag_smallint(0));
+        assert_eq!(pycc_rt_exception_active(), 1);
+        assert_eq!(untag_smallint(result), 0); // sentinel value
+        pycc_rt_exception_clear();
     }
 
     #[test]
@@ -2181,15 +2215,26 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "float division by zero")]
     fn float_div_rejects_a_zero_divisor() {
-        float_div(1.0, -0.0);
+        // D-173: float division by zero now sets the exception flag
+        // instead of panicking.
+        pycc_rt_exception_clear();
+        let result = float_div(1.0, -0.0);
+        assert_eq!(pycc_rt_exception_active(), 1);
+        assert_eq!(result, 0.0);
+        pycc_rt_exception_clear();
     }
 
     #[test]
-    #[should_panic(expected = "float division or modulo by zero")]
     fn float_divmod_rejects_a_zero_divisor() {
-        float_divmod(1.0, 0.0);
+        // D-173: float floor division/modulo by zero now sets the
+        // exception flag instead of panicking.
+        pycc_rt_exception_clear();
+        let (q, r) = float_divmod(1.0, 0.0);
+        assert_eq!(pycc_rt_exception_active(), 1);
+        assert_eq!(q, 0.0);
+        assert_eq!(r, 0.0);
+        pycc_rt_exception_clear();
     }
 
     #[test]
@@ -2740,38 +2785,35 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_rt: list index out of range")]
-    fn int_list_get_out_of_range_panics_honestly() {
-        // Deviation from the task brief: calls the private `int_list_get`
-        // directly, not the public `pycc_rt_int_list_get` wrapper the
-        // brief used -- the wrapper is a plain `unsafe extern "C" fn`, so
-        // a panic crossing its boundary aborts the whole test binary
-        // (`SIGABRT`) instead of unwinding into `#[should_panic]`'s own
-        // catch (see the private-logic/public-wrapper split added above,
-        // same convention as `int_add`/`pycc_rt_int_add` and
-        // `float_to_str`/`pycc_rt_float_to_str`).
+    fn int_list_get_out_of_range_sets_exception_flag() {
+        // D-173: out-of-range index now sets the pending exception flag
+        // instead of panicking.
+        pycc_rt_exception_clear();
         unsafe {
             let list = pycc_rt_int_list_new();
             pycc_rt_int_list_append(list, tag_smallint(1));
-            int_list_get(&*list, 5);
+            let result = int_list_get(&*list, 5);
+            assert_eq!(pycc_rt_exception_active(), 1);
+            assert_eq!(untag_smallint(result), 0); // sentinel value
+            pycc_rt_int_list_decref(list);
         }
+        pycc_rt_exception_clear();
     }
 
     #[test]
-    #[should_panic(expected = "pycc_rt: list index out of range")]
-    fn int_list_get_rejects_negative_indices() {
-        // D-108's documented v0.2 scope cut: unlike real Python (where
-        // `lst[-1]` is the last element), a negative index panics here
-        // exactly like an out-of-range positive one -- `pycc_types` has no
-        // way to reject a negative index at compile time, so this is
-        // pycc's actual, observable runtime behavior for `lst[-1]` today.
-        // Not something Task 12's PEP-585 conformance fixture may exercise
-        // (it would panic instead of byte-for-byte matching CPython).
+    fn int_list_get_rejects_negative_indices_with_exception_flag() {
+        // D-108's documented v0.2 scope cut: a negative index sets the
+        // IndexError flag exactly like an out-of-range positive one.
+        pycc_rt_exception_clear();
         unsafe {
             let list = pycc_rt_int_list_new();
             pycc_rt_int_list_append(list, tag_smallint(1));
-            int_list_get(&*list, -1);
+            let result = int_list_get(&*list, -1);
+            assert_eq!(pycc_rt_exception_active(), 1);
+            assert_eq!(untag_smallint(result), 0); // sentinel value
+            pycc_rt_int_list_decref(list);
         }
+        pycc_rt_exception_clear();
     }
 
     #[test]
@@ -3114,18 +3156,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_rt: dict key not found")]
-    fn pycc_rt_dict_get_on_a_missing_key_panics() {
+    fn pycc_rt_dict_get_on_a_missing_key_sets_exception_flag() {
+        pycc_rt_exception_clear();
         unsafe {
             let dict = pycc_rt_dict_new();
             let key = new_pystr(b"missing");
-            // Calls the private `dict_get`, not the public `pycc_rt_dict_get` wrapper
-            // -- the wrapper is a plain `extern "C" fn`, so a panic crossing its
-            // boundary aborts the whole test binary (`SIGABRT`) instead of unwinding
-            // into `#[should_panic]`'s own catch (see the private-logic/public-wrapper
-            // split added above, same convention as `int_list_get_out_of_range_panics_honestly`).
-            dict_get(&*dict, key);
+            // Calls the private `dict_get` directly, matching the
+            // private-logic/public-wrapper convention used throughout
+            // this file's test module.
+            let result = dict_get(&*dict, key);
+            assert_eq!(pycc_rt_exception_active(), 1);
+            assert_eq!(untag_smallint(result), 0); // sentinel value
+            pycc_rt_dict_decref(dict);
         }
+        pycc_rt_exception_clear();
     }
 
     #[test]
