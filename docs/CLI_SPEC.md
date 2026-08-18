@@ -164,6 +164,37 @@ this row used to name is closed for good as of PR-5 -- see D-072's own
 Context) (matches process exit conventions per-OS). Unsupported HIR input
 to `check` is a normal exit-1 diagnostic, not exit 101.
 
+Named D-072 boundaries include, each recognizable by its exact message.
+This list is maintained by hand and is **not** guaranteed exhaustive -- a
+`pycc_codegen: ... is not supported yet` panic that names a construct is a
+probable alpha boundary even when it is absent here, and should be checked
+against `crates/pycc_codegen/src/lib.rs` before being treated as a defect:
+
+- `pycc_codegen: using print()'s result as a nested expression is not
+  supported yet` -- `print(...)` types as `None`, and an already-materialized
+  `None` value does flow through `alloca`/parameter/return slots since D-075
+  and D-131; what remains unlowered is `print()`'s **call result
+  specifically**, which codegen never materializes at all (the panic is
+  unconditional on the callee being `print`).
+- ``pycc_codegen: string repetition (`str * int`) is not supported yet`` --
+  `str * int` and `int * str` (with a `bool` count) type-check to `str` as of
+  #574, but codegen has no repetition primitive yet; native repetition lands
+  with #575.
+- ``pycc_codegen: string conversion of a class instance without `__repr__` is
+  not supported yet`` -- `print(p)` type-checks for any argument, and
+  `pycc_mir`'s `rewrite_instance_to_repr` is a no-op for a class that defines
+  no `__repr__`, so the instance reaches codegen's `to_str` unconverted
+  (#378).
+- The container `to_str` and truthiness boundaries D-107 records, reached the
+  same way (`print(xs)` and `if xs:` type-check for any argument type, but
+  v0.2 lowers neither conversion nor `bool(...)` for containers):
+  `pycc_codegen: string conversion of a list[T] value is not supported yet`,
+  and the same message for `dict[K, V]`, `set[T]`, and `tuple[...]`; plus
+  `pycc_codegen: truthiness of a list[T] value is not supported yet`, and the
+  same message for `dict[K, V]`, `set[T]`, and `tuple[...]`.
+
+Each is an intentional alpha boundary, not a reportable compiler defect.
+
 `pycc run` normalizes every unsuccessful generated-program termination to
 `101`. This includes an ordinary non-zero child status, a Unix signal (which
 has no numeric `ExitStatus::code()`), and a platform abort status wider than

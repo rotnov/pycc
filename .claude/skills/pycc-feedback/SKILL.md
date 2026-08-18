@@ -47,10 +47,18 @@ external change.
 Do not report a documented unsupported feature merely because it is absent.
 Do not report the current panic (e.g. from `value = print(42)`):
 `pycc_codegen: using print()'s result as a nested expression is not supported yet`.
-D-072 defines it as an intentional temporary alpha gap. Do report a crash or
-panic outside an accepted boundary, silent wrong code, an unstable diagnostic
-contract, an incorrect exit status, or behavior that contradicts an
-implemented and tested contract.
+D-072 defines it as an intentional temporary alpha gap. The same applies to
+every other explicitly named `pycc_codegen: ... is not supported yet` boundary
+listed in `docs/CLI_SPEC.md` § Exit codes -- currently also
+``pycc_codegen: string repetition (`str * int`) is not supported yet``
+(#574 types `str * int` / `int * str` as `str`; lowering is #575). Check that
+list before classifying such a panic. The list is hand-maintained and not
+guaranteed exhaustive, so an unlisted `pycc_codegen: ... is not supported yet`
+panic that names a construct is a probable alpha boundary too: verify it
+against `crates/pycc_codegen/src/lib.rs` before reporting it. Do report a
+crash or panic outside an accepted boundary, silent wrong code, an unstable
+diagnostic contract, an incorrect exit status, or behavior that contradicts
+an implemented and tested contract.
 
 ## Sanitize the public payload
 
