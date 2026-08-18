@@ -958,6 +958,37 @@ fn pep_3119_abc_matches_cpython_3_14_7_byte_for_byte() {
     );
 }
 
+// PEP 3135 (#580, Part 4 of #572): zero-argument `super()`. A three-level
+// inheritance chain exercising `super().__init__()` with and without
+// arguments and an overridden method calling `super().<method>()`, so each
+// level's own `super()` must resolve against its *defining* class rather
+// than the runtime type of `self` (pycc lowers it with static dispatch per
+// D-160; CPython's zero-arg form reads the same `__class__` cell).
+//
+// `super().<attr>` is deliberately absent: reading an *instance* attribute
+// through the proxy raises `AttributeError` in CPython (a `super` object
+// proxies class-level attributes and descriptors only) while pycc resolves
+// it against `self`. That divergence cannot be expressed in a fixture that
+// matches the oracle byte-for-byte, so it is tracked as its own gap issue
+// instead of being papered over here.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn pep_3135_super_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_3135_super.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_3135_super_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/pep_3135_super.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_3135_super_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_3135_super.py"
+    );
+}
+
 // PEP 634-636 (#381, PR-21): structural pattern matching (`match`/`case`).
 // Literal, singleton, capture, wildcard, guard, and or-pattern forms.
 #[test]
