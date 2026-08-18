@@ -3165,8 +3165,10 @@ mod tests {
 
     // #574 (Part 1 of #123): `binop_result_ty`'s repetition clause. One
     // test per operand order and per accepted count type, because each
-    // side of the clause's `||` (and each `matches!` alternative) is its
-    // own region under the D-014 coverage gate.
+    // side of the clause's `||` is its own region under the D-014
+    // coverage gate, as is each arm of the two `matches!` expressions --
+    // including their `_ => false` fallbacks, which the negative controls
+    // at the end of this group reach.
 
     #[test]
     fn string_repetition_by_an_int_infers_str() {
@@ -3291,6 +3293,77 @@ mod tests {
                     left: Box::new(MirExpr::IntLiteral(2)),
                     right: Box::new(MirExpr::IntLiteral(3)),
                     ty: Ty::Int,
+                },
+            })]
+        );
+    }
+
+    #[test]
+    fn multiplying_a_str_by_a_float_does_not_take_the_repetition_clause() {
+        // Defensive shape: `pycc_types` rejects `str * float` with T0021,
+        // so this HIR can never arrive through `pycc check` -- it is built
+        // directly here (`build` does not type-check) purely to exercise
+        // the `_ => false` fallback of the repetition clause's
+        // `matches!(right, Ty::Int | Ty::Bool)`, which no reachable
+        // program covers. The clause must decline, leaving the ordinary
+        // numeric rule to answer `Ty::Float`.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(HirExpr::StringLiteral("a".to_string())),
+                    right: Box::new(HirExpr::FloatLiteral(2.0)),
+                },
+            })],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items,
+            vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(MirExpr::StringLiteral("a".to_string())),
+                    right: Box::new(MirExpr::FloatLiteral(2.0)),
+                    ty: Ty::Float,
+                },
+            })]
+        );
+    }
+
+    #[test]
+    fn multiplying_a_float_by_a_str_does_not_take_the_repetition_clause() {
+        // The mirror of the test above, and equally unreachable through
+        // `pycc check` (T0021): it exists to exercise the `_ => false`
+        // fallback of the repetition clause's
+        // `matches!(left, Ty::Int | Ty::Bool)`.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(HirExpr::FloatLiteral(2.0)),
+                    right: Box::new(HirExpr::StringLiteral("a".to_string())),
+                },
+            })],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items,
+            vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(MirExpr::FloatLiteral(2.0)),
+                    right: Box::new(MirExpr::StringLiteral("a".to_string())),
+                    ty: Ty::Float,
                 },
             })]
         );

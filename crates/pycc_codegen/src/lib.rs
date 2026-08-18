@@ -2080,6 +2080,13 @@ fn emit_expr_unchecked<'ctx>(
                     // error: str BinOp operand did not evaluate to str"
                     // message, which D-072 does not sanction and which
                     // `pycc-feedback` would mis-triage as a compiler defect.
+                    //
+                    // Review note: ordering this test first also shadows the
+                    // more precise `str Mul str` message below for hand-built
+                    // MIR whose two operands are both genuine `Scalar::Str`.
+                    // That shape is unreachable from any real pipeline
+                    // (`pycc_types` rejects `str * str` with `T0021`), so the
+                    // shadowing is accepted rather than worked around.
                     if *op == pycc_mir::BinOpKind::Mul {
                         panic!(
                             "pycc_codegen: string repetition (`str * int`) is not supported yet"
