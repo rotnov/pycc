@@ -3258,12 +3258,32 @@ mod tests {
             class_defs: Vec::new(),
         };
         let mir = build(&hir);
-        for item in &mir.items {
-            let MirItem::TopLevelStmt(MirStmt::Assign { value, .. }) = item else {
-                unreachable!("both items are top-level assignments")
-            };
-            assert_eq!(value.ty(), Ty::Str);
-        }
+        // Asserted against the full expected items rather than destructuring
+        // each one with a `let ... else { unreachable!() }`: that `else` arm
+        // would be an unexercised line and region under the D-014 gate.
+        assert_eq!(
+            mir.items,
+            vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(MirExpr::StringLiteral("a".to_string())),
+                        right: Box::new(MirExpr::BoolLiteral(true)),
+                        ty: Ty::Str,
+                    },
+                }),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "y".to_string(),
+                    value: MirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(MirExpr::BoolLiteral(true)),
+                        right: Box::new(MirExpr::StringLiteral("a".to_string())),
+                        ty: Ty::Str,
+                    },
+                }),
+            ]
+        );
     }
 
     #[test]

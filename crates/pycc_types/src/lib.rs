@@ -21664,14 +21664,15 @@ mod tests {
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
-        let HirItem::Function {
-            params, return_ty, ..
-        } = &resolved.items[0]
-        else {
-            unreachable!("item 0 is the private helper")
-        };
-        assert_eq!(params, &vec![("count".to_string(), Ty::Int)]);
-        assert_eq!(return_ty, &Ty::Str);
+        // Extracted with `assert!(matches!(..))` rather than a `let ... else
+        // { unreachable!() }`, because the `else` arm would be an unexercised
+        // line and region under the D-014 gate. This is the idiom the
+        // surrounding private-inference tests already use.
+        assert!(matches!(
+            &resolved.items[0],
+            HirItem::Function { params, return_ty, .. }
+                if params == &vec![("count".to_string(), Ty::Int)] && *return_ty == Ty::Str
+        ));
     }
 
     #[test]
@@ -21699,10 +21700,10 @@ mod tests {
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
-        let HirItem::Function { return_ty, .. } = &resolved.items[0] else {
-            unreachable!("item 0 is the private helper")
-        };
-        assert_eq!(return_ty, &Ty::Str);
+        assert!(matches!(
+            &resolved.items[0],
+            HirItem::Function { return_ty, .. } if *return_ty == Ty::Str
+        ));
     }
 
     #[test]
@@ -21730,10 +21731,10 @@ mod tests {
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
-        let HirItem::Function { return_ty, .. } = &resolved.items[0] else {
-            unreachable!("item 0 is the private helper")
-        };
-        assert_eq!(return_ty, &Ty::Str);
+        assert!(matches!(
+            &resolved.items[0],
+            HirItem::Function { return_ty, .. } if *return_ty == Ty::Str
+        ));
     }
 
     #[test]
