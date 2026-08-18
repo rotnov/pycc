@@ -1,7 +1,9 @@
+mod binop;
 mod class;
 mod exception;
 mod solver;
 
+use binop::numeric_result_type;
 use exception::{check_raise_stmt, check_try_stmt, is_unshadowed_builtin_exception};
 
 use pycc_diag::{Diagnostic, Span};
@@ -3865,39 +3867,6 @@ fn is_assignable(from: Ty, to: Ty) -> bool {
     // function-owned one.
     || matches!(to, Ty::Param(_)) && matches!(from, Ty::Int | Ty::Float | Ty::Bool | Ty::Str)
     || matches!(from, Ty::Param(_)) && matches!(to, Ty::Int | Ty::Float | Ty::Bool | Ty::Str)
-}
-
-fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnostic> {
-    if left == Ty::Str && right == Ty::Str {
-        return if op == BinOpKind::Add {
-            Ok(Ty::Str)
-        } else {
-            Err(Diagnostic::error(
-                "T0021",
-                format!("operator {op:?} is not defined for `str` and `str`"),
-                Span::new(0, 0),
-            ))
-        };
-    }
-    let as_numeric = |t: &Ty| match t {
-        Ty::Bool | Ty::Int => Some(Ty::Int),
-        Ty::Float => Some(Ty::Float),
-        _ => None,
-    };
-    match (as_numeric(&left), as_numeric(&right)) {
-        (Some(_), Some(_)) if op == BinOpKind::Div => Ok(Ty::Float),
-        (Some(Ty::Int), Some(Ty::Int)) => Ok(Ty::Int),
-        (Some(_), Some(_)) => Ok(Ty::Float),
-        _ => Err(Diagnostic::error(
-            "T0021",
-            format!(
-                "operator {op:?} is not defined for `{}` and `{}`",
-                left.name(),
-                right.name()
-            ),
-            Span::new(0, 0),
-        )),
-    }
 }
 
 fn numeric_or_bool_compatible(a: Ty, b: Ty) -> bool {
@@ -14438,18 +14407,6 @@ mod tests {
     }
 
     #[test]
-    fn numeric_result_type_covers_every_int_float_combination() {
-        assert_eq!(
-            numeric_result_type(BinOpKind::Add, Ty::Float, Ty::Float),
-            Ok(Ty::Float)
-        );
-        assert_eq!(
-            numeric_result_type(BinOpKind::Add, Ty::Float, Ty::Int),
-            Ok(Ty::Float)
-        );
-    }
-
-    #[test]
     fn true_division_of_two_ints_infers_float() {
         assert_eq!(
             numeric_result_type(BinOpKind::Div, Ty::Int, Ty::Int),
@@ -14478,12 +14435,6 @@ mod tests {
     }
 
     #[test]
-    fn numeric_result_type_rejects_a_hypothetical_incompatible_pair() {
-        let err = numeric_result_type(BinOpKind::Add, Ty::Int, Ty::None).unwrap_err();
-        assert_eq!(err.code, "T0021");
-    }
-
-    #[test]
     fn adding_an_int_and_a_float_promotes_to_float() {
         let env = Environment::new();
         let expr = HirExpr::BinOp {
@@ -14492,32 +14443,6 @@ mod tests {
             right: Box::new(HirExpr::FloatLiteral(2.5)),
         };
         assert_eq!(infer_expr(&env, &expr), Ok(Ty::Float));
-    }
-
-    #[test]
-    fn numeric_result_type_accepts_float_and_bool_since_bool_is_numeric_like() {
-        // Task 7 makes `bool` numeric-like everywhere (`True + 1.5 == 2.5` is
-        // legal Python), so this pair is no longer an error -- see
-        // `a_binop_treats_bool_and_float_as_float` for the `infer_expr`-level
-        // version of this same rule.
-        assert_eq!(
-            numeric_result_type(BinOpKind::Add, Ty::Float, Ty::Bool),
-            Ok(Ty::Float)
-        );
-    }
-
-    #[test]
-    fn numeric_result_type_rejects_a_float_and_a_hypothetical_none() {
-        // Exercises `.name()` for `Float` in the error arm now that
-        // `Float`+`Bool` no longer takes that path.
-        let err = numeric_result_type(BinOpKind::Add, Ty::Float, Ty::None).unwrap_err();
-        assert!(err.message.contains("float") && err.message.contains("None"));
-    }
-
-    #[test]
-    fn numeric_result_type_rejects_a_hypothetical_str_operand() {
-        let err = numeric_result_type(BinOpKind::Add, Ty::Bool, Ty::Str).unwrap_err();
-        assert!(err.message.contains("str"));
     }
 
     #[test]
@@ -21638,6 +21563,293 @@ mod tests {
                 }))],
             }
         );
+    }
+
+    // ---- #574: string repetition through both consumers of
+    // `numeric_result_type` — the validation pass (`infer_expr_in`'s
+    // `HirExpr::BinOp` arm) and the private-helper constraint solver
+    // (`propagate_binop_constraints`). ----
+
+    #[test]
+    fn a_public_function_may_return_string_repetition() {
+        // Validation-pass consumer: `check` never runs the solver for a
+        // fully annotated module.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "banner".to_string(),
+                params: vec![("count".to_string(), Ty::Int)],
+                return_ty: Ty::Str,
+                body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(HirExpr::StringLiteral("ab".to_string())),
+                    right: Box::new(HirExpr::Name("count".to_string())),
+                }))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_public_function_may_return_string_repetition_with_the_count_first() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "banner".to_string(),
+                params: vec![("count".to_string(), Ty::Bool)],
+                return_ty: Ty::Str,
+                body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(HirExpr::Name("count".to_string())),
+                    right: Box::new(HirExpr::StringLiteral("ab".to_string())),
+                }))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_public_function_still_cannot_multiply_a_str_by_a_float() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "banner".to_string(),
+                params: vec![("count".to_string(), Ty::Float)],
+                return_ty: Ty::Str,
+                body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(HirExpr::StringLiteral("ab".to_string())),
+                    right: Box::new(HirExpr::Name("count".to_string())),
+                }))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn a_private_helper_infers_str_from_string_repetition() {
+        // Constraint-solver consumer: the helper's parameter and return type
+        // are both `Ty::Infer`, so `check_and_resolve` reaches
+        // `propagate_binop_constraints`.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_rep".to_string(),
+                    params: vec![("count".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(HirExpr::StringLiteral("ab".to_string())),
+                        right: Box::new(HirExpr::Name("count".to_string())),
+                    }))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_rep".to_string(),
+                    args: vec![HirExpr::IntLiteral(3)],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+
+        let resolved = check_and_resolve(&hir).unwrap();
+        let HirItem::Function {
+            params, return_ty, ..
+        } = &resolved.items[0]
+        else {
+            unreachable!("item 0 is the private helper")
+        };
+        assert_eq!(params, &vec![("count".to_string(), Ty::Int)]);
+        assert_eq!(return_ty, &Ty::Str);
+    }
+
+    #[test]
+    fn a_private_helper_infers_str_with_the_count_on_the_left() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_rep".to_string(),
+                    params: vec![("count".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(HirExpr::Name("count".to_string())),
+                        right: Box::new(HirExpr::StringLiteral("ab".to_string())),
+                    }))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_rep".to_string(),
+                    args: vec![HirExpr::IntLiteral(3)],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+
+        let resolved = check_and_resolve(&hir).unwrap();
+        let HirItem::Function { return_ty, .. } = &resolved.items[0] else {
+            unreachable!("item 0 is the private helper")
+        };
+        assert_eq!(return_ty, &Ty::Str);
+    }
+
+    #[test]
+    fn a_private_helper_infers_str_from_a_bool_repetition_count() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_rep".to_string(),
+                    params: vec![("count".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(HirExpr::StringLiteral("ab".to_string())),
+                        right: Box::new(HirExpr::Name("count".to_string())),
+                    }))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_rep".to_string(),
+                    args: vec![HirExpr::BoolLiteral(true)],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+
+        let resolved = check_and_resolve(&hir).unwrap();
+        let HirItem::Function { return_ty, .. } = &resolved.items[0] else {
+            unreachable!("item 0 is the private helper")
+        };
+        assert_eq!(return_ty, &Ty::Str);
+    }
+
+    #[test]
+    fn a_private_helper_still_rejects_a_float_repetition_count() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_rep".to_string(),
+                    params: vec![("count".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(HirExpr::StringLiteral("ab".to_string())),
+                        right: Box::new(HirExpr::Name("count".to_string())),
+                    }))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_rep".to_string(),
+                    args: vec![HirExpr::FloatLiteral(1.5)],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn a_private_helper_still_rejects_subtracting_an_int_from_a_str() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_rep".to_string(),
+                    params: vec![("count".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Sub,
+                        left: Box::new(HirExpr::StringLiteral("ab".to_string())),
+                        right: Box::new(HirExpr::Name("count".to_string())),
+                    }))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_rep".to_string(),
+                    args: vec![HirExpr::IntLiteral(3)],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn a_repetition_over_an_undefined_operand_is_still_reported() {
+        // Validation pass: repetition acceptance must not swallow operand
+        // diagnostics raised before `numeric_result_type` ever sees a pair
+        // of types.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "banner".to_string(),
+                params: vec![("count".to_string(), Ty::Int)],
+                return_ty: Ty::Str,
+                body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(HirExpr::Name("missing".to_string())),
+                    right: Box::new(HirExpr::Name("count".to_string())),
+                }))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("missing"));
+    }
+
+    #[test]
+    fn a_private_helper_repetition_over_an_undefined_operand_fails_closed() {
+        // Solver path: an operand that never resolves leaves the helper's
+        // return term unresolved, and `resolved_private_signature_term`
+        // fails closed with "cannot infer return type" rather than
+        // inventing a signature. Repetition does not change that.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_rep".to_string(),
+                    params: vec![("count".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(HirExpr::Name("missing".to_string())),
+                        right: Box::new(HirExpr::Name("count".to_string())),
+                    }))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_rep".to_string(),
+                    args: vec![HirExpr::IntLiteral(3)],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("cannot infer return type"));
+        assert!(err.message.contains("_rep"));
     }
 
     #[test]

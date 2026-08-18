@@ -2583,6 +2583,22 @@ fn lower_issubclass(args: &[HirExpr], classes: &HashMap<String, HirClassDef>) ->
 }
 
 fn binop_result_ty(op: BinOpKind, left: Ty, right: Ty) -> Ty {
+    // #574 (Part 1 of #123): string repetition. `pycc_types`'
+    // `numeric_result_type` types `str * int` and `int * str` -- with
+    // `bool` accepted as the count, since `bool <: int` -- as `str`, so
+    // this function has to say the same, for exactly the reason the
+    // `Div` paragraph below gives: `pycc_types` already accepted the
+    // program on that promise, and answering `Ty::Int` here would make
+    // MIR's `ty` lie about what codegen must produce. Codegen does not
+    // lower repetition yet; it stops at its own explicit, named D-072
+    // boundary (exit 101, see `docs/CLI_SPEC.md`). Native repetition is
+    // #575.
+    if op == BinOpKind::Mul
+        && ((left == Ty::Str && matches!(right, Ty::Int | Ty::Bool))
+            || (right == Ty::Str && matches!(left, Ty::Int | Ty::Bool)))
+    {
+        return Ty::Str;
+    }
     if left == Ty::Str && right == Ty::Str && op == BinOpKind::Add {
         return Ty::Str;
     }
@@ -3142,6 +3158,139 @@ mod tests {
                     left: Box::new(MirExpr::StringLiteral("a".to_string())),
                     right: Box::new(MirExpr::StringLiteral("b".to_string())),
                     ty: Ty::Str,
+                },
+            })]
+        );
+    }
+
+    // #574 (Part 1 of #123): `binop_result_ty`'s repetition clause. One
+    // test per operand order and per accepted count type, because each
+    // side of the clause's `||` (and each `matches!` alternative) is its
+    // own region under the D-014 coverage gate.
+
+    #[test]
+    fn string_repetition_by_an_int_infers_str() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(HirExpr::StringLiteral("a".to_string())),
+                    right: Box::new(HirExpr::IntLiteral(3)),
+                },
+            })],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items,
+            vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(MirExpr::StringLiteral("a".to_string())),
+                    right: Box::new(MirExpr::IntLiteral(3)),
+                    ty: Ty::Str,
+                },
+            })]
+        );
+    }
+
+    #[test]
+    fn string_repetition_with_the_count_on_the_left_infers_str() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(HirExpr::IntLiteral(3)),
+                    right: Box::new(HirExpr::StringLiteral("a".to_string())),
+                },
+            })],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items,
+            vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(MirExpr::IntLiteral(3)),
+                    right: Box::new(MirExpr::StringLiteral("a".to_string())),
+                    ty: Ty::Str,
+                },
+            })]
+        );
+    }
+
+    #[test]
+    fn string_repetition_by_a_bool_infers_str() {
+        // `bool <: int`, so a `bool` count is accepted in either order --
+        // matching `pycc_types::numeric_result_type` exactly.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(HirExpr::StringLiteral("a".to_string())),
+                        right: Box::new(HirExpr::BoolLiteral(true)),
+                    },
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(HirExpr::BoolLiteral(true)),
+                        right: Box::new(HirExpr::StringLiteral("a".to_string())),
+                    },
+                }),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let mir = build(&hir);
+        for item in &mir.items {
+            let MirItem::TopLevelStmt(MirStmt::Assign { value, .. }) = item else {
+                unreachable!("both items are top-level assignments")
+            };
+            assert_eq!(value.ty(), Ty::Str);
+        }
+    }
+
+    #[test]
+    fn multiplying_two_ints_still_infers_int_after_the_repetition_clause() {
+        // Negative control for the repetition clause: `Mul` alone must not
+        // route a purely numeric pair into `Ty::Str`.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(HirExpr::IntLiteral(2)),
+                    right: Box::new(HirExpr::IntLiteral(3)),
+                },
+            })],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items,
+            vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(MirExpr::IntLiteral(2)),
+                    right: Box::new(MirExpr::IntLiteral(3)),
+                    ty: Ty::Int,
                 },
             })]
         );

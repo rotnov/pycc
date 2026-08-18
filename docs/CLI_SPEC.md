@@ -164,6 +164,18 @@ this row used to name is closed for good as of PR-5 -- see D-072's own
 Context) (matches process exit conventions per-OS). Unsupported HIR input
 to `check` is a normal exit-1 diagnostic, not exit 101.
 
+The D-072 boundaries named today, each recognizable by its exact message:
+
+- `pycc_codegen: using print()'s result as a nested expression is not
+  supported yet` -- `print(...)` types as `None`, but a `None` value has no
+  representation flowing through an `alloca`/parameter/return (D-072).
+- ``pycc_codegen: string repetition (`str * int`) is not supported yet`` --
+  `str * int` and `int * str` (with a `bool` count) type-check to `str` as of
+  #574, but codegen has no repetition primitive yet; native repetition lands
+  with #575.
+
+Each is an intentional alpha boundary, not a reportable compiler defect.
+
 `pycc run` normalizes every unsuccessful generated-program termination to
 `101`. This includes an ordinary non-zero child status, a Unix signal (which
 has no numeric `ExitStatus::code()`), and a platform abort status wider than
