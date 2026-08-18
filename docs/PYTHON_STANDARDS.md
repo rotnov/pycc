@@ -92,6 +92,20 @@ For each newly observed upstream release:
    other passing row and the `tests/conformance_matrix_guard.rs` check, which
    is scoped to `✅` rows per
    [D-175](./decisions/D-175-scope-the-conformance-matrix-fixture-guard-to-green.md).
+8. PEP 3135 (zero-argument `super()`) was flipped on the same rule 5 basis
+   against run
+   [32190906393](https://github.com/rotnov/pycc/actions/runs/32190906393), the
+   fully green `main` push run for `2dcc00a`, the merge of
+   [#588](https://github.com/rotnov/pycc/pull/588) that authored and registered
+   `pep_3135_super.py`. In the same pass the PEP 487 and PEP 560 rows stopped
+   citing the nonexistent `py36/pep_0487_init_subclass.py` and
+   `py37/pep_0560_class_getitem.py` paths, per
+   [#572](https://github.com/rotnov/pycc/issues/572)'s second completion
+   criterion: both features are recognition-only
+   ([#585](https://github.com/rotnov/pycc/issues/585),
+   [#586](https://github.com/rotnov/pycc/issues/586)), so no fixture can
+   exercise them against the CPython oracle and citing no fixture is the honest
+   state rather than a path awaiting an author.
 
 ## Python 3.0–3.2 (foundations)
 
@@ -108,7 +122,7 @@ For each newly observed upstream release:
 | [3129](https://peps.python.org/pep-3129/) | Class decorators | syntax | `pep_3129_class_deco.py` | ✅ |
 | [3131](https://peps.python.org/pep-3131/) | Non-ASCII identifiers | syntax | `pep_3131_unicode_ids.py` | ✅ |
 | [3132](https://peps.python.org/pep-3132/) | Extended unpacking `a, *b = ...` | syntax | `py30/pep_3132_unpack.py` | ☐ |
-| [3135](https://peps.python.org/pep-3135/) | Zero-argument `super()` | sem | `pep_3135_super.py` (authored and registered by [#580](https://github.com/rotnov/pycc/issues/580); the row flips per D-102 once a completed green `main` run can be cited) | ☐ |
+| [3135](https://peps.python.org/pep-3135/) | Zero-argument `super()` | sem | `pep_3135_super.py` (authored and registered by [#580](https://github.com/rotnov/pycc/issues/580); observed green across all 5 Tier-1 targets in both profiles on run [32190906393](https://github.com/rotnov/pycc/actions/runs/32190906393), the completed `main` push run for `2dcc00a`) | ✅ |
 | — | `str`/`bytes` split, all-new-style classes | sem | `py30/str_bytes_model.py` | ☐ |
 
 ## Python 3.3
@@ -146,7 +160,7 @@ For each newly observed upstream release:
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [487](https://peps.python.org/pep-0487/) | `__init_subclass__`, `__set_name__` | sem | `py36/pep_0487_init_subclass.py` — unauthored: PEP 487 is recognition-only, the hook never runs, so no fixture can exercise it against the oracle ([#585](https://github.com/rotnov/pycc/issues/585)) | ☐ |
+| [487](https://peps.python.org/pep-0487/) | `__init_subclass__`, `__set_name__` | sem | no fixture — unauthored: PEP 487 is recognition-only, the hook never runs, so no fixture can exercise it against the oracle ([#585](https://github.com/rotnov/pycc/issues/585)) | ☐ |
 | [498](https://peps.python.org/pep-0498/) | f-strings | syntax | `pep_0498_fstrings.py` | ✅ |
 | [515](https://peps.python.org/pep-0515/) | Underscores in numeric literals | syntax | `pep_0515_underscores.py` | ✅ |
 | [525](https://peps.python.org/pep-0525/) | Async generators | syntax | `py36/pep_0525_async_gen.py` | ☐ |
@@ -159,7 +173,7 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [553](https://peps.python.org/pep-0553/) | `breakpoint()` | rt | `py37/pep_0553_breakpoint.py` | ☐ |
 | [557](https://peps.python.org/pep-0557/) | **dataclasses** | sem | `pep_0557_dataclasses.py` | ✅ |
-| [560](https://peps.python.org/pep-0560/) | `__class_getitem__` typing support | typing | `py37/pep_0560_class_getitem.py` — unauthored: `__class_getitem__` is never dispatched in expression position, so no fixture can exercise it against the oracle ([#586](https://github.com/rotnov/pycc/issues/586)) | ☐ |
+| [560](https://peps.python.org/pep-0560/) | `__class_getitem__` typing support | typing | no fixture — unauthored: `__class_getitem__` is never dispatched in expression position, so no fixture can exercise it against the oracle ([#586](https://github.com/rotnov/pycc/issues/586)) | ☐ |
 | [562](https://peps.python.org/pep-0562/) | Module `__getattr__` | sem | `py37/pep_0562_mod_getattr.py` | ☐ |
 | [563](https://peps.python.org/pep-0563/) | `from __future__ import annotations` (superseded by 649) | typing | `py37/pep_0563_lazy_annotations.py` | ☐ |
 | — | `dict` insertion order guaranteed (`dict[str, int]`, D-123) | sem | `dict_order.py` | ✅ |
