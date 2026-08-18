@@ -86,16 +86,16 @@ For each newly observed upstream release:
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [238](https://peps.python.org/pep-0238/) | True division `/` vs `//` | sem | `py30/pep_0238_division.py` | ✅ |
+| [238](https://peps.python.org/pep-0238/) | True division `/` vs `//` | sem | `pep_0238_division.py` | ✅ |
 | [3102](https://peps.python.org/pep-3102/) | Keyword-only arguments | syntax | `py30/pep_3102_kwonly.py` | ☐ |
 | [3104](https://peps.python.org/pep-3104/) | `nonlocal` | syntax | `py30/pep_3104_nonlocal.py` | ☐ |
-| [3105](https://peps.python.org/pep-3105/) | `print()` as function | syntax | `py30/pep_3105_print.py` | ✅ |
-| [3107](https://peps.python.org/pep-3107/) | Function annotations | typing | `py30/pep_3107_annotations.py` | ✅ |
+| [3105](https://peps.python.org/pep-3105/) | `print()` as function | syntax | `pep_3105_print.py` | ✅ |
+| [3107](https://peps.python.org/pep-3107/) | Function annotations | typing | `pep_3107_annotations.py` | ✅ |
 | [3110](https://peps.python.org/pep-3110/) | `try`/`except`/`else`/`finally`, `raise`, bare `raise` (#382) | sem | `issue_382_exceptions.rs` | ☐ |
 | [3115](https://peps.python.org/pep-3115/) | Metaclasses (`metaclass=`) | sem | `py30/pep_3115_metaclass.py` | ☐ |
-| [3119](https://peps.python.org/pep-3119/) | ABCs, `isinstance` hooks | sem | `py30/pep_3119_abc.py` | ✅ |
+| [3119](https://peps.python.org/pep-3119/) | ABCs, `isinstance` hooks | sem | `pep_3119_abc.py` | ✅ |
 | [3129](https://peps.python.org/pep-3129/) | Class decorators | syntax | `py30/pep_3129_class_deco.py` | ☐ |
-| [3131](https://peps.python.org/pep-3131/) | Non-ASCII identifiers | syntax | `py30/pep_3131_unicode_ids.py` | ✅ |
+| [3131](https://peps.python.org/pep-3131/) | Non-ASCII identifiers | syntax | `pep_3131_unicode_ids.py` | ✅ |
 | [3132](https://peps.python.org/pep-3132/) | Extended unpacking `a, *b = ...` | syntax | `py30/pep_3132_unpack.py` | ☐ |
 | [3135](https://peps.python.org/pep-3135/) | Zero-argument `super()` | sem | `py30/pep_3135_super.py` | ☐ |
 | — | `str`/`bytes` split, all-new-style classes | sem | `py30/str_bytes_model.py` | ☐ |
@@ -106,7 +106,7 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [380](https://peps.python.org/pep-0380/) | `yield from` | syntax | `py33/pep_0380_yield_from.py` | ☐ |
 | [409](https://peps.python.org/pep-0409/) | `raise ... from ...` cause chaining (#382); `from None` suppression is ☐ | sem | `issue_382_exceptions.rs` | ☐ |
-| [414](https://peps.python.org/pep-0414/) | `u''` literals | syntax | `py33/pep_0414_u_literal.py` | ✅ |
+| [414](https://peps.python.org/pep-0414/) | `u''` literals | syntax | `pep_0414_u_literal.py` | ✅ |
 | [420](https://peps.python.org/pep-0420/) | Namespace packages | import | `py33/pep_0420_ns_packages.py` | ☐ |
 | [3151](https://peps.python.org/pep-3151/) | `OSError` hierarchy | sem | `py33/pep_3151_oserror.py` | ☐ |
 
@@ -128,7 +128,7 @@ For each newly observed upstream release:
 | [448](https://peps.python.org/pep-0448/) | Unpacking generalizations `*`/`**` | syntax | `py35/pep_0448_unpack_gen.py` | ☐ |
 | [461](https://peps.python.org/pep-0461/) | `%` formatting for bytes | sem | `py35/pep_0461_bytes_fmt.py` | ☐ |
 | [465](https://peps.python.org/pep-0465/) | `@` matrix-multiply operator | syntax | `py35/pep_0465_matmul.py` | ☐ |
-| [484](https://peps.python.org/pep-0484/) | **Type hints** — pycc's cornerstone | typing | `py35/pep_0484_type_hints.py` | ✅ |
+| [484](https://peps.python.org/pep-0484/) | **Type hints** — pycc's cornerstone | typing | `pep_0484_type_hints.py` | ✅ |
 | [492](https://peps.python.org/pep-0492/) | `async` / `await` syntax | syntax | `py35/pep_0492_async_await.py` | ☐ |
 
 ## Python 3.6
@@ -136,10 +136,10 @@ For each newly observed upstream release:
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
 | [487](https://peps.python.org/pep-0487/) | `__init_subclass__`, `__set_name__` | sem | `py36/pep_0487_init_subclass.py` | ☐ |
-| [498](https://peps.python.org/pep-0498/) | f-strings | syntax | `py36/pep_0498_fstrings.py` | ✅ |
-| [515](https://peps.python.org/pep-0515/) | Underscores in numeric literals | syntax | `py36/pep_0515_underscores.py` | ✅ |
+| [498](https://peps.python.org/pep-0498/) | f-strings | syntax | `pep_0498_fstrings.py` | ✅ |
+| [515](https://peps.python.org/pep-0515/) | Underscores in numeric literals | syntax | `pep_0515_underscores.py` | ✅ |
 | [525](https://peps.python.org/pep-0525/) | Async generators | syntax | `py36/pep_0525_async_gen.py` | ☐ |
-| [526](https://peps.python.org/pep-0526/) | Variable annotations `x: int = 0` | typing | `py36/pep_0526_var_annotations.py` | ✅ |
+| [526](https://peps.python.org/pep-0526/) | Variable annotations `x: int = 0` | typing | `pep_0526_var_annotations.py` | ✅ |
 | [530](https://peps.python.org/pep-0530/) | Async comprehensions | syntax | `py36/pep_0530_async_comp.py` | ☐ |
 
 ## Python 3.7
@@ -157,12 +157,12 @@ For each newly observed upstream release:
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [544](https://peps.python.org/pep-0544/) | `Protocol` — structural typing | typing | `py38/pep_0544_protocol.py` | ✅ |
-| [570](https://peps.python.org/pep-0570/) | Positional-only params `/` | syntax | `py38/pep_0570_pos_only.py` | ✅ |
+| [544](https://peps.python.org/pep-0544/) | `Protocol` — structural typing | typing | `pep_0544_protocol.py` | ✅ |
+| [570](https://peps.python.org/pep-0570/) | Positional-only params `/` | syntax | `pep_0570_pos_only.py` | ✅ |
 | [572](https://peps.python.org/pep-0572/) | Walrus `:=` | syntax | `py38/pep_0572_walrus.py` | ☐ |
 | [586](https://peps.python.org/pep-0586/) | `Literal` | typing | `py38/pep_0586_literal.py` | ☐ |
 | [589](https://peps.python.org/pep-0589/) | `TypedDict` | typing | `py38/pep_0589_typeddict.py` | ☐ |
-| [591](https://peps.python.org/pep-0591/) | `Final` | typing | `py38/pep_0591_final.py` | ✅ |
+| [591](https://peps.python.org/pep-0591/) | `Final` | typing | `pep_0591_final.py` | ✅ |
 | — | f-string `=` debug specifier | syntax | `py38/fstring_eq.py` | ☐ |
 
 ## Python 3.9
@@ -171,7 +171,7 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [584](https://peps.python.org/pep-0584/) | `dict \| dict` union | sem | `py39/pep_0584_dict_union.py` | ☐ |
 | [585](https://peps.python.org/pep-0585/) | Builtin generics: `list[int]` (D-105), `dict[str, int]`/`set[int]` (D-121/D-122, PR-11a), and `tuple[...]` (D-115/D-116, PR-11b) all ship real codegen — this row's `✅` reflects all four fixtures' own CI-observed, all-5-Tier-1-target evidence ([PR #305](https://github.com/rotnov/pycc/pull/305)). `tuple[...]`'s own literal construction, `t[k]` literal-index reads, and both module-global and function-local storage are covered; passing or returning a tuple *value* across a function boundary from real, unannotated Python source does not work yet even though the codegen layer already supports it, for two independent reasons: `pycc_types`' signature-inference solver is scalar-only (D-116 point 4's correction note), and `pycc_codegen`'s `emit_expr` has no `MirExpr::Call` result-dispatch arm for a container-typed return either (D-116's own further correction note) — deferred alongside iteration, unpacking assignment, and an annotation syntax (see `docs/ROADMAP.md`) | typing | `pep_0585_builtin_generics.py`, `dict_order.py`, `pep_0585_set_int.py`, `tuple_heterogeneous.py` | ✅ |
-| [593](https://peps.python.org/pep-0593/) | `Annotated` | typing | `py39/pep_0593_annotated.py` | ✅ |
+| [593](https://peps.python.org/pep-0593/) | `Annotated` | typing | `pep_0593_annotated.py` | ✅ |
 | [614](https://peps.python.org/pep-0614/) | Relaxed decorator grammar | syntax | `py39/pep_0614_decorators.py` | ☐ |
 | [617](https://peps.python.org/pep-0617/) | PEG parser — **pycc's grammar reference** | syntax | (covered by whole suite) | ☐ |
 
@@ -183,7 +183,7 @@ For each newly observed upstream release:
 | [612](https://peps.python.org/pep-0612/) | `ParamSpec` | typing | `py310/pep_0612_paramspec.py` | ☐ |
 | [613](https://peps.python.org/pep-0613/) | `TypeAlias` | typing | `pep_0613_typealias.py` | ✅ |
 | [626](https://peps.python.org/pep-0626/) | Precise line numbers (debug info) | rt | `py310/pep_0626_lineno.py` | ☐ |
-| [634](https://peps.python.org/pep-0634/)–636 | **Structural pattern matching** | syntax | `py310/pep_0634_match.py` | ✅ |
+| [634](https://peps.python.org/pep-0634/)–636 | **Structural pattern matching** | syntax | `pep_0634_match.py` | ✅ |
 | [647](https://peps.python.org/pep-0647/) | `TypeGuard` | typing | `py310/pep_0647_typeguard.py` | ☐ |
 | — | Parenthesized context managers | syntax | `py310/paren_with.py` | ☐ |
 
@@ -219,7 +219,7 @@ the pinned interpreter's own GIL only for CPython-backed operations (D-128).*
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [594](https://peps.python.org/pep-0594/) | "Dead batteries" stdlib removals | rt | `py313/pep_0594_dead_battery.py` + `py313/pep_0594_dead_battery_rejected.py` (D-138; both fixtures observed passing across all 5 Tier-1 targets on [PR #328](https://github.com/rotnov/pycc/pull/328)'s final green CI run) | ✅ |
+| [594](https://peps.python.org/pep-0594/) | "Dead batteries" stdlib removals | rt | `pep_0594_dead_battery.py` + `pep_0594_dead_battery_rejected.py` (D-138; both fixtures observed passing across all 5 Tier-1 targets on [PR #328](https://github.com/rotnov/pycc/pull/328)'s final green CI run) | ✅ |
 | [696](https://peps.python.org/pep-0696/) | TypeVar defaults | typing | `py313/pep_0696_typevar_defaults.py` | ☐ |
 | [702](https://peps.python.org/pep-0702/) | `@deprecated` | typing | `py313/pep_0702_deprecated.py` | ☐ |
 | [703](https://peps.python.org/pep-0703/) | Free-threading (experimental) | rt | superseded by 779 test | ☐ |
