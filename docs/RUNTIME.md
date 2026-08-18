@@ -48,10 +48,14 @@ bare `raise` (re-raise), `raise ... from ...` (PEP 409 cause chaining),
 Converted runtime failure paths include integer floor division/modulo by
 zero, float true/floor division and modulo by zero, list index out of range,
 and missing dictionary keys. They set the pending exception and return a
-neutral carrier. Codegen checks the flag after recursively evaluated
-expressions and emitted statements, so later operands, arguments, statements,
-and visible effects are skipped. Every user function has an exceptional exit
-that returns a neutral ABI value while preserving the flag for its caller.
+neutral carrier. Codegen checks the flag immediately after MIR operations that
+can set it: call nodes that may invoke a user function, constructor calls,
+converted arithmetic/container failures, and complete `try` statements. Child
+expressions guard themselves,
+so later operands, arguments, statements, and visible effects are skipped
+without adding a runtime check after pure literals, reads, comparisons, or
+ordinary arithmetic. Every user function has an exceptional exit that returns
+a neutral ABI value while preserving the flag for its caller.
 
 `finally` preserves a pending exception while its body executes, then restores
 it only after normal fallthrough; a `return` or new exception in `finally`

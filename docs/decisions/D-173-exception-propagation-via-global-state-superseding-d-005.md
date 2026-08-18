@@ -20,12 +20,12 @@ status: accepted
 
   1. A per-thread runtime state stores an `i8` active flag and an opaque pointer to the pending heap-allocated exception object. The exported `pycc_rt_exception_active` and `pycc_rt_exception_value` functions read that state.
   2. `raise ExceptionType(args)` lowers to: allocate the exception object, store it in the per-thread state, set the active flag, and transfer to the nearest exception target.
-  3. Codegen conservatively checks the flag after recursively evaluated expressions and emitted statements. If it is set, control transfers before a later operand, argument, statement, or other visible effect can run.
+  3. Codegen checks the flag immediately after MIR operations that can set it: call nodes that may invoke a user function, constructor calls, converted arithmetic/container failures, and complete structured `try` statements. Child expressions guard themselves, so a pending exception transfers control before a later operand, argument, statement, or other visible effect can run. Pure literals, reads, comparisons, and ordinary arithmetic do not pay for a redundant flag check.
   4. `try`/`except`/`finally` lowers to LLVM basic blocks with explicit exception-type checks. The `try` body runs; after each potentially-raising operation, the inserted check branches to the `except` handler chain on exception. `finally` runs in both the normal and exceptional exit paths.
   5. Every generated user function has an exception-exit block. It returns a neutral ABI value while leaving the runtime flag set; the caller checks the flag before consuming the value or evaluating another effect. Enclosing `finally` blocks run before that exit.
   6. If no `try` block catches the exception by the time it reaches `main`'s top level, the runtime prints the exception and exits with code 1.
 
-  This is not zero-cost: conservative checks add happy-path branches. The design avoids platform-specific unwind machinery, but no performance or five-target portability claim is made until the ordinary CI matrix measures the merged implementation.
+  This is not zero-cost: potentially raising operations add happy-path branches. The design avoids platform-specific unwind machinery, and the ordinary CI performance matrix remains the authority for the resulting overhead and five-target portability.
 
 - Alternatives:
   - **Native unwinding (Itanium/SEH) — D-005's original title.** Rejected for v0.3: the cross-platform cost (two different personality routines, `extern "C-unwind"` migration, unwind tables in every function) is front-loaded and high, while the benefit (zero-cost happy path) is an optimization better layered on after the exception semantics are stable. D-005 is superseded, not rejected outright — a future decision can re-accept native unwinding once the exception model is proven and the optimization is justified by profiling.
@@ -34,8 +34,8 @@ status: accepted
 
 - Consequences:
   - D-005 is superseded. Its `proposed` status is retained as the historical record; D-173 is the active decision.
-  - Every generated user function gains an exception-exit block, and expression/statement emission gains conservative check-and-branch sites. The mechanism does not depend on a platform unwind ABI.
-  - The happy path pays for those checks. This is a documented, presently unmeasured performance cost, not a zero-cost abstraction. A future ADR can migrate to native unwinding if profiling justifies it.
+  - Every generated user function gains an exception-exit block, and potentially raising expression/structured-statement boundaries gain check-and-branch sites. The mechanism does not depend on a platform unwind ABI.
+  - The happy path through a potentially raising operation pays for its check; pure numeric paths do not. This is a documented performance cost, not a zero-cost abstraction, and the CI performance matrix prevents it from silently violating the compiler's throughput contract. A future ADR can migrate to native unwinding if profiling justifies it.
   - `pycc_rt`'s `extern "C"` ABI is unchanged — the abort-on-unwind safety property is preserved. Runtime functions that can raise set the global flag and return a sentinel value; the caller checks the flag.
   - Exception objects use a dedicated leak-only heap allocation with a fixed builtin type tag, message pointer, explicit-cause pointer, and reserved implicit-context pointer. The type checker recognizes unshadowed builtin exception names directly at `raise`/`except` sites and represents handler bindings as `Ty::Instance`; the runtime uses tags for matching.
   - Pending state is thread-local, so compiler/runtime tests and future generated threads cannot overwrite another thread's exception. Generated programs themselves remain single-threaded in this milestone.

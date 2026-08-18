@@ -17,6 +17,41 @@ impl ExceptionCodegenState<'_> {
     }
 }
 
+/// Returns whether evaluating this node's own operation can set D-173's
+/// pending-exception state. Child expressions classify and guard themselves,
+/// so this deliberately does not recurse. Keeping infallible arithmetic off
+/// the guarded path preserves the compiler's performance contract while the
+/// operations converted to catchable Python exceptions remain fail-closed.
+pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
+    match expr {
+        MirExpr::Call { .. } | MirExpr::DictGet { .. } | MirExpr::Instantiate(_) => true,
+        MirExpr::BinOp { op, .. } => matches!(
+            op,
+            pycc_mir::BinOpKind::Div | pycc_mir::BinOpKind::FloorDiv | pycc_mir::BinOpKind::Mod
+        ),
+        MirExpr::Subscript { base, .. } => matches!(base.ty(), pycc_mir::Ty::List(_)),
+        MirExpr::IntLiteral(_)
+        | MirExpr::FloatLiteral(_)
+        | MirExpr::BoolLiteral(_)
+        | MirExpr::IntBoundary(_)
+        | MirExpr::StringLiteral(_)
+        | MirExpr::Name { .. }
+        | MirExpr::Compare { .. }
+        | MirExpr::FString(_)
+        | MirExpr::ListLiteral(_)
+        | MirExpr::ListAppend { .. }
+        | MirExpr::DictLiteral(_)
+        | MirExpr::SetLiteral(_)
+        | MirExpr::TupleLiteral(_)
+        | MirExpr::Slice { .. }
+        | MirExpr::ListPop { .. }
+        | MirExpr::DictGetOrDefault { .. }
+        | MirExpr::SetAdd { .. }
+        | MirExpr::AttrGet { .. }
+        | MirExpr::NullInstance { .. } => false,
+    }
+}
+
 /// Mirrors the type checker's fallthrough proof at MIR level. Structured
 /// exception code generation sometimes leaves an LLVM continuation block
 /// whose no-exception edge is statically impossible (for example,
@@ -489,8 +524,8 @@ pub(super) fn emit_try<'ctx>(
 
     // Finally body: always runs. After finally, check if a return
     // was intercepted (is_returning flag) or branch to after_bb
-    // for normal completion. The pending exception state
-    // will be checked by the next statement's codegen.
+    // for normal completion. The structured-statement guard at
+    // after_bb propagates any pending exception.
     builder.position_at_end(finally_bb);
     let finally_exception_bb = context.append_basic_block(function, "try_finally_exception");
     let pending_exception = if finalbody.is_empty() {
@@ -658,8 +693,8 @@ pub(super) fn emit_try<'ctx>(
             }
         } else {
             // No finally body — branch to after_bb unconditionally.
-            // The pending exception state will be checked by
-            // the next statement's codegen.
+            // The structured-statement guard at after_bb propagates any
+            // pending exception before the enclosing suite can continue.
             builder
                 .build_unconditional_branch(after_bb)
                 .expect("build_unconditional_branch should not fail");
@@ -675,5 +710,73 @@ pub(super) fn emit_try<'ctx>(
         .expect("build_unconditional_branch should propagate a finally exception");
 
     builder.position_at_end(after_bb);
+    // A locally unmatched exception (or one restored after `finally`) must
+    // leave this structured statement immediately. Expression nodes already
+    // guard their own raising operations; this is the corresponding boundary
+    // for a complete try statement.
+    guard_statement_effects(context, builder, rt);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn int_binop(op: pycc_mir::BinOpKind) -> MirExpr {
+        MirExpr::BinOp {
+            op,
+            left: Box::new(MirExpr::IntLiteral(8)),
+            right: Box::new(MirExpr::IntLiteral(2)),
+            ty: pycc_mir::Ty::Int,
+        }
+    }
+
+    #[test]
+    fn exception_guard_classification_keeps_the_arithmetic_fast_path_clean() {
+        for op in [
+            pycc_mir::BinOpKind::Add,
+            pycc_mir::BinOpKind::Sub,
+            pycc_mir::BinOpKind::Mul,
+            pycc_mir::BinOpKind::Pow,
+        ] {
+            assert!(!expression_can_set_exception(&int_binop(op)));
+        }
+        for op in [
+            pycc_mir::BinOpKind::Div,
+            pycc_mir::BinOpKind::FloorDiv,
+            pycc_mir::BinOpKind::Mod,
+        ] {
+            assert!(expression_can_set_exception(&int_binop(op)));
+        }
+
+        assert!(expression_can_set_exception(&MirExpr::Call {
+            callee: "f".to_string(),
+            args: Vec::new(),
+            ty: pycc_mir::Ty::Int,
+        }));
+        assert!(expression_can_set_exception(&MirExpr::DictGet {
+            dict: Box::new(MirExpr::DictLiteral(vec![(
+                MirExpr::StringLiteral("key".to_string()),
+                MirExpr::IntLiteral(1),
+            )])),
+            key: Box::new(MirExpr::StringLiteral("key".to_string())),
+        }));
+        assert!(expression_can_set_exception(&MirExpr::Subscript {
+            base: Box::new(MirExpr::ListLiteral(vec![MirExpr::IntLiteral(1)])),
+            index: Box::new(MirExpr::IntLiteral(0)),
+        }));
+        assert!(!expression_can_set_exception(&MirExpr::Subscript {
+            base: Box::new(MirExpr::TupleLiteral(vec![MirExpr::IntLiteral(1)])),
+            index: Box::new(MirExpr::IntLiteral(0)),
+        }));
+        assert!(expression_can_set_exception(&MirExpr::Instantiate(
+            Box::new(pycc_mir::InstantiateExpr {
+                ctor: "C.__init__".to_string(),
+                attr_count: 0,
+                args: Vec::new(),
+                ty: pycc_mir::Ty::Instance(Box::new("C".to_string())),
+            },)
+        )));
+        assert!(!expression_can_set_exception(&MirExpr::IntLiteral(1)));
+    }
 }

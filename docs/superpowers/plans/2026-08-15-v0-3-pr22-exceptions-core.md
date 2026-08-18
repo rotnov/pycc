@@ -88,7 +88,7 @@ Reuse `Ty::Instance` for typed handler bindings. Builtin exception names are rec
 - Recognize the builtin exception-name table at `raise`/`except` sites: `Exception` (root), `ValueError`, `TypeError`, `KeyError`, `IndexError`, `ZeroDivisionError`, and `RuntimeError`. Reject a shadowing user function/class in this thin slice.
 - `check_stmt` for `HirStmt::Try`: type-check body, handlers, orelse, finalbody. Handler's `exc_type` must be a subclass of `Exception`. The `as name` binding is available in the handler body.
 - `check_stmt` for `HirStmt::Raise`: `exc` must be an instance of `Exception` (or a subclass). `cause` must also be an `Exception` instance.
-- Conservatively guard recursively evaluated expressions and emitted statements. This avoids an incomplete static "can raise" analysis in the thin slice and ensures a pending exception skips later effects.
+- Classify and guard each MIR operation that can set the pending state: call nodes that may invoke a user function, constructor calls, converted arithmetic/container failures, and complete structured `try` statements. Child expressions guard themselves, ensuring a pending exception skips later effects without imposing TLS checks on pure numeric paths.
 - Definite-assignment tracking through try/except/finally: a variable assigned in `try` is `Maybe` after the try block (the assignment may have been skipped due to an exception).
 
 ### Layer 4: MIR (`crates/pycc_mir`)

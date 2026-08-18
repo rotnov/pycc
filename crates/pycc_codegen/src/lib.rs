@@ -14,7 +14,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 mod exception;
-use exception::{ExceptionCodegenState, emit_exception_value, guard_statement_effects};
+use exception::{
+    ExceptionCodegenState, emit_exception_value, expression_can_set_exception,
+    guard_statement_effects,
+};
 
 const RELEASE_PASS_PIPELINE: &str = "default<O3>";
 type CodegenObserver<'observer> =
@@ -1671,10 +1674,15 @@ fn emit_expr<'ctx>(
     expr: &MirExpr,
 ) -> Scalar<'ctx> {
     let value = emit_expr_unchecked(context, builder, module, rt, user_functions, locals, expr);
-    // Recursive calls come back through this wrapper. Consequently a
-    // pending exception stops evaluation before a parent expression can
-    // evaluate its next operand, call argument, or other sub-expression.
-    guard_statement_effects(context, builder, rt);
+    // Recursive calls come back through this wrapper. Consequently a node
+    // that can set the pending state stops evaluation before its parent can
+    // evaluate the next operand, call argument, or other sub-expression.
+    // Pure literals, reads, comparisons, and ordinary arithmetic skip the
+    // TLS call and branch entirely; D-173's original unconditional guard at
+    // every node made tight numeric loops several times slower.
+    if expression_can_set_exception(expr) {
+        guard_statement_effects(context, builder, rt);
+    }
     value
 }
 
@@ -2713,9 +2721,10 @@ fn emit_expr_unchecked<'ctx>(
         // expression crossing in unchanged (a dict key is never tagged),
         // and the encoded value read back out is forwarded unchanged.
         //
-        // A missing key is `pycc_rt_dict_get`'s own honest runtime panic,
-        // not something this crate can check -- the key is only known at
-        // runtime.
+        // A missing key makes `pycc_rt_dict_get` set D-173's pending
+        // `KeyError` state and return a neutral carrier. The enclosing
+        // `emit_expr` wrapper guards this node before that carrier can be
+        // consumed.
         MirExpr::DictGet { dict, key } => {
             let dict_scalar = emit_expr(context, builder, module, rt, user_functions, locals, dict);
             let dict_ptr = expect_dict_pointer(dict_scalar, "the dict subscripted value");
@@ -3881,14 +3890,14 @@ fn emit_body<'ctx>(
             expected_return_ty.clone(),
             finally_stack,
         )?;
-        let exception_target = rt
-            .exceptions
-            .targets
-            .borrow()
-            .last()
-            .copied()
-            .expect("emit_body is always called inside an exception target");
         if erase_unreachable_if_present(builder) {
+            let exception_target = rt
+                .exceptions
+                .targets
+                .borrow()
+                .last()
+                .copied()
+                .expect("emit_body is always called inside an exception target");
             builder
                 .build_unconditional_branch(exception_target)
                 .expect("build_unconditional_branch should route an explicit raise");
@@ -3898,31 +3907,11 @@ fn emit_body<'ctx>(
             .get_insert_block()
             .unwrap()
             .get_terminator()
-            .is_none()
+            .is_some()
         {
-            let active = builder
-                .build_call(rt.exception_active, &[], "suite_exc_active")
-                .expect("build_call should not fail for exception_active")
-                .try_as_basic_value()
-                .expect_basic("pycc_rt_exception_active returns i8")
-                .into_int_value();
-            let has_exc = builder
-                .build_int_compare(
-                    inkwell::IntPredicate::NE,
-                    active,
-                    context.i8_type().const_zero(),
-                    "suite_has_exc",
-                )
-                .expect("build_int_compare should not fail");
-            let function = builder.get_insert_block().unwrap().get_parent().unwrap();
-            let continuation = context.append_basic_block(function, "suite_exc_cont");
-            builder
-                .build_conditional_branch(has_exc, exception_target, continuation)
-                .expect("build_conditional_branch should route a pending exception");
-            builder.position_at_end(continuation);
-        } else {
-            // A return already terminated this suite. Avoid manufacturing a
-            // dead continuation block after the terminator.
+            // A return already terminated this suite. Raising expressions
+            // and complete try statements route themselves; explicit raise
+            // uses the `unreachable` path handled directly above.
             break;
         }
     }
@@ -5236,7 +5225,6 @@ fn emit_stmt<'ctx>(
                     locals,
                     arg,
                 ));
-                guard_statement_effects(context, builder, rt);
             }
             for (i, maybe_str) in evaluated.into_iter().enumerate() {
                 if i > 0 {
@@ -5289,6 +5277,7 @@ fn emit_stmt<'ctx>(
                 callee,
                 args,
             );
+            guard_statement_effects(context, builder, rt);
             Ok(())
         }
         MirStmt::ExprStmt(expr) => {
@@ -5299,7 +5288,6 @@ fn emit_stmt<'ctx>(
             let ty = value.ty();
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
             let scalar = incref_if_str_duplicate(builder, rt, value, scalar);
-            guard_statement_effects(context, builder, rt);
             if ty == pycc_mir::Ty::Str {
                 decref_str_slot_before_store(context, builder, rt, locals, target);
             }
@@ -5671,7 +5659,6 @@ fn emit_stmt<'ctx>(
                     let scalar = incref_if_str_duplicate(builder, rt, expr, scalar);
                     let scalar =
                         coerce_scalar_to_type(context, builder, scalar, expected_return_ty.clone());
-                    guard_statement_effects(context, builder, rt);
                     if expected_return_ty == pycc_mir::Ty::None {
                         // `None` parameters, call results, and stored names
                         // use a canonical `i8 0` carrier inside expressions,
@@ -7410,31 +7397,22 @@ fn emit_stmt<'ctx>(
             emit_assign(context, builder, locals, target, Scalar::Dict(new_dict));
             Ok(())
         }
-        MirStmt::Seq(stmts) => {
-            for stmt in stmts {
-                emit_stmt(
-                    context,
-                    builder,
-                    module,
-                    rt,
-                    user_functions,
-                    locals,
-                    stmt,
-                    expected_return_ty.clone(),
-                    finally_stack,
-                )?;
-            }
-            Ok(())
-        }
+        MirStmt::Seq(stmts) => emit_body(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            stmts,
+            expected_return_ty,
+            finally_stack,
+        ),
         // #382 (PR-22 Part 1): `raise ExceptionType("msg")` — allocate an
-        // exception object, set the pending exception state, then branch to
-        // a continuation block (left without a terminator). The enclosing
-        // `Try`'s post-body check or the top-level exception check will
-        // detect the active exception and handle it. This avoids threading
-        // an exception-handler stack through all codegen functions: `Raise`
-        // just sets the state and transfers control to a fresh block, and
-        // the nearest enclosing check point (try post-body or top-level
-        // post-statement) intercepts it.
+        // exception object, set the pending exception state, then terminate
+        // this block. `emit_body` routes that explicit raise directly to the
+        // nearest installed exception target (a `try` handler, the caller's
+        // exceptional exit, or the top-level exit).
         MirStmt::Raise { exception } => {
             let exc_obj = emit_exception_value(
                 context,
@@ -7450,12 +7428,11 @@ fn emit_stmt<'ctx>(
                 .build_call(rt.exception_raise, &[exc_obj.into()], "")
                 .expect("build_call should not fail for exception_raise");
             // Terminate the block with `unreachable` — the exception is
-            // already set in the pending state, and the enclosing try's
-            // post-body check (or the function's post-call check) will
-            // detect it. Do NOT position at a new block after the
-            // unreachable: the caller checks `get_terminator().is_none()`
-            // to decide if the block falls through, and an unreachable
-            // block correctly does not fall through.
+            // already set in the pending state. Do NOT position at a new
+            // block after the unreachable: `emit_body` recognizes this
+            // marker and replaces it with a branch to the current exception
+            // target, while an unreachable block correctly does not fall
+            // through in other structural checks.
             builder
                 .build_unreachable()
                 .expect("build_unreachable should not fail after raise");
