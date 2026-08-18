@@ -37,15 +37,17 @@
 //! enum, but is refined by D-149: this module is not left untouched by an
 //! `expr.rs`-side flag the way that framing might suggest.
 
+mod exception;
+
 use crate::expr::{
     is_zero_arg_super_call, lower_dict_comp_assign, lower_expr, lower_list_comp_assign,
     lower_range_call, lower_set_comp_assign,
 };
 use crate::{
-    HirExceptHandler, HirExpr, HirMatchCase, HirPattern, HirStmt, Ty, annotation_to_ty,
-    context_invalid, unsupported,
+    HirExpr, HirMatchCase, HirPattern, HirStmt, Ty, annotation_to_ty, context_invalid, unsupported,
 };
-use pycc_ast::{ElifElseClause, ExceptHandler, Expr, Pattern, Singleton, Stmt, StmtMatch};
+use exception::lower_except_handler;
+use pycc_ast::{ElifElseClause, Expr, Pattern, Singleton, Stmt, StmtMatch};
 use pycc_diag::Diagnostic;
 
 pub(crate) fn lower_stmt(
@@ -424,7 +426,17 @@ pub(crate) fn lower_stmt(
             let handlers = try_stmt
                 .handlers
                 .iter()
-                .map(|h| lower_except_handler(h, aliases, in_loop, in_function, class_name, type_param, class_defs))
+                .map(|h| {
+                    lower_except_handler(
+                        h,
+                        aliases,
+                        in_loop,
+                        in_function,
+                        class_name,
+                        type_param,
+                        class_defs,
+                    )
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             let orelse = lower_body(
                 &try_stmt.orelse,
@@ -678,8 +690,7 @@ fn lower_pattern(
                 .keywords
                 .iter()
                 .map(|kw| {
-                    lower_pattern(&kw.pattern, in_function, None)
-                        .map(|p| (kw.attr.to_string(), p))
+                    lower_pattern(&kw.pattern, in_function, None).map(|p| (kw.attr.to_string(), p))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(HirPattern::Class {
@@ -697,10 +708,7 @@ fn lower_pattern(
             (None, Some(name)) => Ok(HirPattern::Capture(name.id.to_string())),
             (Some(inner), name) => {
                 let inner_pat = lower_pattern(inner, in_function, class_name)?;
-                let name = name
-                    .as_ref()
-                    .map(|n| n.id.to_string())
-                    .unwrap_or_default();
+                let name = name.as_ref().map(|n| n.id.to_string()).unwrap_or_default();
                 Ok(HirPattern::As(Box::new(inner_pat), name))
             }
         },
@@ -713,46 +721,6 @@ fn lower_pattern(
             Ok(HirPattern::Or(sub))
         }
     }
-}
-
-/// PEP 3110 (#382, PR-22 Part 1): lowers an `ExceptHandler` from the AST
-/// into an `HirExceptHandler`. The handler's `type_` must be a bare name
-/// (the exception class) or `None` (bare `except:`). The `name` is the
-/// optional `as` binding. The body is lowered via `lower_body`.
-fn lower_except_handler(
-    handler: &ExceptHandler,
-    aliases: &[(String, Ty)],
-    in_loop: bool,
-    in_function: bool,
-    class_name: Option<&str>,
-    type_param: Option<&str>,
-    class_defs: &[(String, bool)],
-) -> Result<HirExceptHandler, Diagnostic> {
-    let pycc_ast::ExceptHandler::ExceptHandler(h) = handler;
-    let exc_type = h.type_.as_deref().map(|t| {
-        let Expr::Name(name) = t else {
-            return Err(unsupported(
-                "only a bare-name exception type is supported so far in except handlers",
-                pycc_ast::expr_range(t),
-            ));
-        };
-        Ok(name.id.as_str().to_string())
-    }).transpose()?;
-    let name = h.name.as_ref().map(|n| n.id.as_str().to_string());
-    let body = lower_body(
-        &h.body,
-        aliases,
-        in_loop,
-        in_function,
-        class_name,
-        type_param,
-        class_defs,
-    )?;
-    Ok(HirExceptHandler {
-        exc_type,
-        name,
-        body,
-    })
 }
 
 #[cfg(test)]
@@ -768,7 +736,10 @@ mod tests {
         });
         let err = lower_pattern(&star, false, None).unwrap_err();
         assert_eq!(err.code, "C0001");
-        assert!(err.message.contains("a `*` pattern is only valid inside a sequence pattern"));
+        assert!(
+            err.message
+                .contains("a `*` pattern is only valid inside a sequence pattern")
+        );
     }
 
     #[test]
@@ -812,9 +783,8 @@ mod tests {
         // `{**x}` is a dict-unpacking expression that `lower_expr` rejects
         // with C0001; used as the match subject it propagates through the
         // `?` on the subject expression.
-        let module = pycc_parser::parse(
-            "match {**x}:\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        let module = pycc_parser::parse("match {**x}:\n    case _:\n        pass\n")
+            .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
@@ -825,7 +795,8 @@ mod tests {
         // C0001, propagating through the `?` on the guard.
         let module = pycc_parser::parse(
             "x = 1\nmatch x:\n    case 1 if {**y}:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        )
+        .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
@@ -836,7 +807,8 @@ mod tests {
         // `lower_expr` does not handle unary operators and rejects with C0001.
         let module = pycc_parser::parse(
             "x = 1\nmatch x:\n    case -1:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        )
+        .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
@@ -847,7 +819,8 @@ mod tests {
         // rejects with C0001, propagating through the `?` on the key.
         let module = pycc_parser::parse(
             "x = {1: 2}\nmatch x:\n    case {-1: v}:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        )
+        .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
@@ -856,7 +829,8 @@ mod tests {
     fn lower_match_sequence_subpattern_error_propagates() {
         let module = pycc_parser::parse(
             "x = [1]\nmatch x:\n    case [foo.bar]:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        )
+        .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
@@ -901,7 +875,8 @@ mod tests {
     fn lower_match_as_pattern_inner_error_propagates() {
         let module = pycc_parser::parse(
             "x = 1\nmatch x:\n    case foo.bar as y:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        )
+        .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
@@ -910,252 +885,9 @@ mod tests {
     fn lower_match_or_pattern_subpattern_error_propagates() {
         let module = pycc_parser::parse(
             "x = 1\nmatch x:\n    case foo.bar | 1:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
+        )
+        .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
-    }
-
-    // -- Exception handling HIR tests (#382, PR-22 Part 1) --
-
-    /// Test helper: extract a `Try` statement from a top-level HIR item,
-    /// panicking if the item is not a `Try`.  The panic arm is covered by
-    /// `expect_top_level_try_panics_on_non_try`.
-    fn expect_top_level_try(
-        item: &crate::HirItem,
-    ) -> (
-        &[HirStmt],
-        &[crate::HirExceptHandler],
-        &[HirStmt],
-        &[HirStmt],
-    ) {
-        match item {
-            crate::HirItem::TopLevelStmt(HirStmt::Try { body, handlers, orelse, finalbody }) => {
-                (body, handlers, orelse, finalbody)
-            }
-            _ => panic!("expected Try"),
-        }
-    }
-
-    /// Test helper: extract a `Raise` statement from a top-level HIR item,
-    /// panicking if the item is not a `Raise`.  The panic arm is covered by
-    /// `expect_top_level_raise_panics_on_non_raise`.
-    fn expect_top_level_raise(item: &crate::HirItem) -> (&Option<HirExpr>, &Option<HirExpr>) {
-        match item {
-            crate::HirItem::TopLevelStmt(HirStmt::Raise { exc, cause }) => (exc, cause),
-            _ => panic!("expected Raise"),
-        }
-    }
-
-    /// Test helper: extract a `Raise` statement from a `HirStmt`,
-    /// panicking if the statement is not a `Raise`.  The panic arm is
-    /// covered by `expect_raise_stmt_panics_on_non_raise`.
-    fn expect_raise_stmt(stmt: &HirStmt) -> (&Option<HirExpr>, &Option<HirExpr>) {
-        match stmt {
-            HirStmt::Raise { exc, cause } => (exc, cause),
-            _ => panic!("expected Raise"),
-        }
-    }
-
-    #[test]
-    #[should_panic(expected = "expected Try")]
-    fn expect_top_level_try_panics_on_non_try() {
-        expect_top_level_try(&crate::HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(0))));
-    }
-
-    #[test]
-    #[should_panic(expected = "expected Raise")]
-    fn expect_top_level_raise_panics_on_non_raise() {
-        expect_top_level_raise(&crate::HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(0))));
-    }
-
-    #[test]
-    #[should_panic(expected = "expected Raise")]
-    fn expect_raise_stmt_panics_on_non_raise() {
-        expect_raise_stmt(&HirStmt::ExprStmt(HirExpr::IntLiteral(0)));
-    }
-
-    #[test]
-    fn lower_try_except_lowers_successfully() {
-        let module = pycc_parser::parse(
-            "try:\n    x = 1\nexcept ValueError:\n    y = 2\n",
-        ).expect("test fixture must parse");
-        let hir = crate::lower_checked(&module).expect("lowering must succeed");
-        let items = &hir.items;
-        assert_eq!(items.len(), 1);
-        let (body, handlers, orelse, finalbody) = expect_top_level_try(&items[0]);
-        assert_eq!(body.len(), 1);
-        assert_eq!(handlers.len(), 1);
-        assert_eq!(handlers[0].exc_type.as_deref(), Some("ValueError"));
-        assert!(handlers[0].name.is_none());
-        assert_eq!(handlers[0].body.len(), 1);
-        assert!(orelse.is_empty());
-        assert!(finalbody.is_empty());
-    }
-
-    #[test]
-    fn lower_try_except_as_binding_lowers_successfully() {
-        let module = pycc_parser::parse(
-            "try:\n    x = 1\nexcept ValueError as e:\n    y = 2\n",
-        ).expect("test fixture must parse");
-        let hir = crate::lower_checked(&module).expect("lowering must succeed");
-        let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
-        assert_eq!(handlers[0].exc_type.as_deref(), Some("ValueError"));
-        assert_eq!(handlers[0].name.as_deref(), Some("e"));
-    }
-
-    #[test]
-    fn lower_try_bare_except_lowers_successfully() {
-        let module = pycc_parser::parse(
-            "try:\n    x = 1\nexcept:\n    y = 2\n",
-        ).expect("test fixture must parse");
-        let hir = crate::lower_checked(&module).expect("lowering must succeed");
-        let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
-        assert!(handlers[0].exc_type.is_none());
-        assert!(handlers[0].name.is_none());
-    }
-
-    #[test]
-    fn lower_try_multiple_handlers_lowers_successfully() {
-        let module = pycc_parser::parse(
-            "try:\n    x = 1\nexcept ValueError:\n    y = 2\nexcept KeyError:\n    z = 3\n",
-        ).expect("test fixture must parse");
-        let hir = crate::lower_checked(&module).expect("lowering must succeed");
-        let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
-        assert_eq!(handlers.len(), 2);
-        assert_eq!(handlers[0].exc_type.as_deref(), Some("ValueError"));
-        assert_eq!(handlers[1].exc_type.as_deref(), Some("KeyError"));
-    }
-
-    #[test]
-    fn lower_try_else_finally_lowers_successfully() {
-        let module = pycc_parser::parse(
-            "try:\n    x = 1\nexcept ValueError:\n    y = 2\nelse:\n    z = 3\nfinally:\n    w = 4\n",
-        ).expect("test fixture must parse");
-        let hir = crate::lower_checked(&module).expect("lowering must succeed");
-        let (_, _, orelse, finalbody) = expect_top_level_try(&hir.items[0]);
-        assert_eq!(orelse.len(), 1);
-        assert_eq!(finalbody.len(), 1);
-    }
-
-    #[test]
-    fn lower_raise_lowers_successfully() {
-        let module = pycc_parser::parse(
-            "raise ValueError(\"bad\")\n",
-        ).expect("test fixture must parse");
-        let hir = crate::lower_checked(&module).expect("lowering must succeed");
-        let (exc, cause) = expect_top_level_raise(&hir.items[0]);
-        assert!(exc.is_some());
-        assert!(cause.is_none());
-    }
-
-    #[test]
-    fn lower_raise_from_lowers_successfully() {
-        let module = pycc_parser::parse(
-            "raise ValueError(\"bad\") from RuntimeError(\"cause\")\n",
-        ).expect("test fixture must parse");
-        let hir = crate::lower_checked(&module).expect("lowering must succeed");
-        let (exc, cause) = expect_top_level_raise(&hir.items[0]);
-        assert!(exc.is_some());
-        assert!(cause.is_some());
-    }
-
-    #[test]
-    fn lower_bare_raise_lowers_successfully() {
-        let module = pycc_parser::parse(
-            "try:\n    x = 1\nexcept ValueError:\n    raise\n",
-        ).expect("test fixture must parse");
-        let hir = crate::lower_checked(&module).expect("lowering must succeed");
-        let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
-        let (exc, cause) = expect_raise_stmt(&handlers[0].body[0]);
-        assert!(exc.is_none());
-        assert!(cause.is_none());
-    }
-
-    #[test]
-    fn lower_try_star_rejects_with_c0001() {
-        let module = pycc_parser::parse(
-            "try:\n    x = 1\nexcept* ValueError:\n    y = 2\n",
-        ).expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-        assert!(err.message.contains("except*"));
-    }
-
-    #[test]
-    fn lower_except_with_tuple_type_rejects_with_c0001() {
-        // `except (ValueError, TypeError):` — a tuple exception type is
-        // not a bare name, so it should be rejected with C0001.
-        let module = pycc_parser::parse(
-            "try:\n    x = 1\nexcept (ValueError, TypeError):\n    y = 2\n",
-        ).expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-        assert!(err.message.contains("bare-name exception type"));
-    }
-
-    #[test]
-    fn lower_try_with_unsupported_body_expr_rejects() {
-        // An unsupported expression in the try body should propagate
-        // the lowering error through the `?` operator.
-        let module = pycc_parser::parse(
-            "try:\n    x = lambda y: y\nexcept ValueError:\n    pass\n",
-        ).expect("test fixture must parse");
-        let result = crate::lower_checked(&module);
-        assert!(result.is_err(), "lowering should fail for unsupported expression in try body");
-    }
-
-    #[test]
-    fn lower_try_with_unsupported_handler_body_rejects() {
-        // An unsupported expression in the handler body should propagate
-        // the lowering error through the `?` operator.
-        let module = pycc_parser::parse(
-            "try:\n    x = 1\nexcept ValueError:\n    y = lambda z: z\n",
-        ).expect("test fixture must parse");
-        let result = crate::lower_checked(&module);
-        assert!(result.is_err(), "lowering should fail for unsupported expression in handler body");
-    }
-
-    #[test]
-    fn lower_try_with_unsupported_else_body_rejects() {
-        // An unsupported expression in the else body should propagate
-        // the lowering error through the `?` operator.
-        let module = pycc_parser::parse(
-            "try:\n    x = 1\nexcept ValueError:\n    pass\nelse:\n    y = lambda z: z\n",
-        ).expect("test fixture must parse");
-        let result = crate::lower_checked(&module);
-        assert!(result.is_err(), "lowering should fail for unsupported expression in else body");
-    }
-
-    #[test]
-    fn lower_try_with_unsupported_finally_body_rejects() {
-        // An unsupported expression in the finally body should propagate
-        // the lowering error through the `?` operator.
-        let module = pycc_parser::parse(
-            "try:\n    x = 1\nexcept ValueError:\n    pass\nfinally:\n    y = lambda z: z\n",
-        ).expect("test fixture must parse");
-        let result = crate::lower_checked(&module);
-        assert!(result.is_err(), "lowering should fail for unsupported expression in finally body");
-    }
-
-    #[test]
-    fn lower_raise_with_unsupported_exc_rejects() {
-        // An unsupported expression as the raise exc should propagate
-        // the lowering error through the `?` operator (line 459).
-        let module = pycc_parser::parse(
-            "raise lambda: None\n",
-        ).expect("test fixture must parse");
-        let result = crate::lower_checked(&module);
-        assert!(result.is_err(), "lowering should fail for unsupported expression in raise exc");
-    }
-
-    #[test]
-    fn lower_raise_from_with_unsupported_cause_rejects() {
-        // An unsupported expression as the raise cause should propagate
-        // the lowering error through the `?` operator (line 464).
-        let module = pycc_parser::parse(
-            "raise ValueError(\"bad\") from lambda: None\n",
-        ).expect("test fixture must parse");
-        let result = crate::lower_checked(&module);
-        assert!(result.is_err(), "lowering should fail for unsupported expression in raise cause");
     }
 }

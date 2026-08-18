@@ -1,5 +1,8 @@
 mod class;
+mod exception;
 mod solver;
+
+use exception::{check_raise_stmt, check_try_stmt, is_unshadowed_builtin_exception};
 
 use pycc_diag::{Diagnostic, Span};
 #[cfg(test)]
@@ -4586,230 +4589,6 @@ fn collect_enum_member_patterns<'a>(
     }
 }
 
-/// #382 (PR-22 Part 1): Checks a `try`/`except`/`else`/`finally` statement.
-/// Shared between module-scope (`check_stmt`, `local_names = &[]`) and
-/// function-scope (`check_stmt_in_function`) contexts.
-///
-/// Definite-assignment semantics: variables assigned only in the try body
-/// become `Maybe` after the try (the body may raise before the assignment).
-/// Handler bodies and the else body are each checked in independent clones.
-/// The finally body always runs, so it is checked in the joined environment.
-fn check_try_stmt(
-    env: &mut Environment,
-    local_names: &[&str],
-    body: &[HirStmt],
-    handlers: &[pycc_hir::HirExceptHandler],
-    orelse: &[HirStmt],
-    finalbody: &[HirStmt],
-    return_ty: Option<&Ty>,
-) -> Result<(), Diagnostic> {
-    // Check the try body in a clone — any binding it introduces is `Maybe`
-    // after the try (the body may raise before reaching the assignment).
-    let mut body_env = env.clone();
-    for stmt in body {
-        check_stmt_shared(&mut body_env, local_names, stmt, return_ty)?;
-    }
-    // Check each handler in an independent clone, with the `as` name bound
-    // to `Ty::Instance(exc_class_name)` and `in_except_handler` set to true.
-    let mut handler_envs: Vec<Environment> = Vec::with_capacity(handlers.len());
-    for handler in handlers {
-        let mut henv = env.clone();
-        henv.in_except_handler = true;
-        // #382: Reject unknown exception class names in `except` handlers.
-        // A bare `except:` (exc_type == None) catches all exceptions and
-        // needs no type check. A named type must be one of the builtin
-        // exception classes this compiler recognizes; an unknown name is a
-        // catch-all by accident (resolve_exception_tag returns None, which
-        // is the same as bare `except:`), so reject it explicitly here.
-        if let Some(exc_type) = &handler.exc_type
-            && !pycc_hir::is_builtin_exception_class(exc_type)
-        {
-            return Err(Diagnostic::error(
-                "T0021",
-                format!(
-                    "`{exc_type}` is not a recognized exception class — \
-                     only builtin exception classes (Exception, ValueError, \
-                     TypeError, KeyError, IndexError, ZeroDivisionError, \
-                     RuntimeError) are supported in `except` handlers"
-                ),
-                Span::new(0, 0),
-            ));
-        }
-        if let Some(exc_type) = &handler.exc_type
-            && let Some(name) = &handler.name
-        {
-            // Bind the `as` name to the exception instance type.
-            // Inside the handler body the binding is definite: the
-            // handler only executes if the exception matches, so `e`
-            // is always bound here. The handler's `henv` is a separate
-            // clone, so this definite binding does not leak into the
-            // post-try joined environment.
-            henv.bind(name.clone(), Ty::Instance(Box::new(exc_type.clone())));
-        }
-        // Note: `except as e:` without an exception type is syntactically
-        // invalid in Python, so there is no bare-except-with-binding case.
-        for stmt in &handler.body {
-            check_stmt_shared(&mut henv, local_names, stmt, return_ty)?;
-        }
-        handler_envs.push(henv);
-    }
-    // Check the else body in an independent clone — it runs only if no
-    // exception was raised, so its bindings are also `Maybe` in the join.
-    let mut else_env = env.clone();
-    for stmt in orelse {
-        check_stmt_shared(&mut else_env, local_names, stmt, return_ty)?;
-    }
-    // Join: start with a fresh clone of the pre-try environment, then
-    // merge each branch into it. A binding is `Definitely` only if it
-    // was definitely bound before the try AND in every branch that can
-    // complete normally. The body's bindings are downgraded to `Maybe`
-    // first (the body may raise before reaching an assignment).
-    let mut joined = env.clone();
-    join_loop_body(&mut joined, &body_env);
-    for henv in &handler_envs {
-        let prev = joined.clone();
-        join_if_branches(&mut joined, &prev, henv)?;
-    }
-    let prev = joined.clone();
-    // The else body was already checked above, so any type mismatch was
-    // caught by `check_assignment`. The join cannot fail here — every
-    // binding in `else_env` is either unchanged from the pre-try env or
-    // was validated by `check_assignment` in the else body check.
-    let _ = join_if_branches(&mut joined, &prev, &else_env);
-    *env = joined;
-    // The finally body always runs — check it in the joined environment.
-    for stmt in finalbody {
-        check_stmt_shared(env, local_names, stmt, return_ty)?;
-    }
-    Ok(())
-}
-
-/// #382 (PR-22 Part 1): Checks a `raise` statement. Shared between
-/// module-scope and function-scope contexts.
-///
-/// Builtin exception class calls (e.g. `ValueError("msg")`) are handled
-/// directly here rather than through `infer_expr_in`, because the concrete
-/// fast-path environment does not register builtin exception classes as
-/// class entries (only `check_with_signatures` does, via `bind_classes`).
-/// Routing through `infer_expr_in` on the concrete path would produce C0001
-/// ("call to builtin `ValueError` is valid Python but not implemented yet")
-/// instead of accepting the raise. The solver path's
-/// `collect_expr_constraints` has the same gap. By checking the call
-/// structure directly, `check_raise_stmt` works on both paths.
-fn check_raise_stmt(
-    env: &Environment,
-    local_names: &[&str],
-    exc: &Option<HirExpr>,
-    cause: &Option<HirExpr>,
-) -> Result<(), Diagnostic> {
-    if let Some(exc_expr) = exc {
-        check_raise_operand(
-            env,
-            local_names,
-            exc_expr,
-            "can only raise exception instances",
-        )?;
-    } else {
-        // Bare `raise` — only valid inside an except handler.
-        if !env.in_except_handler {
-            return Err(Diagnostic::error(
-                "T0021",
-                "bare `raise` is only valid inside an except handler",
-                Span::new(0, 0),
-            ));
-        }
-    }
-    if let Some(cause_expr) = cause {
-        check_raise_operand(
-            env,
-            local_names,
-            cause_expr,
-            "cause must be an exception instance",
-        )?;
-    }
-    Ok(())
-}
-
-/// #382 (PR-22 Part 1): Validates a single raise operand (the `exc` or
-/// `cause` expression). If the expression is a direct call to a builtin
-/// exception class (e.g. `ValueError("msg")`), the argument is validated
-/// here without going through `infer_expr_in` (which would classify the
-/// callee as an unsupported callable builtin on the concrete fast path).
-/// Otherwise, the expression is inferred normally and must produce a
-/// `Ty::Instance` of a builtin exception class.
-fn check_raise_operand(
-    env: &Environment,
-    local_names: &[&str],
-    expr: &HirExpr,
-    error_prefix: &str,
-) -> Result<(), Diagnostic> {
-    if let HirExpr::Call { callee, args } = expr
-        && pycc_hir::is_builtin_exception_class(callee)
-    {
-        // Validate the argument: exactly 1 string (the message).
-        if args.len() != 1 {
-            return Err(Diagnostic::error(
-                "T0021",
-                format!(
-                    "`{callee}` expects exactly 1 argument (the message string), got {}",
-                    args.len()
-                ),
-                Span::new(0, 0),
-            ));
-        }
-        let arg_ty = infer_expr_in(env, local_names, &args[0])?;
-        if arg_ty != Ty::Str {
-            return Err(Diagnostic::error(
-                "T0021",
-                format!(
-                    "`{callee}` expects a `str` message argument, got `{}`",
-                    arg_ty.name()
-                ),
-                Span::new(0, 0),
-            ));
-        }
-        return Ok(());
-    }
-    // Not a direct builtin exception class call — infer normally.
-    let ty = infer_expr_in(env, local_names, expr)?;
-    match &ty {
-        Ty::Instance(class_name) => {
-            if !pycc_hir::is_builtin_exception_class(class_name) {
-                return Err(Diagnostic::error(
-                    "T0021",
-                    format!("{error_prefix}, got `{}`", ty.name()),
-                    Span::new(0, 0),
-                ));
-            }
-        }
-        _ => {
-            return Err(Diagnostic::error(
-                "T0021",
-                format!("{error_prefix}, got `{}`", ty.name()),
-                Span::new(0, 0),
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// #382 (PR-22 Part 1): Dispatches to `check_stmt` or
-/// `check_stmt_in_function` depending on whether `return_ty` is `Some`.
-/// Used by `check_try_stmt` to recursively check nested statements in
-/// either scope.
-fn check_stmt_shared(
-    env: &mut Environment,
-    local_names: &[&str],
-    stmt: &HirStmt,
-    return_ty: Option<&Ty>,
-) -> Result<(), Diagnostic> {
-    if let Some(rt) = return_ty {
-        check_stmt_in_function(env, local_names, stmt, rt.clone())
-    } else {
-        check_stmt(env, stmt)
-    }
-}
-
 pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnostic> {
     match stmt {
         HirStmt::Assign { target, value } => {
@@ -5324,42 +5103,63 @@ fn check_function_in(
 }
 
 fn block_always_returns(body: &[HirStmt]) -> bool {
-    body.iter().any(|stmt| match stmt {
-        HirStmt::Return(_) => true,
-        HirStmt::If { body, orelse, .. } => {
-            !orelse.is_empty() && block_always_returns(body) && block_always_returns(orelse)
+    for stmt in body {
+        let returns = match stmt {
+            HirStmt::Return(_) => true,
+            HirStmt::If { body, orelse, .. } => {
+                !orelse.is_empty() & block_always_returns(body) & block_always_returns(orelse)
+            }
+            HirStmt::ExprStmt(_)
+            | HirStmt::Assign { .. }
+            | HirStmt::AnnAssign { .. }
+            | HirStmt::While { .. }
+            | HirStmt::ForRange { .. }
+            | HirStmt::ForList { .. }
+            | HirStmt::DictSet { .. }
+            | HirStmt::AttrSet { .. }
+            // PR-12 Task 3 (D-117): a comprehension statement never contains a
+            // `return` (its `elt`/`cond`/`key`/`value` are expressions, not
+            // statements), so it can never make a block always return, exactly
+            // like `Assign`/`ForList`/`DictSet` above.
+            | HirStmt::ListCompAssign { .. }
+            | HirStmt::SetCompAssign { .. }
+            | HirStmt::DictCompAssign { .. } => false,
+            // A raise transfers control to an exception handler/caller and
+            // cannot fall through to the function's implicit return point.
+            HirStmt::Raise { .. } => true,
+            HirStmt::Match { cases, .. } => {
+                let mut all_cases_return = !cases.is_empty();
+                for case in cases {
+                    all_cases_return &= block_always_returns(&case.body);
+                }
+                all_cases_return
+            }
+            HirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                // A terminal `finally` replaces every earlier outcome. Otherwise
+                // the normal path must terminate either in the try body itself or
+                // in its `else`, and every matching handler must terminate. With
+                // no handlers, an exception simply propagates to the caller and
+                // is already a terminal path.
+                let normal_path_terminates = block_always_returns(body)
+                    | ((!orelse.is_empty()) & block_always_returns(orelse));
+                let mut handled_paths_terminate = true;
+                for handler in handlers {
+                    handled_paths_terminate &= block_always_returns(&handler.body);
+                }
+                block_always_returns(finalbody)
+                    | (normal_path_terminates & handled_paths_terminate)
+            }
+        };
+        if returns {
+            return true;
         }
-        HirStmt::ExprStmt(_)
-        | HirStmt::Assign { .. }
-        | HirStmt::AnnAssign { .. }
-        | HirStmt::While { .. }
-        | HirStmt::ForRange { .. }
-        | HirStmt::ForList { .. }
-        | HirStmt::DictSet { .. }
-        | HirStmt::AttrSet { .. }
-        // PR-12 Task 3 (D-117): a comprehension statement never contains a
-        // `return` (its `elt`/`cond`/`key`/`value` are expressions, not
-        // statements), so it can never make a block always return, exactly
-        // like `Assign`/`ForList`/`DictSet` above.
-        | HirStmt::ListCompAssign { .. }
-        | HirStmt::SetCompAssign { .. }
-        | HirStmt::DictCompAssign { .. }
-        | HirStmt::Raise { .. } => false,
-        HirStmt::Match { cases, .. } => {
-            !cases.is_empty()
-                && cases.iter().all(|case| block_always_returns(&case.body))
-        }
-        HirStmt::Try { body, handlers, orelse, finalbody } => {
-            // A try block always returns if the finally always returns.
-            // Otherwise, if the body always returns and every handler
-            // always returns (and there are handlers), it always returns.
-            block_always_returns(finalbody)
-                || (!handlers.is_empty()
-                    && block_always_returns(body)
-                    && handlers.iter().all(|h| block_always_returns(&h.body))
-                    && (orelse.is_empty() || block_always_returns(orelse)))
-        }
-    })
+    }
+    false
 }
 
 fn check_stmt_in_function(
@@ -6972,8 +6772,18 @@ fn rewrite_generic_calls_in_stmt(
                 rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
             }
             for handler in handlers.iter_mut() {
+                let mut handler_env = env.clone();
+                if let (Some(exc_type), Some(name)) = (&handler.exc_type, &handler.name) {
+                    handler_env.bind(name.clone(), Ty::Instance(Box::new(exc_type.clone())));
+                }
                 for s in handler.body.iter_mut() {
-                    rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+                    rewrite_generic_calls_in_stmt(
+                        &mut handler_env,
+                        local_names,
+                        s,
+                        instantiations,
+                        seen,
+                    )?;
                 }
             }
             for s in orelse.iter_mut() {
@@ -6986,14 +6796,49 @@ fn rewrite_generic_calls_in_stmt(
         }
         HirStmt::Raise { exc, cause } => {
             if let Some(exc) = exc.as_mut() {
-                rewrite_generic_calls_in_expr(env, local_names, exc, instantiations, seen)?;
+                rewrite_generic_calls_in_raise_operand(
+                    env,
+                    local_names,
+                    exc,
+                    instantiations,
+                    seen,
+                )?;
             }
             if let Some(cause) = cause.as_mut() {
-                rewrite_generic_calls_in_expr(env, local_names, cause, instantiations, seen)?;
+                rewrite_generic_calls_in_raise_operand(
+                    env,
+                    local_names,
+                    cause,
+                    instantiations,
+                    seen,
+                )?;
             }
             Ok(())
         }
     }
+}
+
+/// Rewrites generic calls nested in a `raise` operand without asking the
+/// ordinary call checker to re-type-check the builtin exception constructor
+/// itself. The validation pass has already checked that constructor; only its
+/// message expression can still contain a generic call that needs rewriting.
+fn rewrite_generic_calls_in_raise_operand(
+    env: &mut Environment,
+    local_names: &[&str],
+    expr: &mut HirExpr,
+    instantiations: &mut Vec<GenericInstantiation>,
+    seen: &mut HashSet<String>,
+) -> Result<(), Diagnostic> {
+    if let HirExpr::Call { callee, args } = expr
+        && is_unshadowed_builtin_exception(env, local_names, callee)
+    {
+        for arg in args {
+            rewrite_generic_calls_in_expr(env, local_names, arg, instantiations, seen)?;
+        }
+        return Ok(());
+    }
+    rewrite_generic_calls_in_expr(env, local_names, expr, instantiations, seen)?;
+    Ok(())
 }
 
 /// `CompIter`'s own rewrite counterpart -- mirrors `resolve_comp_iter`
@@ -25019,6 +24864,16 @@ mod tests {
             exc: None,
             cause: Some(bad_generic_call()),
         }]);
+        // The builtin exception constructor is deliberately not re-checked
+        // during monomorphization, but a bad generic call nested in its
+        // message still has to propagate its instantiation diagnostic.
+        assert_monomorphize_propagates_error(vec![HirStmt::Raise {
+            exc: Some(HirExpr::Call {
+                callee: "ValueError".to_string(),
+                args: vec![bad_generic_call()],
+            }),
+            cause: None,
+        }]);
     }
 
     #[test]
@@ -32607,6 +32462,13 @@ mod tests {
     }
 
     #[test]
+    fn unknown_exception_handler_is_t0021() {
+        let err = parse_check("try:\n    pass\nexcept UnknownError:\n    pass\n").unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not a recognized exception class"));
+    }
+
+    #[test]
     fn try_else_finally_checks_successfully() {
         let resolved = parse_check_resolve(
             "try:\n    x = 1\nexcept ValueError:\n    y = 2\nelse:\n    z = 3\nfinally:\n    w = 4\n",
@@ -32738,11 +32600,7 @@ def f() -> int:
 def f() -> int:
     raise ValueError(\"bad\")
 ";
-        // This should fail because the function doesn't return on all paths.
-        // But the raise itself should be valid.
-        let err = parse_check(src).unwrap_err();
-        // The error should be about not returning on all paths, not about raise.
-        assert_ne!(err.code, "T0021");
+        parse_check(src).expect("an always-raising function cannot fall through");
     }
 
     #[test]
@@ -32774,9 +32632,8 @@ def f() -> int:
     except ValueError:
         raise RuntimeError(\"err\")
 ";
-        let err = parse_check_resolve(src).unwrap_err();
-        // Should fail because not all paths return.
-        assert_ne!(err.code, "T0021");
+        parse_check_resolve(src)
+            .expect("the body returns and the handler raises, so every path terminates");
     }
 
     #[test]
@@ -32907,9 +32764,7 @@ def _helper() -> int:
     raise ValueError(\"bad\")
 _helper()
 ";
-        let err = parse_check(src).unwrap_err();
-        // Should fail because not all paths return.
-        assert_ne!(err.code, "T0021");
+        parse_check(src).expect("an always-raising private helper cannot fall through");
     }
 
     // -- #382 coverage tests --
@@ -33444,9 +33299,8 @@ def f() -> int:
     x = c.x
     raise ValueError(\"bad\")
 ";
-        let err = parse_check_resolve(src).unwrap_err();
-        // Should fail because not all paths return, but raise is valid.
-        assert_ne!(err.code, "T0021");
+        parse_check_resolve(src)
+            .expect("the rewritten generic call is followed by a terminal raise");
     }
 
     #[test]
@@ -33468,9 +33322,7 @@ def f() -> int:
         x = 0
     raise ValueError(\"bad\")
 ";
-        let err = parse_check_resolve(src).unwrap_err();
-        // Should fail because not all paths return, but raise is valid.
-        assert_ne!(err.code, "T0021");
+        parse_check_resolve(src).expect("the final raise makes every path terminal");
     }
 
     #[test]
@@ -33492,6 +33344,24 @@ def f() -> int:
     return x
 ";
         parse_check_resolve(src).expect("check should succeed");
+    }
+
+    #[test]
+    fn try_handler_binding_is_visible_during_generic_rewrite() {
+        let src = "\
+def identity[T](value: T) -> T:
+    return value
+try:
+    raise ValueError(\"bad\")
+except ValueError as error:
+    raise error from RuntimeError(\"cause\")
+else:
+    pass
+finally:
+    pass
+";
+        parse_check_resolve(src)
+            .expect("the validated except-as binding must remain visible during rewriting");
     }
 
     #[test]

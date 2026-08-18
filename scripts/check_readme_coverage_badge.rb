@@ -7,10 +7,8 @@
 # The README displays a Shields badge:
 #   [![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)]
 #
-# The CI workflow enforces 100% merged line and region coverage via
-# scripts/check_coverage_merged.py (D-171), which replaced the earlier
-# --fail-under-lines 100 --fail-under-regions 100 gate (D-014) because
-# llvm-cov's summary overcounts misses for generic functions.
+# The CI workflow enforces:
+#   cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
 #
 # This validator binds the badge's visible percentage to the CI
 # threshold so that a false badge (e.g. "101%" or "95%") is rejected
@@ -36,13 +34,9 @@ BADGE_PATTERN = /
   \((https:\/\/img\.shields\.io\/badge\/test%20coverage-(\d+)%25-[a-z]+)\)
 \]/x.freeze
 
-# The CI coverage gate pattern (D-171).
-# Matches the actual command line that invokes the merged-instantiation
-# coverage gate, not just a comment mention.
-COVERAGE_GATE_PATTERN = /run_isolated.*check_coverage_merged\.py/.freeze
-
-# The enforced coverage threshold (D-014 requirement, D-171 mechanism).
-ENFORCED_THRESHOLD = 100
+# The CI coverage gate pattern.
+# Matches: --fail-under-lines N
+FAIL_UNDER_LINES_PATTERN = /--fail-under-lines\s+(\d+)/.freeze
 
 # The CI badge pattern in README.md.
 # Matches: [![CI](https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg?branch=<branch>)](https://github.com/<owner>/<repo>/actions/workflows/ci.yml)
@@ -105,21 +99,33 @@ def check!
           "the URL says #{badge_url_pct}% — they must match"
   end
 
-  # --- Verify the CI coverage gate is present (D-171) ---
-  unless ci_text.match?(COVERAGE_GATE_PATTERN)
+  # --- Extract the enforced threshold from CI ---
+  ci_match = ci_text.match(FAIL_UNDER_LINES_PATTERN)
+  unless ci_match
     raise CoverageBadgeError,
-          "ci.yml must use scripts/check_coverage_merged.py as the " \
-          "coverage gate (D-171)"
+          "ci.yml must contain a --fail-under-lines threshold"
   end
 
-  ci_threshold = ENFORCED_THRESHOLD
+  ci_threshold = ci_match[1].to_i
 
   # --- Bind the badge to the CI threshold ---
   if badge_alt_pct != ci_threshold
     raise CoverageBadgeError,
           "README coverage badge says #{badge_alt_pct}% but CI enforces " \
-          "#{ci_threshold}% via scripts/check_coverage_merged.py (D-171) " \
-          "— the badge must match the enforced threshold"
+          "--fail-under-lines #{ci_threshold} — the badge must match the " \
+          "enforced threshold"
+  end
+
+  # --- Also verify --fail-under-regions matches ---
+  regions_match = ci_text.match(/--fail-under-regions\s+(\d+)/)
+  if regions_match
+    regions_threshold = regions_match[1].to_i
+    if regions_threshold != ci_threshold
+      raise CoverageBadgeError,
+            "CI --fail-under-lines (#{ci_threshold}) and " \
+            "--fail-under-regions (#{regions_threshold}) differ — " \
+            "the badge binds to a single threshold"
+    end
   end
 
   # --- Verify the badge links to docs/TESTING.md ---

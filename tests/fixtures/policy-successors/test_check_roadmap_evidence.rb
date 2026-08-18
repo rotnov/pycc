@@ -48,17 +48,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
   D211_COVERAGE_BADGE_BINDING_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent /
     "tests/fixtures/policy-successors/ci-d211.yml"
-  PY3147_ORACLE_WORKFLOW_FIXTURE =
-    Pathname(__dir__).parent /
-    "tests/fixtures/policy-successors/ci-python-3147.yml"
   COVERAGE_STEP_HEADER =
-    "      - name: Hard coverage gate — 100% lines + regions (D-014/D-171)"
+    "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
-    "# D-171: use merged-instantiation coverage gate instead of\n" \
-    "          # per-instantiation --fail-under-* summary, which overcounts misses\n" \
-    "          # for generic functions.  The 100% requirement (D-014) is unchanged.\n" \
-    "          run_isolated \"$TRUSTED_COV\" llvm-cov --workspace --json --output-path \"$ISOLATED_ROOT/tmp/cov.json\"\n" \
-    "          run_isolated python3 \"$GITHUB_WORKSPACE/scripts/check_coverage_merged.py\" \"$ISOLATED_ROOT/tmp/cov.json\""
+    "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
+    "--fail-under-lines 100 --fail-under-regions 100"
 
   def coverage_workflow(command = COVERAGE_COMMAND)
     <<~YAML
@@ -82,7 +76,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
               run: rustup component add llvm-tools-preview
             - name: Add x86_64-apple-darwin Rust target
               run: rustup target add x86_64-apple-darwin
-            - name: Hard coverage gate — 100% lines + regions (D-014/D-171)
+            - name: Hard coverage gate — 100% lines + regions (D-014)
               run: |
                 set -euo pipefail
                 LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
@@ -1063,20 +1057,18 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
-  # The checker activates before the workflow under D-103. Its exact self-test
-  # therefore accepts the old D211 live digest and the reviewed 3.14.7
-  # successor, but no third shape.
-  def test_tier1_workflow_authorization_is_in_the_python_3147_transition
-    live_digest = Digest::SHA256.hexdigest(
-      (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
-    )
-
-    assert_includes(
-      [
-        D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
-        PY3147_ORACLE_CI_WORKFLOW_SHA256
-      ],
-      live_digest
+  # ci.yml now matches D211 (Merge 2 of issue #211, activating the
+  # README coverage badge binding step) -- D100/D112/D114/D229/D199 remain
+  # in the accepted array below only because retiring them is a separate,
+  # later propose-then-activate round for check_roadmap_evidence.rb's own
+  # bytes (the same self-authorization boundary this whole array already
+  # exists to enforce).
+  def test_tier1_workflow_authorization_is_the_active_d211_digest
+    assert_equal(
+      D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
+      Digest::SHA256.hexdigest(
+        (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
+      )
     )
   end
 
@@ -1091,7 +1083,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # Issue #229 (Phase 3 activation): the D229 pages-performance digest
   # is retained audit evidence.  Issue #199 (Merge 2 activation): the
   # D199 pages-accessibility digest is now the live ci.yml shape.
-  def test_tier1_workflow_authorization_includes_staged_python_3147_oracle
+  def test_tier1_workflow_authorization_contains_exactly_d100_d112_d114_d229_d199_and_d211
     assert_equal(
       [
         D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
@@ -1099,8 +1091,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
         D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
         D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256,
         D199_PAGES_ACCESSIBILITY_CI_WORKFLOW_SHA256,
-        D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
-        PY3147_ORACLE_CI_WORKFLOW_SHA256
+        D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256
       ],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
@@ -1139,26 +1130,19 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_python_3147_transition_workflow_is_active_and_reviewed
+  def test_d211_coverage_badge_binding_workflow_is_active_and_reviewed
     assert_equal(
       D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
       Digest::SHA256.file(D211_COVERAGE_BADGE_BINDING_WORKFLOW_FIXTURE).hexdigest
     )
-    live_digest = Digest::SHA256.file(ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW).hexdigest
-    expected_fixture =
-      if live_digest == D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256
-        D211_COVERAGE_BADGE_BINDING_WORKFLOW_FIXTURE
-      else
-        PY3147_ORACLE_WORKFLOW_FIXTURE
-      end
-    assert_includes(
-      [
-        D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
-        PY3147_ORACLE_CI_WORKFLOW_SHA256
-      ],
-      live_digest
+    assert_equal(
+      D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW).hexdigest
     )
-    assert_equal expected_fixture.read, ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
+    assert_equal(
+      D211_COVERAGE_BADGE_BINDING_WORKFLOW_FIXTURE.read,
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
+    )
     assert validate_source_aware_perf_gate_lifecycle(
       ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read,
       ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.to_s
@@ -1194,8 +1178,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # (`COVERAGE_SCRIPT`/`TRUSTED_COVERAGE_STEPS`) must no longer be accepted
   # alongside it.
   def test_coverage_gate_authorization_contains_only_active_d91
-    assert_equal([D91_COVERAGE_SCRIPT, D171_COVERAGE_SCRIPT], REVIEWED_COVERAGE_SCRIPTS)
-    assert_equal([D91_TRUSTED_COVERAGE_STEPS, D171_TRUSTED_COVERAGE_STEPS], REVIEWED_TRUSTED_COVERAGE_STEPS)
+    assert_equal([D91_COVERAGE_SCRIPT], REVIEWED_COVERAGE_SCRIPTS)
+    assert_equal([D91_TRUSTED_COVERAGE_STEPS], REVIEWED_TRUSTED_COVERAGE_STEPS)
   end
 
   # D-090's own fixture is gone: it was staged but never activated, and
@@ -3334,24 +3318,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_live_ci_yml_is_an_exact_python_3147_transition_shape
+  def test_d211_coverage_badge_binding_workflow_is_the_live_ci_yml
+    # The D211 fixture must match the live ci.yml (Merge 2 activation).
     live_digest = Digest::SHA256.file(
       Pathname(__dir__).parent / ".github/workflows/ci.yml"
     ).hexdigest
-    assert_includes(
-      [
-        D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256,
-        PY3147_ORACLE_CI_WORKFLOW_SHA256
-      ],
-      live_digest
-    )
-  end
-
-  def test_python_3147_oracle_workflow_fixture_is_reviewed
-    staged_digest = Digest::SHA256.file(PY3147_ORACLE_WORKFLOW_FIXTURE).hexdigest
-
-    assert_equal PY3147_ORACLE_CI_WORKFLOW_SHA256, staged_digest
-    assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S, staged_digest
+    assert_equal D211_COVERAGE_BADGE_BINDING_CI_WORKFLOW_SHA256, live_digest
   end
 
   def test_d199_pages_accessibility_workflow_is_not_the_live_ci_yml

@@ -331,7 +331,7 @@ a stop condition, not a reason for a third identical attempt.
 
 As each round's verdicts land, append every finding — fixed and refuted alike — to
 `.harden/findings/issue-<N>.jsonl`, one JSON line per finding per round, append-only
-(schema and rationale: `.agents/skills/harden/references/batch.md`). This is collection
+(schema and rationale: `.claude/skills/harden/references/batch.md`). This is collection
 only and must not interrupt the loop: refuted findings carry their refutation in `note`,
 because they accumulate into reviewer-error classes the batch pass below routes to the
 reviewer's own artefact.

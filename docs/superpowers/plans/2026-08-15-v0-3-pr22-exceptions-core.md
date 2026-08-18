@@ -3,11 +3,11 @@
 **Issue:** [#540](https://github.com/rotnov/pycc/issues/540) (Part 1 of #382)
 **Milestone:** v0.3 — classes & pattern matching
 **Design spec:** `docs/superpowers/specs/2026-08-06-v0-3-classes-pattern-matching-design.md` §2
-**Decision:** D-172 (supersedes D-005)
+**Decision:** D-173 (supersedes D-005)
 
 ## Goal
 
-Implement the core exception handling mechanism: `try`/`except`/`finally`, `raise`, builtin exception types, and exception chains (`raise ... from`). Uses D-172's global exception state + explicit check-and-branch propagation.
+Implement the core exception handling mechanism: `try`/`except`/`finally`, `raise`, builtin exception types, and explicit exception causes (`raise ... from`). Uses D-173's per-thread runtime state plus explicit check-and-branch propagation.
 
 ## Architecture
 
@@ -33,9 +33,11 @@ pub struct PyExceptionObj {
     pub context: *mut PyExceptionObj, // implicit chain during handling
 }
 
-// Global exception state
-static mut EXCEPTION_ACTIVE: i8 = 0;
-static mut EXCEPTION_VALUE: *mut PyExceptionObj = std::ptr::null_mut();
+// Conceptual per-thread exception state (implemented with thread_local! + Cell)
+struct ExceptionState {
+    active: i8,
+    value: *mut PyExceptionObj,
+}
 ```
 
 Runtime functions:
@@ -46,7 +48,7 @@ Runtime functions:
 - `pycc_rt_exception_raise(obj: *mut PyExceptionObj)` — set flag + value
 - `pycc_rt_exception_raise_with_cause(obj: *mut PyExceptionObj, cause: *mut PyExceptionObj)`
 - `pycc_rt_exception_type_matches(obj: *mut PyExceptionObj, type_tag: u8) -> i8` — check if exception matches a type (considering inheritance)
-- `pycc_rt_exception_print_and_exit(obj: *mut PyExceptionObj)` — print traceback and exit(1)
+- `pycc_rt_exception_print_and_exit(obj: *mut PyExceptionObj)` — print type/message and exit(1)
 
 Convert existing panic paths to set exception flag:
 - `pycc_rt_int_floordiv` / `pycc_rt_int_floormod` / `pycc_rt_int_truediv`: zero divisor → set ZeroDivisionError instead of panicking
@@ -79,14 +81,14 @@ pub struct HirExceptHandler {
 }
 ```
 
-New `Ty` variant for exception types: reuse `Ty::Instance` with the class model from PR-15. Builtin exception classes are pre-declared in the type checker's class registry.
+Reuse `Ty::Instance` for typed handler bindings. Builtin exception names are recognized directly at `raise`/`except` sites rather than inserted into the user-class registry; a user function or class that shadows one of those names therefore fails closed instead of silently becoming a builtin exception.
 
 ### Layer 3: Type checking (`crates/pycc_types`)
 
-- Register builtin exception classes in the class registry: `Exception` (base), `ValueError`, `TypeError`, `KeyError`, `IndexError`, `ZeroDivisionError`, `RuntimeError` — all inheriting from `Exception`.
+- Recognize the builtin exception-name table at `raise`/`except` sites: `Exception` (root), `ValueError`, `TypeError`, `KeyError`, `IndexError`, `ZeroDivisionError`, and `RuntimeError`. Reject a shadowing user function/class in this thin slice.
 - `check_stmt` for `HirStmt::Try`: type-check body, handlers, orelse, finalbody. Handler's `exc_type` must be a subclass of `Exception`. The `as name` binding is available in the handler body.
 - `check_stmt` for `HirStmt::Raise`: `exc` must be an instance of `Exception` (or a subclass). `cause` must also be an `Exception` instance.
-- Track which functions can raise (a function can raise if it contains a `raise` statement, or calls a function that can raise, or contains an operation that can raise). This information flows to codegen for check-and-branch insertion.
+- Conservatively guard recursively evaluated expressions and emitted statements. This avoids an incomplete static "can raise" analysis in the thin slice and ensures a pending exception skips later effects.
 - Definite-assignment tracking through try/except/finally: a variable assigned in `try` is `Maybe` after the try block (the assignment may have been skipped due to an exception).
 
 ### Layer 4: MIR (`crates/pycc_mir`)
@@ -102,22 +104,24 @@ pub enum MirStmt {
         orelse: Vec<MirStmt>,
         finalbody: Vec<MirStmt>,
     },
-    Raise {
-        exc_type_tag: u8,
-        message: MirExpr,
-    },
+    Raise { exception: MirExceptionValue },
     RaiseFrom {
-        exc_type_tag: u8,
-        message: MirExpr,
-        cause_type_tag: u8,
-        cause_message: MirExpr,
+        exception: MirExceptionValue,
+        cause: MirExceptionValue,
     },
     Reraise,
 }
 
 pub struct MirExceptHandler {
     pub exc_type_tag: Option<u8>,  // None = catch all
+    pub binding_name: Option<String>,
+    pub binding_ty: Option<Ty>,
     pub body: Vec<MirStmt>,
+}
+
+pub enum MirExceptionValue {
+    Constructed { type_tag: u8, message: MirExpr },
+    Existing(MirExpr),
 }
 ```
 
@@ -131,13 +135,13 @@ The codegen for `try`/`except`/`finally` uses explicit basic blocks and check-an
 4. **Finally block**: runs in all exit paths (normal, exception caught, exception not caught). Implemented as a shared basic block that all exit paths branch to.
 5. **Raise**: allocate exception object, set global flag/value, jump to the current function's exception-exit block (or the nearest enclosing try's handler chain).
 
-For functions that can raise but don't have a try block: after each potentially-raising operation, check the flag and return early (propagating the exception to the caller).
+Every generated user function has an exceptional exit. It returns a neutral ABI value without clearing the pending state; the caller's expression guard transfers control before consuming that value or evaluating another effect.
 
 ## Implementation tasks
 
-1. **Runtime**: Add exception object, global state, and runtime functions to `pycc_rt`. Convert existing panic paths to set exception flag.
+1. **Runtime**: Add exception objects, per-thread pending state, and runtime functions to `pycc_rt`. Convert existing panic paths to set the exception flag.
 2. **HIR**: Add `Try`, `Raise` to `HirStmt`. Add `HirExceptHandler`. Update `lower_stmt` to handle `Stmt::Try` and `Stmt::Raise`.
-3. **Type checking**: Register builtin exception classes. Add `check_stmt` arms for `Try` and `Raise`. Track raise-capability for functions.
+3. **Type checking**: Recognize unshadowed builtin exception names. Add `check_stmt` arms for `Try` and `Raise`; conservatively validate all potentially effectful expression paths.
 4. **MIR**: Add `Try`, `Raise`, `RaiseFrom`, `Reraise` to `MirStmt`. Update `lower_stmt`.
 5. **Codegen**: Implement try/except/finally codegen with check-and-branch. Implement raise codegen. Insert exception checks after potentially-raising operations.
 6. **Tests**: Unit tests for each layer. Integration tests in `tests/issue_382_exceptions.rs`. Conformance fixture for PEP 409.
@@ -149,5 +153,7 @@ For functions that can raise but don't have a try block: after each potentially-
 - Exception messages are strings only (no arbitrary arguments).
 - No `except*` / ExceptionGroup (Part 3).
 - No `OSError` hierarchy, no `finally` restrictions, no `except A, B:` (Part 4).
-- `raise` with no argument (re-raise) only valid inside an except handler.
+- `raise` with no argument (re-raise) is only valid inside an except handler and uses lexical handler-local saved-exception slots, including nested handlers.
 - `else` block in try/except/else is supported.
+- Exception objects are leak-only in this thin slice.
+- Implicit `__context__`, `raise ... from None`, traceback frames, and deletion of an `except ... as name` binding after its handler are deferred.

@@ -1,8 +1,8 @@
 pub use ruff_python_ast::{
     Arguments, CmpOp, Comprehension, ConversionFlag, Decorator, ElifElseClause, ExceptHandler,
     ExceptHandlerExceptHandler, Expr, ExprBinOp, ExprBooleanLiteral, ExprCall, ExprCompare,
-    ExprContext, ExprDictComp, ExprFString, ExprListComp, ExprName, ExprNumberLiteral,
-    ExprSetComp, ExprSlice, ExprStringLiteral, ExprUnaryOp, Identifier, InterpolatedElement,
+    ExprContext, ExprDictComp, ExprFString, ExprListComp, ExprName, ExprNumberLiteral, ExprSetComp,
+    ExprSlice, ExprStringLiteral, ExprUnaryOp, Identifier, InterpolatedElement,
     InterpolatedStringElement, InterpolatedStringLiteralElement, MatchCase, ModModule, Number,
     Operator, ParameterWithDefault, Parameters, Pattern, PatternArguments, PatternKeyword,
     PatternMatchAs, PatternMatchClass, PatternMatchMapping, PatternMatchOr, PatternMatchSequence,

@@ -48,6 +48,527 @@ fn check_only(dir: &std::path::Path, src_name: &str, source: &str) -> (bool, Str
     (output.status.success(), combined)
 }
 
+#[test]
+fn direct_type_api_rejects_an_unknown_exception_handler() {
+    let hir = pycc_hir::HirModule {
+        items: vec![pycc_hir::HirItem::TopLevelStmt(pycc_hir::HirStmt::Try {
+            body: vec![],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("UnknownError".to_string()),
+                name: None,
+                body: vec![],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        })],
+        type_aliases: vec![],
+        imports: vec![],
+        class_defs: vec![],
+    };
+    let err = pycc_types::check(&hir).expect_err("unknown handlers must fail closed");
+    assert_eq!(err.code, "T0021");
+    assert!(err.message.contains("not a recognized exception class"));
+}
+
+#[test]
+fn direct_type_api_rewrites_every_try_and_raise_operand_path() {
+    use pycc_hir::{HirExceptHandler, HirExpr, HirItem, HirModule, HirStmt, Ty};
+
+    let builtin = |name: &str, message: &str| HirExpr::Call {
+        callee: name.to_string(),
+        args: vec![HirExpr::StringLiteral(message.to_string())],
+    };
+    let type_param = Ty::Param(Box::new("T".to_string()));
+    let identity = HirItem::Function {
+        name: "identity".to_string(),
+        params: vec![("value".to_string(), type_param.clone())],
+        return_ty: type_param,
+        body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
+    };
+    let hir = HirModule {
+        items: vec![
+            identity,
+            HirItem::TopLevelStmt(HirStmt::Try {
+                body: vec![HirStmt::Raise {
+                    exc: Some(builtin("ValueError", "body")),
+                    cause: None,
+                }],
+                handlers: vec![HirExceptHandler {
+                    exc_type: Some("ValueError".to_string()),
+                    name: Some("error".to_string()),
+                    body: vec![HirStmt::Raise {
+                        exc: Some(HirExpr::Name("error".to_string())),
+                        cause: Some(builtin("RuntimeError", "cause")),
+                    }],
+                }],
+                orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+                finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+            }),
+        ],
+        type_aliases: vec![],
+        imports: vec![],
+        class_defs: vec![],
+    };
+    pycc_types::check_and_resolve(&hir)
+        .expect("valid raise operands in every try suite must resolve successfully");
+}
+
+fn invalid_generic_class_instantiation() -> pycc_hir::HirExpr {
+    pycc_hir::HirExpr::GenericClassInstantiate {
+        class: "D".to_string(),
+        type_arg: pycc_hir::Ty::Int,
+        args: vec![],
+    }
+}
+
+fn generic_rewrite_fixture(
+    stmt: pycc_hir::HirStmt,
+    return_ty: pycc_hir::Ty,
+    return_expr: pycc_hir::HirExpr,
+    extra_params: Vec<(String, pycc_hir::Ty)>,
+) -> pycc_hir::HirModule {
+    use pycc_hir::{HirClassDef, HirItem, HirStmt, Ty};
+
+    let mut params = vec![("marker".to_string(), Ty::Param(Box::new("T".to_string())))];
+    params.extend(extra_params);
+    let producer = HirItem::Function {
+        name: "produce".to_string(),
+        params,
+        return_ty,
+        body: vec![HirStmt::Return(Some(return_expr))],
+    };
+    let d_init = HirItem::Function {
+        name: "D.__init__".to_string(),
+        params: vec![("self".to_string(), Ty::Instance(Box::new("D".to_string())))],
+        return_ty: Ty::None,
+        body: vec![HirStmt::Return(None)],
+    };
+    let d_class = HirClassDef {
+        name: "D".to_string(),
+        bases: vec![],
+        mro: vec!["D".to_string()],
+        attrs: vec![],
+        methods: vec![("__init__".to_string(), "D.__init__".to_string())],
+        properties: vec![],
+        static_methods: vec![],
+        class_methods: vec![],
+        type_param: None,
+        enum_members: vec![],
+        is_dataclass: false,
+        dataclass_fields: vec![],
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: vec![],
+        abstract_methods: vec![],
+        is_abstract: false,
+    };
+    pycc_hir::HirModule {
+        items: vec![d_init, producer, HirItem::TopLevelStmt(stmt)],
+        type_aliases: vec![],
+        imports: vec![],
+        class_defs: vec![("D".to_string(), d_class)],
+    }
+}
+
+fn assert_generic_rewrite_error(module: pycc_hir::HirModule) {
+    let err = pycc_types::check_and_resolve(&module)
+        .expect_err("a non-generic class subscription must fail during rewriting");
+    assert_eq!(err.code, "T0042");
+}
+
+#[test]
+fn direct_type_api_propagates_generic_rewrite_errors_from_structured_suites() {
+    use pycc_hir::{CompIter, HirExceptHandler, HirExpr, HirMatchCase, HirPattern, HirStmt, Ty};
+
+    let harmless = || HirStmt::ExprStmt(HirExpr::IntLiteral(0));
+    let invalid = || HirStmt::ExprStmt(invalid_generic_class_instantiation());
+    let fixture = |stmt| generic_rewrite_fixture(stmt, Ty::Int, HirExpr::IntLiteral(0), vec![]);
+    for stmt in [
+        HirStmt::Try {
+            body: vec![invalid()],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![],
+        },
+        HirStmt::Try {
+            body: vec![harmless()],
+            handlers: vec![HirExceptHandler {
+                exc_type: Some("ValueError".to_string()),
+                name: None,
+                body: vec![invalid()],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        },
+        HirStmt::Try {
+            body: vec![harmless()],
+            handlers: vec![],
+            orelse: vec![invalid()],
+            finalbody: vec![],
+        },
+        HirStmt::Try {
+            body: vec![harmless()],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![invalid()],
+        },
+        HirStmt::Match {
+            subject: HirExpr::BoolLiteral(true),
+            cases: vec![HirMatchCase {
+                pattern: HirPattern::Wildcard,
+                guard: None,
+                body: vec![invalid()],
+            }],
+        },
+    ] {
+        assert_generic_rewrite_error(fixture(stmt));
+    }
+
+    let invalid_int_call = HirExpr::Call {
+        callee: "produce".to_string(),
+        args: vec![invalid_generic_class_instantiation()],
+    };
+    assert_generic_rewrite_error(fixture(HirStmt::ListCompAssign {
+        target: "values".to_string(),
+        var: "item".to_string(),
+        iter: CompIter::Range {
+            start: invalid_int_call,
+            stop: HirExpr::IntLiteral(1),
+            step: HirExpr::IntLiteral(1),
+        },
+        cond: None,
+        elt: Box::new(HirExpr::Name("item".to_string())),
+    }));
+}
+
+#[test]
+fn direct_type_api_propagates_generic_rewrite_errors_from_raise_operands() {
+    use pycc_hir::{HirExceptHandler, HirExpr, HirStmt, Ty};
+
+    let invalid_message = HirExpr::Call {
+        callee: "produce".to_string(),
+        args: vec![invalid_generic_class_instantiation()],
+    };
+    assert_generic_rewrite_error(generic_rewrite_fixture(
+        HirStmt::Raise {
+            exc: Some(HirExpr::Call {
+                callee: "ValueError".to_string(),
+                args: vec![invalid_message],
+            }),
+            cause: None,
+        },
+        Ty::Str,
+        HirExpr::StringLiteral("message".to_string()),
+        vec![],
+    ));
+
+    let existing_error_call = || HirExpr::Call {
+        callee: "produce".to_string(),
+        args: vec![
+            invalid_generic_class_instantiation(),
+            HirExpr::Name("error".to_string()),
+        ],
+    };
+    let handler_fixture = |raised: HirExpr, cause: Option<HirExpr>| {
+        generic_rewrite_fixture(
+            HirStmt::Try {
+                body: vec![HirStmt::Raise {
+                    exc: Some(HirExpr::Call {
+                        callee: "ValueError".to_string(),
+                        args: vec![HirExpr::StringLiteral("primary".to_string())],
+                    }),
+                    cause: None,
+                }],
+                handlers: vec![HirExceptHandler {
+                    exc_type: Some("ValueError".to_string()),
+                    name: Some("error".to_string()),
+                    body: vec![HirStmt::Raise {
+                        exc: Some(raised),
+                        cause,
+                    }],
+                }],
+                orelse: vec![],
+                finalbody: vec![],
+            },
+            Ty::Instance(Box::new("ValueError".to_string())),
+            HirExpr::Name("saved".to_string()),
+            vec![(
+                "saved".to_string(),
+                Ty::Instance(Box::new("ValueError".to_string())),
+            )],
+        )
+    };
+    assert_generic_rewrite_error(handler_fixture(existing_error_call(), None));
+    assert_generic_rewrite_error(handler_fixture(
+        HirExpr::Name("error".to_string()),
+        Some(existing_error_call()),
+    ));
+}
+
+#[test]
+fn direct_type_api_rejects_bare_return_from_a_value_function() {
+    let hir = pycc_hir::HirModule {
+        items: vec![pycc_hir::HirItem::Function {
+            name: "broken".to_string(),
+            params: vec![],
+            return_ty: pycc_hir::Ty::Int,
+            body: vec![pycc_hir::HirStmt::Return(None)],
+        }],
+        type_aliases: vec![],
+        imports: vec![],
+        class_defs: vec![],
+    };
+    let err = pycc_types::check_and_resolve(&hir)
+        .expect_err("a bare return cannot satisfy a value-returning signature");
+    assert_eq!(err.code, "T0022");
+}
+
+#[test]
+fn direct_type_api_unrolls_enum_loops_nested_in_try() {
+    let source = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+try:
+    for color in Color:
+        x = x + color.value
+except ValueError:
+    pass
+";
+    let module = pycc_parser::parse(source).expect("the enum-in-try fixture must parse");
+    let hir = pycc_hir::lower_checked(&module).expect("the enum-in-try fixture must lower");
+    pycc_types::check_and_resolve(&hir)
+        .expect("enum loops nested in try suites must unroll through the public type API");
+}
+
+fn assert_raw_codegen_error(name: &str, stmt: pycc_mir::MirStmt, expected_message: &str) {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_raw_codegen_{name}_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mir = pycc_mir::MirModule {
+        items: vec![pycc_mir::MirItem::TopLevelStmt(stmt)],
+        class_defs: vec![],
+    };
+    let err = pycc_codegen::compile_to_object(&mir, &dir.join("invalid.o"), None, false)
+        .expect_err("invalid raw MIR must fail closed");
+    assert!(err.contains(expected_message), "unexpected error: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn raw_mir_exception_paths_are_checked_in_the_dependency_instance() {
+    use pycc_mir::{MirExceptionValue, MirExpr, MirStmt};
+
+    assert_raw_codegen_error(
+        "raise_message",
+        MirStmt::Raise {
+            exception: MirExceptionValue::Constructed {
+                type_tag: 1,
+                message: MirExpr::IntLiteral(42),
+            },
+        },
+        "raise message must be a string",
+    );
+    assert_raw_codegen_error(
+        "raise_cause",
+        MirStmt::RaiseFrom {
+            exception: MirExceptionValue::Constructed {
+                type_tag: 1,
+                message: MirExpr::StringLiteral("error".to_string()),
+            },
+            cause: MirExceptionValue::Constructed {
+                type_tag: 2,
+                message: MirExpr::IntLiteral(42),
+            },
+        },
+        "raise cause message must be a string",
+    );
+    assert_raw_codegen_error(
+        "existing_value",
+        MirStmt::Raise {
+            exception: MirExceptionValue::Existing(MirExpr::IntLiteral(42)),
+        },
+        "must be an exception instance",
+    );
+
+    for (name, nested) in [
+        (
+            "try_body",
+            pycc_mir::MirStmt::Try {
+                body: vec![undefined_void_call("missing_try_body")],
+                handlers: vec![],
+                orelse: vec![],
+                finalbody: vec![],
+            },
+        ),
+        (
+            "handler",
+            pycc_mir::MirStmt::Try {
+                body: vec![MirStmt::NoOp],
+                handlers: vec![pycc_mir::MirExceptHandler {
+                    exc_type_tag: Some(1),
+                    binding_name: None,
+                    binding_ty: None,
+                    body: vec![undefined_void_call("missing_handler")],
+                }],
+                orelse: vec![],
+                finalbody: vec![],
+            },
+        ),
+        (
+            "else",
+            pycc_mir::MirStmt::Try {
+                body: vec![MirStmt::NoOp],
+                handlers: vec![],
+                orelse: vec![undefined_void_call("missing_else")],
+                finalbody: vec![],
+            },
+        ),
+        (
+            "finally",
+            pycc_mir::MirStmt::Try {
+                body: vec![MirStmt::NoOp],
+                handlers: vec![],
+                orelse: vec![],
+                finalbody: vec![undefined_void_call("missing_finally")],
+            },
+        ),
+        (
+            "if_body",
+            MirStmt::If {
+                test: MirExpr::BoolLiteral(true),
+                body: vec![undefined_void_call("missing_if_body")],
+                orelse: vec![],
+            },
+        ),
+    ] {
+        assert_raw_codegen_error(name, nested, "missing_");
+    }
+
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_raw_codegen_bare_except_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mir = pycc_mir::MirModule {
+        items: vec![pycc_mir::MirItem::TopLevelStmt(MirStmt::Try {
+            body: vec![MirStmt::Raise {
+                exception: MirExceptionValue::Constructed {
+                    type_tag: 1,
+                    message: MirExpr::StringLiteral("error".to_string()),
+                },
+            }],
+            handlers: vec![pycc_mir::MirExceptHandler {
+                exc_type_tag: None,
+                binding_name: None,
+                binding_ty: None,
+                body: vec![MirStmt::NoOp],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        })],
+        class_defs: vec![],
+    };
+    pycc_codegen::compile_to_object(&mir, &dir.join("bare_except.o"), None, false)
+        .expect("a bare handler is valid raw MIR");
+
+    let mir = pycc_mir::MirModule {
+        items: vec![
+            pycc_mir::MirItem::Function {
+                name: "none_expr_through_finally".to_string(),
+                params: vec![],
+                return_ty: pycc_mir::Ty::None,
+                body: vec![MirStmt::Try {
+                    body: vec![MirStmt::Return(Some(MirExpr::Name {
+                        name: "None".to_string(),
+                        ty: pycc_mir::Ty::None,
+                    }))],
+                    handlers: vec![],
+                    orelse: vec![],
+                    finalbody: vec![MirStmt::NoOp],
+                }],
+            },
+            pycc_mir::MirItem::Function {
+                name: "bare_value_return_through_finally".to_string(),
+                params: vec![],
+                return_ty: pycc_mir::Ty::Int,
+                body: vec![MirStmt::Try {
+                    body: vec![MirStmt::Return(None)],
+                    handlers: vec![],
+                    orelse: vec![],
+                    finalbody: vec![MirStmt::NoOp],
+                }],
+            },
+            pycc_mir::MirItem::Function {
+                name: "statically_unreachable_match_tail".to_string(),
+                params: vec![],
+                return_ty: pycc_mir::Ty::None,
+                body: vec![MirStmt::Unreachable],
+            },
+        ],
+        class_defs: vec![],
+    };
+    pycc_codegen::compile_to_object(&mir, &dir.join("return_paths.o"), None, false)
+        .expect("raw return routing must remain valid in the dependency instance");
+
+    let invalid_top_level_return = pycc_mir::MirModule {
+        items: vec![pycc_mir::MirItem::TopLevelStmt(MirStmt::Return(None))],
+        class_defs: vec![],
+    };
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = pycc_codegen::compile_to_object(
+            &invalid_top_level_return,
+            &dir.join("invalid_top_level_return.o"),
+            None,
+            false,
+        );
+    }));
+    assert!(
+        panic.is_err(),
+        "raw top-level return must trip codegen's defensive frontend invariant"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn undefined_void_call(name: &str) -> pycc_mir::MirStmt {
+    pycc_mir::MirStmt::ExprStmt(pycc_mir::MirExpr::Call {
+        callee: name.to_string(),
+        args: vec![],
+        ty: pycc_mir::Ty::None,
+    })
+}
+
+#[test]
+fn a_terminal_try_with_match_and_handler_has_no_fallthrough() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_terminal_match_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "terminal_match.py",
+        "def choose(flag: bool) -> int:\n    try:\n        if flag:\n            match flag:\n                case _:\n                    return 1\n        else:\n            return 2\n    except ValueError:\n        return 3\nprint(choose(True))\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"1\n");
+}
+
+#[test]
+fn an_exhaustive_bool_match_inside_try_has_no_synthetic_fallthrough() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_382_exhaustive_match_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "exhaustive_match.py",
+        "def choose(flag: bool) -> int:\n    try:\n        match flag:\n            case True:\n                return 1\n            case False:\n                return 2\n    except ValueError:\n        return 3\nprint(choose(True))\nprint(choose(False))\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"1\n2\n");
+}
+
 // -- Caught ValueError --
 
 #[test]
@@ -108,6 +629,19 @@ fn else_body_runs_when_no_exception() {
     assert_eq!(out, b"body\nelse\n");
 }
 
+#[test]
+fn else_body_can_read_a_binding_created_by_the_successful_try_body() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_else_bind_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "else_bind.py",
+        "try:\n    x = 7\nexcept ValueError:\n    x = 9\nelse:\n    print(x)\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"7\n");
+}
+
 // -- Finally always runs --
 
 #[test]
@@ -136,19 +670,44 @@ fn finally_runs_after_handler() {
     assert_eq!(out, b"handler\nfinally\n");
 }
 
+#[test]
+fn an_exception_from_else_runs_finally_and_reaches_an_outer_handler() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_else_exc_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "else_exc.py",
+        "try:\n    try:\n        pass\n    except ValueError:\n        pass\n    else:\n        raise TypeError(\"else failed\")\n    finally:\n        print(\"cleanup\")\nexcept TypeError:\n    print(\"caught\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"cleanup\ncaught\n");
+}
+
+#[test]
+fn an_exception_from_handler_runs_finally_and_reaches_an_outer_handler() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_handler_exc_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "handler_exc.py",
+        "try:\n    try:\n        raise ValueError(\"body failed\")\n    except ValueError:\n        raise TypeError(\"handler failed\")\n    finally:\n        print(\"cleanup\")\nexcept TypeError:\n    print(\"caught\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"cleanup\ncaught\n");
+}
+
 // -- Uncaught exception exits with non-zero --
 
 #[test]
 fn uncaught_exception_exits_nonzero() {
     let dir = std::env::temp_dir().join(format!("pycc_382_uncaught_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let (ok, _out, err) = build_and_run(
-        &dir,
-        "uncaught.py",
-        "raise ValueError(\"uncaught\")\n",
-    );
+    let (ok, _out, err) = build_and_run(&dir, "uncaught.py", "raise ValueError(\"uncaught\")\n");
     assert!(!ok, "expected non-zero exit for uncaught exception");
-    assert!(err.contains("ValueError"), "stderr should contain ValueError: {err}");
+    assert!(
+        err.contains("ValueError"),
+        "stderr should contain ValueError: {err}"
+    );
 }
 
 // -- Division by zero is caught --
@@ -226,6 +785,22 @@ fn raise_from_builds_and_runs() {
     assert_eq!(out, b"caught\n");
 }
 
+#[test]
+fn exceptions_while_evaluating_raise_operands_are_not_overwritten() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_raise_operand_exception_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "raise_operand_exception.py",
+        "def fail_message() -> str:\n    raise RuntimeError(\"inner message\")\n    return \"not reached\"\n\ndef fail_cause() -> str:\n    raise KeyError(\"inner cause\")\n    return \"not reached\"\n\ntry:\n    raise ValueError(fail_message())\nexcept RuntimeError:\n    print(\"message preserved\")\n\ntry:\n    raise ValueError(\"outer\") from TypeError(fail_cause())\nexcept KeyError:\n    print(\"cause preserved\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"message preserved\ncause preserved\n");
+}
+
 // -- Bare re-raise propagates --
 
 #[test]
@@ -238,7 +813,10 @@ fn bare_reraise_propagates() {
         "try:\n    raise ValueError(\"orig\")\nexcept ValueError:\n    raise\n",
     );
     assert!(!ok, "expected non-zero exit for re-raised exception");
-    assert!(err.contains("ValueError"), "stderr should contain ValueError: {err}");
+    assert!(
+        err.contains("ValueError"),
+        "stderr should contain ValueError: {err}"
+    );
 }
 
 // -- except* is rejected (C0001) --
@@ -253,7 +831,10 @@ fn except_star_is_rejected() {
         "try:\n    pass\nexcept* ValueError:\n    pass\n",
     );
     assert!(!ok, "except* should be rejected");
-    assert!(combined.contains("C0001"), "should mention C0001: {combined}");
+    assert!(
+        combined.contains("C0001"),
+        "should mention C0001: {combined}"
+    );
 }
 
 // -- Bare raise outside handler is rejected --
@@ -262,12 +843,131 @@ fn except_star_is_rejected() {
 fn bare_raise_outside_handler_is_rejected() {
     let dir = std::env::temp_dir().join(format!("pycc_382_bare_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let (ok, _combined) = check_only(
-        &dir,
-        "bare.py",
-        "raise\n",
-    );
+    let (ok, _combined) = check_only(&dir, "bare.py", "raise\n");
     assert!(!ok, "bare raise outside handler should be rejected");
+}
+
+#[test]
+fn a_user_function_cannot_silently_shadow_a_builtin_exception_in_raise() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_shadowed_exception_fn_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "shadowed_exception_fn.py",
+        "def ValueError(message: str) -> int:\n    return 1\n\nraise ValueError(\"not builtin\")\n",
+    );
+    assert!(
+        !ok,
+        "a shadowing function must not become a builtin exception"
+    );
+    assert!(
+        combined.contains("T0021"),
+        "unexpected diagnostic: {combined}"
+    );
+}
+
+#[test]
+fn a_user_class_cannot_silently_shadow_a_builtin_exception_in_raise() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_shadowed_exception_class_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "shadowed_exception_class.py",
+        "class ValueError:\n    def __init__(self, message: str):\n        pass\n\nraise ValueError(\"not builtin\")\n",
+    );
+    assert!(!ok, "a shadowing class must not become a builtin exception");
+    assert!(
+        combined.contains("T0021"),
+        "unexpected diagnostic: {combined}"
+    );
+}
+
+#[test]
+fn a_value_binding_cannot_silently_shadow_a_builtin_exception_in_raise() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_shadowed_exception_value_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "shadowed_exception_value.py",
+        "ValueError = 1\nraise ValueError(\"not builtin\")\n",
+    );
+    assert!(!ok, "a value binding must not become a builtin exception");
+    assert!(
+        combined.contains("T0021"),
+        "unexpected diagnostic: {combined}"
+    );
+}
+
+#[test]
+fn a_function_local_cannot_silently_shadow_a_builtin_exception_in_raise() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_shadowed_exception_local_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "shadowed_exception_local.py",
+        "def fail() -> None:\n    raise ValueError(\"not builtin\")\n    ValueError = 1\n\nfail()\n",
+    );
+    assert!(!ok, "a local binding must not become a builtin exception");
+    assert!(
+        combined.contains("T0021"),
+        "unexpected diagnostic: {combined}"
+    );
+}
+
+#[test]
+fn a_value_binding_cannot_silently_shadow_a_builtin_exception_in_except() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_shadowed_exception_handler_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "shadowed_exception_handler.py",
+        "ValueError = 1\ntry:\n    raise RuntimeError(\"boom\")\nexcept ValueError:\n    pass\n",
+    );
+    assert!(
+        !ok,
+        "a value binding must not become a builtin handler type"
+    );
+    assert!(
+        combined.contains("T0021"),
+        "unexpected diagnostic: {combined}"
+    );
+}
+
+#[test]
+fn a_try_body_binding_cannot_silently_shadow_its_exception_handler_type() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_shadowed_exception_handler_from_body_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "shadowed_exception_handler_from_body.py",
+        "try:\n    ValueError = 1\n    raise RuntimeError(\"boom\")\nexcept ValueError:\n    pass\n",
+    );
+    assert!(
+        !ok,
+        "a try-body binding must not become a builtin handler type"
+    );
+    assert!(
+        combined.contains("T0021"),
+        "unexpected diagnostic: {combined}"
+    );
 }
 
 // -- Return in try body routes through finally --
@@ -294,7 +994,7 @@ fn except_as_binding_is_accessible() {
     let (ok, out, err) = build_and_run(
         &dir,
         "asbind.py",
-        "try:\n    raise ValueError(\"caught_msg\")\nexcept ValueError as e:\n    print(\"got it\")\n",
+        "try:\n    raise ValueError(\"caught_msg\")\nexcept ValueError as e:\n    saved = e\n    print(\"got it\")\n",
     );
     assert!(ok, "build/run failed: {err}");
     assert_eq!(out, b"got it\n");
@@ -312,7 +1012,10 @@ fn unknown_exception_type_in_handler_is_rejected() {
         "try:\n    pass\nexcept TypoError:\n    pass\n",
     );
     assert!(!ok, "unknown exception type should be rejected");
-    assert!(combined.contains("T0021"), "should mention T0021: {combined}");
+    assert!(
+        combined.contains("T0021"),
+        "should mention T0021: {combined}"
+    );
 }
 
 // -- Unmatched exception propagates to outer handler --
@@ -329,4 +1032,328 @@ fn unmatched_exception_propagates_to_outer_handler() {
     assert!(ok, "build/run failed: {err}");
     assert_eq!(out, b"outer handler\n");
 }
-// trigger
+
+// -- Exceptions cross user-function boundaries --
+
+#[test]
+fn explicit_raise_in_called_function_is_caught_by_caller() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_call_raise_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "call_raise.py",
+        "def fail() -> None:\n    raise ValueError(\"from callee\")\n\ntry:\n    fail()\nexcept ValueError:\n    print(\"caught caller\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught caller\n");
+}
+
+#[test]
+fn a_value_returning_function_may_terminate_only_by_raising() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_raise_int_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "raise_int.py",
+        "def fail() -> int:\n    raise ValueError(\"from value callee\")\n\ntry:\n    x = fail()\nexcept ValueError:\n    print(\"caught value callee\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught value callee\n");
+}
+
+#[test]
+fn a_value_function_with_a_raising_try_finally_cannot_fall_through() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_382_raise_finally_int_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "raise_finally_int.py",
+        "def fail() -> int:\n    try:\n        raise ValueError(\"from try\")\n    finally:\n        print(\"cleanup\")\n\ntry:\n    x = fail()\nexcept ValueError:\n    print(\"caught value callee\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"cleanup\ncaught value callee\n");
+}
+
+#[test]
+fn a_generic_call_inside_an_exception_message_is_monomorphized() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_raise_generic_message_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "raise_generic_message.py",
+        "def identity[T](x: T) -> T:\n    return x\n\ndef fail() -> int:\n    raise ValueError(identity(\"nested message\"))\n\ntry:\n    x = fail()\nexcept ValueError:\n    print(\"caught generic message\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught generic message\n");
+}
+
+#[test]
+fn nested_finally_blocks_preserve_a_value_return() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_nested_finally_value_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "nested_finally_value.py",
+        "def value() -> int:\n    try:\n        try:\n            return 7\n        finally:\n            print(\"inner\")\n    finally:\n        print(\"outer\")\n\nprint(value())\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"inner\nouter\n7\n");
+}
+
+#[test]
+fn nested_finally_blocks_preserve_a_bare_none_return() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_nested_finally_none_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "nested_finally_none.py",
+        "def finish() -> None:\n    try:\n        try:\n            return\n        finally:\n            print(\"inner\")\n    finally:\n        print(\"outer\")\n\nfinish()\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"inner\nouter\n");
+}
+
+#[test]
+fn a_none_expression_return_routes_through_finally() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_382_none_expr_finally_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "none_expr_finally.py",
+        "def side_effect() -> None:\n    print(\"value\")\n\ndef finish() -> None:\n    try:\n        return side_effect()\n    finally:\n        print(\"cleanup\")\n\nfinish()\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"value\ncleanup\n");
+}
+
+#[test]
+fn runtime_exception_in_called_function_is_caught_by_caller() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_call_runtime_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "call_runtime.py",
+        "def fail() -> None:\n    x = 1 // 0\n    print(\"must not run\")\n\ntry:\n    fail()\nexcept ZeroDivisionError:\n    print(\"caught caller\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught caller\n");
+}
+
+// -- An exception transfers control immediately --
+
+#[test]
+fn runtime_exception_skips_remaining_try_body() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_skip_try_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "skip_try.py",
+        "try:\n    x = 1 // 0\n    print(\"must not run\")\nexcept ZeroDivisionError:\n    print(\"caught\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught\n");
+}
+
+#[test]
+fn runtime_exception_skips_remaining_nested_suite() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_skip_nested_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "skip_nested.py",
+        "try:\n    if True:\n        x = 1 // 0\n        print(\"must not run\")\nexcept ZeroDivisionError:\n    print(\"caught\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught\n");
+}
+
+#[test]
+fn failed_assignment_does_not_overwrite_its_target() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_atomic_assign_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "atomic_assign.py",
+        "x = 5\ntry:\n    x = 1 // 0\nexcept ZeroDivisionError:\n    print(x)\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"5\n");
+}
+
+#[test]
+fn failed_print_argument_produces_no_partial_output() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_atomic_print_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "atomic_print.py",
+        "try:\n    print(1 // 0)\nexcept ZeroDivisionError:\n    print(\"caught\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught\n");
+}
+
+#[test]
+fn failed_condition_does_not_enter_either_branch() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_condition_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "condition.py",
+        "try:\n    if 1 // 0:\n        print(\"must not run\")\n    else:\n        print(\"must not run either\")\nexcept ZeroDivisionError:\n    print(\"caught\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught\n");
+}
+
+#[test]
+fn failed_condition_does_not_mutate_in_the_selected_branch() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_382_condition_effect_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "condition_effect.py",
+        "xs = [1]\ntry:\n    if 1 // 0:\n        xs.append(2)\n    else:\n        xs.append(3)\nexcept ZeroDivisionError:\n    print(len(xs))\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"1\n");
+}
+
+#[test]
+fn failed_left_operand_skips_the_right_operand() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_operand_order_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "operand_order.py",
+        "def side_effect() -> int:\n    print(\"must not run\")\n    return 2\n\ntry:\n    x = (1 // 0) + side_effect()\nexcept ZeroDivisionError:\n    print(\"caught\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught\n");
+}
+
+#[test]
+fn uncaught_failed_left_operand_skips_the_right_operand_at_top_level() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_top_operand_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "top_operand.py",
+        "def side_effect() -> int:\n    print(\"must not run\")\n    return 2\n\nx = (1 // 0) + side_effect()\n",
+    );
+    assert!(!ok, "expected the uncaught exception to exit non-zero");
+    assert!(
+        out.is_empty(),
+        "right operand ran after the exception: {out:?}"
+    );
+    assert!(
+        err.contains("ZeroDivisionError"),
+        "unexpected stderr: {err}"
+    );
+}
+
+#[test]
+fn failed_return_expression_is_caught_before_return_commits() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_return_expr_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "return_expr.py",
+        "def value() -> int:\n    try:\n        return 1 // 0\n    except ZeroDivisionError:\n        return 7\n    return 9\n\nprint(value())\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"7\n");
+}
+
+#[test]
+fn nested_handler_does_not_replace_outer_bare_reraise_value() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_nested_reraise_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "nested_reraise.py",
+        "try:\n    try:\n        raise ValueError(\"outer\")\n    except ValueError:\n        try:\n            raise TypeError(\"inner\")\n        except TypeError:\n            pass\n        raise\nexcept ValueError:\n    print(\"outer preserved\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"outer preserved\n");
+}
+
+#[test]
+fn raising_an_except_binding_preserves_its_exception_type() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_raise_binding_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "raise_binding.py",
+        "try:\n    try:\n        raise ValueError(\"original\")\n    except ValueError as e:\n        raise e\nexcept ValueError:\n    print(\"type preserved\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"type preserved\n");
+}
+
+#[test]
+fn raise_from_an_except_binding_preserves_the_primary_exception_type() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_382_raise_from_binding_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "raise_from_binding.py",
+        "try:\n    try:\n        raise ValueError(\"original\")\n    except ValueError as e:\n        raise e from TypeError(\"cause\")\nexcept ValueError:\n    print(\"primary preserved\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"primary preserved\n");
+}
+
+#[test]
+fn exception_in_finally_overrides_pending_return() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_finally_raise_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "finally_raise.py",
+        "def fail() -> int:\n    try:\n        return 1\n    finally:\n        raise ValueError(\"override\")\n    return 2\n\ntry:\n    x = fail()\nexcept ValueError:\n    print(\"caught override\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught override\n");
+}
+
+#[test]
+fn finally_runs_while_an_unmatched_exception_is_propagating() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_finally_pending_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "finally_pending.py",
+        "try:\n    try:\n        raise ValueError(\"pending\")\n    finally:\n        print(\"cleanup\")\nexcept ValueError:\n    print(\"caught\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"cleanup\ncaught\n");
+}
+
+#[test]
+fn return_in_finally_suppresses_a_pending_exception() {
+    let dir = std::env::temp_dir().join(format!("pycc_382_finally_return_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "finally_return.py",
+        "def value() -> int:\n    try:\n        raise ValueError(\"suppressed\")\n    finally:\n        return 7\n    return 9\n\nprint(value())\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"7\n");
+}

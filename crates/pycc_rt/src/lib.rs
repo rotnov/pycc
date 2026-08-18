@@ -30,7 +30,19 @@
 
 use std::cell::Cell;
 
+mod exception;
 mod instance;
+
+#[cfg(not(test))]
+pub use exception::pycc_rt_exception_print_and_exit;
+use exception::raise_builtin;
+pub use exception::{
+    EXCEPTION_TYPE_EXCEPTION, EXCEPTION_TYPE_INDEX_ERROR, EXCEPTION_TYPE_KEY_ERROR,
+    EXCEPTION_TYPE_RUNTIME_ERROR, EXCEPTION_TYPE_TYPE_ERROR, EXCEPTION_TYPE_VALUE_ERROR,
+    EXCEPTION_TYPE_ZERO_DIV_ERROR, PyExceptionObj, pycc_rt_exception_active,
+    pycc_rt_exception_alloc, pycc_rt_exception_clear, pycc_rt_exception_raise,
+    pycc_rt_exception_raise_with_cause, pycc_rt_exception_type_matches,
+};
 
 fn format_i64_line(value: i64) -> String {
     format!("{value}\n")
@@ -381,7 +393,7 @@ fn int_floordiv(a: i64, b: i64) -> i64 {
     let a = require_inline_int(a, "dividing");
     let b = require_inline_int(b, "dividing");
     if b == 0 {
-        // D-172: set the global exception flag instead of panicking.
+        // D-173: set the pending exception flag instead of panicking.
         // Returns a sentinel `0` (tagged smallint 0); the caller's
         // generated code checks `pycc_rt_exception_active()` after this
         // call and branches to the exception handler before using the
@@ -424,7 +436,7 @@ fn int_floormod(a: i64, b: i64) -> i64 {
     let a = require_inline_int(a, "computing the modulo of");
     let b = require_inline_int(b, "computing the modulo of");
     if b == 0 {
-        // D-172: set the global exception flag instead of panicking.
+        // D-173: set the pending exception flag instead of panicking.
         raise_builtin(EXCEPTION_TYPE_ZERO_DIV_ERROR, "integer modulo by zero");
         return tag_smallint(0);
     }
@@ -647,12 +659,12 @@ pub extern "C" fn pycc_rt_int_untag_checked(tagged: i64) -> i64 {
 }
 
 /// Python true division rejects both positive and negative zero divisors.
-/// D-172 (#382): a zero divisor now sets the global exception state and
+/// D-173 (#382): a zero divisor now sets the pending exception state and
 /// returns 0.0 instead of panicking. Generated code checks
 /// `pycc_rt_exception_active()` after this call.
 fn float_div(a: f64, b: f64) -> f64 {
     if b == 0.0 {
-        // D-172: set the global exception flag instead of panicking.
+        // D-173: set the pending exception flag instead of panicking.
         raise_builtin(EXCEPTION_TYPE_ZERO_DIV_ERROR, "float division by zero");
         return 0.0;
     }
@@ -669,8 +681,11 @@ pub extern "C" fn pycc_rt_float_div(a: f64, b: f64) -> f64 {
 /// naive `(a / b).floor()` for values such as `1.0 // 0.1`.
 fn float_divmod(a: f64, b: f64) -> (f64, f64) {
     if b == 0.0 {
-        // D-172: set the global exception flag instead of panicking.
-        raise_builtin(EXCEPTION_TYPE_ZERO_DIV_ERROR, "float floor division or modulo by zero");
+        // D-173: set the pending exception flag instead of panicking.
+        raise_builtin(
+            EXCEPTION_TYPE_ZERO_DIV_ERROR,
+            "float floor division or modulo by zero",
+        );
         return (0.0, 0.0);
     }
 
@@ -1183,7 +1198,7 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
     let items = list.items.take();
     let len = items.len();
     if index < 0 || index as usize >= len {
-        // D-172: set the global exception flag instead of panicking.
+        // D-173: set the pending exception flag instead of panicking.
         // Restore the payload before returning (not required for
         // correctness in single-shot FFI usage, but cheap insurance).
         list.items.set(items);
@@ -1196,8 +1211,8 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
 }
 
 /// Reads the element at `index` (Python's `list[index]`, D-105's v0.2
-/// `list[int]` slice). Sets the global `IndexError` exception flag on an
-/// out-of-range index (D-172) and returns a sentinel `0`; the caller's
+/// `list[int]` slice). Sets the pending `IndexError` exception flag on an
+/// out-of-range index (D-173) and returns a sentinel `0`; the caller's
 /// generated code checks the flag after this call.
 ///
 /// Known v0.2 scope cut: negative indices are not supported. Real Python
@@ -1461,14 +1476,14 @@ fn dict_get(dict: &PyDictObj, key: *mut PyStrObj) -> i64 {
         .map(|(_, v)| *v);
     dict.entries.set(entries);
     found.unwrap_or_else(|| {
-        // D-172: set the global exception flag instead of panicking.
+        // D-173: set the pending exception flag instead of panicking.
         raise_builtin(EXCEPTION_TYPE_KEY_ERROR, "dict key not found");
         tag_smallint(0)
     })
 }
 
-/// Linear-scan lookup (D-121). Sets the global `KeyError` exception flag
-/// if no stored key compares equal to `key` (D-172) and returns a sentinel
+/// Linear-scan lookup (D-121). Sets the pending `KeyError` exception flag
+/// if no stored key compares equal to `key` (D-173) and returns a sentinel
 /// `0`; the caller's generated code checks the flag after this call. The
 /// exception message is `"dict key not found"`.
 ///
@@ -1769,239 +1784,6 @@ pub extern "C" fn pycc_rt_name_error(name: *const std::os::raw::c_char) -> ! {
     name_error(name)
 }
 
-// ---------------------------------------------------------------------------
-// Exception infrastructure (D-172, PR-22 Part 1 of #382/#540)
-//
-// Global exception state + explicit check-and-branch propagation, not native
-// unwinding. See `docs/decisions/D-172-exception-propagation-via-global-state-
-// superseding-d-005.md` for the full rationale.
-// ---------------------------------------------------------------------------
-
-/// Exception type tags (compile-time known, matching the class hierarchy).
-/// These match the tags the codegen emits for `raise`/`except` type checks.
-pub const EXCEPTION_TYPE_EXCEPTION: u8 = 0;
-pub const EXCEPTION_TYPE_VALUE_ERROR: u8 = 1;
-pub const EXCEPTION_TYPE_TYPE_ERROR: u8 = 2;
-pub const EXCEPTION_TYPE_KEY_ERROR: u8 = 3;
-pub const EXCEPTION_TYPE_INDEX_ERROR: u8 = 4;
-pub const EXCEPTION_TYPE_ZERO_DIV_ERROR: u8 = 5;
-pub const EXCEPTION_TYPE_RUNTIME_ERROR: u8 = 6;
-
-/// Exception object (heap-allocated, never freed -- leak-only, matching
-/// `PyIntListObj`/`PyDictObj`/`PyIntSetObj`'s own accepted D-107/D-124
-/// leak-only policy). `pub` only so it can appear in `extern "C"` function
-/// signatures (the `private_interfaces` lint); fields stay private.
-pub struct PyExceptionObj {
-    pub type_tag: u8,
-    pub message: *mut PyStrObj,
-    /// `raise ... from cause`: the explicitly-chained cause exception.
-    pub cause: *mut PyExceptionObj,
-    /// Implicit chain during handling (the exception being handled when a
-    /// new one is raised). Not yet wired by this PR's scope.
-    pub context: *mut PyExceptionObj,
-}
-
-/// Global exception state: an active flag and a pointer to the current
-/// exception object. When `EXCEPTION_ACTIVE` is non-zero, an exception is
-/// in flight and `EXCEPTION_VALUE` points to its heap-allocated object.
-static mut EXCEPTION_ACTIVE: i8 = 0;
-static mut EXCEPTION_VALUE: *mut PyExceptionObj = std::ptr::null_mut();
-
-/// Reads the global exception-active flag. Returns non-zero if an exception
-/// is currently in flight, zero otherwise. Generated code calls this after
-/// each potentially-raising operation to check whether to branch to an
-/// exception handler.
-#[unsafe(no_mangle)]
-pub extern "C" fn pycc_rt_exception_active() -> i8 {
-    // SAFETY: single-threaded access (pycc-generated programs are
-    // single-threaded), no concurrent mutation.
-    unsafe { EXCEPTION_ACTIVE }
-}
-
-/// Reads the current exception value pointer. Returns null if no exception
-/// is active. Generated code calls this inside an except handler to
-/// retrieve the caught exception object.
-#[unsafe(no_mangle)]
-pub extern "C" fn pycc_rt_exception_value() -> *mut PyExceptionObj {
-    unsafe { EXCEPTION_VALUE }
-}
-
-/// Clears the global exception state (sets the flag to zero and the value
-/// to null). Generated code calls this when entering an except handler
-/// (the exception has been caught) or when re-raising after a finally
-/// block.
-#[unsafe(no_mangle)]
-pub extern "C" fn pycc_rt_exception_clear() {
-    unsafe {
-        EXCEPTION_ACTIVE = 0;
-        EXCEPTION_VALUE = std::ptr::null_mut();
-    }
-}
-
-/// Allocates a new exception object with the given type tag and message
-/// string. The message is adopted (not copied) -- the caller transfers
-/// ownership, matching `pycc_rt_dict_set`'s own key-adoption convention.
-/// The `cause` and `context` pointers are initialized to null.
-#[unsafe(no_mangle)]
-pub extern "C" fn pycc_rt_exception_alloc(
-    type_tag: u8,
-    message: *mut PyStrObj,
-) -> *mut PyExceptionObj {
-    let obj = Box::new(PyExceptionObj {
-        type_tag,
-        message,
-        cause: std::ptr::null_mut(),
-        context: std::ptr::null_mut(),
-    });
-    Box::into_raw(obj)
-}
-
-/// Sets the global exception flag and value. After this call,
-/// `pycc_rt_exception_active()` returns non-zero and
-/// `pycc_rt_exception_value()` returns `obj`. Generated code calls this
-/// for `raise ExceptionType(msg)`.
-#[unsafe(no_mangle)]
-pub extern "C" fn pycc_rt_exception_raise(obj: *mut PyExceptionObj) {
-    unsafe {
-        EXCEPTION_ACTIVE = 1;
-        EXCEPTION_VALUE = obj;
-    }
-}
-
-/// Sets the global exception flag and value, with an explicit cause chain
-/// (`raise ... from cause`). The cause is stored in the exception object's
-/// `cause` field. Generated code calls this for
-/// `raise ExceptionType(msg) from CauseType(cause_msg)`.
-///
-/// # Safety
-///
-/// `obj` must be a valid `PyExceptionObj` pointer or null. `cause` must be
-/// a valid `PyExceptionObj` pointer or null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pycc_rt_exception_raise_with_cause(
-    obj: *mut PyExceptionObj,
-    cause: *mut PyExceptionObj,
-) {
-    if !obj.is_null() {
-        unsafe { (*obj).cause = cause };
-    }
-    unsafe {
-        EXCEPTION_ACTIVE = 1;
-        EXCEPTION_VALUE = obj;
-    }
-}
-
-/// Checks whether an exception object's type matches `type_tag`, considering
-/// the builtin exception hierarchy: every exception type is a subclass of
-/// `Exception` (tag 0). Returns non-zero if the exception matches (either
-/// exact type or is a subclass of the queried type), zero otherwise.
-///
-/// The hierarchy is flat in this PR: `Exception` is the base, and every
-/// other builtin exception type (`ValueError`, `TypeError`, `KeyError`,
-/// `IndexError`, `ZeroDivisionError`, `RuntimeError`) is a direct subclass
-/// of `Exception`. So `except Exception` catches everything, while
-/// `except ValueError` catches only `ValueError`.
-///
-/// # Safety
-///
-/// `obj` must be a valid `PyExceptionObj` pointer or null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pycc_rt_exception_type_matches(
-    obj: *mut PyExceptionObj,
-    type_tag: u8,
-) -> i8 {
-    if obj.is_null() {
-        return 0;
-    }
-    let obj_tag = unsafe { (*obj).type_tag };
-    // `except Exception` (tag 0) catches every exception type.
-    if type_tag == EXCEPTION_TYPE_EXCEPTION {
-        return 1;
-    }
-    // Exact match.
-    if obj_tag == type_tag {
-        return 1;
-    }
-    0
-}
-
-/// Prints the exception's message to stderr and exits with code 1. Called
-/// by generated code at `main`'s top level when no try block caught the
-/// exception. The message format is `Exception: <message>\n`, matching
-/// CPython's own uncaught-exception output shape (simplified: no traceback,
-/// no exception class name beyond the fixed builtin names).
-///
-/// # Safety
-///
-/// `obj` must be a valid `PyExceptionObj` pointer or null.
-#[cfg(not(test))]
-fn exception_print_and_exit(obj: *mut PyExceptionObj) -> ! {
-    if obj.is_null() {
-        eprintln!("Exception");
-        std::process::exit(1);
-    }
-    let exc = unsafe { &*obj };
-    let type_name = match exc.type_tag {
-        EXCEPTION_TYPE_EXCEPTION => "Exception",
-        EXCEPTION_TYPE_VALUE_ERROR => "ValueError",
-        EXCEPTION_TYPE_TYPE_ERROR => "TypeError",
-        EXCEPTION_TYPE_KEY_ERROR => "KeyError",
-        EXCEPTION_TYPE_INDEX_ERROR => "IndexError",
-        EXCEPTION_TYPE_ZERO_DIV_ERROR => "ZeroDivisionError",
-        EXCEPTION_TYPE_RUNTIME_ERROR => "RuntimeError",
-        _ => "Exception",
-    };
-    if !exc.message.is_null() {
-        let msg_bytes = unsafe { (*exc.message).bytes() };
-        let msg_str = String::from_utf8_lossy(msg_bytes);
-        eprintln!("{type_name}: {msg_str}");
-    } else {
-        eprintln!("{type_name}");
-    }
-    std::process::exit(1);
-}
-
-/// Prints the exception's message to stderr and exits with code 1. Called
-/// by generated code at `main`'s top level when no try block caught the
-/// exception.
-///
-/// # Safety
-///
-/// `obj` must be a valid `PyExceptionObj` pointer or null.
-#[cfg(not(test))]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pycc_rt_exception_print_and_exit(obj: *mut PyExceptionObj) -> ! {
-    exception_print_and_exit(obj)
-}
-
-/// Allocates a `PyStrObj` from a raw byte slice, matching the test helper
-/// `new_pystr` but available to the non-test exception-raise paths below.
-/// Used by the converted panic paths (`int_floordiv`, `int_floormod`,
-/// `dict_get`, `int_list_get`) to construct the exception message.
-fn alloc_exception_message(msg: &str) -> *mut PyStrObj {
-    let bytes = msg.as_bytes();
-    let len = bytes.len();
-    let payload = if len <= 22 {
-        let mut buf = [0u8; 22];
-        buf[..len].copy_from_slice(bytes);
-        PyStrPayload::Inline(buf, len as u8)
-    } else {
-        PyStrPayload::Heap(bytes.into())
-    };
-    Box::into_raw(Box::new(PyStrObj {
-        rc: Cell::new(1),
-        payload,
-    }))
-}
-
-/// Helper: raises a builtin exception with a message string. Sets the
-/// global flag and value. Used by the converted panic paths.
-fn raise_builtin(type_tag: u8, msg: &str) {
-    let message = alloc_exception_message(msg);
-    let obj = pycc_rt_exception_alloc(type_tag, message);
-    pycc_rt_exception_raise(obj);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2122,7 +1904,7 @@ mod tests {
 
     #[test]
     fn pycc_rt_int_floordiv_by_zero_sets_exception_flag() {
-        // D-172: zero division now sets the global exception flag instead
+        // D-173: zero division now sets the pending exception flag instead
         // of panicking. Clear the flag first for test isolation.
         pycc_rt_exception_clear();
         let result = int_floordiv(tag_smallint(1), tag_smallint(0));
@@ -2434,7 +2216,7 @@ mod tests {
 
     #[test]
     fn float_div_rejects_a_zero_divisor() {
-        // D-172: float division by zero now sets the exception flag
+        // D-173: float division by zero now sets the exception flag
         // instead of panicking.
         pycc_rt_exception_clear();
         let result = float_div(1.0, -0.0);
@@ -2445,7 +2227,7 @@ mod tests {
 
     #[test]
     fn float_divmod_rejects_a_zero_divisor() {
-        // D-172: float floor division/modulo by zero now sets the
+        // D-173: float floor division/modulo by zero now sets the
         // exception flag instead of panicking.
         pycc_rt_exception_clear();
         let (q, r) = float_divmod(1.0, 0.0);
@@ -3004,7 +2786,7 @@ mod tests {
 
     #[test]
     fn int_list_get_out_of_range_sets_exception_flag() {
-        // D-172: out-of-range index now sets the global exception flag
+        // D-173: out-of-range index now sets the pending exception flag
         // instead of panicking.
         pycc_rt_exception_clear();
         unsafe {
@@ -3553,139 +3335,5 @@ mod tests {
             pycc_rt_int_set_incref(std::ptr::null_mut());
             pycc_rt_int_set_decref(std::ptr::null_mut());
         }
-    }
-
-    // -- Exception infrastructure tests (D-172, PR-22) --
-
-    #[test]
-    fn exception_active_is_zero_by_default() {
-        pycc_rt_exception_clear();
-        assert_eq!(pycc_rt_exception_active(), 0);
-    }
-
-    #[test]
-    fn exception_raise_sets_active_flag_and_value() {
-        pycc_rt_exception_clear();
-        let msg = new_pystr(b"test error");
-        let obj = pycc_rt_exception_alloc(EXCEPTION_TYPE_VALUE_ERROR, msg);
-        pycc_rt_exception_raise(obj);
-        assert_eq!(pycc_rt_exception_active(), 1);
-        assert_eq!(pycc_rt_exception_value(), obj);
-        pycc_rt_exception_clear();
-    }
-
-    #[test]
-    fn exception_clear_resets_flag_and_value() {
-        pycc_rt_exception_clear();
-        let msg = new_pystr(b"clear test");
-        let obj = pycc_rt_exception_alloc(EXCEPTION_TYPE_RUNTIME_ERROR, msg);
-        pycc_rt_exception_raise(obj);
-        assert_eq!(pycc_rt_exception_active(), 1);
-        pycc_rt_exception_clear();
-        assert_eq!(pycc_rt_exception_active(), 0);
-        assert!(pycc_rt_exception_value().is_null());
-    }
-
-    #[test]
-    fn exception_type_matches_exact_type() {
-        pycc_rt_exception_clear();
-        let msg = new_pystr(b"exact match");
-        let obj = pycc_rt_exception_alloc(EXCEPTION_TYPE_KEY_ERROR, msg);
-        assert_eq!(
-            unsafe { pycc_rt_exception_type_matches(obj, EXCEPTION_TYPE_KEY_ERROR) },
-            1
-        );
-        assert_eq!(
-            unsafe { pycc_rt_exception_type_matches(obj, EXCEPTION_TYPE_VALUE_ERROR) },
-            0
-        );
-        pycc_rt_exception_clear();
-    }
-
-    #[test]
-    fn exception_type_matches_exception_catches_all() {
-        pycc_rt_exception_clear();
-        let msg = new_pystr(b"base catch");
-        let obj = pycc_rt_exception_alloc(EXCEPTION_TYPE_INDEX_ERROR, msg);
-        // `except Exception` (tag 0) catches every exception type.
-        assert_eq!(
-            unsafe { pycc_rt_exception_type_matches(obj, EXCEPTION_TYPE_EXCEPTION) },
-            1
-        );
-        pycc_rt_exception_clear();
-    }
-
-    #[test]
-    fn exception_type_matches_on_null_returns_zero() {
-        assert_eq!(
-            unsafe { pycc_rt_exception_type_matches(std::ptr::null_mut(), EXCEPTION_TYPE_EXCEPTION) },
-            0
-        );
-    }
-
-    #[test]
-    fn exception_raise_with_cause_sets_cause_field() {
-        pycc_rt_exception_clear();
-        let cause_msg = new_pystr(b"the cause");
-        let cause = pycc_rt_exception_alloc(EXCEPTION_TYPE_VALUE_ERROR, cause_msg);
-        let exc_msg = new_pystr(b"the effect");
-        let exc = pycc_rt_exception_alloc(EXCEPTION_TYPE_RUNTIME_ERROR, exc_msg);
-        unsafe { pycc_rt_exception_raise_with_cause(exc, cause) };
-        assert_eq!(pycc_rt_exception_active(), 1);
-        assert_eq!(pycc_rt_exception_value(), exc);
-        assert_eq!(unsafe { (*exc).cause }, cause);
-        pycc_rt_exception_clear();
-    }
-
-    #[test]
-    fn exception_raise_with_cause_on_null_obj_does_not_crash() {
-        pycc_rt_exception_clear();
-        let cause_msg = new_pystr(b"cause");
-        let cause = pycc_rt_exception_alloc(EXCEPTION_TYPE_VALUE_ERROR, cause_msg);
-        // Passing null as `obj` should not dereference it.
-        unsafe { pycc_rt_exception_raise_with_cause(std::ptr::null_mut(), cause) };
-        assert_eq!(pycc_rt_exception_active(), 1);
-        pycc_rt_exception_clear();
-    }
-
-    #[test]
-    fn exception_alloc_initializes_cause_and_context_to_null() {
-        pycc_rt_exception_clear();
-        let msg = new_pystr(b"alloc test");
-        let obj = pycc_rt_exception_alloc(EXCEPTION_TYPE_TYPE_ERROR, msg);
-        assert!(unsafe { (*obj).cause }.is_null());
-        assert!(unsafe { (*obj).context }.is_null());
-        assert_eq!(unsafe { (*obj).type_tag }, EXCEPTION_TYPE_TYPE_ERROR);
-        pycc_rt_exception_clear();
-    }
-
-    #[test]
-    fn alloc_exception_message_creates_valid_pystr() {
-        let s = alloc_exception_message("hello world");
-        assert_eq!(unsafe { (*s).bytes() }, b"hello world");
-    }
-
-    #[test]
-    fn alloc_exception_message_creates_inline_for_short_strings() {
-        let s = alloc_exception_message("short");
-        assert_eq!(unsafe { (*s).bytes() }, b"short");
-    }
-
-    #[test]
-    fn alloc_exception_message_creates_heap_for_long_strings() {
-        let long_msg = "this is a very long exception message that exceeds 22 bytes";
-        let s = alloc_exception_message(long_msg);
-        assert_eq!(unsafe { (*s).bytes() }, long_msg.as_bytes());
-    }
-
-    #[test]
-    fn raise_builtin_sets_flag_and_correct_type_tag() {
-        pycc_rt_exception_clear();
-        raise_builtin(EXCEPTION_TYPE_ZERO_DIV_ERROR, "test zero div");
-        assert_eq!(pycc_rt_exception_active(), 1);
-        let obj = pycc_rt_exception_value();
-        assert!(!obj.is_null());
-        assert_eq!(unsafe { (*obj).type_tag }, EXCEPTION_TYPE_ZERO_DIV_ERROR);
-        pycc_rt_exception_clear();
     }
 }

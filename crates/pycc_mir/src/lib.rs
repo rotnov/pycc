@@ -1,4 +1,9 @@
 pub use pycc_hir::HirClassDef;
+mod exception;
+#[cfg(test)]
+use exception::lower_exception_value;
+pub use exception::{MirExceptHandler, MirExceptionValue};
+use exception::{lower_raise, resolve_exception_tag};
 use pycc_hir::{
     CompIter, FStringPart, HirExpr, HirItem, HirMatchCase, HirModule, HirPattern, HirStmt,
     eval_isinstance_single, eval_issubclass_single, extract_class_names, is_builtin_type_name,
@@ -367,6 +372,12 @@ pub enum MirStmt {
     /// nothing observable for either (confirmed empirically during PR-9
     /// planning: no store, no allocation, nothing an oracle diff could see).
     NoOp,
+    /// A continuation that the validated HIR proves cannot be reached. The
+    /// match lowerer uses this for the no-case fallback of an exhaustive
+    /// `match`: preserving the proof in MIR keeps later fallthrough analysis
+    /// aligned with the type checker instead of inventing a synthetic `NoOp`
+    /// path after all exhaustive alternatives failed.
+    Unreachable,
     If {
         test: MirExpr,
         body: Vec<MirStmt>,
@@ -487,37 +498,17 @@ pub enum MirStmt {
         orelse: Vec<MirStmt>,
         finalbody: Vec<MirStmt>,
     },
-    /// `raise ExceptionType("msg")` (PEP 3110, #382). `exc_type_tag` is
-    /// the resolved runtime exception type tag. `message` is the message
-    /// expression.
+    /// `raise <exception>` (PEP 3110, #382).
     Raise {
-        exc_type_tag: u8,
-        message: MirExpr,
+        exception: MirExceptionValue,
     },
-    /// `raise ExceptionType("msg") from CauseType("cause")` (PEP 409, #382).
-    /// Both the exception and its explicit cause are raised together.
+    /// `raise <exception> from <cause>` (PEP 409, #382).
     RaiseFrom {
-        exc_type_tag: u8,
-        message: MirExpr,
-        cause_type_tag: u8,
-        cause_message: MirExpr,
+        exception: MirExceptionValue,
+        cause: MirExceptionValue,
     },
     /// Bare `raise` (re-raise, #382). Only valid inside an except handler.
     Reraise,
-}
-
-/// A single `except` handler in a MIR `try` statement (PEP 3110, #382,
-/// PR-22 Part 1). `exc_type_tag` is the resolved runtime exception type
-/// tag, or `None` for a bare `except:` (catches all exceptions).
-/// `binding_name` is the optional `as` binding name (e.g. `e` in
-/// `except ValueError as e:`), carried from `HirExceptHandler.name` so
-/// the codegen can allocate a local slot for it and store the exception
-/// value there.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MirExceptHandler {
-    pub exc_type_tag: Option<u8>,
-    pub binding_name: Option<String>,
-    pub body: Vec<MirStmt>,
 }
 
 /// A comprehension's already-resolved iterable source (PR-12, D-117) --
@@ -1094,7 +1085,22 @@ fn lower_stmt(
             let handlers = handlers
                 .iter()
                 .map(|h| {
-                    let exc_type_tag = h.exc_type.as_deref().and_then(resolve_exception_tag);
+                    let exc_type_tag = h.exc_type.as_deref().map(|name| {
+                        resolve_exception_tag(name)
+                            .expect("pycc_types rejects unknown exception handler types before MIR")
+                    });
+                    if let (Some(exc_type), Some(name)) = (&h.exc_type, &h.name) {
+                        // The type checker binds `except T as name` only in
+                        // the handler's cloned environment. MIR maintains
+                        // its own type scopes, so record the same binding
+                        // before lowering expressions in the handler body.
+                        // A bare handler cannot have an `as` name in Python.
+                        bind(
+                            scopes,
+                            name.clone(),
+                            Ty::Instance(Box::new(exc_type.clone())),
+                        );
+                    }
                     let handler_body = h
                         .body
                         .iter()
@@ -1103,6 +1109,11 @@ fn lower_stmt(
                     MirExceptHandler {
                         exc_type_tag,
                         binding_name: h.name.clone(),
+                        binding_ty: h
+                            .name
+                            .as_ref()
+                            .zip(h.exc_type.as_ref())
+                            .map(|_| Ty::Instance(Box::new(h.exc_type.clone().unwrap()))),
                         body: handler_body,
                     }
                 })
@@ -1155,82 +1166,6 @@ fn lower_match(
     MirStmt::Seq(vec![assign, chain])
 }
 
-/// #382 (PR-22 Part 1): Resolves a builtin exception class name to its
-/// runtime type tag (matching `pycc_rt`'s `EXCEPTION_TYPE_*` constants).
-/// Returns `None` for unknown names (should not happen after type
-/// checking, but handled gracefully).
-fn resolve_exception_tag(name: &str) -> Option<u8> {
-    match name {
-        "Exception" => Some(0),
-        "ValueError" => Some(1),
-        "TypeError" => Some(2),
-        "KeyError" => Some(3),
-        "IndexError" => Some(4),
-        "ZeroDivisionError" => Some(5),
-        "RuntimeError" => Some(6),
-        _ => None,
-    }
-}
-
-/// #382 (PR-22 Part 1): Lowers a `raise` statement into MIR.
-/// - `raise ExceptionType("msg")` → `MirStmt::Raise { exc_type_tag, message }`
-/// - `raise ExceptionType("msg") from CauseType("cause")` → `MirStmt::RaiseFrom { ... }`
-/// - bare `raise` → `MirStmt::Reraise`
-fn lower_raise(
-    exc: &Option<HirExpr>,
-    cause: &Option<HirExpr>,
-    scopes: &mut [HashMap<String, Ty>],
-    classes: &HashMap<String, HirClassDef>,
-    current_class: Option<&str>,
-) -> MirStmt {
-    // Bare `raise` (re-raise).
-    if exc.is_none() {
-        return MirStmt::Reraise;
-    }
-    let exc_expr = exc.as_ref().unwrap();
-    // The exc expression should be `HirExpr::Call { callee: "ExceptionType", args: [msg] }`.
-    // Extract the type name and message.
-    let (exc_type_tag, message) = extract_exception_call(exc_expr, scopes, classes, current_class);
-    // Check for `from cause`.
-    if let Some(cause_expr) = cause {
-        let (cause_type_tag, cause_message) =
-            extract_exception_call(cause_expr, scopes, classes, current_class);
-        return MirStmt::RaiseFrom {
-            exc_type_tag,
-            message,
-            cause_type_tag,
-            cause_message,
-        };
-    }
-    MirStmt::Raise {
-        exc_type_tag,
-        message,
-    }
-}
-
-/// #382 (PR-22 Part 1): Extracts the type tag and message expression from
-/// a `HirExpr::Call { callee: "ExceptionType", args: [msg] }` expression.
-/// Falls back to tag 0 (Exception) and a string literal "unknown" if the
-/// shape doesn't match (should not happen after type checking).
-fn extract_exception_call(
-    expr: &HirExpr,
-    scopes: &mut [HashMap<String, Ty>],
-    classes: &HashMap<String, HirClassDef>,
-    current_class: Option<&str>,
-) -> (u8, MirExpr) {
-    if let HirExpr::Call { callee, args } = expr {
-        let tag = resolve_exception_tag(callee).unwrap_or(0);
-        let message = if let Some(msg_expr) = args.first() {
-            lower_expr(msg_expr, scopes, classes, current_class)
-        } else {
-            MirExpr::StringLiteral("unknown".to_string())
-        };
-        return (tag, message);
-    }
-    // Fallback: should not happen after type checking.
-    (0, MirExpr::StringLiteral("unknown".to_string()))
-}
-
 /// Builds the nested `if` chain for match cases. Each case's pattern
 /// produces a list of alternative condition-lists (any alternative's
 /// conditions all being true is sufficient); these are nested as `if`
@@ -1245,7 +1180,11 @@ fn lower_match_chain(
     current_class: Option<&str>,
 ) -> MirStmt {
     if cases.is_empty() {
-        return MirStmt::NoOp;
+        // `pycc_types::check` rejects every non-exhaustive match before MIR
+        // lowering (T0030), including guarded-only coverage. Reaching the
+        // end of the validated case chain is therefore statically
+        // impossible and must remain terminal in MIR.
+        return MirStmt::Unreachable;
     }
     let case = &cases[0];
     let rest = &cases[1..];
@@ -9200,12 +9139,9 @@ mod tests {
     /// Test helper: extract a `Raise` statement from a top-level MIR item,
     /// panicking if the item is not a `Raise`.  The panic arm is covered by
     /// `expect_top_level_raise_panics_on_non_raise`.
-    fn expect_top_level_raise(item: &MirItem) -> (&u8, &MirExpr) {
+    fn expect_top_level_raise(item: &MirItem) -> &MirExceptionValue {
         match item {
-            MirItem::TopLevelStmt(MirStmt::Raise {
-                exc_type_tag,
-                message,
-            }) => (exc_type_tag, message),
+            MirItem::TopLevelStmt(MirStmt::Raise { exception }) => exception,
             _ => panic!("expected Raise"),
         }
     }
@@ -9213,15 +9149,17 @@ mod tests {
     /// Test helper: extract a `RaiseFrom` statement from a top-level MIR item,
     /// panicking if the item is not a `RaiseFrom`.  The panic arm is covered
     /// by `expect_top_level_raise_from_panics_on_non_raise_from`.
-    fn expect_top_level_raise_from(item: &MirItem) -> (&u8, &u8, &MirExpr, &MirExpr) {
+    fn expect_top_level_raise_from(item: &MirItem) -> (&MirExceptionValue, &MirExceptionValue) {
         match item {
-            MirItem::TopLevelStmt(MirStmt::RaiseFrom {
-                exc_type_tag,
-                cause_type_tag,
-                message,
-                cause_message,
-            }) => (exc_type_tag, cause_type_tag, message, cause_message),
+            MirItem::TopLevelStmt(MirStmt::RaiseFrom { exception, cause }) => (exception, cause),
             _ => panic!("expected RaiseFrom"),
+        }
+    }
+
+    fn expect_constructed_exception(value: &MirExceptionValue) -> (&u8, &MirExpr) {
+        match value {
+            MirExceptionValue::Constructed { type_tag, message } => (type_tag, message),
+            MirExceptionValue::Existing(_) => panic!("expected constructed exception"),
         }
     }
 
@@ -9251,6 +9189,12 @@ mod tests {
     #[should_panic(expected = "expected RaiseFrom")]
     fn expect_top_level_raise_from_panics_on_non_raise_from() {
         expect_top_level_raise_from(&MirItem::TopLevelStmt(MirStmt::NoOp));
+    }
+
+    #[test]
+    #[should_panic(expected = "expected constructed exception")]
+    fn expect_constructed_exception_panics_on_an_existing_exception() {
+        expect_constructed_exception(&MirExceptionValue::Existing(MirExpr::IntLiteral(0)));
     }
 
     #[test]
@@ -9374,7 +9318,8 @@ mod tests {
             class_defs: Vec::new(),
         };
         let mir = build(&hir);
-        let (exc_type_tag, message) = expect_top_level_raise(&mir.items[0]);
+        let (exc_type_tag, message) =
+            expect_constructed_exception(expect_top_level_raise(&mir.items[0]));
         assert_eq!(*exc_type_tag, 1); // ValueError = 1
         expect_string_literal(message);
     }
@@ -9397,7 +9342,9 @@ mod tests {
             class_defs: Vec::new(),
         };
         let mir = build(&hir);
-        let (exc_type_tag, cause_type_tag, _, _) = expect_top_level_raise_from(&mir.items[0]);
+        let (exception, cause) = expect_top_level_raise_from(&mir.items[0]);
+        let (exc_type_tag, _) = expect_constructed_exception(exception);
+        let (cause_type_tag, _) = expect_constructed_exception(cause);
         assert_eq!(*exc_type_tag, 1); // ValueError = 1
         assert_eq!(*cause_type_tag, 2); // TypeError = 2
     }
@@ -9445,26 +9392,44 @@ mod tests {
             class_defs: Vec::new(),
         };
         let mir = build(&hir);
-        let (_, message) = expect_top_level_raise(&mir.items[0]);
+        let (_, message) = expect_constructed_exception(expect_top_level_raise(&mir.items[0]));
         assert_eq!(expect_string_literal(message), "unknown");
     }
 
     #[test]
-    fn lowers_raise_with_non_call_expr_uses_fallback() {
-        // A non-Call expression as the raise exc — should hit the fallback
-        // path in `extract_exception_call`.
-        let hir = HirModule {
-            items: vec![HirItem::TopLevelStmt(HirStmt::Raise {
-                exc: Some(HirExpr::Name("some_exc".to_string())),
-                cause: None,
-            })],
-            type_aliases: Vec::new(),
-            imports: Vec::new(),
-            class_defs: Vec::new(),
-        };
-        let mir = build(&hir);
-        let (exc_type_tag, message) = expect_top_level_raise(&mir.items[0]);
-        assert_eq!(*exc_type_tag, 0); // fallback tag
-        expect_string_literal(message);
+    fn lowers_existing_exception_value_without_replacing_it() {
+        let mut scopes = vec![HashMap::from([(
+            "some_exc".to_string(),
+            Ty::Instance(Box::new("ValueError".to_string())),
+        )])];
+        let value = lower_exception_value(
+            &HirExpr::Name("some_exc".to_string()),
+            &mut scopes,
+            &HashMap::new(),
+            None,
+        );
+        assert!(matches!(
+            value,
+            MirExceptionValue::Existing(MirExpr::Name {
+                name,
+                ty: Ty::Instance(class_name),
+            }) if name == "some_exc" && class_name.as_str() == "ValueError"
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_types rejects unknown exception handler types before MIR")]
+    fn an_unknown_exception_handler_cannot_silently_become_a_bare_handler() {
+        let hir = try_module(
+            vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+            vec![pycc_hir::HirExceptHandler {
+                exc_type: Some("TypoError".to_string()),
+                name: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+            }],
+            Vec::new(),
+            Vec::new(),
+        );
+        let _ = build(&hir);
     }
 }

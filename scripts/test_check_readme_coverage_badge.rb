@@ -47,9 +47,9 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
                  "README must have a coverage badge")
   end
 
-  def test_live_ci_has_coverage_gate
-    assert_match(/run_isolated.*check_coverage_merged\.py/, live_ci,
-                 "ci.yml must use scripts/check_coverage_merged.py as the coverage gate (D-171)")
+  def test_live_ci_has_fail_under_lines
+    assert_match(/--fail-under-lines\s+\d+/, live_ci,
+                 "ci.yml must have a --fail-under-lines threshold")
   end
 
   # --- Negative: badge percentage mismatches ---
@@ -82,15 +82,15 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
     refute_equal 0, status, "accepted badge where alt text and URL disagree"
   end
 
-  # --- Negative: CI gate removed ---
+  # --- Negative: CI threshold mismatch ---
 
-  def test_rejects_ci_without_coverage_gate
-    text = live_ci.gsub(
-      /check_coverage_merged\.py/,
-      "check_coverage_removed.py"
+  def test_rejects_ci_threshold_different_from_badge
+    text = live_ci.sub(
+      /--fail-under-lines 100/,
+      "--fail-under-lines 95"
     )
     status, = run_checker(live_readme, text)
-    refute_equal 0, status, "accepted CI without check_coverage_merged.py gate"
+    refute_equal 0, status, "accepted CI threshold 95 when badge says 100%"
   end
 
   # --- Negative: missing badge ---
@@ -115,15 +115,26 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
     refute_equal 0, status, "accepted badge linking to ROADMAP.md instead of TESTING.md"
   end
 
-  # --- Negative: coverage gate step removed ---
+  # --- Negative: missing CI threshold ---
 
-  def test_rejects_missing_coverage_gate_step
-    text = live_ci.gsub(
-      /run_isolated python3 "\$GITHUB_WORKSPACE\/scripts\/check_coverage_merged\.py"[^\n]*\n/,
-      ""
+  def test_rejects_missing_ci_threshold
+    text = live_ci.sub(
+      /--fail-under-lines 100/,
+      "--fail-under-lines"
     )
     status, = run_checker(live_readme, text)
-    refute_equal 0, status, "accepted ci.yml without the check_coverage_merged.py step"
+    refute_equal 0, status, "accepted ci.yml without --fail-under-lines value"
+  end
+
+  # --- Negative: lines and regions thresholds disagree ---
+
+  def test_rejects_lines_and_regions_thresholds_disagreeing
+    text = live_ci.sub(
+      /--fail-under-regions 100/,
+      "--fail-under-regions 95"
+    )
+    status, = run_checker(live_readme, text)
+    refute_equal 0, status, "accepted CI with lines=100 but regions=95"
   end
 
   # --- Negative: CI badge mutations (issue #211) ---

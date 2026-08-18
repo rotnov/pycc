@@ -2,10 +2,15 @@ use pycc_ast::{Expr, ModModule, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
 mod class;
+mod exception;
 mod expr;
 mod stmt;
 
 pub use class::{HirClassDef, PropertyDef, ProtocolMember};
+pub use exception::{
+    BUILTIN_EXCEPTION_CLASSES, HirExceptHandler, builtin_exception_parent,
+    is_builtin_exception_class,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -475,43 +480,6 @@ pub fn is_abc_base_name(name: &str) -> bool {
     name == "ABC"
 }
 
-/// #382 (PR-22 Part 1): Returns `true` if `name` is one of the builtin
-/// exception class names this compiler recognizes: `Exception`,
-/// `ValueError`, `TypeError`, `KeyError`, `IndexError`,
-/// `ZeroDivisionError`, `RuntimeError`. These are not user-defined classes
-/// in `class_defs` — they are registered as builtin class entries by
-/// `pycc_types`'s `register_builtin_exceptions` so that
-/// `raise ValueError("msg")` type-checks as a valid class instantiation
-/// and `except ValueError` resolves to a known exception type.
-pub fn is_builtin_exception_class(name: &str) -> bool {
-    matches!(
-        name,
-        "Exception"
-            | "ValueError"
-            | "TypeError"
-            | "KeyError"
-            | "IndexError"
-            | "ZeroDivisionError"
-            | "RuntimeError"
-    )
-}
-
-/// #382 (PR-22 Part 1): Returns the builtin exception class's parent
-/// class name, or `None` for `Exception` itself (the root). Every builtin
-/// exception except `Exception` inherits from `Exception`.
-pub fn builtin_exception_parent(name: &str) -> Option<&'static str> {
-    match name {
-        "Exception" => None,
-        "ValueError"
-        | "TypeError"
-        | "KeyError"
-        | "IndexError"
-        | "ZeroDivisionError"
-        | "RuntimeError" => Some("Exception"),
-        _ => None,
-    }
-}
-
 /// Computes the compile-time result of `isinstance(obj, target_class)`.
 ///
 /// `obj_ty` is the inferred static type of the object expression.
@@ -798,17 +766,6 @@ pub enum HirPattern {
 pub struct HirMatchCase {
     pub pattern: HirPattern,
     pub guard: Option<HirExpr>,
-    pub body: Vec<HirStmt>,
-}
-
-/// A single `except` handler in a `try` statement (PEP 3110, #382, PR-22
-/// Part 1). `exc_type` is the exception class name (e.g. `"ValueError"`) or
-/// `None` for a bare `except:`. `name` is the optional `as` binding name
-/// (e.g. `except ValueError as e:`). `body` is the handler's statement list.
-#[derive(Debug, Clone, PartialEq)]
-pub struct HirExceptHandler {
-    pub exc_type: Option<String>,
-    pub name: Option<String>,
     pub body: Vec<HirStmt>,
 }
 
@@ -5866,7 +5823,9 @@ mod tests {
 
     #[test]
     fn lowers_match_with_int_literal_pattern() {
-        let stmt = lower_match_stmt("x = 1\nmatch x:\n    case 1:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = 1\nmatch x:\n    case 1:\n        pass\n    case _:\n        pass\n",
+        );
         assert_eq!(
             stmt,
             HirStmt::Match {
@@ -5889,23 +5848,35 @@ mod tests {
 
     #[test]
     fn lowers_match_with_float_literal_pattern() {
-        let stmt = lower_match_stmt("x = 1.0\nmatch x:\n    case 2.5:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = 1.0\nmatch x:\n    case 2.5:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
-        assert_eq!(cases[0].pattern, HirPattern::Literal(HirExpr::FloatLiteral(2.5)));
+        assert_eq!(
+            cases[0].pattern,
+            HirPattern::Literal(HirExpr::FloatLiteral(2.5))
+        );
     }
 
     #[test]
     fn lowers_match_with_string_literal_pattern() {
-        let stmt = lower_match_stmt("x = \"hi\"\nmatch x:\n    case \"hi\":\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = \"hi\"\nmatch x:\n    case \"hi\":\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
-        assert_eq!(cases[0].pattern, HirPattern::Literal(HirExpr::StringLiteral("hi".to_string())));
+        assert_eq!(
+            cases[0].pattern,
+            HirPattern::Literal(HirExpr::StringLiteral("hi".to_string()))
+        );
     }
 
     #[test]
     fn lowers_match_with_singleton_true_pattern() {
-        let stmt = lower_match_stmt("x = True\nmatch x:\n    case True:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = True\nmatch x:\n    case True:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
         assert_eq!(cases[0].pattern, HirPattern::Singleton(true));
@@ -5913,7 +5884,9 @@ mod tests {
 
     #[test]
     fn lowers_match_with_singleton_false_pattern() {
-        let stmt = lower_match_stmt("x = False\nmatch x:\n    case False:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = False\nmatch x:\n    case False:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
         assert_eq!(cases[0].pattern, HirPattern::Singleton(false));
@@ -5921,7 +5894,9 @@ mod tests {
 
     #[test]
     fn lowers_match_with_none_singleton_pattern() {
-        let stmt = lower_match_stmt("def f() -> None:\n    pass\nmatch f():\n    case None:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "def f() -> None:\n    pass\nmatch f():\n    case None:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
         assert_eq!(cases[0].pattern, HirPattern::NoneSingleton);
@@ -5945,7 +5920,9 @@ mod tests {
 
     #[test]
     fn lowers_match_with_sequence_pattern() {
-        let stmt = lower_match_stmt("x = [1, 2]\nmatch x:\n    case [a, b]:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = [1, 2]\nmatch x:\n    case [a, b]:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
         assert_eq!(
@@ -5959,7 +5936,9 @@ mod tests {
 
     #[test]
     fn lowers_match_with_sequence_star_pattern() {
-        let stmt = lower_match_stmt("x = [1, 2]\nmatch x:\n    case [a, *rest]:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = [1, 2]\nmatch x:\n    case [a, *rest]:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
         assert_eq!(
@@ -5973,27 +5952,31 @@ mod tests {
 
     #[test]
     fn lowers_match_with_sequence_star_wildcard_pattern() {
-        let stmt = lower_match_stmt("x = [1, 2]\nmatch x:\n    case [a, *_]:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = [1, 2]\nmatch x:\n    case [a, *_]:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
         assert_eq!(
             cases[0].pattern,
-            HirPattern::SequenceStar(
-                vec![HirPattern::Capture("a".to_string())],
-                None,
-            )
+            HirPattern::SequenceStar(vec![HirPattern::Capture("a".to_string())], None,)
         );
     }
 
     #[test]
     fn lowers_match_with_mapping_pattern() {
-        let stmt = lower_match_stmt("x = {\"k\": 1}\nmatch x:\n    case {\"k\": v}:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = {\"k\": 1}\nmatch x:\n    case {\"k\": v}:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
         assert_eq!(
             cases[0].pattern,
             HirPattern::Mapping(
-                vec![(HirExpr::StringLiteral("k".to_string()), HirPattern::Capture("v".to_string()))],
+                vec![(
+                    HirExpr::StringLiteral("k".to_string()),
+                    HirPattern::Capture("v".to_string())
+                )],
                 None,
             )
         );
@@ -6001,13 +5984,18 @@ mod tests {
 
     #[test]
     fn lowers_match_with_mapping_rest_pattern() {
-        let stmt = lower_match_stmt("x = {\"k\": 1}\nmatch x:\n    case {\"k\": v, **rest}:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = {\"k\": 1}\nmatch x:\n    case {\"k\": v, **rest}:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
         assert_eq!(
             cases[0].pattern,
             HirPattern::Mapping(
-                vec![(HirExpr::StringLiteral("k".to_string()), HirPattern::Capture("v".to_string()))],
+                vec![(
+                    HirExpr::StringLiteral("k".to_string()),
+                    HirPattern::Capture("v".to_string())
+                )],
                 Some("rest".to_string()),
             )
         );
@@ -6066,7 +6054,9 @@ mod tests {
 
     #[test]
     fn lowers_match_with_or_pattern() {
-        let stmt = lower_match_stmt("x = 2\nmatch x:\n    case 1 | 2 | 3:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = 2\nmatch x:\n    case 1 | 2 | 3:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
         assert_eq!(
@@ -6081,7 +6071,9 @@ mod tests {
 
     #[test]
     fn lowers_match_with_as_pattern() {
-        let stmt = lower_match_stmt("x = [1, 2]\nmatch x:\n    case [a, b] as pair:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = [1, 2]\nmatch x:\n    case [a, b] as pair:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
         assert_eq!(
@@ -6098,7 +6090,9 @@ mod tests {
 
     #[test]
     fn lowers_match_with_guard() {
-        let stmt = lower_match_stmt("x = 5\nmatch x:\n    case y if y > 3:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = 5\nmatch x:\n    case y if y > 3:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert_eq!(cases.len(), 2);
         assert!(cases[0].guard.is_some());
@@ -6115,7 +6109,9 @@ mod tests {
 
     #[test]
     fn lowers_match_with_pass_only_body() {
-        let stmt = lower_match_stmt("x = 1\nmatch x:\n    case 1:\n        pass\n    case _:\n        pass\n");
+        let stmt = lower_match_stmt(
+            "x = 1\nmatch x:\n    case 1:\n        pass\n    case _:\n        pass\n",
+        );
         let cases = match_cases(&stmt);
         assert!(cases[0].body.is_empty());
         assert!(cases[1].body.is_empty());
@@ -6128,7 +6124,10 @@ mod tests {
         );
         let err = lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
-        assert!(err.message.contains("only a literal value pattern is supported so far"));
+        assert!(
+            err.message
+                .contains("only a literal value pattern is supported so far")
+        );
     }
 
     #[test]
@@ -6138,7 +6137,10 @@ mod tests {
         );
         let err = lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
-        assert!(err.message.contains("only a bare-name class pattern is supported so far"));
+        assert!(
+            err.message
+                .contains("only a bare-name class pattern is supported so far")
+        );
     }
 
     #[test]
@@ -6165,7 +6167,10 @@ mod tests {
         assert_eq!(builtin_exception_parent("TypeError"), Some("Exception"));
         assert_eq!(builtin_exception_parent("KeyError"), Some("Exception"));
         assert_eq!(builtin_exception_parent("IndexError"), Some("Exception"));
-        assert_eq!(builtin_exception_parent("ZeroDivisionError"), Some("Exception"));
+        assert_eq!(
+            builtin_exception_parent("ZeroDivisionError"),
+            Some("Exception")
+        );
         assert_eq!(builtin_exception_parent("RuntimeError"), Some("Exception"));
     }
 
