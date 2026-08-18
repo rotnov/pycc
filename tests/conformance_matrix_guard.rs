@@ -27,8 +27,7 @@ fn repo_root() -> PathBuf {
 
 fn read(relative: &str) -> String {
     let path = repo_root().join(relative);
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 
 /// One parsed matrix row: its source line number, its PEP cell, the fixture
@@ -113,22 +112,12 @@ const UNREGISTERED_FIXTURE_ALLOWLIST: &[(&str, &str)] = &[
          comparison.",
     ),
     (
-        "pep_0557_dataclasses.py",
-        "Fails the CPython oracle with NameError; blocked on the pycc_std decorator surface \
-         (issue #579, Part 3 of #572).",
-    ),
-    (
         "pep_0681_dc_transform.py",
-        "Same oracle failure as pep_0557_dataclasses.py, and additionally blocked on the \
-         deliberate @dataclass_transform()-as-@dataclass divergence tracked by issue #248.",
-    ),
-    (
-        "pep_0698_override.py",
-        "Same oracle failure as pep_0557_dataclasses.py; blocked on issue #579, Part 3 of #572.",
-    ),
-    (
-        "pep_3129_class_deco.py",
-        "Same oracle failure as pep_0557_dataclasses.py; blocked on issue #579, Part 3 of #572.",
+        "Blocked on the deliberate @dataclass_transform()-as-@dataclass divergence tracked by \
+         issue #248: pycc synthesizes __init__/__eq__/__repr__ where CPython's own \
+         typing.dataclass_transform synthesizes nothing, so this fixture cannot match the \
+         oracle byte-for-byte at all. #579 registered the other three decorator fixtures; this \
+         one is not merely awaiting the stdlib surface.",
     ),
 ];
 
@@ -156,8 +145,8 @@ fn is_registered(harness: &str, fixture: &str) -> bool {
 /// `tests/fixtures/`" rule would wrongly demand conformance registration for.
 fn pep_fixture_files() -> BTreeSet<String> {
     let dir = repo_root().join("tests").join("fixtures");
-    let entries = std::fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("cannot list {}: {e}", dir.display()));
+    let entries =
+        std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot list {}: {e}", dir.display()));
     let mut names = BTreeSet::new();
     for entry in entries {
         let entry = entry.expect("cannot read a tests/fixtures/ directory entry");
@@ -277,7 +266,10 @@ fn every_allowlist_entry_records_a_reason() {
 #[test]
 fn cited_fixtures_reads_every_backticked_path_in_a_cell() {
     // A single-fixture cell, the shape most rows have.
-    assert_eq!(cited_fixtures("`pep_0435_enum.py`"), vec!["pep_0435_enum.py"]);
+    assert_eq!(
+        cited_fixtures("`pep_0435_enum.py`"),
+        vec!["pep_0435_enum.py"]
+    );
     // A multi-fixture cell carrying prose and a link between the paths, the
     // shape PEP 594's and PEP 585's rows have.
     assert_eq!(

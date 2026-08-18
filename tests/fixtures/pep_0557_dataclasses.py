@@ -9,6 +9,15 @@
 #
 # Field defaults (`field(default=...)`, `field(default_factory=...)`) are
 # not supported in this version -- only required fields are supported.
+#
+# The import is required by CPython, which evaluates decorators eagerly
+# (unlike annotations, which PEP 649/749 defers) and would otherwise
+# raise `NameError` on the oracle run. pycc itself recognizes the bare
+# name `dataclass` without the import, matching its
+# `Final`/`Annotated`/`Enum`/`abstractmethod` precedent, so the import
+# only has to resolve -- see `pycc_std`'s `dataclasses` module (#579).
+from dataclasses import dataclass
+
 
 @dataclass
 class Point:
