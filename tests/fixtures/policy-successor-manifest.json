@@ -169,7 +169,7 @@
     {
       "path": "tests/fixtures/pages-performance-manifest.json",
       "source_path": "tests/fixtures/pages-performance-manifest.json",
-      "sha256": "6d87382e0542a412a7c7ef83a095cac1d29c805166558b5b32476f08b73c08ad"
+      "sha256": "cd920a756a39d09fbb3f956fbfae9e38be9e14b3abf6294b484c22d527f2e462"
     },
     {
       "path": "tests/fixtures/workflow-policy-search-ledger.yml",
@@ -234,7 +234,7 @@
     {
       "path": "tests/fixtures/policy-successors/pages-performance-manifest.json",
       "source_path": "tests/fixtures/policy-successors/pages-performance-manifest.json",
-      "sha256": "6d87382e0542a412a7c7ef83a095cac1d29c805166558b5b32476f08b73c08ad"
+      "sha256": "cd920a756a39d09fbb3f956fbfae9e38be9e14b3abf6294b484c22d527f2e462"
     },
     {
       "path": "tests/fixtures/policy-successors/ci-python-3147.yml",
