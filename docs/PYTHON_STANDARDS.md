@@ -71,6 +71,16 @@ For each newly observed upstream release:
    observed passing on a real, already-completed CI run across all 5 Tier-1
    targets in both build profiles. Building the real automation remains a
    tracked `docs/ROADMAP.md` follow-up.
+6. Bookkeeping lag is itself a defect, not a safe default. A fixture that is
+   registered in `tests/conformance.rs` and already observed green under rule 5
+   must have its row flipped; leaving it `☐` understates conformance and, per
+   [#572](https://github.com/rotnov/pycc/issues/572), made v0.3's own row-count
+   Accept criterion read as further from reach than it was. Seven rows —
+   PEPs 3119, 435, 544, 634–636, 673, 695 (generic classes) and 649/749 — were
+   flipped on that basis against run
+   [32053825412](https://github.com/rotnov/pycc/actions/runs/32053825412), the
+   fully green `main` push run for `006fd786`, which executed every one of their
+   fixtures across all 5 Tier-1 targets in both profiles.
 
 ## Python 3.0–3.2 (foundations)
 
@@ -83,7 +93,7 @@ For each newly observed upstream release:
 | [3107](https://peps.python.org/pep-3107/) | Function annotations | typing | `py30/pep_3107_annotations.py` | ✅ |
 | [3110](https://peps.python.org/pep-3110/) | `try`/`except`/`else`/`finally`, `raise`, bare `raise` (#382) | sem | `issue_382_exceptions.rs` | ☐ |
 | [3115](https://peps.python.org/pep-3115/) | Metaclasses (`metaclass=`) | sem | `py30/pep_3115_metaclass.py` | ☐ |
-| [3119](https://peps.python.org/pep-3119/) | ABCs, `isinstance` hooks | sem | `py30/pep_3119_abc.py` | ☐ |
+| [3119](https://peps.python.org/pep-3119/) | ABCs, `isinstance` hooks | sem | `py30/pep_3119_abc.py` | ✅ |
 | [3129](https://peps.python.org/pep-3129/) | Class decorators | syntax | `py30/pep_3129_class_deco.py` | ☐ |
 | [3131](https://peps.python.org/pep-3131/) | Non-ASCII identifiers | syntax | `py30/pep_3131_unicode_ids.py` | ✅ |
 | [3132](https://peps.python.org/pep-3132/) | Extended unpacking `a, *b = ...` | syntax | `py30/pep_3132_unpack.py` | ☐ |
@@ -106,7 +116,7 @@ For each newly observed upstream release:
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [435](https://peps.python.org/pep-0435/) | `enum` | sem | `pep_0435_enum.py` | ☐ |
+| [435](https://peps.python.org/pep-0435/) | `enum` | sem | `pep_0435_enum.py` | ✅ |
 | [443](https://peps.python.org/pep-0443/) | `functools.singledispatch` | sem | `py34/pep_0443_singledispatch.py` | ☐ |
 | [451](https://peps.python.org/pep-0451/) | Module spec import model | import | `py34/pep_0451_modspec.py` | ☐ |
 | [3156](https://peps.python.org/pep-3156/) | `asyncio` event loop model | rt | `py34/pep_3156_asyncio.py` | ☐ |
@@ -147,7 +157,7 @@ For each newly observed upstream release:
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [544](https://peps.python.org/pep-0544/) | `Protocol` — structural typing | typing | `py38/pep_0544_protocol.py` | ☐ |
+| [544](https://peps.python.org/pep-0544/) | `Protocol` — structural typing | typing | `py38/pep_0544_protocol.py` | ✅ |
 | [570](https://peps.python.org/pep-0570/) | Positional-only params `/` | syntax | `py38/pep_0570_pos_only.py` | ✅ |
 | [572](https://peps.python.org/pep-0572/) | Walrus `:=` | syntax | `py38/pep_0572_walrus.py` | ☐ |
 | [586](https://peps.python.org/pep-0586/) | `Literal` | typing | `py38/pep_0586_literal.py` | ☐ |
@@ -173,7 +183,7 @@ For each newly observed upstream release:
 | [612](https://peps.python.org/pep-0612/) | `ParamSpec` | typing | `py310/pep_0612_paramspec.py` | ☐ |
 | [613](https://peps.python.org/pep-0613/) | `TypeAlias` | typing | `pep_0613_typealias.py` | ✅ |
 | [626](https://peps.python.org/pep-0626/) | Precise line numbers (debug info) | rt | `py310/pep_0626_lineno.py` | ☐ |
-| [634](https://peps.python.org/pep-0634/)–636 | **Structural pattern matching** | syntax | `py310/pep_0634_match.py` | ☐ |
+| [634](https://peps.python.org/pep-0634/)–636 | **Structural pattern matching** | syntax | `py310/pep_0634_match.py` | ✅ |
 | [647](https://peps.python.org/pep-0647/) | `TypeGuard` | typing | `py310/pep_0647_typeguard.py` | ☐ |
 | — | Parenthesized context managers | syntax | `py310/paren_with.py` | ☐ |
 
@@ -185,7 +195,7 @@ For each newly observed upstream release:
 | [654](https://peps.python.org/pep-0654/) | `except*` + `ExceptionGroup` | syntax | `py311/pep_0654_except_star.py` | ☐ |
 | [655](https://peps.python.org/pep-0655/) | `Required` / `NotRequired` | typing | `py311/pep_0655_required.py` | ☐ |
 | [657](https://peps.python.org/pep-0657/) | Fine-grained error locations | rt | (drives pycc diagnostics UX) | ☐ |
-| [673](https://peps.python.org/pep-0673/) | `Self` as method return/param annotation (#387 Part 1) — resolves to the class's own instance type at HIR-lowering time | typing | `pep_0673_self.py` | ☐ |
+| [673](https://peps.python.org/pep-0673/) | `Self` as method return/param annotation (#387 Part 1) — resolves to the class's own instance type at HIR-lowering time | typing | `pep_0673_self.py` | ✅ |
 | [675](https://peps.python.org/pep-0675/) | `LiteralString` | typing | `py311/pep_0675_literalstring.py` | ☐ |
 | [681](https://peps.python.org/pep-0681/) | `dataclass_transform` | typing | `py311/pep_0681_dc_transform.py` | ☐ |
 
@@ -196,7 +206,7 @@ For each newly observed upstream release:
 | [688](https://peps.python.org/pep-0688/) | `Buffer` type | typing | `py312/pep_0688_buffer.py` | ☐ |
 | [692](https://peps.python.org/pep-0692/) | `Unpack[TypedDict]` for `**kwargs` | typing | `py312/pep_0692_kwargs.py` | ☐ |
 | [695](https://peps.python.org/pep-0695/) | **`type` statement + generic functions** `def f[T](x: T) -> T` (v0.2 scope per D-088 — no class support exists yet) | typing | `pep_0695_generics.py` | ✅ |
-| [695](https://peps.python.org/pep-0695/) | Generic classes `class C[T]` (#387 Part 3) — single type param, scalar-only instantiation, monomorphized at compile time | typing | `pep_0695_generic_classes.py` | ☐ |
+| [695](https://peps.python.org/pep-0695/) | Generic classes `class C[T]` (#387 Part 3) — single type param, scalar-only instantiation, monomorphized at compile time | typing | `pep_0695_generic_classes.py` | ✅ |
 | [698](https://peps.python.org/pep-0698/) | `@override` | typing | `py312/pep_0698_override.py` | ☐ |
 | [701](https://peps.python.org/pep-0701/) | Formalized f-string grammar | syntax | `py312/pep_0701_fstring_grammar.py` | ☐ |
 | [709](https://peps.python.org/pep-0709/) | Comprehension inlining semantics -- pycc has no bytecode/frame model to "inline" the way CPython's own PEP 709 change does; this row instead verifies the one CPython-observable, statically-testable guarantee PEP 709 depends on: a comprehension's own loop variable does not leak into an enclosing same-named binding (D-117/D-120) | sem | `pep_0709_comp_inline.py` | ✅ |
@@ -221,7 +231,7 @@ the pinned interpreter's own GIL only for CPython-backed operations (D-128).*
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [649](https://peps.python.org/pep-0649/)/[749](https://peps.python.org/pep-0749/) | **Deferred annotations** — pycc reads annotations exactly per 3.14 semantics; self-referential class-name annotations in own methods work (#387 Part 2) | typing | `pep_0649_deferred_ann.py` | ☐ |
+| [649](https://peps.python.org/pep-0649/)/[749](https://peps.python.org/pep-0749/) | **Deferred annotations** — pycc reads annotations exactly per 3.14 semantics; self-referential class-name annotations in own methods work (#387 Part 2) | typing | `pep_0649_deferred_ann.py` | ✅ |
 | [734](https://peps.python.org/pep-0734/) | Subinterpreters in stdlib | rt | `py314/pep_0734_interpreters.py` | ☐ |
 | [750](https://peps.python.org/pep-0750/) | **Template strings (t-strings)** | syntax | `py314/pep_0750_tstrings.py` | ☐ |
 | [758](https://peps.python.org/pep-0758/) | `except A, B:` without parentheses | syntax | `py314/pep_0758_except_noparens.py` | ☐ |
