@@ -2064,6 +2064,27 @@ fn emit_expr_unchecked<'ctx>(
                     }
                 }
                 Ty::Str => {
+                    // #574 (Part 1 of #123): `pycc_types` accepts string
+                    // repetition (`str * int` / `int * str`, `bool` count
+                    // included) and `pycc_mir::binop_result_ty` types it
+                    // `str`, but codegen does not lower it yet -- there is
+                    // no `pycc_rt_str_repeat` primitive (#575). This is an
+                    // explicit, *named* D-072 "not supported yet" boundary
+                    // (exit 101, enumerated in `docs/CLI_SPEC.md`), not an
+                    // internal error.
+                    //
+                    // Tested *before* the two operand destructures below on
+                    // purpose: the repetition count evaluates to a
+                    // `Scalar::Int`/`Scalar::Bool`, so leaving it to fall
+                    // through would report the destructures' "internal
+                    // error: str BinOp operand did not evaluate to str"
+                    // message, which D-072 does not sanction and which
+                    // `pycc-feedback` would mis-triage as a compiler defect.
+                    if *op == pycc_mir::BinOpKind::Mul {
+                        panic!(
+                            "pycc_codegen: string repetition (`str * int`) is not supported yet"
+                        );
+                    }
                     let Scalar::Str(l) = l else {
                         panic!(
                             "pycc_codegen: internal error: str BinOp operand did not evaluate to str"
@@ -14239,10 +14260,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "internal error: str BinOp operand did not evaluate to str")]
     fn a_str_result_binop_with_a_non_str_left_operand_hits_the_internal_consistency_check() {
-        // Deliberately malformed MIR: `pycc_types`/`pycc_mir` only ever
-        // produce a `Ty::Str`-typed `BinOp` for `str + str` (see
-        // `pycc_mir`'s own `adding_two_strings_infers_str` test), so no real
-        // pipeline could reach this arm with a non-`str` left operand.
+        // Deliberately malformed MIR: `pycc_types`/`pycc_mir` produce a
+        // `Ty::Str`-typed `BinOp` only for `str + str` (see `pycc_mir`'s own
+        // `adding_two_strings_infers_str` test) and for `Mul` string
+        // repetition (#574), and the repetition shape is caught by this
+        // arm's own named D-072 boundary above before either destructure
+        // runs -- so no real pipeline could reach this `Add` shape with a
+        // non-`str` left operand.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "x".to_string(),
@@ -14305,6 +14329,34 @@ mod tests {
         };
         let dir = tempfile_dir("str_binop_unsupported_op_panics");
         let obj_path = dir.join("str_binop_unsupported_op_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_codegen: string repetition (`str * int`) is not supported yet")]
+    fn string_repetition_stops_at_a_named_boundary() {
+        // `x = "a" * 3` -- #574 (Part 1 of #123) makes `pycc_types` accept
+        // this and `pycc_mir::binop_result_ty` type it `str`, so unlike the
+        // three tests above this MIR *is* what a real `pycc build` produces.
+        // Codegen has no repetition primitive yet (#575), so it stops at an
+        // explicit, named D-072 boundary (exit 101, enumerated in
+        // `docs/CLI_SPEC.md`) rather than at the `Scalar::Str` destructure's
+        // "internal error" message, which the `int` count would otherwise
+        // trigger.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Mul,
+                    left: Box::new(MirExpr::StringLiteral("a".to_string())),
+                    right: Box::new(MirExpr::IntLiteral(3)),
+                    ty: Ty::Str,
+                },
+            })],
+            class_defs: Vec::new(),
+        };
+        let dir = tempfile_dir("str_binop_repetition_panics");
+        let obj_path = dir.join("str_binop_repetition_panics.o");
         let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
