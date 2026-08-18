@@ -4,16 +4,19 @@
 require "open3"
 
 # Measures wall-clock time for `<pycc_bin> check <fixture>` and reports
-# whether the median of `samples` runs stayed under `threshold_ms` -- an
+# whether the fastest of `samples` runs stayed under `threshold_ms` -- an
 # absolute floor (D-079), not a regression-vs-predecessor comparison like
-# frontend-perf-gate's Criterion harness. D-132 moved this from a single
-# wall-clock sample to a median-of-`samples` measurement: historical CI data
-# (~209 sampled runs, D-132) showed the check normally lands at 15-32ms
-# against the 75ms threshold with zero corroborating failures, so a lone
-# 54.55ms spike was runner-noise on one draw, not a regression. `samples`
-# must be odd so the median is a single element, not an average of two.
-def measure_and_check(pycc_bin, fixture_path, threshold_ms:, samples: 3)
-  raise ArgumentError, "samples must be a positive odd integer" unless samples.positive? && samples.odd?
+# frontend-perf-gate's Criterion harness. D-174 replaced D-132's median with
+# this minimum: a median cancels one contaminated draw but not a whole
+# contended batch, which is exactly what failed CI at byte-identical compiler
+# source (every sample elevated, the fastest already ~2x the 15-32ms band).
+# Runner interference is strictly additive -- co-tenant CPU steal, scheduler
+# preemption, and frequency throttling can only slow an invocation down --
+# so the minimum is bounded below by the compiler's fastest achievable cost.
+# That is the quantity an absolute floor bounds: if the true cost exceeds the
+# threshold, every sample does, and the minimum still trips.
+def measure_and_check(pycc_bin, fixture_path, threshold_ms:, samples: 5)
+  raise ArgumentError, "samples must be a positive integer" unless samples.positive?
 
   elapsed_times = []
   samples.times do
@@ -26,13 +29,13 @@ def measure_and_check(pycc_bin, fixture_path, threshold_ms:, samples: 3)
     elapsed_times << elapsed_ms
   end
 
-  median_ms = elapsed_times.sort[elapsed_times.length / 2]
-  if median_ms > threshold_ms
-    reason = "exceeded #{threshold_ms}ms threshold (median of #{samples} runs: #{elapsed_times.sort})"
-    return { ok: false, elapsed_ms: median_ms, reason: reason }
+  best_ms = elapsed_times.min
+  if best_ms > threshold_ms
+    reason = "exceeded #{threshold_ms}ms threshold (best of #{samples} runs: #{elapsed_times.sort})"
+    return { ok: false, elapsed_ms: best_ms, reason: reason }
   end
 
-  { ok: true, elapsed_ms: median_ms }
+  { ok: true, elapsed_ms: best_ms }
 end
 
 def main(arguments)

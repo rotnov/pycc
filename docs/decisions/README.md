@@ -138,7 +138,7 @@ current.
 | [D-129](./D-129-keep-the-nbody-gate-on-wall-clock-after-cpu-time.md) | Keep the nbody gate on wall clock after CPU time fails to reduce variance across Tier-1 | accepted |
 | [D-130](./D-130-decompose-the-session-handoff-log-into-per.md) | Decompose the session handoff log into per-session files | accepted |
 | [D-131](./D-131-store-materialized-none-values-in-canonical-local.md) | Store materialized `None` values in canonical local and module slots | accepted |
-| [D-132](./D-132-measure-the-d-084-throughput-floor-as-a-median-of.md) | Measure the D-084 throughput floor as a median of 3 samples | accepted |
+| [D-132](./D-132-measure-the-d-084-throughput-floor-as-a-median-of.md) | Measure the D-084 throughput floor as a median of 3 samples | superseded |
 | [D-133](./D-133-pr-13-generic-function-type-parameter.md) | PR-13 generic-function type-parameter representation is a new `Ty::Param(String)` variant, substituted before MIR lowering | accepted |
 | [D-134](./D-134-pr-13-thin-slice-one-type-parameter-one-concrete.md) | PR-13 thin slice — one type parameter, one concrete scalar per call site, every other generic shape gets a clean diagnostic | accepted |
 | [D-135](./D-135-type-statement-and-legacy-typealias-are-compile.md) | `type` statement and legacy `TypeAlias` are compile-time-only name substitution, no runtime or `Ty` representation | accepted |
@@ -180,3 +180,4 @@ current.
 | [D-171](./D-171-change-aware-ci-gate-scheduling.md) | Change-aware CI gate scheduling | accepted |
 | [D-172](./D-172-nonblocking-property-based-ci-policy-audit.md) | Use a base-owned property audit without forced CI successor activation | accepted |
 | [D-173](./D-173-exception-propagation-via-global-state-superseding-d-005.md) | Exception propagation via explicit per-thread state, superseding D-005 | accepted |
+| [D-174](./D-174-gate-the-d-084-throughput-floor-on-the-minimum-of.md) | Gate the D-084 throughput floor on the minimum of 5 samples, superseding D-132 | accepted |
