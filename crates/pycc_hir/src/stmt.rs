@@ -812,13 +812,11 @@ mod tests {
         )
         .expect("test fixture must parse");
         let hir = crate::lower_checked(&module).expect("a negative literal pattern must lower");
-        let HirItem::TopLevelStmt(HirStmt::Match { cases, .. }) = &hir.items[1] else {
-            panic!("expected a top-level match statement");
-        };
-        assert_eq!(
-            cases[0].pattern,
-            HirPattern::Literal(HirExpr::IntLiteral(-1))
-        );
+        assert!(matches!(
+            &hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Match { cases, .. })
+                if cases[0].pattern == HirPattern::Literal(HirExpr::IntLiteral(-1))
+        ));
     }
 
     #[test]
@@ -842,13 +840,15 @@ mod tests {
         )
         .expect("test fixture must parse");
         let hir = crate::lower_checked(&module).expect("a negative mapping key must lower");
-        let HirItem::TopLevelStmt(HirStmt::Match { cases, .. }) = &hir.items[1] else {
-            panic!("expected a top-level match statement");
-        };
-        let HirPattern::Mapping(entries, _) = &cases[0].pattern else {
-            panic!("expected a mapping pattern");
-        };
-        assert_eq!(entries[0].0, HirExpr::IntLiteral(-1));
+        assert!(matches!(
+            &hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Match { cases, .. })
+                if matches!(
+                    &cases[0].pattern,
+                    HirPattern::Mapping(entries, _)
+                        if entries[0].0 == HirExpr::IntLiteral(-1)
+                )
+        ));
     }
 
     #[test]

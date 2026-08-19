@@ -1119,16 +1119,20 @@ pub(crate) fn lower_dict_comp_assign(
 mod tests {
     use crate::{HirExpr, HirItem, HirStmt};
 
-    /// Lowers `source` and returns the value expression of its first
-    /// top-level assignment, so each case below can assert on the folded
-    /// literal directly.
-    fn lower_first_assign(source: &str) -> HirExpr {
+    /// Lowers `source` and asserts that the value expression of its first
+    /// top-level assignment is `expected`, so each case below states the
+    /// folded literal it wants directly.
+    fn assert_first_assign(source: &str, expected: HirExpr) {
         let module = pycc_parser::parse(source).expect("test fixture must parse");
         let hir = crate::lower_checked(&module).expect("fixture must lower");
-        let HirItem::TopLevelStmt(HirStmt::Assign { value, .. }) = &hir.items[0] else {
-            panic!("expected a top-level assignment");
-        };
-        value.clone()
+        assert!(
+            matches!(
+                &hir.items[0],
+                HirItem::TopLevelStmt(HirStmt::Assign { value, .. }) if *value == expected
+            ),
+            "unexpected lowering of {source:?}: {:?}",
+            hir.items[0]
+        );
     }
 
     fn lower_err_code(source: &str) -> String {
@@ -1148,25 +1152,22 @@ mod tests {
 
     #[test]
     fn unary_minus_folds_into_an_int_literal() {
-        assert_eq!(lower_first_assign("x = -5\n"), HirExpr::IntLiteral(-5));
+        assert_first_assign("x = -5\n", HirExpr::IntLiteral(-5));
     }
 
     #[test]
     fn unary_plus_leaves_an_int_literal_positive() {
-        assert_eq!(lower_first_assign("x = +5\n"), HirExpr::IntLiteral(5));
+        assert_first_assign("x = +5\n", HirExpr::IntLiteral(5));
     }
 
     #[test]
     fn unary_minus_folds_into_a_float_literal() {
-        assert_eq!(
-            lower_first_assign("x = -1.5\n"),
-            HirExpr::FloatLiteral(-1.5)
-        );
+        assert_first_assign("x = -1.5\n", HirExpr::FloatLiteral(-1.5));
     }
 
     #[test]
     fn unary_plus_leaves_a_float_literal_positive() {
-        assert_eq!(lower_first_assign("x = +1.5\n"), HirExpr::FloatLiteral(1.5));
+        assert_first_assign("x = +1.5\n", HirExpr::FloatLiteral(1.5));
     }
 
     #[test]
@@ -1175,10 +1176,7 @@ mod tests {
         // applied to `9223372036854775808` -- a magnitude that does not fit in
         // an `i64` even though its negation is exactly `i64::MIN`. Folding the
         // sign before the range check is what accepts it.
-        assert_eq!(
-            lower_first_assign("x = -9223372036854775808\n"),
-            HirExpr::IntLiteral(i64::MIN)
-        );
+        assert_first_assign("x = -9223372036854775808\n", HirExpr::IntLiteral(i64::MIN));
     }
 
     #[test]
