@@ -1896,10 +1896,12 @@ fn lower_expr(
         HirExpr::AttrGet { base, attr } => {
             // #433: `super().attr` — resolve the attribute starting from
             // the next class in the current class's MRO, using `self` (the
-            // current function's first parameter) as the instance. The slot
-            // index is still computed from the full MRO's flat layout, so
-            // the same slot offset the base class's own methods would use
-            // is reused here — `self` is the same object either way.
+            // current function's first parameter) as the instance.
+            // #587: only a `@property` resolves this way. A `super` object
+            // proxies class-level attributes and descriptors, not the
+            // instance's own attributes, so `super().<instance attr>` no
+            // longer lowers to a slot read against `self` — the type
+            // checker rejects it with `T0047` first.
             if matches!(base.as_ref(), HirExpr::Super) {
                 let current = match current_class {
                     Some(c) => c,
@@ -1928,41 +1930,20 @@ fn lower_expr(
                         };
                     }
                 }
-                // Regular attribute slots — the slot index comes from the
-                // full MRO's flat layout (since `self` is the same object),
-                // but the *type* must come from the super_mro slice to match
-                // the type checker's `resolve_super_attr_get`. A derived
-                // class may redeclare an attribute with a different type;
-                // using the full layout's type would pick the most-derived
-                // declaration, but `super().attr` should use the base class's
-                // declaration (#433 review fix).
-                let flat_attrs = mro_attrs(class_def, classes);
-                let slot = flat_attrs
-                    .iter()
-                    .enumerate()
-                    .find(|(_, (name, _))| name == attr)
-                    .map(|(slot, _)| slot)
-                    .expect(
-                        "pycc_mir: internal error: attribute not declared on class or any base in \
-                         its MRO -- pycc_types::check should have rejected this HIR before it \
-                         reached pycc_mir",
-                    );
-                let ty = super_mro
-                    .iter()
-                    .find_map(|mro_class| {
-                        let mro_def = &classes[mro_class.as_str()];
-                        mro_def.attrs.iter().find(|(name, _)| name == attr)
-                    })
-                    .map(|(_, ty)| ty.clone())
-                    .expect(
-                        "pycc_mir: internal error: attribute not found in super_mro -- \
-                         pycc_types::check should have rejected this HIR before it reached pycc_mir",
-                    );
-                return MirExpr::AttrGet {
-                    base: Box::new(self_expr),
-                    slot,
-                    ty,
-                };
+                // #587: nothing else resolves through `super()`. A `super`
+                // object proxies class-level attributes and descriptors
+                // along the MRO, not the instance's own attributes, so an
+                // `AttrGet` naming an instance attribute (or a name declared
+                // nowhere in the MRO at all) is rejected by
+                // `pycc_types::class::resolve_super_attr_get` with `T0047`
+                // or `T0044` before any HIR reaches this crate. Properties
+                // are the only class-level member pycc models today, so the
+                // loop above is exhaustive for well-typed input.
+                panic!(
+                    "pycc_mir: internal error: `super().{attr}` is not a property on any class \
+                     after `{current}` in its MRO -- pycc_types::check should have rejected this \
+                     HIR with T0047 or T0044 before it reached pycc_mir"
+                );
             }
             // #379 (PR-19): `Color.RED` — accessing an enum member by name
             // on the enum class. The base is `HirExpr::Name` referring to
@@ -7009,7 +6990,14 @@ mod tests {
     }
 
     #[test]
-    fn super_attr_lowers_to_attr_get_with_self_base() {
+    #[should_panic(expected = "is not a property on any class after `B` in its MRO")]
+    fn super_attr_get_naming_an_instance_attr_panics_with_an_internal_error() {
+        // #587: `super().x` where `x` is an instance attribute is rejected
+        // by `pycc_types::class::resolve_super_attr_get` with `T0047`, so
+        // this HIR shape cannot reach `pycc_mir` through the real pipeline.
+        // Constructing it directly exercises the arm's panic-on-inconsistency
+        // guard, which replaced the slot-read lowering this test previously
+        // asserted (`super_attr_lowers_to_attr_get_with_self_base`).
         let self_a = Ty::Instance(Box::new("A".to_string()));
         let self_b = Ty::Instance(Box::new("B".to_string()));
         let hir = HirModule {
@@ -7083,22 +7071,7 @@ mod tests {
                 ),
             ],
         };
-        let mir = build(&hir);
-        let get_x = mir.items.iter().find_map(|item| match item {
-            MirItem::Function { name, body, .. } if name == "B.get_x" => body.first(),
-            _ => None,
-        });
-        assert_eq!(
-            get_x,
-            Some(&MirStmt::Return(Some(MirExpr::AttrGet {
-                base: Box::new(MirExpr::Name {
-                    name: "self".to_string(),
-                    ty: Ty::Instance(Box::new("B".to_string())),
-                }),
-                slot: 0,
-                ty: Ty::Int,
-            })))
-        );
+        build(&hir);
     }
 
     #[test]

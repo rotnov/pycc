@@ -48,6 +48,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0044` | error | class has no attribute or method with the given name (D-154, Part 1 of #375); a mismatched instantiation/method call-site argument list reuses `T0021` instead, exactly like an ordinary function call |
 | `T0045` | error | cannot reassign a `Final` name (PEP 591, #383) — variable-level annotations only (module-level and function-local); `Final` on parameters or class-body attributes is out of scope |
 | `T0046` | error | class does not conform to a protocol (PEP 544 structural typing, #380, D-166) — a concrete class is missing one or more of a protocol's required methods or attributes, or a method/attribute has an incompatible signature/type |
+| `T0047` | error | `super()` does not proxy instance attributes (#587) — an attribute established by `self.<attr> = ...` is reachable only through `self`, matching CPython's `super` object, which proxies class-level attributes and descriptors along the MRO but not the instance's own attributes |
 | `O0201` | error | value used after move across scope boundary *(internal-only: never fires on legal Python — see note)* |
 | `O0301` | error | non-Shareable value crosses thread boundary without move |
 | `O0302` | error | lock-guarded field accessed without holding lock |

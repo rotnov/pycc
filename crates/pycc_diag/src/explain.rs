@@ -617,6 +617,39 @@ d: Drawable = Square()  # T0046 -- Square lacks draw()
 ",
     },
     DiagnosticExplanation {
+        code: "T0047",
+        severity: Severity::Error,
+        summary: "`super()` does not proxy instance attributes",
+        explanation: "\
+T0047 fires when `super().<attr>` names an *instance* attribute -- one \
+established by a `self.<attr> = ...` assignment inside `__init__`, and so \
+stored in the instance's own slot rather than on any class in the MRO \
+(issue #587). A CPython `super` object proxies the class-level attributes \
+and descriptors it finds along the MRO; it does not consult the instance's \
+`__dict__`, so the same source raises `AttributeError: 'super' object has \
+no attribute '<attr>'` under the pinned conformance oracle. pycc used to \
+resolve this form against `self`'s own slot and return a value, which meant \
+a program compiled and printed a different answer than CPython gave for the \
+same expression; it is now rejected instead. Nothing is lost by the \
+rejection: `super().<attr>` and `self.<attr>` read the identical slot, so \
+the fix is always to spell the read `self.<attr>`. A base class \
+`@property` read through `super()` is unaffected -- a property is a \
+class-level descriptor, which a `super` object genuinely does proxy. A name \
+declared nowhere in the MRO at all is `T0044`, not this code.",
+        example: "\
+class Vehicle:
+    def __init__(self, wheels: int) -> None:
+        self.wheels = wheels
+
+class Car(Vehicle):
+    def __init__(self, wheels: int) -> None:
+        super().__init__(wheels)
+
+    def base_wheels(self) -> int:
+        return super().wheels  # T0047 -- write `self.wheels` instead
+",
+    },
+    DiagnosticExplanation {
         code: "O0201",
         severity: Severity::Error,
         summary: "value used after move across scope boundary",

@@ -965,12 +965,15 @@ fn pep_3119_abc_matches_cpython_3_14_7_byte_for_byte() {
 // than the runtime type of `self` (pycc lowers it with static dispatch per
 // D-160; CPython's zero-arg form reads the same `__class__` cell).
 //
-// `super().<attr>` is deliberately absent: reading an *instance* attribute
-// through the proxy raises `AttributeError` in CPython (a `super` object
-// proxies class-level attributes and descriptors only) while pycc resolves
-// it against `self`. That divergence cannot be expressed in a fixture that
-// matches the oracle byte-for-byte, so it is tracked as its own gap issue
-// instead of being papered over here.
+// #587 also covers `super().<attr>`, split by what a `super` object
+// actually proxies. A base class `@property` is a class-level descriptor
+// found along the MRO, so `super().power` calls the base getter rather
+// than the subclass's override -- that half is exercised here. An
+// *instance* attribute established by `self.<attr> = ...` is not proxied,
+// and CPython raises `AttributeError`; pycc rejects that form at compile
+// time with `T0047`, so it cannot appear in a fixture that must match the
+// oracle byte-for-byte and stays a declared gap in the breadth manifest
+// instead (`tests/issue_433_super.rs` asserts the rejection).
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
 fn pep_3135_super_matches_cpython_3_14_7_byte_for_byte() {
