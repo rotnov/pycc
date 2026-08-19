@@ -71,6 +71,32 @@ python3 scripts/check_conformance_breadth.py
 python3 scripts/test_check_conformance_breadth.py
 ```
 
+Both of those guards reason about which fixtures a row cites and how much of
+the PEP they cover. Neither says anything about what the registered tests
+actually compare, and until [#224](https://github.com/rotnov/pycc/issues/224)
+nothing did: `tests/conformance.rs`'s shared helper returns the compiled pycc
+binary's stdout as its first tuple element and the pinned CPython oracle's as
+its second, and a helper returning `(pycc_output.stdout.clone(),
+pycc_output.stdout)` would still build pycc, still launch `python3.14`, still
+assert both processes exited zero — and turn every differential test into
+`assert_eq!(x, x)` with every gate green. `tests/conformance_oracle_guard.rs`
+holds that line. It reads `tests/conformance.rs` as text (so it needs neither
+LLVM nor the oracle interpreter, and is a genuine negative control rather than
+a second copy of the tests it guards) and requires: the shared helper launches
+the oracle and asserts both processes succeeded; its returned tuple's first
+element derives from the pycc process alone and its second from the oracle
+alone; `run_conformance_fixture` still delegates to it; and every
+`*_matches_cpython_3_14_7_byte_for_byte` test binds a helper result pair,
+compares exactly that pair in a top-level `assert_eq!`, and exercises both
+profiles unless it is one of the two named in the guard's own
+`DEBUG_ONLY_TESTS`. It also requires every registered `pep_*.py` fixture to be
+run by some `#[test]`, so a fixture cannot satisfy the matrix guard while no
+test executes it. The guard's own tests apply each mutation — assertion
+deleted, made tautological, both sides pycc, oracle process removed, oracle
+exit status ignored, comparison moved behind `if false` or into a comment, a
+profile dropped — to a synthetic harness and to the real one, and require the
+guard to reject each.
+
 The focused D-094 release regression in `pycc_codegen` observes the same
 production codegen helper immediately before object emission. Debug codegen
 reports no applied pass pipeline and retains both a used and an unused runtime
