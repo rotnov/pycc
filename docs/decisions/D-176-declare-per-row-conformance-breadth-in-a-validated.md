@@ -18,7 +18,7 @@ status: accepted
   "pycc has no bytecode/frame model" on PEP 709, "#387 Part 1" on PEP 673),
   which proves the need is real but leaves the qualification unstructured,
   unvalidated, and invisible to any count of "how many PEPs are green".
-  [D-153](./D-153-set-the-v0-3-conformance-target-at-37-rows-of-39.md)'s
+  [D-153](./D-153-correct-v0-3-s-conformance-target-before-any-v0.md)'s
   milestone target is stated in exactly that unqualified row count.
 - Decision: every `✅` row in `docs/PYTHON_STANDARDS.md` declares its breadth
   in `tests/fixtures/conformance-breadth-manifest.json`: what the row's cited

@@ -1,27 +1,40 @@
 #!/usr/bin/env python3
-"""Check that every green conformance row declares the breadth its evidence proves.
+"""Check that every evidence-backed conformance row declares the breadth it proves.
 
-`docs/PYTHON_STANDARDS.md`'s matrix has three statuses -- planned, in progress,
-and passing -- and no way to say "passing, but only this slice of the PEP". A
-green row therefore reads as whole-PEP acceptance no matter how narrow the
-fixture behind it is, and `docs/ROADMAP.md`'s milestone gates count those rows
-directly. Issue #248 records the consequence: several rows claim substantially
-more than their one fixture exercises, while pycc still rejects other core
-constructs from those same PEPs.
+`docs/PYTHON_STANDARDS.md`'s matrix used to have three statuses -- planned, in
+progress, and passing -- with no way to say "passing, but only this slice of the
+PEP". A passing row therefore read as whole-PEP acceptance no matter how narrow
+the fixture behind it was, and `docs/ROADMAP.md`'s milestone gates counted those
+rows directly. Issue #248 records the consequence: several rows claimed
+substantially more than their one fixture exercised, while pycc still rejects
+other core constructs from those same PEPs.
 
-This checker is Part 1 of the fix (issue #593). It does not change any row's
-status -- that is Part 2 (#594). What it does is make the gap *recorded and
-machine-checked*: `tests/fixtures/conformance-breadth-manifest.json` carries, for
-every green row, the semantic categories that row's evidence actually proves and
-the categories that are known-unsupported or intentionally deviating, and this
-script fails when the manifest and the matrix disagree. Each entry also carries
-the row's `matrix_line`, checked against the parsed line number, so an entry
-cannot silently drift onto a different row as the matrix grows.
+Part 1 (issue #593) introduced this manifest and checker without changing any
+row's status. Part 2 (issue #594, D-177) adds the missing status and the rule
+that makes the distinction mechanical:
+
+* `◐` -- **subset**. The row's fixtures pass and its breadth is declared, but
+  the PEP has core surface those fixtures do not reach. Evidence-backed; *not*
+  whole-PEP acceptance.
+* `✅` -- **accepted**. The fixtures pass and every gap the manifest records is
+  a deliberate, permanent non-goal rather than an unimplemented category.
+
+Both are evidence-backed, so both need a manifest entry. Each `not_proven` item
+carries a `kind`: `core` (part of the PEP's core surface, unimplemented) or
+`out-of-scope` (deliberately excluded, with a reason citing an accepted decision
+or a language-level fact). The rule this script enforces, in both directions, is
+exactly: **any `core` gap forces `◐`; `✅` requires zero of them.** A narrow
+smoke fixture therefore cannot be promoted to whole-PEP acceptance, which is the
+defect #248 names.
+
+Every entry also carries the row's `matrix_line`, checked against the parsed
+line number, so an entry cannot silently drift onto a different row as the
+matrix grows.
 
 The matrix is parsed with exactly the rules `tests/conformance_matrix_guard.rs`
 uses -- five-cell rows whose status cell is one of the documented markers, and
 backtick spans ending in `.py` as the cited fixtures -- so the two checks cannot
-disagree about which rows are green or which fixtures a row cites.
+disagree about which rows are evidence-backed or which fixtures a row cites.
 """
 
 from __future__ import annotations
@@ -33,9 +46,15 @@ import sys
 from typing import Any
 
 
-MANIFEST_VERSION = 1
-STATUS_MARKERS = ("☐", "⚙", "✅")
-GREEN = "✅"
+MANIFEST_VERSION = 2
+SUBSET = "◐"
+ACCEPTED = "✅"
+STATUS_MARKERS = ("☐", "⚙", SUBSET, ACCEPTED)
+#: Statuses whose rows claim their fixtures pass, and so must declare breadth.
+EVIDENCE_STATUSES = (SUBSET, ACCEPTED)
+CORE = "core"
+OUT_OF_SCOPE = "out-of-scope"
+GAP_KINDS = (CORE, OUT_OF_SCOPE)
 
 
 class BreadthError(Exception):
@@ -114,8 +133,9 @@ def parse_matrix(markdown: str) -> list[MatrixRow]:
     return rows
 
 
-def green_rows(markdown: str) -> list[MatrixRow]:
-    return [row for row in parse_matrix(markdown) if row.status == GREEN]
+def evidence_rows(markdown: str) -> list[MatrixRow]:
+    """Rows claiming their fixtures pass -- `◐` and `✅` alike."""
+    return [row for row in parse_matrix(markdown) if row.status in EVIDENCE_STATUSES]
 
 
 def is_registered(harness: str, fixture: str) -> bool:
@@ -152,6 +172,33 @@ def _check_category_list(
                 failures.append(f"{origin} needs a non-empty `{field}`")
 
 
+def _check_acceptance(
+    where: str, pep: str, row: MatrixRow, core_gaps: list[str], failures: list[str],
+) -> None:
+    """Enforce D-177's rule: any `core` gap forces `◐`; `✅` requires zero.
+
+    Checked in both directions, because each failure is a different defect. A
+    `✅` row with core gaps is the #248 overclaim itself. A `◐` row with none is
+    a row being held below the acceptance it has earned -- harmless to a reader,
+    but it means the manifest and the matrix disagree about the same fact, and
+    letting that drift is how the first direction stops being trustworthy.
+    """
+    if row.status == ACCEPTED and core_gaps:
+        failures.append(
+            f"{where}: PEP {pep} is ✅ (whole-PEP acceptance) but records "
+            f"{len(core_gaps)} unimplemented core category/categories "
+            f"({', '.join(repr(gap) for gap in core_gaps)}) — mark the row ◐, or "
+            "reclassify the gap as `out-of-scope` with a reason if it is a "
+            "deliberate permanent non-goal"
+        )
+    elif row.status == SUBSET and not core_gaps:
+        failures.append(
+            f"{where}: PEP {pep} is ◐ (subset) but records no unimplemented core "
+            "category — either name the core gap that keeps it a subset, or "
+            "promote the row to ✅"
+        )
+
+
 def validate(markdown: str, manifest: Any, harness: str) -> None:
     """Raises `BreadthError` describing every disagreement found, or returns."""
     failures: list[str] = []
@@ -167,10 +214,10 @@ def validate(markdown: str, manifest: Any, harness: str) -> None:
     if not isinstance(rows, list):
         raise BreadthError("the breadth manifest needs a `rows` list")
 
-    matrix = green_rows(markdown)
+    matrix = evidence_rows(markdown)
     if not matrix:
         raise BreadthError(
-            "no ✅ rows parsed out of the conformance matrix — "
+            "no ◐ or ✅ rows parsed out of the conformance matrix — "
             "the check would pass vacuously"
         )
     matrix_by_key = {row.key: row for row in matrix}
@@ -212,7 +259,7 @@ def validate(markdown: str, manifest: Any, harness: str) -> None:
         if key not in matrix_by_key:
             failures.append(
                 f"{where} declares PEP {pep} citing {list(fixtures)}, "
-                "which matches no ✅ row in the matrix"
+                "which matches no ◐ or ✅ row in the matrix"
             )
             continue
 
@@ -229,9 +276,9 @@ def validate(markdown: str, manifest: Any, harness: str) -> None:
         if isinstance(proven, list):
             if not proven:
                 failures.append(
-                    f"{where}: PEP {pep} is ✅ but proves no semantic category — "
-                    "a green row with no proven breadth is exactly the overclaim "
-                    "this manifest exists to surface"
+                    f"{where}: PEP {pep} is {row.status} but proves no semantic "
+                    "category — an evidence-backed row with no proven breadth is "
+                    "exactly the overclaim this manifest exists to surface"
                 )
             for item in proven:
                 if not isinstance(item, dict):
@@ -243,10 +290,26 @@ def validate(markdown: str, manifest: Any, harness: str) -> None:
                         f"{item.get('category', '?')!r} cites `{evidence}`, "
                         "which is not one of this row's fixtures"
                     )
+        not_proven = entry.get("not_proven")
         _check_category_list(
-            entry.get("not_proven"), "not_proven", where, ("category", "reason"),
+            not_proven, "not_proven", where, ("category", "kind", "reason"),
             failures,
         )
+        if isinstance(not_proven, list):
+            core_gaps = []
+            for item in not_proven:
+                if not isinstance(item, dict):
+                    continue
+                kind = item.get("kind")
+                if kind not in GAP_KINDS:
+                    failures.append(
+                        f"{where}: not_proven category "
+                        f"{item.get('category', '?')!r} has `kind` {kind!r}, "
+                        f"which is not one of {list(GAP_KINDS)}"
+                    )
+                elif kind == CORE:
+                    core_gaps.append(item.get("category", "?"))
+            _check_acceptance(where, pep, row, core_gaps, failures)
 
         for fixture in fixtures:
             if not is_registered(harness, fixture):
@@ -258,8 +321,8 @@ def validate(markdown: str, manifest: Any, harness: str) -> None:
     for key, row in matrix_by_key.items():
         if key not in seen:
             failures.append(
-                f"line {row.line_number}: PEP {row.pep} is ✅ but has no breadth "
-                "manifest entry declaring what its evidence proves"
+                f"line {row.line_number}: PEP {row.pep} is {row.status} but has no "
+                "breadth manifest entry declaring what its evidence proves"
             )
 
     if failures:
@@ -294,8 +357,12 @@ def main(argv: list[str] | None = None) -> int:
         print(str(error), file=sys.stderr)
         return 1
 
-    rows = green_rows(args.matrix.read_text(encoding="utf-8"))
-    print(f"conformance breadth: {len(rows)} green rows, all declared")
+    rows = evidence_rows(args.matrix.read_text(encoding="utf-8"))
+    accepted = sum(1 for row in rows if row.status == ACCEPTED)
+    print(
+        f"conformance breadth: {len(rows)} evidence-backed rows, all declared "
+        f"({accepted} accepted as whole-PEP, {len(rows) - accepted} subset)"
+    )
     return 0
 
 

@@ -7,7 +7,7 @@ asserting the checker rejects it. A checker whose failure paths are never
 exercised is a checker that can rot into a no-op, which is exactly how the
 matrix drifted in the first place (#572).
 
-The last test runs the real repository files, so this suite also fails if the
+The last tests run the real repository files, so this suite also fails if the
 checked-in manifest stops describing the checked-in matrix.
 """
 
@@ -29,7 +29,7 @@ CHECKER = importlib.util.module_from_spec(CHECKER_SPEC)
 CHECKER_SPEC.loader.exec_module(CHECKER)
 BreadthError = CHECKER.BreadthError
 cited_fixtures = CHECKER.cited_fixtures
-green_rows = CHECKER.green_rows
+evidence_rows = CHECKER.evidence_rows
 is_registered = CHECKER.is_registered
 parse_matrix = CHECKER.parse_matrix
 validate = CHECKER.validate
@@ -45,21 +45,31 @@ MATRIX = """
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [498](https://peps.python.org/pep-0498/) | f-strings | syntax | `pep_0498_fstrings.py` | ✅ |
+| [498](https://peps.python.org/pep-0498/) | f-strings | syntax | `pep_0498_fstrings.py` | ◐ |
 | [3102](https://peps.python.org/pep-3102/) | Keyword-only arguments | syntax | `py30/pep_3102_kwonly.py` | ☐ |
 | [3110](https://peps.python.org/pep-3110/) | `try`/`except` | sem | `issue_382_exceptions.rs` | ⚙ |
+| [414](https://peps.python.org/pep-0414/) | Unicode literals | syntax | `pep_0414_u_prefix.py` | ✅ |
 """.lstrip()
 
 HARNESS = """
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/pep_0498_fstrings.py");
+    let other = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/pep_0414_u_prefix.py");
     /// See `pep_0594_dead_battery.py` for the negative control.
 """
 
 
 def manifest() -> dict:
+    """A manifest that validates against `MATRIX` and `HARNESS` unmutated.
+
+    It carries one row of each evidence status on purpose: a `◐` row whose one
+    gap is `core`, and a `✅` row whose one gap is `out-of-scope`. Both sides of
+    D-177's acceptance rule are therefore exercised by the accepting path, not
+    only by the mutations below.
+    """
     return {
-        "manifest_version": 1,
+        "manifest_version": 2,
         "rows": [
             {
                 "pep": "[498](https://peps.python.org/pep-0498/)",
@@ -75,11 +85,33 @@ def manifest() -> dict:
                 "not_proven": [
                     {
                         "category": "format specifiers",
+                        "kind": "core",
                         "reason": "rejected with C0001 in HIR lowering",
                         "issue": 248,
                     }
                 ],
-            }
+            },
+            {
+                "pep": "[414](https://peps.python.org/pep-0414/)",
+                "feature": "Unicode literals",
+                "matrix_line": 12,
+                "fixtures": ["pep_0414_u_prefix.py"],
+                "proven": [
+                    {
+                        "category": "the bare `u` prefix on a str literal",
+                        "evidence": "pep_0414_u_prefix.py",
+                    }
+                ],
+                "not_proven": [
+                    {
+                        "category": "prefix combinations such as `ur''`",
+                        "kind": "out-of-scope",
+                        "reason": "Python 3 rejects every combination of `u` with "
+                        "`r`, `b`, or `f` as a syntax error, so there is no valid "
+                        "combined-prefix category for a fixture to cover.",
+                    }
+                ],
+            },
         ],
     }
 
@@ -87,13 +119,13 @@ def manifest() -> dict:
 class ParsingTests(unittest.TestCase):
     def test_only_status_marked_five_cell_rows_are_matrix_rows(self) -> None:
         rows = parse_matrix(MATRIX)
-        self.assertEqual([row.status for row in rows], ["✅", "☐", "⚙"])
+        self.assertEqual([row.status for row in rows], ["◐", "☐", "⚙", "✅"])
 
-    def test_green_rows_selects_the_passing_rows_only(self) -> None:
-        self.assertEqual([row.pep[1:4] for row in green_rows(MATRIX)], ["498"])
+    def test_evidence_rows_selects_the_subset_and_accepted_rows_only(self) -> None:
+        self.assertEqual([row.pep[1:4] for row in evidence_rows(MATRIX)], ["498", "414"])
 
     def test_the_line_number_is_one_based(self) -> None:
-        self.assertEqual(green_rows(MATRIX)[0].line_number, 9)
+        self.assertEqual(evidence_rows(MATRIX)[0].line_number, 9)
 
     def test_cited_fixtures_takes_backtick_spans_ending_in_py(self) -> None:
         cell = "`a.py` and [link](x) plus `b.rs` then `c.py`"
@@ -110,10 +142,10 @@ class ParsingTests(unittest.TestCase):
     def test_the_row_key_separates_two_rows_sharing_one_pep(self) -> None:
         shared = MATRIX + (
             "| [498](https://peps.python.org/pep-0498/) | other slice | syntax |"
-            " `pep_0498_other.py` | ✅ |\n"
+            " `pep_0498_other.py` | ◐ |\n"
         )
-        keys = {row.key for row in green_rows(shared)}
-        self.assertEqual(len(keys), 2)
+        keys = {row.key for row in evidence_rows(shared)}
+        self.assertEqual(len(keys), 3)
 
 
 class ValidationTests(unittest.TestCase):
@@ -127,20 +159,20 @@ class ValidationTests(unittest.TestCase):
     def test_the_unmutated_input_is_accepted(self) -> None:
         validate(MATRIX, manifest(), HARNESS)
 
-    def test_a_green_row_with_no_manifest_entry_is_rejected(self) -> None:
+    def test_an_evidence_row_with_no_manifest_entry_is_rejected(self) -> None:
         self.assert_rejected(
             lambda document: document["rows"].clear(),
-            "is ✅ but has no breadth manifest entry",
+            "but has no breadth manifest entry",
         )
 
-    def test_an_entry_for_a_row_that_is_not_green_is_rejected(self) -> None:
+    def test_an_entry_for_a_row_that_is_not_evidence_backed_is_rejected(self) -> None:
         def mutate(document: dict) -> None:
             extra = copy.deepcopy(document["rows"][0])
             extra["pep"] = "[3102](https://peps.python.org/pep-3102/)"
             extra["fixtures"] = ["py30/pep_3102_kwonly.py"]
             document["rows"].append(extra)
 
-        self.assert_rejected(mutate, "matches no ✅ row in the matrix")
+        self.assert_rejected(mutate, "matches no ◐ or ✅ row in the matrix")
 
     def test_an_empty_proven_list_is_rejected(self) -> None:
         self.assert_rejected(
@@ -152,15 +184,11 @@ class ValidationTests(unittest.TestCase):
         def mutate(document: dict) -> None:
             document["rows"][0]["fixtures"] = ["pep_0594_dead_battery.py"]
             document["rows"][0]["proven"][0]["evidence"] = "pep_0594_dead_battery.py"
-            # Keep the row key matching the matrix by rewriting the matrix cell
-            # is not possible here, so this asserts the registration failure
-            # alongside the key failure; both are real.
 
-        document = manifest()
-        mutate(document)
-        with self.assertRaises(BreadthError) as caught:
-            validate(MATRIX, document, HARNESS)
-        self.assertIn("matches no ✅ row in the matrix", str(caught.exception))
+        # Rewriting the fixture also breaks the row key, so this asserts the key
+        # failure; the registration failure has its own test below, on a matrix
+        # whose cell was rewritten to match.
+        self.assert_rejected(mutate, "matches no ◐ or ✅ row in the matrix")
 
     def test_an_unregistered_fixture_on_a_matching_row_is_rejected(self) -> None:
         matrix = MATRIX.replace("`pep_0498_fstrings.py`", "`pep_0498_unrun.py`")
@@ -203,6 +231,31 @@ class ValidationTests(unittest.TestCase):
             "needs a non-empty `reason`",
         )
 
+    def test_a_not_proven_entry_without_a_kind_is_rejected(self) -> None:
+        self.assert_rejected(
+            lambda document: document["rows"][0]["not_proven"][0].pop("kind"),
+            "needs a non-empty `kind`",
+        )
+
+    def test_an_unrecognized_gap_kind_is_rejected(self) -> None:
+        self.assert_rejected(
+            lambda document: document["rows"][0]["not_proven"][0].update(
+                kind="partial"
+            ),
+            "has `kind` 'partial', which is not one of",
+        )
+
+    def test_a_subset_row_with_no_core_gap_is_rejected(self) -> None:
+        # The other direction of D-177's rule: a row held at ◐ while its
+        # manifest says every gap is a permanent non-goal means the manifest
+        # and the matrix disagree about the same fact.
+        self.assert_rejected(
+            lambda document: document["rows"][0]["not_proven"][0].update(
+                kind="out-of-scope"
+            ),
+            "is ◐ (subset) but records no unimplemented core category",
+        )
+
     def test_a_missing_feature_is_rejected(self) -> None:
         self.assert_rejected(
             lambda document: document["rows"][0].pop("feature"),
@@ -218,7 +271,7 @@ class ValidationTests(unittest.TestCase):
     def test_a_wrong_manifest_version_is_rejected(self) -> None:
         self.assert_rejected(
             lambda document: document.update(manifest_version=99),
-            "`manifest_version` must be 1",
+            "`manifest_version` must be 2",
         )
 
     def test_a_non_object_manifest_is_rejected(self) -> None:
@@ -227,7 +280,7 @@ class ValidationTests(unittest.TestCase):
 
     def test_a_manifest_without_rows_is_rejected(self) -> None:
         with self.assertRaises(BreadthError) as caught:
-            validate(MATRIX, {"manifest_version": 1}, HARNESS)
+            validate(MATRIX, {"manifest_version": 2}, HARNESS)
         self.assertIn("needs a `rows` list", str(caught.exception))
 
     def test_a_non_object_row_is_rejected(self) -> None:
@@ -236,40 +289,135 @@ class ValidationTests(unittest.TestCase):
             "must be an object",
         )
 
-    def test_a_matrix_with_no_green_rows_fails_rather_than_passing_vacuously(
+    def test_a_matrix_with_no_evidence_rows_fails_rather_than_passing_vacuously(
         self,
     ) -> None:
+        empty = MATRIX.replace("| ◐ |", "| ☐ |").replace("| ✅ |", "| ☐ |")
         with self.assertRaises(BreadthError) as caught:
-            validate(MATRIX.replace("✅", "☐"), {"manifest_version": 1, "rows": []}, HARNESS)
+            validate(empty, {"manifest_version": 2, "rows": []}, HARNESS)
         self.assertIn("would pass vacuously", str(caught.exception))
 
 
+#: #248's three named counterexamples: narrow fixtures whose rows were marked
+#: ✅ as if they proved the whole PEP. Each is `(pep, feature, fixture,
+#: unimplemented core category)`. They are the concrete cases this rule exists
+#: to make unrepresentable, so they are tested as data rather than prose.
+OVERCLAIM_COUNTEREXAMPLES = [
+    (
+        "498",
+        "f-strings",
+        "pep_0498_fstrings.py",
+        "format specifiers",
+    ),
+    (
+        "3105",
+        "`print` as a function",
+        "pep_3105_print_function.py",
+        "the `sep=` and `end=` keyword arguments",
+    ),
+    (
+        "526",
+        "Variable annotations",
+        "pep_0526_var_annotations.py",
+        "parenthesized annotated assignment targets",
+    ),
+]
+
+
+class OverclaimTests(unittest.TestCase):
+    """A row cannot carry ✅ while declaring an unimplemented core category."""
+
+    @staticmethod
+    def _single_row_inputs(
+        pep: str, feature: str, fixture: str, gap: str, kind: str
+    ) -> tuple[str, dict, str]:
+        link = f"[{pep}](https://peps.python.org/pep-{pep.zfill(4)}/)"
+        matrix = (
+            "| PEP | Feature | Cat | Test | St |\n"
+            "|---|---|---|---|---|\n"
+            f"| {link} | {feature} | syntax | `{fixture}` | ✅ |\n"
+        )
+        document = {
+            "manifest_version": 2,
+            "rows": [
+                {
+                    "pep": link,
+                    "feature": feature,
+                    "matrix_line": 3,
+                    "fixtures": [fixture],
+                    "proven": [
+                        {"category": "the fixture's own narrow slice", "evidence": fixture}
+                    ],
+                    "not_proven": [
+                        {"category": gap, "kind": kind, "reason": "not implemented"}
+                    ],
+                }
+            ],
+        }
+        harness = f'.join("tests/fixtures/{fixture}");'
+        return matrix, document, harness
+
+    def test_a_core_gap_forces_the_row_off_whole_pep_acceptance(self) -> None:
+        for pep, feature, fixture, gap in OVERCLAIM_COUNTEREXAMPLES:
+            with self.subTest(pep=pep):
+                matrix, document, harness = self._single_row_inputs(
+                    pep, feature, fixture, gap, "core"
+                )
+                with self.assertRaises(BreadthError) as caught:
+                    validate(matrix, document, harness)
+                message = str(caught.exception)
+                self.assertIn("whole-PEP acceptance", message)
+                self.assertIn(gap, message)
+
+    def test_the_same_row_is_accepted_once_the_gap_is_a_declared_non_goal(self) -> None:
+        # The rule keys on the gap's classification, not on the row having any
+        # gap at all -- otherwise a deliberate permanent non-goal (PEP 594's
+        # unallowlisted modules, PEP 709's undetectable inlining) could never
+        # reach ✅ no matter how complete the implementation was.
+        for pep, feature, fixture, gap in OVERCLAIM_COUNTEREXAMPLES:
+            with self.subTest(pep=pep):
+                matrix, document, harness = self._single_row_inputs(
+                    pep, feature, fixture, gap, "out-of-scope"
+                )
+                validate(matrix, document, harness)
+
+
 class RepositoryTests(unittest.TestCase):
+    @staticmethod
+    def _checked_in_manifest() -> dict:
+        return json.loads(
+            (
+                REPOSITORY_ROOT / "tests/fixtures/conformance-breadth-manifest.json"
+            ).read_text(encoding="utf-8")
+        )
+
     def test_the_checked_in_manifest_describes_the_checked_in_matrix(self) -> None:
         matrix = (REPOSITORY_ROOT / "docs/PYTHON_STANDARDS.md").read_text(
             encoding="utf-8"
         )
-        document = json.loads(
-            (
-                REPOSITORY_ROOT / "tests/fixtures/conformance-breadth-manifest.json"
-            ).read_text(encoding="utf-8")
-        )
         harness = (REPOSITORY_ROOT / "tests/conformance.rs").read_text(encoding="utf-8")
-        validate(matrix, document, harness)
+        validate(matrix, self._checked_in_manifest(), harness)
 
-    def test_every_green_row_records_at_least_one_unproven_category_or_says_why(
-        self,
-    ) -> None:
-        # Not a validator rule -- a whole-PEP row that genuinely proves
-        # everything is legitimate -- but a manifest where *no* row records a
-        # gap would mean the population pass was not actually done.
-        document = json.loads(
-            (
-                REPOSITORY_ROOT / "tests/fixtures/conformance-breadth-manifest.json"
-            ).read_text(encoding="utf-8")
-        )
+    def test_every_evidence_row_records_at_least_one_unproven_category(self) -> None:
+        # Not a validator rule -- a row that genuinely proves everything and
+        # has no non-goal to record is legitimate -- but a manifest where *no*
+        # row records a gap would mean the population pass was not actually
+        # done.
+        document = self._checked_in_manifest()
         with_gaps = [row for row in document["rows"] if row["not_proven"]]
         self.assertGreater(len(with_gaps), len(document["rows"]) // 2)
+
+    def test_the_checked_in_manifest_classifies_every_gap(self) -> None:
+        # Redundant with the validator by construction, and deliberately so:
+        # if a future edit ever relaxes the `kind` requirement, this asserts
+        # the checked-in data still carries the classification the roadmap's
+        # count is derived from.
+        document = self._checked_in_manifest()
+        kinds = {
+            gap["kind"] for row in document["rows"] for gap in row["not_proven"]
+        }
+        self.assertTrue(kinds)
+        self.assertTrue(kinds <= {"core", "out-of-scope"}, kinds)
 
 
 if __name__ == "__main__":

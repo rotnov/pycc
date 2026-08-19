@@ -32,9 +32,9 @@ than an accident of those two files.
 `tests/conformance_matrix_guard.rs` is what now holds the line (see
 [D-175](./decisions/D-175-scope-the-conformance-matrix-fixture-guard-to-green.md)):
 a `☐` row's `pyNN/`-prefixed path is a *planned* path for a fixture nobody has
-authored yet and is deliberately not asserted to exist, while a `✅` row claims
-its fixture passes and so must cite a path that resolves under `tests/fixtures/`
-and is registered in `tests/conformance.rs`. The guard also runs the inverse
+authored yet and is deliberately not asserted to exist, while an evidence-backed
+row — `◐` or `✅` — claims its fixture passes and so must cite a path that
+resolves under `tests/fixtures/` and is registered in `tests/conformance.rs`. The guard also runs the inverse
 direction — every `tests/fixtures/pep_*.py` must be registered in
 `tests/conformance.rs` or carry an allowlist entry recording why it is not.
 
@@ -44,16 +44,27 @@ separate contract, recorded per row in
 `tests/fixtures/conformance-breadth-manifest.json` and validated by
 `scripts/check_conformance_breadth.py` (see
 [D-176](./decisions/D-176-declare-per-row-conformance-breadth-in-a-validated.md)).
-Every `✅` row declares what its fixtures actually prove (`proven`, each item
-citing one of that row's own fixtures as evidence) and what the PEP contains
-that they do not (`not_proven`, each item giving a reason and, where one
-exists, the issue tracking it). The checker parses `docs/PYTHON_STANDARDS.md`
-with exactly the guard's own rules, so the two cannot disagree about which
-rows are green or which fixtures a row cites, and it requires a bijection
-between manifest entries and green rows in both directions — flipping a row
-to `✅` without declaring its breadth fails, and so does a manifest entry for
-a row that is no longer green. `scripts/test_check_conformance_breadth.py` is
-its mutation self-test; both run without `cargo`:
+Every evidence-backed row declares what its fixtures actually prove (`proven`,
+each item citing one of that row's own fixtures as evidence) and what the PEP
+contains that they do not (`not_proven`, each item giving a reason, the issue
+tracking it where one exists, and a required `kind`). The checker parses
+`docs/PYTHON_STANDARDS.md` with exactly the guard's own rules, so the two
+cannot disagree about which rows are evidence-backed or which fixtures a row
+cites, and it requires a bijection between manifest entries and those rows in
+both directions — flipping a row to `◐`/`✅` without declaring its breadth
+fails, and so does a manifest entry for a row that is no longer evidence-backed.
+
+`kind` is what separates the two evidence statuses. A gap classified `core` is
+a category of the PEP that is simply not implemented or not exercised; one
+classified `out-of-scope` is a deliberate, permanent non-goal for pycc. The
+checker enforces
+[D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md)'s
+rule in both directions — **any `core` gap forces `◐`; `✅` requires zero** —
+so a row's marker is derived mechanically from its classified gaps rather than
+chosen at review time, and a narrow fixture cannot be promoted to whole-PEP
+acceptance. The manifest is at `manifest_version: 2`, which is what makes
+`kind` required. `scripts/test_check_conformance_breadth.py` is the mutation
+self-test for all of this; both run without `cargo`:
 
 ```
 python3 scripts/check_conformance_breadth.py
