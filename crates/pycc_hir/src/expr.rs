@@ -1290,4 +1290,23 @@ mod tests {
             "unexpected message: {message}"
         );
     }
+
+    #[test]
+    fn renaming_walks_through_a_unary_operand() {
+        let renamed = super::rename_name_in_expr(
+            HirExpr::UnaryOp {
+                op: UnaryOpKind::USub,
+                operand: Box::new(HirExpr::Name("v".to_string())),
+            },
+            "v",
+            "$comp0",
+        );
+        assert_eq!(
+            renamed,
+            HirExpr::UnaryOp {
+                op: UnaryOpKind::USub,
+                operand: Box::new(HirExpr::Name("$comp0".to_string())),
+            }
+        );
+    }
 }

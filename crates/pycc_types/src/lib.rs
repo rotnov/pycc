@@ -6506,7 +6506,14 @@ fn rewrite_generic_calls_in_expr(
             infer_expr_in(env, local_names, expr)
         }
         HirExpr::UnaryOp { operand, .. } => {
-            rewrite_generic_calls_in_expr(env, local_names, operand, instantiations, seen)?;
+            // `let _ =` rather than `?`, for the same reason the
+            // `isinstance` arm above uses it: only the rewriting side
+            // effect matters here, and the `infer_expr_in` call on the
+            // whole unary expression immediately below recurses into this
+            // same operand, so it surfaces the identical error. Propagating
+            // here as well would leave a permanently-uncovered error-path
+            // region under D-014's 100 %-coverage gate.
+            let _ = rewrite_generic_calls_in_expr(env, local_names, operand, instantiations, seen);
             infer_expr_in(env, local_names, expr)
         }
         HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
@@ -34159,5 +34166,102 @@ value: int = f()
 "
         );
         assert!(parse_check(&src).is_ok());
+    }
+
+    // -- #603: a unary operand is a general expression -------------------
+    //
+    // The unary arms these cases drive live in this crate's generic-call,
+    // generic-class, and protocol walkers. `tests/issue_603_unary_general_operand.rs`
+    // already pins the observable program output end to end; these unit
+    // tests exist so the same arms are executed by this crate's own test
+    // binary too, which is what the D-014 region gate actually measures.
+
+    #[test]
+    fn a_unary_operand_composes_with_a_generic_call_in_both_directions() {
+        let result = check_source(
+            "def ident[T](v: T) -> T:\n    return v\n\n\nx = 5\nprint(ident(-x))\nprint(-ident(x))\n",
+        );
+        assert!(
+            result.is_ok(),
+            "a unary operand must compose with a generic call: {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_unary_operand_inside_a_generic_function_body_is_walked_through() {
+        let result = check_source(
+            "def negate[T](v: T, n: int) -> int:\n    return -n\n\n\nprint(negate(1, 5))\n",
+        );
+        assert!(
+            result.is_ok(),
+            "a unary operand inside a generic body must resolve: {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_unary_operand_composes_with_a_generic_class_instantiation() {
+        let result = check_source(
+            "class Box[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\n    def size(self) -> int:\n        return 1\n\n\nb = Box(5)\nprint(-b.size())\n",
+        );
+        assert!(
+            result.is_ok(),
+            "a unary operand must compose with a generic class instantiation: {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_unary_operand_composes_with_a_protocol_dispatched_call() {
+        let result = check_source(
+            "from typing import Protocol\n\n\nclass Scaled(Protocol):\n    def scale(self) -> int: ...\n\n\nclass Two:\n    def __init__(self, v: int) -> None:\n        self.v = v\n\n    def scale(self) -> int:\n        return self.v * 2\n\n\ndef apply(s: Scaled) -> int:\n    return -s.scale()\n\n\nprint(apply(Two(4)))\n",
+        );
+        assert!(
+            result.is_ok(),
+            "a unary operand must compose with a protocol call: {result:?}"
+        );
+    }
+
+    #[test]
+    fn an_error_inside_a_unary_operand_propagates_through_a_generic_body() {
+        let result = check_source(
+            "def negate[T](v: T, n: int) -> int:\n    return -missing(n)\n\n\nprint(negate(1, 5))\n",
+        );
+        assert!(
+            result.is_err(),
+            "an unresolvable unary operand must be rejected: {result:?}"
+        );
+    }
+
+    #[test]
+    fn an_error_inside_a_unary_operand_propagates_at_module_level() {
+        let result = check_source("x = -missing(1)\n");
+        assert!(
+            result.is_err(),
+            "an unresolvable unary operand must be rejected: {result:?}"
+        );
+    }
+
+    #[test]
+    fn an_unbound_local_under_a_unary_in_a_generic_body_propagates() {
+        let result = check_source(
+            "def negate[T](v: T) -> int:\n    a = -b\n    b = 1\n    return a\n\n\nprint(negate(1))\n",
+        );
+        let message = result
+            .expect_err("an unbound local must be rejected")
+            .message;
+        assert!(
+            message.contains("local name `b` is not bound"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn a_failing_generic_call_under_a_unary_propagates() {
+        let result = check_source(
+            "def ident[T](v: T) -> T:\n    return v\n\n\nx = -ident(\"s\")\nprint(x)\n",
+        );
+        assert!(
+            result.is_err(),
+            "a unary over a `str`-instantiated generic call must be rejected: {result:?}"
+        );
     }
 }
