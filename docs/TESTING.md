@@ -999,6 +999,23 @@ execute the freshly built compiler and bind its current diagnostics and D-072
 backend boundary, so they are part of the compiler contract rather than an
 agent-assets-only check.
 
+Two documents under `docs/` are classified as compiler inputs rather than cheap
+prose, because a Rust test reads each one as data: `docs/DIAGNOSTICS.md`, read by
+the diagnostics-registry tests, and — since
+[#591](https://github.com/rotnov/pycc/issues/591) — `docs/PYTHON_STANDARDS.md`,
+read by `tests/conformance_matrix_guard.rs`. Left in the `docs/` bucket they
+classify as an empty selection, so the change most likely to break each guard —
+editing the very document it asserts on — is the change that skips it, and the
+breakage surfaces on the later `main` push run instead of on the pull request
+that caused it. That is a deliberate exception to the classifier's
+docs-are-cheap rule and not a relaxation of it: a pull request that promotes a
+conformance matrix row is asserting that the row's fixtures pass, so running the
+compiler jobs on it verifies the claim being made rather than adding unrelated
+cost. `scripts/test_classify_ci_changes.py`'s
+`test_every_input_the_conformance_matrix_guard_reads_selects_compiler` binds all
+three of that guard's inputs, so returning the matrix to the cheap-docs bucket
+fails the classifier's own self-test.
+
 This active scheduling change supersedes only D-014's instruction to execute
 coverage on literally every pull request: coverage remains mandatory for every
 compiler-relevant pull request selected by the classifier and every push to

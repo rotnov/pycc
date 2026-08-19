@@ -65,6 +65,14 @@ COMPILER_FILES = frozenset(
         "Cargo.lock",
         "build.rs",
         "docs/DIAGNOSTICS.md",
+        # Both of these documents are test inputs, not only prose.
+        # `docs/DIAGNOSTICS.md` is read by the diagnostics-registry tests, and
+        # `docs/PYTHON_STANDARDS.md` is read by `tests/conformance_matrix_guard.rs`
+        # (issue #591). Left in the `docs/` bucket below they would classify as
+        # EMPTY_SELECTION, so the one change most likely to break each guard --
+        # editing the document it asserts on -- would be the change that skips it,
+        # surfacing only on the later `main` push run.
+        "docs/PYTHON_STANDARDS.md",
         "rust-toolchain",
         "rust-toolchain.toml",
     }
