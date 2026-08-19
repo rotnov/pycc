@@ -121,10 +121,13 @@ fn require_inline_int(encoded: i64, context: &str) -> i64 {
 /// D-058: hand-rolled sign-magnitude limbs, base 2^32, little-endian,
 /// no trailing zero limbs except a single `[0]` representing zero
 /// itself. Never freed (leaked) -- unlike `PyStrObj`, D-060 only commits
-/// `str` to real refcounting; a bigint is a rare, overflow-only path
-/// with no v0.1 construct that could leak it in a hot loop the way an
-/// unbounded string-building loop could (this is a deliberate, narrower
-/// "simplest safe default" than `str`'s, recorded alongside D-061).
+/// `str` to real refcounting; a bigint is an overflow-only path, and the
+/// concession is a deliberate, narrower "simplest safe default" than
+/// `str`'s, recorded alongside D-061. Since #147 (D-179) a `range` loop
+/// whose induction variable crosses the tagged range keeps iterating
+/// instead of aborting, so each such iteration's `int_add` leaks one
+/// `BigIntObj`; that is now the widest exposure of this concession, and it
+/// is bounded by the loop's own trip count rather than being unbounded.
 struct BigIntObj {
     negative: bool,
     limbs: Vec<u32>,
@@ -252,6 +255,54 @@ fn to_sign_and_magnitude(tagged: i64) -> (bool, Vec<u32>) {
     } else {
         let b = unsafe { bigint_ref(tagged) };
         (b.negative, b.limbs.clone())
+    }
+}
+
+/// The sign of a sign-magnitude pair as `-1`/`0`/`1`.
+///
+/// **Zero is decided by the magnitude, never by the `negative` flag.**
+/// `bigint_add_signed` normalizes an equal-magnitude, opposite-sign result
+/// to `BigIntObj { negative: false, limbs: vec![0] }`, so `!negative` does
+/// *not* imply "positive" -- exactly the trap `pycc_rt_int_truthy` already
+/// documents for its own magnitude inspection.
+fn magnitude_sign(negative: bool, magnitude: &[u32]) -> i8 {
+    if trim(magnitude) == [0] {
+        0
+    } else if negative {
+        -1
+    } else {
+        1
+    }
+}
+
+/// Orders two encoded int-compatible words (D-061/D-141) across the whole
+/// representation, including heap bigints and the bool-identity markers.
+///
+/// Two inline operands take the cheap `i64` path so an ordinary smallint
+/// `range` loop allocates nothing per iteration. As soon as either side is a
+/// bigint the comparison decodes both to sign-magnitude and orders them
+/// sign-first, then by magnitude (reversed for two negatives).
+///
+/// This is deliberately *not* `pycc_rt_int_cmp`'s general comparison
+/// operator: `int_cmp` keeps its D-141 bigint boundary (see #618). This
+/// helper exists for the loop-control comparison `range_continue` performs,
+/// which #147 makes bigint-capable.
+fn encoded_int_cmp(a: i64, b: i64) -> std::cmp::Ordering {
+    if let (Some(a), Some(b)) = (inline_int_value(a), inline_int_value(b)) {
+        return a.cmp(&b);
+    }
+    let (a_negative, a_magnitude) = to_sign_and_magnitude(a);
+    let (b_negative, b_magnitude) = to_sign_and_magnitude(b);
+    let a_sign = magnitude_sign(a_negative, &a_magnitude);
+    let b_sign = magnitude_sign(b_negative, &b_magnitude);
+    if a_sign != b_sign {
+        return a_sign.cmp(&b_sign);
+    }
+    match a_sign {
+        0 => std::cmp::Ordering::Equal,
+        1 => magnitude_cmp(&a_magnitude, &b_magnitude),
+        // Both negative: the larger magnitude is the smaller value.
+        _ => magnitude_cmp(&b_magnitude, &a_magnitude),
     }
 }
 
@@ -567,8 +618,9 @@ pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
 // past a plain `extern "C" fn`'s own boundary is caught right there and
 // turned into a process abort, regardless of who calls it -- including
 // this crate's own same-binary Rust tests. `pycc_rt_range_continue` *can*
-// panic (`require_inline_int`'s bigint-rejection path, and the zero-step
-// case below), so it needs the same split every other panicking
+// panic (`classify_encoded_int`'s fail-closed rejection of a malformed
+// encoded word, and the zero-step case below), so it needs the same split
+// every other panicking
 // `pycc_rt_int_*` function already gets: a private, ordinary-Rust-ABI
 // `range_continue` holding the real logic (freely panics, unwinds
 // normally, `#[should_panic]`-testable), and a thin `pub extern "C"`
@@ -576,15 +628,23 @@ pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
 // code to call. The zero-step test below calls `range_continue` directly,
 // not the public wrapper, for the same reason every other
 // `#[should_panic]` test in this file does.
+//
+// Since #147 all three operands are compared through `encoded_int_cmp`
+// rather than decoded with `require_inline_int`, so a bigint start, stop,
+// step, or mid-loop-promoted induction variable drives the loop normally
+// instead of aborting at D-141's runtime `int` boundary. Note the zero-step
+// check reads the *step's own encoded order against zero*, not the raw
+// word: a bigint zero step (reachable via `a - a` on two promoted values)
+// must still panic, and a bigint word is never numerically `0`.
 fn range_continue(i: i64, stop: i64, step: i64) -> i8 {
-    let (i, stop, step) = (
-        require_inline_int(i, "iterating"),
-        require_inline_int(stop, "iterating"),
-        require_inline_int(step, "iterating"),
-    );
-    match step.cmp(&0) {
-        std::cmp::Ordering::Greater => i8::from(i < stop),
-        std::cmp::Ordering::Less => i8::from(i > stop),
+    let zero = tag_smallint(0);
+    match encoded_int_cmp(step, zero) {
+        std::cmp::Ordering::Greater => {
+            i8::from(encoded_int_cmp(i, stop) == std::cmp::Ordering::Less)
+        }
+        std::cmp::Ordering::Less => {
+            i8::from(encoded_int_cmp(i, stop) == std::cmp::Ordering::Greater)
+        }
         std::cmp::Ordering::Equal => panic!("pycc_rt: range() arg 3 must not be zero"),
     }
 }
@@ -592,6 +652,34 @@ fn range_continue(i: i64, stop: i64, step: i64) -> i8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_range_continue(i: i64, stop: i64, step: i64) -> i8 {
     range_continue(i, stop, step)
+}
+
+/// Normalizes one `range()` operand for D-141's bool-identity contract:
+/// `range` consumes the numeric *value* of its arguments and produces
+/// ordinary integer objects, so `True`/`False` markers become the ordinary
+/// smallints `1`/`0` before entering the induction phi. A smallint and --
+/// since #147 -- a heap bigint pass through unchanged; a malformed word
+/// fails closed inside `classify_encoded_int` exactly as before.
+///
+/// This replaces the `range_untag_operand` call to
+/// `pycc_rt_int_untag_checked` that codegen used to emit: that decoder
+/// rejects every bigint, which is precisely the #147 defect. Normalization
+/// stays a runtime call because only `pycc_rt` may interpret an encoded
+/// word.
+///
+/// Split into a private fn plus a thin wrapper for the same reason
+/// `range_continue` is (see the note above): it can panic.
+fn range_normalize_operand(encoded: i64) -> i64 {
+    match classify_encoded_int(encoded) {
+        EncodedIntKind::SmallInt | EncodedIntKind::BigInt => encoded,
+        EncodedIntKind::BoolFalse => tag_smallint(0),
+        EncodedIntKind::BoolTrue => tag_smallint(1),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_range_normalize_operand(encoded: i64) -> i64 {
+    range_normalize_operand(encoded)
 }
 
 /// Converts an encoded int-compatible value (D-061/D-141) to `f64` -- the
@@ -1843,6 +1931,7 @@ pub extern "C" fn pycc_rt_name_error(name: *const std::os::raw::c_char) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cmp::Ordering::{Equal, Greater, Less};
 
     #[test]
     fn print_i64_matches_cpython_format() {
@@ -2195,6 +2284,146 @@ mod tests {
         // comment above `range_continue`'s definition (same rationale as
         // `pycc_rt_int_add_panics_...` above).
         range_continue(tag_smallint(0), tag_smallint(3), tag_smallint(0));
+    }
+
+    /// A bigint holding exactly `2^62` -- the smallest magnitude that does
+    /// not round-trip through the tagged 63-bit encoding, i.e. the first
+    /// value `fits_smallint` rejects.
+    fn bigint_two_pow_62() -> i64 {
+        tag_bigint(bigint_from_i128(1i128 << 62))
+    }
+
+    /// A *bigint-tagged zero*, produced the way production code produces one:
+    /// `bigint_add_signed`'s equal-magnitude, opposite-sign case. Its
+    /// `negative` flag is `false`, which is exactly why sign must never be
+    /// read before magnitude.
+    fn bigint_zero() -> i64 {
+        let big = bigint_two_pow_62();
+        let zero = int_sub(big, big);
+        assert_eq!(classify_encoded_int(zero), EncodedIntKind::BigInt);
+        zero
+    }
+
+    #[test]
+    fn magnitude_sign_reads_zero_from_the_magnitude_not_the_negative_flag() {
+        assert_eq!(magnitude_sign(false, &[0]), 0);
+        // The trap this helper exists for: a normalized bigint zero carries
+        // `negative: false`, so "not negative" alone would read as positive.
+        assert_eq!(magnitude_sign(true, &[0, 0]), 0);
+        assert_eq!(magnitude_sign(false, &[1]), 1);
+        assert_eq!(magnitude_sign(true, &[1]), -1);
+    }
+
+    #[test]
+    fn encoded_int_cmp_orders_inline_operands_without_decoding() {
+        assert_eq!(encoded_int_cmp(tag_smallint(1), tag_smallint(2)), Less);
+        assert_eq!(encoded_int_cmp(tag_smallint(2), tag_smallint(1)), Greater);
+        assert_eq!(encoded_int_cmp(tag_smallint(2), tag_smallint(2)), Equal);
+        assert_eq!(encoded_int_cmp(BOOL_FALSE_MARKER, tag_smallint(0)), Equal);
+        assert_eq!(encoded_int_cmp(BOOL_TRUE_MARKER, tag_smallint(1)), Equal);
+        assert_eq!(encoded_int_cmp(BOOL_FALSE_MARKER, BOOL_TRUE_MARKER), Less);
+    }
+
+    #[test]
+    fn encoded_int_cmp_orders_bigints_against_inline_operands_in_both_positions() {
+        let big = bigint_two_pow_62();
+        let negative_big = int_sub(tag_smallint(0), big);
+        assert_eq!(encoded_int_cmp(big, tag_smallint(i64::MAX >> 1)), Greater);
+        assert_eq!(encoded_int_cmp(tag_smallint(i64::MAX >> 1), big), Less);
+        assert_eq!(encoded_int_cmp(negative_big, tag_smallint(0)), Less);
+        assert_eq!(encoded_int_cmp(tag_smallint(0), negative_big), Greater);
+        // Opposite signs on both sides of the comparison.
+        assert_eq!(encoded_int_cmp(big, negative_big), Greater);
+        assert_eq!(encoded_int_cmp(negative_big, big), Less);
+    }
+
+    #[test]
+    fn encoded_int_cmp_orders_two_bigints_of_the_same_sign_by_magnitude() {
+        let big = bigint_two_pow_62();
+        let bigger = int_add(big, tag_smallint(1));
+        assert_eq!(encoded_int_cmp(big, bigger), Less);
+        assert_eq!(encoded_int_cmp(bigger, big), Greater);
+        assert_eq!(encoded_int_cmp(big, int_add(big, tag_smallint(0))), Equal);
+
+        // Two negatives: the larger magnitude is the *smaller* value.
+        let negative = int_sub(tag_smallint(0), big);
+        let more_negative = int_sub(tag_smallint(0), bigger);
+        assert_eq!(encoded_int_cmp(more_negative, negative), Less);
+        assert_eq!(encoded_int_cmp(negative, more_negative), Greater);
+    }
+
+    #[test]
+    fn encoded_int_cmp_treats_a_bigint_zero_as_zero() {
+        let zero = bigint_zero();
+        assert_eq!(encoded_int_cmp(zero, tag_smallint(0)), Equal);
+        assert_eq!(encoded_int_cmp(zero, bigint_zero()), Equal);
+        assert_eq!(encoded_int_cmp(zero, tag_smallint(1)), Less);
+        assert_eq!(encoded_int_cmp(tag_smallint(-1), zero), Less);
+    }
+
+    #[test]
+    fn range_normalize_operand_maps_bool_markers_to_ordinary_smallints() {
+        // D-141's contract, restated by D-179: `range` consumes the numeric
+        // value and produces ordinary integer objects, so the identity
+        // markers must not survive into the induction variable.
+        assert_eq!(range_normalize_operand(BOOL_FALSE_MARKER), tag_smallint(0));
+        assert_eq!(range_normalize_operand(BOOL_TRUE_MARKER), tag_smallint(1));
+    }
+
+    #[test]
+    fn range_normalize_operand_passes_smallints_and_bigints_through_unchanged() {
+        assert_eq!(range_normalize_operand(tag_smallint(7)), tag_smallint(7));
+        assert_eq!(range_normalize_operand(tag_smallint(-7)), tag_smallint(-7));
+        let big = bigint_two_pow_62();
+        // The #147 defect in one assertion: this used to abort.
+        assert_eq!(range_normalize_operand(big), big);
+        // The public wrapper's own line, on a non-panicking input.
+        assert_eq!(pycc_rt_range_normalize_operand(big), big);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: invalid encoded int word")]
+    fn range_normalize_operand_rejects_a_malformed_word() {
+        // Calls the private fn for the usual `extern "C"` abort reason.
+        range_normalize_operand(0);
+    }
+
+    #[test]
+    fn range_continue_drives_a_loop_whose_operands_are_bigints() {
+        let start = bigint_two_pow_62();
+        let stop = int_add(start, tag_smallint(2));
+        assert_eq!(range_continue(start, stop, tag_smallint(1)), 1);
+        assert_eq!(range_continue(stop, stop, tag_smallint(1)), 0);
+        // A bigint step, ascending and descending.
+        assert_eq!(range_continue(tag_smallint(0), start, start), 1);
+        assert_eq!(
+            range_continue(
+                tag_smallint(0),
+                tag_smallint(-1),
+                int_sub(tag_smallint(0), start)
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn range_continue_stops_when_the_induction_variable_promotes_mid_loop() {
+        // The exact shape `range(4611686018427387900, 4611686018427387903, 2)`
+        // reaches: `start`/`stop`/`step` all stay smallints, but the third
+        // `int_add` produces 2^62, which `fits_smallint` rejects. The loop
+        // guard then sees a *bigint* `i` against a *smallint* `stop`.
+        let stop = tag_smallint(4_611_686_018_427_387_903);
+        let promoted = int_add(tag_smallint(4_611_686_018_427_387_902), tag_smallint(2));
+        assert_eq!(classify_encoded_int(promoted), EncodedIntKind::BigInt);
+        assert_eq!(range_continue(promoted, stop, tag_smallint(2)), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: range() arg 3 must not be zero")]
+    fn range_continue_rejects_a_bigint_zero_step() {
+        // A bigint-tagged zero is *numerically* zero even though its word is
+        // a non-zero pointer, so the guard must compare values, not words.
+        range_continue(tag_smallint(0), tag_smallint(10), bigint_zero());
     }
 
     #[test]

@@ -731,6 +731,28 @@ fn oversized_int_literal_matches_cpython_3_14_7_byte_for_byte() {
     );
 }
 
+/// #147 (D-179): `range()` bounds, steps, and induction variables that cross
+/// D-061's tagged 63-bit boundary. Registered separately from
+/// `oversized_int_literal.py` because that fixture is deliberately restricted
+/// to the operations a bigint supported *before* #147.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn bigint_range_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bigint_range.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("bigint_range_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/bigint_range.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("bigint_range_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/bigint_range.py"
+    );
+}
+
 // PEP 673 (#387 Part 1): `Self` as a method return-type annotation. A
 // method returning `Self` yields the class's own instance type, exactly
 // like CPython 3.14's deferred-evaluation semantics.

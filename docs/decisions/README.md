@@ -185,3 +185,4 @@ current.
 | [D-176](./D-176-declare-per-row-conformance-breadth-in-a-validated.md) | Declare per-row conformance breadth in a validated manifest | accepted |
 | [D-177](./D-177-scope-matrix-acceptance-to-proven-semantics.md) | Scope matrix acceptance to proven semantics | accepted |
 | [D-178](./D-178-materialize-out-of-range-int-literals-through-a.md) | Materialize out-of-range int literals through a runtime constructor | accepted |
+| [D-179](./D-179-range-loops-drive-bigint-bounds-steps-and.md) | range() loops drive bigint bounds, steps, and induction variables | accepted |
