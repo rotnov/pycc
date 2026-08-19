@@ -12,6 +12,12 @@ enforce the normal delivery path.
   `classify-changes` and `governance` to succeed, requires every selected
   compiler or Pages job to succeed, runs agent-dependent checks inside
   `governance`, and requires every unselected conditional job to be skipped.
+  `governance` is where unconditional repository-policy gates live, so a new
+  one is added as a step there rather than as its own required context --
+  issue #595 wired `scripts/check_conformance_breadth.py` in that way, and the
+  required-check list above is unchanged as a result. Prefer that placement:
+  a separate required context for a gate `ci-gate` already fans in is a second
+  control over the same contract, editable independently of the first.
   Compiler routing fans in
   `build-test-coverage` and the four-target `native-build-test`/
   `cross-compile-build`/`cross-compile-verify` Tier-1 matrix -- named directly

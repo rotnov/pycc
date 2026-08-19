@@ -97,6 +97,9 @@ jobs:
           ruby scripts/test_check_roadmap_evidence.rb
           ruby scripts/check_roadmap_evidence.rb
 
+      - name: Check conformance breadth contract (issue #595)
+        run: python3 -B scripts/check_conformance_breadth.py
+
       - name: Check README coverage badge binding (issue #211)
         run: |
           ruby scripts/check_readme_coverage_badge.rb

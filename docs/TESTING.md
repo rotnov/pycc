@@ -71,6 +71,21 @@ python3 scripts/check_conformance_breadth.py
 python3 scripts/test_check_conformance_breadth.py
 ```
 
+Since [#595](https://github.com/rotnov/pycc/issues/595) the breadth contract is
+a merge gate rather than a locally-runnable convention: the `governance` job
+runs `scripts/check_conformance_breadth.py` directly, and `ci-gate` — the
+required branch-protection check — requires `governance` unconditionally, on
+every pull request rather than only compiler-classified ones. That placement is
+deliberate: a matrix row is edited by documentation-only changes as often as by
+compiler ones, so a gate that ran only under the compiler classification would
+miss exactly the pull requests most likely to promote a row past its manifest
+entry. It also means no new branch-protection entry was needed, and none should
+be added — registering the step as its own required context would create a
+second, independently-editable gate for the same contract.
+`scripts/test_check_conformance_breadth.py`'s `CiWiringTest` binds both halves:
+it fails if the step is removed from `governance`, if `governance` leaves
+`ci-gate`'s fan-in, or if the step is made advisory with `continue-on-error`.
+
 Both of those guards reason about which fixtures a row cites and how much of
 the PEP they cover. Neither says anything about what the registered tests
 actually compare, and until [#224](https://github.com/rotnov/pycc/issues/224)
