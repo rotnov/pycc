@@ -420,5 +420,51 @@ class RepositoryTests(unittest.TestCase):
         self.assertTrue(kinds <= {"core", "out-of-scope"}, kinds)
 
 
+class CiWiringTest(unittest.TestCase):
+    """The checker is only a merge gate while required CI actually runs it.
+
+    Issue #593 landed the checker with no CI wiring at all, so a matrix row
+    could be promoted past its manifest entry and nothing would notice until
+    someone ran the script by hand. Issue #595 wires it into `governance`,
+    which `ci-gate` requires unconditionally -- `ci-gate` is the required
+    branch-protection check, so no separate protection entry is needed and
+    none should be added. These tests fail if either half of that binding is
+    removed: the step, or `governance`'s place in the aggregate gate.
+    """
+
+    WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
+
+    def setUp(self) -> None:
+        self.text = self.WORKFLOW.read_text(encoding="utf-8")
+
+    def _job_body(self, name: str) -> str:
+        start = self.text.index(f"\n  {name}:\n")
+        rest = self.text[start + 1 :]
+        lines = rest.split("\n")
+        body = [lines[0]]
+        for line in lines[1:]:
+            # A new top-level job starts at exactly two spaces of indent.
+            if line.startswith("  ") and not line.startswith("   ") and line.rstrip().endswith(":"):
+                break
+            body.append(line)
+        return "\n".join(body)
+
+    def test_the_governance_job_runs_the_breadth_checker(self) -> None:
+        self.assertIn(
+            "scripts/check_conformance_breadth.py", self._job_body("governance")
+        )
+
+    def test_ci_gate_requires_the_governance_job(self) -> None:
+        gate = self._job_body("ci-gate")
+        self.assertIn("- governance", gate)
+        self.assertIn("needs.governance.result != 'success'", gate)
+
+    def test_the_breadth_checker_is_not_wired_as_advisory(self) -> None:
+        # `continue-on-error` on the step, or on the job, would leave the
+        # gate green while the contract is violated.
+        governance = self._job_body("governance")
+        self.assertNotIn("continue-on-error", governance)
+
+
 if __name__ == "__main__":
     unittest.main()
