@@ -38,6 +38,28 @@ and is registered in `tests/conformance.rs`. The guard also runs the inverse
 direction — every `tests/fixtures/pep_*.py` must be registered in
 `tests/conformance.rs` or carry an allowlist entry recording why it is not.
 
+That guard proves a green row's fixture *exists and runs*; it deliberately
+says nothing about how much of the PEP that fixture exercises. Breadth is a
+separate contract, recorded per row in
+`tests/fixtures/conformance-breadth-manifest.json` and validated by
+`scripts/check_conformance_breadth.py` (see
+[D-176](./decisions/D-176-declare-per-row-conformance-breadth-in-a-validated.md)).
+Every `✅` row declares what its fixtures actually prove (`proven`, each item
+citing one of that row's own fixtures as evidence) and what the PEP contains
+that they do not (`not_proven`, each item giving a reason and, where one
+exists, the issue tracking it). The checker parses `docs/PYTHON_STANDARDS.md`
+with exactly the guard's own rules, so the two cannot disagree about which
+rows are green or which fixtures a row cites, and it requires a bijection
+between manifest entries and green rows in both directions — flipping a row
+to `✅` without declaring its breadth fails, and so does a manifest entry for
+a row that is no longer green. `scripts/test_check_conformance_breadth.py` is
+its mutation self-test; both run without `cargo`:
+
+```
+python3 scripts/check_conformance_breadth.py
+python3 scripts/test_check_conformance_breadth.py
+```
+
 The focused D-094 release regression in `pycc_codegen` observes the same
 production codegen helper immediately before object emission. Debug codegen
 reports no applied pass pipeline and retains both a used and an unused runtime

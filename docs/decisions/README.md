@@ -182,3 +182,4 @@ current.
 | [D-173](./D-173-exception-propagation-via-global-state-superseding-d-005.md) | Exception propagation via explicit per-thread state, superseding D-005 | accepted |
 | [D-174](./D-174-gate-the-d-084-throughput-floor-on-the-minimum-of.md) | Gate the D-084 throughput floor on the minimum of 5 samples, superseding D-132 | accepted |
 | [D-175](./D-175-scope-the-conformance-matrix-fixture-guard-to-green.md) | Scope the conformance-matrix fixture guard to green rows | accepted |
+| [D-176](./D-176-declare-per-row-conformance-breadth-in-a-validated.md) | Declare per-row conformance breadth in a validated manifest | accepted |
