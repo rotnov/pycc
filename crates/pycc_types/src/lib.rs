@@ -33965,8 +33965,70 @@ class C:
         // `check_and_resolve` runs `rewrite_generic_calls_in_expr`, whose
         // `Subscript` arm must not recurse into the bare class-name base:
         // doing so would infer it as a value and fail with T0021.
-        let src = format!("{CLASS_GETITEM_STATIC}\nvalue: int = C[3]\n");
+        //
+        // The generic function is load-bearing: `monomorphize` returns early
+        // for a module that declares no generic function and no protocol
+        // parameter, and the rewrite pass would never run at all without it.
+        let src = format!(
+            "{CLASS_GETITEM_STATIC}
+def ident[T](x: T) -> T:
+    return x
+
+echoed: int = ident(1)
+value: int = C[3]
+"
+        );
         assert!(parse_check_resolve(&src).is_ok());
+    }
+
+    #[test]
+    fn class_getitem_index_error_propagates_through_the_generic_rewrite_pass() {
+        // The rewrite pass still descends into the *index* of a class-name
+        // subscript, so an instantiation error there must surface rather than
+        // being skipped along with the base.
+        let src = format!(
+            "{CLASS_GETITEM_STATIC}
+def ident[T](x: T) -> T:
+    return x
+
+value: int = C[ident(1, 2)]
+"
+        );
+        assert_eq!(parse_check_resolve(&src).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn monomorphize_propagates_an_instantiation_error_from_a_subscript_index() {
+        // The rewrite pass descends into a subscript's index regardless of
+        // whether its base is a bare class name, so an instantiation error
+        // there must propagate. `check_and_resolve` rejects the bad call
+        // before `monomorphize` ever sees it, so the module is built by hand
+        // and handed to `monomorphize` directly, as the sibling
+        // error-propagation tests above already do.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let top = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Subscript {
+            base: Box::new(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
+            index: Box::new(HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+            }),
+        }));
+        let hir = HirModule {
+            items: vec![identity, top],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn class_getitem_propagates_an_index_inference_error() {
+        // The index is inferred before the hook is resolved, so an undefined
+        // name there is reported as such instead of reaching the class hook.
+        let src = format!("{CLASS_GETITEM_STATIC}\nvalue: int = C[missing]\n");
+        assert_eq!(parse_check(&src).unwrap_err().code, "T0021");
     }
 
     #[test]
@@ -34020,9 +34082,7 @@ value: int = C[3]
         // Only *type aliases* collide with a class name in `pycc_hir`, so a
         // plain rebinding is accepted and `C[0]` must then read the list
         // element rather than dispatching a class hook.
-        let src = format!(
-            "{CLASS_GETITEM_STATIC}\nC = [1, 2, 3]\nvalue: int = C[0]\n"
-        );
+        let src = format!("{CLASS_GETITEM_STATIC}\nC = [1, 2, 3]\nvalue: int = C[0]\n");
         assert!(
             parse_check(&src).is_ok(),
             "a rebound class name must index as the value it now holds"

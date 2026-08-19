@@ -9821,11 +9821,17 @@ mod tests {
             ],
         );
         let mir = build(&hir);
-        assert!(matches!(
-            mir.items.last(),
-            Some(MirItem::TopLevelStmt(MirStmt::ExprStmt(
-                MirExpr::Subscript { .. }
-            )))
-        ));
+        // Both outcomes of the pattern are exercised so the `matches!`
+        // fallback arm is a covered region under D-014: the trailing item is
+        // the plain subscript, and the leading item (the class's own
+        // `__init__`) is not.
+        let is_value_subscript = |item: &MirItem| {
+            matches!(
+                item,
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Subscript { .. }))
+            )
+        };
+        assert!(is_value_subscript(mir.items.last().unwrap()));
+        assert!(!is_value_subscript(&mir.items[0]));
     }
 }
