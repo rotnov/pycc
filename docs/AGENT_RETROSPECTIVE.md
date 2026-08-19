@@ -28,6 +28,57 @@ never a merge gate.
 
 ---
 
+## 2026-08-19 — Chased a red coverage gate through four merged-view report formats before reaching the per-instantiation JSON that actually showed the gap
+
+**What happened:** PR #615 (issue #603, general unary `-`/`+` on non-literal
+operands) failed `build-test-coverage` at 99.93% regions / 99.96% lines. The
+new `HirExpr::UnaryOp` arms in `pycc_hir`, `pycc_mir`, and `pycc_types` were
+all exercised end to end by `tests/issue_603_unary_general_operand.rs` (25
+passing tests, confirmed running under the coverage build), and
+`cargo llvm-cov --show-missing-lines` listed only the pre-existing
+`src/main.rs` / `src/project_config.rs` container-permission misses — nothing
+in the crates the diff touched. Diagnosis went through `--show-missing-lines`,
+then LCOV, then a hand-written JSON segment walk, then annotated text with
+`^0` region markers, before the per-function `regions` array in
+`cargo llvm-cov report --json` finally located six uncovered arms by exact
+line.
+
+**Root cause:** every one of those first four views reports the *union* of
+coverage across all compilations of a crate, while the summary table that the
+`--fail-under-regions` gate reads reports the *sum*. A crate here is compiled
+twice — plainly, into the `pycc` binary that every integration test spawns,
+and again with `--cfg test` for its own unit-test binary — and the inline
+`mod tests` suites never constructed a unary expression. The plain copy was
+fully covered, the `cfg(test)` copy was not, the union said "covered" and the
+sum said "missed." `nm` on `target/llvm-cov-target/debug/pycc` versus
+`target/llvm-cov-target/debug/deps/pycc_types-<hash>` shows the two distinct
+mangled symbols and settles it in one command.
+
+**What fixed it:** adding inline unit tests to each crate's own `mod tests`
+that build the unary shapes directly (commit `3ceb334`), plus replacing one
+`?` in `rewrite_generic_calls_in_expr`'s unary arm with `let _ =`, matching
+the identical decision already commented on the `isinstance` arm a few lines
+above — its recursion's return value is discarded, and the `infer_expr_in`
+call immediately below surfaces the same error, so the `?` was a
+permanently-unreachable error region. Two side lessons: a stray
+`default_*.profraw` from the coverage run got picked up by `git add -A` and
+had to be amended out, and `rm -rf target/debug` to free disk silently broke
+every `pycc build` integration test (`error: no pycc_rt build found`) until
+`cargo build -p pycc_rt` restored it — a whole coverage run was wasted
+misreading that as a real regression.
+
+**Lesson:** when the coverage summary and `--show-missing-lines` disagree, stop
+re-running merged views in new formats — they all answer the same question. Go
+straight to `cargo llvm-cov report --workspace --json` and aggregate the
+per-function `regions` arrays by source range; a range whose counts sum to zero
+across every instantiation is the real gap. And treat "the integration suite
+covers it" as insufficient by construction: any arm reachable only through the
+`pycc` binary needs its own inline unit test, because the crate's `cfg(test)`
+build is a separate denominator. Written up as a durable rule in
+`docs/TESTING.md`'s coverage practical-notes list.
+
+---
+
 ## 2026-08-09 — `ci-watch.sh` covered `mergeStateStatus=BEHIND` but not the rest of GitHub's non-`CLEAN` enum, so a legitimately blocked PR polled silently forever
 
 **What happened:** PR #417 (a docs-only session-log checkpoint) reached a
