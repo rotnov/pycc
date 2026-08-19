@@ -1125,14 +1125,10 @@ mod tests {
     fn assert_first_assign(source: &str, expected: HirExpr) {
         let module = pycc_parser::parse(source).expect("test fixture must parse");
         let hir = crate::lower_checked(&module).expect("fixture must lower");
-        assert!(
-            matches!(
-                &hir.items[0],
-                HirItem::TopLevelStmt(HirStmt::Assign { value, .. }) if *value == expected
-            ),
-            "unexpected lowering of {source:?}: {:?}",
-            hir.items[0]
-        );
+        assert!(matches!(
+            &hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign { value, .. }) if *value == expected
+        ));
     }
 
     fn lower_err_code(source: &str) -> String {
