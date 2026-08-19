@@ -141,7 +141,7 @@ For each newly observed upstream release:
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
 | [380](https://peps.python.org/pep-0380/) | `yield from` | syntax | `py33/pep_0380_yield_from.py` | ☐ |
-| [409](https://peps.python.org/pep-0409/) | `raise ... from ...` cause chaining (#382); `from None` suppression is ☐ | sem | `issue_382_exceptions.rs` | ☐ |
+| [409](https://peps.python.org/pep-0409/) | `raise ... from ...` cause chaining and `from None` suppression (#382, #540) | sem | `issue_382_exceptions.rs` | ☐ |
 | [414](https://peps.python.org/pep-0414/) | `u''` literals | syntax | `pep_0414_u_literal.py` | ✅ |
 | [420](https://peps.python.org/pep-0420/) | Namespace packages | import | `py33/pep_0420_ns_packages.py` | ☐ |
 | [3151](https://peps.python.org/pep-3151/) | `OSError` hierarchy | sem | `py33/pep_3151_oserror.py` | ☐ |
