@@ -328,6 +328,28 @@ fn t0044_unknown_member(kind: &str, class_name: &str, member: &str) -> Diagnosti
     )
 }
 
+/// #587: `super().<attr>` naming an *instance* attribute — one established
+/// by `self.<attr> = ...` inside `__init__`, and therefore living in the
+/// instance's own slot rather than on any class in the MRO. CPython's
+/// `super` object proxies class-level attributes and descriptors only, so
+/// this raises `AttributeError` there; pycc used to resolve it against
+/// `self`'s slot and return a value instead.
+fn t0047_super_instance_attr(attr: &str, declaring_class: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0047",
+        format!(
+            "`super().{attr}` is not readable: `{attr}` is an instance attribute of class \
+             `{declaring_class}`, and `super()` proxies class-level attributes and \
+             descriptors along the MRO, not the instance's own attributes -- CPython raises \
+             `AttributeError: 'super' object has no attribute '{attr}'` here"
+        ),
+        Span::new(0, 0),
+    )
+    .with_help(format!(
+        "read it through `self` instead: `self.{attr}`"
+    ))
+}
+
 /// Looks up `class_name`'s declared shape, panicking if it isn't
 /// registered. Every caller in this module only ever calls this with a
 /// class name extracted from a real `Ty::Instance` payload (either produced
@@ -679,14 +701,19 @@ pub(crate) fn has_static_or_class_method(
 /// `super()`. The resolution starts from the class *after* the current
 /// class in the MRO (not the current class itself), matching CPython's own
 /// `super().__getattribute__` semantics: `super()` skips the current
-/// class's own entries and searches the rest of the MRO. The `self`
-/// instance retains its actual (most-derived) type, so the slot index
-/// computed downstream by `pycc_mir` is still the full MRO's flat layout
-/// index — only the *resolution* (which class's declaration wins) is
-/// affected by the `super()` skip.
+/// class's own entries and searches the rest of the MRO.
 ///
-/// Properties are checked before regular attribute slots, matching
-/// `resolve_attr_get`'s own properties-first-across-full-MRO precedence.
+/// Only *class-level* members resolve here. A `super` object proxies the
+/// class-level attributes and descriptors it finds along the MRO; it does
+/// not proxy the instance `__dict__`, so an attribute established by
+/// `self.<attr> = ...` inside `__init__` is not reachable through it and
+/// CPython raises `AttributeError: 'super' object has no attribute
+/// '<attr>'`. pycc used to resolve that form against `self`'s own slot and
+/// return a value, which disagreed with the pinned oracle on the value of
+/// an expression rather than merely on what compiles (#587); it is now
+/// rejected with `T0047`. Of the class-level members pycc models, only
+/// properties are reachable this way today, so this function resolves a
+/// property or rejects.
 pub(crate) fn resolve_super_attr_get(env: &Environment, attr: &str) -> Result<Ty, Diagnostic> {
     let current_class = env.current_class().unwrap();
     let class_def = expect_class(env, current_class);
@@ -706,35 +733,17 @@ pub(crate) fn resolve_super_attr_get(env: &Environment, attr: &str) -> Result<Ty
             return Ok(return_ty.clone());
         }
     }
-    // Regular attribute slots.
+    // #587: an instance attribute — established by `self.<attr> = ...`
+    // inside `__init__` and stored in the instance's own slot — is not
+    // proxied by a `super` object in CPython, which raises
+    // `AttributeError: 'super' object has no attribute '<attr>'`. Reject
+    // it rather than resolving it against `self`'s slot: the slot read is
+    // exactly what `self.<attr>` already spells, so the rejection costs no
+    // expressive power and the diagnostic can name the fix.
     for mro_class in super_mro {
         let mro_def = expect_class(env, mro_class);
-        if let Some((_, ty)) = mro_def.attrs.iter().find(|(name, _)| name == attr) {
-            // #433 review fix: if a class between the current class and the
-            // declaring class (i.e. in the MRO before super_mro) redeclares
-            // this attribute with a different type, the shared slot will
-            // contain the redeclared value at runtime, not the base type's
-            // value. Reject this to avoid a type-safety violation.
-            for before_class in &class_def.mro[..current_pos + 1] {
-                let before_def = expect_class(env, before_class);
-                if let Some((_, before_ty)) = before_def.attrs.iter().find(|(n, _)| n == attr)
-                    && before_ty != ty
-                {
-                    return Err(Diagnostic::error(
-                        "T0021",
-                        format!(
-                            "super().{attr} has type `{}` in class `{mro_class}` but is \
-                             redeclared as `{}` in class `{before_class}` — the shared \
-                             attribute slot will contain the redeclared type at runtime, \
-                             so super().{attr} would read the wrong type",
-                            ty.name(),
-                            before_ty.name(),
-                        ),
-                        Span::new(0, 0),
-                    ));
-                }
-            }
-            return Ok(ty.clone());
+        if mro_def.attrs.iter().any(|(name, _)| name == attr) {
+            return Err(t0047_super_instance_attr(attr, mro_class));
         }
     }
     Err(t0044_unknown_member("attribute", current_class, attr))
@@ -2279,7 +2288,15 @@ mod tests {
     }
 
     #[test]
-    fn resolve_super_attr_get_returns_attr_type() {
+    fn resolve_super_attr_get_rejects_instance_attr() {
+        // #587: `super().x` where `x` is an instance attribute declared by
+        // a base class's `__init__`. CPython raises `AttributeError` here
+        // because a `super` object does not proxy the instance's own
+        // attributes, so pycc rejects it with `T0047` rather than
+        // resolving it against `self`'s slot. This one test replaces the
+        // three the old resolve-against-`self` behaviour needed (the
+        // success path plus the `T0021` shared-slot redeclaration guard,
+        // whose condition is unreachable once the form itself is gone).
         let env = super_env(|env| {
             env.bind_class(
                 "A".to_string(),
@@ -2326,113 +2343,18 @@ mod tests {
                 },
             );
         });
-        assert_eq!(super::resolve_super_attr_get(&env, "x"), Ok(Ty::Int));
-    }
-
-    #[test]
-    fn resolve_super_attr_get_rejects_redeclared_type_mismatch() {
-        let env = super_env(|env| {
-            env.bind_class(
-                "A".to_string(),
-                HirClassDef {
-                    name: "A".to_string(),
-                    bases: vec![],
-                    mro: vec!["A".to_string()],
-                    attrs: vec![("x".to_string(), Ty::Int)],
-                    methods: vec![("__init__".to_string(), "A.__init__".to_string())],
-                    type_param: None,
-                    properties: Vec::new(),
-                    static_methods: Vec::new(),
-                    class_methods: Vec::new(),
-                    enum_members: Vec::new(),
-                    is_dataclass: false,
-                    dataclass_fields: Vec::new(),
-                    is_protocol: false,
-                    runtime_checkable: false,
-                    protocol_members: Vec::new(),
-                    abstract_methods: Vec::new(),
-                    is_abstract: false,
-                },
-            );
-            env.bind_class(
-                "B".to_string(),
-                HirClassDef {
-                    name: "B".to_string(),
-                    bases: vec!["A".to_string()],
-                    mro: vec!["B".to_string(), "A".to_string()],
-                    attrs: vec![("x".to_string(), Ty::Str)],
-                    methods: vec![("__init__".to_string(), "B.__init__".to_string())],
-                    type_param: None,
-                    properties: Vec::new(),
-                    static_methods: Vec::new(),
-                    class_methods: Vec::new(),
-                    enum_members: Vec::new(),
-                    is_dataclass: false,
-                    dataclass_fields: Vec::new(),
-                    is_protocol: false,
-                    runtime_checkable: false,
-                    protocol_members: Vec::new(),
-                    abstract_methods: Vec::new(),
-                    is_abstract: false,
-                },
-            );
-        });
-        let result = super::resolve_super_attr_get(&env, "x");
-        assert!(result.is_err());
-        let diag = result.unwrap_err();
-        assert_eq!(diag.code, "T0021");
-        assert!(diag.message.contains("redeclared"));
-    }
-
-    #[test]
-    fn resolve_super_attr_get_allows_same_type_redeclaration() {
-        let env = super_env(|env| {
-            env.bind_class(
-                "A".to_string(),
-                HirClassDef {
-                    name: "A".to_string(),
-                    bases: vec![],
-                    mro: vec!["A".to_string()],
-                    attrs: vec![("x".to_string(), Ty::Int)],
-                    methods: vec![("__init__".to_string(), "A.__init__".to_string())],
-                    type_param: None,
-                    properties: Vec::new(),
-                    static_methods: Vec::new(),
-                    class_methods: Vec::new(),
-                    enum_members: Vec::new(),
-                    is_dataclass: false,
-                    dataclass_fields: Vec::new(),
-                    is_protocol: false,
-                    runtime_checkable: false,
-                    protocol_members: Vec::new(),
-                    abstract_methods: Vec::new(),
-                    is_abstract: false,
-                },
-            );
-            env.bind_class(
-                "B".to_string(),
-                HirClassDef {
-                    name: "B".to_string(),
-                    bases: vec!["A".to_string()],
-                    mro: vec!["B".to_string(), "A".to_string()],
-                    attrs: vec![("x".to_string(), Ty::Int)],
-                    methods: vec![("__init__".to_string(), "B.__init__".to_string())],
-                    type_param: None,
-                    properties: Vec::new(),
-                    static_methods: Vec::new(),
-                    class_methods: Vec::new(),
-                    enum_members: Vec::new(),
-                    is_dataclass: false,
-                    dataclass_fields: Vec::new(),
-                    is_protocol: false,
-                    runtime_checkable: false,
-                    protocol_members: Vec::new(),
-                    abstract_methods: Vec::new(),
-                    is_abstract: false,
-                },
-            );
-        });
-        assert_eq!(super::resolve_super_attr_get(&env, "x"), Ok(Ty::Int));
+        let err = super::resolve_super_attr_get(&env, "x").unwrap_err();
+        assert_eq!(err.code, "T0047");
+        assert!(
+            err.message.contains("instance attribute of class `A`"),
+            "T0047 should name the declaring class, got: {}",
+            err.message
+        );
+        assert_eq!(
+            err.help.as_deref(),
+            Some("read it through `self` instead: `self.x`"),
+            "T0047 should point at the equivalent `self` read"
+        );
     }
 
     #[test]

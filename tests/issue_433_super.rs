@@ -134,33 +134,55 @@ fn three_level_super_chain_builds_and_runs() {
     );
 }
 
-/// #433: `super().attr` — reading a base class attribute via `super()`.
-/// The attribute is resolved starting from the next class in the MRO,
-/// and the slot index is from the full MRO's flat layout.
+/// #587: `super().<instance attr>` is rejected. CPython raises
+/// `AttributeError: 'super' object has no attribute 'x'` for this source,
+/// because a `super` object proxies class-level attributes and descriptors
+/// along the MRO and never consults the instance's own attributes. pycc
+/// used to resolve it against `self`'s slot and print `99`, disagreeing
+/// with the pinned oracle on the value of an expression.
 #[test]
-fn super_attr_read_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_attr_{}", std::process::id()));
+fn super_instance_attr_read_is_a_check_error() {
+    let dir = std::env::temp_dir().join(format!("pycc_587_attr_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
         "attr.py",
         "class A:\n    def __init__(self) -> None:\n        self.x = 99\nclass B(A):\n    def __init__(self) -> None:\n        super().__init__()\n    def get_x_via_super(self) -> int:\n        return super().x\nb = B()\nprint(b.get_x_via_super())\n",
     );
-    let out = dir.join("attr");
 
-    let status = Command::new(pycc_bin())
-        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
-        .status()
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
         .unwrap();
     assert!(
-        status.success(),
-        "pycc build should succeed for super().attr"
+        !output.status.success(),
+        "pycc check should fail for super().<instance attr>"
+    );
+    let rendered = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        rendered.contains("T0047"),
+        "should report T0047, got: {rendered}"
     );
 
-    let output = Command::new(&out).output().unwrap();
-    assert_eq!(
-        output.stdout, b"99\n",
-        "super().attr should read the base class attribute from self"
+    // `render_human` deliberately has no `help:` line yet (D-043); the
+    // suggestion reaches users through the JSON diagnostic format's `help`
+    // array (D-152), so that is where the equivalent `self` read is asserted.
+    let json = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap(), "--error-format", "json"])
+        .output()
+        .unwrap();
+    let json_rendered = format!(
+        "{}{}",
+        String::from_utf8_lossy(&json.stdout),
+        String::from_utf8_lossy(&json.stderr)
+    );
+    assert!(
+        json_rendered.contains("self.x"),
+        "T0047's JSON `help` should suggest the equivalent `self` read, got: {json_rendered}"
     );
 }
 
@@ -390,47 +412,22 @@ fn super_in_class_with_no_base_is_a_check_error() {
     );
 }
 
-/// #433 review fix: super().attr where the attribute is redeclared with a
-/// different type in a derived class must be rejected, because the shared
-/// slot will contain the redeclared type at runtime.
+/// #587: a base class `@property` read through `super()` still works, and
+/// is the class-level form CPython genuinely does proxy — a property is a
+/// descriptor found on a class in the MRO, not an entry in the instance's
+/// own attributes. This is the surviving half of `super().<attr>` after
+/// the instance-attribute form was rejected, and it had no end-to-end
+/// coverage before #587 (only `pycc_types`/`pycc_mir` unit tests).
 #[test]
-fn super_attr_with_redeclared_type_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue433_redecl_{}", std::process::id()));
+fn super_property_read_builds_and_runs() {
+    let dir = std::env::temp_dir().join(format!("pycc_587_prop_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(
         &dir,
-        "redecl.py",
-        "class A:\n    def __init__(self) -> None:\n        self.x = 1\nclass B(A):\n    def __init__(self) -> None:\n        super().__init__()\n        self.x = \"hello\"\n    def get_base_x(self) -> int:\n        return super().x\n",
+        "prop.py",
+        "class A:\n    def __init__(self) -> None:\n        self._x = 7\n    @property\n    def x(self) -> int:\n        return self._x\nclass B(A):\n    def __init__(self) -> None:\n        super().__init__()\n    @property\n    def x(self) -> int:\n        return 0\n    def base_x(self) -> int:\n        return super().x\nb = B()\nprint(b.x)\nprint(b.base_x())\n",
     );
-
-    let output = Command::new(pycc_bin())
-        .args(["check", src.to_str().unwrap()])
-        .output()
-        .unwrap();
-    assert!(
-        !output.status.success(),
-        "pycc check should fail for super().attr with redeclared type"
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("T0021") && stdout.contains("redeclared"),
-        "should report T0021 with redeclared message, got: {stdout}"
-    );
-}
-
-/// #433 review: super().attr where the attribute is redeclared with the
-/// SAME type in a derived class should still work (no false positive).
-#[test]
-fn super_attr_with_same_type_redeclaration_builds_and_runs() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_issue433_same_redecl_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(
-        &dir,
-        "same_redecl.py",
-        "class A:\n    def __init__(self) -> None:\n        self.x = 1\nclass B(A):\n    def __init__(self) -> None:\n        super().__init__()\n        self.x = 2\n    def get_base_x(self) -> int:\n        return super().x\nb = B()\nprint(b.get_base_x())\n",
-    );
-    let out = dir.join("same_redecl");
+    let out = dir.join("prop");
 
     let status = Command::new(pycc_bin())
         .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
@@ -438,17 +435,15 @@ fn super_attr_with_same_type_redeclaration_builds_and_runs() {
         .unwrap();
     assert!(
         status.success(),
-        "pycc build should succeed for super().attr with same-type redeclaration"
+        "pycc build should succeed for super().<property>"
     );
 
     let output = Command::new(&out).output().unwrap();
-    // super().x reads the same shared slot as self.x. Since B's __init__
-    // wrote 2 to the slot (after calling super().__init__() which wrote 1),
-    // the value is 2. This is correct for a shared-slot layout — super().x
-    // and self.x read the same memory.
+    // `b.x` uses B's own override (0); `super().x` skips B and calls A's
+    // getter (7), exactly as CPython resolves the descriptor along the MRO.
     assert_eq!(
-        output.stdout, b"2\n",
-        "super().x reads the same shared slot as self.x, so it returns the last-written value (2)"
+        output.stdout, b"0\n7\n",
+        "super().<property> should call the base class's getter, not the override"
     );
 }
 

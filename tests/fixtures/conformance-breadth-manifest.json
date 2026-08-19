@@ -186,14 +186,17 @@
         {
           "category": "zero-argument `super().method()` calls through a three-level hierarchy",
           "evidence": "pep_3135_super.py"
+        },
+        {
+          "category": "`super().<property>` calling the base class's getter rather than a subclass override",
+          "evidence": "pep_3135_super.py"
         }
       ],
       "not_proven": [
         {
           "category": "`super().<instance attribute>` raising `AttributeError`",
-          "kind": "core",
-          "reason": "pycc returns a value where CPython raises; tracked by #587.",
-          "issue": 587
+          "kind": "out-of-scope",
+          "reason": "pycc rejects `super().<instance attribute>` at compile time with `T0047` (#587), matching CPython's refusal to resolve it, so no fixture can exercise CPython's runtime `AttributeError` against a binary that never builds. The class-level half a `super` object does proxy is proven above."
         },
         {
           "category": "explicit two-argument `super(C, self)`",

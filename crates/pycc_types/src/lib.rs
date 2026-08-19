@@ -19608,7 +19608,12 @@ mod tests {
     #[test]
     fn infer_expr_in_resolves_super_attr_get() {
         // Directly exercises the HirExpr::Super arm of infer_expr_in's
-        // HirExpr::AttrGet branch (#433).
+        // HirExpr::AttrGet branch (#433). The resolved member is a base
+        // class *property* rather than an instance attribute: since #587
+        // only class-level members resolve through `super()`, a property
+        // is what proves this arm still routes to a successful
+        // `resolve_super_attr_get` rather than only to its rejection.
+        use pycc_hir::PropertyDef;
         let mut env = Environment::new();
         env.current_class = Some("B".to_string());
         env.bind_class(
@@ -19617,10 +19622,14 @@ mod tests {
                 name: "A".to_string(),
                 bases: vec![],
                 mro: vec!["A".to_string()],
-                attrs: vec![("x".to_string(), Ty::Int)],
+                attrs: vec![("_x".to_string(), Ty::Int)],
                 methods: vec![("__init__".to_string(), "A.__init__".to_string())],
                 type_param: None,
-                properties: Vec::new(),
+                properties: vec![PropertyDef {
+                    name: "x".to_string(),
+                    getter: "A.x".to_string(),
+                    setter: None,
+                }],
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
@@ -19654,6 +19663,11 @@ mod tests {
                 abstract_methods: Vec::new(),
                 is_abstract: false,
             },
+        );
+        env.bind_function(
+            "A.x".to_string(),
+            vec![Ty::Instance(Box::new("A".to_string()))],
+            Ty::Int,
         );
         let expr = HirExpr::AttrGet {
             base: Box::new(HirExpr::Super),
