@@ -1215,9 +1215,11 @@ fn appending_a_bigint_valued_element_fails_explicitly_instead_of_corrupting_the_
     // the exact product here; this remains a documented v0.2 scope cut.
     //
     // The overflowing value is built by multiplication rather than written
-    // as a literal: `tag_smallint_const` rejects an out-of-tagged-range
-    // integer *literal* at compile time (bigint literals are their own
-    // separate gap), so a literal would never reach `.append()` at all.
+    // as a literal. That was originally because `tag_smallint_const`
+    // rejected an out-of-tagged-range integer *literal* at compile time;
+    // since #148/D-178 a literal does reach `.append()` and hits this same
+    // boundary (pinned by `tests/issue_148_oversized_int_literal.rs`), so
+    // this case now specifically covers the *promotion* ingress.
     // `3000000000 * 3000000000` is the same promotion
     // `multiplication_promotes_and_float_floor_division_matches_cpython`
     // above already pins as reaching a real bigint.

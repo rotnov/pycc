@@ -658,6 +658,29 @@ pub extern "C" fn pycc_rt_int_untag_checked(tagged: i64) -> i64 {
     int_untag_checked(tagged)
 }
 
+/// Materializes a source-level `int` literal (or an `enum` member's
+/// discriminant) as an encoded `int` word: the tagged smallint when the
+/// value round-trips through D-061's 63-bit tagged encoding, and a heap
+/// `BigIntObj` pointer otherwise. `pycc_codegen` folds the tagged case at
+/// compile time and only emits a call to this function for the values it
+/// cannot fold, but the function itself handles both so the ABI contract
+/// is total (D-178).
+///
+/// `bigint_from_i128` takes an `i128`, which is the only reason for the
+/// widening cast -- `i64::MIN` has no magnitude problem here.
+///
+/// Never panics, so, per this file's established convention (see the
+/// implementation note above `pycc_rt_int_add` and the one on
+/// `pycc_rt_int_list_new`), it needs no private-logic/public-wrapper
+/// split.
+///
+/// # Safety
+/// None -- takes no pointer, only an `i64`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_int_from_i64(v: i64) -> i64 {
+    fits_smallint(v).unwrap_or_else(|| tag_bigint(bigint_from_i128(v as i128)))
+}
+
 /// Python true division rejects both positive and negative zero divisors.
 /// D-173 (#382): a zero divisor now sets the pending exception state and
 /// returns 0.0 instead of panicking. Generated code checks
@@ -2619,6 +2642,31 @@ mod tests {
         let s = pycc_rt_int_to_str(huge);
         assert_eq!(unsafe { &*s }.bytes(), b"4611686018427387904");
         unsafe { pycc_rt_str_decref(s) };
+    }
+
+    #[test]
+    fn int_from_i64_keeps_an_in_range_value_inline() {
+        let encoded = pycc_rt_int_from_i64(42);
+        assert_eq!(classify_encoded_int(encoded), EncodedIntKind::SmallInt);
+        assert_eq!(untag_smallint(encoded), 42);
+    }
+
+    #[test]
+    fn int_from_i64_promotes_values_outside_the_tagged_range() {
+        // The four boundary literals `pycc_codegen` can no longer fold:
+        // `2^62`, `i64::MAX`, `-(2^62) - 1`, and `i64::MIN`.
+        for (value, expected) in [
+            (4_611_686_018_427_387_904_i64, "4611686018427387904"),
+            (i64::MAX, "9223372036854775807"),
+            (-4_611_686_018_427_387_905_i64, "-4611686018427387905"),
+            (i64::MIN, "-9223372036854775808"),
+        ] {
+            let encoded = pycc_rt_int_from_i64(value);
+            assert_eq!(classify_encoded_int(encoded), EncodedIntKind::BigInt);
+            let s = pycc_rt_int_to_str(encoded);
+            assert_eq!(unsafe { &*s }.bytes(), expected.as_bytes());
+            unsafe { pycc_rt_str_decref(s) };
+        }
     }
 
     #[test]
