@@ -18,6 +18,8 @@ use exception::{
     ExceptionCodegenState, emit_exception_value, expression_can_set_exception,
     guard_statement_effects,
 };
+mod int_const;
+use int_const::{emit_int_constant, tag_smallint_const};
 
 const RELEASE_PASS_PIPELINE: &str = "default<O3>";
 type CodegenObserver<'observer> =
@@ -243,6 +245,7 @@ struct StorageSlot<'ctx> {
 /// Extended (never replaced) by Tasks 8/9/10 as they add more `pycc_rt`
 /// declarations.
 struct RtFns<'ctx> {
+    int_from_i64: FunctionValue<'ctx>,
     int_add: FunctionValue<'ctx>,
     int_sub: FunctionValue<'ctx>,
     int_mul: FunctionValue<'ctx>,
@@ -500,6 +503,10 @@ fn declare_rt_functions<'ctx>(
         print_space: declare("pycc_rt_print_space", void_type.fn_type(&[], false)),
         print_newline: declare("pycc_rt_print_newline", void_type.fn_type(&[], false)),
         print_none: declare("pycc_rt_print_none", void_type.fn_type(&[], false)),
+        int_from_i64: declare(
+            "pycc_rt_int_from_i64",
+            i64_type.fn_type(&[i64_type.into()], false),
+        ),
         int_untag_checked: declare(
             "pycc_rt_int_untag_checked",
             i64_type.fn_type(&[i64_type.into()], false),
@@ -642,22 +649,6 @@ fn declare_rt_functions<'ctx>(
         ),
         exceptions: ExceptionCodegenState::new(),
     }
-}
-
-/// Mirrors `pycc_rt::tag_smallint` exactly (compile-time constant folding
-/// of the same encoding, see D-061) -- an `int` literal whose magnitude
-/// doesn't fit the tagged 63-bit range needs a real bigint *literal*,
-/// which doesn't exist until Task 9; this is a narrow, honest,
-/// compile-time "not supported yet" (not a silent truncation).
-fn tag_smallint_const(context: &Context, n: i64) -> IntValue<'_> {
-    let tagged = (n << 1) | 1;
-    if (tagged >> 1) != n {
-        panic!(
-            "pycc_codegen: integer literal {n} is too large for the v0.1 fast \
-             path (bigint literal support lands in a later task)"
-        );
-    }
-    context.i64_type().const_int(tagged as u64, true)
 }
 
 fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::BasicTypeEnum<'_> {
@@ -1718,7 +1709,7 @@ fn emit_expr_unchecked<'ctx>(
 ) -> Scalar<'ctx> {
     use pycc_mir::Ty;
     match expr {
-        MirExpr::IntLiteral(n) => Scalar::Int(tag_smallint_const(context, *n)),
+        MirExpr::IntLiteral(n) => Scalar::Int(emit_int_constant(context, builder, rt, *n)),
         MirExpr::FloatLiteral(f) => Scalar::Float(context.f64_type().const_float(*f)),
         MirExpr::IntBoundary(value) => {
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
@@ -4534,9 +4525,12 @@ fn emit_enum_member_inits<'ctx>(
             // Set slot 0 to the integer member value. The value is the
             // actual `i64` literal from the source (`RED = 1` → 1), carried
             // in `HirClassDef.enum_members` from HIR through MIR to here.
-            // `tag_smallint_const` folds it at compile time into the
-            // tagged-pointer representation `pycc_rt` uses for small ints.
-            let value_scalar = Scalar::Int(tag_smallint_const(context, *member_value));
+            // `emit_int_constant` folds it at compile time into the
+            // tagged-pointer representation `pycc_rt` uses for small ints,
+            // or materializes a heap bigint through `pycc_rt_int_from_i64`
+            // when the discriminant is outside the tagged 63-bit range
+            // (D-178) -- once, here at module init.
+            let value_scalar = Scalar::Int(emit_int_constant(context, builder, rt, *member_value));
             let value_word = scalar_to_slot_word(context, builder, value_scalar);
             let slot0_index = context.i64_type().const_int(0, false);
             builder
@@ -8888,22 +8882,80 @@ mod tests {
         compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
+    // Inverted for #148/D-178: this module is exactly the one the retired
+    // `an_oversized_int_literal_is_not_yet_supported` compiled, and it must
+    // now succeed by materializing the literal through
+    // `pycc_rt_int_from_i64` rather than panicking in `tag_smallint_const`.
     #[test]
-    #[should_panic(expected = "too large for the v0.1 fast path")]
-    fn an_oversized_int_literal_is_not_yet_supported() {
-        // `tag_smallint_const`'s own round-trip check: `i64::MAX` doesn't
-        // fit the 63-bit tagged range (D-061).
+    fn an_oversized_int_literal_materializes_a_runtime_bigint() {
+        for value in [
+            i64::MAX,
+            4_611_686_018_427_387_904_i64,
+            -4_611_686_018_427_387_905_i64,
+            i64::MIN,
+        ] {
+            let mir = MirModule {
+                items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::IntLiteral(value)],
+                    ty: Ty::None,
+                }))],
+                class_defs: Vec::new(),
+            };
+            let dir = tempfile_dir("oversized_int_literal_materializes");
+            let obj_path = dir.join("oversized_int_literal_materializes.o");
+            let mut saw_call = false;
+            let mut observer = |module: &inkwell::module::Module<'_>, _| {
+                saw_call |= module
+                    .print_to_string()
+                    .to_string()
+                    .contains("call i64 @pycc_rt_int_from_i64");
+            };
+            compile_to_object_with_observer(&mir, &obj_path, None, false, Some(&mut observer))
+                .expect("an out-of-range int literal should compile");
+            assert!(saw_call, "{value} should be materialized at run time");
+        }
+    }
+
+    // The in-range arm of `fits_tagged_smallint`: still folded to an
+    // immediate, with no runtime call at all.
+    #[test]
+    fn an_in_range_int_literal_is_still_folded_at_compile_time() {
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                 callee: "print".to_string(),
-                args: vec![MirExpr::IntLiteral(i64::MAX)],
+                args: vec![MirExpr::IntLiteral(4_611_686_018_427_387_903_i64)],
                 ty: Ty::None,
             }))],
             class_defs: Vec::new(),
         };
-        let dir = tempfile_dir("oversized_int_literal_panics");
-        let obj_path = dir.join("oversized_int_literal_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None, false);
+        let dir = tempfile_dir("in_range_int_literal_folds");
+        let obj_path = dir.join("in_range_int_literal_folds.o");
+        let mut saw_call = false;
+        let mut observer = |module: &inkwell::module::Module<'_>, _| {
+            saw_call |= module
+                .print_to_string()
+                .to_string()
+                .contains("call i64 @pycc_rt_int_from_i64");
+        };
+        compile_to_object_with_observer(&mir, &obj_path, None, false, Some(&mut observer))
+            .expect("an in-range int literal should compile");
+        assert!(
+            !saw_call,
+            "an in-range literal needs no runtime materialization"
+        );
+    }
+
+    // `declare_module_globals` builds a constant initializer with no
+    // `Builder`, so `tag_smallint_const` survives the #148 refactor with
+    // its defensive panic. Generated code only ever reaches it with `0`;
+    // this test calls it directly, matching this file's existing
+    // defensive-arm convention.
+    #[test]
+    #[should_panic(expected = "too large for the constant-only")]
+    fn tag_smallint_const_still_rejects_an_out_of_range_constant() {
+        let context = Context::create();
+        let _ = tag_smallint_const(&context, i64::MAX);
     }
 
     #[test]

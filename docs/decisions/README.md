@@ -184,3 +184,4 @@ current.
 | [D-175](./D-175-scope-the-conformance-matrix-fixture-guard-to-green.md) | Scope the conformance-matrix fixture guard to green rows | accepted |
 | [D-176](./D-176-declare-per-row-conformance-breadth-in-a-validated.md) | Declare per-row conformance breadth in a validated manifest | accepted |
 | [D-177](./D-177-scope-matrix-acceptance-to-proven-semantics.md) | Scope matrix acceptance to proven semantics | accepted |
+| [D-178](./D-178-materialize-out-of-range-int-literals-through-a.md) | Materialize out-of-range int literals through a runtime constructor | accepted |

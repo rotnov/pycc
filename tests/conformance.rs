@@ -709,6 +709,28 @@ fn bool_int_runtime_identity_matches_cpython_3_14_7_byte_for_byte() {
     );
 }
 
+// #148/D-178: an `int` literal (and an `enum` member discriminant) outside
+// D-061's tagged 63-bit range now materializes a heap bigint through
+// `pycc_rt_int_from_i64` instead of aborting codegen.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn oversized_int_literal_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/oversized_int_literal.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("oversized_int_literal_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/oversized_int_literal.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("oversized_int_literal_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/oversized_int_literal.py"
+    );
+}
+
 // PEP 673 (#387 Part 1): `Self` as a method return-type annotation. A
 // method returning `Self` yields the class's own instance type, exactly
 // like CPython 3.14's deferred-evaluation semantics.
