@@ -1,6 +1,7 @@
 //! Lowering for `except` handler clauses.
 
 use super::lower_body;
+use crate::class::ClassAnnotationInfo;
 use crate::{HirExceptHandler, Ty, unsupported};
 use pycc_ast::{ExceptHandler, Expr};
 use pycc_diag::Diagnostic;
@@ -12,7 +13,7 @@ pub(super) fn lower_except_handler(
     in_function: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<HirExceptHandler, Diagnostic> {
     let pycc_ast::ExceptHandler::ExceptHandler(handler) = handler;
     let exc_type = handler

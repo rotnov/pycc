@@ -39,6 +39,7 @@
 
 mod exception;
 
+use crate::class::ClassAnnotationInfo;
 use crate::expr::{
     is_zero_arg_super_call, lower_dict_comp_assign, lower_expr, lower_list_comp_assign,
     lower_range_call, lower_set_comp_assign,
@@ -57,7 +58,7 @@ pub(crate) fn lower_stmt(
     in_function: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<HirStmt, Diagnostic> {
     let lowered = match stmt {
         Stmt::Expr(expr_stmt) => {
@@ -503,7 +504,7 @@ pub(crate) fn lower_body(
     in_function: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<Vec<HirStmt>, Diagnostic> {
     // #435: `Stmt::Pass` is a no-op — filter it out rather than lowering it
     // to a statement. This allows method bodies like `def __init_subclass__:
@@ -533,7 +534,7 @@ pub(crate) fn lower_elif_else_clauses(
     in_function: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<Vec<HirStmt>, Diagnostic> {
     let Some((first, rest)) = clauses.split_first() else {
         return Ok(vec![]);
@@ -589,7 +590,7 @@ fn lower_match(
     in_function: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<HirStmt, Diagnostic> {
     let subject = lower_expr(&match_stmt.subject, in_function, class_name)?;
     let mut cases = Vec::with_capacity(match_stmt.cases.len());

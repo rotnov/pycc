@@ -579,7 +579,7 @@ fn lower_protocol_class(
     type_param: Option<String>,
     runtime_checkable: bool,
     defined_classes: &[(String, HirClassDef)],
-    class_name_defs: &[(String, bool)],
+    class_name_defs: &[ClassAnnotationInfo],
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
     let mut protocol_members: Vec<ProtocolMember> = Vec::new();
     // Inherit protocol members from base protocols.
@@ -932,18 +932,68 @@ fn lower_enum_class(
     ))
 }
 
+/// One already-defined class, projected down to exactly what
+/// `annotation_to_ty` needs. Replaces the former `(String, bool)` pair
+/// (#380, PR-20), which carried the class name and its protocol flag and had
+/// nowhere to record #611's subscriptability answer.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ClassAnnotationInfo {
+    pub(crate) name: String,
+    pub(crate) is_protocol: bool,
+    /// PEP 560 (#611): whether `ClassName[type_arg]` is legal in a type
+    /// annotation. True when the class defines `__class_getitem__` somewhere
+    /// in its MRO -- in either the `@staticmethod` or the `@classmethod`
+    /// spelling -- or when it is a PEP 695 generic class (`class C[T]:`),
+    /// which CPython makes implicitly subscriptable through `Generic`
+    /// without any explicit hook of its own.
+    pub(crate) subscriptable: bool,
+}
+
+/// Projects the full class table down to the [`ClassAnnotationInfo`] slice
+/// `annotation_to_ty` consults. Both of this crate's own projection sites
+/// (`lower_checked`'s per-statement rebuild and `lower_class`'s own
+/// `defined_classes` view) go through here, so the two agree on every flag.
+pub(crate) fn class_annotation_infos(defs: &[(String, HirClassDef)]) -> Vec<ClassAnnotationInfo> {
+    defs.iter()
+        .map(|(name, def)| ClassAnnotationInfo {
+            name: name.clone(),
+            is_protocol: def.is_protocol,
+            subscriptable: def.type_param.is_some() || defines_class_getitem(defs, &def.mro),
+        })
+        .collect()
+}
+
+/// PEP 560 (#611): whether `def` declares `__class_getitem__` anywhere in
+/// its MRO. Checks `static_methods` and `class_methods` -- the same two
+/// tables, for the same reason, that `pycc_types`' own value-position
+/// `resolve_static_or_class_method_call` walks when it dispatches `C[x]`.
+/// The two crates must agree on which classes are subscriptable, so the
+/// lookups are deliberately kept parallel.
+///
+/// Iterates the class table and tests MRO membership, rather than looking
+/// each MRO entry up in the table: every MRO entry is present in `defs` by
+/// construction (a base class is always lowered before the class that
+/// inherits it), so a lookup would carry a `None` arm no test could reach.
+fn defines_class_getitem(defs: &[(String, HirClassDef)], mro: &[String]) -> bool {
+    defs.iter().any(|(name, mro_def)| {
+        mro.contains(name)
+            && mro_def
+                .static_methods
+                .iter()
+                .chain(&mro_def.class_methods)
+                .any(|(method, _)| method == "__class_getitem__")
+    })
+}
+
 pub(crate) fn lower_class(
     def: &pycc_ast::StmtClassDef,
     aliases: &[(String, Ty)],
     defined_classes: &[(String, HirClassDef)],
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
-    // #380 (PR-20): build a `(name, is_protocol)` slice for
-    // `annotation_to_ty` to resolve cross-class annotations (including
-    // protocol-typed annotations).
-    let class_name_defs: Vec<(String, bool)> = defined_classes
-        .iter()
-        .map(|(name, def)| (name.clone(), def.is_protocol))
-        .collect();
+    // #380 (PR-20): build the projected class slice `annotation_to_ty` uses
+    // to resolve cross-class annotations (including protocol-typed ones);
+    // #611 (PEP 560) added the per-class subscriptability flag it carries.
+    let mut class_name_defs = class_annotation_infos(defined_classes);
     // PEP 3129/557/681/544 (#378/#380, PR-18/PR-20): classify the class's
     // decorator list. `@dataclass`/`@dataclass_transform(...)` and
     // `@runtime_checkable` are recognized; any other class decorator is
@@ -1175,6 +1225,35 @@ pub(crate) fn lower_class(
             def.range,
         )
     })?;
+    // PEP 560 (#611): the class currently being lowered is not in
+    // `defined_classes` yet, so without this entry a self-referential
+    // `C[int]` annotation inside `C`'s own body would bypass the
+    // subscriptability gate that every *other* class name goes through. Its
+    // own `static_methods`/`class_methods` tables are still empty at this
+    // point, so an own hook is detected by pre-scanning the class body's
+    // `def`s; a hook inherited from a base is found by the same MRO walk
+    // over `defined_classes` that `class_annotation_infos` uses. A
+    // `classify_decorator` error is treated as "no hook" here -- the
+    // class-body loop below reports it properly a few lines later, and
+    // this pre-scan must not pre-empt that diagnostic.
+    let declares_own_class_getitem = def.body.iter().any(|stmt| match stmt {
+        Stmt::FunctionDef(method) if method.name.id.as_str() == "__class_getitem__" => matches!(
+            classify_decorator(
+                &method.decorator_list,
+                "__class_getitem__",
+                method.range.into()
+            ),
+            Ok(MethodKind::StaticMethod | MethodKind::ClassMethod)
+        ),
+        _ => false,
+    });
+    class_name_defs.push(ClassAnnotationInfo {
+        name: class_name.clone(),
+        is_protocol,
+        subscriptable: type_param.is_some()
+            || declares_own_class_getitem
+            || defines_class_getitem(defined_classes, &mro),
+    });
     let mut methods: Vec<(String, String)> = Vec::new();
     let mut items: Vec<HirItem> = Vec::new();
     let mut attrs: Vec<(String, Ty)> = Vec::new();
@@ -1924,7 +2003,7 @@ fn lower_method(
     type_param: Option<&str>,
     aliases: &[(String, Ty)],
     kind: &MethodKind,
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<(HirItem, Vec<(String, Ty)>), Diagnostic> {
     if def.is_async {
         return Err(unsupported(
