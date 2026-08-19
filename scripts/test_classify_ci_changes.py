@@ -52,6 +52,7 @@ class ClassifyPathsTests(unittest.TestCase):
             ".cargo/config.toml",
             "build.rs",
             "docs/DIAGNOSTICS.md",
+            "docs/PYTHON_STANDARDS.md",
             "tests/conformance.rs",
             "benches/check_bench.rs",
         ):
@@ -60,6 +61,44 @@ class ClassifyPathsTests(unittest.TestCase):
                     Selection(True, False, True),
                     classify_paths([path], event_name="pull_request"),
                 )
+
+    def test_every_input_the_conformance_matrix_guard_reads_selects_compiler(self):
+        """`tests/conformance_matrix_guard.rs` reads three inputs, and a change to
+        any one of them can break it. Two live under `tests/` and were already
+        covered by `COMPILER_ROOTS`; the third, `docs/PYTHON_STANDARDS.md`, sat in
+        the `docs/` bucket and classified as EMPTY_SELECTION until issue #591 --
+        so a docs-only matrix edit skipped the guard on its own pull request and
+        turned `main` red after merge instead. These assertions fail if that path
+        is dropped back into the cheap-docs bucket.
+        """
+        for path in (
+            "docs/PYTHON_STANDARDS.md",
+            "tests/conformance.rs",
+            "tests/conformance_matrix_guard.rs",
+        ):
+            with self.subTest(path=path):
+                selection = classify_paths([path], event_name="pull_request")
+                self.assertTrue(
+                    selection.compiler,
+                    f"{path} is a conformance_matrix_guard input, so it must select"
+                    " the compiler jobs that run the guard",
+                )
+
+    def test_a_docs_only_matrix_edit_still_selects_the_compiler_jobs(self):
+        # The real shape of the pull requests that motivated #591: the matrix
+        # plus the roadmap paragraph citing it, and nothing else. `docs/ROADMAP.md`
+        # on its own is EMPTY_SELECTION, and the union must not dilute the matrix
+        # path's own selection.
+        self.assertEqual(
+            Selection(False, False, False),
+            classify_paths(["docs/ROADMAP.md"], event_name="pull_request"),
+        )
+        self.assertTrue(
+            classify_paths(
+                ["docs/PYTHON_STANDARDS.md", "docs/ROADMAP.md"],
+                event_name="pull_request",
+            ).compiler
+        )
 
     def test_compiler_and_performance_gate_scripts_select_compiler(self):
         for path in (
