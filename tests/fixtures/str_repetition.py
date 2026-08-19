@@ -1,9 +1,9 @@
 # #575 (Part 2 of #123): `str * int` and `int * str` repetition.
 #
-# Negative counts are written as `0 - 2` rather than as a `-2` literal
-# because unary negation is still unlowered (#573); the runtime's
-# non-positive-count rule (empty string, matching CPython) is exercised
-# through that form instead.
+# Negative counts are written as `0 - 2` rather than as a `-2` literal:
+# this fixture predates #602's literal-sign fold. The `BinOp::Sub` form is
+# still an equally valid way to reach the runtime's non-positive-count rule
+# (empty string, matching CPython).
 
 print("ab" * 3)
 print(3 * "ab")

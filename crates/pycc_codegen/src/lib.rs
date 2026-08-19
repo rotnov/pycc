@@ -14625,9 +14625,9 @@ mod tests {
     fn a_repeated_string_prints_its_repetition() {
         // `print("ab" * 3)`, `print(0 * "ab")`, `print("ab" * True)` and
         // `print("ab" * n)` for `n = 0 - 2` -- the executable half of #575.
-        // The negative count comes from `0 - 2` rather than a `-2` literal
-        // because unary negation is still unlowered (#573); it is a real
-        // reachable program today, and CPython prints an empty line for it.
+        // The negative count comes from `0 - 2` rather than a `-2` literal:
+        // this test predates #602's literal-sign fold. Both forms are real
+        // reachable programs, and CPython prints an empty line for each.
         let repeat = |left: MirExpr, right: MirExpr| {
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                 callee: "print".to_string(),

@@ -1087,8 +1087,9 @@ fn pep_3129_class_deco_matches_cpython_3_14_7_byte_for_byte() {
 // operand orders for literal, variable, boolean, zero, and negative counts,
 // a repetition result that crosses D-059's 22-byte inline payload threshold,
 // and repetition composed with concatenation, an f-string, and a function
-// return. Negative counts are spelled `0 - 2` because unary negation is
-// still unlowered (#573).
+// return. Negative counts are spelled `0 - 2` rather than `-2`: the fixture
+// predates #602's literal-sign fold, and the `BinOp::Sub` form remains a
+// valid, equally reachable way to produce a negative `int`.
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
 fn str_repetition_matches_cpython_3_14_7_byte_for_byte() {
@@ -1104,5 +1105,30 @@ fn str_repetition_matches_cpython_3_14_7_byte_for_byte() {
     assert_eq!(
         release_pycc, release_cpython,
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/str_repetition.py"
+    );
+}
+
+// #602 (Part 1 of #573): a source-level `+`/`-` applied directly to a numeric
+// literal folds into that literal's own value. Covers expression position
+// (assignment, arithmetic, comparison, argument, `print`) and `match`
+// value-pattern position, for both `int` and `float`. Mapping-key position is
+// left to `pycc_hir`'s own unit tests: mapping patterns have no end-to-end
+// codegen fixture yet, so covering them here would exercise an unrelated gap.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn unary_literal_sign_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unary_literal_sign.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("unary_literal_sign_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/unary_literal_sign.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("unary_literal_sign_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/unary_literal_sign.py"
     );
 }

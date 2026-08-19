@@ -105,11 +105,10 @@ for v in xs:
 #[test]
 fn dict_get_returns_the_stored_value_or_the_default() {
     // `99` stands in for a sentinel "not found" default rather than a
-    // negative literal: unary negation (`-1`) is not itself implemented
-    // anywhere in this compiler yet (`error[C0001]: expression kind not
-    // supported yet`, confirmed independently of this task -- see
-    // `tests/slice1_codegen_depth.rs`'s own identical note), so a negative
-    // `int` literal cannot appear directly in real Python source here.
+    // negative literal: when this test was written no unary operator lowered
+    // at all, so a negative `int` literal could not appear directly in real
+    // Python source here. #602 has since made `-1` lower, but the sentinel
+    // reads no worse and the test's subject is `dict.get`, not literal signs.
     // Expected output verified against `python3` on this exact source:
     // `1` (present key) then `99` (missing key, no `KeyError`, unlike
     // plain `d["z"]`).

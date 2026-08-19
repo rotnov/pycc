@@ -779,11 +779,11 @@ fn mandelbrot_ascii_produces_a_grid_of_the_expected_dimensions_and_palette() {
     // `mandelbrot_ascii_matches_cpython_3_14_7_byte_for_byte` (PR-6).
     //
     // Deviation from the plan brief: the brief's fixture wrote the
-    // plane offsets as unary-minus literals (`-2.0`, `-1.0`). Unary
-    // operators (`Expr::UnaryOp` / `USub`/`UAdd`/`Not`/`Invert`) are not
-    // lowered by the implemented HIR subset: the checked lowering path now
-    // reports a spanned `C0001` capability diagnostic before MIR/codegen.
-    // Rewritten as `0.0 - 2.0` / `0.0 - 1.0`, which is exactly
+    // plane offsets as unary-minus literals (`-2.0`, `-1.0`). At the time no
+    // unary operator was lowered at all, so the checked lowering path
+    // reported a spanned `C0001` capability diagnostic before MIR/codegen.
+    // #602 has since made `-2.0` lower (the sign folds into the literal), but
+    // the fixture is left as written: `0.0 - 2.0` / `0.0 - 1.0` is exactly
     // semantically equivalent (Python's left-to-right `+`/`-` makes
     // `0.0 - 2.0 + x` == `-2.0 + x`) and already exercised by this same
     // fixture's `x2 - y2` subtraction. See this task's report for the
@@ -1602,11 +1602,10 @@ fn a_runtime_negative_slice_start_traps_instead_of_cpython_last_element_addressi
     // D-118's own runtime-panic scope cut, extended from D-108's existing
     // index precedent to slicing: a negative `start` traps rather than
     // addressing from the end the way real CPython's `xs[-1:3]` would.
-    // `neg = 0 - 1` (`BinOp::Sub`) stands in for a negative literal here --
-    // unary negation (`-1`) is not itself implemented anywhere in this
-    // compiler yet (`error[C0001]: expression kind not supported yet`,
-    // confirmed independently of slicing), so this is the only way to
-    // *produce* a negative runtime `int` from real Python source today.
+    // `neg = 0 - 1` (`BinOp::Sub`) stands in for a negative literal here.
+    // When this test was written no unary operator lowered at all; #602 has
+    // since made the literal form `-1` lower too, but `0 - 1` remains an
+    // equally valid way to produce a negative runtime `int`.
     let source = "\
 xs = [1, 2, 3]
 neg = 0 - 1
