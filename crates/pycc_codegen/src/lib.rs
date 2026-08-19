@@ -255,6 +255,14 @@ struct RtFns<'ctx> {
     int_cmp: FunctionValue<'ctx>,
     int_truthy: FunctionValue<'ctx>,
     range_continue: FunctionValue<'ctx>,
+    /// #147 (D-179): `pycc_rt_range_normalize_operand`, the encoded-word-in,
+    /// encoded-word-out normalizer every `range()` operand passes through.
+    /// It maps D-141's `False`/`True` markers to the ordinary smallints
+    /// `0`/`1` (a range produces integer objects rather than forwarding its
+    /// argument object) and passes a smallint or a heap bigint through
+    /// unchanged. It replaces the `int_untag_checked` call this position
+    /// used to emit, which rejected every bigint.
+    range_normalize_operand: FunctionValue<'ctx>,
     int_to_float: FunctionValue<'ctx>,
     float_div: FunctionValue<'ctx>,
     float_floordiv: FunctionValue<'ctx>,
@@ -268,8 +276,9 @@ struct RtFns<'ctx> {
     /// in, one brand-new `str` pointer out. The count parameter is a
     /// **raw** `i64`, already decoded by `build_untag_checked`, matching
     /// every other raw runtime counter this table declares (list index,
-    /// slice bound, `range` step) rather than pushing D-141's classifier
-    /// into a second place.
+    /// slice bound) rather than pushing D-141's classifier into a second
+    /// place. `range` operands left that group in #147 (D-179): they now
+    /// stay encoded and go through `range_normalize_operand`.
     str_repeat: FunctionValue<'ctx>,
     str_cmp: FunctionValue<'ctx>,
     str_truthy: FunctionValue<'ctx>,
@@ -283,10 +292,12 @@ struct RtFns<'ctx> {
     print_newline: FunctionValue<'ctx>,
     print_none: FunctionValue<'ctx>,
     /// D-141's checked numeric decoder. Container ingress calls it for
-    /// validation and keeps the original encoded word; range/index/slice
-    /// sites use its raw `0`/`1`/smallint result as an implementation
-    /// counter. It rejects bigint and malformed words in `pycc_rt`, which
-    /// owns the representation classifier.
+    /// validation and keeps the original encoded word; index, slice, and
+    /// `str`-repeat-count sites use its raw `0`/`1`/smallint result as an
+    /// implementation counter. `range` operands no longer call it at all
+    /// since #147 (D-179) -- see `range_normalize_operand`. It rejects
+    /// bigint and malformed words in `pycc_rt`, which owns the
+    /// representation classifier.
     int_untag_checked: FunctionValue<'ctx>,
     int_list_new: FunctionValue<'ctx>,
     int_list_append: FunctionValue<'ctx>,
@@ -435,6 +446,10 @@ fn declare_rt_functions<'ctx>(
             context
                 .i8_type()
                 .fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),
+        ),
+        range_normalize_operand: declare(
+            "pycc_rt_range_normalize_operand",
+            i64_type.fn_type(&[i64_type.into()], false),
         ),
         int_to_float: declare(
             "pycc_rt_int_to_float",
@@ -897,10 +912,11 @@ fn to_encoded_int<'ctx>(
 }
 
 /// Tags an already-known-in-range raw counter as an ordinary smallint.
-/// D-141 leaves this only for user-visible lengths and for normalizing a
-/// decoded `range()` operand before it enters an induction phi. Container
-/// elements/values now carry their encoded words unchanged and never use
-/// this helper on read.
+/// D-141 leaves this only for user-visible lengths -- `range()` operands
+/// stopped using it in #147 (D-179), where normalization moved into
+/// `pycc_rt_range_normalize_operand` so a bigint operand survives it.
+/// Container elements/values carry their encoded words unchanged and never
+/// use this helper on read.
 fn raw_i64_to_tagged_int<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -1044,8 +1060,9 @@ fn scalar_to_slot_word<'ctx>(
 
 /// Calls D-141's runtime-owned classifier/decoder. Container-value ingress
 /// uses the call only to validate bigint exclusion and then stores the
-/// original encoded word; index, slice, and range sites consume its decoded
-/// raw result. Keeping classification in `pycc_rt` prevents codegen from
+/// original encoded word; index, slice, and `str`-repeat-count sites consume
+/// its decoded raw result. `range` operands stopped calling it in #147
+/// (D-179). Keeping classification in `pycc_rt` prevents codegen from
 /// duplicating or partially interpreting the ABI.
 fn build_untag_checked<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
@@ -1372,7 +1389,15 @@ fn coerce_scalar_to_type<'ctx>(
     }
 }
 
-fn range_operand_to_tagged_int<'ctx>(
+/// Prepares one `range()` operand for the induction phi: the result is an
+/// *encoded* int-compatible word (D-061/D-141), normalized so the
+/// bool-identity markers become the ordinary smallints `0`/`1` while a
+/// smallint or a heap bigint passes through unchanged.
+///
+/// Renamed from `range_operand_to_tagged_int` in #147 (D-179): the old name
+/// described the old mechanism, which decoded to a raw `i64` and re-tagged,
+/// and therefore could not represent a bigint operand at all.
+fn range_operand_to_normalized_int<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     rt: &RtFns<'ctx>,
@@ -1382,8 +1407,17 @@ fn range_operand_to_tagged_int<'ctx>(
     match scalar {
         scalar @ (Scalar::Int(_) | Scalar::Bool(_)) => {
             let encoded = to_encoded_int(context, builder, scalar);
-            let raw = build_untag_checked(builder, rt, encoded, "range_untag_operand");
-            raw_i64_to_tagged_int(context, builder, raw)
+            // #147 (D-179): normalize instead of decode-and-re-tag. The old
+            // `build_untag_checked` + `raw_i64_to_tagged_int` pair enforced
+            // D-141's bool normalization by round-tripping through a raw
+            // `i64`, which made every bigint operand abort. The runtime
+            // normalizer keeps that bool contract and lets a bigint through.
+            builder
+                .build_call(rt.range_normalize_operand, &[encoded.into()], "range_norm")
+                .expect("build_call should not fail for a declared runtime function")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_range_normalize_operand returns a non-void i64")
+                .into_int_value()
         }
         // `List`/`Dict`/`Set`/`Tuple` join this arm's existing or-pattern
         // rather than getting their own (D-107, extended to dict/set by
@@ -5458,21 +5492,21 @@ fn emit_stmt<'ctx>(
             body,
         } => {
             let function = builder.get_insert_block().unwrap().get_parent().unwrap();
-            let start_v = range_operand_to_tagged_int(
+            let start_v = range_operand_to_normalized_int(
                 context,
                 builder,
                 rt,
                 emit_expr(context, builder, module, rt, user_functions, locals, start),
                 "start",
             );
-            let stop_v = range_operand_to_tagged_int(
+            let stop_v = range_operand_to_normalized_int(
                 context,
                 builder,
                 rt,
                 emit_expr(context, builder, module, rt, user_functions, locals, stop),
                 "stop",
             );
-            let step_v = range_operand_to_tagged_int(
+            let step_v = range_operand_to_normalized_int(
                 context,
                 builder,
                 rt,
@@ -6308,21 +6342,21 @@ fn emit_stmt<'ctx>(
             let (test_bb, after_bb, tail) = match source {
                 CompSource::Range { start, stop, step } => {
                     // Mirrors `MirStmt::ForRange`'s own shape exactly.
-                    let start_v = range_operand_to_tagged_int(
+                    let start_v = range_operand_to_normalized_int(
                         context,
                         builder,
                         rt,
                         emit_expr(context, builder, module, rt, user_functions, locals, start),
                         "start",
                     );
-                    let stop_v = range_operand_to_tagged_int(
+                    let stop_v = range_operand_to_normalized_int(
                         context,
                         builder,
                         rt,
                         emit_expr(context, builder, module, rt, user_functions, locals, stop),
                         "stop",
                     );
-                    let step_v = range_operand_to_tagged_int(
+                    let step_v = range_operand_to_normalized_int(
                         context,
                         builder,
                         rt,
@@ -6719,21 +6753,21 @@ fn emit_stmt<'ctx>(
             //    mirrors).
             let (test_bb, after_bb, tail) = match source {
                 CompSource::Range { start, stop, step } => {
-                    let start_v = range_operand_to_tagged_int(
+                    let start_v = range_operand_to_normalized_int(
                         context,
                         builder,
                         rt,
                         emit_expr(context, builder, module, rt, user_functions, locals, start),
                         "start",
                     );
-                    let stop_v = range_operand_to_tagged_int(
+                    let stop_v = range_operand_to_normalized_int(
                         context,
                         builder,
                         rt,
                         emit_expr(context, builder, module, rt, user_functions, locals, stop),
                         "stop",
                     );
-                    let step_v = range_operand_to_tagged_int(
+                    let step_v = range_operand_to_normalized_int(
                         context,
                         builder,
                         rt,
@@ -7098,21 +7132,21 @@ fn emit_stmt<'ctx>(
 
             let (test_bb, after_bb, tail) = match source {
                 CompSource::Range { start, stop, step } => {
-                    let start_v = range_operand_to_tagged_int(
+                    let start_v = range_operand_to_normalized_int(
                         context,
                         builder,
                         rt,
                         emit_expr(context, builder, module, rt, user_functions, locals, start),
                         "start",
                     );
-                    let stop_v = range_operand_to_tagged_int(
+                    let stop_v = range_operand_to_normalized_int(
                         context,
                         builder,
                         rt,
                         emit_expr(context, builder, module, rt, user_functions, locals, stop),
                         "stop",
                     );
-                    let step_v = range_operand_to_tagged_int(
+                    let step_v = range_operand_to_normalized_int(
                         context,
                         builder,
                         rt,
@@ -9806,7 +9840,7 @@ mod tests {
     fn for_range_with_a_bool_stop_widens_to_int() {
         // `for i in range(0, True, 1): print(i)` -- distinct region from
         // the `start`/`step` coverage above: exercises `stop`'s own
-        // `range_operand_to_tagged_int`'s `Scalar::Bool` arm specifically.
+        // `range_operand_to_normalized_int`'s `Scalar::Bool` arm specifically.
         // `True` normalizes to the ordinary tagged int `1`, so this loop runs once.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::ForRange {
@@ -9840,7 +9874,7 @@ mod tests {
         // `i64`-carried `Ty::Int`: their bool results have already crossed
         // the return boundary and become D-141 markers before `ForRange`
         // sees them. All three operands therefore exercise
-        // `range_operand_to_tagged_int`'s `Scalar::Int` path. The first
+        // `range_operand_to_normalized_int`'s `Scalar::Int` path. The first
         // visible target must print ordinary integer `0`, not `False`.
         let mir = MirModule {
             items: vec![
@@ -12273,14 +12307,14 @@ mod tests {
     #[should_panic(
         expected = "pycc_codegen: internal error: range() start did not evaluate to int"
     )]
-    fn range_operand_to_tagged_int_rejects_an_instance_operand() {
+    fn range_operand_to_normalized_int_rejects_an_instance_operand() {
         let context = Context::create();
         let (_module, rt) = list_scalar_panic_fixture(&context);
         let builder = context.create_builder();
         let ptr = context
             .ptr_type(inkwell::AddressSpace::default())
             .const_null();
-        range_operand_to_tagged_int(&context, &builder, &rt, Scalar::Instance(ptr), "start");
+        range_operand_to_normalized_int(&context, &builder, &rt, Scalar::Instance(ptr), "start");
     }
 
     #[test]
@@ -13339,7 +13373,13 @@ mod tests {
         let module = context.create_module("tuple_range_bound");
         let rt = declare_rt_functions(&context, &module);
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            range_operand_to_tagged_int(&context, &builder, &rt, tuple_scalar(&context), "start");
+            range_operand_to_normalized_int(
+                &context,
+                &builder,
+                &rt,
+                tuple_scalar(&context),
+                "start",
+            );
         }));
         let payload = panicked.expect_err("a tuple range bound must be rejected");
         let message = payload

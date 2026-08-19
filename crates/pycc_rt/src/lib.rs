@@ -32,6 +32,7 @@ use std::cell::Cell;
 
 mod exception;
 mod instance;
+mod int_encoding;
 
 #[cfg(not(test))]
 pub use exception::pycc_rt_exception_print_and_exit;
@@ -43,216 +44,14 @@ pub use exception::{
     pycc_rt_exception_alloc, pycc_rt_exception_clear, pycc_rt_exception_raise,
     pycc_rt_exception_raise_with_cause, pycc_rt_exception_type_matches,
 };
+// D-061/D-141's one-word `int` encoding and its heap bigint representation.
+// Glob-imported so the operations below -- and their `#[cfg(test)]` tests,
+// which reach them through `use super::*` -- keep referring to these names
+// unqualified, exactly as when they lived in this file.
+use int_encoding::*;
 
 fn format_i64_line(value: i64) -> String {
     format!("{value}\n")
-}
-
-/// See D-061/D-141: every int-compatible value is one LLVM `i64`. Odd words
-/// are ordinary smallints; exact words `2` and `6` preserve `False` and
-/// `True` identity after a bool-to-int boundary; non-zero words aligned to
-/// four bytes are heap `BigInt` pointers. `classify_encoded_int` is the one
-/// fail-closed classifier used before interpreting any even word.
-const TAG_BIT: i64 = 1;
-const LOW_TAG_MASK: i64 = 0b11;
-const BOOL_FALSE_MARKER: i64 = 0b0010;
-const BOOL_TRUE_MARKER: i64 = 0b0110;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EncodedIntKind {
-    SmallInt,
-    BoolFalse,
-    BoolTrue,
-    BigInt,
-}
-
-fn tag_smallint(value: i64) -> i64 {
-    (value << 1) | TAG_BIT
-}
-
-fn untag_smallint(tagged: i64) -> i64 {
-    tagged >> 1 // arithmetic (sign-extending) shift for `i64`
-}
-
-fn is_smallint(tagged: i64) -> bool {
-    tagged & TAG_BIT == TAG_BIT
-}
-
-/// Classifies every word in the int-compatible ABI before any pointer cast.
-/// Odd words are ordinary smallints; two exact low-tag-`10` words preserve
-/// bool identity; non-zero aligned words are bigint pointers. Every other
-/// pattern fails closed instead of being dereferenced as an attacker-chosen
-/// pointer.
-fn classify_encoded_int(encoded: i64) -> EncodedIntKind {
-    if is_smallint(encoded) {
-        EncodedIntKind::SmallInt
-    } else if encoded == BOOL_FALSE_MARKER {
-        EncodedIntKind::BoolFalse
-    } else if encoded == BOOL_TRUE_MARKER {
-        EncodedIntKind::BoolTrue
-    } else if encoded != 0 && encoded & LOW_TAG_MASK == 0 {
-        EncodedIntKind::BigInt
-    } else {
-        panic!("pycc_rt: invalid encoded int word {encoded:#x}")
-    }
-}
-
-fn inline_int_value(encoded: i64) -> Option<i64> {
-    match classify_encoded_int(encoded) {
-        EncodedIntKind::SmallInt => Some(untag_smallint(encoded)),
-        EncodedIntKind::BoolFalse => Some(0),
-        EncodedIntKind::BoolTrue => Some(1),
-        EncodedIntKind::BigInt => None,
-    }
-}
-
-/// `None` when `value` needs the full 64 bits (including sign) to
-/// represent -- i.e. tagging then untagging would not round-trip.
-fn fits_smallint(value: i64) -> Option<i64> {
-    let tagged = tag_smallint(value);
-    (untag_smallint(tagged) == value).then_some(tagged)
-}
-
-fn require_inline_int(encoded: i64, context: &str) -> i64 {
-    inline_int_value(encoded)
-        .unwrap_or_else(|| panic!("pycc_rt: {context} a bigint-valued `int` is not supported yet"))
-}
-
-/// D-058: hand-rolled sign-magnitude limbs, base 2^32, little-endian,
-/// no trailing zero limbs except a single `[0]` representing zero
-/// itself. Never freed (leaked) -- unlike `PyStrObj`, D-060 only commits
-/// `str` to real refcounting; a bigint is a rare, overflow-only path
-/// with no v0.1 construct that could leak it in a hot loop the way an
-/// unbounded string-building loop could (this is a deliberate, narrower
-/// "simplest safe default" than `str`'s, recorded alongside D-061).
-struct BigIntObj {
-    negative: bool,
-    limbs: Vec<u32>,
-}
-
-const _: () = assert!(std::mem::align_of::<BigIntObj>() >= 4);
-const _: () = assert!(std::mem::size_of::<*const BigIntObj>() <= std::mem::size_of::<i64>());
-
-fn trim(limbs: &[u32]) -> Vec<u32> {
-    let mut end = limbs.len();
-    while end > 1 && limbs[end - 1] == 0 {
-        end -= 1;
-    }
-    limbs[..end].to_vec()
-}
-
-fn magnitude_cmp(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
-    let (a, b) = (trim(a), trim(b));
-    if a.len() != b.len() {
-        return a.len().cmp(&b.len());
-    }
-    for i in (0..a.len()).rev() {
-        if a[i] != b[i] {
-            return a[i].cmp(&b[i]);
-        }
-    }
-    std::cmp::Ordering::Equal
-}
-
-fn magnitude_add(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut result = Vec::with_capacity(a.len().max(b.len()) + 1);
-    let mut carry: u64 = 0;
-    for i in 0..a.len().max(b.len()) {
-        let av = *a.get(i).unwrap_or(&0) as u64;
-        let bv = *b.get(i).unwrap_or(&0) as u64;
-        let sum = av + bv + carry;
-        result.push((sum & 0xFFFF_FFFF) as u32);
-        carry = sum >> 32;
-    }
-    if carry > 0 {
-        result.push(carry as u32);
-    }
-    result
-}
-
-/// Requires `a >= b` (checked by every caller via `magnitude_cmp` first).
-fn magnitude_sub(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut result = Vec::with_capacity(a.len());
-    let mut borrow: i64 = 0;
-    for (i, &av) in a.iter().enumerate() {
-        let av = av as i64;
-        let bv = *b.get(i).unwrap_or(&0) as i64;
-        let mut diff = av - bv - borrow;
-        if diff < 0 {
-            diff += 1i64 << 32;
-            borrow = 1;
-        } else {
-            borrow = 0;
-        }
-        result.push(diff as u32);
-    }
-    result
-}
-
-fn bigint_add_signed(a_neg: bool, a_mag: &[u32], b_neg: bool, b_mag: &[u32]) -> BigIntObj {
-    if a_neg == b_neg {
-        BigIntObj {
-            negative: a_neg,
-            limbs: trim(&magnitude_add(a_mag, b_mag)),
-        }
-    } else {
-        match magnitude_cmp(a_mag, b_mag) {
-            std::cmp::Ordering::Equal => BigIntObj {
-                negative: false,
-                limbs: vec![0],
-            },
-            std::cmp::Ordering::Greater => BigIntObj {
-                negative: a_neg,
-                limbs: trim(&magnitude_sub(a_mag, b_mag)),
-            },
-            std::cmp::Ordering::Less => BigIntObj {
-                negative: b_neg,
-                limbs: trim(&magnitude_sub(b_mag, a_mag)),
-            },
-        }
-    }
-}
-
-fn bigint_from_i128(v: i128) -> BigIntObj {
-    let negative = v < 0;
-    let mut mag = v.unsigned_abs();
-    let mut limbs = Vec::new();
-    while mag > 0 {
-        limbs.push((mag & 0xFFFF_FFFF) as u32);
-        mag >>= 32;
-    }
-    if limbs.is_empty() {
-        limbs.push(0);
-    }
-    BigIntObj { negative, limbs }
-}
-
-fn tag_bigint(b: BigIntObj) -> i64 {
-    Box::into_raw(Box::new(b)) as i64
-}
-
-/// # Safety
-/// `tagged` must classify as a `BigIntObj` pointer. Classification is
-/// repeated here so no dereference can bypass the fail-closed tag check.
-unsafe fn bigint_ref<'a>(tagged: i64) -> &'a BigIntObj {
-    if classify_encoded_int(tagged) != EncodedIntKind::BigInt {
-        panic!("pycc_rt: internal error: attempted bigint dereference of a non-pointer int word")
-    }
-    unsafe { &*(tagged as *const BigIntObj) }
-}
-
-fn to_sign_and_magnitude(tagged: i64) -> (bool, Vec<u32>) {
-    if let Some(v) = inline_int_value(tagged) {
-        let negative = v < 0;
-        let mag = v.unsigned_abs();
-        (
-            negative,
-            trim(&[(mag & 0xFFFF_FFFF) as u32, (mag >> 32) as u32]),
-        )
-    } else {
-        let b = unsafe { bigint_ref(tagged) };
-        (b.negative, b.limbs.clone())
-    }
 }
 
 fn divmod_small(limbs: &[u32], divisor: u32) -> (Vec<u32>, u32) {
@@ -567,8 +366,9 @@ pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
 // past a plain `extern "C" fn`'s own boundary is caught right there and
 // turned into a process abort, regardless of who calls it -- including
 // this crate's own same-binary Rust tests. `pycc_rt_range_continue` *can*
-// panic (`require_inline_int`'s bigint-rejection path, and the zero-step
-// case below), so it needs the same split every other panicking
+// panic (`classify_encoded_int`'s fail-closed rejection of a malformed
+// encoded word, and the zero-step case below), so it needs the same split
+// every other panicking
 // `pycc_rt_int_*` function already gets: a private, ordinary-Rust-ABI
 // `range_continue` holding the real logic (freely panics, unwinds
 // normally, `#[should_panic]`-testable), and a thin `pub extern "C"`
@@ -576,15 +376,43 @@ pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
 // code to call. The zero-step test below calls `range_continue` directly,
 // not the public wrapper, for the same reason every other
 // `#[should_panic]` test in this file does.
+//
+// Since #147 the operands are ordered through `encoded_int_cmp` rather than
+// decoded with `require_inline_int`, so a bigint start, stop, step, or
+// mid-loop-promoted induction variable drives the loop normally instead of
+// aborting at D-141's runtime `int` boundary. Note the zero-step check reads
+// the *step's own encoded order against zero*, not the raw word: a bigint
+// zero step (reachable via `a - a` on two promoted values) must still panic,
+// and a bigint word is never numerically `0`.
 fn range_continue(i: i64, stop: i64, step: i64) -> i8 {
-    let (i, stop, step) = (
-        require_inline_int(i, "iterating"),
-        require_inline_int(stop, "iterating"),
-        require_inline_int(step, "iterating"),
-    );
-    match step.cmp(&0) {
-        std::cmp::Ordering::Greater => i8::from(i < stop),
-        std::cmp::Ordering::Less => i8::from(i > stop),
+    // Fast path: three inline operands -- the shape of every ordinary
+    // smallint loop -- are ordered as plain `i64`s. Sending them through
+    // `encoded_int_cmp` instead measured a consistent ~22% slowdown on a
+    // 50-million-iteration release loop (0.32s -> 0.39s across five paired
+    // rounds; see D-179's Consequences), and this restores the pre-#147 cost
+    // exactly. It is not a semantic special case: `inline_int_value` yields
+    // `None` for a bigint, so any promoted operand falls through to the
+    // general path below, and a malformed word still fails closed inside
+    // `classify_encoded_int` on either path.
+    if let (Some(i), Some(stop), Some(step)) = (
+        inline_int_value(i),
+        inline_int_value(stop),
+        inline_int_value(step),
+    ) {
+        return match step.cmp(&0) {
+            std::cmp::Ordering::Greater => i8::from(i < stop),
+            std::cmp::Ordering::Less => i8::from(i > stop),
+            std::cmp::Ordering::Equal => panic!("pycc_rt: range() arg 3 must not be zero"),
+        };
+    }
+    let zero = tag_smallint(0);
+    match encoded_int_cmp(step, zero) {
+        std::cmp::Ordering::Greater => {
+            i8::from(encoded_int_cmp(i, stop) == std::cmp::Ordering::Less)
+        }
+        std::cmp::Ordering::Less => {
+            i8::from(encoded_int_cmp(i, stop) == std::cmp::Ordering::Greater)
+        }
         std::cmp::Ordering::Equal => panic!("pycc_rt: range() arg 3 must not be zero"),
     }
 }
@@ -592,6 +420,34 @@ fn range_continue(i: i64, stop: i64, step: i64) -> i8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_range_continue(i: i64, stop: i64, step: i64) -> i8 {
     range_continue(i, stop, step)
+}
+
+/// Normalizes one `range()` operand for D-141's bool-identity contract:
+/// `range` consumes the numeric *value* of its arguments and produces
+/// ordinary integer objects, so `True`/`False` markers become the ordinary
+/// smallints `1`/`0` before entering the induction phi. A smallint and --
+/// since #147 -- a heap bigint pass through unchanged; a malformed word
+/// fails closed inside `classify_encoded_int` exactly as before.
+///
+/// This replaces the `range_untag_operand` call to
+/// `pycc_rt_int_untag_checked` that codegen used to emit: that decoder
+/// rejects every bigint, which is precisely the #147 defect. Normalization
+/// stays a runtime call because only `pycc_rt` may interpret an encoded
+/// word.
+///
+/// Split into a private fn plus a thin wrapper for the same reason
+/// `range_continue` is (see the note above): it can panic.
+fn range_normalize_operand(encoded: i64) -> i64 {
+    match classify_encoded_int(encoded) {
+        EncodedIntKind::SmallInt | EncodedIntKind::BigInt => encoded,
+        EncodedIntKind::BoolFalse => tag_smallint(0),
+        EncodedIntKind::BoolTrue => tag_smallint(1),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_range_normalize_operand(encoded: i64) -> i64 {
+    range_normalize_operand(encoded)
 }
 
 /// Converts an encoded int-compatible value (D-061/D-141) to `f64` -- the
@@ -1843,6 +1699,7 @@ pub extern "C" fn pycc_rt_name_error(name: *const std::os::raw::c_char) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cmp::Ordering::{Equal, Greater, Less};
 
     #[test]
     fn print_i64_matches_cpython_format() {
@@ -2195,6 +2052,146 @@ mod tests {
         // comment above `range_continue`'s definition (same rationale as
         // `pycc_rt_int_add_panics_...` above).
         range_continue(tag_smallint(0), tag_smallint(3), tag_smallint(0));
+    }
+
+    /// A bigint holding exactly `2^62` -- the smallest magnitude that does
+    /// not round-trip through the tagged 63-bit encoding, i.e. the first
+    /// value `fits_smallint` rejects.
+    fn bigint_two_pow_62() -> i64 {
+        tag_bigint(bigint_from_i128(1i128 << 62))
+    }
+
+    /// A *bigint-tagged zero*, produced the way production code produces one:
+    /// `bigint_add_signed`'s equal-magnitude, opposite-sign case. Its
+    /// `negative` flag is `false`, which is exactly why sign must never be
+    /// read before magnitude.
+    fn bigint_zero() -> i64 {
+        let big = bigint_two_pow_62();
+        let zero = int_sub(big, big);
+        assert_eq!(classify_encoded_int(zero), EncodedIntKind::BigInt);
+        zero
+    }
+
+    #[test]
+    fn magnitude_sign_reads_zero_from_the_magnitude_not_the_negative_flag() {
+        assert_eq!(magnitude_sign(false, &[0]), 0);
+        // The trap this helper exists for: a normalized bigint zero carries
+        // `negative: false`, so "not negative" alone would read as positive.
+        assert_eq!(magnitude_sign(true, &[0, 0]), 0);
+        assert_eq!(magnitude_sign(false, &[1]), 1);
+        assert_eq!(magnitude_sign(true, &[1]), -1);
+    }
+
+    #[test]
+    fn encoded_int_cmp_orders_inline_operands_without_decoding() {
+        assert_eq!(encoded_int_cmp(tag_smallint(1), tag_smallint(2)), Less);
+        assert_eq!(encoded_int_cmp(tag_smallint(2), tag_smallint(1)), Greater);
+        assert_eq!(encoded_int_cmp(tag_smallint(2), tag_smallint(2)), Equal);
+        assert_eq!(encoded_int_cmp(BOOL_FALSE_MARKER, tag_smallint(0)), Equal);
+        assert_eq!(encoded_int_cmp(BOOL_TRUE_MARKER, tag_smallint(1)), Equal);
+        assert_eq!(encoded_int_cmp(BOOL_FALSE_MARKER, BOOL_TRUE_MARKER), Less);
+    }
+
+    #[test]
+    fn encoded_int_cmp_orders_bigints_against_inline_operands_in_both_positions() {
+        let big = bigint_two_pow_62();
+        let negative_big = int_sub(tag_smallint(0), big);
+        assert_eq!(encoded_int_cmp(big, tag_smallint(i64::MAX >> 1)), Greater);
+        assert_eq!(encoded_int_cmp(tag_smallint(i64::MAX >> 1), big), Less);
+        assert_eq!(encoded_int_cmp(negative_big, tag_smallint(0)), Less);
+        assert_eq!(encoded_int_cmp(tag_smallint(0), negative_big), Greater);
+        // Opposite signs on both sides of the comparison.
+        assert_eq!(encoded_int_cmp(big, negative_big), Greater);
+        assert_eq!(encoded_int_cmp(negative_big, big), Less);
+    }
+
+    #[test]
+    fn encoded_int_cmp_orders_two_bigints_of_the_same_sign_by_magnitude() {
+        let big = bigint_two_pow_62();
+        let bigger = int_add(big, tag_smallint(1));
+        assert_eq!(encoded_int_cmp(big, bigger), Less);
+        assert_eq!(encoded_int_cmp(bigger, big), Greater);
+        assert_eq!(encoded_int_cmp(big, int_add(big, tag_smallint(0))), Equal);
+
+        // Two negatives: the larger magnitude is the *smaller* value.
+        let negative = int_sub(tag_smallint(0), big);
+        let more_negative = int_sub(tag_smallint(0), bigger);
+        assert_eq!(encoded_int_cmp(more_negative, negative), Less);
+        assert_eq!(encoded_int_cmp(negative, more_negative), Greater);
+    }
+
+    #[test]
+    fn encoded_int_cmp_treats_a_bigint_zero_as_zero() {
+        let zero = bigint_zero();
+        assert_eq!(encoded_int_cmp(zero, tag_smallint(0)), Equal);
+        assert_eq!(encoded_int_cmp(zero, bigint_zero()), Equal);
+        assert_eq!(encoded_int_cmp(zero, tag_smallint(1)), Less);
+        assert_eq!(encoded_int_cmp(tag_smallint(-1), zero), Less);
+    }
+
+    #[test]
+    fn range_normalize_operand_maps_bool_markers_to_ordinary_smallints() {
+        // D-141's contract, restated by D-179: `range` consumes the numeric
+        // value and produces ordinary integer objects, so the identity
+        // markers must not survive into the induction variable.
+        assert_eq!(range_normalize_operand(BOOL_FALSE_MARKER), tag_smallint(0));
+        assert_eq!(range_normalize_operand(BOOL_TRUE_MARKER), tag_smallint(1));
+    }
+
+    #[test]
+    fn range_normalize_operand_passes_smallints_and_bigints_through_unchanged() {
+        assert_eq!(range_normalize_operand(tag_smallint(7)), tag_smallint(7));
+        assert_eq!(range_normalize_operand(tag_smallint(-7)), tag_smallint(-7));
+        let big = bigint_two_pow_62();
+        // The #147 defect in one assertion: this used to abort.
+        assert_eq!(range_normalize_operand(big), big);
+        // The public wrapper's own line, on a non-panicking input.
+        assert_eq!(pycc_rt_range_normalize_operand(big), big);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: invalid encoded int word")]
+    fn range_normalize_operand_rejects_a_malformed_word() {
+        // Calls the private fn for the usual `extern "C"` abort reason.
+        range_normalize_operand(0);
+    }
+
+    #[test]
+    fn range_continue_drives_a_loop_whose_operands_are_bigints() {
+        let start = bigint_two_pow_62();
+        let stop = int_add(start, tag_smallint(2));
+        assert_eq!(range_continue(start, stop, tag_smallint(1)), 1);
+        assert_eq!(range_continue(stop, stop, tag_smallint(1)), 0);
+        // A bigint step, ascending and descending.
+        assert_eq!(range_continue(tag_smallint(0), start, start), 1);
+        assert_eq!(
+            range_continue(
+                tag_smallint(0),
+                tag_smallint(-1),
+                int_sub(tag_smallint(0), start)
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn range_continue_stops_when_the_induction_variable_promotes_mid_loop() {
+        // The exact shape `range(4611686018427387900, 4611686018427387903, 2)`
+        // reaches: `start`/`stop`/`step` all stay smallints, but the third
+        // `int_add` produces 2^62, which `fits_smallint` rejects. The loop
+        // guard then sees a *bigint* `i` against a *smallint* `stop`.
+        let stop = tag_smallint(4_611_686_018_427_387_903);
+        let promoted = int_add(tag_smallint(4_611_686_018_427_387_902), tag_smallint(2));
+        assert_eq!(classify_encoded_int(promoted), EncodedIntKind::BigInt);
+        assert_eq!(range_continue(promoted, stop, tag_smallint(2)), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: range() arg 3 must not be zero")]
+    fn range_continue_rejects_a_bigint_zero_step() {
+        // A bigint-tagged zero is *numerically* zero even though its word is
+        // a non-zero pointer, so the guard must compare values, not words.
+        range_continue(tag_smallint(0), tag_smallint(10), bigint_zero());
     }
 
     #[test]

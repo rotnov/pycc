@@ -9,7 +9,9 @@
 //!   boundaries that the retired codegen panic used to shadow. CPython
 //!   accepts the value in most of these positions, so a differential fixture
 //!   containing one would fail by construction -- they are pinned here
-//!   instead, by exit code and exact message.
+//!   instead, by exit code and exact message. One member of this family, the
+//!   `range` operand, left it in #147 (D-179) and is now pinned as a success
+//!   case; see `tests/issue_147_bigint_range.rs`.
 //! * **Still-open bigint operations.** `*`, `//`, `%`, `**`, `/`, `int`->`float`
 //!   conversion, and comparison remain accepted failure boundaries; before
 //!   #148 they were unreachable from a literal, so their current behavior is
@@ -137,12 +139,42 @@ fn an_oversized_literal_as_a_str_repeat_count_hits_the_runtime_int_boundary() {
 }
 
 #[test]
-fn an_oversized_literal_as_a_range_argument_hits_the_runtime_int_boundary() {
-    // `range_untag_operand` -- the numeric-argument guard family.
-    assert_runtime_abort(
-        "range_argument",
-        &format!("for i in range({OVERSIZED}):\n    print(i)\n"),
-        BOUNDARY_MESSAGE,
+fn an_oversized_literal_as_a_range_argument_no_longer_hits_the_runtime_int_boundary() {
+    // #147 (D-179) removed `range_untag_operand`: `range` operands are now
+    // normalized rather than decoded, so a bigint bound drives the loop.
+    //
+    // A bounded stop is essential. The naive spelling this test used to
+    // carry -- `range(4611686018427387904)` -- now *succeeds*, and would
+    // run ~4.6e18 iterations. The pair below crosses exactly the same
+    // representation boundary in two.
+    //
+    // The success paths themselves live in
+    // `tests/issue_147_bigint_range.rs`; this case stays here so the #148
+    // boundary inventory records which position left the list and why.
+    let dir = std::env::temp_dir().join(format!("pycc_issue148_range_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("range.py");
+    std::fs::File::create(&src)
+        .unwrap()
+        .write_all(
+            format!("for i in range({OVERSIZED}, 4611686018427387906):\n    print(i)\n").as_bytes(),
+        )
+        .unwrap();
+
+    let run = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "a bigint range should run to completion since #147, got {:?}: {}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "4611686018427387904\n4611686018427387905\n"
     );
 }
 

@@ -6,7 +6,10 @@ status: accepted
 
 ## D-178: Materialize out-of-range int literals through a runtime constructor
 
-- Status: accepted
+- Status: accepted; superseded in part by
+  [D-179](./D-179-range-loops-drive-bigint-bounds-steps-and.md), which removes
+  the `range` operand from this decision's fourteen-boundary inventory. Every
+  other part of this decision stands.
 - Context:
   [D-061](./D-061-int-s-fast-path-i64-slot-is-a-low-bit-tagged-63.md) gives `int` a 63-bit tagged
   fast path, and [D-058](./D-058-int-overflow-to-bigint-d-001-is-a-minimal-hand.md) gives
@@ -52,7 +55,12 @@ status: accepted
   (`list`/`set`/`dict` literals, `append`/`add`, comprehension elements,
   `dict.get` defaults, subscript-assign values), an index or repeat count, a
   `range` operand, and a slice bound. All of them abort with exit `101` and
-  `pycc_rt: int boundary does not support bigint-valued values yet`. This was
+  `pycc_rt: int boundary does not support bigint-valued values yet`.
+  (Superseded in part by
+  [D-179](./D-179-range-loops-drive-bigint-bounds-steps-and.md): the `range`
+  operand left this inventory in
+  [#147](https://github.com/rotnov/pycc/issues/147), leaving thirteen.
+  Nothing else in this decision changes.) This was
   measured, not assumed: every one of those positions *already* aborted
   identically for an arithmetically promoted bigint before this change. What
   the change removes is the inconsistency where the same program shape failed
