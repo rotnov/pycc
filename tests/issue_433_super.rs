@@ -167,9 +167,22 @@ fn super_instance_attr_read_is_a_check_error() {
         rendered.contains("T0047"),
         "should report T0047, got: {rendered}"
     );
+
+    // `render_human` deliberately has no `help:` line yet (D-043); the
+    // suggestion reaches users through the JSON diagnostic format's `help`
+    // array (D-152), so that is where the equivalent `self` read is asserted.
+    let json = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap(), "--error-format", "json"])
+        .output()
+        .unwrap();
+    let json_rendered = format!(
+        "{}{}",
+        String::from_utf8_lossy(&json.stdout),
+        String::from_utf8_lossy(&json.stderr)
+    );
     assert!(
-        rendered.contains("self.x"),
-        "T0047 should suggest the equivalent `self` read, got: {rendered}"
+        json_rendered.contains("self.x"),
+        "T0047's JSON `help` should suggest the equivalent `self` read, got: {json_rendered}"
     );
 }
 
