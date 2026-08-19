@@ -2,9 +2,11 @@ mod binop;
 mod class;
 mod exception;
 mod solver;
+mod unop;
 
 use binop::numeric_result_type;
 use exception::{check_raise_stmt, check_try_stmt, is_unshadowed_builtin_exception};
+use unop::unary_result_type;
 
 use pycc_diag::{Diagnostic, Span};
 #[cfg(test)]
@@ -12,7 +14,7 @@ use pycc_hir::CmpOpKind;
 pub use pycc_hir::Ty;
 use pycc_hir::{
     BinOpKind, CmpOpKind as CmpOp, CompIter, FStringPart, HirClassDef, HirExpr, HirItem,
-    HirMatchCase, HirModule, HirPattern, HirStmt, PropertyDef,
+    HirMatchCase, HirModule, HirPattern, HirStmt, PropertyDef, UnaryOpKind,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -1231,6 +1233,38 @@ fn collect_expr_constraints(
             collect_expr_constraints(signatures, parents, concrete, binops, env, left)?;
             collect_expr_constraints(signatures, parents, concrete, binops, env, right)?;
             Ok(Some(Ok(Ty::Bool)))
+        }
+        // #603 (Part 2 of #573). An operand whose type is already concrete
+        // is typed directly by `unary_result_type`, so a bad operand keeps
+        // the unary diagnostic ("unary operator USub is not defined for
+        // `str`") rather than a confusing binary one about the rewrite's
+        // synthetic `0`. That path covers every operand the solver can see
+        // a type for, which is the overwhelming majority.
+        //
+        // An operand that is still an inference variable has no type to
+        // check yet, so it is deferred as the exact binary constraint
+        // `pycc_mir` will lower the expression to -- `0 - x` / `0 + x`.
+        // `numeric_result_type(Sub | Add, Int, operand)` *is* the unary
+        // rule (`Int`/`Bool` give `Int` since `-True == -1`, `Float` gives
+        // `Float`, anything else is `T0021`), so reusing it keeps the
+        // solver's view of the expression identical to MIR's own rewrite
+        // and the two cannot drift apart.
+        HirExpr::UnaryOp { op, operand } => {
+            let operand =
+                collect_expr_constraints(signatures, parents, concrete, binops, env, operand)?;
+            match operand {
+                Some(Ok(operand_ty)) => Ok(Some(Ok(unary_result_type(*op, operand_ty)?))),
+                Some(operand) => {
+                    let result = fresh_term(parents, concrete);
+                    let op = match op {
+                        UnaryOpKind::USub => BinOpKind::Sub,
+                        UnaryOpKind::UAdd => BinOpKind::Add,
+                    };
+                    binops.push((op, Ok(Ty::Int), operand, result.clone()));
+                    Ok(Some(result))
+                }
+                None => Ok(None),
+            }
         }
         HirExpr::BinOp { op, left, right } => {
             let left = collect_expr_constraints(signatures, parents, concrete, binops, env, left)?;
@@ -2906,6 +2940,10 @@ fn infer_expr_in(
                     }
                 }
             }
+        }
+        HirExpr::UnaryOp { op, operand } => {
+            let operand_ty = infer_expr_in(env, local_names, operand)?;
+            unary_result_type(*op, operand_ty)
         }
         HirExpr::BinOp { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
@@ -5846,6 +5884,9 @@ fn reject_generic_calls_in_expr(
             }
             Ok(())
         }
+        HirExpr::UnaryOp { operand, .. } => {
+            reject_generic_calls_in_expr(module_env, own_name, operand)
+        }
         HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
             reject_generic_calls_in_expr(module_env, own_name, left)?;
             reject_generic_calls_in_expr(module_env, own_name, right)
@@ -6464,6 +6505,17 @@ fn rewrite_generic_calls_in_expr(
             }
             infer_expr_in(env, local_names, expr)
         }
+        HirExpr::UnaryOp { operand, .. } => {
+            // `let _ =` rather than `?`, for the same reason the
+            // `isinstance` arm above uses it: only the rewriting side
+            // effect matters here, and the `infer_expr_in` call on the
+            // whole unary expression immediately below recurses into this
+            // same operand, so it surfaces the identical error. Propagating
+            // here as well would leave a permanently-uncovered error-path
+            // region under D-014's 100 %-coverage gate.
+            let _ = rewrite_generic_calls_in_expr(env, local_names, operand, instantiations, seen);
+            infer_expr_in(env, local_names, expr)
+        }
         HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
             for sub in [left.as_mut(), right.as_mut()] {
                 rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
@@ -6933,6 +6985,9 @@ fn collect_generic_class_instantiations_from_expr(expr: &HirExpr, out: &mut Vec<
             for arg in args {
                 collect_generic_class_instantiations_from_expr(arg, out);
             }
+        }
+        HirExpr::UnaryOp { operand, .. } => {
+            collect_generic_class_instantiations_from_expr(operand, out);
         }
         HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
             collect_generic_class_instantiations_from_expr(left, out);
@@ -8164,6 +8219,16 @@ fn rewrite_protocol_calls_in_expr(
         HirExpr::AttrGet { base, .. } => {
             rewrite_protocol_calls_in_expr(
                 base,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+        }
+        HirExpr::UnaryOp { operand, .. } => {
+            rewrite_protocol_calls_in_expr(
+                operand,
                 protocol_funcs,
                 env,
                 local_names,
@@ -34101,5 +34166,135 @@ value: int = f()
 "
         );
         assert!(parse_check(&src).is_ok());
+    }
+
+    // -- #603: a unary operand is a general expression -------------------
+    //
+    // The unary arms these cases drive live in this crate's generic-call,
+    // generic-class, and protocol walkers. `tests/issue_603_unary_general_operand.rs`
+    // already pins the observable program output end to end; these unit
+    // tests exist so the same arms are executed by this crate's own test
+    // binary too, which is what the D-014 region gate actually measures.
+
+    #[test]
+    fn a_unary_operand_composes_with_a_generic_call_in_both_directions() {
+        let result = check_source(
+            "def ident[T](v: T) -> T:\n    return v\n\n\nx = 5\nprint(ident(-x))\nprint(-ident(x))\n",
+        );
+        assert!(
+            result.is_ok(),
+            "a unary operand must compose with a generic call: {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_unary_operand_inside_a_generic_function_body_is_walked_through() {
+        let result = check_source(
+            "def negate[T](v: T, n: int) -> int:\n    return -n\n\n\nprint(negate(1, 5))\n",
+        );
+        assert!(
+            result.is_ok(),
+            "a unary operand inside a generic body must resolve: {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_unary_operand_composes_with_a_generic_class_instantiation() {
+        let result = check_source(
+            "class Box[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\n    def size(self) -> int:\n        return 1\n\n\nb = Box(5)\nprint(-b.size())\n",
+        );
+        assert!(
+            result.is_ok(),
+            "a unary operand must compose with a generic class instantiation: {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_unary_operand_composes_with_a_protocol_dispatched_call() {
+        let result = check_source(
+            "from typing import Protocol\n\n\nclass Scaled(Protocol):\n    def scale(self) -> int: ...\n\n\nclass Two:\n    def __init__(self, v: int) -> None:\n        self.v = v\n\n    def scale(self) -> int:\n        return self.v * 2\n\n\ndef apply(s: Scaled) -> int:\n    return -s.scale()\n\n\nprint(apply(Two(4)))\n",
+        );
+        assert!(
+            result.is_ok(),
+            "a unary operand must compose with a protocol call: {result:?}"
+        );
+    }
+
+    #[test]
+    fn an_error_inside_a_unary_operand_propagates_through_a_generic_body() {
+        let result = check_source(
+            "def negate[T](v: T, n: int) -> int:\n    return -missing(n)\n\n\nprint(negate(1, 5))\n",
+        );
+        assert!(
+            result.is_err(),
+            "an unresolvable unary operand must be rejected: {result:?}"
+        );
+    }
+
+    #[test]
+    fn an_error_inside_a_unary_operand_propagates_at_module_level() {
+        let result = check_source("x = -missing(1)\n");
+        assert!(
+            result.is_err(),
+            "an unresolvable unary operand must be rejected: {result:?}"
+        );
+    }
+
+    #[test]
+    fn an_unbound_local_under_a_unary_in_a_generic_body_propagates() {
+        let result = check_source(
+            "def negate[T](v: T) -> int:\n    a = -b\n    b = 1\n    return a\n\n\nprint(negate(1))\n",
+        );
+        let message = result
+            .expect_err("an unbound local must be rejected")
+            .message;
+        assert!(
+            message.contains("local name `b` is not bound"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn a_failing_generic_call_under_a_unary_propagates() {
+        let result = check_source(
+            "def ident[T](v: T) -> T:\n    return v\n\n\nx = -ident(\"s\")\nprint(x)\n",
+        );
+        assert!(
+            result.is_err(),
+            "a unary over a `str`-instantiated generic call must be rejected: {result:?}"
+        );
+    }
+
+    // A unary whose operand is still an inference variable cannot be checked
+    // with `unary_result_type` yet, so the solver defers it as the exact
+    // binary constraint `pycc_mir` lowers it to. Both operators take that
+    // path, and only an unannotated helper parameter -- whose type comes from
+    // signature inference rather than an annotation -- reaches it.
+
+    #[test]
+    fn a_negated_inferred_parameter_defers_to_a_subtraction_constraint() {
+        let result = check_source("def _neg(n):\n    return -n\n\n\nx: int = 4\nprint(_neg(x))\n");
+        assert!(
+            result.is_ok(),
+            "a negated inferred parameter must resolve through the deferred constraint: {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_unary_plus_inferred_parameter_defers_to_an_addition_constraint() {
+        let result = check_source("def _pos(n):\n    return +n\n\n\nx: int = 4\nprint(_pos(x))\n");
+        assert!(
+            result.is_ok(),
+            "a unary-plus inferred parameter must resolve through the deferred constraint: {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_deferred_unary_constraint_still_rejects_a_non_numeric_operand() {
+        let result = check_source("def _bad(s):\n    return -s\n\n\nt = \"ab\"\nprint(_bad(t))\n");
+        assert!(
+            result.is_err(),
+            "a deferred unary constraint over `str` must be rejected: {result:?}"
+        );
     }
 }

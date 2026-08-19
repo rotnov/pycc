@@ -153,6 +153,32 @@ pub enum CmpOpKind {
     GtE,
 }
 
+/// The unary operators this compiler supports (#603, Part 2 of #573).
+///
+/// `not` and `~` are deliberately absent rather than present-but-rejected:
+/// they are #604 (Part 3), and leaving them out of this enum keeps every
+/// exhaustive match over it honest about what is actually lowerable today
+/// instead of carrying arms that only ever return an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOpKind {
+    /// `-x`.
+    USub,
+    /// `+x`. Not a no-op: `+True` is the integer `1` in Python, so a
+    /// `bool` operand crosses into `int` here (see
+    /// `pycc_types::unop::unary_result_type`).
+    UAdd,
+}
+
+impl UnaryOpKind {
+    /// The operator's Python source spelling, for diagnostics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnaryOpKind::USub => "-",
+            UnaryOpKind::UAdd => "+",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirExpr {
     IntLiteral(i64),
@@ -173,6 +199,17 @@ pub enum HirExpr {
         op: CmpOpKind,
         left: Box<HirExpr>,
         right: Box<HirExpr>,
+    },
+    /// `-operand` / `+operand` where `operand` is *not* a numeric literal
+    /// (#603, Part 2 of #573).
+    ///
+    /// A literal operand never reaches this variant: `expr.rs`'s
+    /// `Expr::UnaryOp` arm folds `-1` straight into `HirExpr::IntLiteral(-1)`
+    /// first (#602, Part 1), so this node exists exactly for the cases
+    /// folding cannot reach -- `-x`, `-f(y)`, `-(a + b)`.
+    UnaryOp {
+        op: UnaryOpKind,
+        operand: Box<HirExpr>,
     },
     FString(Vec<FStringPart>),
     /// `[e1, e2, ...]`. Element homogeneity is `pycc_types`' job, not this

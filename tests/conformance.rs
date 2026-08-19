@@ -1133,6 +1133,33 @@ fn unary_literal_sign_matches_cpython_3_14_7_byte_for_byte() {
     );
 }
 
+// #603 (Part 2 of #573): a source-level `+`/`-` applied to an operand that is
+// not a numeric literal, which #602's fold cannot reach -- a name, a call
+// result, a parenthesized expression, an attribute, a subscript, and a nested
+// unary. Covers `int`, `bool` (where `+` is not the identity: `+True` is the
+// integer `1`), and `float` including `-0.0` and the infinities, plus an
+// operand that has already been promoted to a bigint. The two representations
+// matter because `pycc_mir` rewrites them into different binary shapes --
+// `0 - x` / `0 + x` for `int`/`bool`, `x * -1.0` / `x * 1.0` for `float`.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn unary_general_operand_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unary_general_operand.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("unary_general_operand_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/unary_general_operand.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("unary_general_operand_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/unary_general_operand.py"
+    );
+}
+
 // #610 (PEP 560): value-position `C[x]` dispatches to
 // `C.__class_getitem__(x)`. Covers both the `@staticmethod` and the
 // `@classmethod` spelling of the hook, inheritance of the hook through the

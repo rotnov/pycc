@@ -28,6 +28,74 @@ never a merge gate.
 
 ---
 
+## 2026-08-19 — Misread llvm-cov's summary arithmetic twice, and shipped a "fix" that every merged *and* per-range view called complete while CI stayed red
+
+**What happened:** PR #615 (issue #603, general unary `-`/`+` on non-literal
+operands) failed `build-test-coverage`. The new `HirExpr::UnaryOp` arms in
+`pycc_hir`, `pycc_mir`, and `pycc_types` were exercised end to end by
+`tests/issue_603_unary_general_operand.rs` (25 passing tests, confirmed
+running under the coverage build), but `cargo llvm-cov --show-missing-lines`,
+LCOV, a JSON `segments` walk, and annotated text all reported the touched
+crates as fully covered. Aggregating the JSON per-function `regions` arrays
+*per source range across instantiations* found zero uncovered ranges, so a
+first round of inline unit tests was pushed as complete — and CI came back red
+again at 99.95%, with 16 missed regions still in
+`crates/pycc_types/src/lib.rs`. Six further arithmetic models were tried
+against the data and ruled out (per-function zero regions; union of ranges;
+min of ranges; region sum by unique function name; count of fully-uncovered
+instantiation groups) before the right one was found.
+
+**Root cause:** LLVM's per-file summary is neither the union nor the sum
+across compilations. `RegionCoverageInfo::merge` in `CoverageSummaryInfo.h`
+takes `Covered = max(Covered, RHS.Covered)` and
+`NumRegions = max(NumRegions, RHS.NumRegions)` over each *instantiation group*
+— functions keyed by definition location (file, line, column), which is how
+the plain and `--cfg test` compilations of a crate group together — and then
+sums those per-group maxima per file. So a function whose regions are covered
+by *different* instantiations still shows
+`NumRegions - max(Covered)` missed, while every union-based view shows it
+fully covered. Here `collect_expr_constraints`
+(`crates/pycc_types/src/lib.rs:1168`, 549 regions) had 533 regions covered by
+the `--cfg test` instantiation and the remaining 16 — the deferred-constraint
+branch of its `HirExpr::UnaryOp` arm — covered only by the `pycc` binary's
+instantiation, via an integration test.
+
+**What fixed it:** a group-max deficit computation over
+`cargo llvm-cov --workspace --json` (group `data[].functions[]` by
+`min((r[0], r[1]))` over the target file's regions; per group,
+`max(len(regions)) - max(count of regions with count > 0)`), which reproduced
+CI's figure of 16 exactly from local data and named the function and lines.
+Then three inline `pycc_types` tests driving that branch from the crate's own
+unit-test binary, so a single instantiation covers all 549 regions. Earlier
+commits `3ceb334` (inline tests in each crate) and one `?` → `let _ =` in
+`rewrite_generic_calls_in_expr`'s unary arm — matching the identical decision
+already commented on the `isinstance` arm above it — were necessary but not
+sufficient.
+
+**Side lessons from the same session:** a stray `default_*.profraw` from a
+coverage run got picked up by `git add -A` and had to be amended out;
+`rm -rf target/debug` to free disk silently broke every `pycc build`
+integration test (`error: no pycc_rt build found`) until `cargo build -p
+pycc_rt -p pycc_std` restored it, wasting a whole coverage run misread as a
+real regression; and the container hit ENOSPC twice because the `pycc build`
+integration harness leaks a temp directory per run — 12,706 `/tmp/pycc_*`
+directories totalling ~25 GB, cleared with `rm -rf /tmp/pycc_*` (100% → 34%
+disk). Check for that leak before concluding the disk allowance itself is
+exhausted.
+
+**Lesson:** when the coverage summary disagrees with *any* other view, the
+disagreement is about instantiation grouping, not about report format — do not
+try successive formats, and do not trust a per-source-range aggregation of the
+JSON regions either, because that is just the union in another shape. Compute
+the group-max deficit and confirm it reproduces the gate's own number before
+believing a fix is complete. And treat "an integration test covers it" as
+insufficient by construction: an arm reachable only through the `pycc` binary
+needs its own inline unit test, because coverage does not compose across a
+crate's two compilations. Written up as a durable rule in `docs/TESTING.md`'s
+coverage practical-notes list.
+
+---
+
 ## 2026-08-09 — `ci-watch.sh` covered `mergeStateStatus=BEHIND` but not the rest of GitHub's non-`CLEAN` enum, so a legitimately blocked PR polled silently forever
 
 **What happened:** PR #417 (a docs-only session-log checkpoint) reached a
