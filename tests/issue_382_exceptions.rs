@@ -786,6 +786,22 @@ fn raise_from_builds_and_runs() {
 }
 
 #[test]
+fn raise_from_none_builds_and_runs() {
+    // PEP 409: `from None` suppresses implicit context chaining. pycc emits
+    // no traceback, so the observable behavior is identical to a plain
+    // `raise` -- the handler still catches the primary exception.
+    let dir = std::env::temp_dir().join(format!("pycc_382_from_none_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "from_none.py",
+        "try:\n    try:\n        raise KeyError(\"original\")\n    except KeyError:\n        raise ValueError(\"bad\") from None\nexcept ValueError:\n    print(\"caught\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught\n");
+}
+
+#[test]
 fn exceptions_while_evaluating_raise_operands_are_not_overwritten() {
     let dir = std::env::temp_dir().join(format!(
         "pycc_382_raise_operand_exception_{}",

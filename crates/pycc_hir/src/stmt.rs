@@ -469,11 +469,21 @@ pub(crate) fn lower_stmt(
                 .as_deref()
                 .map(|e| lower_expr(e, in_function, class_name))
                 .transpose()?;
-            let cause = raise_stmt
-                .cause
-                .as_deref()
-                .map(|e| lower_expr(e, in_function, class_name))
-                .transpose()?;
+            // PEP 409: `raise X from None` suppresses the implicit
+            // `__context__` chain. Its only observable effect in CPython is
+            // traceback rendering, and pycc neither populates `__context__`
+            // nor emits traceback frames yet, so a `None` cause is recorded
+            // as "no cause" rather than lowered as an expression -- `HirExpr`
+            // has no `None` variant to lower it into, and adding one solely
+            // for a value nothing downstream can observe would put an
+            // unreachable arm in every exhaustive `HirExpr` match in the
+            // workspace. This deliberately collapses `raise X from None` and
+            // `raise X` into the same HIR; the distinction has to be
+            // reintroduced here when implicit `__context__` chaining lands.
+            let cause = match raise_stmt.cause.as_deref() {
+                None | Some(Expr::NoneLiteral(_)) => None,
+                Some(cause) => Some(lower_expr(cause, in_function, class_name)?),
+            };
             HirStmt::Raise { exc, cause }
         }
         other => {
