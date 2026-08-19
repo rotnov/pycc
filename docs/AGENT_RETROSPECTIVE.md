@@ -28,54 +28,71 @@ never a merge gate.
 
 ---
 
-## 2026-08-19 — Chased a red coverage gate through four merged-view report formats before reaching the per-instantiation JSON that actually showed the gap
+## 2026-08-19 — Misread llvm-cov's summary arithmetic twice, and shipped a "fix" that every merged *and* per-range view called complete while CI stayed red
 
 **What happened:** PR #615 (issue #603, general unary `-`/`+` on non-literal
-operands) failed `build-test-coverage` at 99.93% regions / 99.96% lines. The
-new `HirExpr::UnaryOp` arms in `pycc_hir`, `pycc_mir`, and `pycc_types` were
-all exercised end to end by `tests/issue_603_unary_general_operand.rs` (25
-passing tests, confirmed running under the coverage build), and
-`cargo llvm-cov --show-missing-lines` listed only the pre-existing
-`src/main.rs` / `src/project_config.rs` container-permission misses — nothing
-in the crates the diff touched. Diagnosis went through `--show-missing-lines`,
-then LCOV, then a hand-written JSON segment walk, then annotated text with
-`^0` region markers, before the per-function `regions` array in
-`cargo llvm-cov report --json` finally located six uncovered arms by exact
-line.
+operands) failed `build-test-coverage`. The new `HirExpr::UnaryOp` arms in
+`pycc_hir`, `pycc_mir`, and `pycc_types` were exercised end to end by
+`tests/issue_603_unary_general_operand.rs` (25 passing tests, confirmed
+running under the coverage build), but `cargo llvm-cov --show-missing-lines`,
+LCOV, a JSON `segments` walk, and annotated text all reported the touched
+crates as fully covered. Aggregating the JSON per-function `regions` arrays
+*per source range across instantiations* found zero uncovered ranges, so a
+first round of inline unit tests was pushed as complete — and CI came back red
+again at 99.95%, with 16 missed regions still in
+`crates/pycc_types/src/lib.rs`. Six further arithmetic models were tried
+against the data and ruled out (per-function zero regions; union of ranges;
+min of ranges; region sum by unique function name; count of fully-uncovered
+instantiation groups) before the right one was found.
 
-**Root cause:** every one of those first four views reports the *union* of
-coverage across all compilations of a crate, while the summary table that the
-`--fail-under-regions` gate reads reports the *sum*. A crate here is compiled
-twice — plainly, into the `pycc` binary that every integration test spawns,
-and again with `--cfg test` for its own unit-test binary — and the inline
-`mod tests` suites never constructed a unary expression. The plain copy was
-fully covered, the `cfg(test)` copy was not, the union said "covered" and the
-sum said "missed." `nm` on `target/llvm-cov-target/debug/pycc` versus
-`target/llvm-cov-target/debug/deps/pycc_types-<hash>` shows the two distinct
-mangled symbols and settles it in one command.
+**Root cause:** LLVM's per-file summary is neither the union nor the sum
+across compilations. `RegionCoverageInfo::merge` in `CoverageSummaryInfo.h`
+takes `Covered = max(Covered, RHS.Covered)` and
+`NumRegions = max(NumRegions, RHS.NumRegions)` over each *instantiation group*
+— functions keyed by definition location (file, line, column), which is how
+the plain and `--cfg test` compilations of a crate group together — and then
+sums those per-group maxima per file. So a function whose regions are covered
+by *different* instantiations still shows
+`NumRegions - max(Covered)` missed, while every union-based view shows it
+fully covered. Here `collect_expr_constraints`
+(`crates/pycc_types/src/lib.rs:1168`, 549 regions) had 533 regions covered by
+the `--cfg test` instantiation and the remaining 16 — the deferred-constraint
+branch of its `HirExpr::UnaryOp` arm — covered only by the `pycc` binary's
+instantiation, via an integration test.
 
-**What fixed it:** adding inline unit tests to each crate's own `mod tests`
-that build the unary shapes directly (commit `3ceb334`), plus replacing one
-`?` in `rewrite_generic_calls_in_expr`'s unary arm with `let _ =`, matching
-the identical decision already commented on the `isinstance` arm a few lines
-above — its recursion's return value is discarded, and the `infer_expr_in`
-call immediately below surfaces the same error, so the `?` was a
-permanently-unreachable error region. Two side lessons: a stray
-`default_*.profraw` from the coverage run got picked up by `git add -A` and
-had to be amended out, and `rm -rf target/debug` to free disk silently broke
-every `pycc build` integration test (`error: no pycc_rt build found`) until
-`cargo build -p pycc_rt` restored it — a whole coverage run was wasted
-misreading that as a real regression.
+**What fixed it:** a group-max deficit computation over
+`cargo llvm-cov --workspace --json` (group `data[].functions[]` by
+`min((r[0], r[1]))` over the target file's regions; per group,
+`max(len(regions)) - max(count of regions with count > 0)`), which reproduced
+CI's figure of 16 exactly from local data and named the function and lines.
+Then three inline `pycc_types` tests driving that branch from the crate's own
+unit-test binary, so a single instantiation covers all 549 regions. Earlier
+commits `3ceb334` (inline tests in each crate) and one `?` → `let _ =` in
+`rewrite_generic_calls_in_expr`'s unary arm — matching the identical decision
+already commented on the `isinstance` arm above it — were necessary but not
+sufficient.
 
-**Lesson:** when the coverage summary and `--show-missing-lines` disagree, stop
-re-running merged views in new formats — they all answer the same question. Go
-straight to `cargo llvm-cov report --workspace --json` and aggregate the
-per-function `regions` arrays by source range; a range whose counts sum to zero
-across every instantiation is the real gap. And treat "the integration suite
-covers it" as insufficient by construction: any arm reachable only through the
-`pycc` binary needs its own inline unit test, because the crate's `cfg(test)`
-build is a separate denominator. Written up as a durable rule in
-`docs/TESTING.md`'s coverage practical-notes list.
+**Side lessons from the same session:** a stray `default_*.profraw` from a
+coverage run got picked up by `git add -A` and had to be amended out;
+`rm -rf target/debug` to free disk silently broke every `pycc build`
+integration test (`error: no pycc_rt build found`) until `cargo build -p
+pycc_rt -p pycc_std` restored it, wasting a whole coverage run misread as a
+real regression; and the container hit ENOSPC twice because the `pycc build`
+integration harness leaks a temp directory per run — 12,706 `/tmp/pycc_*`
+directories totalling ~25 GB, cleared with `rm -rf /tmp/pycc_*` (100% → 34%
+disk). Check for that leak before concluding the disk allowance itself is
+exhausted.
+
+**Lesson:** when the coverage summary disagrees with *any* other view, the
+disagreement is about instantiation grouping, not about report format — do not
+try successive formats, and do not trust a per-source-range aggregation of the
+JSON regions either, because that is just the union in another shape. Compute
+the group-max deficit and confirm it reproduces the gate's own number before
+believing a fix is complete. And treat "an integration test covers it" as
+insufficient by construction: an arm reachable only through the `pycc` binary
+needs its own inline unit test, because coverage does not compose across a
+crate's two compilations. Written up as a durable rule in `docs/TESTING.md`'s
+coverage practical-notes list.
 
 ---
 

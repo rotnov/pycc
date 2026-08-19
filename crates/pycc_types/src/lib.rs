@@ -34264,4 +34264,37 @@ value: int = f()
             "a unary over a `str`-instantiated generic call must be rejected: {result:?}"
         );
     }
+
+    // A unary whose operand is still an inference variable cannot be checked
+    // with `unary_result_type` yet, so the solver defers it as the exact
+    // binary constraint `pycc_mir` lowers it to. Both operators take that
+    // path, and only an unannotated helper parameter -- whose type comes from
+    // signature inference rather than an annotation -- reaches it.
+
+    #[test]
+    fn a_negated_inferred_parameter_defers_to_a_subtraction_constraint() {
+        let result = check_source("def _neg(n):\n    return -n\n\n\nx: int = 4\nprint(_neg(x))\n");
+        assert!(
+            result.is_ok(),
+            "a negated inferred parameter must resolve through the deferred constraint: {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_unary_plus_inferred_parameter_defers_to_an_addition_constraint() {
+        let result = check_source("def _pos(n):\n    return +n\n\n\nx: int = 4\nprint(_pos(x))\n");
+        assert!(
+            result.is_ok(),
+            "a unary-plus inferred parameter must resolve through the deferred constraint: {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_deferred_unary_constraint_still_rejects_a_non_numeric_operand() {
+        let result = check_source("def _bad(s):\n    return -s\n\n\nt = \"ab\"\nprint(_bad(t))\n");
+        assert!(
+            result.is_err(),
+            "a deferred unary constraint over `str` must be rejected: {result:?}"
+        );
+    }
 }
