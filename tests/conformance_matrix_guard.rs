@@ -8,15 +8,23 @@
 //! every normative documentation claim should be enforceable by a test where
 //! practical.
 //!
-//! **Scope: `✅` rows only.** The matrix's own Conventions block defines the test
-//! path as the eventual `tests/conformance/pyXY/pep_NNNN_slug.py` harness layout
-//! and then records that today's fixtures live flat at `tests/fixtures/` and that
-//! "the `pyXY/` tree and its language-level selection do not exist yet". A `☐`
-//! row's path is therefore a *planned* path for a fixture nobody has authored,
-//! and asserting that it resolves would be asserting something the matrix never
-//! claimed. A `✅` row is different: it claims its fixture passes, which is only
-//! meaningful if the file exists and actually runs. So a green row's path must
+//! **Scope: evidence-backed rows only — `◐` and `✅`.** The matrix's own
+//! Conventions block defines the test path as the eventual
+//! `tests/conformance/pyXY/pep_NNNN_slug.py` harness layout and then records that
+//! today's fixtures live flat at `tests/fixtures/` and that "the `pyXY/` tree and
+//! its language-level selection do not exist yet". A `☐` row's path is therefore a
+//! *planned* path for a fixture nobody has authored, and asserting that it
+//! resolves would be asserting something the matrix never claimed. An
+//! evidence-backed row is different: it claims its fixture passes, which is only
+//! meaningful if the file exists and actually runs. So such a row's path must
 //! resolve, and its fixture must be registered in `tests/conformance.rs`.
+//!
+//! `◐` (subset) and `✅` (whole-PEP acceptance) differ only in how much of the PEP
+//! the row is allowed to claim — see
+//! `docs/decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md`. Both cite
+//! fixtures that pass, so this guard's reasoning applies to them identically; the
+//! `◐`/`✅` split itself is enforced by `scripts/check_conformance_breadth.py`, not
+//! here.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -60,6 +68,14 @@ fn cited_fixtures(test_cell: &str) -> Vec<String> {
     found
 }
 
+/// The matrix's subset status: the row's fixtures pass, but the PEP has core
+/// surface they do not reach.
+const SUBSET: &str = "◐";
+
+/// The matrix's whole-PEP acceptance status: the row's fixtures pass and every
+/// gap it records is a deliberate, permanent non-goal.
+const ACCEPTED: &str = "✅";
+
 /// Parses the matrix's `| PEP | Feature | Cat | Test | St |` rows. Header and
 /// separator rows are dropped by requiring a status cell that is one of the
 /// documented status markers, which also skips every unrelated five-column table
@@ -80,7 +96,7 @@ fn parse_matrix(markdown: &str) -> Vec<MatrixRow> {
             continue;
         }
         let status = cells[4];
-        if !matches!(status, "☐" | "⚙" | "✅") {
+        if !matches!(status, "☐" | "⚙" | SUBSET | ACCEPTED) {
             continue;
         }
         rows.push(MatrixRow {
@@ -93,10 +109,12 @@ fn parse_matrix(markdown: &str) -> Vec<MatrixRow> {
     rows
 }
 
-fn green_rows(markdown: &str) -> Vec<MatrixRow> {
+/// Rows whose fixtures are claimed to pass. `◐` and `✅` alike cite real fixtures,
+/// so both are held to the existence and registration checks below.
+fn evidence_rows(markdown: &str) -> Vec<MatrixRow> {
     parse_matrix(markdown)
         .into_iter()
-        .filter(|row| row.status == "✅")
+        .filter(|row| matches!(row.status.as_str(), SUBSET | ACCEPTED))
         .collect()
 }
 
@@ -164,12 +182,12 @@ fn pep_fixture_files() -> BTreeSet<String> {
 }
 
 #[test]
-fn every_green_matrix_row_cites_an_existing_flat_fixture() {
+fn every_evidence_matrix_row_cites_an_existing_flat_fixture() {
     let markdown = read("docs/PYTHON_STANDARDS.md");
-    let rows = green_rows(&markdown);
+    let rows = evidence_rows(&markdown);
     assert!(
         !rows.is_empty(),
-        "no ✅ rows parsed out of docs/PYTHON_STANDARDS.md — the guard would pass vacuously"
+        "no ◐/✅ rows parsed out of docs/PYTHON_STANDARDS.md — the guard would pass vacuously"
     );
 
     let fixtures_dir = repo_root().join("tests").join("fixtures");
@@ -177,9 +195,10 @@ fn every_green_matrix_row_cites_an_existing_flat_fixture() {
     for row in &rows {
         assert!(
             !row.fixtures.is_empty(),
-            "line {}: PEP {} is marked ✅ but cites no fixture",
+            "line {}: PEP {} is marked {} but cites no fixture",
             row.line_number,
-            row.pep
+            row.pep,
+            row.status
         );
         for fixture in &row.fixtures {
             // The cited path is interpreted relative to tests/fixtures/, so a
@@ -187,8 +206,9 @@ fn every_green_matrix_row_cites_an_existing_flat_fixture() {
             // resolving through its basename.
             if !fixtures_dir.join(fixture).is_file() {
                 failures.push(format!(
-                    "line {}: PEP {} is ✅ but `{}` does not resolve to a file under tests/fixtures/",
-                    row.line_number, row.pep, fixture
+                    "line {}: PEP {} is {} but `{}` does not resolve to a file under \
+                     tests/fixtures/",
+                    row.line_number, row.pep, row.status, fixture
                 ));
             }
         }
@@ -197,17 +217,17 @@ fn every_green_matrix_row_cites_an_existing_flat_fixture() {
 }
 
 #[test]
-fn every_green_matrix_fixture_is_registered_in_the_conformance_harness() {
+fn every_evidence_matrix_fixture_is_registered_in_the_conformance_harness() {
     let markdown = read("docs/PYTHON_STANDARDS.md");
     let harness = read("tests/conformance.rs");
 
     let mut failures = Vec::new();
-    for row in green_rows(&markdown) {
+    for row in evidence_rows(&markdown) {
         for fixture in &row.fixtures {
             if !is_registered(&harness, fixture) {
                 failures.push(format!(
-                    "line {}: PEP {} is ✅ but `{}` is not registered in tests/conformance.rs",
-                    row.line_number, row.pep, fixture
+                    "line {}: PEP {} is {} but `{}` is not registered in tests/conformance.rs",
+                    row.line_number, row.pep, row.status, fixture
                 ));
             }
         }
@@ -292,21 +312,25 @@ fn parse_matrix_keeps_status_rows_and_drops_headers_and_separators() {
 | [238](https://peps.python.org/pep-0238/) | True division | sem | `pep_0238_division.py` | ✅ |
 | [3102](https://peps.python.org/pep-3102/) | Keyword-only args | syntax | `pep_3102_kwonly.py` | ☐ |
 | [999](https://peps.python.org/pep-0999/) | In progress | sem | `pep_0999.py` | ⚙ |
+| [498](https://peps.python.org/pep-0498/) | f-strings | syntax | `pep_0498_fstrings.py` | ◐ |
 | Track | Upstream checkpoint | pycc consequence |
 ";
     let rows = parse_matrix(markdown);
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 4);
     assert_eq!(rows[0].status, "✅");
     assert_eq!(rows[1].status, "☐");
     assert_eq!(rows[2].status, "⚙");
+    assert_eq!(rows[3].status, "◐");
     assert_eq!(rows[0].line_number, 3);
     assert_eq!(rows[0].fixtures, vec!["pep_0238_division.py"]);
 
-    // Only the ✅ row survives the green filter — a ☐ row's path is a planned
-    // path and is deliberately not asserted to exist.
-    let green = green_rows(markdown);
-    assert_eq!(green.len(), 1);
-    assert_eq!(green[0].fixtures, vec!["pep_0238_division.py"]);
+    // `◐` and `✅` both survive the evidence filter — each cites a fixture that
+    // is claimed to pass. A `☐` row's path is a planned path and is deliberately
+    // not asserted to exist, and a `⚙` row's fixture is still being authored.
+    let evidence = evidence_rows(markdown);
+    assert_eq!(evidence.len(), 2);
+    assert_eq!(evidence[0].fixtures, vec!["pep_0238_division.py"]);
+    assert_eq!(evidence[1].fixtures, vec!["pep_0498_fstrings.py"]);
 }
 
 #[test]
