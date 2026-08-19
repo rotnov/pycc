@@ -1,3 +1,4 @@
+use crate::class::ClassAnnotationInfo;
 use pycc_ast::{Expr, ModModule, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
@@ -871,12 +872,10 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     let mut class_defs: Vec<(String, HirClassDef)> = Vec::new();
     let mut items = Vec::with_capacity(module.body.len());
     for stmt in &module.body {
-        // #380 (PR-20): build a `(name, is_protocol)` slice for
-        // `annotation_to_ty` to resolve cross-class annotations.
-        let class_name_defs: Vec<(String, bool)> = class_defs
-            .iter()
-            .map(|(name, def)| (name.clone(), def.is_protocol))
-            .collect();
+        // #380 (PR-20): build the projected class slice `annotation_to_ty`
+        // uses to resolve cross-class annotations; #611 (PEP 560) added the
+        // per-class subscriptability flag it carries.
+        let class_name_defs = class::class_annotation_infos(&class_defs);
         if let Some((name, ty)) = lower_type_alias_stmt(stmt, &aliases, &class_name_defs)? {
             // D-068 review finding on #385, second round: the class-vs-alias
             // check below (at the `Stmt::ClassDef` arm) only ever catches a
@@ -1174,7 +1173,7 @@ fn lower_import_stmt(stmt: &Stmt) -> Result<Option<Vec<ImportBinding>>, Diagnost
 fn lower_type_alias_stmt(
     stmt: &Stmt,
     aliases: &[(String, Ty)],
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<Option<(String, Ty)>, Diagnostic> {
     let Stmt::TypeAlias(type_alias) = stmt else {
         return Ok(None);
@@ -1242,7 +1241,7 @@ fn lower_type_alias_stmt(
 fn lower_legacy_type_alias_ann_assign(
     stmt: &Stmt,
     aliases: &[(String, Ty)],
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<Option<(String, Ty)>, Diagnostic> {
     let Stmt::AnnAssign(ann) = stmt else {
         return Ok(None);
@@ -1266,7 +1265,7 @@ fn lower_legacy_type_alias_ann_assign(
 fn lower_function(
     def: &pycc_ast::StmtFunctionDef,
     aliases: &[(String, Ty)],
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<HirItem, Diagnostic> {
     if def.is_async {
         return Err(unsupported(
@@ -1364,7 +1363,7 @@ fn lower_params(
     fn_name: &str,
     type_param: Option<&str>,
     aliases: &[(String, Ty)],
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     // Every parameter kind and default value below is silently absent from
     // `parameters.args`/`ParameterWithDefault::default` -- an earlier version
@@ -1440,7 +1439,7 @@ pub(crate) fn lower_arg_list(
     type_param: Option<&str>,
     class_name: Option<&str>,
     aliases: &[(String, Ty)],
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     args.iter()
         .map(|param| {
@@ -1477,7 +1476,7 @@ fn lower_return_annotation(
     type_param: Option<&str>,
     class_name: Option<&str>,
     aliases: &[(String, Ty)],
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<Ty, Diagnostic> {
     match returns {
         Some(ann) => annotation_to_ty(ann, type_param, class_name, aliases, class_defs),
@@ -1507,8 +1506,8 @@ fn lower_return_annotation(
 /// name remain unrecognized (C0001), matching CPython's own scope rule that
 /// `Self` is only valid inside a class body.
 ///
-/// `class_defs` is the `(name, is_protocol)` slice of already-defined
-/// classes (#380, PR-20): a bare name matching a known class resolves to
+/// `class_defs` is the projected slice of already-defined classes
+/// (#380, PR-20): a bare name matching a known class resolves to
 /// `Ty::Instance` (or `Ty::Protocol` if the class is a protocol). This
 /// fixes the pre-existing gap where cross-class annotations
 /// (`def f(a: A) -> int` where `A` is a user-defined class) produced `C0001`.
@@ -1521,7 +1520,7 @@ pub(crate) fn annotation_to_ty(
     type_param: Option<&str>,
     class_name: Option<&str>,
     aliases: &[(String, Ty)],
-    class_defs: &[(String, bool)],
+    class_defs: &[ClassAnnotationInfo],
 ) -> Result<Ty, Diagnostic> {
     match annotation {
         Expr::NoneLiteral(_) => Ok(Ty::None),
@@ -1563,8 +1562,8 @@ pub(crate) fn annotation_to_ty(
                 // is a user-defined class) produced `C0001`. Checked before
                 // the alias table so a class name takes priority over an
                 // alias of the same name.
-                if let Some((_, is_protocol)) = class_defs.iter().find(|(n, _)| n == other) {
-                    if *is_protocol {
+                if let Some(info) = class_defs.iter().find(|info| info.name == other) {
+                    if info.is_protocol {
                         return Ok(Ty::Protocol(Box::new(other.to_string())));
                     }
                     return Ok(Ty::Instance(Box::new(other.to_string())));
@@ -1651,13 +1650,44 @@ pub(crate) fn annotation_to_ty(
                 // reuse `annotation_to_ty` on the bare name so self-referential
                 // class names, aliases, and builtin types all resolve
                 // identically.
-                _ => annotation_to_ty(
-                    &Expr::Name(base_name.clone()),
-                    type_param,
-                    class_name,
-                    aliases,
-                    class_defs,
-                ),
+                //
+                // PEP 560 (#611): before that, reject a subscript on a known
+                // class that is not subscriptable. CPython raises
+                // `TypeError: type 'C' is not subscriptable` for the same
+                // program, and pycc's own value-position path (#610) already
+                // reports it as `T0044` through `t0044_unknown_member`, so
+                // this arm reuses that code rather than the surrounding
+                // `C0001`. A name that is *not* a known class — a builtin
+                // like `list`, an alias, or an undefined name — is left to
+                // the recursion below, which reports it exactly as it does
+                // today.
+                _ => {
+                    if let Some(info) = class_defs
+                        .iter()
+                        .find(|info| info.name == base_name.id.as_str())
+                        && !info.subscriptable
+                    {
+                        return Err(Diagnostic::error(
+                            "T0044",
+                            format!(
+                                "class `{}` does not define `__class_getitem__`, so \
+                                 `{}[...]` is not a valid type annotation",
+                                info.name, info.name
+                            ),
+                            {
+                                let range = pycc_ast::expr_range(annotation);
+                                Span::new(range.start, range.end)
+                            },
+                        ));
+                    }
+                    annotation_to_ty(
+                        &Expr::Name(base_name.clone()),
+                        type_param,
+                        class_name,
+                        aliases,
+                        class_defs,
+                    )
+                }
             }
         }
         other => Err(unsupported(
@@ -3462,6 +3492,119 @@ mod tests {
         assert_capability_error_message(
             "x: list[int] = []\n",
             "type annotation `list` is not supported yet",
+        );
+    }
+
+    /// PEP 560 (#611): a class body defining `__class_getitem__` with the
+    /// given decorator, plus an `__init__` so the class is instantiable.
+    fn class_with_hook(decorator: &str) -> String {
+        // A `@classmethod` hook declares `cls` explicitly, exactly as
+        // `pycc_types`' own value-position tests spell it; the
+        // `@staticmethod` form does not.
+        let cls_param = if decorator == "@classmethod" {
+            "cls, "
+        } else {
+            ""
+        };
+        format!(
+            "class C:\n    {decorator}\n    def __class_getitem__({cls_param}key: int) -> int:\n        return key\n\n    def __init__(self) -> None:\n        self.x = 1\n"
+        )
+    }
+
+    fn assert_type_error_message(source: &str, expected_message: &str) {
+        let module = pycc_parser_test_helper::parse(source);
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "T0044");
+        assert!(diagnostic.message.contains(expected_message));
+        assert!(diagnostic.span.is_some());
+    }
+
+    #[test]
+    fn a_subscripted_annotation_on_a_class_defining_the_hook_is_accepted() {
+        // #611: `C[int]` in annotation position is legal exactly when `C` is
+        // subscriptable. Both spellings CPython accepts for the hook -- the
+        // explicit `@staticmethod` and the `@classmethod` one -- are checked,
+        // mirroring `pycc_types`' own value-position dispatch (#610).
+        for decorator in ["@staticmethod", "@classmethod"] {
+            let src = format!("{}\nv: C[int] = C()\n", class_with_hook(decorator));
+            let module = pycc_parser_test_helper::parse(&src);
+            assert!(
+                lower_checked(&module).is_ok(),
+                "`C[int]` must be accepted for a class whose hook is spelled `{decorator}`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_subscripted_annotation_on_a_class_inheriting_the_hook_is_accepted() {
+        // #611: the gate walks the MRO, so a hook declared on a base class
+        // makes the derived class subscriptable too.
+        let src = format!(
+            "{}\nclass D(C):\n    def value(self) -> int:\n        return self.x\n\nv: D[int] = D()\n",
+            class_with_hook("@staticmethod")
+        );
+        let module = pycc_parser_test_helper::parse(&src);
+        assert!(lower_checked(&module).is_ok());
+    }
+
+    #[test]
+    fn a_subscripted_annotation_on_a_generic_class_is_accepted() {
+        // #611: a PEP 695 generic class (`class G[T]:`) declares no
+        // `__class_getitem__` of its own -- CPython gives it one implicitly
+        // through `Generic`. `G[int]` in an annotation lowers successfully
+        // today, and the gate must not regress that.
+        let module = pycc_parser_test_helper::parse(
+            "class G[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\nv: G[int] = G[int](1)\n",
+        );
+        assert!(lower_checked(&module).is_ok());
+    }
+
+    #[test]
+    fn a_subscripted_annotation_on_a_class_without_the_hook_is_rejected() {
+        // #611: this is the over-acceptance the issue exists to close --
+        // `D[int]` was accepted for any known class name. CPython raises
+        // `TypeError: type 'D' is not subscriptable`, so this reuses the
+        // `T0044` the value-position path (#610) already reports.
+        assert_type_error_message(
+            "class D:\n    def __init__(self) -> None:\n        self.x = 1\n\nv: D[int] = D()\n",
+            "class `D` does not define `__class_getitem__`",
+        );
+    }
+
+    #[test]
+    fn a_subscripted_annotation_inside_the_class_s_own_body_is_gated_too() {
+        // #611: the class being lowered is not yet in the already-defined
+        // class table, so `lower_class` adds an entry for it explicitly.
+        // Without that, a self-referential `D[int]` would slip past the gate
+        // that every other class name goes through.
+        assert_type_error_message(
+            "class D:\n    def __init__(self) -> None:\n        self.x = 1\n\n    def me(self) -> D[int]:\n        return self\n",
+            "class `D` does not define `__class_getitem__`",
+        );
+    }
+
+    #[test]
+    fn a_subscripted_annotation_inside_a_hooked_class_s_own_body_is_accepted() {
+        // The accepting half of the self-reference gate above: the class's
+        // own `static_methods` table is still empty while its body is being
+        // lowered, so the hook is found by the class-body pre-scan.
+        let module = pycc_parser_test_helper::parse(
+            "class C:\n    @staticmethod\n    def __class_getitem__(key: int) -> int:\n        return key\n\n    def __init__(self) -> None:\n        self.x = 1\n\n    def me(self) -> C[int]:\n        return self\n",
+        );
+        assert!(lower_checked(&module).is_ok());
+    }
+
+    #[test]
+    fn an_undecorated_class_getitem_does_not_make_a_class_subscriptable() {
+        // pycc's value-position dispatch resolves `__class_getitem__` only
+        // through the static-method and class-method tables (#610), so a
+        // plain `def __class_getitem__(self)` is an ordinary method and does
+        // not make the class subscriptable. The annotation gate agrees,
+        // which is what keeps the two positions from disagreeing.
+        assert_type_error_message(
+            "class D:\n    def __init__(self) -> None:\n        self.x = 1\n\n    def __class_getitem__(self) -> int:\n        return 1\n\nv: D[int] = D()\n",
+            "class `D` does not define `__class_getitem__`",
         );
     }
 
