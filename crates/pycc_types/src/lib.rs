@@ -2,9 +2,11 @@ mod binop;
 mod class;
 mod exception;
 mod solver;
+mod unop;
 
 use binop::numeric_result_type;
 use exception::{check_raise_stmt, check_try_stmt, is_unshadowed_builtin_exception};
+use unop::unary_result_type;
 
 use pycc_diag::{Diagnostic, Span};
 #[cfg(test)]
@@ -12,7 +14,7 @@ use pycc_hir::CmpOpKind;
 pub use pycc_hir::Ty;
 use pycc_hir::{
     BinOpKind, CmpOpKind as CmpOp, CompIter, FStringPart, HirClassDef, HirExpr, HirItem,
-    HirMatchCase, HirModule, HirPattern, HirStmt, PropertyDef,
+    HirMatchCase, HirModule, HirPattern, HirStmt, PropertyDef, UnaryOpKind,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -1231,6 +1233,38 @@ fn collect_expr_constraints(
             collect_expr_constraints(signatures, parents, concrete, binops, env, left)?;
             collect_expr_constraints(signatures, parents, concrete, binops, env, right)?;
             Ok(Some(Ok(Ty::Bool)))
+        }
+        // #603 (Part 2 of #573). An operand whose type is already concrete
+        // is typed directly by `unary_result_type`, so a bad operand keeps
+        // the unary diagnostic ("unary operator USub is not defined for
+        // `str`") rather than a confusing binary one about the rewrite's
+        // synthetic `0`. That path covers every operand the solver can see
+        // a type for, which is the overwhelming majority.
+        //
+        // An operand that is still an inference variable has no type to
+        // check yet, so it is deferred as the exact binary constraint
+        // `pycc_mir` will lower the expression to -- `0 - x` / `0 + x`.
+        // `numeric_result_type(Sub | Add, Int, operand)` *is* the unary
+        // rule (`Int`/`Bool` give `Int` since `-True == -1`, `Float` gives
+        // `Float`, anything else is `T0021`), so reusing it keeps the
+        // solver's view of the expression identical to MIR's own rewrite
+        // and the two cannot drift apart.
+        HirExpr::UnaryOp { op, operand } => {
+            let operand =
+                collect_expr_constraints(signatures, parents, concrete, binops, env, operand)?;
+            match operand {
+                Some(Ok(operand_ty)) => Ok(Some(Ok(unary_result_type(*op, operand_ty)?))),
+                Some(operand) => {
+                    let result = fresh_term(parents, concrete);
+                    let op = match op {
+                        UnaryOpKind::USub => BinOpKind::Sub,
+                        UnaryOpKind::UAdd => BinOpKind::Add,
+                    };
+                    binops.push((op, Ok(Ty::Int), operand, result.clone()));
+                    Ok(Some(result))
+                }
+                None => Ok(None),
+            }
         }
         HirExpr::BinOp { op, left, right } => {
             let left = collect_expr_constraints(signatures, parents, concrete, binops, env, left)?;
@@ -2906,6 +2940,10 @@ fn infer_expr_in(
                     }
                 }
             }
+        }
+        HirExpr::UnaryOp { op, operand } => {
+            let operand_ty = infer_expr_in(env, local_names, operand)?;
+            unary_result_type(*op, operand_ty)
         }
         HirExpr::BinOp { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
@@ -5846,6 +5884,9 @@ fn reject_generic_calls_in_expr(
             }
             Ok(())
         }
+        HirExpr::UnaryOp { operand, .. } => {
+            reject_generic_calls_in_expr(module_env, own_name, operand)
+        }
         HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
             reject_generic_calls_in_expr(module_env, own_name, left)?;
             reject_generic_calls_in_expr(module_env, own_name, right)
@@ -6464,6 +6505,10 @@ fn rewrite_generic_calls_in_expr(
             }
             infer_expr_in(env, local_names, expr)
         }
+        HirExpr::UnaryOp { operand, .. } => {
+            rewrite_generic_calls_in_expr(env, local_names, operand, instantiations, seen)?;
+            infer_expr_in(env, local_names, expr)
+        }
         HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
             for sub in [left.as_mut(), right.as_mut()] {
                 rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
@@ -6933,6 +6978,9 @@ fn collect_generic_class_instantiations_from_expr(expr: &HirExpr, out: &mut Vec<
             for arg in args {
                 collect_generic_class_instantiations_from_expr(arg, out);
             }
+        }
+        HirExpr::UnaryOp { operand, .. } => {
+            collect_generic_class_instantiations_from_expr(operand, out);
         }
         HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
             collect_generic_class_instantiations_from_expr(left, out);
@@ -8164,6 +8212,16 @@ fn rewrite_protocol_calls_in_expr(
         HirExpr::AttrGet { base, .. } => {
             rewrite_protocol_calls_in_expr(
                 base,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+        }
+        HirExpr::UnaryOp { operand, .. } => {
+            rewrite_protocol_calls_in_expr(
+                operand,
                 protocol_funcs,
                 env,
                 local_names,

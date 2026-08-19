@@ -34,7 +34,8 @@
 //! literal that reproduces current behavior.
 
 use crate::{
-    BinOpKind, CmpOpKind, CompIter, FStringPart, HirExpr, HirStmt, Ty, context_invalid, unsupported,
+    BinOpKind, CmpOpKind, CompIter, FStringPart, HirExpr, HirStmt, Ty, UnaryOpKind,
+    context_invalid, unsupported,
 };
 use pycc_ast::{CmpOp, Expr, Int, Number, Operator, UnaryOp};
 use pycc_diag::Diagnostic;
@@ -150,8 +151,8 @@ pub(crate) fn lower_expr(
         // the literal here needs no new HIR variant and no change to
         // `pycc_types`, `pycc_mir`, or `pycc_codegen`. Only a *literal*
         // operand folds: `-x` for a variable needs a real `HirExpr` variant
-        // and downstream arms, which is #603 (Part 2), and `not`/`~` are
-        // #604 (Part 3).
+        // and downstream arms, which the next arm supplies (#603, Part 2);
+        // `not`/`~` are still #604 (Part 3).
         Expr::UnaryOp(unary) => match (unary.op, unary.operand.as_ref()) {
             (UnaryOp::USub | UnaryOp::UAdd, Expr::NumberLiteral(lit)) => {
                 let negate = matches!(unary.op, UnaryOp::USub);
@@ -170,16 +171,19 @@ pub(crate) fn lower_expr(
                     }
                 }
             }
-            (UnaryOp::USub | UnaryOp::UAdd, _) => {
-                return Err(unsupported(
-                    format!(
-                        "unary `{}` is only supported on a numeric literal so far \
-                         (issue #603)",
-                        unary.op.as_str()
-                    ),
-                    unary.range,
-                ));
-            }
+            // #603 (Part 2 of #573): every `-`/`+` whose operand is not a
+            // numeric literal. The literal arm above still runs first, so
+            // `-1` keeps folding into a signed `IntLiteral` with no node at
+            // all; this arm covers only what folding cannot reach (`-x`,
+            // `-f(y)`, `-(a + b)`).
+            (UnaryOp::USub | UnaryOp::UAdd, operand) => HirExpr::UnaryOp {
+                op: if matches!(unary.op, UnaryOp::USub) {
+                    UnaryOpKind::USub
+                } else {
+                    UnaryOpKind::UAdd
+                },
+                operand: Box::new(lower_expr(operand, in_function, class_name)?),
+            },
             (UnaryOp::Not | UnaryOp::Invert, _) => {
                 return Err(unsupported(
                     format!(
@@ -726,6 +730,10 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
             callee,
             args: args.into_iter().map(recurse).collect(),
         },
+        HirExpr::UnaryOp { op, operand } => HirExpr::UnaryOp {
+            op,
+            operand: Box::new(recurse(*operand)),
+        },
         HirExpr::BinOp { op, left, right } => HirExpr::BinOp {
             op,
             left: Box::new(recurse(*left)),
@@ -1117,7 +1125,7 @@ pub(crate) fn lower_dict_comp_assign(
 
 #[cfg(test)]
 mod tests {
-    use crate::{HirExpr, HirItem, HirStmt};
+    use crate::{BinOpKind, HirExpr, HirItem, HirStmt, UnaryOpKind};
 
     /// Lowers `source` and asserts that the value expression of its first
     /// top-level assignment is `expected`, so each case below states the
@@ -1198,22 +1206,71 @@ mod tests {
         );
     }
 
+    /// The `assert_first_assign` counterpart for the *second* top-level
+    /// assignment -- the unary fixtures below all need a bound name first,
+    /// so `assert_first_assign` would look at the binding rather than at the
+    /// unary expression under test.
+    fn assert_second_assign(source: &str, expected: HirExpr) {
+        let module = pycc_parser::parse(source).expect("test fixture must parse");
+        let hir = crate::lower_checked(&module).expect("fixture must lower");
+        assert!(matches!(
+            &hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign { value, .. }) if *value == expected
+        ));
+    }
+
     #[test]
-    fn unary_minus_on_a_non_literal_names_issue_603() {
-        let message = lower_err_message("y = 1\nx = -y\n");
+    fn unary_minus_on_a_non_literal_builds_a_unary_node() {
+        assert_second_assign(
+            "y = 1\nx = -y\n",
+            HirExpr::UnaryOp {
+                op: UnaryOpKind::USub,
+                operand: Box::new(HirExpr::Name("y".to_string())),
+            },
+        );
+    }
+
+    #[test]
+    fn unary_plus_on_a_non_literal_builds_a_unary_node() {
+        assert_second_assign(
+            "y = 1\nx = +y\n",
+            HirExpr::UnaryOp {
+                op: UnaryOpKind::UAdd,
+                operand: Box::new(HirExpr::Name("y".to_string())),
+            },
+        );
+    }
+
+    #[test]
+    fn unary_minus_on_a_parenthesized_sum_lowers_the_whole_operand() {
+        assert_second_assign(
+            "y = 1\nx = -(y + 2)\n",
+            HirExpr::UnaryOp {
+                op: UnaryOpKind::USub,
+                operand: Box::new(HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::Name("y".to_string())),
+                    right: Box::new(HirExpr::IntLiteral(2)),
+                }),
+            },
+        );
+    }
+
+    #[test]
+    fn a_lowering_error_inside_a_unary_operand_propagates() {
+        // The operand is lowered recursively, so its own rejection must
+        // surface unchanged rather than being masked by the unary arm.
+        let message = lower_err_message("y = 1\nx = -(-1j)\n");
         assert!(
-            message.contains("unary `-`") && message.contains("issue #603"),
+            message.contains("numeric literal kind not supported yet"),
             "unexpected message: {message}"
         );
     }
 
     #[test]
-    fn unary_plus_on_a_non_literal_names_issue_603() {
-        let message = lower_err_message("y = 1\nx = +y\n");
-        assert!(
-            message.contains("unary `+`") && message.contains("issue #603"),
-            "unexpected message: {message}"
-        );
+    fn unary_operator_kinds_render_their_source_spelling() {
+        assert_eq!(UnaryOpKind::USub.as_str(), "-");
+        assert_eq!(UnaryOpKind::UAdd.as_str(), "+");
     }
 
     #[test]

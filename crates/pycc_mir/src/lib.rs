@@ -6,7 +6,8 @@ pub use exception::{MirExceptHandler, MirExceptionValue};
 use exception::{lower_raise, resolve_exception_tag};
 use pycc_hir::{
     CompIter, FStringPart, HirExpr, HirItem, HirMatchCase, HirModule, HirPattern, HirStmt,
-    eval_isinstance_single, eval_issubclass_single, extract_class_names, is_builtin_type_name,
+    UnaryOpKind, eval_isinstance_single, eval_issubclass_single, extract_class_names,
+    is_builtin_type_name,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1663,6 +1664,54 @@ fn lower_expr(
             MirExpr::Call {
                 callee: callee.clone(),
                 args,
+                ty,
+            }
+        }
+        // #603 (Part 2 of #573): `-x`/`+x` over a non-literal operand is
+        // rewritten into the equivalent binary expression rather than
+        // getting a `MirExpr` variant of its own, the same way `!=` between
+        // dataclass instances is lowered as a negated `__eq__` call below
+        // -- pycc's MIR deliberately has no unary node.
+        //
+        // The rewrite is representation-sensitive, so it is not a single
+        // uniform shape:
+        //
+        // * `int`/`bool` become `0 - x` / `0 + x`. `pycc_rt`'s `int_sub`
+        //   and `int_add` both handle an already-promoted bigint operand
+        //   and the smallint boundary, so negation inherits arbitrary
+        //   precision for free. `x * -1` would *not*: `int_mul` calls
+        //   `require_inline_int` and aborts on a bigint.
+        // * `float` becomes `x * -1.0` / `x * 1.0`, a plain LLVM `fmul`.
+        //   `0.0 - x` would be wrong for `-0.0` (it yields `+0.0`), and
+        //   multiplication is exact for infinities and NaN too.
+        //
+        // `UAdd` is not folded away, because it is not the identity: on a
+        // `bool` operand it crosses into `int` (`+True` is `1`), which the
+        // `0 + x` / `x * 1.0` shapes deliver through the same typing rules
+        // as `USub`. Any non-numeric operand is already rejected by
+        // `pycc_types::unop::unary_result_type` and never reaches here.
+        HirExpr::UnaryOp { op, operand } => {
+            let operand = lower_expr(operand, scopes, classes, current_class);
+            let (op, left, right) = if operand.ty() == Ty::Float {
+                let factor = if matches!(op, UnaryOpKind::USub) {
+                    -1.0
+                } else {
+                    1.0
+                };
+                (BinOpKind::Mul, operand, MirExpr::FloatLiteral(factor))
+            } else {
+                let op = if matches!(op, UnaryOpKind::USub) {
+                    BinOpKind::Sub
+                } else {
+                    BinOpKind::Add
+                };
+                (op, MirExpr::IntLiteral(0), operand)
+            };
+            let ty = binop_result_ty(op, left.ty(), right.ty());
+            MirExpr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
                 ty,
             }
         }

@@ -164,8 +164,8 @@ no longer exists (D-072 records `pycc_mir`'s own D-035 boundary panic
 closing for real, and D-074 records the backend lexical-scope and
 representation fixes needed to preserve it). See
 [ROADMAP.md](./ROADMAP.md)'s "Language surface" row for the specific,
-still-open gaps (unary operators, bigint-operand arithmetic beyond
-overflow, etc.), not a broad "backend is narrower" statement.
+still-open gaps (the remaining `not`/`~` unary operators, bigint-operand
+arithmetic beyond overflow, etc.), not a broad "backend is narrower" statement.
 
 Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by own parser before v0.6 (tracked in [D-003](./decisions/D-003-parser-vendor-ruff-python-parser-for-v0-1-0-5.md)).
 
