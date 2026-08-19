@@ -377,14 +377,34 @@ pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
 // not the public wrapper, for the same reason every other
 // `#[should_panic]` test in this file does.
 //
-// Since #147 all three operands are compared through `encoded_int_cmp`
-// rather than decoded with `require_inline_int`, so a bigint start, stop,
-// step, or mid-loop-promoted induction variable drives the loop normally
-// instead of aborting at D-141's runtime `int` boundary. Note the zero-step
-// check reads the *step's own encoded order against zero*, not the raw
-// word: a bigint zero step (reachable via `a - a` on two promoted values)
-// must still panic, and a bigint word is never numerically `0`.
+// Since #147 the operands are ordered through `encoded_int_cmp` rather than
+// decoded with `require_inline_int`, so a bigint start, stop, step, or
+// mid-loop-promoted induction variable drives the loop normally instead of
+// aborting at D-141's runtime `int` boundary. Note the zero-step check reads
+// the *step's own encoded order against zero*, not the raw word: a bigint
+// zero step (reachable via `a - a` on two promoted values) must still panic,
+// and a bigint word is never numerically `0`.
 fn range_continue(i: i64, stop: i64, step: i64) -> i8 {
+    // Fast path: three inline operands -- the shape of every ordinary
+    // smallint loop -- are ordered as plain `i64`s. Sending them through
+    // `encoded_int_cmp` instead measured a consistent ~22% slowdown on a
+    // 50-million-iteration release loop (0.32s -> 0.39s across five paired
+    // rounds; see D-179's Consequences), and this restores the pre-#147 cost
+    // exactly. It is not a semantic special case: `inline_int_value` yields
+    // `None` for a bigint, so any promoted operand falls through to the
+    // general path below, and a malformed word still fails closed inside
+    // `classify_encoded_int` on either path.
+    if let (Some(i), Some(stop), Some(step)) = (
+        inline_int_value(i),
+        inline_int_value(stop),
+        inline_int_value(step),
+    ) {
+        return match step.cmp(&0) {
+            std::cmp::Ordering::Greater => i8::from(i < stop),
+            std::cmp::Ordering::Less => i8::from(i > stop),
+            std::cmp::Ordering::Equal => panic!("pycc_rt: range() arg 3 must not be zero"),
+        };
+    }
     let zero = tag_smallint(0);
     match encoded_int_cmp(step, zero) {
         std::cmp::Ordering::Greater => {

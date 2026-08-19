@@ -109,3 +109,18 @@ status: accepted
     #618 makes `int_cmp` bigint-capable, the two should be reconciled --
     most likely by `int_cmp` delegating to `encoded_int_cmp` -- rather than
     left to drift.
+  - Loop-control cost is unchanged for ordinary smallint loops. Sending all
+    three operands through `encoded_int_cmp` unconditionally measured a
+    consistent regression on a 50-million-iteration release loop
+    (`for i in range(50000000): total = total + 1`): five paired rounds gave
+    a warm 0.32s before the change and 0.39s after, roughly +22%. No CI gate
+    would have caught it -- `scripts/check_replicated_paired_perf_regression.rb`
+    times `pycc check` (frontend compilation), and `tests/nbody_bench.rs` is
+    `#[ignore]`d and is not invoked by any workflow -- so it was found by
+    direct measurement against the pre-change driver. `range_continue`
+    therefore keeps an explicit three-inline-operand fast path that orders
+    plain `i64`s; the same measurement after adding it gives a warm 0.30s
+    against the same 0.32s baseline. The fast path is a performance shortcut
+    only: `inline_int_value` returns `None` for a bigint, so every promoted
+    operand still takes the general path, and a malformed word fails closed
+    in `classify_encoded_int` either way.
