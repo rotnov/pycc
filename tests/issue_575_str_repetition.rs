@@ -11,10 +11,10 @@
 //! the oracle so the behavior is gated on every CI run, not only on the
 //! oracle-bearing job.
 //!
-//! Negative counts are written `0 - 2` rather than `-2` because unary
-//! negation is still unlowered (#573); the non-positive-count rule (empty
-//! string, matching CPython) is reachable from real source only through that
-//! form today.
+//! Negative counts are written `0 - 2` rather than `-2`: these tests predate
+//! #602's literal-sign fold, and the `BinOp::Sub` form remains an equally
+//! valid way to reach the non-positive-count rule (empty string, matching
+//! CPython).
 
 use std::io::Write;
 use std::process::Command;

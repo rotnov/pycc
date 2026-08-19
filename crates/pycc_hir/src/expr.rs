@@ -36,7 +36,7 @@
 use crate::{
     BinOpKind, CmpOpKind, CompIter, FStringPart, HirExpr, HirStmt, Ty, context_invalid, unsupported,
 };
-use pycc_ast::{CmpOp, Expr, Number, Operator};
+use pycc_ast::{CmpOp, Expr, Int, Number, Operator, UnaryOp};
 use pycc_diag::Diagnostic;
 
 /// Resolves a PEP 695 generic-class type argument (the `int` in `C[int]`)
@@ -86,6 +86,38 @@ pub(crate) fn is_zero_arg_super_call(expr: &Expr) -> bool {
         && call.arguments.args.is_empty()
 }
 
+/// #602: applies a source-level unary sign to an integer literal's own
+/// magnitude, in the literal's arbitrary-precision form, *before* the `i64`
+/// range check.
+///
+/// The order matters for exactly one value. `ruff`'s `Int` stores its
+/// magnitude as a `u64`, and `-9223372036854775808` parses as `USub` applied
+/// to the literal `9223372036854775808` -- a magnitude that does not fit in
+/// an `i64` even though its negation is precisely `i64::MIN`. Range-checking
+/// the operand first (what `lower_expr`'s own unsigned `Number::Int` arm
+/// does, correctly, for an unsigned literal) would reject that source as out
+/// of range. Checking after the sign is applied accepts it.
+fn fold_int_literal_sign(
+    value: &Int,
+    negate: bool,
+    range: std::ops::Range<u32>,
+) -> Result<i64, Diagnostic> {
+    let magnitude = value.as_u64();
+    let folded = match magnitude {
+        // `i64::MIN`'s magnitude is one past `i64::MAX`, so it is
+        // representable only when the sign is actually negative.
+        Some(m) if negate && m == (i64::MAX as u64) + 1 => Some(i64::MIN),
+        Some(m) => i64::try_from(m).ok().map(|v| if negate { -v } else { v }),
+        None => None,
+    };
+    folded.ok_or_else(|| {
+        unsupported(
+            format!("integer literal does not fit in i64: {value:?}"),
+            range,
+        )
+    })
+}
+
 pub(crate) fn lower_expr(
     expr: &Expr,
     in_function: bool,
@@ -107,6 +139,54 @@ pub(crate) fn lower_expr(
                 return Err(unsupported(
                     format!("numeric literal kind not supported yet: {other:?}"),
                     lit.range,
+                ));
+            }
+        },
+        // #602 (Part 1 of #573): a source-level negative number is not a
+        // negative literal in the AST -- `-5` parses as `UnaryOp { op: USub,
+        // operand: NumberLiteral(5) }`. `HirExpr::IntLiteral` is already an
+        // `i64` and `FloatLiteral` an `f64`, and every downstream crate
+        // already handles negative values in them, so folding the sign into
+        // the literal here needs no new HIR variant and no change to
+        // `pycc_types`, `pycc_mir`, or `pycc_codegen`. Only a *literal*
+        // operand folds: `-x` for a variable needs a real `HirExpr` variant
+        // and downstream arms, which is #603 (Part 2), and `not`/`~` are
+        // #604 (Part 3).
+        Expr::UnaryOp(unary) => match (unary.op, unary.operand.as_ref()) {
+            (UnaryOp::USub | UnaryOp::UAdd, Expr::NumberLiteral(lit)) => {
+                let negate = matches!(unary.op, UnaryOp::USub);
+                match &lit.value {
+                    Number::Int(i) => HirExpr::IntLiteral(fold_int_literal_sign(
+                        i,
+                        negate,
+                        pycc_ast::expr_range(expr),
+                    )?),
+                    Number::Float(f) => HirExpr::FloatLiteral(if negate { -*f } else { *f }),
+                    other => {
+                        return Err(unsupported(
+                            format!("numeric literal kind not supported yet: {other:?}"),
+                            lit.range,
+                        ));
+                    }
+                }
+            }
+            (UnaryOp::USub | UnaryOp::UAdd, _) => {
+                return Err(unsupported(
+                    format!(
+                        "unary `{}` is only supported on a numeric literal so far \
+                         (issue #603)",
+                        unary.op.as_str()
+                    ),
+                    unary.range,
+                ));
+            }
+            (UnaryOp::Not | UnaryOp::Invert, _) => {
+                return Err(unsupported(
+                    format!(
+                        "unary `{}` is not supported yet (issue #604)",
+                        unary.op.as_str()
+                    ),
+                    unary.range,
                 ));
             }
         },
@@ -1033,4 +1113,124 @@ pub(crate) fn lower_dict_comp_assign(
         key: Box::new(key),
         value: Box::new(value),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{HirExpr, HirItem, HirStmt};
+
+    /// Lowers `source` and asserts that the value expression of its first
+    /// top-level assignment is `expected`, so each case below states the
+    /// folded literal it wants directly.
+    fn assert_first_assign(source: &str, expected: HirExpr) {
+        let module = pycc_parser::parse(source).expect("test fixture must parse");
+        let hir = crate::lower_checked(&module).expect("fixture must lower");
+        assert!(matches!(
+            &hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign { value, .. }) if *value == expected
+        ));
+    }
+
+    fn lower_err_code(source: &str) -> String {
+        let module = pycc_parser::parse(source).expect("test fixture must parse");
+        crate::lower_checked(&module)
+            .expect_err("fixture must be rejected")
+            .code
+            .to_string()
+    }
+
+    fn lower_err_message(source: &str) -> String {
+        let module = pycc_parser::parse(source).expect("test fixture must parse");
+        crate::lower_checked(&module)
+            .expect_err("fixture must be rejected")
+            .message
+    }
+
+    #[test]
+    fn unary_minus_folds_into_an_int_literal() {
+        assert_first_assign("x = -5\n", HirExpr::IntLiteral(-5));
+    }
+
+    #[test]
+    fn unary_plus_leaves_an_int_literal_positive() {
+        assert_first_assign("x = +5\n", HirExpr::IntLiteral(5));
+    }
+
+    #[test]
+    fn unary_minus_folds_into_a_float_literal() {
+        assert_first_assign("x = -1.5\n", HirExpr::FloatLiteral(-1.5));
+    }
+
+    #[test]
+    fn unary_plus_leaves_a_float_literal_positive() {
+        assert_first_assign("x = +1.5\n", HirExpr::FloatLiteral(1.5));
+    }
+
+    #[test]
+    fn unary_minus_accepts_i64_min() {
+        // `ruff` stores the magnitude as a `u64`, so this source is `USub`
+        // applied to `9223372036854775808` -- a magnitude that does not fit in
+        // an `i64` even though its negation is exactly `i64::MIN`. Folding the
+        // sign before the range check is what accepts it.
+        assert_first_assign("x = -9223372036854775808\n", HirExpr::IntLiteral(i64::MIN));
+    }
+
+    #[test]
+    fn unary_plus_rejects_i64_mins_magnitude() {
+        // The same magnitude without a negative sign is genuinely out of
+        // range: `i64::MAX` is one less.
+        assert_eq!(lower_err_code("x = +9223372036854775808\n"), "C0001");
+    }
+
+    #[test]
+    fn unary_minus_rejects_a_magnitude_past_u64() {
+        // A magnitude too large for `u64` reaches the fold as `Number::Big`,
+        // whose `as_u64()` is `None`.
+        assert_eq!(lower_err_code("x = -99999999999999999999999\n"), "C0001");
+    }
+
+    #[test]
+    fn unary_sign_on_a_complex_literal_is_unsupported() {
+        let message = lower_err_message("x = -1j\n");
+        assert!(
+            message.contains("numeric literal kind not supported yet"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn unary_minus_on_a_non_literal_names_issue_603() {
+        let message = lower_err_message("y = 1\nx = -y\n");
+        assert!(
+            message.contains("unary `-`") && message.contains("issue #603"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn unary_plus_on_a_non_literal_names_issue_603() {
+        let message = lower_err_message("y = 1\nx = +y\n");
+        assert!(
+            message.contains("unary `+`") && message.contains("issue #603"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn logical_not_names_issue_604() {
+        let message = lower_err_message("y = True\nx = not y\n");
+        assert!(
+            message.contains("unary `not`") && message.contains("issue #604"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn bitwise_invert_names_issue_604() {
+        let message = lower_err_message("y = 1\nx = ~y\n");
+        assert!(
+            message.contains("unary `~`") && message.contains("issue #604"),
+            "unexpected message: {message}"
+        );
+    }
 }

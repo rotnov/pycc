@@ -872,9 +872,8 @@ pub unsafe extern "C" fn pycc_rt_str_concat(a: *mut PyStrObj, b: *mut PyStrObj) 
 ///
 /// A non-positive `count` yields the empty string, matching CPython: `"ab" *
 /// 0` and `"ab" * -3` are both `""`. Negative counts are reachable from real
-/// source even though a `-3` literal is not (#573 leaves unary negation
-/// unlowered) -- `n = 0 - 3` types as `int` and lowers today -- so this is a
-/// live semantic path, not a defensive one.
+/// source both as a folded literal (`-3`, since #602) and as `n = 0 - 3`, so
+/// this is a live semantic path, not a defensive one.
 ///
 /// Like every other `pycc_rt_str_*` function (see `pycc_rt_str_from_literal`'s
 /// own doc comment), this needs no private-logic/public-wrapper split: it has

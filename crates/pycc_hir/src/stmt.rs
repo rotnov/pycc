@@ -726,6 +726,7 @@ fn lower_pattern(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::HirItem;
 
     #[test]
     fn lower_pattern_rejects_bare_match_star() {
@@ -802,11 +803,29 @@ mod tests {
     }
 
     #[test]
-    fn lower_match_value_pattern_expr_error_propagates() {
-        // `case -1:` is a value pattern with a unary minus expression;
-        // `lower_expr` does not handle unary operators and rejects with C0001.
+    fn lower_match_value_pattern_folds_a_negative_literal() {
+        // #602: `case -1:` is a value pattern whose expression is `USub`
+        // applied to the literal `1`. The fold makes it an ordinary
+        // `HirExpr::IntLiteral(-1)`, so it is an accepted literal pattern.
         let module = pycc_parser::parse(
             "x = 1\nmatch x:\n    case -1:\n        pass\n    case _:\n        pass\n",
+        )
+        .expect("test fixture must parse");
+        let hir = crate::lower_checked(&module).expect("a negative literal pattern must lower");
+        assert!(matches!(
+            &hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Match { cases, .. })
+                if cases[0].pattern == HirPattern::Literal(HirExpr::IntLiteral(-1))
+        ));
+    }
+
+    #[test]
+    fn lower_match_value_pattern_expr_error_propagates() {
+        // A magnitude past `i64`'s range still fails in `lower_expr`, so the
+        // `?` on the value pattern's own expression keeps its error path
+        // covered after #602 made `case -1:` succeed.
+        let module = pycc_parser::parse(
+            "x = 1\nmatch x:\n    case -99999999999999999999999:\n        pass\n    case _:\n        pass\n",
         )
         .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
@@ -814,11 +833,30 @@ mod tests {
     }
 
     #[test]
-    fn lower_match_mapping_key_expr_error_propagates() {
-        // A mapping key `-1` is a unary minus expression that `lower_expr`
-        // rejects with C0001, propagating through the `?` on the key.
+    fn lower_match_mapping_key_folds_a_negative_literal() {
+        // #602: a mapping key `-1` folds to `HirExpr::IntLiteral(-1)`.
         let module = pycc_parser::parse(
             "x = {1: 2}\nmatch x:\n    case {-1: v}:\n        pass\n    case _:\n        pass\n",
+        )
+        .expect("test fixture must parse");
+        let hir = crate::lower_checked(&module).expect("a negative mapping key must lower");
+        assert!(matches!(
+            &hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Match { cases, .. })
+                if matches!(
+                    &cases[0].pattern,
+                    HirPattern::Mapping(entries, _)
+                        if entries[0].0 == HirExpr::IntLiteral(-1)
+                )
+        ));
+    }
+
+    #[test]
+    fn lower_match_mapping_key_expr_error_propagates() {
+        // As above, an out-of-range magnitude keeps the mapping key's own
+        // `?` error path covered now that `-1` folds successfully.
+        let module = pycc_parser::parse(
+            "x = {1: 2}\nmatch x:\n    case {-99999999999999999999999: v}:\n        pass\n    case _:\n        pass\n",
         )
         .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();

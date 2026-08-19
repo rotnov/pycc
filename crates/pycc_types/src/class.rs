@@ -345,9 +345,7 @@ fn t0047_super_instance_attr(attr: &str, declaring_class: &str) -> Diagnostic {
         ),
         Span::new(0, 0),
     )
-    .with_help(format!(
-        "read it through `self` instead: `self.{attr}`"
-    ))
+    .with_help(format!("read it through `self` instead: `self.{attr}`"))
 }
 
 /// Looks up `class_name`'s declared shape, panicking if it isn't
