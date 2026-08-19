@@ -28,6 +28,67 @@ never a merge gate.
 
 ---
 
+## 2026-08-19 — Reintroduced a Windows access violation that already had its own accepted decision entry (D-029)
+
+**What happened:** While implementing issue #148, new codegen tests called
+`module.print_to_string()` and let the returned `LLVMString` temporary drop
+normally. Local macOS and Linux runs were green; Windows CI failed with
+`0xC0000005 STATUS_ACCESS_VIOLATION`. The repository already had an accepted
+decision entry describing exactly this failure — `inkwell`'s `LLVMString`
+`Drop` calls `LLVMDisposeMessage`, which faults against the prebuilt LLVM the
+Windows runner uses — and an existing in-tree remedy, `llvm_string_to_owned`
+(`.to_string()` then `std::mem::forget`). The fix in commit `7434e205` was to
+route the new call sites through that helper, i.e. to apply a remedy that had
+been written, accepted, and merged before the offending code was typed.
+
+**Root cause:** The D-021 preflight reads `docs/SPEC.md` and the
+specifications owning the affected area, but an accepted decision entry about
+a *host-platform hazard in a dependency* is not owned by any area
+specification — it is discoverable only by searching `docs/decisions/` for the
+API being called. Nothing in the workflow prompts that search at the moment a
+new call to a third-party API is introduced, so the hazard is invisible until
+the one Tier-1 platform that manifests it runs, which is always after the
+local gates are already green.
+
+**What fixed it:** Commit `7434e205`, replacing the direct `print_to_string()`
+drops with `llvm_string_to_owned`.
+
+**Lesson:** When introducing a call to a third-party API that returns an
+owned handle — anything whose `Drop` runs foreign code — grep
+`docs/decisions/` for that API's own name before writing the call, not after
+CI fails. A green local run on one platform is not evidence for a hazard whose
+accepted decision entry says it only manifests on another. This class of
+defect cannot be caught by the local gate set at all, so the search is the
+only cheap rung available.
+
+## 2026-08-19 — Treated `ci-watch.sh`'s terminal line as authoritative and nearly reported a still-running PR as green
+
+**What happened:** While waiting on CI, the bundled
+`.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh` emitted its terminal
+"all checks completed with no failures" line, twice in one session, while
+`gh pr checks` on the same head still listed jobs in a pending state. Taking
+that line at face value would have reported a pull request as fully green
+while required checks were still running.
+
+**Root cause:** The watcher's terminal line is a summary of the checks it has
+observed reach a conclusion, not an assertion that every required check has
+started and concluded. A required check that has not yet been created for the
+head — a workflow that is queued but not yet materialised as a check run —
+is absent from the watcher's view rather than pending in it, so "no failures
+among what I can see" reads identically to "green".
+
+**What fixed it:** Confirming the watcher's verdict against `gh pr checks`
+directly before acting on it, and treating the watcher as a wake-up mechanism
+rather than as the verdict itself.
+
+**Lesson:** A watcher that polls a remote system reports what it has observed,
+not what exists; its terminal signal is a prompt to check, not a result to
+act on. Before merging or reporting a pull request green on any watcher's
+say-so, re-query the authoritative surface and confirm the required-check set
+is complete as well as passing. The general form: never let a convenience
+wrapper's summary be the last read of a gate whose verdict decides an
+irreversible action.
+
 ## 2026-08-19 — Misread llvm-cov's summary arithmetic twice, and shipped a "fix" that every merged *and* per-range view called complete while CI stayed red
 
 **What happened:** PR #615 (issue #603, general unary `-`/`+` on non-literal
