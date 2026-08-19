@@ -503,8 +503,12 @@ fn audit(harness: &str) -> Vec<String> {
     errors
 }
 
+/// The harness source with line endings normalized. A Windows checkout can
+/// materialize `tests/conformance.rs` with CRLF endings, and every structural
+/// pattern this guard reasons about — including the mutation controls below —
+/// is written against LF.
 fn harness() -> String {
-    read("tests/conformance.rs")
+    read("tests/conformance.rs").replace("\r\n", "\n")
 }
 
 // --- Positive control: the real harness ------------------------------------
