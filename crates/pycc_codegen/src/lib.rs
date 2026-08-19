@@ -8905,10 +8905,14 @@ mod tests {
             let dir = tempfile_dir("oversized_int_literal_materializes");
             let obj_path = dir.join("oversized_int_literal_materializes.o");
             let mut saw_call = false;
+            // `Module::print_to_string` returns an `inkwell` `LLVMString`,
+            // whose `Drop` calls `LLVMDisposeMessage` -- which faults with
+            // `STATUS_ACCESS_VIOLATION` on Windows against this LLVM
+            // release (D-029). Route it through `llvm_string_to_owned`,
+            // exactly as this crate's error paths already do, instead of
+            // letting the temporary drop.
             let mut observer = |module: &inkwell::module::Module<'_>, _| {
-                saw_call |= module
-                    .print_to_string()
-                    .to_string()
+                saw_call |= llvm_string_to_owned(module.print_to_string())
                     .contains("call i64 @pycc_rt_int_from_i64");
             };
             compile_to_object_with_observer(&mir, &obj_path, None, false, Some(&mut observer))
@@ -8932,10 +8936,10 @@ mod tests {
         let dir = tempfile_dir("in_range_int_literal_folds");
         let obj_path = dir.join("in_range_int_literal_folds.o");
         let mut saw_call = false;
+        // D-029 again: `print_to_string`'s `LLVMString` must not be dropped
+        // on Windows. See the sibling test above.
         let mut observer = |module: &inkwell::module::Module<'_>, _| {
-            saw_call |= module
-                .print_to_string()
-                .to_string()
+            saw_call |= llvm_string_to_owned(module.print_to_string())
                 .contains("call i64 @pycc_rt_int_from_i64");
         };
         compile_to_object_with_observer(&mir, &obj_path, None, false, Some(&mut observer))
