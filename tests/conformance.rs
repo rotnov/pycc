@@ -1132,3 +1132,49 @@ fn unary_literal_sign_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/unary_literal_sign.py"
     );
 }
+
+// #608 (PEP 3110): `try`/`except`/`else`/`finally` control flow, exception
+// ordering across multiple handlers, bare `raise` re-raising the active
+// exception out to an outer handler, and `finally` running on both the normal
+// and the propagating path.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn pep_3110_exceptions_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_3110_exceptions.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_3110_exceptions_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/pep_3110_exceptions.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_3110_exceptions_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_3110_exceptions.py"
+    );
+}
+
+// #608 (PEP 409): `raise X from Y` explicit cause chaining and `raise X from
+// None` context suppression. Both are observable here only through which
+// handler catches the raised exception, because pycc emits no traceback and
+// does not populate `__context__` yet (#606).
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn pep_0409_raise_from_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0409_raise_from.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0409_raise_from_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/pep_0409_raise_from.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0409_raise_from_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0409_raise_from.py"
+    );
+}

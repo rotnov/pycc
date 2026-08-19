@@ -127,7 +127,7 @@ For each newly observed upstream release:
 | [3104](https://peps.python.org/pep-3104/) | `nonlocal` | syntax | `py30/pep_3104_nonlocal.py` | ☐ |
 | [3105](https://peps.python.org/pep-3105/) | `print()` as function | syntax | `pep_3105_print.py` | ◐ |
 | [3107](https://peps.python.org/pep-3107/) | Function annotations | typing | `pep_3107_annotations.py` | ◐ |
-| [3110](https://peps.python.org/pep-3110/) | `try`/`except`/`else`/`finally`, `raise`, bare `raise` (#382) | sem | `issue_382_exceptions.rs` | ☐ |
+| [3110](https://peps.python.org/pep-3110/) | `try`/`except`/`else`/`finally`, `raise`, bare `raise` (#382) | sem | `pep_3110_exceptions.py` | ◐ |
 | [3115](https://peps.python.org/pep-3115/) | Metaclasses (`metaclass=`) | sem | `py30/pep_3115_metaclass.py` | ☐ |
 | [3119](https://peps.python.org/pep-3119/) | ABCs, `isinstance` hooks | sem | `pep_3119_abc.py` | ◐ |
 | [3129](https://peps.python.org/pep-3129/) | Class decorators | syntax | `pep_3129_class_deco.py` | ◐ |
@@ -141,7 +141,7 @@ For each newly observed upstream release:
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
 | [380](https://peps.python.org/pep-0380/) | `yield from` | syntax | `py33/pep_0380_yield_from.py` | ☐ |
-| [409](https://peps.python.org/pep-0409/) | `raise ... from ...` cause chaining and `from None` suppression (#382, #540) | sem | `issue_382_exceptions.rs` | ☐ |
+| [409](https://peps.python.org/pep-0409/) | `raise ... from ...` cause chaining and `from None` suppression (#382, #540) | sem | `pep_0409_raise_from.py` | ◐ |
 | [414](https://peps.python.org/pep-0414/) | `u''` literals | syntax | `pep_0414_u_literal.py` | ✅ |
 | [420](https://peps.python.org/pep-0420/) | Namespace packages | import | `py33/pep_0420_ns_packages.py` | ☐ |
 | [3151](https://peps.python.org/pep-3151/) | `OSError` hierarchy | sem | `py33/pep_3151_oserror.py` | ☐ |

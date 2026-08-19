@@ -86,6 +86,58 @@
       ]
     },
     {
+      "pep": "[3110](https://peps.python.org/pep-3110/)",
+      "feature": "`try`/`except`/`else`/`finally`, `raise`, bare `raise` (#382)",
+      "matrix_line": 130,
+      "fixtures": [
+        "pep_3110_exceptions.py"
+      ],
+      "proven": [
+        {
+          "category": "`try`/`except` selecting the handler matching the raised exception type, across several handlers on one `try`",
+          "evidence": "pep_3110_exceptions.py"
+        },
+        {
+          "category": "`else` running exactly when the `try` body completes without raising",
+          "evidence": "pep_3110_exceptions.py"
+        },
+        {
+          "category": "`finally` running on both the normal and the exceptional path, in CPython's own ordering relative to the handler body",
+          "evidence": "pep_3110_exceptions.py"
+        },
+        {
+          "category": "bare `raise` re-raising the active exception out of a handler to an enclosing `try`",
+          "evidence": "pep_3110_exceptions.py"
+        },
+        {
+          "category": "an exception propagating across a function-call boundary to a caller's handler",
+          "evidence": "pep_3110_exceptions.py"
+        }
+      ],
+      "not_proven": [
+        {
+          "category": "`except ValueError as exc:` binding the caught exception to a name, and reading its payload",
+          "kind": "core",
+          "reason": "pycc does not materialize an exception object a handler can bind yet; handler selection is by type alone. Tracked by #382's remaining cluster."
+        },
+        {
+          "category": "user-defined exception classes derived from `Exception`",
+          "kind": "core",
+          "reason": "Only built-in exception types can be raised and caught today. Tracked by #541."
+        },
+        {
+          "category": "`except*` and `ExceptionGroup` (PEP 654)",
+          "kind": "out-of-scope",
+          "reason": "A separate PEP with its own matrix row; tracked by #542, not by this row."
+        },
+        {
+          "category": "traceback rendering for an uncaught exception",
+          "kind": "core",
+          "reason": "pycc emits no traceback frames, so an uncaught exception's stderr text cannot be compared against CPython's. Tracked by #606."
+        }
+      ]
+    },
+    {
       "pep": "[3119](https://peps.python.org/pep-3119/)",
       "feature": "ABCs, `isinstance` hooks",
       "matrix_line": 132,
@@ -202,6 +254,45 @@
           "category": "explicit two-argument `super(C, self)`",
           "kind": "core",
           "reason": "Only the zero-argument form this row names is exercised."
+        }
+      ]
+    },
+    {
+      "pep": "[409](https://peps.python.org/pep-0409/)",
+      "feature": "`raise ... from ...` cause chaining and `from None` suppression (#382, #540)",
+      "matrix_line": 144,
+      "fixtures": [
+        "pep_0409_raise_from.py"
+      ],
+      "proven": [
+        {
+          "category": "`raise X from Y` inside a handler raising `X` and reaching an enclosing handler for `X`",
+          "evidence": "pep_0409_raise_from.py"
+        },
+        {
+          "category": "`raise X from None` inside a handler behaving identically to a plain `raise X` for control flow",
+          "evidence": "pep_0409_raise_from.py"
+        },
+        {
+          "category": "the whole `from`-clause form compiling and running in both `--debug` and `--release`",
+          "evidence": "pep_0409_raise_from.py"
+        }
+      ],
+      "not_proven": [
+        {
+          "category": "`__cause__` being observable on the raised exception",
+          "kind": "core",
+          "reason": "pycc materializes no exception object with attributes, so the cause the `from` clause records cannot be read back. The PEP's whole point is unobservable until then."
+        },
+        {
+          "category": "`__suppress_context__` distinguishing `from None` from a plain `raise`",
+          "kind": "core",
+          "reason": "`from None` currently lowers to the same HIR as a plain `raise`; the distinction has to be reintroduced when implicit `__context__` chaining lands. Tracked by #606."
+        },
+        {
+          "category": "traceback output showing `The above exception was the direct cause of ...` or its suppression",
+          "kind": "core",
+          "reason": "pycc emits no traceback frames, so the only rendering in which CPython surfaces `from` chaining cannot be compared. Tracked by #606."
         }
       ]
     },
