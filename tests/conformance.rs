@@ -1133,6 +1133,30 @@ fn unary_literal_sign_matches_cpython_3_14_7_byte_for_byte() {
     );
 }
 
+// #610 (PEP 560): value-position `C[x]` dispatches to
+// `C.__class_getitem__(x)`. Covers both the `@staticmethod` and the
+// `@classmethod` spelling of the hook, inheritance of the hook through the
+// MRO, dispatch from inside a function body, and that an ordinary instance
+// attribute on the same class is unaffected.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn pep_0560_class_getitem_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0560_class_getitem.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0560_class_getitem_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/pep_0560_class_getitem.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0560_class_getitem_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0560_class_getitem.py"
+    );
+}
+
 // #608 (PEP 3110): `try`/`except`/`else`/`finally` control flow, exception
 // ordering across multiple handlers, bare `raise` re-raising the active
 // exception out to an outer handler, and `finally` running on both the normal

@@ -5,7 +5,7 @@
     {
       "pep": "[238](https://peps.python.org/pep-0238/)",
       "feature": "True division `/` vs `//`",
-      "matrix_line": 125,
+      "matrix_line": 130,
       "fixtures": [
         "pep_0238_division.py"
       ],
@@ -35,7 +35,7 @@
     {
       "pep": "[3105](https://peps.python.org/pep-3105/)",
       "feature": "`print()` as function",
-      "matrix_line": 128,
+      "matrix_line": 133,
       "fixtures": [
         "pep_3105_print.py"
       ],
@@ -63,7 +63,7 @@
     {
       "pep": "[3107](https://peps.python.org/pep-3107/)",
       "feature": "Function annotations",
-      "matrix_line": 129,
+      "matrix_line": 134,
       "fixtures": [
         "pep_3107_annotations.py"
       ],
@@ -88,7 +88,7 @@
     {
       "pep": "[3110](https://peps.python.org/pep-3110/)",
       "feature": "`try`/`except`/`else`/`finally`, `raise`, bare `raise` (#382)",
-      "matrix_line": 130,
+      "matrix_line": 135,
       "fixtures": [
         "pep_3110_exceptions.py"
       ],
@@ -140,7 +140,7 @@
     {
       "pep": "[3119](https://peps.python.org/pep-3119/)",
       "feature": "ABCs, `isinstance` hooks",
-      "matrix_line": 132,
+      "matrix_line": 137,
       "fixtures": [
         "pep_3119_abc.py"
       ],
@@ -174,7 +174,7 @@
     {
       "pep": "[3129](https://peps.python.org/pep-3129/)",
       "feature": "Class decorators",
-      "matrix_line": 133,
+      "matrix_line": 138,
       "fixtures": [
         "pep_3129_class_deco.py"
       ],
@@ -200,7 +200,7 @@
     {
       "pep": "[3131](https://peps.python.org/pep-3131/)",
       "feature": "Non-ASCII identifiers",
-      "matrix_line": 134,
+      "matrix_line": 139,
       "fixtures": [
         "pep_3131_unicode_ids.py"
       ],
@@ -226,7 +226,7 @@
     {
       "pep": "[3135](https://peps.python.org/pep-3135/)",
       "feature": "Zero-argument `super()`",
-      "matrix_line": 136,
+      "matrix_line": 141,
       "fixtures": [
         "pep_3135_super.py"
       ],
@@ -260,7 +260,7 @@
     {
       "pep": "[409](https://peps.python.org/pep-0409/)",
       "feature": "`raise ... from ...` cause chaining and `from None` suppression (#382, #540)",
-      "matrix_line": 144,
+      "matrix_line": 149,
       "fixtures": [
         "pep_0409_raise_from.py"
       ],
@@ -299,7 +299,7 @@
     {
       "pep": "[414](https://peps.python.org/pep-0414/)",
       "feature": "`u''` literals",
-      "matrix_line": 145,
+      "matrix_line": 150,
       "fixtures": [
         "pep_0414_u_literal.py"
       ],
@@ -320,7 +320,7 @@
     {
       "pep": "[435](https://peps.python.org/pep-0435/)",
       "feature": "`enum`",
-      "matrix_line": 155,
+      "matrix_line": 160,
       "fixtures": [
         "pep_0435_enum.py"
       ],
@@ -359,7 +359,7 @@
     {
       "pep": "[484](https://peps.python.org/pep-0484/)",
       "feature": "**Type hints** — pycc's cornerstone",
-      "matrix_line": 167,
+      "matrix_line": 172,
       "fixtures": [
         "pep_0484_type_hints.py"
       ],
@@ -399,7 +399,7 @@
     {
       "pep": "[498](https://peps.python.org/pep-0498/)",
       "feature": "f-strings",
-      "matrix_line": 175,
+      "matrix_line": 180,
       "fixtures": [
         "pep_0498_fstrings.py"
       ],
@@ -432,7 +432,7 @@
     {
       "pep": "[515](https://peps.python.org/pep-0515/)",
       "feature": "Underscores in numeric literals",
-      "matrix_line": 176,
+      "matrix_line": 181,
       "fixtures": [
         "pep_0515_underscores.py"
       ],
@@ -458,7 +458,7 @@
     {
       "pep": "[526](https://peps.python.org/pep-0526/)",
       "feature": "Variable annotations `x: int = 0`",
-      "matrix_line": 178,
+      "matrix_line": 183,
       "fixtures": [
         "pep_0526_var_annotations.py"
       ],
@@ -495,7 +495,7 @@
     {
       "pep": "[557](https://peps.python.org/pep-0557/)",
       "feature": "**dataclasses**",
-      "matrix_line": 186,
+      "matrix_line": 191,
       "fixtures": [
         "pep_0557_dataclasses.py"
       ],
@@ -539,7 +539,7 @@
     {
       "pep": "—",
       "feature": "`dict` insertion order guaranteed (`dict[str, int]`, D-123)",
-      "matrix_line": 190,
+      "matrix_line": 195,
       "fixtures": [
         "dict_order.py"
       ],
@@ -568,7 +568,7 @@
     {
       "pep": "[544](https://peps.python.org/pep-0544/)",
       "feature": "`Protocol` — structural typing",
-      "matrix_line": 196,
+      "matrix_line": 201,
       "fixtures": [
         "pep_0544_protocol.py"
       ],
@@ -607,7 +607,7 @@
     {
       "pep": "[570](https://peps.python.org/pep-0570/)",
       "feature": "Positional-only params `/`",
-      "matrix_line": 197,
+      "matrix_line": 202,
       "fixtures": [
         "pep_0570_pos_only.py"
       ],
@@ -629,7 +629,7 @@
     {
       "pep": "[591](https://peps.python.org/pep-0591/)",
       "feature": "`Final`",
-      "matrix_line": 201,
+      "matrix_line": 206,
       "fixtures": [
         "pep_0591_final.py"
       ],
@@ -664,7 +664,7 @@
     {
       "pep": "[585](https://peps.python.org/pep-0585/)",
       "feature": "Builtin generics: `list[int]` (D-105), `dict[str, int]`/`set[int]` (D-121/D-122, PR-11a), and `tuple[...]` (D-115/D-116, PR-11b) all ship real codegen — this row's `✅` reflects all four fixtures' own CI-observed, all-5-Tier-1-target evidence ([PR #305](https://github.com/rotnov/pycc/pull/305)). `tuple[...]`'s own literal construction, `t[k]` literal-index reads, and both module-global and function-local storage are covered; passing or returning a tuple *value* across a function boundary from real, unannotated Python source does not work yet even though the codegen layer already supports it, for two independent reasons: `pycc_types`' signature-inference solver is scalar-only (D-116 point 4's correction note), and `pycc_codegen`'s `emit_expr` has no `MirExpr::Call` result-dispatch arm for a container-typed return either (D-116's own further correction note) — deferred alongside iteration, unpacking assignment, and an annotation syntax (see `docs/ROADMAP.md`)",
-      "matrix_line": 209,
+      "matrix_line": 214,
       "fixtures": [
         "pep_0585_builtin_generics.py",
         "dict_order.py",
@@ -705,7 +705,7 @@
     {
       "pep": "[593](https://peps.python.org/pep-0593/)",
       "feature": "`Annotated`",
-      "matrix_line": 210,
+      "matrix_line": 215,
       "fixtures": [
         "pep_0593_annotated.py"
       ],
@@ -735,7 +735,7 @@
     {
       "pep": "[613](https://peps.python.org/pep-0613/)",
       "feature": "`TypeAlias`",
-      "matrix_line": 220,
+      "matrix_line": 225,
       "fixtures": [
         "pep_0613_typealias.py"
       ],
@@ -761,7 +761,7 @@
     {
       "pep": "[634](https://peps.python.org/pep-0634/)–636",
       "feature": "**Structural pattern matching**",
-      "matrix_line": 222,
+      "matrix_line": 227,
       "fixtures": [
         "pep_0634_match.py"
       ],
@@ -801,7 +801,7 @@
     {
       "pep": "[673](https://peps.python.org/pep-0673/)",
       "feature": "`Self` as method return/param annotation (#387 Part 1) — resolves to the class's own instance type at HIR-lowering time",
-      "matrix_line": 234,
+      "matrix_line": 239,
       "fixtures": [
         "pep_0673_self.py"
       ],
@@ -833,7 +833,7 @@
     {
       "pep": "[695](https://peps.python.org/pep-0695/)",
       "feature": "**`type` statement + generic functions** `def f[T](x: T) -> T` (v0.2 scope per D-088 — no class support exists yet)",
-      "matrix_line": 244,
+      "matrix_line": 249,
       "fixtures": [
         "pep_0695_generics.py"
       ],
@@ -868,7 +868,7 @@
     {
       "pep": "[695](https://peps.python.org/pep-0695/)",
       "feature": "Generic classes `class C[T]` (#387 Part 3) — single type param, scalar-only instantiation, monomorphized at compile time",
-      "matrix_line": 245,
+      "matrix_line": 250,
       "fixtures": [
         "pep_0695_generic_classes.py"
       ],
@@ -909,7 +909,7 @@
     {
       "pep": "[698](https://peps.python.org/pep-0698/)",
       "feature": "`@override`",
-      "matrix_line": 246,
+      "matrix_line": 251,
       "fixtures": [
         "pep_0698_override.py"
       ],
@@ -934,7 +934,7 @@
     {
       "pep": "[709](https://peps.python.org/pep-0709/)",
       "feature": "Comprehension inlining semantics -- pycc has no bytecode/frame model to \"inline\" the way CPython's own PEP 709 change does; this row instead verifies the one CPython-observable, statically-testable guarantee PEP 709 depends on: a comprehension's own loop variable does not leak into an enclosing same-named binding (D-117/D-120)",
-      "matrix_line": 248,
+      "matrix_line": 253,
       "fixtures": [
         "pep_0709_comp_inline.py"
       ],
@@ -964,7 +964,7 @@
     {
       "pep": "[594](https://peps.python.org/pep-0594/)",
       "feature": "\"Dead batteries\" stdlib removals",
-      "matrix_line": 258,
+      "matrix_line": 263,
       "fixtures": [
         "pep_0594_dead_battery.py",
         "pep_0594_dead_battery_rejected.py"
@@ -990,7 +990,7 @@
     {
       "pep": "[649](https://peps.python.org/pep-0649/)/[749](https://peps.python.org/pep-0749/)",
       "feature": "**Deferred annotations** — pycc reads annotations exactly per 3.14 semantics; self-referential class-name annotations in own methods work (#387 Part 2)",
-      "matrix_line": 270,
+      "matrix_line": 275,
       "fixtures": [
         "pep_0649_deferred_ann.py"
       ],

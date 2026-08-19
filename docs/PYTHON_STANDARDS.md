@@ -116,7 +116,12 @@ For each newly observed upstream release:
    ([#585](https://github.com/rotnov/pycc/issues/585),
    [#586](https://github.com/rotnov/pycc/issues/586)), so no fixture can
    exercise them against the CPython oracle and citing no fixture is the honest
-   state rather than a path awaiting an author.
+   state rather than a path awaiting an author. That reasoning no longer holds
+   for PEP 560 as of [#610](https://github.com/rotnov/pycc/issues/610), which
+   made `ClassName[key]` dispatch to `__class_getitem__` in value position and
+   authored `pep_0560_class_getitem.py` to exercise it against the oracle; the
+   row itself stays `☐` until that fixture's own D-102 Tier-1 observation.
+   PEP 487 remains recognition-only.
 
 ## Python 3.0–3.2 (foundations)
 
@@ -184,7 +189,7 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [553](https://peps.python.org/pep-0553/) | `breakpoint()` | rt | `py37/pep_0553_breakpoint.py` | ☐ |
 | [557](https://peps.python.org/pep-0557/) | **dataclasses** | sem | `pep_0557_dataclasses.py` | ◐ |
-| [560](https://peps.python.org/pep-0560/) | `__class_getitem__` typing support | typing | no fixture — unauthored: `__class_getitem__` is never dispatched in expression position, so no fixture can exercise it against the oracle ([#586](https://github.com/rotnov/pycc/issues/586)) | ☐ |
+| [560](https://peps.python.org/pep-0560/) | `__class_getitem__` typing support | typing | fixture authored for value-position dispatch ([#610](https://github.com/rotnov/pycc/issues/610)); row pending the D-102 Tier-1 observation | ☐ |
 | [562](https://peps.python.org/pep-0562/) | Module `__getattr__` | sem | `py37/pep_0562_mod_getattr.py` | ☐ |
 | [563](https://peps.python.org/pep-0563/) | `from __future__ import annotations` (superseded by 649) | typing | `py37/pep_0563_lazy_annotations.py` | ☐ |
 | — | `dict` insertion order guaranteed (`dict[str, int]`, D-123) | sem | `dict_order.py` | ◐ |

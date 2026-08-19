@@ -3423,6 +3423,40 @@ fn infer_expr_in(
             Ok(Ty::Tuple(Box::new(elem_tys)))
         }
         HirExpr::Subscript { base, index } => {
+            // PEP 560 (#610): `C[x]` where `C` is a bare class name is
+            // `C.__class_getitem__(x)`, not a container index. The base is
+            // `HirExpr::Name` referring to a registered class, exactly as in
+            // the `MethodCall` arm's own `ClassName.static_method(args)`
+            // interception -- and, like that arm, it must run before the
+            // ordinary base inference, which has no type for a bare class
+            // name and would reject it as an undefined name.
+            //
+            // Unlike that arm, this one also requires the name to be unbound
+            // as a value: `class C: ...` followed by `C = [1, 2, 3]` is
+            // accepted (only *type aliases* collide with a class name, see
+            // `pycc_hir`'s own collision check), and `C[0]` must then read
+            // the list element, not dispatch a class hook. `pycc_mir`'s own
+            // `Subscript` arm applies the identical guard, so both crates
+            // agree on which of the two `C[0]` means.
+            //
+            // A class that defines no `__class_getitem__` anywhere in its
+            // MRO is rejected by `resolve_static_or_class_method_call`'s own
+            // unknown-member diagnostic, which names the class and the
+            // missing hook -- CPython raises `TypeError: type 'C' is not
+            // subscriptable` for the same program.
+            if let HirExpr::Name(class_name) = base.as_ref()
+                && env.binding_state(class_name).is_none()
+                && !is_local(local_names, class_name)
+                && env.lookup_class(class_name).is_some()
+            {
+                let index_ty = infer_expr_in(env, local_names, index)?;
+                return class::resolve_static_or_class_method_call(
+                    env,
+                    class_name,
+                    "__class_getitem__",
+                    &[index_ty],
+                );
+            }
             let base_ty = infer_expr_in(env, local_names, base)?;
             let index_ty = infer_expr_in(env, local_names, index)?;
             match base_ty {
@@ -6461,9 +6495,22 @@ fn rewrite_generic_calls_in_expr(
             infer_expr_in(env, local_names, expr)
         }
         HirExpr::Subscript { base, index } => {
-            for sub in [base.as_mut(), index.as_mut()] {
-                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            // PEP 560 (#610): when the base is a bare class name, `C[x]` is
+            // `C.__class_getitem__(x)` and the base is not a value
+            // expression -- recursing into it would call `infer_expr_in` on
+            // a bare class name and fail with T0021 ("name not defined"),
+            // exactly the failure mode this function's own `isinstance`
+            // class-argument skip above exists to avoid. Rewrite only the
+            // index in that case; `infer_expr_in` on the whole expression
+            // below still resolves the hook and reports any error.
+            let base_is_class_name = matches!(base.as_ref(), HirExpr::Name(name)
+                if env.binding_state(name).is_none()
+                    && !is_local(local_names, name)
+                    && env.lookup_class(name).is_some());
+            if !base_is_class_name {
+                rewrite_generic_calls_in_expr(env, local_names, base, instantiations, seen)?;
             }
+            rewrite_generic_calls_in_expr(env, local_names, index, instantiations, seen)?;
             infer_expr_in(env, local_names, expr)
         }
         HirExpr::Slice {
@@ -33888,5 +33935,111 @@ _helper(1)
 ";
         let err = parse_check_resolve(src).unwrap_err();
         assert_eq!(err.code, "T0021");
+    }
+
+    // ------------------------------------------------------------------
+    // PEP 560 (#610): value-position `C[x]` dispatches to
+    // `C.__class_getitem__(x)`.
+    // ------------------------------------------------------------------
+
+    const CLASS_GETITEM_STATIC: &str = "\
+class C:
+    def __init__(self) -> None:
+        self.x = 1
+    @staticmethod
+    def __class_getitem__(key: int) -> int:
+        return key + 1
+";
+
+    #[test]
+    fn class_getitem_dispatches_a_static_hook_in_value_position() {
+        let src = format!("{CLASS_GETITEM_STATIC}\nvalue: int = C[3]\n");
+        assert!(
+            parse_check(&src).is_ok(),
+            "`C[3]` must resolve through the class's own `__class_getitem__`"
+        );
+    }
+
+    #[test]
+    fn class_getitem_dispatch_survives_the_generic_rewrite_pass() {
+        // `check_and_resolve` runs `rewrite_generic_calls_in_expr`, whose
+        // `Subscript` arm must not recurse into the bare class-name base:
+        // doing so would infer it as a value and fail with T0021.
+        let src = format!("{CLASS_GETITEM_STATIC}\nvalue: int = C[3]\n");
+        assert!(parse_check_resolve(&src).is_ok());
+    }
+
+    #[test]
+    fn class_getitem_dispatches_a_classmethod_hook_in_value_position() {
+        // CPython makes `__class_getitem__` an implicit classmethod, so the
+        // explicit `@classmethod` spelling must resolve too.
+        let src = "\
+class C:
+    def __init__(self) -> None:
+        self.x = 1
+    @classmethod
+    def __class_getitem__(cls, key: int) -> int:
+        return key + 1
+
+value: int = C[3]
+";
+        assert!(parse_check(src).is_ok());
+    }
+
+    #[test]
+    fn class_getitem_result_type_is_the_hook_s_return_type() {
+        // Binding the result to a mismatched annotation must fail, proving
+        // the subscript's type comes from the hook rather than from a
+        // container-element fallback.
+        let src = format!("{CLASS_GETITEM_STATIC}\nvalue: str = C[3]\n");
+        assert!(parse_check(&src).is_err());
+    }
+
+    #[test]
+    fn class_getitem_argument_type_is_checked_against_the_hook() {
+        let src = format!("{CLASS_GETITEM_STATIC}\nvalue: int = C[\"k\"]\n");
+        assert!(parse_check(&src).is_err());
+    }
+
+    #[test]
+    fn subscripting_a_class_without_the_hook_is_rejected() {
+        // CPython raises `TypeError: type 'C' is not subscriptable` here.
+        let src = "\
+class C:
+    def __init__(self) -> None:
+        self.x = 1
+
+value: int = C[3]
+";
+        let err = parse_check(src).unwrap_err();
+        assert_eq!(err.code, "T0044");
+    }
+
+    #[test]
+    fn a_value_binding_shadowing_a_class_name_indexes_as_a_value() {
+        // Only *type aliases* collide with a class name in `pycc_hir`, so a
+        // plain rebinding is accepted and `C[0]` must then read the list
+        // element rather than dispatching a class hook.
+        let src = format!(
+            "{CLASS_GETITEM_STATIC}\nC = [1, 2, 3]\nvalue: int = C[0]\n"
+        );
+        assert!(
+            parse_check(&src).is_ok(),
+            "a rebound class name must index as the value it now holds"
+        );
+    }
+
+    #[test]
+    fn a_local_shadowing_a_class_name_indexes_as_a_value() {
+        let src = format!(
+            "{CLASS_GETITEM_STATIC}
+def f() -> int:
+    C = [1, 2, 3]
+    return C[0]
+
+value: int = f()
+"
+        );
+        assert!(parse_check(&src).is_ok());
     }
 }
