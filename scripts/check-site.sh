@@ -2043,9 +2043,14 @@ PY
 # Validate the root README's compiler comparison table against the
 # readme_projection block in claims.json.
 
-readme_path="${site_dir%/site}/README.md"
-if [ ! -f "$readme_path" ]; then
-  readme_path="README.md"
+# `readme_path` was already resolved at the top of this script, honoring an
+# explicit README_PATH override. Only derive it from `site_dir` when no
+# override was given, so the override reaches every consumer below.
+if [ -z "${README_PATH:-}" ]; then
+  readme_path="${site_dir%/site}/README.md"
+  if [ ! -f "$readme_path" ]; then
+    readme_path="README.md"
+  fi
 fi
 
 python3 - \
