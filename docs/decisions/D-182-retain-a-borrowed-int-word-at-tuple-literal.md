@@ -153,13 +153,14 @@ status: accepted
 
   - Closing the leak is a successor work item — "release a `Ty::Tuple`
     slot's owned `int` fields at slot death, and take a reference on
-    whole-tuple copy" — blocked on
+    whole-tuple copy" — tracked as
+    [#636](https://github.com/rotnov/pycc/issues/636) in the same
+    milestone, and blocked on
     [D-124](./D-124-dict-str-int-set-int-refcounting-stays-leak-only.md)'s container refcounting,
     which is what makes a copy take its own reference and therefore what
-    makes a slot-death release safe. A successor issue for it is to be
-    filed in the same milestone; this decision does not carry its number
-    because the change that records this decision has no issue-tracker
-    write authority.
+    makes a slot-death release safe. Both halves of that item are
+    required together: a slot-death release without a copy retain would
+    fire twice against one ingress reference, which is a double-free.
 
   - The `rc: Cell<u32>` overflow exposure recorded against D-180
     (`crates/pycc_rt/src/int_encoding.rs`, no saturation) is widened
