@@ -140,9 +140,9 @@ fn explain(code: &str, format: OutputFormat) -> ExitCode {
 
 /// `pycc init [NAME]`: testable core of the `Command::Init` arm. Takes
 /// `dir` as a parameter instead of calling `std::env::current_dir()`
-/// internally -- matching `find_pycc_rt_lib_dir`/`find_pycc_rt_lib_dir_in`'s
-/// existing dependency-injection split below -- so a test can exercise
-/// `project_config::scaffold`'s error path (an existing `pycc.toml`,
+/// internally -- matching `pycc_codegen::artifact_layout`'s
+/// `find_pycc_rt_lib_dir_in` dependency-injection split -- so a test can
+/// exercise `project_config::scaffold`'s error path (an existing `pycc.toml`,
 /// #237's refusal contract) without mutating this test process's real,
 /// shared working directory.
 fn init(name: Option<&str>, dir: &Path) -> Result<(), String> {
@@ -176,8 +176,9 @@ fn check_paths(paths: &[std::path::PathBuf], error_format: ErrorFormat) -> ExitC
 ///
 /// `target`: `None` builds for the host's own default target (`run` always
 /// passes this, since running a cross-compiled binary on this host makes
-/// no sense). `Some(triple)` cross-compiles -- see `find_pycc_rt_lib_dir`
-/// for what that requires to actually be available.
+/// no sense). `Some(triple)` cross-compiles -- see
+/// `pycc_codegen::artifact_layout::find_pycc_rt_lib_dir_in` for what that
+/// requires to actually be available.
 ///
 /// `release`: the final, already-resolved profile -- `true` runs LLVM's
 /// `"default<O3>"` pipeline, `false` skips it. This function does *not*
@@ -519,206 +520,30 @@ fn run(path: &str) -> ExitCode {
     ExitCode::from(if status.success() { 0 } else { 101 })
 }
 
-/// `target: None` (the common case) returns this workspace's ordinary
-/// `target/debug/` or `target/release/` -- always populated once `pycc_rt`
-/// has been built for the requested profile (see that crate's own doc
-/// comment on the build-order requirement).
+/// Locates `pycc_rt`'s static library for the requested target and
+/// profile, honoring Cargo's target-directory environment variables.
 ///
-/// `target: Some(triple)` looks in `target/<triple>/debug/` or
-/// `target/<triple>/release/` -- where `cargo build [--release] --target
-/// <triple> -p pycc_rt` (after `rustup target add <triple>` if needed) puts
-/// it. Cross-compiling `pycc_rt` itself for the requested target is not
-/// done automatically here: unlike the ordinary case, there's no single
-/// always-correct way to trigger it that doesn't either require
-/// duplicating `rustup`/`cargo`'s own target-management logic or risk the
-/// same build-lock deadlock documented on `pycc_rt` (see that crate's own
-/// doc comment). Failing with a clear, actionable message is better than a
-/// confusing linker error about a missing `-lpycc_rt`.
+/// A thin driver-side wrapper: the resolution rules, the precedence
+/// `CARGO_TARGET_DIR` participates in, and the error messages all live in
+/// [`pycc_codegen::artifact_layout`], which `pycc_codegen`'s own
+/// link-and-run tests and `tests/slice0.rs` share so that every artifact
+/// lookup in this workspace agrees on where Cargo put things.
 ///
-/// `release`: selects which of `pycc_rt`'s own two builds to link against.
-/// Before this parameter existed, this function unconditionally linked the
-/// debug build regardless of `pycc build --release` -- a real, unambiguous
-/// bug (not a design choice) caught while investigating why a `--release`
-/// nbody benchmark's speedup ratio fell far short of expectations
-/// (`tests/nbody_bench.rs`): `--release` was optimizing the compiled
-/// module's own LLVM IR but every runtime call (`pycc_rt_float_pow`, string
-/// helpers, etc.) still ran through an unoptimized debug `pycc_rt`. Callers
-/// pass `try_build`'s own already-resolved `release` bool through here
-/// unchanged, so an optimized build is linked exactly when `--release`
-/// (explicit or via a neighboring `pycc.toml` default) is actually in
-/// effect.
+/// `env!("CARGO_MANIFEST_DIR")` is the `pycc` package directory, which is
+/// also the workspace root, so it is the correct fallback anchor when
+/// neither `CARGO_TARGET_DIR` nor `CARGO_BUILD_TARGET_DIR` redirects the
+/// target directory.
 fn find_pycc_rt_lib_dir(target: Option<&str>, release: bool) -> Result<std::path::PathBuf, String> {
-    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    find_pycc_rt_lib_dir_in(workspace_root, target, release, std::path::Path::exists)
-}
-
-/// Rust's `staticlib` output naming is platform-specific: `lib<name>.a` on
-/// Unix-like targets, but `<name>.lib` (no `lib` prefix, COFF format) on
-/// `-msvc` targets -- verified empirically by cross-building `pycc_rt` for
-/// `x86_64-pc-windows-msvc` and inspecting `target/x86_64-pc-windows-msvc/
-/// debug/` directly, not assumed from Unix convention. Keyed on the
-/// *requested* `target` triple, not the host `#[cfg(windows)]` -- an
-/// earlier version used a host-keyed constant, which silently checked for
-/// the wrong filename whenever `--target` crossed OS families (e.g.
-/// requesting an `-msvc` triple from a non-Windows host, or vice versa),
-/// reporting a misleading "no build found" even when the correctly-named
-/// file was right there (caught in PR review before merge).
-fn pycc_rt_lib_filename(target: Option<&str>) -> &'static str {
-    let targets_msvc = match target {
-        Some(triple) => triple.contains("windows-msvc"),
-        None => cfg!(windows),
-    };
-    if targets_msvc {
-        "pycc_rt.lib"
-    } else {
-        "libpycc_rt.a"
-    }
-}
-
-/// Testable core of `find_pycc_rt_lib_dir`: takes the filesystem-existence
-/// check as a parameter instead of calling `Path::exists` directly, so
-/// tests can simulate "no build found" without mutating this workspace's
-/// real, shared `target/` directory (which every other test also depends
-/// on -- deleting the real `libpycc_rt.a`, even temporarily, would be
-/// flaky under parallel test execution).
-///
-/// A plain `fn` pointer, not `impl Fn(..)`: every caller here (production
-/// and all four tests) passes a non-capturing closure, so a concrete
-/// function pointer covers all of them with a single compiled body.
-/// Genericity over `impl Fn` would monomorphize a separate copy per
-/// closure type -- each one only ever exercising the branches *that
-/// caller* takes, which under `cargo llvm-cov` reads as a real gap in
-/// coverage even though every branch collectively runs somewhere.
-fn find_pycc_rt_lib_dir_in(
-    workspace_root: &std::path::Path,
-    target: Option<&str>,
-    release: bool,
-    exists: fn(&std::path::Path) -> bool,
-) -> Result<std::path::PathBuf, String> {
-    let profile = if release { "release" } else { "debug" };
-    let release_flag = if release { " --release" } else { "" };
-    let dir = match target {
-        Some(triple) => workspace_root.join("target").join(triple).join(profile),
-        None => workspace_root.join("target").join(profile),
-    };
-    if exists(&dir.join(pycc_rt_lib_filename(target))) {
-        Ok(dir)
-    } else if let Some(triple) = target {
-        Err(format!(
-            "no pycc_rt build found for target `{triple}` (expected {}). \
-             Run `rustup target add {triple}` then `cargo build{release_flag} --target {triple} -p pycc_rt` first.",
-            dir.display()
-        ))
-    } else {
-        Err(format!(
-            "no pycc_rt build found (expected {}). Run `cargo build{release_flag} -p pycc_rt` first.",
-            dir.display()
-        ))
-    }
-}
-
-#[cfg(test)]
-mod linker_tests {
-    use super::*;
-
-    #[test]
-    fn finds_the_native_lib_dir_when_it_exists() {
-        let root = std::path::Path::new("/workspace");
-        let result = find_pycc_rt_lib_dir_in(root, None, false, |_| true);
-        assert_eq!(result, Ok(root.join("target/debug")));
-    }
-
-    #[test]
-    fn reports_a_clean_error_when_the_native_build_is_missing() {
-        let root = std::path::Path::new("/workspace");
-        let err = find_pycc_rt_lib_dir_in(root, None, false, |_| false).unwrap_err();
-        assert!(err.contains("cargo build -p pycc_rt"));
-        // Must not suggest --release for a debug-profile lookup.
-        assert!(!err.contains("--release"));
-    }
-
-    #[test]
-    fn finds_the_target_specific_lib_dir_when_it_exists() {
-        let root = std::path::Path::new("/workspace");
-        let result =
-            find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), false, |_| true);
-        assert_eq!(
-            result,
-            Ok(root.join("target/x86_64-unknown-linux-gnu/debug"))
-        );
-    }
-
-    #[test]
-    fn reports_a_clean_error_naming_the_target_when_its_build_is_missing() {
-        let root = std::path::Path::new("/workspace");
-        let err = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), false, |_| false)
-            .unwrap_err();
-        assert!(err.contains("x86_64-unknown-linux-gnu"));
-        assert!(err.contains("rustup target add"));
-    }
-
-    #[test]
-    fn finds_the_native_release_lib_dir_when_it_exists() {
-        let root = std::path::Path::new("/workspace");
-        let result = find_pycc_rt_lib_dir_in(root, None, true, |_| true);
-        assert_eq!(result, Ok(root.join("target/release")));
-    }
-
-    #[test]
-    fn reports_a_clean_error_naming_release_when_the_native_release_build_is_missing() {
-        let root = std::path::Path::new("/workspace");
-        let err = find_pycc_rt_lib_dir_in(root, None, true, |_| false).unwrap_err();
-        assert!(err.contains("cargo build --release -p pycc_rt"));
-        // Not a literal "target/release" substring check: `dir.display()`
-        // renders with the platform's native separator, so this would be
-        // "target\\release" on Windows -- a real bug caught by the pinned
-        // reviewer in this same fix's own review round. `assert_eq!` against
-        // a `PathBuf` join (like the sibling `Ok(...)` tests above) compares
-        // components instead of literal separator bytes.
-        let expected_dir = root.join("target").join("release");
-        assert!(err.contains(&expected_dir.display().to_string()));
-    }
-
-    #[test]
-    fn finds_the_target_specific_release_lib_dir_when_it_exists() {
-        let root = std::path::Path::new("/workspace");
-        let result =
-            find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), true, |_| true);
-        assert_eq!(
-            result,
-            Ok(root.join("target/x86_64-unknown-linux-gnu/release"))
-        );
-    }
-
-    #[test]
-    fn reports_a_clean_error_naming_the_target_and_release_when_its_build_is_missing() {
-        let root = std::path::Path::new("/workspace");
-        let err = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), true, |_| false)
-            .unwrap_err();
-        assert!(err.contains("x86_64-unknown-linux-gnu"));
-        assert!(err.contains("rustup target add"));
-        assert!(err.contains("cargo build --release --target x86_64-unknown-linux-gnu -p pycc_rt"));
-    }
-
-    #[test]
-    fn an_msvc_target_uses_the_dot_lib_filename_regardless_of_host() {
-        // The regression this guards: pycc_rt_lib_filename used to be a
-        // host-#[cfg(windows)] constant, so requesting an -msvc target from
-        // this (non-Windows) test runner silently checked for the wrong
-        // filename (libpycc_rt.a instead of pycc_rt.lib).
-        assert_eq!(
-            pycc_rt_lib_filename(Some("x86_64-pc-windows-msvc")),
-            "pycc_rt.lib"
-        );
-    }
-
-    #[test]
-    fn a_non_msvc_target_uses_the_lib_prefix_dot_a_filename() {
-        assert_eq!(
-            pycc_rt_lib_filename(Some("x86_64-unknown-linux-gnu")),
-            "libpycc_rt.a"
-        );
-    }
+    let target_root = pycc_codegen::artifact_layout::resolve_cargo_target_root(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        pycc_codegen::artifact_layout::cargo_target_dir_from_env,
+    );
+    pycc_codegen::artifact_layout::find_pycc_rt_lib_dir_in(
+        &target_root,
+        target,
+        release,
+        std::path::Path::exists,
+    )
 }
 
 #[cfg(test)]

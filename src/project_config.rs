@@ -244,8 +244,8 @@ fn write_new(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
 }
 
 /// Testable core of [`write_new`], following the same dependency-injection
-/// split as `find_pycc_rt_lib_dir`/`find_pycc_rt_lib_dir_in` in
-/// `src/main.rs`: the injected writer lets a test exercise the
+/// split as `find_pycc_rt_lib_dir_in` in
+/// `pycc_codegen::artifact_layout`: the injected writer lets a test exercise the
 /// cleanup-on-write-failure path deterministically, which no portable
 /// filesystem setup can trigger for a real `write_all`. A plain `fn`
 /// pointer (not `impl FnOnce`) on purpose: a generic parameter would

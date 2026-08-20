@@ -718,9 +718,28 @@ fn calling_an_undefined_function_is_a_compile_error() {
 /// skip cleanly rather than fail on an environment gap the rest of this
 /// test suite doesn't require.
 fn x86_64_apple_darwin_pycc_rt_is_available() -> bool {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target/x86_64-apple-darwin/debug/libpycc_rt.a")
-        .exists()
+    cross_pycc_rt_is_available("x86_64-apple-darwin")
+}
+
+/// Asks the same resolver `pycc build` itself uses whether a cross-target
+/// `pycc_rt` debug build is present, instead of joining a `target/`-shaped
+/// path here. That keeps these guards correct when `CARGO_TARGET_DIR`
+/// redirects the artifact directory -- as this project's own coverage job
+/// does -- where a manifest-relative literal would always report "not
+/// available" and silently skip the tests it guards, which D-014 counts as
+/// a coverage gap rather than a pass.
+fn cross_pycc_rt_is_available(triple: &str) -> bool {
+    let target_root = pycc_codegen::artifact_layout::resolve_cargo_target_root(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        pycc_codegen::artifact_layout::cargo_target_dir_from_env,
+    );
+    pycc_codegen::artifact_layout::find_pycc_rt_lib_dir_in(
+        &target_root,
+        Some(triple),
+        false,
+        std::path::Path::exists,
+    )
+    .is_ok()
 }
 
 #[test]
@@ -783,11 +802,7 @@ fn build_and_run_with_target_set_to_the_host_s_own_triple_on_linux() {
             return;
         }
     };
-    let rt_lib = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
-        .join(triple)
-        .join("debug/libpycc_rt.a");
-    if !rt_lib.exists() {
+    if !cross_pycc_rt_is_available(triple) {
         eprintln!("skipping: {triple} pycc_rt build not available in this environment");
         return;
     }

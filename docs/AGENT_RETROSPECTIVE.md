@@ -28,6 +28,57 @@ never a merge gate.
 
 ---
 
+## 2026-08-20 — Four consecutive review rounds on one class: claims about Cargo's behavior that were reasoned instead of measured
+
+**What happened:** Issue #629's change resolves the runtime artifact
+directory, so its documentation makes claims about how Cargo itself behaves.
+Four of the five pinned-review rounds it took to close the loop found a
+member of the same class, each in prose the previous round had just written:
+
+- Round 2 asserted that Cargo exports no environment variable for the
+  `build.target-dir` configuration key. Measuring it showed
+  `CARGO_BUILD_TARGET_DIR` is honored — so this was not a documentation
+  defect but a live behavioral gap, and the resolver gained a second
+  precedence level and four unit tests. The same round also found a claim
+  that treating an empty `CARGO_TARGET_DIR` as unset is "what Cargo itself
+  does" (Cargo exits 101 instead — the divergence is deliberate and is now
+  recorded as one), and an unqualified claim that a relative value "matches"
+  Cargo's resolution.
+- Round 3 found that the clause written to *fix* round 2 — "neither reaches
+  a compiled binary" — was itself reasoned rather than measured, and false:
+  `env!("CARGO_TARGET_TMPDIR")` expands to the `--target-dir` path at compile
+  time for integration-test and bench targets.
+- Round 4 found that while removing round 3's clause, the `docs/ROADMAP.md`
+  copy of the passage had drifted into a *new* universal — "reaches only
+  integration-test and bench binaries" — a claim about the complete recipient
+  set, which a build script's runtime `OUT_DIR` falsifies. The other three
+  copies of the passage had correctly scoped "only" to the mechanism.
+
+**Root cause:** Two things compounding. The passage exists in four
+near-parallel copies (the decision record, `docs/CLI_SPEC.md`,
+`docs/ROADMAP.md`, and a source doc comment), and each round rewrote the copy
+the reviewer cited rather than all four together — which is how round 4's
+drift was introduced by round 3's fix. Underneath that, a claim about the
+diff's own code has the compiler, the tests, and the coverage gate behind it,
+while a claim about how a *different* tool behaves has nothing: it reads as
+authoritative, costs one command to check, and was instead derived from
+familiarity. D-183 records that exact lesson in its own text, and the round-3
+and round-4 violations were written into and beside that record.
+
+**What fixed it:** Measuring, every time — a two-line shell probe per claim,
+run on the authoring host, with the result pasted into the prose it justifies.
+The review loop closed clean on round 5.
+
+**Lesson:** When a change's documentation asserts how an external tool
+behaves, run the command before writing the sentence — treat "I know how this
+tool works" as an untested hypothesis, not as knowledge. And when a passage
+has parallel copies across several documents, `grep` for its distinguishing
+phrase and rewrite every copy in the same edit, then re-read each one on its
+own: a fix applied to the cited copy alone is how a corrected claim becomes a
+differently-wrong claim one file over.
+
+---
+
 ## 2026-08-20 — Treated a plan's enumerated deliverable as satisfied by writing the document it named
 
 **What happened:** The plan for issue #633 required, in its risks section,
