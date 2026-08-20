@@ -28,6 +28,51 @@ never a merge gate.
 
 ---
 
+## 2026-08-20 — Chased a phantom flaky test for hours because a dispatched implementation agent was still writing the same file
+
+**What happened:** While finishing issue #624's review-fix round, two new
+in-crate codegen tests failed together under `cargo llvm-cov`, then passed
+seven consecutive times under identical commands. Four root-cause
+hypotheses were raised and each disconfirmed with direct evidence: an
+unguarded emitter call site (grep proved every refcount call routes through
+one helper), a race on the global `Target::initialize_all` (it runs after IR
+construction and never touches the module), the release optimization
+pipeline rewriting the guard chain (`run_passes` is gated on `release ==
+true`, and the tests pass `false`), and a per-process `HashMap` seed
+reordering emission (the only iterated map on that path is a `BTreeMap`).
+The actual cause was that `issue-implement` step 4's dispatched background
+implementation agent was **still alive and editing
+`crates/pycc_codegen/src/lib.rs` in the same worktree** the orchestrating
+session was debugging in. It was detected only when a three-line `eprintln!`
+debug patch, confirmed present earlier in the session, vanished from disk
+without being removed, and the file's mtime was later than both failing
+coverage logs at a time no edit had been made. The agent's own final status
+was "Clippy and the full test suite are green. Waiting on coverage" —
+proving it was running gates against the same tree concurrently.
+
+**Root cause:** The orchestrating session took over the dispatched agent's
+work directly — reading, editing, and running gates on the shared worktree —
+without first confirming the agent had terminated. `issue-implement` and
+`AGENTS.md` bound how long to *wait* on a stalled subagent, but neither says
+to kill a dispatched implementation agent before assuming ownership of its
+files. Two writers on one file makes every compile a race against an
+arbitrary intermediate state, which presents exactly as a nondeterministic
+test.
+
+**What fixed it:** `TaskStop` on the dispatched agent, then verifying tree
+coherence (`git status`, `git diff` against the index, grep for debug
+residue) and re-running every gate from a single-writer baseline. No test or
+production code changed — the "failure" was never in the diff.
+
+**Lesson:** Before debugging a file the current session did not just write
+itself, enumerate live background tasks and terminate any that share the
+worktree. A dispatched agent that has reported its result may still be
+running; a report is not a termination. And once two writers have shared a
+tree, **every** gate verdict taken during that window is void — including
+the green ones — so re-run the full set, not just the one that failed.
+
+---
+
 ## 2026-08-19 — Reintroduced a Windows access violation that already had its own accepted decision entry (D-029)
 
 **What happened:** While implementing issue #148, new codegen tests called

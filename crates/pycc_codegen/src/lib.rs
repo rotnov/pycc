@@ -6228,10 +6228,16 @@ fn emit_stmt<'ctx>(
             // The one shape that diverges is a `bool` value assigned into
             // an `int`-declared attribute, which skips the release of a
             // bigint the attribute still holds -- a leak, never a
-            // use-after-free, and pinned by
-            // `tests/issue_146_bigint_release.rs`. Threading the declared
-            // type through from `mir.class_defs` is deliberately left out
-            // of Part 1's scope.
+            // use-after-free. That gap is documented in D-180 Consequences
+            // item 6 but deliberately *not* pinned by a test: the shape is
+            // unobservable today because `scalar_to_slot_word` stores a
+            // `Scalar::Bool` as a raw `zext` rather than a D-141 encoded
+            // word, so the attribute reads back as `0` regardless of any
+            // refcounting (a separate, pre-existing D-154 defect, tracked
+            // in D-180 Consequences item 6). A fixture here could only
+            // enshrine that wrong output. Threading the declared type
+            // through from `mir.class_defs` is deliberately left out of
+            // Part 1's scope.
             if value_ty == pycc_mir::Ty::Int {
                 release_int_attr_slot_before_store(context, builder, rt, base_ptr, slot_index);
             }
@@ -9401,6 +9407,282 @@ mod tests {
             !saw_call,
             "an in-range literal needs no runtime materialization"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // #624 (D-180) codegen-depth: the inline bigint-refcount guard.
+    //
+    // The behavioral tests for this feature live in
+    // `tests/issue_146_bigint_release.rs` (real source through the real
+    // CLI, plus two peak-RSS oracles). Those prove the *net effect* -- a
+    // loop's peak RSS stops tracking its trip count -- but they cannot see
+    // the two structural properties the emitter is actually responsible
+    // for, because both are invisible in a program's output and in its RSS:
+    //
+    //   1. Every `pycc_rt_bigint_retain`/`_release` call is reached only
+    //      through `emit_bigint_refcount_call`'s inline `(word & 0b11) == 0
+    //      && word != 0` guard, on the *same* word the call receives. An
+    //      unguarded call is correct-but-slow, so it regresses D-084/D-140's
+    //      nbody throughput floor silently rather than failing a test.
+    //   2. That guard splits the current basic block, so any caller
+    //      recording a block for a phi incoming edge must re-read
+    //      `get_insert_block()` afterwards. A stale phi predecessor is
+    //      malformed IR that LLVM's own verifier rejects.
+    //
+    // These are in-crate rather than in `tests/` on purpose:
+    // `compile_to_object_with_observer`, the only way to reach the emitted
+    // module before it becomes an object file, is private -- so this
+    // follows `an_oversized_int_literal_materializes_a_runtime_bigint`
+    // directly above, which is this repository's actual IR-inspection
+    // convention, rather than `tests/slice1_codegen_depth.rs`'s
+    // hand-built-MIR-through-`compile_to_object` one.
+    // -----------------------------------------------------------------
+
+    /// One `pycc_rt_bigint_retain`/`_release` call recovered from emitted
+    /// LLVM IR: the callee's bare symbol name and the encoded word it is
+    /// actually passed.
+    #[derive(Debug, PartialEq, Eq)]
+    struct RefcountCall {
+        callee: String,
+        word: String,
+    }
+
+    /// Returns every `pycc_rt_bigint_*` refcount call in `ir`, and panics
+    /// unless each one is dominated by exactly the guard
+    /// `emit_bigint_refcount_call` emits, evaluated on the same operand the
+    /// call receives.
+    ///
+    /// The chain proved per call, backwards from the call:
+    /// the call sits in a `bigint_rc_call*` block; that block is the taken
+    /// arm of `br i1 %c, label %bigint_rc_call*, label %bigint_rc_cont*`;
+    /// `%c = and i1 %a, %b`; `%a = icmp eq i64 %t, 0` with `%t = and i64
+    /// %w, 3`; `%b = icmp ne i64 %w, 0`; and the call's own argument is
+    /// that same `%w`.
+    fn guarded_bigint_refcount_calls(ir: &str) -> Vec<RefcountCall> {
+        // Every name `emit_bigint_refcount_call` produces is a fixed
+        // literal, and LLVM disambiguates those only *within* a function --
+        // the first guard of two different functions is `%bigint_is_heap`
+        // in both. So each function body is analyzed on its own maps, and a
+        // call can never be validated against a guard chain read out of
+        // some other function. `split` yields the module header first,
+        // which `skip(1)` drops.
+        ir.split("\ndefine ")
+            .skip(1)
+            .flat_map(guarded_bigint_refcount_calls_in_one_function)
+            .collect()
+    }
+
+    /// `guarded_bigint_refcount_calls` for a single `define` body.
+    fn guarded_bigint_refcount_calls_in_one_function(ir: &str) -> Vec<RefcountCall> {
+        // `%name = <rhs>` for every SSA value in the function.
+        let mut defs: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        // `taken block -> (condition, not-taken block)` for every `br i1`.
+        let mut branches: std::collections::HashMap<&str, (&str, &str)> =
+            std::collections::HashMap::new();
+        // Every refcount call, tagged with the block it was found in.
+        let mut calls: Vec<(String, RefcountCall)> = Vec::new();
+        let mut block = String::new();
+
+        for raw in ir.lines() {
+            let line = raw.trim();
+            // A block label is the only unindented `name:` line inside a
+            // function body; LLVM appends a `; preds = ...` comment to it.
+            // The leftover of the `define` line itself is the only such
+            // line here, and it carries no colon.
+            if !raw.starts_with([' ', '@', '%', '}', '!']) {
+                if let Some((label, _)) = line.split_once(':') {
+                    block = label.to_string();
+                }
+                continue;
+            }
+            if let Some((name, rhs)) = line.split_once(" = ") {
+                defs.insert(name, rhs);
+            }
+            if let Some(rest) = line.strip_prefix("br i1 ") {
+                let parts: Vec<&str> = rest.split(", label ").collect();
+                assert_eq!(
+                    parts.len(),
+                    3,
+                    "a conditional branch always has a condition and two targets"
+                );
+                branches.insert(parts[1], (parts[0], parts[2]));
+            }
+            if let Some(rest) = line.strip_prefix("call void @pycc_rt_bigint_") {
+                let (op, args) = rest
+                    .split_once('(')
+                    .expect("a call instruction always has an argument list");
+                let word = args
+                    .trim_end_matches(')')
+                    .strip_prefix("i64 ")
+                    .expect("both refcount entry points take exactly one i64")
+                    .to_string();
+                calls.push((
+                    block.clone(),
+                    RefcountCall {
+                        callee: format!("pycc_rt_bigint_{op}"),
+                        word,
+                    },
+                ));
+            }
+        }
+
+        // Only `assert*!` and `expect` are used from here on, never a
+        // local `unwrap_or_else(|| panic!(..))` closure: an error closure
+        // that never runs is an uncovered function under D-014's region
+        // gate, whereas `assert!`'s cold arm lives in `core`.
+        for (block, call) in &calls {
+            assert!(
+                block.starts_with("bigint_rc_call"),
+                "{} is emitted in block `{block}`, not a guard's own call block",
+                call.callee
+            );
+            let key: &str = &format!("%{block}");
+            let (cond, cont) = *branches
+                .get(key)
+                .expect("a guard's call block is always the target of its own branch");
+            assert!(
+                cont.starts_with("%bigint_rc_cont"),
+                "`{block}`'s not-taken arm is `{cont}`, not a guard continuation"
+            );
+            let (aligned, non_zero) = defs[cond]
+                .strip_prefix("and i1 ")
+                .and_then(|rest| rest.split_once(", "))
+                .expect("the guard condition is an `and` of its two halves");
+            let low_tag = defs[aligned]
+                .strip_prefix("icmp eq i64 ")
+                .and_then(|rest| rest.strip_suffix(", 0"))
+                .expect("the guard's alignment half compares a masked word against 0");
+            let tagged_word = defs[low_tag]
+                .strip_prefix("and i64 ")
+                .and_then(|rest| rest.strip_suffix(", 3"))
+                .expect("the guard's alignment half masks the word with 0b11");
+            let tested_word = defs[non_zero]
+                .strip_prefix("icmp ne i64 ")
+                .and_then(|rest| rest.strip_suffix(", 0"))
+                .expect("the guard's non-zero half compares the word against 0");
+            assert_eq!(
+                tagged_word, tested_word,
+                "the guard's two halves test different words"
+            );
+            assert_eq!(
+                tagged_word, call.word,
+                "{} is passed a word the guard never tested",
+                call.callee
+            );
+        }
+
+        calls.into_iter().map(|(_, call)| call).collect()
+    }
+
+    /// Compiles `mir`, runs `guarded_bigint_refcount_calls` over the
+    /// emitted module, and additionally asserts LLVM's own verifier accepts
+    /// it -- the verifier is what catches a phi whose incoming block is no
+    /// longer a real predecessor after `emit_bigint_refcount_call` split it.
+    fn refcount_calls_in(label: &str, mir: &MirModule) -> Vec<RefcountCall> {
+        let dir = tempfile_dir(label);
+        let obj_path = dir.join(format!("{label}.o"));
+        let mut calls = Vec::new();
+        // D-029: never let `print_to_string`'s `LLVMString` drop; route it
+        // through `llvm_string_to_owned` exactly as the sibling tests do.
+        let mut observer = |module: &inkwell::module::Module<'_>, _| {
+            // D-029 again: `verify`'s error is an `LLVMString` too, so it
+            // must be converted rather than dropped.
+            let verdict = module.verify().map_err(llvm_string_to_owned);
+            assert!(verdict.is_ok(), "LLVM rejected the emitted module: {verdict:?}");
+            calls = guarded_bigint_refcount_calls(&llvm_string_to_owned(module.print_to_string()));
+        };
+        compile_to_object_with_observer(mir, &obj_path, None, false, Some(&mut observer))
+            .expect("codegen should succeed");
+        calls
+    }
+
+    fn int_name(name: &str) -> MirExpr {
+        MirExpr::Name {
+            name: name.to_string(),
+            ty: Ty::Int,
+        }
+    }
+
+    #[test]
+    fn an_int_slot_store_emits_a_guarded_release_of_the_word_it_overwrites() {
+        // `v = v` is the minimal named-storage shape: `emit_assign` must
+        // release whatever the slot already held *before* storing, and
+        // `retain_if_int_duplicate` must retain the loaded word because the
+        // slot is about to become a second owner of it.
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "reassign".to_string(),
+                params: vec![("v".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![
+                    MirStmt::Assign {
+                        target: "v".to_string(),
+                        value: int_name("v"),
+                    },
+                    MirStmt::Return(Some(int_name("v"))),
+                ],
+            }],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_int_slot_store", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        // Two retains (the assignment's duplicate and the return's), one
+        // release (the store's). Every one of them was proved guarded, on
+        // its own operand, by `guarded_bigint_refcount_calls`.
+        assert_eq!((retains, releases), (2, 1), "got {calls:?}");
+    }
+
+    #[test]
+    fn a_range_loop_over_one_aliased_bound_emits_guarded_retains_and_releases() {
+        // `for i in range(n, n, n)`: one heap object reachable as start,
+        // stop, and step at once -- the shape where an over-eager release
+        // would free a word two other operands still hold. Compiling it at
+        // all also exercises the phi-predecessor invariant, since every
+        // guard here splits a block the loop's induction phi points at.
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "loop_over".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::None,
+                body: vec![MirStmt::ForRange {
+                    var: "i".to_string(),
+                    start: int_name("n"),
+                    stop: int_name("n"),
+                    step: int_name("n"),
+                    body: Vec::new(),
+                }],
+            }],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_range_aliased_bounds", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        // The ownership contract of `MirStmt::ForRange`, stated as a count
+        // so that dropping any single one of them fails here rather than
+        // only as a slow RSS drift. Four retains: start, stop and step in
+        // the preheader (three independent references even though all
+        // three alias one object here), plus the induction word once per
+        // iteration. Five releases: the loop variable's own slot before
+        // each rebind, the induction word once `next` is computed, and
+        // three in the exit block (the surviving induction word, stop, and
+        // step). Start has no release of its own on purpose -- its
+        // preheader retain *is* the induction word's first reference, and
+        // releasing it separately would free a word `stop` and `step` still
+        // hold in exactly the aliased shape this fixture builds.
+        assert_eq!((retains, releases), (4, 5), "got {calls:?}");
     }
 
     // `declare_module_globals` builds a constant initializer with no

@@ -164,10 +164,27 @@ status: accepted
        as a decision rather than an oversight.
     6. A `bool` value assigned into an `int`-declared *instance attribute*
        skips the attribute slot's release (see the `AttrSet` alternative
-       above).
+       above). This one is deliberately not pinned by a test, and cannot be:
+       attempting the fixture uncovered a separate, pre-existing D-154
+       defect -- `scalar_to_slot_word` stores a `Scalar::Bool` into an
+       attribute slot as a raw `zext` rather than a D-141 encoded word, so
+       `b.v = True` on an `int`-declared attribute reads back as `0` no
+       matter what the refcounting does. Fixing that is out of #624's scope;
+       a fixture written against today's behavior would only enshrine the
+       wrong output.
     7. Unbound arithmetic temporaries -- including a bigint *literal*, which
        `int_const::emit_int_constant` materializes per evaluation -- are still
        leaked. This is the largest residual class and is Part 2 (#625).
+  - The two structural properties this design depends on -- that no refcount
+    call is ever reached without the inline guard, on the word the call
+    itself receives, and that the block split leaves no stale phi
+    predecessor -- are invisible in a program's output and in its peak RSS,
+    so behavioral tests cannot see them. They are pinned instead at
+    codegen depth by `an_int_slot_store_emits_a_guarded_release_of_the_word_it_overwrites`
+    and `a_range_loop_over_one_aliased_bound_emits_guarded_retains_and_releases`
+    in `crates/pycc_codegen`'s own test module, which read the emitted LLVM
+    IR through `compile_to_object_with_observer` and additionally run LLVM's
+    module verifier. They live in-crate because that observer is private.
   - `emit_bigint_refcount_call` splits the current basic block. Any caller
     that records a block for a phi incoming edge must re-read
     `get_insert_block()` *after* the call; `MirStmt::ForRange` and the three
