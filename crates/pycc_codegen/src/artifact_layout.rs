@@ -88,11 +88,14 @@ pub fn resolve_cargo_target_root(
     }
 }
 
-/// Reads `CARGO_TARGET_DIR` from this process's real environment.
+/// Reads the named variable from this process's real environment.
 ///
-/// The production `env_lookup` for [`resolve_cargo_target_root`]; exists
-/// as a named `fn` so every caller shares one function pointer instead of
-/// each spelling out its own closure.
+/// The production `env_lookup` for [`resolve_cargo_target_root`], which
+/// calls it once per precedence level rather than only for
+/// `CARGO_TARGET_DIR`; exists as a named `fn` so every caller shares one
+/// function pointer instead of each spelling out its own closure. A
+/// variable that is set but not valid Unicode is reported as unset, which
+/// the resolver treats like any other absent level.
 pub fn cargo_target_dir_from_env(key: &str) -> Option<String> {
     std::env::var(key).ok()
 }
