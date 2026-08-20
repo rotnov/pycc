@@ -144,6 +144,15 @@ semantics, or maturity:
 Each binding has a negative mutation test in `scripts/test-check-site.sh` that
 corrupts the field and verifies the validator rejects the change.
 
+Every such mutation test restores the complete fixture tree once its guarded
+block ends, through the harness's `restore_fixtures` helper. This is a
+correctness requirement, not tidiness: a block that leaves its mutation in place
+hands it to every block after it, so an earlier, unrelated rejection can mask
+whether the later block's own assertion works at all. The harness enforces the
+invariant on itself — it parses its own source at startup and fails when a
+guarded `check-site.sh` block is not followed by `restore_fixtures`, so a new
+mutation test cannot silently opt out.
+
 Visible page copy must also state that AI agents create the entire project, the
 human role is management, and no project code is handwritten by a human. This
 development-model claim is part of the public project identity, not hidden
