@@ -2925,8 +2925,11 @@ fn emit_expr_unchecked<'ctx>(
         // `get_undef()` for the struct shape, then one
         // `build_insert_value` (LLVM's `insertvalue`) per element in source
         // order, each returning a *new* aggregate value rather than
-        // mutating one in place. No alloca, no pointer, no allocation, and
-        // so nothing for D-107/D-124's leak-only policy to apply to.
+        // mutating one in place. No alloca, no pointer, and no allocation
+        // of the aggregate itself -- but D-107/D-124's leak-only policy
+        // does apply to what the fields hold: under D-182 a borrowed `int`
+        // element is retained on the way in (see the retain below) and
+        // nothing releases it when the tuple dies.
         //
         // Deliberately no `build_untag_checked` per element: a tuple has no
         // runtime storage boundary to validate. Like D-141 containers, a
@@ -3844,10 +3847,14 @@ fn emit_assign<'ctx>(
         // struct by value rather than one opaque pointer (D-115) -- into a
         // slot `ty_to_basic_type` already allocated at exactly that struct
         // type, so the store is type-correct without any tuple-specific
-        // code at the `build_store` call below. No refcount traffic
-        // accompanies it, and for a stronger reason than `List`/`Dict`/
-        // `Set`'s leak-only policy: a tuple owns no allocation at all, so
-        // overwriting this slot frees nothing and leaks nothing.
+        // code at the `build_store` call below. The store itself emits no
+        // refcount traffic, but that is no longer because a tuple holds
+        // nothing worth counting: under D-182 a tuple field can hold an
+        // ingress-retained reference to a borrowed `int` element, so
+        // overwriting this slot drops the struct without releasing those
+        // fields. That is the accepted, documented leak -- a slot-death
+        // release for tuple fields is deferred to D-124's container
+        // refcounting, not simply absent because there is nothing to free.
         Scalar::Tuple(v) => v.into(),
         // Pass-through, identical to `List`'s/`Dict`'s/`Set`'s arms above
         // (D-154, Part 1 of #375): storing a class-instance value is
