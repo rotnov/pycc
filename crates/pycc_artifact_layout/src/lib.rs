@@ -550,14 +550,28 @@ mod tests {
         );
     }
 
+    /// A path literal that is genuinely absolute on the host platform.
+    ///
+    /// A bare leading slash is *rooted* but not absolute on Windows --
+    /// `Path::is_absolute` there additionally requires a drive or UNC
+    /// prefix -- so a Unix-shaped literal would send
+    /// `anchor_target_root_for_build_script` down its relative branch on
+    /// exactly one Tier-1 platform, testing the opposite of what the test
+    /// below names. A real resolved target root always carries whatever
+    /// prefix its platform requires.
+    #[cfg(windows)]
+    const ABSOLUTE_ELSEWHERE: &str = r"C:\elsewhere\build";
+    #[cfg(not(windows))]
+    const ABSOLUTE_ELSEWHERE: &str = "/elsewhere/build";
+
     #[test]
     fn an_absolute_resolved_root_is_anchored_unchanged_and_never_diverges() {
         let anchored = anchor_target_root_for_build_script(
-            std::path::Path::new("/elsewhere/build"),
+            std::path::Path::new(ABSOLUTE_ELSEWHERE),
             std::path::Path::new("/workspace"),
             std::path::Path::new("/somewhere/else/out"),
         );
-        assert_eq!(anchored.root, std::path::PathBuf::from("/elsewhere/build"));
+        assert_eq!(anchored.root, std::path::PathBuf::from(ABSOLUTE_ELSEWHERE));
         assert!(!anchored.diverged);
     }
 
