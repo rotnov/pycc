@@ -3513,4 +3513,51 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
 fi
 cp "$repo_root/site/og.png" "$fixture_root/site/og.png"
 
+# --- README_PATH override reaches every consumer (issue #649) ---
+# The override is established at the top of check-site.sh, but the README
+# comparison-table section later re-derives readme_path from site_dir. These
+# mutations pin the override's reach: the probe README lives outside the
+# directory that derivation would produce, so a run that honors it and a run
+# that silently re-derives cannot both pass.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+mkdir -p "$fixture_root/override"
+cp "$repo_root/README.md" "$fixture_root/override/README.md"
+
+# Positive direction: an override pointing at a pristine README outside the
+# derived location is accepted, so a rejection below cannot be blamed on the
+# path simply being unreachable.
+if ! README_PATH="$fixture_root/override/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator rejected a pristine README supplied via README_PATH (issue #649)" >&2
+  exit 1
+fi
+
+# Negative direction: the same override pointing at a broken README must be
+# rejected. The derived path ($fixture_root/README.md) stays pristine, so a
+# validator that ignores the override accepts this and fails the test.
+python3 - "$fixture_root/override/README.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+assert "def fib(n: int) -> int:\n    if n < 2:" in content
+path.write_text(
+    content.replace(
+        "def fib(n: int) -> int:\n    if n < 2:",
+        "def fib(n: int) -> int :\n    if n < 2:",
+        1,
+    )
+)
+PY
+if README_PATH="$fixture_root/override/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator ignored README_PATH and re-derived the README location (issue #649)" >&2
+  exit 1
+fi
+
+# Unset direction: with no override, the site_dir-derived default is unchanged.
+if ! SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator rejected the site_dir-derived README with README_PATH unset (issue #649)" >&2
+  exit 1
+fi
+rm -rf "$fixture_root/override"
+
 echo "Website validator self-tests passed."
