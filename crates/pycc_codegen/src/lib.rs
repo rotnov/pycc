@@ -9383,18 +9383,34 @@ mod tests {
     // D-029 static guard. Every inkwell API that hands back an `LLVMString`
     // is a Windows crash waiting to happen: the wrapper's `Drop` calls
     // `LLVMDisposeMessage`, which faults against the prebuilt LLVM this
-    // project links there. This crate owns exactly two safe entry points --
-    // `llvm_string_to_owned`, which forgets the wrapper instead of dropping
-    // it, and `verify_module`, which is a no-op under `#[cfg(windows)]`.
-    // Reaching past either one to the raw inkwell API compiles and passes
-    // every local gate, then kills the whole test binary in CI, because the
-    // Windows job is the only place this class is ever executed. This test
-    // is the mechanical stand-in for that missing local gate: it reads the
-    // crate's own source and asserts nothing escapes the two wrappers.
+    // project links there. Reaching past this crate's own protections to
+    // the raw inkwell API compiles and passes every local gate, then kills
+    // the whole test binary in CI, because the Windows job is the only
+    // place this class is ever executed. This test is the mechanical
+    // stand-in for that missing local gate.
+    //
+    // D-029 records three distinct protections, and this test covers them
+    // to three different depths -- state that plainly rather than letting
+    // the name imply uniform coverage:
+    //
+    //  1. `llvm_string_to_owned`, which forgets the wrapper instead of
+    //     dropping it. Fully checked: every `print_to_string` call must
+    //     name it on the same line.
+    //  2. `verify_module`, a no-op under `#[cfg(windows)]`. Fully checked:
+    //     exactly one direct `verify` call may exist, the wrapper's own.
+    //  3. `ManuallyDrop` at the point a `TargetTriple` is created, which
+    //     covers every exit path including the early `?`. Only tripwired:
+    //     the wrapping is structural and spans several lines, so a
+    //     line-oriented scan cannot confirm it. What it can do is pin the
+    //     number of triple-producing call sites, so adding one fails here
+    //     and sends the author to this comment.
+    //
+    // `Target::from_triple`'s and `write_to_file`'s `.map_err` sites fall
+    // under (1) and are checked only insofar as they name the wrapper.
     //
     // The needles are assembled at run time so this test's own body is not
     // counted as a violation of itself. Comment lines are excluded, since
-    // the crate discusses both APIs at length in prose.
+    // the crate discusses all three APIs at length in prose.
     #[test]
     fn every_inkwell_llvm_string_call_routes_through_a_d029_wrapper() {
         // Read the whole crate rather than this one file, so a module added
@@ -9407,7 +9423,9 @@ mod tests {
             .collect();
         let printer = format!(".{}()", "print_to_string");
         let verifier = format!(".{}()", "verify");
-        let wrapped = format!("llvm_string_to_owned(module{printer})");
+        let wrapper = format!("llvm_string_to_{}(", "owned");
+        let created = format!("TargetTriple::{}(", "create");
+        let defaulted = format!("TargetMachine::get_default_{}()", "triple");
         let code_lines = || {
             sources
                 .iter()
@@ -9415,9 +9433,13 @@ mod tests {
                 .filter(|line| !line.trim_start().starts_with("//"))
         };
 
+        // Deliberately not keyed on the receiver's name: a correctly
+        // wrapped call on some other inkwell value must pass too.
         assert_eq!(
             code_lines().filter(|line| line.contains(&printer)).count(),
-            code_lines().filter(|line| line.contains(&wrapped)).count(),
+            code_lines()
+                .filter(|line| line.contains(&printer) && line.contains(&wrapper))
+                .count(),
             "every inkwell print_to_string call must be an argument of \
              llvm_string_to_owned, or its LLVMString drops and faults on Windows (D-029)"
         );
@@ -9426,6 +9448,15 @@ mod tests {
             1,
             "the only direct inkwell verify call may be the one inside verify_module, \
              which is skipped on Windows; everything else must go through that wrapper (D-029)"
+        );
+        assert_eq!(
+            code_lines()
+                .filter(|line| line.contains(&created) || line.contains(&defaulted))
+                .count(),
+            2,
+            "a TargetTriple owns an LLVMString and must be created inside a ManuallyDrop \
+             (D-029); this count is a tripwire, so if you added a call site, wrap it and \
+             raise the number -- if you removed one, lower it"
         );
     }
 

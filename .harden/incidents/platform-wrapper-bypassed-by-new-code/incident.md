@@ -45,12 +45,27 @@ is recorded here and in the PR body in lieu of an approval pause.
 `tests::every_inkwell_llvm_string_call_routes_through_a_d029_wrapper`.
 It reads every `.rs` file in the crate's own `src/` directory at run time
 (so a module added later is covered without anyone extending a list),
-strips comment lines, and asserts two invariants: every call to the
-string-returning printer API is an argument of the crate's own owning
-wrapper, and exactly one direct call to the verification API exists — the
-one inside the platform-guarded wrapper itself. The search needles are
-assembled at run time so the test's own body is not counted as a
-violation of itself.
+strips comment lines, and checks the project's three recorded protections
+for this hazard to three honestly-stated depths:
+
+1. the owning conversion wrapper — fully checked: every call to the
+   string-returning printer API must name the wrapper on the same line.
+   The check is deliberately not keyed on the receiver's name, so a
+   correctly wrapped call on some other value passes too;
+2. the platform-guarded verification wrapper — fully checked: exactly one
+   direct call to the verification API may exist, the wrapper's own;
+3. suppressing the drop at the point the target triple is created — only
+   tripwired. That wrapping is structural and spans several lines, so a
+   line-oriented scan cannot confirm it; what the scan can do is pin the
+   number of triple-producing call sites, so adding one fails the test and
+   sends the author to the explanation above it.
+
+The search needles are assembled at run time so the test's own body is not
+counted as a violation of itself. The test's own comment states which
+protection is checked and which is merely tripwired, rather than letting
+the name imply uniform coverage — an independent review round caught an
+earlier version of this comment claiming the crate had "exactly two safe
+entry points" when its own ADR records three.
 
 ## Fixture
 
@@ -91,6 +106,18 @@ inside verify_module, which is skipped on Windows; everything else must go throu
 that wrapper (D-029)
   left: 2
  right: 1
+
+# D: a new, unsuppressed target-triple call site
+D_RC=101
+assertion `left == right` failed: a TargetTriple owns an LLVMString and must be created
+inside a ManuallyDrop (D-029); this count is a tripwire, so if you added a call site,
+wrap it and raise the number -- if you removed one, lower it
+  left: 3
+ right: 2
+
+# E: the negative control -- a correctly wrapped printer call on a receiver
+#    other than the one the original version hardcoded. Must be accepted.
+E_RC=0
 ```
 
 ## Sweep result
@@ -103,8 +130,9 @@ that true for modules added later.
 
 ## Known limits
 
-The guard is textual, not semantic: it recognizes the API by its call
+The guard is textual, not semantic: it recognizes each API by its call
 spelling. A call reached through a re-export under a different name, or
-split across lines, would evade it. That is accepted — the failure this
-guards against is a contributor reaching for the obvious raw API, not an
-adversary.
+split across lines, would evade it, and the third protection is pinned by
+a count rather than proven. That is accepted — the failure this guards
+against is a contributor reaching for the obvious raw API, not an
+adversary — and the test's own comment says so rather than implying more.
