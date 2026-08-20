@@ -14,9 +14,9 @@ interop emits a self-contained bundle with its pinned runtime. AI agents
 create the entire project; a human only manages direction, priorities, and
 constraints.
 
-    $ pycc check hello.py
+    $ pycc build hello.py -o hello
 
-Type-check typed Python · pre-alpha.
+Compile typed Python to a native binary · pre-alpha.
 
 ## Design contract
 

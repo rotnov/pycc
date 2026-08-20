@@ -53,7 +53,7 @@ SECTION_CONTRACT = {
     md_heading: nil,
     md_markers: [
       "Typed Python in. Autonomous artifacts out.",
-      "pycc check hello.py",
+      "pycc build hello.py -o hello",
     ],
   },
   "design contract" => {

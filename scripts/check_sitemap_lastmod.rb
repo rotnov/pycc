@@ -75,7 +75,12 @@ def check!
     # Validate lastmod format.
     begin
       Date.parse(lastmod)
-    rescue Date::Error
+    rescue ArgumentError
+      # `Date::Error` only exists on Ruby 3.0+, where it is a subclass of
+      # `ArgumentError`; on Ruby 2.x `Date.parse` raises a bare
+      # `ArgumentError` and naming `Date::Error` here would itself raise
+      # `NameError`, crashing the checker with a backtrace instead of
+      # reporting the malformed date. Rescuing `ArgumentError` covers both.
       raise SitemapLastmodError,
             "sitemap lastmod for #{location} is not a valid date: #{lastmod}"
     end

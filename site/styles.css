@@ -299,8 +299,9 @@ h1 span {
 }
 
 .hero-code {
-  position: relative;
-  padding-bottom: 110px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
 }
 
 .code-window {
@@ -380,72 +381,41 @@ h1 span {
   color: #9fd8a3;
 }
 
-.diagnostic-card {
-  position: absolute;
-  right: -22px;
-  bottom: 0;
-  width: min(94%, 440px);
-  padding: 19px 20px;
-  border: 1px solid rgba(255, 125, 85, 0.45);
-  background: #1a1512;
-  box-shadow: -16px 16px 0 rgba(255, 125, 85, 0.05);
+.output-window {
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  background: #0a0c0a;
+  box-shadow: 20px 20px 0 rgba(199, 255, 94, 0.055);
+}
+
+.output-window pre {
+  margin: 0;
+  padding: 24px 27px;
+  overflow-x: auto;
+  color: #d7d9d3;
+  font: 0.8rem/1.85 var(--mono);
+  tab-size: 4;
+}
+
+.evidence-state {
+  justify-self: end;
+  padding: 2px 8px;
+  color: var(--ground);
+  background: var(--acid);
+  font: 0.62rem var(--mono);
+  letter-spacing: 0.04em;
+}
+
+.hero-provenance {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  line-height: 1.65;
+}
+
+.hero-provenance code {
   font-family: var(--mono);
   font-size: 0.72rem;
-}
-
-.diagnostic-title {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  color: var(--coral);
-}
-
-.diagnostic-title span:last-child {
-  margin-left: auto;
-  color: var(--ink-faint);
-}
-
-.diagnostic-icon {
-  display: grid;
-  width: 20px;
-  height: 20px;
-  place-items: center;
-  border-radius: 50%;
-  color: var(--ground);
-  background: var(--coral);
-  font-weight: 900;
-}
-
-.diagnostic-card > p {
-  margin: 12px 0;
-  color: #d3cbc5;
-}
-
-.diagnostic-card code {
-  color: var(--ink);
-}
-
-.diagnostic-line {
-  display: flex;
-  gap: 14px;
-  padding: 8px 0;
-  border-block: 1px solid rgba(255, 125, 85, 0.15);
-}
-
-.diagnostic-line > span {
-  color: var(--ink-faint);
-}
-
-.diagnostic-line mark {
-  color: var(--coral);
-  background: transparent;
-  text-decoration: underline wavy;
-  text-underline-offset: 4px;
-}
-
-.diagnostic-card .diagnostic-help {
-  margin-bottom: 0;
-  color: #b9c99a;
 }
 
 .contract {
@@ -1419,19 +1389,15 @@ footer > div a:hover {
     font-size: 0.69rem;
   }
 
-  .hero-code {
-    padding-bottom: 145px;
-  }
-
   .code-window pre {
     min-height: 250px;
     padding: 24px 20px 32px;
     font-size: 0.68rem;
   }
 
-  .diagnostic-card {
-    right: -2px;
-    width: 96%;
+  .output-window pre {
+    padding: 20px;
+    font-size: 0.68rem;
   }
 
   .contract div {
