@@ -28,6 +28,50 @@ never a merge gate.
 
 ---
 
+## 2026-08-20 — A Unix-shaped "absolute" path literal in a unit test silently tested the opposite branch on Windows
+
+**What happened:** Issue #630's change added
+`anchor_target_root_for_build_script`, which branches on whether a resolved
+Cargo target root is absolute. Its unit test for the absolute case passed
+`Path::new("/elsewhere/build")`. Every local gate was green — the full
+coverage gate at 100%/100%, clippy, fmt — and the pull request was opened
+and reviewed on that basis. CI then failed on exactly one leg,
+`native-build-test (windows-latest, x86_64-pc-windows-msvc)`, with
+`assertion failed: !anchored.diverged`.
+
+**Root cause:** a bare leading slash is *rooted* but not *absolute* on
+Windows — `Path::is_absolute` there additionally requires a drive or UNC
+prefix. So on that one platform the test drove the function's *relative*
+branch, anchored the root on the workspace, found the `OUT_DIR` outside it,
+and observed the divergence warning the test asserts against. The test was
+not merely failing on Windows; for the whole time it existed it was
+asserting the opposite of what its own name claimed there. Nothing local
+could have caught it: the developer host is Unix, and the neighbouring
+relative-root tests are genuinely portable because `PathBuf` compares
+component-wise, so their passing on Windows carried no signal about this one.
+
+**What fixed it:** commit `29815e64` — a `#[cfg(windows)]` / `#[cfg(not(windows))]`
+pair supplying `C:\elsewhere\build` and `/elsewhere/build` respectively, so
+the literal is genuinely absolute on whichever platform runs it. The
+production path was never affected: a resolved Cargo target root on Windows
+always carries its platform's prefix. The Windows branch was type-checked
+locally before pushing, with
+`cargo check -p pycc_artifact_layout --tests --target x86_64-pc-windows-msvc`.
+
+**Lesson:** a path literal in a test that feeds a platform-conditional
+predicate is itself platform-specific data, and a Unix-shaped one does not
+fail loudly on Windows — it quietly selects the other branch and can still
+pass, or fail for a reason that looks unrelated to portability. When a
+function branches on `is_absolute`, `is_symlink`, path separators, or any
+other predicate whose answer depends on the host, supply the literal through
+a `cfg` pair rather than assuming the Unix shape generalizes, and type-check
+the other platform's branch with `cargo check --target <triple>` before
+pushing. The generalizing check is cheap:
+`grep -rn 'is_absolute' crates/ src/ tests/` closes the class in one command
+rather than waiting for the next CI round-trip to surface the next instance.
+
+---
+
 ## 2026-08-20 — Four consecutive review rounds on one class: claims about Cargo's behavior that were reasoned instead of measured
 
 **What happened:** Issue #629's change resolves the runtime artifact
