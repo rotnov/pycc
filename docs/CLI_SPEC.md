@@ -144,6 +144,8 @@ artifacts were redirected by one of those two, with neither environment
 variable set, fails with the ordinary actionable exit-2 message naming
 the directory that was searched (`no pycc_rt build found (expected ...).
 Run \`cargo build -p pycc_rt\` first.`) rather than mislinking.
+Whether either input should be honored at all is tracked as
+[#639](https://github.com/rotnov/pycc/issues/639).
 
 Within the resolved directory the layout is Cargo's: `<root>/debug/` or
 `<root>/release/` for a host build, `<root>/<triple>/<profile>/` when

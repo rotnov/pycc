@@ -121,11 +121,12 @@ status: accepted
      more than covering the flag for two of them. Deferred rather than
      half-implemented here;
      the documented precedence in `docs/CLI_SPEC.md` states plainly which
-     inputs are honored today. The deferral is **untracked by any issue
-     yet** -- stated in this project's own explicit convention for that
-     state (`docs/ROADMAP.md`'s "Follow-ups (untracked by any issue yet)"
-     heading) rather than implied -- and filing it is the follow-up this
-     decision asks for.
+     inputs are honored today. The deferral is tracked as
+     [#639](https://github.com/rotnov/pycc/issues/639), filed with this
+     change; that issue carries both exclusions and their reasoning, and
+     its own first completion criterion admits the outcome that neither
+     form is ever honored and the environment-variable precedence is the
+     whole contract.
 
      Both exclusions above were narrowed by review, in two rounds, and
      the history is recorded rather than smoothed over because the same
