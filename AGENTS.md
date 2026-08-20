@@ -145,6 +145,7 @@
 ## Keep source files decomposable
 
 - A Rust source file over ~1,000 lines is a maintainability and agent-context risk (several `lib.rs` files here already reach 15-18k lines, past what a single `Read` call covers). When a task's own work touches such a file, decompose the part it touches into cohesion-driven submodules as part of that same change — not as a separate dedicated refactor task, and not by rewriting unrelated code.
+- A dedicated GitHub issue may also track decomposition of one specific oversized file, filed proactively rather than only discovered while touching the file for other work ([D-185](docs/decisions/D-185-permit-a-dedicated-tracking-issue-per-oversized.md)). Picking up such an issue on its own satisfies the rule above — the issue's own scope is the task whose work touches the file. Each pull request against it still extracts one or more cohesion-driven submodules and never rewrites unrelated logic. Because a file at many thousands of lines cannot be brought under the threshold in one pull request, the issue is not closed per pull request: narrow it with a comment describing what was extracted after each merge, and close it only once the file is under the ~1,000-line threshold or removed/merged away.
 
 ## Code Review Rules
 
