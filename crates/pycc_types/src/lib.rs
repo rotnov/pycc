@@ -5586,7 +5586,7 @@ fn t0042(message: impl Into<String>) -> Diagnostic {
 /// D-105's own pre-existing "container element type is fixed, not generic"
 /// restriction.
 ///
-/// Defense in depth, not a reachable frontend path: `crates/pycc_hir/src/lib.rs`'s
+/// Defense in depth, not a reachable frontend path: `crates/pycc_hir/src/func.rs`'s
 /// `lower_function` already enforces at most one PEP 695 `TypeVar` per
 /// function (Task 1) and `annotation_to_ty` never lowers a `Subscript`
 /// annotation at all, so a real `def f[T](x: list[T])` or `def f[T, U](...)`

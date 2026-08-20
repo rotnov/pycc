@@ -110,7 +110,7 @@ pub(crate) fn lower_stmt(
                 // rejects it with `T0033` once the base's real type is
                 // known, relocating (not removing) the invariant
                 // `subscript_assignment_to_a_non_bare_name_base_is_unsupported`
-                // (`crates/pycc_hir/src/lib.rs`) used to enforce at the
+                // (`crates/pycc_hir/src/tests.rs`) used to enforce at the
                 // lowering level.
                 Expr::Subscript(sub) => {
                     let Expr::Name(base_name) = sub.value.as_ref() else {
@@ -139,7 +139,7 @@ pub(crate) fn lower_stmt(
                 // -- still reaches the `other => ..` catch-all just below
                 // and is covered by
                 // `assigning_to_a_tuple_unpacking_target_is_unsupported` in
-                // `crates/pycc_hir/src/lib.rs`.
+                // `crates/pycc_hir/src/tests.rs`.
                 Expr::Attribute(attr) => {
                     // #448: `super().attr = value` — super() attribute
                     // assignment is not implemented in this version. Without
