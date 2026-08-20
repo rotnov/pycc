@@ -150,6 +150,22 @@ status: accepted
      `an_int_operation_never_returns_an_operand_s_own_word`, because an
      identity fast path (`a + 0 -> a`) added later would turn every operand
      release into a use-after-free on the value just produced.
+ 12. `emit_bigint_refcount_call` **skips a compile-time-constant word**
+     entirely. Every constant an `int` expression can produce is a tagged
+     smallint, a bool identity marker, or the empty-slot word; a `BigIntObj`
+     address is only ever materialized by a runtime call, so a constant word
+     is provably not a heap pointer and its guard is known false before it is
+     built. Emitting the guard anyway let inkwell constant-fold all four of
+     its halves, leaving a conditional branch whose condition was no longer an
+     SSA definition -- dead IR that the D-180 guard-shape observer harness
+     cannot describe, and which made
+     `a_tuple_element_operand_is_borrowed_while_a_literal_operand_is_owned`
+     abort inside the harness rather than report a verdict. This is why that
+     test uses `2**62` as its literal operand: only an out-of-range literal is
+     materialized by `pycc_rt_int_from_i64`, so only that shape yields a word
+     whose heap-ness is unknown at compile time and therefore an observable
+     release. An in-range literal never allocated, so skipping it loses
+     nothing.
 - Alternatives:
   - **A statement-scoped deferred release list.** Collect every owning word
     evaluated during a statement and release them all at the statement's end.

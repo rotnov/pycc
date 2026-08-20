@@ -46,6 +46,18 @@ pub(super) fn emit_bigint_refcount_call<'ctx>(
     word: IntValue<'ctx>,
     op: BigIntRefcount,
 ) {
+    // A compile-time-constant word is provably never a heap pointer: every
+    // constant an `int` expression can produce is a tagged smallint, a bool
+    // identity marker, or the empty-slot word, and a `BigIntObj` address is
+    // only ever materialized by a runtime call. Emitting the guard anyway
+    // would let inkwell fold all four of its halves into a constant `i1`,
+    // leaving a conditional branch whose condition is no longer an SSA
+    // definition -- dead IR that the D-180 guard-shape observer tests then
+    // cannot describe. Skip it instead of emitting a guard that is known
+    // false before it is built.
+    if word.is_const() {
+        return;
+    }
     let i64_type = context.i64_type();
     let low_tag = builder
         .build_and(word, i64_type.const_int(0b11, false), "bigint_low_tag")

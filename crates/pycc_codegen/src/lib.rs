@@ -9911,6 +9911,13 @@ mod tests {
     /// supplied it, since `TupleLiteral` never retains what it stores), so
     /// the `+` releases only its literal operand -- releasing `t[0]` too
     /// would free a word `n` still holds.
+    ///
+    /// The literal is `2^62` rather than a small one on purpose: only an
+    /// out-of-range literal is materialized by a runtime
+    /// `pycc_rt_int_from_i64` call, so only that shape produces a word
+    /// whose heap-ness is unknown at compile time. An in-range literal is
+    /// a constant tagged smallint, `emit_bigint_refcount_call` skips it,
+    /// and the release this test is about would not exist to observe.
     #[test]
     fn a_tuple_element_operand_is_borrowed_while_a_literal_operand_is_owned() {
         let mir = MirModule {
@@ -9932,7 +9939,7 @@ mod tests {
                             }),
                             index: Box::new(MirExpr::IntLiteral(0)),
                         }),
-                        right: Box::new(MirExpr::IntLiteral(1)),
+                        right: Box::new(MirExpr::IntLiteral(4_611_686_018_427_387_904)),
                         ty: Ty::Int,
                     })),
                 ],
