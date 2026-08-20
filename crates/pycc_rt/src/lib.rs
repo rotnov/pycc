@@ -7,26 +7,40 @@
 //! linker-driver invocation (`cc`, or on Windows the bundled `clang` --
 //! see D-028) -- in `pycc_codegen`'s own tests (`link_object_with_runtime`)
 //! and in `pycc`'s real `build`/`run` (`src/main.rs`). Nothing in Cargo's
-//! normal dependency graph expresses that relationship, so this crate's
-//! staticlib output only exists once this crate has actually been built
-//! explicitly (or as part of a workspace-wide build) -- unlike this
-//! source file, which is of course always there.
+//! normal dependency graph expresses that relationship: Cargo does not
+//! uplift a `staticlib` reached through an ordinary `[dependencies]` edge
+//! to a predictable path, and `cargo test` does not build the `staticlib`
+//! crate type at all. So neither `cargo build --workspace` nor
+//! `cargo test --workspace` can be relied on to leave the archive where
+//! anything looks for it.
 //!
-//! **Practical consequence:** commands scoped to a single other crate --
-//! `cargo test -p pycc_codegen`, `cargo run --bin pycc -- build ...` run in
-//! isolation -- need this crate built first: `cargo build -p pycc_rt`.
-//! `cargo build --workspace` / `cargo test --workspace` (what CI always
-//! runs) builds every workspace member including this one, so the ordering
-//! issue never surfaces there.
+//! **This is now handled automatically.** `pycc_codegen`'s build script
+//! (`crates/pycc_codegen/build.rs`) runs `cargo build --locked -p pycc_rt`
+//! for *both* host profiles into a private directory under its own
+//! `OUT_DIR`, then installs the resulting archive at `<target-root>/debug/`
+//! and `<target-root>/release/` -- the directories
+//! `pycc_artifact_layout::find_pycc_rt_lib_dir_in` searches. Because every
+//! path into the compiler goes through `pycc_codegen`, a clean checkout
+//! builds and tests with no manual step: `cargo build -p pycc_rt` is no
+//! longer a prerequisite for `cargo test -p pycc_codegen` or for
+//! `cargo run --bin pycc -- build ...`. See
+//! `docs/decisions/D-184-build-pycc-rt-from-pycc-codegen-s-build.md`.
 //!
-//! A `build.rs` in the consuming crates that shells out to `cargo build -p
-//! pycc_rt` was tried and reverted: pointed at the same `target-dir` as the
-//! outer build, it deadlocks on Cargo's own build lock (the outer build
-//! holds it for the whole build-script execution; the nested `cargo build`
-//! blocks forever waiting for it). Fixing this for real needs either a
-//! separate target-dir for the nested build or embedding `pycc_rt` into the
-//! `pycc` binary directly instead of linking a sibling staticlib -- both
-//! bigger changes than this sharp edge currently justifies.
+//! The deadlock that made an earlier attempt at this unworkable was real
+//! and is avoided rather than wished away: a build script that invokes
+//! `cargo` at the *same* build directory blocks forever on Cargo's own
+//! build-directory lock, which the outer invocation holds for the whole
+//! build-script execution. The nested build therefore gets its own
+//! `--target-dir` under `OUT_DIR`. This crate declaring no dependencies at
+//! all is what keeps that nested build cheap and keeps it from contending
+//! for `$CARGO_HOME/.package-cache`; `tests/issue_630_pycc_rt_build_dependency.rs`
+//! asserts that property so it cannot be lost silently.
+//!
+//! Cross-compilation is still explicit. When `pycc build --target <triple>`
+//! names a triple this workspace was not itself built for, run
+//! `rustup target add <triple>` and
+//! `cargo build [--release] --target <triple> -p pycc_rt` first; the build
+//! script only produces the host's archives, and the diagnostic says so.
 
 use std::cell::Cell;
 

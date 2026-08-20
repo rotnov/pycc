@@ -105,7 +105,11 @@ directory once project mode exists.
 ## Environment
 
 `pycc build` looks for `pycc_rt`'s static library in the *Cargo target
-directory*, which Cargo — not `pycc` — produces. Resolution precedence,
+directory*, which Cargo — not `pycc` — produces. Building this workspace
+puts it there: `pycc_codegen`'s build script builds `pycc_rt` for both
+host profiles and installs the archives at the resolved location, so a
+clean checkout needs no separate `cargo build -p pycc_rt` step (D-184).
+Resolution precedence,
 keeping Cargo's own relative order for the inputs `pycc` can observe
 (D-183):
 
@@ -150,6 +154,14 @@ Whether either input should be honored at all is tracked as
 Within the resolved directory the layout is Cargo's: `<root>/debug/` or
 `<root>/release/` for a host build, `<root>/<triple>/<profile>/` when
 `--target` is given.
+
+The `no pycc_rt build found ... Run \`cargo build -p pycc_rt\` first.`
+diagnostic is retained verbatim rather than reworded, because the
+situations that still produce it are exactly the ones where running that
+command by hand is the fix: a cross-compilation target the build script
+does not produce (`--target <triple>`, which additionally needs `rustup
+target add <triple>`), and a target directory redirected by an input
+`pycc` cannot observe. It is no longer an ordinary first-build message.
 
 ## `pycc.toml`
 

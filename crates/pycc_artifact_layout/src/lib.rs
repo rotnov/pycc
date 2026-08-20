@@ -11,6 +11,15 @@
 //! `pycc_codegen`'s own link-and-run tests, and by the CLI integration
 //! tests. `tests/target_dir_literals.rs` is the mechanical gate that keeps
 //! it that way.
+//!
+//! This lives in its own workspace member rather than inside
+//! `pycc_codegen` because `pycc_codegen`'s build script needs the same
+//! resolution rules the library uses, and a crate cannot depend on itself.
+//! `pycc_codegen` takes it under both `[dependencies]` and
+//! `[build-dependencies]` and re-exports it as
+//! `pycc_codegen::artifact_layout`, so every pre-existing path through that
+//! module name still resolves. See
+//! `docs/decisions/D-184-build-pycc-rt-from-pycc-codegen-s-build.md`.
 
 /// The directory name Cargo uses when the target directory is not
 /// redirected. Named rather than inlined so that this module -- the single
@@ -194,6 +203,119 @@ pub fn find_pycc_rt_lib_dir_in(
         ))
     }
 }
+
+/// Where a build script should install artifacts, given the target root
+/// [`resolve_cargo_target_root`] produced.
+///
+/// [`AnchoredTargetRoot::root`] is always absolute-or-workspace-anchored,
+/// so a build script can create directories under it without depending on
+/// its own working directory. [`AnchoredTargetRoot::diverged`] reports the
+/// one case the caller must warn about: the resolved root was relative and
+/// anchoring it produced a directory that does not contain `out_dir`,
+/// meaning Cargo itself resolved that same relative value against a
+/// different working directory and the install will land somewhere Cargo
+/// is not reading from.
+pub struct AnchoredTargetRoot {
+    /// The directory to install into.
+    pub root: std::path::PathBuf,
+    /// Whether the anchored root demonstrably disagrees with the directory
+    /// Cargo is actually using for this build.
+    pub diverged: bool,
+}
+
+/// Anchors a resolved Cargo target root for use from a build script.
+///
+/// [`resolve_cargo_target_root`] deliberately passes a relative
+/// `CARGO_TARGET_DIR` through unchanged, because `pycc` is a separate
+/// process from the Cargo invocation and agreeing with Cargo means
+/// resolving against the *invoking* process's working directory. A build
+/// script has no such freedom: Cargo runs it with an unspecified working
+/// directory, so a bare relative root is not usable as written. Anchoring
+/// it on `workspace_root` is the only interpretation available, and it is
+/// correct exactly when Cargo was invoked from the workspace root -- the
+/// overwhelmingly common case, and the one CI uses.
+///
+/// `out_dir` is the build script's own `OUT_DIR`, which Cargo always
+/// places *inside* the target directory it is really using. That makes it
+/// a direct, zero-cost probe of whether the anchoring guess was right:
+/// when the anchored root does not contain `OUT_DIR`, Cargo resolved the
+/// relative value elsewhere and the caller should emit a
+/// `cargo::warning`. No filesystem access and no environment access, so
+/// this stays a pure function the unit tests below drive directly.
+///
+/// An absolute resolved root -- including the `<manifest_dir>/target`
+/// fallback, which is absolute whenever `manifest_dir` is -- is returned
+/// unchanged and never reported as divergent: it names one directory
+/// unambiguously, and a build script whose `OUT_DIR` sits elsewhere under
+/// a redirect is a situation the absolute path already describes
+/// correctly.
+pub fn anchor_target_root_for_build_script(
+    resolved_root: &std::path::Path,
+    workspace_root: &std::path::Path,
+    out_dir: &std::path::Path,
+) -> AnchoredTargetRoot {
+    if resolved_root.is_absolute() {
+        return AnchoredTargetRoot {
+            root: resolved_root.to_path_buf(),
+            diverged: false,
+        };
+    }
+    let root = workspace_root.join(resolved_root);
+    let diverged = !out_dir.starts_with(&root);
+    AnchoredTargetRoot { root, diverged }
+}
+
+/// Whether an environment variable must be removed before a build script
+/// shells out to a *nested* `cargo` invocation.
+///
+/// Cargo exports a large `CARGO_*` namespace describing the build that is
+/// currently running -- package name and version, feature flags, the
+/// encoded rustflags, the target directory, the manifest directory. Left
+/// in place, those describe the *outer* build to the inner one and either
+/// corrupt it or make it silently reuse the outer build's configuration.
+/// The same holds for `RUSTC_WRAPPER`/`RUSTC_WORKSPACE_WRAPPER` (a
+/// coverage or caching wrapper the outer build installed),
+/// `RUSTFLAGS`/`RUSTDOCFLAGS`, and `LLVM_PROFILE_FILE` (the outer
+/// coverage run's profile-output template, which the nested build would
+/// otherwise overwrite).
+///
+/// Two deliberate exceptions:
+///
+/// * `CARGO_HOME` is kept. It names the shared registry and cache, not
+///   anything about the current build; dropping it would send the nested
+///   build to a fresh default home and re-download the index.
+/// * `RUSTC` is kept, because it does not start with `RUSTC_`. That is
+///   intentional and not an oversight of the prefix rule: it names the
+///   compiler binary to use, which the nested build must agree with.
+///
+/// Everything *not* matched here survives, which is the point of a
+/// removal predicate rather than an allowlist: platform toolchain
+/// variables (`SDKROOT` and `DEVELOPER_DIR` on macOS, `INCLUDE`, `LIB`,
+/// and `LIBPATH` in an MSVC environment) are exactly the variables a
+/// nested build cannot function without, and enumerating them correctly
+/// for every Tier-1 platform is not verifiable from this project's single
+/// development host.
+///
+/// A pure function over the variable name so the unit tests below can
+/// drive every arm from string inputs. Driven only from a real process
+/// environment, the `CARGO_HOME` arm would not execute wherever that
+/// variable happens to be unset, leaving a D-014 region gap that depends
+/// on the machine running the tests.
+pub fn should_scrub_for_nested_cargo(name: &str) -> bool {
+    if name == "CARGO_HOME" {
+        return false;
+    }
+    name.starts_with("CARGO_")
+        || name.starts_with("RUSTC_")
+        || name == "RUSTFLAGS"
+        || name == "RUSTDOCFLAGS"
+        || name == "LLVM_PROFILE_FILE"
+}
+
+/// The variable a nested `cargo` invocation sets to announce itself, so a
+/// build script re-entered from inside that nested build can detect the
+/// recursion and do nothing instead of spawning another one.
+pub const NESTED_BUILD_SENTINEL: &str = "PYCC_RT_NESTED_BUILD";
 
 #[cfg(test)]
 mod tests {
@@ -426,6 +548,98 @@ mod tests {
             result,
             Ok(std::path::PathBuf::from("/elsewhere/build").join("debug"))
         );
+    }
+
+    #[test]
+    fn an_absolute_resolved_root_is_anchored_unchanged_and_never_diverges() {
+        let anchored = anchor_target_root_for_build_script(
+            std::path::Path::new("/elsewhere/build"),
+            std::path::Path::new("/workspace"),
+            std::path::Path::new("/somewhere/else/out"),
+        );
+        assert_eq!(anchored.root, std::path::PathBuf::from("/elsewhere/build"));
+        assert!(!anchored.diverged);
+    }
+
+    #[test]
+    fn a_relative_resolved_root_containing_out_dir_is_anchored_without_divergence() {
+        let anchored = anchor_target_root_for_build_script(
+            std::path::Path::new("build-out"),
+            std::path::Path::new("/workspace"),
+            std::path::Path::new("/workspace/build-out/debug/build/pycc_codegen-abc/out"),
+        );
+        assert_eq!(
+            anchored.root,
+            std::path::PathBuf::from("/workspace/build-out")
+        );
+        assert!(!anchored.diverged);
+    }
+
+    #[test]
+    fn a_relative_resolved_root_not_containing_out_dir_is_reported_as_divergent() {
+        // Cargo was invoked from somewhere other than the workspace root,
+        // so it resolved the same relative value against a different
+        // directory: the anchored guess names a place Cargo is not
+        // reading from, and the caller must warn.
+        let anchored = anchor_target_root_for_build_script(
+            std::path::Path::new("build-out"),
+            std::path::Path::new("/workspace"),
+            std::path::Path::new("/elsewhere/build-out/debug/build/pycc_codegen-abc/out"),
+        );
+        assert_eq!(
+            anchored.root,
+            std::path::PathBuf::from("/workspace/build-out")
+        );
+        assert!(anchored.diverged);
+    }
+
+    #[test]
+    fn the_nested_cargo_scrub_removes_the_outer_build_s_own_namespace() {
+        for removed in [
+            "CARGO_MANIFEST_DIR",
+            "CARGO_TARGET_DIR",
+            "CARGO_PKG_NAME",
+            "CARGO_ENCODED_RUSTFLAGS",
+            "RUSTC_WRAPPER",
+            "RUSTC_WORKSPACE_WRAPPER",
+            "RUSTC_BOOTSTRAP",
+            "RUSTFLAGS",
+            "RUSTDOCFLAGS",
+            "LLVM_PROFILE_FILE",
+        ] {
+            assert!(should_scrub_for_nested_cargo(removed), "{removed}");
+        }
+    }
+
+    #[test]
+    fn the_nested_cargo_scrub_keeps_the_shared_cache_the_compiler_and_the_toolchain() {
+        for kept in [
+            "CARGO_HOME",
+            // Bare `CARGO` is the path to the cargo binary itself, which
+            // the build script re-invokes for the nested build. The
+            // prefix rule spells `CARGO_` with the underscore precisely
+            // so this one survives.
+            "CARGO",
+            "RUSTC",
+            "RUSTUP_HOME",
+            "RUSTUP_TOOLCHAIN",
+            "PATH",
+            "SDKROOT",
+            "DEVELOPER_DIR",
+            "INCLUDE",
+            "LIB",
+            "LIBPATH",
+        ] {
+            assert!(!should_scrub_for_nested_cargo(kept), "{kept}");
+        }
+    }
+
+    #[test]
+    fn the_recursion_sentinel_is_outside_the_scrubbed_namespace() {
+        // The sentinel must survive into the nested build's own build
+        // scripts; if it were scrubbed, the recursion guard could never
+        // fire and a four-level nesting would be possible.
+        assert!(!should_scrub_for_nested_cargo(NESTED_BUILD_SENTINEL));
     }
 
     #[test]

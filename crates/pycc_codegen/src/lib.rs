@@ -25,7 +25,7 @@ use bigint_rc::{
 };
 mod int_const;
 use int_const::{emit_int_constant, tag_smallint_const};
-pub mod artifact_layout;
+pub use pycc_artifact_layout as artifact_layout;
 
 const RELEASE_PASS_PIPELINE: &str = "default<O3>";
 type CodegenObserver<'observer> =

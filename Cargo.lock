@@ -796,6 +796,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pycc_artifact_layout"
+version = "0.1.0"
+
+[[package]]
 name = "pycc_ast"
 version = "0.1.0"
 dependencies = [
@@ -808,6 +812,7 @@ name = "pycc_codegen"
 version = "0.1.0"
 dependencies = [
  "inkwell",
+ "pycc_artifact_layout",
  "pycc_mir",
 ]
 

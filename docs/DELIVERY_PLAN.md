@@ -37,7 +37,7 @@ Only macOS is locally verifiable. Linux x64/arm64 and Windows MSVC exist only vi
 
 ## v0.1 crate scope
 
-Not all 11 crates in [ARCHITECTURE.md](./ARCHITECTURE.md) are needed on day one.
+Not every crate in [ARCHITECTURE.md](./ARCHITECTURE.md)'s workspace table is needed on day one. (The count is deliberately not restated here: it was stale, and the table is the single place it can be read off correctly.)
 
 **Built now:** `pycc` (CLI/driver), `pycc_parser`/`pycc_ast` (thin wrapper over vendored `ruff_python_parser`), `pycc_hir`, `pycc_types` (strict public annotations plus monomorphic local/private-helper inference over the v0.1 primitive subset), `pycc_mir`, `pycc_codegen` (LLVM via `inkwell`), `pycc_rt` (minimal runtime), `pycc_diag`.
 
