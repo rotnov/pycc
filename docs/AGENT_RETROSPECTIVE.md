@@ -28,6 +28,36 @@ never a merge gate.
 
 ---
 
+## 2026-08-20 — Treated a plan's enumerated deliverable as satisfied by writing the document it named
+
+**What happened:** The plan for issue #633 required, in its risks section,
+that the newly accepted resource-consumption class be recorded "in the PR
+body, the new ADR's residual list, and `docs/RUNTIME.md`, with freshly
+measured figures." The implementation wrote all three documents and
+described the class qualitatively — trip-count-linear, with the exact source
+shape that produces it — but measured nothing. Round 2 of the pinned local
+review caught it as its only finding; taking the measurements afterwards
+cost a build, two timed runs at two trip counts, and a second pair of runs
+against a deliberately disabled variant to establish the baseline column.
+
+**Root cause:** The deliverable was read as "record it in these three
+places," and three places were written. The qualifying clause — *with
+freshly measured figures* — is the part that turns a claim into evidence,
+and it was silently downgraded to a description because the description felt
+like it already carried the point. Nothing mechanical can catch this: no
+gate in this repository can tell that a documented claim is unmeasured.
+
+**What fixed it:** Commit `950fee7f` — peak resident set size measured with
+`/usr/bin/time -l` at two trip counts, against the same source built with
+the change disabled, recorded as a table in the decision record with a
+pointer sentence in the specification page.
+
+**Lesson:** When a plan enumerates a deliverable, treat each qualifying
+clause in it as its own line item and state where that clause landed before
+entering review — not just where the artefact it names landed. A clause like
+"with measured figures", "with a failing test first", or "citing the run"
+is the deliverable; the document is only its container.
+
 ## 2026-08-20 — Shipped an inkwell-touching test that no local gate could exercise, and crashed the Windows CI job
 
 **What happened:** The codegen-depth IR test added for issue #624 called

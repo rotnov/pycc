@@ -215,7 +215,10 @@ status: accepted
        site: the tuple keeps holding the word, and releasing at ingress would
        free a value `Subscript` can still read back out. Closing it requires
        giving tuple fields a real owner, which is the same work item as the
-       defect below.
+       defect below. **Widened by
+       [D-182](./D-182-retain-a-borrowed-int-word-at-tuple-literal.md):**
+       a *borrowed* element is now retained at ingress too, so this residual
+       covers that shape as well.
     2. The exception-path skip of decision 7. A pending exception raised
        between an operand's evaluation and its release branches away before the
        release, leaking that operand. Enumerated here rather than fixed:
@@ -223,9 +226,14 @@ status: accepted
        refcounting work.
 
     D-180's other six residual accepted leaks are unchanged.
-  - **A known, unfixed memory-safety defect**, tracked as
+  - **A memory-safety defect that was known and unfixed when this decision
+    was accepted**, tracked as
     [#633](https://github.com/rotnov/pycc/issues/633) -- a use-after-free, not a
-    leak, and therefore recorded separately from the residual list above. A
+    leak, and therefore recorded separately from the residual list above.
+    **Since closed by
+    [D-182](./D-182-retain-a-borrowed-int-word-at-tuple-literal.md)**, which
+    gives a tuple field its own ingress reference; the paragraph below is
+    retained as the record of the state at this decision's acceptance. A
     tuple field holds a word it never retained, so overwriting the *supplying
     name* before reading the field frees the object the field still points at:
 
@@ -242,8 +250,9 @@ status: accepted
     overwriting *that* local -- was the same defect from the other side and is
     fixed by decision 5's retain arm. It is pinned by
     `a_bigint_read_out_of_a_tuple_is_not_freed_by_overwriting_the_reader`. The
-    direction above is left broken on purpose and is *not* asserted as a
-    passing test, so nothing in the tree enshrines its wrong output.
+    direction above was left broken on purpose and was *not* asserted as a
+    passing test, so nothing in the tree enshrined its wrong output. D-182
+    subsequently closed it and pins it with three behavioral fixtures.
   - `Compare` and the `int_mul`/`int_floordiv`/`int_floormod`/`int_pow`
     `BinOp`s cannot be exercised with a heap bigint at all: all of them route
     through `require_inline_int`, which aborts on a bigint operand (the

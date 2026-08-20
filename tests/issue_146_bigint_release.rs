@@ -405,8 +405,9 @@ fn list_and_tuple_elements_are_classified_differently_at_a_release_site() {
 /// exactly this shape.
 ///
 /// The mirror direction (overwriting `b` itself before reading `t[0]`) is
-/// still broken and deliberately not asserted here: giving a tuple field a
-/// real owner is out of #625's scope and stays tracked on #633.
+/// D-182's #633 direction B, closed by giving the tuple field its own
+/// ingress reference and pinned by
+/// `a_bigint_stored_in_a_tuple_survives_overwriting_its_supplier` below.
 #[test]
 fn a_bigint_read_out_of_a_tuple_is_not_freed_by_overwriting_the_reader() {
     assert_runs_and_prints(
@@ -416,6 +417,61 @@ fn a_bigint_read_out_of_a_tuple_is_not_freed_by_overwriting_the_reader() {
              c: int = 4611686018427387905\nprint(b)\nprint(c)\n"
         ),
         "4611686018427387904\n4611686018427387905\n",
+    );
+}
+
+/// Issue [#633](https://github.com/rotnov/pycc/issues/633) direction B, the
+/// mirror of the fixture above and the one D-182 closes: the tuple field
+/// held a bigint word it never retained, so overwriting `b` -- the name
+/// that supplied the element -- released the object the field still points
+/// at. The next allocation (`c`) reused it and `print(t[0])` produced `c`'s
+/// value. Verified failing at the base commit before D-182's ingress retain
+/// was added.
+#[test]
+fn a_bigint_stored_in_a_tuple_survives_overwriting_its_supplier() {
+    assert_runs_and_prints(
+        "tuple_ingress_supplier_overwritten",
+        &format!(
+            "b: int = {PROMOTED}\nt = (b, 1)\nb = 0\n\
+             c: int = 4611686018427387905\nprint(t[0])\n"
+        ),
+        "4611686018427387904\n",
+    );
+}
+
+/// The whole-tuple-copy variant of the same direction. `t2 = t` copies the
+/// aggregate field-by-field without going through `MirExpr::TupleLiteral`,
+/// so the copy takes no reference of its own; the fixture pins that this is
+/// still sound, because the *original* tuple's D-182 ingress reference is
+/// never released and therefore keeps the word alive for both.
+#[test]
+fn a_copied_tuple_still_holds_a_live_bigint_after_its_supplier_is_overwritten() {
+    assert_runs_and_prints(
+        "tuple_ingress_whole_copy",
+        &format!(
+            "b: int = {PROMOTED}\nt = (b, 1)\nt2 = t\nb = 0\n\
+             c: int = 4611686018427387905\nprint(t2[0])\n"
+        ),
+        "4611686018427387904\n",
+    );
+}
+
+/// The loop shape, where the supplier is rebound on every trip. At the base
+/// commit this did not merely print a wrong value: it *hung* under
+/// `pycc run`, which is what genuine use-after-free looks like when the
+/// freed object is walked as a bigint. Correctness is all that is asserted
+/// -- deliberately no peak-RSS ratio gate, because D-182 knowingly accepts
+/// a trip-count-linear leak for exactly this shape as the price of closing
+/// the use-after-free.
+#[test]
+fn a_bigint_tuple_rebuilt_in_a_loop_survives_its_supplier_being_rebound() {
+    assert_runs_and_prints(
+        "tuple_ingress_loop_rebind",
+        &format!(
+            "b: int = {PROMOTED}\nt = (0, 1)\nfor i in range(3):\n    b = b + 1\n\
+                 t = (b, 1)\nb = 0\nc: int = 4611686018427387905\nprint(t[0])\n"
+        ),
+        "4611686018427387907\n",
     );
 }
 
