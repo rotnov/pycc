@@ -28,6 +28,43 @@ never a merge gate.
 
 ---
 
+## 2026-08-20 — "The expected message appeared" is not evidence a guard caused the rejection
+
+**What happened:** Issue #197's change added guards to the website validator
+and mutation tests asserting the validator rejects each deliberate mutation.
+Every test passed. The pinned reviewer's round 2 found two of them were
+vacuous: they exited non-zero because an *earlier* mutation block had left a
+shared fixture dirty, not because of the mutation under test. The fix restored
+each fixture at the source of the dirt and was verified per-mutation. Round 3
+found the same class again. Instrumenting every guarded validator invocation
+with a line marker and capturing each one's stderr showed 18 vacuous sites in
+the section, not 2 — the fix had repaired the instances a reviewer happened to
+look at, twice.
+
+**Root cause:** a failure-expecting test whose only assertion is a non-zero
+exit status cannot distinguish "rejected for the reason under test" from
+"rejected for any other reason". Proving causation by deleting one guard and
+re-running is O(n) under a suite that stops at first failure, so it was run
+once over the suite rather than per mutation, and a single green run was read
+as proof for every mutation in it.
+
+**What fixed it:** instrumenting all guarded invocations at once — a marker
+echo per call site plus that call's stderr redirected to a log — then pairing
+each marker with the block's own "validator accepted X" string. Mismatches are
+the vacuous sites, found in one run instead of n. The same instrumentation run
+against the base commit proved the defect predates the branch, which is what
+separated "fix here" from "file and fix separately" (issue #644).
+
+**Lesson:** a test that asserts only an exit status has not established
+causation. Bind the expected diagnostic, or prove the guard is load-bearing by
+removing it and confirming that specific test — not the suite — goes red. When
+several such tests share mutable state, instrument every call site in one run
+rather than bisecting them one at a time, and diff the resulting call-site-to-
+message table against the base commit before deciding whether the defect is
+yours to fix in this change.
+
+---
+
 ## 2026-08-20 — A Unix-shaped "absolute" path literal in a unit test silently tested the opposite branch on Windows
 
 **What happened:** Issue #630's change added
