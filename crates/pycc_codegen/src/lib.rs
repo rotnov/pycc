@@ -9574,10 +9574,21 @@ mod tests {
         calls.into_iter().map(|(_, call)| call).collect()
     }
 
-    /// Compiles `mir`, runs `guarded_bigint_refcount_calls` over the
-    /// emitted module, and additionally asserts LLVM's own verifier accepts
-    /// it -- the verifier is what catches a phi whose incoming block is no
-    /// longer a real predecessor after `emit_bigint_refcount_call` split it.
+    /// Compiles `mir` and runs `guarded_bigint_refcount_calls` over the
+    /// emitted module.
+    ///
+    /// LLVM's own verifier is what catches a phi whose incoming block
+    /// stopped being a real predecessor after `emit_bigint_refcount_call`
+    /// split it -- but this helper deliberately does not call it. Callers do
+    /// not need to: `compile_to_object_with_observer` already runs
+    /// `verify_module` on this exact module *before* it invokes the
+    /// observer, so simply reaching this closure means the module already
+    /// passed. Calling `module.verify()` a second time here would bypass
+    /// `verify_module`'s `#[cfg(windows)]` skip and reintroduce D-029:
+    /// inkwell's `Module::verify` calls `LLVMDisposeMessage` on its
+    /// *success* path too, which faults against the prebuilt LLVM 22.1.1
+    /// the Windows runner uses -- an access violation that kills the whole
+    /// test binary rather than failing one test.
     fn refcount_calls_in(label: &str, mir: &MirModule) -> Vec<RefcountCall> {
         let dir = tempfile_dir(label);
         let obj_path = dir.join(format!("{label}.o"));
@@ -9585,10 +9596,6 @@ mod tests {
         // D-029: never let `print_to_string`'s `LLVMString` drop; route it
         // through `llvm_string_to_owned` exactly as the sibling tests do.
         let mut observer = |module: &inkwell::module::Module<'_>, _| {
-            // D-029 again: `verify`'s error is an `LLVMString` too, so it
-            // must be converted rather than dropped.
-            let verdict = module.verify().map_err(llvm_string_to_owned);
-            assert!(verdict.is_ok(), "LLVM rejected the emitted module: {verdict:?}");
             calls = guarded_bigint_refcount_calls(&llvm_string_to_owned(module.print_to_string()));
         };
         compile_to_object_with_observer(mir, &obj_path, None, false, Some(&mut observer))

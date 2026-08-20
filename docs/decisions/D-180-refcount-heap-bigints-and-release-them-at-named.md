@@ -183,8 +183,11 @@ status: accepted
     codegen depth by `an_int_slot_store_emits_a_guarded_release_of_the_word_it_overwrites`
     and `a_range_loop_over_one_aliased_bound_emits_guarded_retains_and_releases`
     in `crates/pycc_codegen`'s own test module, which read the emitted LLVM
-    IR through `compile_to_object_with_observer` and additionally run LLVM's
-    module verifier. They live in-crate because that observer is private.
+    IR through `compile_to_object_with_observer`, which has already run
+    `verify_module` on that same module before invoking the observer. They
+    live in-crate because that observer is private. They do not call
+    `module.verify()` themselves: that would bypass `verify_module`'s
+    `#[cfg(windows)]` skip and reintroduce D-029.
   - `emit_bigint_refcount_call` splits the current basic block. Any caller
     that records a block for a phi incoming edge must re-read
     `get_insert_block()` *after* the call; `MirStmt::ForRange` and the three

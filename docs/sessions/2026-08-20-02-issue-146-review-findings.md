@@ -37,10 +37,13 @@ Two tests now cover both, one over a `Ty::Int` assignment site and one over a
 call, walk backwards from the call to prove the whole guard chain — call block
 is a `bigint_rc_call*` block, that block is the taken arm of a `br i1` whose
 condition is `and i1` of `icmp eq (and i64 %w, 3), 0` and `icmp ne %w, 0`, and
-`%w` is the call's own argument. They additionally run LLVM's module verifier,
-which is what catches a phi whose incoming block stopped being a real
-predecessor, and assert exact retain/release counts so that dropping any single
-one fails loudly instead of drifting.
+`%w` is the call's own argument. They assert exact retain/release counts so
+that dropping any single one fails loudly instead of drifting. LLVM's module
+verifier -- which is what catches a phi whose incoming block stopped being a
+real predecessor -- covers them without any extra call, because
+`compile_to_object_with_observer` runs `verify_module` on the module before it
+invokes the observer; calling `module.verify()` from the test would bypass that
+wrapper's `#[cfg(windows)]` skip and reintroduce D-029.
 
 **Deviation from the review's suggested location.** The review pointed at
 `tests/slice1_codegen_depth.rs`. That file (and
