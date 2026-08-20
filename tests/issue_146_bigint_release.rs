@@ -84,7 +84,9 @@ fn a_named_bigint_start_bound_survives_the_loop_that_consumes_it() {
     // the loop ends.
     assert_runs_and_prints(
         "named_start_bound",
-        &format!("b: int = {PROMOTED}\nfor i in range(b, 4611686018427387907):\n    print(i)\nprint(b)\n"),
+        &format!(
+            "b: int = {PROMOTED}\nfor i in range(b, 4611686018427387907):\n    print(i)\nprint(b)\n"
+        ),
         "4611686018427387904\n4611686018427387905\n4611686018427387906\n4611686018427387904\n",
     );
 }
@@ -122,7 +124,9 @@ fn a_bigint_loop_variable_reassigned_to_a_smallint_inside_the_body_still_iterate
     // loop must keep advancing from the right value regardless.
     assert_runs_and_prints(
         "reassign_bound_target",
-        &format!("for i in range({PROMOTED}, 4611686018427387907):\n    print(i)\n    i = 5\n    print(i)\n"),
+        &format!(
+            "for i in range({PROMOTED}, 4611686018427387907):\n    print(i)\n    i = 5\n    print(i)\n"
+        ),
         "4611686018427387904\n5\n4611686018427387905\n5\n4611686018427387906\n5\n",
     );
 }
@@ -216,7 +220,9 @@ fn a_bool_assigned_into_a_bigint_valued_int_slot_releases_the_old_word() {
 fn a_list_comprehension_over_a_named_bigint_bound_leaves_the_bound_intact() {
     assert_runs_and_prints(
         "list_comp_named_bound",
-        &format!("b: int = {PROMOTED}\nxs = [0 for i in range(b, 4611686018427387906)]\nprint(len(xs))\nprint(b)\n"),
+        &format!(
+            "b: int = {PROMOTED}\nxs = [0 for i in range(b, 4611686018427387906)]\nprint(len(xs))\nprint(b)\n"
+        ),
         "2\n4611686018427387904\n",
     );
 }
@@ -225,7 +231,9 @@ fn a_list_comprehension_over_a_named_bigint_bound_leaves_the_bound_intact() {
 fn a_set_comprehension_over_a_named_bigint_bound_leaves_the_bound_intact() {
     assert_runs_and_prints(
         "set_comp_named_bound",
-        &format!("b: int = {PROMOTED}\nxs = {{0 for i in range(b, 4611686018427387906)}}\nprint(len(xs))\nprint(b)\n"),
+        &format!(
+            "b: int = {PROMOTED}\nxs = {{0 for i in range(b, 4611686018427387906)}}\nprint(len(xs))\nprint(b)\n"
+        ),
         "1\n4611686018427387904\n",
     );
 }
@@ -234,7 +242,9 @@ fn a_set_comprehension_over_a_named_bigint_bound_leaves_the_bound_intact() {
 fn a_dict_comprehension_over_a_named_bigint_bound_leaves_the_bound_intact() {
     assert_runs_and_prints(
         "dict_comp_named_bound",
-        &format!("b: int = {PROMOTED}\nxs = {{\"k\": 0 for i in range(b, 4611686018427387906)}}\nprint(len(xs))\nprint(b)\n"),
+        &format!(
+            "b: int = {PROMOTED}\nxs = {{\"k\": 0 for i in range(b, 4611686018427387906)}}\nprint(len(xs))\nprint(b)\n"
+        ),
         "1\n4611686018427387904\n",
     );
 }
@@ -249,9 +259,169 @@ fn a_dict_comprehension_over_a_named_bigint_bound_leaves_the_bound_intact() {
 // doubles the peak. A fixed program's peak is flat.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// #146 Part 2 (D-181): unbound arithmetic temporaries.
+//
+// Every shape below evaluates an `int` value that no name ever holds, at a
+// site that consumes the word and discards it. Part 2 releases the birth
+// reference at each of those sites, so each of these would be a
+// use-after-free (wrong value, or a crash) if a release fired on a word that
+// was really borrowed, and a leak -- invisible here, caught by the peak-RSS
+// gates at the bottom of this file -- if one were missing.
+// ---------------------------------------------------------------------------
+
+/// The two `BinOp` operand release sites, in the two shapes that differ in
+/// how the operands are produced: a borrowed name plus a folded immediate,
+/// and a borrowed name aliased on both sides.
+#[test]
+fn nested_bigint_arithmetic_temporaries_produce_the_right_value() {
+    assert_runs_and_prints(
+        "nested_temporaries",
+        &format!(
+            "x: int = {PROMOTED}\ny: int = (x + 1) + 2\nprint(y)\nprint((x + x) + x)\nprint(x)\n"
+        ),
+        "4611686018427387907\n13835058055282163712\n4611686018427387904\n",
+    );
+}
+
+/// A bigint *literal* operand: outside D-061's tagged range, so
+/// `int_const::emit_int_constant` allocates one `BigIntObj` per evaluation
+/// rather than folding an immediate. Evaluated twice so a release that
+/// freed a still-shared object would corrupt the second read.
+#[test]
+fn a_bigint_literal_operand_is_released_without_corrupting_a_later_one() {
+    assert_runs_and_prints(
+        "literal_operand",
+        &format!("print({PROMOTED} + 1)\nprint({PROMOTED} + 2)\n"),
+        "4611686018427387905\n4611686018427387906\n",
+    );
+}
+
+/// `print`'s own argument and an f-string interpolation: both consume the
+/// word through `to_str` and discard it.
+#[test]
+fn a_bigint_temporary_printed_directly_and_interpolated_survives_to_str() {
+    assert_runs_and_prints(
+        "print_and_fstring",
+        &format!("x: int = {PROMOTED}\nprint(x + 1)\nprint(f\"{{x + 1}}\")\nprint(x)\n"),
+        "4611686018427387905\n4611686018427387905\n4611686018427387904\n",
+    );
+}
+
+/// `MirStmt::ExprStmt`: the value is discarded outright.
+#[test]
+fn a_bigint_temporary_in_statement_position_is_discarded_safely() {
+    assert_runs_and_prints(
+        "expr_stmt",
+        &format!("x: int = {PROMOTED}\nx + 1\nx + x\nprint(x)\n"),
+        "4611686018427387904\n",
+    );
+}
+
+/// The `MirStmt::If` condition site. A heap bigint is always truthy, so the
+/// interesting half is that `truthy` still reads the word: the release is
+/// emitted *after* it for exactly that reason.
+#[test]
+fn a_bigint_temporary_used_as_an_if_condition_is_read_before_it_is_released() {
+    assert_runs_and_prints(
+        "if_condition",
+        &format!("x: int = {PROMOTED}\nif x + 1:\n    print(7)\nprint(x)\n"),
+        "7\n4611686018427387904\n",
+    );
+}
+
+/// The `MirStmt::While` condition site, entered once and then falsified.
+/// `x - <bigint literal>` is re-evaluated every trip, so the literal
+/// operand's release has to be correct on both the truthy and the falsey
+/// pass.
+#[test]
+fn a_bigint_temporary_used_as_a_while_condition_is_re_evaluated_safely() {
+    assert_runs_and_prints(
+        "while_condition",
+        &format!(
+            "x: int = 9223372036854775807\nn: int = 0\nwhile x - {PROMOTED}:\n    \
+             n = n + 1\n    x = {PROMOTED}\nprint(n)\nprint(x)\n"
+        ),
+        "1\n4611686018427387904\n",
+    );
+}
+
+/// The three comprehension `if`-filter condition sites.
+#[test]
+fn a_bigint_temporary_used_as_a_comprehension_filter_is_read_before_release() {
+    assert_runs_and_prints(
+        "comprehension_filter",
+        &format!(
+            "x: int = {PROMOTED}\nn: int = 3\nxs = [0 for i in range(n) if x + 1]\n\
+             ss = {{1 for i in range(n) if x + 1}}\nds = {{\"k\": 2 for i in range(n) if x + 1}}\n\
+             print(len(xs))\nprint(len(ss))\nprint(len(ds))\nprint(x)\n"
+        ),
+        "3\n1\n1\n4611686018427387904\n",
+    );
+}
+
+/// Freshly built `range` bounds, in a `for` statement and in all three
+/// comprehension emitters. `pycc_rt_range_continue` re-reads `stop`/`step`
+/// on every trip, so a bound released at the point it is built would be a
+/// use-after-free on iteration two -- the comprehension emitters carry
+/// theirs out to `after_bb` for exactly that reason.
+#[test]
+fn freshly_built_bigint_range_bounds_survive_every_iteration() {
+    assert_runs_and_prints(
+        "fresh_range_bounds",
+        &format!(
+            "x: int = {PROMOTED}\nn: int = 0\nfor i in range(x + 0, x + 3):\n    n = n + 1\n\
+             xs = [0 for i in range(x + 0, x + 3)]\nss = {{1 for i in range(x + 0, x + 3)}}\n\
+             ds = {{\"k\": 2 for i in range(x + 0, x + 3)}}\n\
+             print(n)\nprint(len(xs))\nprint(len(ss))\nprint(len(ds))\nprint(x)\n"
+        ),
+        "3\n3\n1\n1\n4611686018427387904\n",
+    );
+}
+
+/// The two non-tuple `Subscript` shapes at a release site, pinning that a
+/// *list* element is classified owning while a *tuple* element is borrowed.
+/// Both are smallints at runtime (D-141 container ingress rejects bigints),
+/// so the emitted guard is false either way -- this is a compile-time
+/// classification test that must still produce the right values.
+#[test]
+fn list_and_tuple_elements_are_classified_differently_at_a_release_site() {
+    assert_runs_and_prints(
+        "subscript_operands",
+        "xs = [10, 20]\nt = (30, 40)\nprint(xs[0] + 1)\nprint(t[0] + 1)\nprint(xs[1] + t[1])\n",
+        "11\n31\n60\n",
+    );
+}
+
+/// Issue [#633](https://github.com/rotnov/pycc/issues/633) direction A, the
+/// pre-existing use-after-free Part 2 fixes: a tuple field holds a bigint
+/// word it never retained, and reading it into an `int` local made that
+/// local a second owner of a single reference. Overwriting the local then
+/// released the word `b` still held, so the next allocation reused the
+/// freed object and `print(b)` produced `c`'s value.
+///
+/// The more obvious `t = (x + x, 1); y = t[0] + t[0]` shape does *not*
+/// reproduce it -- verified while planning -- so the fixture is pinned in
+/// exactly this shape.
+///
+/// The mirror direction (overwriting `b` itself before reading `t[0]`) is
+/// still broken and deliberately not asserted here: giving a tuple field a
+/// real owner is out of #625's scope and stays tracked on #633.
+#[test]
+fn a_bigint_read_out_of_a_tuple_is_not_freed_by_overwriting_the_reader() {
+    assert_runs_and_prints(
+        "tuple_egress_alias",
+        &format!(
+            "b: int = {PROMOTED}\nt = (b, 1)\ny: int = t[0]\ny = 0\n\
+             c: int = 4611686018427387905\nprint(b)\nprint(c)\n"
+        ),
+        "4611686018427387904\n4611686018427387905\n",
+    );
+}
+
 #[cfg(unix)]
 mod peak_rss {
-    use super::{pycc_bin, write_case, PROMOTED};
+    use super::{PROMOTED, pycc_bin, write_case};
     use std::process::Command;
 
     /// Spawns `command`, waits for it via `wait4`, and returns the child's
@@ -301,10 +471,8 @@ mod peak_rss {
     /// LLVM and would swamp the signal.
     fn built_program_peak_rss(case: &str, source: &str) -> libc::c_long {
         let src = write_case(case, source);
-        let bin = std::env::temp_dir().join(format!(
-            "pycc_issue146_rss_{case}_{}",
-            std::process::id()
-        ));
+        let bin =
+            std::env::temp_dir().join(format!("pycc_issue146_rss_{case}_{}", std::process::id()));
         let build = Command::new(pycc_bin())
             .arg("build")
             .arg(&src)
@@ -320,14 +488,15 @@ mod peak_rss {
     /// freshly allocated `BigIntObj` to the same named local, dropping the
     /// previous one on the floor.
     ///
-    /// Deliberately `x = x + 1` rather than `x = <bigint literal> + i`: a
-    /// bigint *literal* is materialized per evaluation
-    /// (`int_const::emit_int_constant`), so the literal form leaks one extra
-    /// unbound temporary per iteration on top of the named-storage leak this
-    /// test is about. That temporary is a discarded arithmetic value with no
-    /// name, which is Part 2 (#625) and explicitly out of Part 1's scope --
-    /// measuring it here would make this gate unpassable for reasons Part 1
-    /// cannot fix.
+    /// `x = x + 1` rather than `x = <bigint literal> + i`, historically
+    /// because a bigint *literal* is materialized per evaluation
+    /// (`int_const::emit_int_constant`) and the literal form therefore
+    /// leaked one extra unbound temporary per iteration on top of the
+    /// named-storage leak this particular test is about. Part 2 (#625,
+    /// D-181) closed that temporary leak, and
+    /// `a_bigint_literal_operand_does_not_grow_with_the_iteration_count`
+    /// below is the form that measures it. This one is left in its original
+    /// shape so it keeps measuring Part 1's own site family in isolation.
     fn repro(iterations: u32) -> String {
         format!("x: int = {PROMOTED}\nfor i in range({iterations}):\n    x = x + 1\nprint(x)\n")
     }
@@ -365,6 +534,78 @@ mod peak_rss {
                 start + 1_000_000
             ),
         );
+        let ratio = double as f64 / single as f64;
+        assert!(
+            ratio < 1.35,
+            "peak RSS must not scale with the loop trip count: \
+             500k iterations={single} 1M iterations={double} ratio={ratio:.4} \
+             (a per-iteration `BigIntObj` leak reads as ratio ~2.0)"
+        );
+    }
+
+    /// #146 Part 2 (D-181): the nested arithmetic temporary. `(x + 1)` is
+    /// an unbound `int` value whose single consumer is the outer `+`, and
+    /// before Part 2 nothing ever retired its birth reference. Measured at
+    /// the plan's own baseline this form grew with ratio 1.925 against the
+    /// `< 1.35` gate below.
+    fn nested_temporary_repro(iterations: u32) -> String {
+        format!(
+            "x: int = {PROMOTED}\ny: int = 0\nfor i in range({iterations}):\n    \
+             y = (x + 1) + 2\nprint(y)\n"
+        )
+    }
+
+    #[test]
+    fn a_nested_bigint_arithmetic_temporary_does_not_grow_with_the_iteration_count() {
+        let single = built_program_peak_rss("rss_tmp_1x", &nested_temporary_repro(500_000));
+        let double = built_program_peak_rss("rss_tmp_2x", &nested_temporary_repro(1_000_000));
+        let ratio = double as f64 / single as f64;
+        assert!(
+            ratio < 1.35,
+            "peak RSS must not scale with the loop trip count: \
+             500k iterations={single} 1M iterations={double} ratio={ratio:.4} \
+             (a per-iteration `BigIntObj` leak reads as ratio ~2.0)"
+        );
+    }
+
+    /// The same shape with a *named* operand on both sides rather than a
+    /// folded literal, so the leaked temporary is produced by two
+    /// borrowed reads rather than one borrowed read and one immediate.
+    /// Measured at 1.926 before Part 2.
+    fn aliased_temporary_repro(iterations: u32) -> String {
+        format!(
+            "x: int = {PROMOTED}\ny: int = 0\nfor i in range({iterations}):\n    \
+             y = (x + x) + x\nprint(y)\n"
+        )
+    }
+
+    #[test]
+    fn an_aliased_bigint_arithmetic_temporary_does_not_grow_with_the_iteration_count() {
+        let single = built_program_peak_rss("rss_alias_1x", &aliased_temporary_repro(500_000));
+        let double = built_program_peak_rss("rss_alias_2x", &aliased_temporary_repro(1_000_000));
+        let ratio = double as f64 / single as f64;
+        assert!(
+            ratio < 1.35,
+            "peak RSS must not scale with the loop trip count: \
+             500k iterations={single} 1M iterations={double} ratio={ratio:.4} \
+             (a per-iteration `BigIntObj` leak reads as ratio ~2.0)"
+        );
+    }
+
+    /// The third acceptance form, and the only one that exercises the
+    /// bigint *literal* allocation specifically: `{PROMOTED}` is outside
+    /// D-061's tagged smallint range, so `int_const::emit_int_constant`
+    /// cannot fold it to an immediate and emits a per-evaluation
+    /// `pycc_rt_int_from_i64` call instead. Neither form above reaches that
+    /// path -- their `1`/`2` literals are folded immediates.
+    fn literal_operand_repro(iterations: u32) -> String {
+        format!("y: int = 0\nfor i in range({iterations}):\n    y = {PROMOTED} + i\nprint(y)\n")
+    }
+
+    #[test]
+    fn a_bigint_literal_operand_does_not_grow_with_the_iteration_count() {
+        let single = built_program_peak_rss("rss_lit_1x", &literal_operand_repro(500_000));
+        let double = built_program_peak_rss("rss_lit_2x", &literal_operand_repro(1_000_000));
         let ratio = double as f64 / single as f64;
         assert!(
             ratio < 1.35,

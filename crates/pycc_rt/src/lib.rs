@@ -134,6 +134,23 @@ fn int_add(a: i64, b: i64) -> i64 {
     tag_bigint(bigint_add_signed(a_neg, &a_mag, b_neg, &b_mag))
 }
 
+/// # Ownership (no-aliasing invariant, applies to every `pycc_rt_int_*`
+/// function below, [D-181])
+/// No `int` operation may return an operand's own encoded word. Every
+/// bigint result is built through `tag_bigint(..)` on a freshly
+/// constructed `BigIntObj`, so a returned heap word is always a *new*
+/// object owning exactly one reference and never an alias of `a` or `b`.
+///
+/// `pycc_codegen` relies on this: it releases both operands' birth
+/// references immediately after the call (D-181's `BinOp`/`Compare` release
+/// sites). An identity fast path here -- returning `a` unchanged for
+/// `b == 0`, say -- would turn each of those releases into a use-after-free
+/// on the value just produced. Adding one therefore requires changing the
+/// emitter first. `an_int_operation_never_returns_an_operand_s_own_word`
+/// below pins this.
+///
+/// [D-181]: ../../../docs/decisions/D-181-release-a-heap-bigint-s-birth-reference-at-every.md
+///
 /// # Safety (panic-across-FFI note, applies to every `pycc_rt_int_*`
 /// function below)
 /// These are plain `extern "C" fn`s, not `extern "C-unwind"`. Since Rust
@@ -1754,6 +1771,42 @@ mod tests {
             before + 1,
             "the release retiring the last reference must free the object"
         );
+    }
+
+    /// #146 Part 2 (D-181): the no-aliasing invariant `pycc_codegen`'s
+    /// operand releases depend on. No `int` operation may hand back an
+    /// operand's own encoded word -- every bigint result is a freshly
+    /// allocated object. If an identity fast path were ever added (say
+    /// `a + 0 -> a`), the emitter's release of both operands right after
+    /// the call would free the value just returned, and this test is what
+    /// stands between that change and a use-after-free in every compiled
+    /// program.
+    ///
+    /// Only `int_add`/`int_sub` are exercised: `int_mul`, `int_floordiv`,
+    /// `int_floormod`, `int_pow` and `int_cmp` all route through
+    /// `require_inline_int`, which aborts on a bigint operand, so they have
+    /// no bigint result to alias in the first place (`docs/ROADMAP.md`'s
+    /// own bigint capability gap).
+    #[test]
+    fn an_int_operation_never_returns_an_operand_s_own_word() {
+        let big = tag_bigint(bigint_from_i128(1i128 << 62));
+        let zero = int_encoding::tag_smallint(0);
+        for (name, result) in [
+            ("add-zero-right", pycc_rt_int_add(big, zero)),
+            ("add-zero-left", pycc_rt_int_add(zero, big)),
+            ("sub-zero-right", pycc_rt_int_sub(big, zero)),
+            ("add-self", pycc_rt_int_add(big, big)),
+            ("sub-self", pycc_rt_int_sub(big, big)),
+        ] {
+            assert_ne!(
+                result, big,
+                "`{name}` returned the operand's own encoded word; \
+                 pycc_codegen releases both operands after the call, so an \
+                 aliased result is a use-after-free"
+            );
+            bigint_release(result);
+        }
+        bigint_release(big);
     }
 
     /// The word `0` is what an `int` storage slot holds before its first
