@@ -23,7 +23,7 @@
     "human_approval_required": true,
     "blocking_issues": {
       "196": "open",
-      "197": "open"
+      "197": "closed"
     },
     "criteria": [
       "issue_196_release_tag_roadmap_consistency_resolved",
