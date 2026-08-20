@@ -129,7 +129,21 @@ status: accepted
         t = (b, 1)     # one retained object leaked per trip
     ```
 
-    This leak is trip-count-linear. It is accepted knowingly as the price
+    This leak is trip-count-linear, measured rather than derived. Peak
+    resident set size for that exact shape, built with `pycc build` and
+    measured with `/usr/bin/time -l` on the authoring host:
+
+    | trips     | before this decision | after this decision |
+    | --------- | -------------------- | ------------------- |
+    | 500 000   | 1 949 696 B          | 26 116 096 B        |
+    | 1 000 000 | 1 933 312 B          | 50 200 576 B        |
+
+    The "before" column is flat in the trip count -- each iteration's
+    object was freed, which is precisely the use-after-free this decision
+    closes, since the tuple still pointed at it. The "after" column scales
+    at 1.92x for a 2x trip count, which is the linearity claimed above.
+
+    It is accepted knowingly as the price
     of closing a use-after-free, on the standing principle that a bounded
     wrong-memory-usage is preferable to unbounded undefined behavior. It is
     deliberately **not** gated by a peak-RSS ratio assertion in
