@@ -52,6 +52,7 @@ closure to the deployment artifact under `auto` or `allowlist`; `deny` and
 | `pycc_mir` | Typed SSA IR + optimization passes |
 | `pycc_codegen` | LLVM backend via `inkwell`; `--emit llvm-ir\|obj\|mir` |
 | `pycc_rt` | Runtime staticlib (see RUNTIME.md) — pure Rust, `#![no_std]`-friendly core |
+| `pycc_artifact_layout` | Where Cargo-produced artifacts live: target-directory resolution (D-183) and `pycc_rt` archive naming. A dependency-free leaf shared by `pycc_codegen`'s library *and* its build script (D-184), and re-exported as `pycc_codegen::artifact_layout` |
 | `pycc_std` | Compiled stdlib subset (typed Python + Rust intrinsics, see STDLIB_PLAN.md) |
 | `pycc_diag` | Diagnostics engine, error registry (see DIAGNOSTICS.md) |
 | `pycc_testkit` | Conformance/differential test harness (see TESTING.md) |
