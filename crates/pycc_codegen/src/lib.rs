@@ -284,6 +284,13 @@ struct RtFns<'ctx> {
     str_truthy: FunctionValue<'ctx>,
     str_incref: FunctionValue<'ctx>,
     str_decref: FunctionValue<'ctx>,
+    /// #146 Part 1: `str`'s D-060 refcounting pair, generalized to D-141's
+    /// encoded `int` word. Both take the raw `i64` word rather than a
+    /// pointer, and both are only ever called under the inline
+    /// `(word & 3) == 0 && word != 0` guard `emit_bigint_refcount_call`
+    /// wraps them in, so a smallint loop never reaches a runtime call.
+    bigint_retain: FunctionValue<'ctx>,
+    bigint_release: FunctionValue<'ctx>,
     int_to_str: FunctionValue<'ctx>,
     float_to_str: FunctionValue<'ctx>,
     bool_to_str: FunctionValue<'ctx>,
@@ -498,6 +505,14 @@ fn declare_rt_functions<'ctx>(
         str_decref: declare(
             "pycc_rt_str_decref",
             void_type.fn_type(&[ptr_type.into()], false),
+        ),
+        bigint_retain: declare(
+            "pycc_rt_bigint_retain",
+            void_type.fn_type(&[i64_type.into()], false),
+        ),
+        bigint_release: declare(
+            "pycc_rt_bigint_release",
+            void_type.fn_type(&[i64_type.into()], false),
         ),
         int_to_str: declare(
             "pycc_rt_int_to_str",
@@ -3410,6 +3425,7 @@ fn build_call_to_with_leading_args<'ctx>(
         .map(|(a, param_ty)| {
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, a);
             let scalar = incref_if_str_duplicate(builder, rt, a, scalar);
+            let scalar = retain_if_int_duplicate(context, builder, rt, a, scalar);
             let scalar = coerce_scalar_to_type(context, builder, scalar, param_ty.clone());
             match scalar {
                 Scalar::Int(v) => v.into(),
@@ -3652,7 +3668,11 @@ fn erase_unreachable_if_present<'ctx>(builder: &inkwell::builder::Builder<'ctx>)
 
 /// Allocates a local slot in the current function's entry block, which
 /// dominates every branch, loop, and merge that may read it. String slots are
-/// initialized to null so the first emitted decref is a safe no-op. A guarded
+/// initialized to null and `int` slots to the word `0` (#146 Part 1), so the
+/// first emitted decref/release is a safe no-op rather than a read of
+/// uninitialized stack. `0` is deliberately *not* a valid encoded int -- it
+/// is `classify_encoded_int`'s fail-closed pattern -- which is exactly why
+/// `pycc_rt_bigint_release` returns on it before classifying. A guarded
 /// non-parameter slot also receives an `i8` initialized flag, because #118's
 /// static definite-assignment joins have not landed yet and a syntactically
 /// present assignment may not execute at runtime.
@@ -3685,6 +3705,10 @@ fn storage_slot_at_entry<'ctx>(
                     .const_null(),
             )
             .expect("build_store should not fail immediately after this function's own alloca");
+    } else if ty == pycc_mir::Ty::Int {
+        builder
+            .build_store(ptr, context.i64_type().const_zero())
+            .expect("build_store should not fail immediately after this function's own alloca");
     }
     let initialized = if guard_reads {
         let initialized_ptr = builder
@@ -3708,9 +3732,26 @@ fn storage_slot_at_entry<'ctx>(
 /// Reuses the predeclared slot backing `target`. The slot's established type
 /// wins over the current expression type, including the accepted
 /// `bool`-to-`int` assignment that must store a D-141 encoded i64 rather than raw i8.
+///
+/// #146 Part 1: an `Ty::Int` slot releases its previous word here, before
+/// the store, for *every* caller rather than at each call site
+/// individually. `str`'s own release deliberately stays at `MirStmt::
+/// Assign` (`decref_str_slot_before_store`): only a small subset of this
+/// function's callers bind a `str`, whereas thirteen of them bind an `int`
+/// (the four `range`-induction binds, the eight container-element binds,
+/// and ordinary assignment), and a per-site release is exactly the shape
+/// where one missed site ships a silent leak that no value assertion can
+/// observe. Centralizing it here makes "released before every int store" a
+/// property of the function rather than of an audit.
+///
+/// The release is gated on the *slot's* declared type, never on the value's:
+/// `x: int = True` reaches here as a `Scalar::Bool` that
+/// `coerce_scalar_to_type` (below) turns into a D-141 encoded word, and
+/// value-type gating would skip the release for exactly that case.
 fn emit_assign<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
     locals: &mut HashMap<String, StorageSlot<'ctx>>,
     target: &str,
     value: Scalar<'ctx>,
@@ -3719,6 +3760,9 @@ fn emit_assign<'ctx>(
         .get(target)
         .cloned()
         .expect("every assignment target must have a predeclared storage slot");
+    if slot.ty == pycc_mir::Ty::Int {
+        release_int_slot_before_store(context, builder, rt, &slot);
+    }
     let value = coerce_scalar_to_type(context, builder, value, slot.ty);
     let basic_value: inkwell::values::BasicValueEnum = match value {
         Scalar::Int(v) => v.into(),
@@ -3730,13 +3774,8 @@ fn emit_assign<'ctx>(
         // `ty_to_basic_type` already allocated as a pointer. No refcount
         // traffic accompanies it -- D-107 keeps `list[T]` leak-only for
         // v0.2, so unlike `Str` there is deliberately no incref here and
-        // no `decref_str_slot_before_store` counterpart. That helper is
-        // never even called for a list target: `emit_stmt`'s `Assign` arm
-        // gates the call itself on the target's `Ty` (`if ty ==
-        // pycc_mir::Ty::Str`) before ever invoking this function, not the
-        // other way around -- the helper's own internal `slot.ty !=
-        // Ty::Str` check is a defensive `panic!` for the "reached with the
-        // wrong target" case, not a skip a list target relies on.
+        // no `decref_str_slot_before_store` counterpart, and unlike
+        // `Ty::Int` the slot-type guard above skips this arm entirely.
         Scalar::List(v) => v.into(),
         // Pass-through, identical to `List`'s arm directly above: storing
         // a `dict[K, V]` value is storing one opaque pointer into a slot
@@ -3851,6 +3890,147 @@ fn incref_if_str_duplicate<'ctx>(
     }
 }
 
+/// Which of `pycc_rt`'s two bigint refcount entry points
+/// `emit_bigint_refcount_call` should emit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BigIntRefcount {
+    Retain,
+    Release,
+}
+
+/// Emits a guarded `pycc_rt_bigint_retain`/`_release` call on the D-141
+/// encoded int word `word`.
+///
+/// The guard is emitted *inline*, as LLVM IR, rather than left to the
+/// runtime's own no-op arms: the predicate is `(word & 0b11) == 0 && word
+/// != 0`, exactly `classify_encoded_int`'s `BigInt` case, so an ordinary
+/// smallint loop performs one `and`, two `icmp`s and a not-taken branch per
+/// site instead of a call into `pycc_rt`. D-084/D-140's nbody throughput
+/// floor is measured on code that is entirely smallint; routing it through
+/// an unconditional call per assignment would regress that gate, which is
+/// the reason this guard exists at all and must not be simplified away.
+///
+/// Word `0` is excluded by the guard and *also* handled by the runtime:
+/// `storage_slot_at_entry` zero-initializes `int` slots, and `0` is
+/// `classify_encoded_int`'s fail-closed pattern rather than a valid encoded
+/// int, so a release of a never-stored slot must reach neither the
+/// classifier nor a dereference.
+///
+/// Leaves the builder positioned in a fresh continuation block. Callers that
+/// record a basic block for a phi incoming edge must therefore re-read
+/// `get_insert_block()` *after* calling this, never before.
+fn emit_bigint_refcount_call<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    word: IntValue<'ctx>,
+    op: BigIntRefcount,
+) {
+    let i64_type = context.i64_type();
+    let low_tag = builder
+        .build_and(word, i64_type.const_int(0b11, false), "bigint_low_tag")
+        .expect("build_and should not fail for two i64 values");
+    let aligned = builder
+        .build_int_compare(
+            inkwell::IntPredicate::EQ,
+            low_tag,
+            i64_type.const_zero(),
+            "bigint_aligned",
+        )
+        .expect("build_int_compare should not fail for two i64 values");
+    let non_zero = builder
+        .build_int_compare(
+            inkwell::IntPredicate::NE,
+            word,
+            i64_type.const_zero(),
+            "bigint_non_zero",
+        )
+        .expect("build_int_compare should not fail for two i64 values");
+    let is_heap = builder
+        .build_and(aligned, non_zero, "bigint_is_heap")
+        .expect("build_and should not fail for two i1 values");
+    let function = builder
+        .get_insert_block()
+        .expect("builder is always positioned inside some block while emitting")
+        .get_parent()
+        .expect("the block the builder is positioned in always belongs to a function");
+    let call_block = context.append_basic_block(function, "bigint_rc_call");
+    let continue_block = context.append_basic_block(function, "bigint_rc_cont");
+    builder
+        .build_conditional_branch(is_heap, call_block, continue_block)
+        .expect("build_conditional_branch should not fail for a well-formed i1");
+    builder.position_at_end(call_block);
+    let callee = match op {
+        BigIntRefcount::Retain => rt.bigint_retain,
+        BigIntRefcount::Release => rt.bigint_release,
+    };
+    builder
+        .build_call(callee, &[word.into()], "bigint_rc")
+        .expect("build_call should not fail for a well-formed refcount call");
+    builder
+        .build_unconditional_branch(continue_block)
+        .expect("build_unconditional_branch should not fail for a fresh block");
+    builder.position_at_end(continue_block);
+}
+
+/// Loads `slot`'s current encoded word and releases it. `emit_assign` calls
+/// this for every `Ty::Int` slot before storing, which is what makes the
+/// slot's single owned reference an invariant: the slot holds `0` (released
+/// as a no-op) until its first store, and exactly one owned word after it.
+fn release_int_slot_before_store<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    slot: &StorageSlot<'ctx>,
+) {
+    let old = builder
+        .build_load(context.i64_type(), slot.ptr, "old_int")
+        .expect("build_load should not fail for this function's own alloca")
+        .into_int_value();
+    emit_bigint_refcount_call(context, builder, rt, old, BigIntRefcount::Release);
+}
+
+/// `int`'s counterpart to [`incref_if_str_duplicate`], deliberately kept as
+/// a separate function applied at a strictly smaller set of call sites.
+///
+/// `incref_if_str_duplicate` runs at every site that *evaluates* a `str`,
+/// including the two that merely consume the value without taking ownership
+/// (`print`'s argument and `to_str`'s operand). That is harmless for `str`
+/// because those two paths decref again themselves, but an `int` retain
+/// there would be orphaned -- a leak with no matching release. So the
+/// int-side retain is applied only where the value's new home actually
+/// takes ownership: an assignment target, a `return` value, an instance
+/// attribute, and a call argument.
+///
+/// The predicate itself matches `str_value_is_a_duplicate_reference`'s:
+/// a bare `Name` or `AttrGet` read yields a *second* reference to a word
+/// something else already owns, whereas every other int-producing
+/// expression (`IntLiteral`, arithmetic, a call result) freshly constructs
+/// its value already owning exactly one reference.
+fn retain_if_int_duplicate<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    source_expr: &MirExpr,
+    scalar: Scalar<'ctx>,
+) -> Scalar<'ctx> {
+    if let Scalar::Int(word) = scalar
+        && matches!(
+            source_expr,
+            MirExpr::Name {
+                ty: pycc_mir::Ty::Int,
+                ..
+            } | MirExpr::AttrGet {
+                ty: pycc_mir::Ty::Int,
+                ..
+            }
+        )
+    {
+        emit_bigint_refcount_call(context, builder, rt, word, BigIntRefcount::Retain);
+    }
+    scalar
+}
+
 /// Only meaningful for `Ty::Str` targets: loads the target's predeclared
 /// slot and decrefs its current value before the new value overwrites it.
 /// String slots start as null, whose runtime decref is a no-op, so the same
@@ -3930,6 +4110,35 @@ fn decref_str_attr_slot_before_store<'ctx>(
     builder
         .build_call(rt.str_decref, &[old.into()], "str_decref_old_attr")
         .expect("build_call should not fail for a well-formed decref");
+}
+
+/// [`release_int_slot_before_store`]'s counterpart for an instance
+/// attribute slot, and the exact `int` mirror of
+/// [`decref_str_attr_slot_before_store`] directly above: reads the slot's
+/// current raw word through `pycc_rt_instance_get_slot` and releases it
+/// before the new value overwrites it. A freshly allocated instance's slots
+/// are zero-initialized (`pycc_rt::instance::new_instance`), and `0` is the
+/// word `pycc_rt_bigint_release` returns on without classifying, so the
+/// same call is correct for `__init__`'s first assignment and every later
+/// reassignment.
+fn release_int_attr_slot_before_store<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    base_ptr: PointerValue<'ctx>,
+    slot_index: IntValue<'ctx>,
+) {
+    let old = builder
+        .build_call(
+            rt.instance_get_slot,
+            &[base_ptr.into(), slot_index.into()],
+            "instance_get_slot_old_int",
+        )
+        .expect("build_call should not fail for a well-formed attribute read")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_instance_get_slot returns a non-void i64")
+        .into_int_value();
+    emit_bigint_refcount_call(context, builder, rt, old, BigIntRefcount::Release);
 }
 
 /// Emits every statement in `body` in order, stopping early the moment the
@@ -5379,10 +5588,16 @@ fn emit_stmt<'ctx>(
             let ty = value.ty();
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
             let scalar = incref_if_str_duplicate(builder, rt, value, scalar);
+            let scalar = retain_if_int_duplicate(context, builder, rt, value, scalar);
             if ty == pycc_mir::Ty::Str {
                 decref_str_slot_before_store(context, builder, rt, locals, target);
             }
-            emit_assign(context, builder, locals, target, scalar);
+            // #146 Part 1: the matching `int` release is *not* here. It
+            // lives inside `emit_assign`, gated on the target slot's own
+            // declared type rather than on `ty` above -- `x: int = True`
+            // reaches this arm with `ty == Ty::Bool` and would otherwise
+            // skip the release of the bigint the slot still holds.
+            emit_assign(context, builder, rt, locals, target, scalar);
             Ok(())
         }
         MirStmt::NoOp => Ok(()),
@@ -5513,6 +5728,46 @@ fn emit_stmt<'ctx>(
                 emit_expr(context, builder, module, rt, user_functions, locals, step),
                 "step",
             );
+            // #146 Part 1, the `ForRange` ownership contract.
+            //
+            // `range_operand_to_normalized_int` passes a bigint operand
+            // through `pycc_rt_range_normalize_operand` *unchanged*, so
+            // `start_v`/`stop_v`/`step_v` alias whatever the source
+            // expression already owned -- for `for i in range(b, b, b)`,
+            // one single heap object under three names. None of the three
+            // has been retained by `retain_if_int_duplicate`: that helper
+            // is deliberately not applied to `range` operands, and the
+            // three retains below are the loop's own.
+            //
+            // WARNING for a later change: do *not* route `range`'s operands
+            // through `retain_if_int_duplicate` as well. `start_v` would
+            // then be retained twice while still being released once, by
+            // the ordinary `current` machinery -- a permanent leak of every
+            // named `range` bound, invisible to every value assertion.
+            //
+            // `stop_v` and `step_v` are read on every trip through
+            // `for_test` and are released once in `for_after`. `start_v` is
+            // retained here as `current`'s *first owner*, not as a third
+            // independent operand: on the first trip the induction phi's
+            // incoming value *is* `start_v`, so the ordinary per-iteration
+            // `current` release below (or `for_after`'s final one, for an
+            // empty range) is what balances this retain. Adding a third
+            // `for_after` release for `start_v` would free a word the
+            // source name still holds.
+            //
+            // The whole invariant, for `n` executed iterations: `n + 1`
+            // owned `current` values (`start_v` plus one `pycc_rt_int_add`
+            // result per iteration), matched by `n` per-iteration releases
+            // plus one `for_after` release. Separately, each of the `n`
+            // binds of the visible target retains `current`, matched by the
+            // *next* bind's release-before-store inside `emit_assign`, with
+            // the final one matched whenever that slot is next overwritten.
+            emit_bigint_refcount_call(context, builder, rt, start_v, BigIntRefcount::Retain);
+            emit_bigint_refcount_call(context, builder, rt, stop_v, BigIntRefcount::Retain);
+            emit_bigint_refcount_call(context, builder, rt, step_v, BigIntRefcount::Retain);
+            // Re-read *after* the retains above: each one splits the block,
+            // and the phi's incoming edge must name the block that actually
+            // branches into `for_test`.
             let preheader = builder.get_insert_block().unwrap();
 
             let test_bb = context.append_basic_block(function, "for_test");
@@ -5556,7 +5811,13 @@ fn emit_stmt<'ctx>(
             // induction value so an empty range leaves it unbound, the final
             // target remains the last element, and body reassignment cannot
             // corrupt the next iteration.
-            emit_assign(context, builder, locals, var, Scalar::Int(current));
+            // Retain before `emit_assign`, which releases the slot's
+            // previous word: when the slot already holds this very object
+            // (a body that does not reassign the target cannot produce
+            // that, but an aliasing source such as `b` can), releasing
+            // first would free the word this bind is about to store.
+            emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Retain);
+            emit_assign(context, builder, rt, locals, var, Scalar::Int(current));
             emit_body(
                 context,
                 builder,
@@ -5587,6 +5848,13 @@ fn emit_stmt<'ctx>(
                     .try_as_basic_value()
                     .expect_basic("pycc_rt_int_add returns a non-void i64")
                     .into_int_value();
+                // This iteration's `current` is dead once `next` exists.
+                // A `Return` inside `body` skips this release (and both
+                // `for_after` releases below) and leaks -- an accepted,
+                // documented Part 1 concession, not an oversight.
+                emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Release);
+                // Re-read after the release: it splits the block, and the
+                // phi's incoming edge must name the block that branches.
                 let body_end = builder.get_insert_block().unwrap();
                 induction.add_incoming(&[(&next, body_end)]);
                 builder.build_unconditional_branch(test_bb).expect(
@@ -5595,6 +5863,12 @@ fn emit_stmt<'ctx>(
             }
 
             builder.position_at_end(after_bb);
+            // The `current` that failed `range_continue` was never bound to
+            // the visible target and has no per-iteration release; plus the
+            // two operand retains from the preheader.
+            emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Release);
+            emit_bigint_refcount_call(context, builder, rt, stop_v, BigIntRefcount::Release);
+            emit_bigint_refcount_call(context, builder, rt, step_v, BigIntRefcount::Release);
             Ok(())
         }
         // An intentional inline duplicate of `ForRange`'s loop-building
@@ -5682,7 +5956,7 @@ fn emit_stmt<'ctx>(
             // type) and v0.2 has no `pop`/`del` to empty a list afterwards.
             let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
             let element = encoded_element;
-            emit_assign(context, builder, locals, var, Scalar::Int(element));
+            emit_assign(context, builder, rt, locals, var, Scalar::Int(element));
             emit_body(
                 context,
                 builder,
@@ -5748,6 +6022,7 @@ fn emit_stmt<'ctx>(
                     let scalar =
                         emit_expr(context, builder, module, rt, user_functions, locals, expr);
                     let scalar = incref_if_str_duplicate(builder, rt, expr, scalar);
+                    let scalar = retain_if_int_duplicate(context, builder, rt, expr, scalar);
                     let scalar =
                         coerce_scalar_to_type(context, builder, scalar, expected_return_ty.clone());
                     if expected_return_ty == pycc_mir::Ty::None {
@@ -5941,9 +6216,30 @@ fn emit_stmt<'ctx>(
             let value_scalar =
                 emit_expr(context, builder, module, rt, user_functions, locals, value);
             let value_scalar = incref_if_str_duplicate(builder, rt, value, value_scalar);
+            let value_scalar = retain_if_int_duplicate(context, builder, rt, value, value_scalar);
             let slot_index = context.i64_type().const_int(*slot as u64, false);
             if value_ty == pycc_mir::Ty::Str {
                 decref_str_attr_slot_before_store(context, builder, rt, base_ptr, slot_index);
+            }
+            // #146 Part 1, accepted gap: unlike a local's storage slot, an
+            // instance attribute's declared `Ty` is not reachable from
+            // `MirStmt::AttrSet` (it carries only a slot *index*), so this
+            // release is gated on the value's type rather than the slot's.
+            // The one shape that diverges is a `bool` value assigned into
+            // an `int`-declared attribute, which skips the release of a
+            // bigint the attribute still holds -- a leak, never a
+            // use-after-free. That gap is documented in D-180 Consequences
+            // item 6 but deliberately *not* pinned by a test: the shape is
+            // unobservable today because `scalar_to_slot_word` stores a
+            // `Scalar::Bool` as a raw `zext` rather than a D-141 encoded
+            // word, so the attribute reads back as `0` regardless of any
+            // refcounting (a separate, pre-existing D-154 defect, tracked
+            // in D-180 Consequences item 6). A fixture here could only
+            // enshrine that wrong output. Threading the declared type
+            // through from `mir.class_defs` is deliberately left out of
+            // Part 1's scope.
+            if value_ty == pycc_mir::Ty::Int {
+                release_int_attr_slot_before_store(context, builder, rt, base_ptr, slot_index);
             }
             let word = scalar_to_slot_word(context, builder, value_scalar);
             builder
@@ -6057,7 +6353,7 @@ fn emit_stmt<'ctx>(
             // `emit_stmt`'s `Assign` arm -- so, like `ForList`'s own
             // per-iteration bind, this specific write never itself calls
             // `decref_str_slot_before_store`).
-            emit_assign(context, builder, locals, var, Scalar::Str(key_ptr));
+            emit_assign(context, builder, rt, locals, var, Scalar::Str(key_ptr));
             emit_body(
                 context,
                 builder,
@@ -6178,7 +6474,7 @@ fn emit_stmt<'ctx>(
             // describes: a separate storage slot written once per
             // iteration.
             let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
-            emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
+            emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
             emit_body(
                 context,
                 builder,
@@ -6363,6 +6659,25 @@ fn emit_stmt<'ctx>(
                         emit_expr(context, builder, module, rt, user_functions, locals, step),
                         "step",
                     );
+                    // #146 Part 1: same ownership contract as
+                    // `MirStmt::ForRange`'s own arm (see the long comment
+                    // there), minus its `stop_v`/`step_v` retain/release
+                    // pair -- `CompLoopTail::Range` does not carry `stop_v`,
+                    // and it does not need to: not retaining and not
+                    // releasing an operand this loop only ever *reads* is
+                    // already balanced. `start_v` is different: it becomes
+                    // the first `current`, which the per-iteration and
+                    // `after_bb` releases below do retire, so it must be
+                    // retained here. Do not additionally route these
+                    // operands through `retain_if_int_duplicate`.
+                    emit_bigint_refcount_call(
+                        context,
+                        builder,
+                        rt,
+                        start_v,
+                        BigIntRefcount::Retain,
+                    );
+                    // Re-read after the retain: it splits the block.
                     let preheader = builder.get_insert_block().unwrap();
 
                     let test_bb = context.append_basic_block(function, "listcomp_test");
@@ -6403,7 +6718,10 @@ fn emit_stmt<'ctx>(
                         );
 
                     builder.position_at_end(body_bb);
-                    emit_assign(context, builder, locals, var, Scalar::Int(current));
+                    // Retain before `emit_assign`'s release-before-store,
+                    // exactly as in `MirStmt::ForRange`.
+                    emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Retain);
+                    emit_assign(context, builder, rt, locals, var, Scalar::Int(current));
 
                     (
                         test_bb,
@@ -6454,7 +6772,7 @@ fn emit_stmt<'ctx>(
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
-                    emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
+                    emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
 
                     (
                         test_bb,
@@ -6532,7 +6850,7 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_call(rt.str_incref, &[key_ptr.into()], "listcomp_dict_key_incref")
                         .expect("build_call should not fail for a well-formed incref");
-                    emit_assign(context, builder, locals, var, Scalar::Str(key_ptr));
+                    emit_assign(context, builder, rt, locals, var, Scalar::Str(key_ptr));
 
                     (
                         test_bb,
@@ -6579,7 +6897,7 @@ fn emit_stmt<'ctx>(
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
-                    emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
+                    emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
 
                     (
                         test_bb,
@@ -6646,7 +6964,12 @@ fn emit_stmt<'ctx>(
             // 4. Increment and branch back to the loop test -- no
             //    terminator-safety guard needed here (see this arm's own
             //    doc comment above for why).
-            match tail {
+            // `Some(current)` for a `range` source: the final `current`
+            // (the one that failed `range_continue`) was never bound to the
+            // visible target and needs its own release once `after_bb` is
+            // reached. A comprehension has no `return`, so this release is
+            // unconditional -- a terminator guard here would be dead code.
+            let unconsumed_current = match tail {
                 CompLoopTail::Range {
                     induction,
                     current,
@@ -6662,11 +6985,21 @@ fn emit_stmt<'ctx>(
                         .try_as_basic_value()
                         .expect_basic("pycc_rt_int_add returns a non-void i64")
                         .into_int_value();
+                    // This iteration's `current` is dead once `next` exists.
+                    emit_bigint_refcount_call(
+                        context,
+                        builder,
+                        rt,
+                        current,
+                        BigIntRefcount::Release,
+                    );
+                    // Re-read after the release: it splits the block.
                     let body_end = builder.get_insert_block().unwrap();
                     induction.add_incoming(&[(&next, body_end)]);
                     builder.build_unconditional_branch(test_bb).expect(
                         "build_unconditional_branch should not fail on a block with no terminator yet",
                     );
+                    Some(current)
                 }
                 CompLoopTail::Indexed { induction, current } => {
                     let next = builder
@@ -6681,17 +7014,23 @@ fn emit_stmt<'ctx>(
                     builder.build_unconditional_branch(test_bb).expect(
                         "build_unconditional_branch should not fail on a block with no terminator yet",
                     );
+                    // A container index is a raw `i64` counter, never a
+                    // D-141 encoded word, so it owns nothing to release.
+                    None
                 }
-            }
+            };
 
             builder.position_at_end(after_bb);
+            if let Some(current) = unconsumed_current {
+                emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Release);
+            }
             // 5. Only now -- after the loop has fully run to completion,
             //    with every read of `target`'s own name during `source`/
             //    `cond`/`elt` evaluation already having happened against
             //    its pre-existing value -- bind `target` to the now-fully-
             //    built list (see point 1's own comment above for why this
             //    is deferred all the way to here).
-            emit_assign(context, builder, locals, target, Scalar::List(new_list));
+            emit_assign(context, builder, rt, locals, target, Scalar::List(new_list));
             Ok(())
         }
         // `target = {elt for var in <source> [if cond]}` (PR-12 Task 5b,
@@ -6774,6 +7113,25 @@ fn emit_stmt<'ctx>(
                         emit_expr(context, builder, module, rt, user_functions, locals, step),
                         "step",
                     );
+                    // #146 Part 1: same ownership contract as
+                    // `MirStmt::ForRange`'s own arm (see the long comment
+                    // there), minus its `stop_v`/`step_v` retain/release
+                    // pair -- `CompLoopTail::Range` does not carry `stop_v`,
+                    // and it does not need to: not retaining and not
+                    // releasing an operand this loop only ever *reads* is
+                    // already balanced. `start_v` is different: it becomes
+                    // the first `current`, which the per-iteration and
+                    // `after_bb` releases below do retire, so it must be
+                    // retained here. Do not additionally route these
+                    // operands through `retain_if_int_duplicate`.
+                    emit_bigint_refcount_call(
+                        context,
+                        builder,
+                        rt,
+                        start_v,
+                        BigIntRefcount::Retain,
+                    );
+                    // Re-read after the retain: it splits the block.
                     let preheader = builder.get_insert_block().unwrap();
 
                     let test_bb = context.append_basic_block(function, "setcomp_test");
@@ -6814,7 +7172,10 @@ fn emit_stmt<'ctx>(
                         );
 
                     builder.position_at_end(body_bb);
-                    emit_assign(context, builder, locals, var, Scalar::Int(current));
+                    // Retain before `emit_assign`'s release-before-store,
+                    // exactly as in `MirStmt::ForRange`.
+                    emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Retain);
+                    emit_assign(context, builder, rt, locals, var, Scalar::Int(current));
 
                     (
                         test_bb,
@@ -6864,7 +7225,7 @@ fn emit_stmt<'ctx>(
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
-                    emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
+                    emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
 
                     (
                         test_bb,
@@ -6932,7 +7293,7 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_call(rt.str_incref, &[key_ptr.into()], "setcomp_dict_key_incref")
                         .expect("build_call should not fail for a well-formed incref");
-                    emit_assign(context, builder, locals, var, Scalar::Str(key_ptr));
+                    emit_assign(context, builder, rt, locals, var, Scalar::Str(key_ptr));
 
                     (
                         test_bb,
@@ -6978,7 +7339,7 @@ fn emit_stmt<'ctx>(
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
-                    emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
+                    emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
 
                     (
                         test_bb,
@@ -7037,7 +7398,12 @@ fn emit_stmt<'ctx>(
             //    terminator-safety guard, for the identical reason
             //    `ListCompAssign`'s own arm gives (a comprehension's own
             //    "body" is only `cond`/`elt`, never a `Return`).
-            match tail {
+            // `Some(current)` for a `range` source: the final `current`
+            // (the one that failed `range_continue`) was never bound to the
+            // visible target and needs its own release once `after_bb` is
+            // reached. A comprehension has no `return`, so this release is
+            // unconditional -- a terminator guard here would be dead code.
+            let unconsumed_current = match tail {
                 CompLoopTail::Range {
                     induction,
                     current,
@@ -7049,11 +7415,21 @@ fn emit_stmt<'ctx>(
                         .try_as_basic_value()
                         .expect_basic("pycc_rt_int_add returns a non-void i64")
                         .into_int_value();
+                    // This iteration's `current` is dead once `next` exists.
+                    emit_bigint_refcount_call(
+                        context,
+                        builder,
+                        rt,
+                        current,
+                        BigIntRefcount::Release,
+                    );
+                    // Re-read after the release: it splits the block.
                     let body_end = builder.get_insert_block().unwrap();
                     induction.add_incoming(&[(&next, body_end)]);
                     builder.build_unconditional_branch(test_bb).expect(
                         "build_unconditional_branch should not fail on a block with no terminator yet",
                     );
+                    Some(current)
                 }
                 CompLoopTail::Indexed { induction, current } => {
                     let next = builder
@@ -7068,15 +7444,21 @@ fn emit_stmt<'ctx>(
                     builder.build_unconditional_branch(test_bb).expect(
                         "build_unconditional_branch should not fail on a block with no terminator yet",
                     );
+                    // A container index is a raw `i64` counter, never a
+                    // D-141 encoded word, so it owns nothing to release.
+                    None
                 }
-            }
+            };
 
             builder.position_at_end(after_bb);
+            if let Some(current) = unconsumed_current {
+                emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Release);
+            }
             // 5. Only now -- after the loop has fully run to completion --
             //    bind `target` to the now-fully-built set (see
             //    `ListCompAssign`'s own "point 5" comment above for why this
             //    is deferred all the way to here).
-            emit_assign(context, builder, locals, target, Scalar::Set(new_set));
+            emit_assign(context, builder, rt, locals, target, Scalar::Set(new_set));
             Ok(())
         }
         // `target = {key: value for var in <source> [if cond]}` (PR-12 Task
@@ -7153,6 +7535,25 @@ fn emit_stmt<'ctx>(
                         emit_expr(context, builder, module, rt, user_functions, locals, step),
                         "step",
                     );
+                    // #146 Part 1: same ownership contract as
+                    // `MirStmt::ForRange`'s own arm (see the long comment
+                    // there), minus its `stop_v`/`step_v` retain/release
+                    // pair -- `CompLoopTail::Range` does not carry `stop_v`,
+                    // and it does not need to: not retaining and not
+                    // releasing an operand this loop only ever *reads* is
+                    // already balanced. `start_v` is different: it becomes
+                    // the first `current`, which the per-iteration and
+                    // `after_bb` releases below do retire, so it must be
+                    // retained here. Do not additionally route these
+                    // operands through `retain_if_int_duplicate`.
+                    emit_bigint_refcount_call(
+                        context,
+                        builder,
+                        rt,
+                        start_v,
+                        BigIntRefcount::Retain,
+                    );
+                    // Re-read after the retain: it splits the block.
                     let preheader = builder.get_insert_block().unwrap();
 
                     let test_bb = context.append_basic_block(function, "dictcomp_test");
@@ -7193,7 +7594,10 @@ fn emit_stmt<'ctx>(
                         );
 
                     builder.position_at_end(body_bb);
-                    emit_assign(context, builder, locals, var, Scalar::Int(current));
+                    // Retain before `emit_assign`'s release-before-store,
+                    // exactly as in `MirStmt::ForRange`.
+                    emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Retain);
+                    emit_assign(context, builder, rt, locals, var, Scalar::Int(current));
 
                     (
                         test_bb,
@@ -7243,7 +7647,7 @@ fn emit_stmt<'ctx>(
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
-                    emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
+                    emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
 
                     (
                         test_bb,
@@ -7317,7 +7721,7 @@ fn emit_stmt<'ctx>(
                     builder
                         .build_call(rt.str_incref, &[key_ptr.into()], "dictcomp_dict_key_incref")
                         .expect("build_call should not fail for a well-formed incref");
-                    emit_assign(context, builder, locals, var, Scalar::Str(key_ptr));
+                    emit_assign(context, builder, rt, locals, var, Scalar::Str(key_ptr));
 
                     (
                         test_bb,
@@ -7363,7 +7767,7 @@ fn emit_stmt<'ctx>(
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
-                    emit_assign(context, builder, locals, var, Scalar::Int(encoded_element));
+                    emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
 
                     (
                         test_bb,
@@ -7442,7 +7846,12 @@ fn emit_stmt<'ctx>(
             // 4. Increment and branch back to the loop test -- no
             //    terminator-safety guard, for the identical reason
             //    `ListCompAssign`'s own arm gives.
-            match tail {
+            // `Some(current)` for a `range` source: the final `current`
+            // (the one that failed `range_continue`) was never bound to the
+            // visible target and needs its own release once `after_bb` is
+            // reached. A comprehension has no `return`, so this release is
+            // unconditional -- a terminator guard here would be dead code.
+            let unconsumed_current = match tail {
                 CompLoopTail::Range {
                     induction,
                     current,
@@ -7458,11 +7867,21 @@ fn emit_stmt<'ctx>(
                         .try_as_basic_value()
                         .expect_basic("pycc_rt_int_add returns a non-void i64")
                         .into_int_value();
+                    // This iteration's `current` is dead once `next` exists.
+                    emit_bigint_refcount_call(
+                        context,
+                        builder,
+                        rt,
+                        current,
+                        BigIntRefcount::Release,
+                    );
+                    // Re-read after the release: it splits the block.
                     let body_end = builder.get_insert_block().unwrap();
                     induction.add_incoming(&[(&next, body_end)]);
                     builder.build_unconditional_branch(test_bb).expect(
                         "build_unconditional_branch should not fail on a block with no terminator yet",
                     );
+                    Some(current)
                 }
                 CompLoopTail::Indexed { induction, current } => {
                     let next = builder
@@ -7477,15 +7896,21 @@ fn emit_stmt<'ctx>(
                     builder.build_unconditional_branch(test_bb).expect(
                         "build_unconditional_branch should not fail on a block with no terminator yet",
                     );
+                    // A container index is a raw `i64` counter, never a
+                    // D-141 encoded word, so it owns nothing to release.
+                    None
                 }
-            }
+            };
 
             builder.position_at_end(after_bb);
+            if let Some(current) = unconsumed_current {
+                emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Release);
+            }
             // 5. Only now -- after the loop has fully run to completion --
             //    bind `target` to the now-fully-built dict (see
             //    `ListCompAssign`'s own "point 5" comment above for why this
             //    is deferred all the way to here).
-            emit_assign(context, builder, locals, target, Scalar::Dict(new_dict));
+            emit_assign(context, builder, rt, locals, target, Scalar::Dict(new_dict));
             Ok(())
         }
         MirStmt::Seq(stmts) => emit_body(
@@ -8955,6 +9380,86 @@ mod tests {
         }
     }
 
+    // D-029 static guard. Every inkwell API that hands back an `LLVMString`
+    // is a Windows crash waiting to happen: the wrapper's `Drop` calls
+    // `LLVMDisposeMessage`, which faults against the prebuilt LLVM this
+    // project links there. Reaching past this crate's own protections to
+    // the raw inkwell API compiles and passes every local gate, then kills
+    // the whole test binary in CI, because the Windows job is the only
+    // place this class is ever executed. This test is the mechanical
+    // stand-in for that missing local gate.
+    //
+    // D-029 records three distinct protections, and this test covers them
+    // to three different depths -- state that plainly rather than letting
+    // the name imply uniform coverage:
+    //
+    //  1. `llvm_string_to_owned`, which forgets the wrapper instead of
+    //     dropping it. Fully checked: every `print_to_string` call must
+    //     name it on the same line.
+    //  2. `verify_module`, a no-op under `#[cfg(windows)]`. Fully checked:
+    //     exactly one direct `verify` call may exist, the wrapper's own.
+    //  3. `ManuallyDrop` at the point a `TargetTriple` is created, which
+    //     covers every exit path including the early `?`. Only tripwired:
+    //     the wrapping is structural and spans several lines, so a
+    //     line-oriented scan cannot confirm it. What it can do is pin the
+    //     number of triple-producing call sites, so adding one fails here
+    //     and sends the author to this comment.
+    //
+    // `Target::from_triple`'s and `write_to_file`'s `.map_err` sites fall
+    // under (1) and are checked only insofar as they name the wrapper.
+    //
+    // The needles are assembled at run time so this test's own body is not
+    // counted as a violation of itself. Comment lines are excluded, since
+    // the crate discusses all three APIs at length in prose.
+    #[test]
+    fn every_inkwell_llvm_string_call_routes_through_a_d029_wrapper() {
+        // Read the whole crate rather than this one file, so a module added
+        // later is covered without anyone remembering to extend a list.
+        let sources: Vec<String> = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))
+            .expect("the crate's own source directory should be readable")
+            .map(|entry| entry.expect("a readable directory entry").path())
+            .filter(|path| path.extension() == Some(std::ffi::OsStr::new("rs")))
+            .map(|path| std::fs::read_to_string(path).expect("a readable source file"))
+            .collect();
+        let printer = format!(".{}()", "print_to_string");
+        let verifier = format!(".{}()", "verify");
+        let wrapper = format!("llvm_string_to_{}(", "owned");
+        let created = format!("TargetTriple::{}(", "create");
+        let defaulted = format!("TargetMachine::get_default_{}()", "triple");
+        let code_lines = || {
+            sources
+                .iter()
+                .flat_map(|source| source.lines())
+                .filter(|line| !line.trim_start().starts_with("//"))
+        };
+
+        // Deliberately not keyed on the receiver's name: a correctly
+        // wrapped call on some other inkwell value must pass too.
+        assert_eq!(
+            code_lines().filter(|line| line.contains(&printer)).count(),
+            code_lines()
+                .filter(|line| line.contains(&printer) && line.contains(&wrapper))
+                .count(),
+            "every inkwell print_to_string call must be an argument of \
+             llvm_string_to_owned, or its LLVMString drops and faults on Windows (D-029)"
+        );
+        assert_eq!(
+            code_lines().filter(|line| line.contains(&verifier)).count(),
+            1,
+            "the only direct inkwell verify call may be the one inside verify_module, \
+             which is skipped on Windows; everything else must go through that wrapper (D-029)"
+        );
+        assert_eq!(
+            code_lines()
+                .filter(|line| line.contains(&created) || line.contains(&defaulted))
+                .count(),
+            2,
+            "a TargetTriple owns an LLVMString and must be created inside a ManuallyDrop \
+             (D-029); this count is a tripwire, so if you added a call site, wrap it and \
+             raise the number -- if you removed one, lower it"
+        );
+    }
+
     // The in-range arm of `fits_tagged_smallint`: still folded to an
     // immediate, with no runtime call at all.
     #[test]
@@ -8982,6 +9487,289 @@ mod tests {
             !saw_call,
             "an in-range literal needs no runtime materialization"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // #624 (D-180) codegen-depth: the inline bigint-refcount guard.
+    //
+    // The behavioral tests for this feature live in
+    // `tests/issue_146_bigint_release.rs` (real source through the real
+    // CLI, plus two peak-RSS oracles). Those prove the *net effect* -- a
+    // loop's peak RSS stops tracking its trip count -- but they cannot see
+    // the two structural properties the emitter is actually responsible
+    // for, because both are invisible in a program's output and in its RSS:
+    //
+    //   1. Every `pycc_rt_bigint_retain`/`_release` call is reached only
+    //      through `emit_bigint_refcount_call`'s inline `(word & 0b11) == 0
+    //      && word != 0` guard, on the *same* word the call receives. An
+    //      unguarded call is correct-but-slow, so it regresses D-084/D-140's
+    //      nbody throughput floor silently rather than failing a test.
+    //   2. That guard splits the current basic block, so any caller
+    //      recording a block for a phi incoming edge must re-read
+    //      `get_insert_block()` afterwards. A stale phi predecessor is
+    //      malformed IR that LLVM's own verifier rejects.
+    //
+    // These are in-crate rather than in `tests/` on purpose:
+    // `compile_to_object_with_observer`, the only way to reach the emitted
+    // module before it becomes an object file, is private -- so this
+    // follows `an_oversized_int_literal_materializes_a_runtime_bigint`
+    // directly above, which is this repository's actual IR-inspection
+    // convention, rather than `tests/slice1_codegen_depth.rs`'s
+    // hand-built-MIR-through-`compile_to_object` one.
+    // -----------------------------------------------------------------
+
+    /// One `pycc_rt_bigint_retain`/`_release` call recovered from emitted
+    /// LLVM IR: the callee's bare symbol name and the encoded word it is
+    /// actually passed.
+    #[derive(Debug, PartialEq, Eq)]
+    struct RefcountCall {
+        callee: String,
+        word: String,
+    }
+
+    /// Returns every `pycc_rt_bigint_*` refcount call in `ir`, and panics
+    /// unless each one is dominated by exactly the guard
+    /// `emit_bigint_refcount_call` emits, evaluated on the same operand the
+    /// call receives.
+    ///
+    /// The chain proved per call, backwards from the call:
+    /// the call sits in a `bigint_rc_call*` block; that block is the taken
+    /// arm of `br i1 %c, label %bigint_rc_call*, label %bigint_rc_cont*`;
+    /// `%c = and i1 %a, %b`; `%a = icmp eq i64 %t, 0` with `%t = and i64
+    /// %w, 3`; `%b = icmp ne i64 %w, 0`; and the call's own argument is
+    /// that same `%w`.
+    fn guarded_bigint_refcount_calls(ir: &str) -> Vec<RefcountCall> {
+        // Every name `emit_bigint_refcount_call` produces is a fixed
+        // literal, and LLVM disambiguates those only *within* a function --
+        // the first guard of two different functions is `%bigint_is_heap`
+        // in both. So each function body is analyzed on its own maps, and a
+        // call can never be validated against a guard chain read out of
+        // some other function. `split` yields the module header first,
+        // which `skip(1)` drops.
+        ir.split("\ndefine ")
+            .skip(1)
+            .flat_map(guarded_bigint_refcount_calls_in_one_function)
+            .collect()
+    }
+
+    /// `guarded_bigint_refcount_calls` for a single `define` body.
+    fn guarded_bigint_refcount_calls_in_one_function(ir: &str) -> Vec<RefcountCall> {
+        // `%name = <rhs>` for every SSA value in the function.
+        let mut defs: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        // `taken block -> (condition, not-taken block)` for every `br i1`.
+        let mut branches: std::collections::HashMap<&str, (&str, &str)> =
+            std::collections::HashMap::new();
+        // Every refcount call, tagged with the block it was found in.
+        let mut calls: Vec<(String, RefcountCall)> = Vec::new();
+        let mut block = String::new();
+
+        for raw in ir.lines() {
+            let line = raw.trim();
+            // A block label is the only unindented `name:` line inside a
+            // function body; LLVM appends a `; preds = ...` comment to it.
+            // The leftover of the `define` line itself is the only such
+            // line here, and it carries no colon.
+            if !raw.starts_with([' ', '@', '%', '}', '!']) {
+                if let Some((label, _)) = line.split_once(':') {
+                    block = label.to_string();
+                }
+                continue;
+            }
+            if let Some((name, rhs)) = line.split_once(" = ") {
+                defs.insert(name, rhs);
+            }
+            if let Some(rest) = line.strip_prefix("br i1 ") {
+                let parts: Vec<&str> = rest.split(", label ").collect();
+                assert_eq!(
+                    parts.len(),
+                    3,
+                    "a conditional branch always has a condition and two targets"
+                );
+                branches.insert(parts[1], (parts[0], parts[2]));
+            }
+            if let Some(rest) = line.strip_prefix("call void @pycc_rt_bigint_") {
+                let (op, args) = rest
+                    .split_once('(')
+                    .expect("a call instruction always has an argument list");
+                let word = args
+                    .trim_end_matches(')')
+                    .strip_prefix("i64 ")
+                    .expect("both refcount entry points take exactly one i64")
+                    .to_string();
+                calls.push((
+                    block.clone(),
+                    RefcountCall {
+                        callee: format!("pycc_rt_bigint_{op}"),
+                        word,
+                    },
+                ));
+            }
+        }
+
+        // Only `assert*!` and `expect` are used from here on, never a
+        // local `unwrap_or_else(|| panic!(..))` closure: an error closure
+        // that never runs is an uncovered function under D-014's region
+        // gate, whereas `assert!`'s cold arm lives in `core`.
+        for (block, call) in &calls {
+            assert!(
+                block.starts_with("bigint_rc_call"),
+                "{} is emitted in block `{block}`, not a guard's own call block",
+                call.callee
+            );
+            let key: &str = &format!("%{block}");
+            let (cond, cont) = *branches
+                .get(key)
+                .expect("a guard's call block is always the target of its own branch");
+            assert!(
+                cont.starts_with("%bigint_rc_cont"),
+                "`{block}`'s not-taken arm is `{cont}`, not a guard continuation"
+            );
+            let (aligned, non_zero) = defs[cond]
+                .strip_prefix("and i1 ")
+                .and_then(|rest| rest.split_once(", "))
+                .expect("the guard condition is an `and` of its two halves");
+            let low_tag = defs[aligned]
+                .strip_prefix("icmp eq i64 ")
+                .and_then(|rest| rest.strip_suffix(", 0"))
+                .expect("the guard's alignment half compares a masked word against 0");
+            let tagged_word = defs[low_tag]
+                .strip_prefix("and i64 ")
+                .and_then(|rest| rest.strip_suffix(", 3"))
+                .expect("the guard's alignment half masks the word with 0b11");
+            let tested_word = defs[non_zero]
+                .strip_prefix("icmp ne i64 ")
+                .and_then(|rest| rest.strip_suffix(", 0"))
+                .expect("the guard's non-zero half compares the word against 0");
+            assert_eq!(
+                tagged_word, tested_word,
+                "the guard's two halves test different words"
+            );
+            assert_eq!(
+                tagged_word, call.word,
+                "{} is passed a word the guard never tested",
+                call.callee
+            );
+        }
+
+        calls.into_iter().map(|(_, call)| call).collect()
+    }
+
+    /// Compiles `mir` and runs `guarded_bigint_refcount_calls` over the
+    /// emitted module.
+    ///
+    /// LLVM's own verifier is what catches a phi whose incoming block
+    /// stopped being a real predecessor after `emit_bigint_refcount_call`
+    /// split it -- but this helper deliberately does not call it. Callers do
+    /// not need to: `compile_to_object_with_observer` already runs
+    /// `verify_module` on this exact module *before* it invokes the
+    /// observer, so simply reaching this closure means the module already
+    /// passed. Calling `module.verify()` a second time here would bypass
+    /// `verify_module`'s `#[cfg(windows)]` skip and reintroduce D-029:
+    /// inkwell's `Module::verify` calls `LLVMDisposeMessage` on its
+    /// *success* path too, which faults against the prebuilt LLVM 22.1.1
+    /// the Windows runner uses -- an access violation that kills the whole
+    /// test binary rather than failing one test.
+    fn refcount_calls_in(label: &str, mir: &MirModule) -> Vec<RefcountCall> {
+        let dir = tempfile_dir(label);
+        let obj_path = dir.join(format!("{label}.o"));
+        let mut calls = Vec::new();
+        // D-029: never let `print_to_string`'s `LLVMString` drop; route it
+        // through `llvm_string_to_owned` exactly as the sibling tests do.
+        let mut observer = |module: &inkwell::module::Module<'_>, _| {
+            calls = guarded_bigint_refcount_calls(&llvm_string_to_owned(module.print_to_string()));
+        };
+        compile_to_object_with_observer(mir, &obj_path, None, false, Some(&mut observer))
+            .expect("codegen should succeed");
+        calls
+    }
+
+    fn int_name(name: &str) -> MirExpr {
+        MirExpr::Name {
+            name: name.to_string(),
+            ty: Ty::Int,
+        }
+    }
+
+    #[test]
+    fn an_int_slot_store_emits_a_guarded_release_of_the_word_it_overwrites() {
+        // `v = v` is the minimal named-storage shape: `emit_assign` must
+        // release whatever the slot already held *before* storing, and
+        // `retain_if_int_duplicate` must retain the loaded word because the
+        // slot is about to become a second owner of it.
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "reassign".to_string(),
+                params: vec![("v".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![
+                    MirStmt::Assign {
+                        target: "v".to_string(),
+                        value: int_name("v"),
+                    },
+                    MirStmt::Return(Some(int_name("v"))),
+                ],
+            }],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_int_slot_store", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        // Two retains (the assignment's duplicate and the return's), one
+        // release (the store's). Every one of them was proved guarded, on
+        // its own operand, by `guarded_bigint_refcount_calls`.
+        assert_eq!((retains, releases), (2, 1), "got {calls:?}");
+    }
+
+    #[test]
+    fn a_range_loop_over_one_aliased_bound_emits_guarded_retains_and_releases() {
+        // `for i in range(n, n, n)`: one heap object reachable as start,
+        // stop, and step at once -- the shape where an over-eager release
+        // would free a word two other operands still hold. Compiling it at
+        // all also exercises the phi-predecessor invariant, since every
+        // guard here splits a block the loop's induction phi points at.
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "loop_over".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::None,
+                body: vec![MirStmt::ForRange {
+                    var: "i".to_string(),
+                    start: int_name("n"),
+                    stop: int_name("n"),
+                    step: int_name("n"),
+                    body: Vec::new(),
+                }],
+            }],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_range_aliased_bounds", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        // The ownership contract of `MirStmt::ForRange`, stated as a count
+        // so that dropping any single one of them fails here rather than
+        // only as a slow RSS drift. Four retains: start, stop and step in
+        // the preheader (three independent references even though all
+        // three alias one object here), plus the induction word once per
+        // iteration. Five releases: the loop variable's own slot before
+        // each rebind, the induction word once `next` is computed, and
+        // three in the exit block (the surviving induction word, stop, and
+        // step). Start has no release of its own on purpose -- its
+        // preheader retain *is* the induction word's first reference, and
+        // releasing it separately would free a word `stop` and `step` still
+        // hold in exactly the aliased shape this fixture builds.
+        assert_eq!((retains, releases), (4, 5), "got {calls:?}");
     }
 
     // `declare_module_globals` builds a constant initializer with no
@@ -11348,7 +12136,8 @@ mod tests {
         let value = context
             .ptr_type(inkwell::AddressSpace::default())
             .const_null();
-        emit_assign(&context, &builder, &mut locals, "xs", Scalar::List(value));
+        let rt = declare_rt_functions(&context, &module);
+        emit_assign(&context, &builder, &rt, &mut locals, "xs", Scalar::List(value));
         builder
             .build_return(None)
             .expect("build_return should not fail for a void function");

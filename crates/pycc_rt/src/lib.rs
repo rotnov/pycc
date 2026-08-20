@@ -798,6 +798,33 @@ pub unsafe extern "C" fn pycc_rt_str_truthy(s: *mut PyStrObj) -> i8 {
     i8::from(!unsafe { &*s }.bytes().is_empty())
 }
 
+/// #146 Part 1's refcounting for heap bigints: adds one live reference to
+/// the D-141 encoded int word `word`.
+///
+/// A thin `extern "C"` wrapper over `int_encoding::bigint_retain`, split
+/// exactly like `pycc_rt_range_continue`/`range_continue`: an `extern "C"`
+/// function may not unwind, so the classification panic on an invalid word
+/// lives in the private function, which unit tests can call directly.
+///
+/// Word `0` and every inline kind (smallints, the two bool-identity
+/// markers) are no-ops. `pycc_codegen` additionally emits an inline
+/// `(word & 3) == 0 && word != 0` test before every call, so an ordinary
+/// smallint loop never reaches this symbol at all -- that guard is what
+/// keeps D-084/D-140's nbody throughput floor untouched by this change.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_bigint_retain(word: i64) {
+    bigint_retain(word);
+}
+
+/// #146 Part 1's refcounting for heap bigints: drops one live reference
+/// from `word`, freeing the `BigIntObj` when the last one goes away.
+/// Same wrapper split, same no-op cases, and the same inline codegen guard
+/// as `pycc_rt_bigint_retain` above.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_bigint_release(word: i64) {
+    bigint_release(word);
+}
+
 /// D-060's unconditional refcounting for `str`: increments `s`'s refcount by
 /// one. A no-op on a null pointer -- not something Task 7's own codegen
 /// ever actually passes, but a documented, tested part of this function's
@@ -1013,11 +1040,11 @@ pub extern "C" fn pycc_rt_print_none() {
 /// precedent (`rc: Cell<u32>` plus payload) rather than `docs/RUNTIME.md`'s
 /// former stale 16-byte generic-header spec (corrected by this plan's
 /// Task 12) -- `PyStrObj` is this runtime's only other *refcounted* heap
-/// object, and it never had a `type_id`/`flags` field either. (`BigIntObj`,
-/// above, is a third heap-allocated type -- `Box::into_raw`'d by
-/// `tag_bigint` -- but it carries no `rc` field at all: it is a deliberate,
-/// documented leak, not refcounted like `PyStrObj`/`PyIntListObj`, so it is
-/// not a counterexample to this struct's own refcounted-header shape.)
+/// object, and it never had a `type_id`/`flags` field either. (`BigIntObj`
+/// in `int_encoding` is a third heap-allocated type -- `Box::into_raw`'d by
+/// `tag_bigint` -- and since #146 Part 1 it carries the same `rc: Cell<u32>`
+/// header shape, released at the named-storage and loop-induction sites
+/// that change enumerates.)
 ///
 /// No `#[repr(C)]`: exactly like `PyStrObj` (see that struct's own doc
 /// comment), `pycc_codegen` never sees anything but an opaque pointer to
@@ -1700,6 +1727,92 @@ pub extern "C" fn pycc_rt_name_error(name: *const std::os::raw::c_char) -> ! {
 mod tests {
     use super::*;
     use std::cmp::Ordering::{Equal, Greater, Less};
+
+    /// #146 Part 1: a heap bigint round-trips through retain/release and is
+    /// freed exactly once, at the release that retires its last reference.
+    /// `BIGINT_DROPS` is the only way a test can observe the free at all --
+    /// nothing about a freed word is inspectable afterwards.
+    #[test]
+    fn a_bigint_is_freed_only_when_its_last_reference_goes_away() {
+        let before = int_encoding::BIGINT_DROPS.with(|c| c.get());
+        let word = tag_bigint(bigint_from_i128(1i128 << 62));
+        // Birth reference plus two more.
+        bigint_retain(word);
+        bigint_retain(word);
+        bigint_release(word);
+        bigint_release(word);
+        assert_eq!(
+            int_encoding::BIGINT_DROPS.with(|c| c.get()),
+            before,
+            "a bigint with a live reference left must not be freed"
+        );
+        // The value is still intact and readable at this point.
+        assert_eq!(to_sign_and_magnitude(word), (false, vec![0, 0x4000_0000]));
+        bigint_release(word);
+        assert_eq!(
+            int_encoding::BIGINT_DROPS.with(|c| c.get()),
+            before + 1,
+            "the release retiring the last reference must free the object"
+        );
+    }
+
+    /// The word `0` is what an `int` storage slot holds before its first
+    /// store (`storage_slot_at_entry`'s zero-initialization). It is *not* a
+    /// valid encoded int -- `classify_encoded_int` fails closed on it -- so
+    /// both operations must return before classifying rather than panic.
+    #[test]
+    fn the_empty_slot_word_is_a_no_op_for_both_refcount_operations() {
+        let before = int_encoding::BIGINT_DROPS.with(|c| c.get());
+        bigint_retain(0);
+        bigint_release(0);
+        assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before);
+    }
+
+    /// Smallints and the two D-141 bool-identity markers own no allocation,
+    /// so both operations are no-ops on them. `pycc_codegen` guards its call
+    /// sites inline so these never actually reach the runtime, but the
+    /// runtime contract holds independently of that guard.
+    #[test]
+    fn inline_int_kinds_are_no_ops_for_both_refcount_operations() {
+        let before = int_encoding::BIGINT_DROPS.with(|c| c.get());
+        for word in [tag_smallint(0), tag_smallint(-7), 0b0010, 0b0110] {
+            bigint_retain(word);
+            bigint_release(word);
+        }
+        assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before);
+    }
+
+    /// The private functions, not the `extern "C"` wrappers: an `extern "C"`
+    /// function may not unwind, so the fail-closed panic is only observable
+    /// through the private path (the same split as `range_continue` versus
+    /// `pycc_rt_range_continue`).
+    #[test]
+    #[should_panic(expected = "pycc_rt: invalid encoded int word 0x2a")]
+    fn retaining_an_invalid_encoded_word_fails_closed() {
+        bigint_retain(0x2a);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: invalid encoded int word 0x2a")]
+    fn releasing_an_invalid_encoded_word_fails_closed() {
+        bigint_release(0x2a);
+    }
+
+    /// The `extern "C"` wrappers themselves, on the non-panicking paths that
+    /// generated code actually reaches.
+    #[test]
+    fn the_extern_c_bigint_refcount_wrappers_forward_to_the_private_pair() {
+        let before = int_encoding::BIGINT_DROPS.with(|c| c.get());
+        let word = tag_bigint(bigint_from_i128(1i128 << 62));
+        pycc_rt_bigint_retain(word);
+        pycc_rt_bigint_release(word);
+        assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before);
+        pycc_rt_bigint_retain(0);
+        pycc_rt_bigint_release(0);
+        assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before);
+        pycc_rt_bigint_release(word);
+        assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before + 1);
+    }
 
     #[test]
     fn print_i64_matches_cpython_format() {

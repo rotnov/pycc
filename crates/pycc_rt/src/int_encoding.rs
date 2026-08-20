@@ -83,18 +83,55 @@ pub(crate) fn require_inline_int(encoded: i64, context: &str) -> i64 {
 }
 
 /// D-058: hand-rolled sign-magnitude limbs, base 2^32, little-endian,
-/// no trailing zero limbs except a single `[0]` representing zero
-/// itself. Never freed (leaked) -- unlike `PyStrObj`, D-060 only commits
-/// `str` to real refcounting; a bigint is an overflow-only path, and the
-/// concession is a deliberate, narrower "simplest safe default" than
-/// `str`'s, recorded alongside D-061. Since #147 (D-179) a `range` loop
-/// whose induction variable crosses the tagged range keeps iterating
-/// instead of aborting, so each such iteration's `int_add` leaks one
-/// `BigIntObj`; that is now the widest exposure of this concession, and it
-/// is bounded by the loop's own trip count rather than being unbounded.
+/// no trailing zero limbs except a single `[0]` representing zero itself.
+///
+/// Reference-counted since #146 Part 1, which narrows D-058's original
+/// "never freed" concession: `rc` is an ordinary non-atomic `Cell` because
+/// pycc emits single-threaded programs, exactly like `PyStrObj`'s own
+/// D-060/D-074 counter. `tag_bigint` hands out the birth reference at
+/// `rc == 1`; `bigint_retain`/`bigint_release` are the only two operations
+/// that move it, and the object is freed when the last reference goes away.
+///
+/// The counter is *not* a general ownership model: only the site families
+/// #146 Part 1 enumerates (named storage slots and loop-induction
+/// variables) participate. Unbound arithmetic temporaries still leak --
+/// that is Part 2 (#625) -- and the accepted residual concessions are
+/// listed in the ADR that narrows D-058.
 pub(crate) struct BigIntObj {
+    /// Live references. `1` at birth; the object is freed at the release
+    /// that would take it to `0`.
+    pub(crate) rc: std::cell::Cell<u32>,
     pub(crate) negative: bool,
     pub(crate) limbs: Vec<u32>,
+}
+
+impl BigIntObj {
+    /// The only constructor: every `BigIntObj` starts at one live
+    /// reference, held by whoever receives `tag_bigint`'s word.
+    pub(crate) fn new(negative: bool, limbs: Vec<u32>) -> Self {
+        BigIntObj {
+            rc: std::cell::Cell::new(1),
+            negative,
+            limbs,
+        }
+    }
+}
+
+// Counts `BigIntObj` frees so unit tests can observe a release actually
+// running the destructor. Nothing outside `#[cfg(test)]` can see a free
+// otherwise -- the freed word is simply gone. A line comment rather than a
+// doc comment: rustdoc does not document items produced by a macro
+// invocation, and `-D warnings` rejects the unused doc comment.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BIGINT_DROPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+impl Drop for BigIntObj {
+    fn drop(&mut self) {
+        BIGINT_DROPS.with(|c| c.set(c.get() + 1));
+    }
 }
 
 const _: () = assert!(std::mem::align_of::<BigIntObj>() >= 4);
@@ -163,24 +200,14 @@ pub(crate) fn bigint_add_signed(
     b_mag: &[u32],
 ) -> BigIntObj {
     if a_neg == b_neg {
-        BigIntObj {
-            negative: a_neg,
-            limbs: trim(&magnitude_add(a_mag, b_mag)),
-        }
+        BigIntObj::new(a_neg, trim(&magnitude_add(a_mag, b_mag)))
     } else {
         match magnitude_cmp(a_mag, b_mag) {
-            std::cmp::Ordering::Equal => BigIntObj {
-                negative: false,
-                limbs: vec![0],
-            },
-            std::cmp::Ordering::Greater => BigIntObj {
-                negative: a_neg,
-                limbs: trim(&magnitude_sub(a_mag, b_mag)),
-            },
-            std::cmp::Ordering::Less => BigIntObj {
-                negative: b_neg,
-                limbs: trim(&magnitude_sub(b_mag, a_mag)),
-            },
+            std::cmp::Ordering::Equal => BigIntObj::new(false, vec![0]),
+            std::cmp::Ordering::Greater => {
+                BigIntObj::new(a_neg, trim(&magnitude_sub(a_mag, b_mag)))
+            }
+            std::cmp::Ordering::Less => BigIntObj::new(b_neg, trim(&magnitude_sub(b_mag, a_mag))),
         }
     }
 }
@@ -196,11 +223,59 @@ pub(crate) fn bigint_from_i128(v: i128) -> BigIntObj {
     if limbs.is_empty() {
         limbs.push(0);
     }
-    BigIntObj { negative, limbs }
+    BigIntObj::new(negative, limbs)
 }
 
+/// Moves `b` to the heap and hands back its encoded word carrying the
+/// single birth reference (`rc == 1`). Whoever receives the word owns that
+/// reference and is responsible for the matching `bigint_release`.
 pub(crate) fn tag_bigint(b: BigIntObj) -> i64 {
     Box::into_raw(Box::new(b)) as i64
+}
+
+/// Adds one live reference to `word` when it names a heap bigint.
+///
+/// `word == 0` returns immediately *before* classification: `0` is not a
+/// valid encoded int (it is `classify_encoded_int`'s fail-closed case), but
+/// it is exactly what an `int` storage slot holds between
+/// `storage_slot_at_entry`'s zero-initialization and the slot's first
+/// store. Generated code releases a slot's previous value before every
+/// store, so the very first store on any path necessarily passes `0` here.
+/// Smallints and the two bool-identity markers are no-ops; `pycc_codegen`
+/// additionally guards the call site inline so those never reach this
+/// function at all (see the `(w & 3) == 0 && w != 0` test it emits).
+pub(crate) fn bigint_retain(word: i64) {
+    if word == 0 {
+        return;
+    }
+    if classify_encoded_int(word) == EncodedIntKind::BigInt {
+        // SAFETY: `classify_encoded_int` just proved `word` is a live
+        // `BigIntObj` pointer, and pycc programs are single-threaded, so no
+        // other reference can be mutating `rc` concurrently.
+        let obj = unsafe { &*(word as *const BigIntObj) };
+        obj.rc.set(obj.rc.get() + 1);
+    }
+}
+
+/// Drops one live reference from `word`, freeing the object when the last
+/// one goes away. `word == 0` and the inline kinds behave exactly as in
+/// `bigint_retain`.
+pub(crate) fn bigint_release(word: i64) {
+    if word == 0 {
+        return;
+    }
+    if classify_encoded_int(word) == EncodedIntKind::BigInt {
+        // SAFETY: as in `bigint_retain`. The `Box::from_raw` reclaims the
+        // very allocation `tag_bigint` leaked, and only on the release that
+        // retires the final reference, so no other name can still hold it.
+        let obj = unsafe { &*(word as *const BigIntObj) };
+        let live = obj.rc.get();
+        if live == 1 {
+            drop(unsafe { Box::from_raw(word as *mut BigIntObj) });
+        } else {
+            obj.rc.set(live - 1);
+        }
+    }
 }
 
 /// # Safety
@@ -231,7 +306,7 @@ pub(crate) fn to_sign_and_magnitude(tagged: i64) -> (bool, Vec<u32>) {
 ///
 /// **Zero is decided by the magnitude, never by the `negative` flag.**
 /// `bigint_add_signed` normalizes an equal-magnitude, opposite-sign result
-/// to `BigIntObj { negative: false, limbs: vec![0] }`, so `!negative` does
+/// to `BigIntObj::new(false, vec![0])`, so `!negative` does
 /// *not* imply "positive" -- exactly the trap `pycc_rt_int_truthy` already
 /// documents for its own magnitude inspection.
 pub(crate) fn magnitude_sign(negative: bool, magnitude: &[u32]) -> i8 {

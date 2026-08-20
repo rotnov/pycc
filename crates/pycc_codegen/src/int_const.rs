@@ -21,8 +21,15 @@ pub(super) fn fits_tagged_smallint(n: i64) -> Option<i64> {
 ///
 /// Materialized per evaluation rather than cached in a module global,
 /// mirroring `emit_string_literal`: a bigint literal evaluated in a loop
-/// therefore allocates one `BigIntObj` per iteration, which is the leak
-/// D-058 already accepts for every arithmetic promotion, not a new class.
+/// therefore allocates one `BigIntObj` per iteration.
+///
+/// That allocation is still leaked. #146 Part 1 (D-180) narrowed D-058's
+/// blanket "never freed" concession to a listed residual set, and an
+/// *unbound temporary* -- which is exactly what this value is until
+/// something binds it to a name -- is one of the entries on that list. It
+/// is Part 2's ([#625](https://github.com/rotnov/pycc/issues/625)) subject,
+/// not a new class introduced here: a literal in a loop leaks for the same
+/// reason `a + b` discarded mid-expression does.
 pub(super) fn emit_int_constant<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
