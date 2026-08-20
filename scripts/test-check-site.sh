@@ -3171,6 +3171,11 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   exit 1
 fi
 
+# Restore immediately: this mutation strips every occurrence of
+# tests/quick_start.rs from the page, and a later block that leaves it in
+# place would fail on this residual dirt rather than on its own mutation.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
 # Mutation: rename the README diagnostic anchor's declared fixture.
 cp "$repo_root/README.md" "$fixture_root/README.md"
 python3 - "$fixture_root/README.md" <<'PY'
@@ -3237,6 +3242,11 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   exit 1
 fi
 
+# Restore immediately: a later block that mutates something other than the
+# README would otherwise inherit this diverging diagnostic body and fail on
+# it instead of on the property it means to test.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+
 # Mutation: drift the generated diagnostic fixture's own span, proving the
 # published README block is bound to the fixture and not merely self-consistent.
 cp "$repo_root/tests/diagnostics/quick_start_type_error.expected.txt" \
@@ -3276,6 +3286,26 @@ PY
 if QUICK_START_DIAGNOSTIC_SOURCE_PATH="$fixture_root/quick_start_type_error.py" \
   SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator accepted a diagnostic source that is not the quick-start fixture plus one line (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: change an early line of the diagnostic source's body rather than
+# appending one. The line count still matches, so only the full-string
+# equality against the canonical fixture can catch it.
+cp "$repo_root/tests/diagnostics/quick_start_type_error.py" \
+  "$fixture_root/quick_start_type_error.py"
+python3 - "$fixture_root/quick_start_type_error.py" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+line = "    if n < 2:"
+assert line in content
+path.write_text(content.replace(line, "    if n < 3:", 1))
+PY
+if QUICK_START_DIAGNOSTIC_SOURCE_PATH="$fixture_root/quick_start_type_error.py" \
+  SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a diagnostic source whose body diverges from the quick-start fixture (issue #197)" >&2
   exit 1
 fi
 
