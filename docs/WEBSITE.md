@@ -360,16 +360,60 @@ evidence-page link set grows.
 The landing-page and README quick-start example is a tested, executable v0.1 example, not a design mock. Its source is bound to a single canonical fixture
 (`tests/fixtures/quick_start.py`) and a CLI regression test
 (`tests/quick_start.rs`) that builds and runs it through the real
-`pycc build` → native binary path and asserts exact stdout
-(`0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n55\n`). `scripts/check-site.sh` binds the
-README `cat hello.py` source, the site hero `<pre><code>` source, the
-copy-button command, and the documented output to that fixture and to each
-other, with mutation tests in `scripts/test-check-site.sh`. A deliberate
-coordinated change that updates the fixture, the Rust expected stdout, and the
-README output consistently is the intended update path; the binding prevents
-inconsistent drift, not deliberate coordinated updates. Other examples and CLI
-commands shown on the website are design targets unless explicitly identified
-as implemented behavior.
+`pycc build` → native binary path. That test no longer carries its own copy of
+the expected stdout: the documented output lives in
+`tests/fixtures/quick_start.expected.txt`, the single source of truth the test,
+the README `$ ./hello` block, and the site hero output pane are all compared
+against byte-for-byte (#197). `scripts/check-site.sh` binds the README
+`cat hello.py` source, the site hero `<pre><code>` source, the copy-button
+command, the site hero `.output-window` pane, and the README output to those
+fixtures and to each other, with mutation tests in
+`scripts/test-check-site.sh`. A deliberate coordinated change that updates the
+fixtures, the README, and the site consistently is the intended update path;
+the binding prevents inconsistent drift, not deliberate coordinated updates.
+Other examples and CLI commands shown on the website are design targets unless
+explicitly identified as implemented behavior.
+
+### The published diagnostic example
+
+The hero previously carried a `.diagnostic-card` showing a `T0021` error with a
+precise multi-character span and a `help:` suggestion line. No pycc version has
+ever emitted that output: `render_human` emits no `help:` line at all, and
+every `T0xxx` span is still the `Span::new(0, 0)` placeholder, so the real
+diagnostic points at line 1, column 1 with a one-character caret whose label
+repeats the full message (D-083; D-043 owns the deferred span and help work).
+The card is deleted, and `scripts/check-site.sh` fails if either
+`diagnostic-card` or a published `help:` line reappears in `site/index.html`.
+
+The honest replacement lives in `README.md`, generated from
+`tests/diagnostics/quick_start_type_error.expected.txt` — the quick-start
+program plus a call that passes a `str` to its `int` parameter, whose expected
+output `tests/diagnostics_test.rs` checks against the real binary on every
+test run — verifying the checked-in fixture, never rewriting it, so a renderer
+change surfaces as a failing test and the fixture is updated by hand.
+`scripts/check-site.sh` extracts the README block through an explicit
+`<!-- #197: generated from ... -->` anchor and requires it to equal that
+fixture with only the source path substituted for `hello.py`, so a renderer
+change that would falsify the published example fails the gate rather than
+silently shipping.
+
+The hero output pane and the fixture it is compared against differ by exactly
+one byte: the fixture is a POSIX text file ending in a single newline, while
+the pane's text ends on its last output line because `</code></pre>` closes
+there. `check-site.sh` strips exactly that one trailing newline from each
+fixture before comparing, rather than collapsing whitespace, so trailing-space
+or blank-line drift on either side still fails. For the same reason the pane's
+markup must open as `<pre><code>0` with no newline after `<code>`: HTML
+preserves it, and it would become a leading blank line the fixture does not
+have.
+
+Full HTML/Markdown parity for the new output pane and provenance note is
+[#206](https://github.com/rotnov/pycc/issues/206)'s scope; the generated
+evidence-hero contract that owns the `all-Tier-1` / `partial` / `experimental`
+/ `unavailable` / `superseded` evidence-state vocabulary reused by the hero
+marker is [#564](https://github.com/rotnov/pycc/issues/564)'s, and a dedicated
+Diagnostics evidence page is
+[#565](https://github.com/rotnov/pycc/issues/565)'s.
 
 ## Status-page freshness enforcement
 

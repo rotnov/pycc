@@ -55,7 +55,7 @@
             "name": "pycc — AOT compiler for typed Python to native binaries",
             "description": "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM; AI-created and human-managed.",
             "inLanguage": "en",
-            "dateModified": "2026-08-14",
+            "dateModified": "2026-08-20",
             "mainEntity": {
               "@id": "https://rotnov.github.io/pycc/#project"
             }
@@ -138,12 +138,12 @@
             </a>
           </div>
           <div class="command">
-            <code><span>$</span> pycc check hello.py</code>
-            <button class="copy-button" type="button" data-copy="pycc check hello.py">
+            <code><span>$</span> pycc build hello.py -o hello</code>
+            <button class="copy-button" type="button" data-copy="pycc build hello.py -o hello">
               Copy
             </button>
           </div>
-          <p class="command-note">Type-check typed Python · pre-alpha</p>
+          <p class="command-note">Compile typed Python to a native binary · pre-alpha</p>
         </div>
 
         <div class="hero-code">
@@ -153,7 +153,7 @@
                 <span></span><span></span><span></span>
               </div>
               <span>hello.py</span>
-              <span class="window-state">PY 3.14</span>
+              <span class="window-state">Python 3.14 subset</span>
             </div>
             <pre><code><span class="code-keyword">def</span> <span class="code-function">fib</span>(n: <span class="code-type">int</span>) -&gt; <span class="code-type">int</span>:
     <span class="code-keyword">if</span> n &lt; <span class="code-number">2</span>:
@@ -165,19 +165,35 @@ i = <span class="code-number">0</span>
     print(fib(i))
     i = i + <span class="code-number">1</span></code></pre>
           </div>
-          <div class="diagnostic-card">
-            <div class="diagnostic-title">
-              <span class="diagnostic-icon" aria-hidden="true">!</span>
-              <strong>error[T0021]</strong>
-              <span>compile-time</span>
+          <div class="output-window">
+            <div class="window-bar">
+              <div class="window-dots" aria-hidden="true">
+                <span></span><span></span><span></span>
+              </div>
+              <span>$ ./hello</span>
+              <span class="evidence-state" data-evidence-state="all-Tier-1">all-Tier-1</span>
             </div>
-            <p>argument 1 of <code>fib</code> expects <code>int</code>, got <code>str</code></p>
-            <div class="diagnostic-line">
-              <span>8</span>
-              <code>print(fib(<mark>"5"</mark>))</code>
-            </div>
-            <p class="diagnostic-help">help: did you mean <code>int("5")</code>?</p>
+            <pre><code>0
+1
+1
+2
+3
+5
+8
+13
+21
+34
+55</code></pre>
           </div>
+          <p class="hero-provenance">
+            Source: <a href="https://github.com/rotnov/pycc/blob/main/tests/fixtures/quick_start.py"><code>tests/fixtures/quick_start.py</code></a>.
+            Output verified on every test run by
+            <a href="https://github.com/rotnov/pycc/blob/main/tests/quick_start.rs"><code>tests/quick_start.rs</code></a>.
+            Limitations: this compiles only the implemented v0.1 subset —
+            statement-form <code>if</code> and <code>while</code>, recursive
+            calls, and <code>print</code>; classes, exceptions, generators, and
+            imports are not compiled yet.
+          </p>
         </div>
       </section>
 

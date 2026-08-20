@@ -7,6 +7,9 @@ indexnow_key='3361fe03d0f44ab7cdbb1a3ce1461821'
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 readme_path=${README_PATH:-"$repo_root/README.md"}
 quick_start_fixture=${QUICK_START_FIXTURE_PATH:-"$repo_root/tests/fixtures/quick_start.py"}
+quick_start_expected=${QUICK_START_EXPECTED_PATH:-"$repo_root/tests/fixtures/quick_start.expected.txt"}
+quick_start_diagnostic=${QUICK_START_DIAGNOSTIC_PATH:-"$repo_root/tests/diagnostics/quick_start_type_error.expected.txt"}
+quick_start_diagnostic_source=${QUICK_START_DIAGNOSTIC_SOURCE_PATH:-"$repo_root/tests/diagnostics/quick_start_type_error.py"}
 website_md_path=${WEBSITE_MD_PATH:-"$repo_root/docs/WEBSITE.md"}
 
 for required_file in \
@@ -503,7 +506,7 @@ if web_page.get("name") != title:
     raise SystemExit("WebPage JSON-LD name must match the page title")
 if web_page.get("description") != metadata["description"][0]["content"]:
     raise SystemExit("WebPage JSON-LD description must match the meta description")
-if web_page.get("dateModified") != "2026-08-14":
+if web_page.get("dateModified") != "2026-08-20":
     raise SystemExit("Landing WebPage dateModified is stale")
 if web_page.get("mainEntity") != {"@id": project_id}:
     raise SystemExit("WebPage JSON-LD must identify the pycc project as its main entity")
@@ -2191,15 +2194,14 @@ python3 - \
   "$index" \
   "$readme_path" \
   "$quick_start_fixture" \
-  "$website_md_path" <<'PY'
+  "$website_md_path" \
+  "$quick_start_expected" \
+  "$quick_start_diagnostic" \
+  "$quick_start_diagnostic_source" <<'PY'
 from html.parser import HTMLParser
 from pathlib import Path
 import re
 import sys
-
-
-def normalize_ws(text):
-    return " ".join(text.split())
 
 
 def normalize_source(text):
@@ -2207,7 +2209,7 @@ def normalize_source(text):
 
     Preserves leading indentation (semantically significant in Python) while
     normalizing line endings, stripping trailing whitespace, and collapsing
-    blank lines. This is stricter than normalize_ws for source-code comparison.
+    blank lines. This is stricter than whitespace collapsing.
     """
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     stripped = [line.rstrip() for line in lines]
@@ -2224,14 +2226,61 @@ def normalize_source(text):
     return "\n".join(result)
 
 
+def read_fixture(path):
+    """Read a fixture and drop its single trailing newline.
+
+    Every fixture compared here is a POSIX text file ending in exactly one
+    `\n`; the published copies (a README fence body, an HTML `<pre><code>`
+    pane) have no such terminator because the fence/tag closes on the last
+    content line. Stripping exactly one trailing newline -- rather than
+    `.strip()`-ing or collapsing whitespace -- keeps the comparison
+    byte-exact in both directions: a fixture that gains a blank final line,
+    or a published copy that gains or loses trailing whitespace, still fails.
+    Windows checkouts under the default `core.autocrlf` also carry `\r\n`,
+    so line endings are normalized first (there is no `.gitattributes` to
+    pin them, and workflow-policy.yml rejects adding one).
+    """
+    text = path.read_text().replace("\r\n", "\n")
+    if text.endswith("\n"):
+        text = text[:-1]
+    return text
+
+
+# The evidence-state vocabulary is shared with the generated evidence-hero
+# contract (#564). A marker outside this set is drift, not a new state.
+EVIDENCE_STATES = {
+    "all-Tier-1",
+    "partial",
+    "experimental",
+    "unavailable",
+    "superseded",
+}
+
+DIAGNOSTIC_FIXTURE_REL = "tests/diagnostics/quick_start_type_error.expected.txt"
+DIAGNOSTIC_SOURCE_REL = "tests/diagnostics/quick_start_type_error.py"
+HERO_COMMAND = "pycc build hello.py -o hello"
+
+
 class HeroCodeParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.in_hero_code = False
         self.hero_div_depth = 0
+        # The hero carries two independent `<pre><code>` panes: the program
+        # source in `.code-window` and that program's stdout in
+        # `.output-window`. They are accumulated into separate buffers and
+        # each is compared against its own fixture. A parser that lumped
+        # every `<pre><code>` inside `.hero-code` into one buffer would
+        # concatenate source and output, so neither could be compared -- the
+        # gate would still pass while checking nothing.
+        self.in_code_window = False
+        self.code_window_depth = 0
+        self.in_output_window = False
+        self.output_window_depth = 0
         self.in_pre = False
         self.in_pre_code = False
         self.hero_code_text = []
+        self.hero_output_text = []
         self.in_command = False
         self.command_div_depth = 0
         self.command_in_code = False
@@ -2239,6 +2288,12 @@ class HeroCodeParser(HTMLParser):
         self.copy_button_data = None
         self.in_command_note = False
         self.command_note_text = []
+        self.in_provenance = False
+        self.provenance_text = []
+        self.provenance_hrefs = []
+        self.in_evidence_state = False
+        self.evidence_state_attr = None
+        self.evidence_state_text = []
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
@@ -2255,6 +2310,15 @@ class HeroCodeParser(HTMLParser):
             self.in_command_note = True
             self.command_note_text = []
             return
+        if tag == "p" and "hero-provenance" in classes:
+            self.in_provenance = True
+            self.provenance_text = []
+            return
+        if "evidence-state" in classes:
+            self.in_evidence_state = True
+            self.evidence_state_attr = attributes.get("data-evidence-state")
+        if self.in_provenance and tag == "a":
+            self.provenance_hrefs.append(attributes.get("href", ""))
         if self.in_command:
             if tag == "div":
                 self.command_div_depth += 1
@@ -2263,6 +2327,16 @@ class HeroCodeParser(HTMLParser):
         if self.in_hero_code:
             if tag == "div":
                 self.hero_div_depth += 1
+                if self.in_code_window:
+                    self.code_window_depth += 1
+                elif self.in_output_window:
+                    self.output_window_depth += 1
+                elif "code-window" in classes:
+                    self.in_code_window = True
+                    self.code_window_depth = 1
+                elif "output-window" in classes:
+                    self.in_output_window = True
+                    self.output_window_depth = 1
             if tag == "pre":
                 self.in_pre = True
             if tag == "code" and self.in_pre:
@@ -2273,6 +2347,10 @@ class HeroCodeParser(HTMLParser):
     def handle_endtag(self, tag):
         if self.in_command_note and tag == "p":
             self.in_command_note = False
+        if self.in_provenance and tag == "p":
+            self.in_provenance = False
+        if self.in_evidence_state and tag == "span":
+            self.in_evidence_state = False
         if self.in_command:
             if tag == "code":
                 self.command_in_code = False
@@ -2286,30 +2364,62 @@ class HeroCodeParser(HTMLParser):
             if tag == "pre":
                 self.in_pre = False
             if tag == "div":
+                if self.in_code_window:
+                    self.code_window_depth -= 1
+                    if self.code_window_depth <= 0:
+                        self.in_code_window = False
+                elif self.in_output_window:
+                    self.output_window_depth -= 1
+                    if self.output_window_depth <= 0:
+                        self.in_output_window = False
                 self.hero_div_depth -= 1
                 if self.hero_div_depth <= 0:
                     self.in_hero_code = False
 
     def handle_data(self, data):
         if self.in_hero_code and self.in_pre_code:
-            self.hero_code_text.append(data)
+            if self.in_code_window:
+                self.hero_code_text.append(data)
+            elif self.in_output_window:
+                self.hero_output_text.append(data)
         if self.in_command and self.command_in_code:
             self.command_text.append(data)
         if self.in_command_note:
             self.command_note_text.append(data)
+        if self.in_provenance:
+            self.provenance_text.append(data)
+        if self.in_evidence_state:
+            self.evidence_state_text.append(data)
 
 
 index_path = Path(sys.argv[1])
 readme_path = Path(sys.argv[2])
 fixture_path = Path(sys.argv[3])
 website_md_path = Path(sys.argv[4])
+expected_output_path = Path(sys.argv[5])
+diagnostic_fixture_path = Path(sys.argv[6])
+diagnostic_source_path = Path(sys.argv[7])
 
-fixture_source = fixture_path.read_text()
-if fixture_source.endswith("\n"):
-    fixture_source = fixture_source[:-1]
+fixture_source = read_fixture(fixture_path)
+expected_output = read_fixture(expected_output_path)
+expected_diagnostic = read_fixture(diagnostic_fixture_path)
+diagnostic_source = read_fixture(diagnostic_source_path)
+
+# The published diagnostic is bound to the compiler's own generated fixture,
+# so the fixture itself must still be the placeholder-span shape D-083
+# describes and D-043 owns fixing. If a renderer change moves the span, this
+# fires before any published copy is compared.
+diagnostic_path_line = f" --> {DIAGNOSTIC_SOURCE_REL}:1:1"
+if diagnostic_path_line not in expected_diagnostic:
+    raise SystemExit(
+        f"{DIAGNOSTIC_FIXTURE_REL} must contain the exact path line "
+        f"{diagnostic_path_line!r}; the README copy is generated from it by "
+        f"substituting the path, so a changed span silently falsifies the "
+        f"published example"
+    )
 
 # --- README quick-start extraction ---
-readme_text = readme_path.read_text()
+readme_text = readme_path.read_text().replace("\r\n", "\n")
 quick_start_match = re.search(
     r"^## Quick start\s*$",
     readme_text,
@@ -2367,12 +2477,85 @@ readme_command_lines = [
     line for line in console_lines if line.startswith("$ ")
 ]
 
-# --- Site hero extraction ---
-parser = HeroCodeParser()
-parser.feed(index_path.read_text())
+# --- README diagnostic-example extraction ---
+# The published diagnostic block is anchored by an explicit HTML comment
+# naming the fixture it is generated from, so the extraction cannot silently
+# retarget onto some other fenced block if the surrounding prose is reworded.
+diagnostic_match = re.search(
+    r"<!-- #197: generated from (\S+) -->\n```\n(.*?)\n```",
+    readme_text,
+    re.DOTALL,
+)
+if not diagnostic_match:
+    raise SystemExit(
+        "README is missing the '<!-- #197: generated from ... -->' anchor "
+        "immediately followed by the generated diagnostic fence block"
+    )
+declared_fixture = diagnostic_match.group(1)
+if declared_fixture != DIAGNOSTIC_FIXTURE_REL:
+    raise SystemExit(
+        f"README diagnostic anchor must name {DIAGNOSTIC_FIXTURE_REL!r}, "
+        f"found {declared_fixture!r}"
+    )
+readme_diagnostic = diagnostic_match.group(2)
 
-hero_source_raw = "".join(parser.hero_code_text)
-hero_source = hero_source_raw
+# The README copy is the fixture with the fixture's own source path replaced
+# by the `hello.py` the surrounding quick start uses -- nothing else.
+substituted = expected_diagnostic.replace(DIAGNOSTIC_SOURCE_REL, "hello.py")
+readme_diagnostic_path_line = " --> hello.py:1:1"
+if readme_diagnostic_path_line not in readme_diagnostic:
+    raise SystemExit(
+        f"README diagnostic block must contain the exact path line "
+        f"{readme_diagnostic_path_line!r}"
+    )
+if readme_diagnostic != substituted:
+    raise SystemExit(
+        "README diagnostic block is not the compiler-generated "
+        f"{DIAGNOSTIC_FIXTURE_REL} with its source path substituted for "
+        f"'hello.py':\nexpected:\n{substituted}\nfound:\n{readme_diagnostic}"
+    )
+
+# --- Diagnostic-source binding ---
+# The README states the type-error example is the quick-start file "above"
+# with one line appended. Nothing else enforces that sentence: the path-line
+# checks above only compare `DIAGNOSTIC_SOURCE_REL` as a string and never read
+# that file's body. Without this binding, editing tests/fixtures/quick_start.py
+# drags every other published surface along through its own binding while this
+# claim silently goes false. Bind all three: the README names the appended
+# line, and the diagnostic source must be the canonical fixture plus exactly
+# that one line.
+appended_match = re.search(
+    r"appending\s+`([^`]+)`\s+to\s+the\s+file\s+above",
+    readme_text,
+)
+if not appended_match:
+    raise SystemExit(
+        "README must describe the type-error example as appending a named "
+        "line to the quick-start file, in the form: appending `<line>` to "
+        "the file above"
+    )
+appended_line = appended_match.group(1)
+if "\n" in appended_line or not appended_line.strip():
+    raise SystemExit(
+        f"README's appended-line claim must name exactly one non-empty "
+        f"source line, found {appended_line!r}"
+    )
+expected_diagnostic_source = fixture_source + "\n" + appended_line
+if diagnostic_source != expected_diagnostic_source:
+    raise SystemExit(
+        f"{DIAGNOSTIC_SOURCE_REL} must be tests/fixtures/quick_start.py with "
+        f"exactly the one line the README names ({appended_line!r}) appended, "
+        f"so the README's 'the file above' claim stays true:\n"
+        f"expected:\n{expected_diagnostic_source}\n"
+        f"found:\n{diagnostic_source}"
+    )
+
+# --- Site hero extraction ---
+index_text = index_path.read_text().replace("\r\n", "\n")
+parser = HeroCodeParser()
+parser.feed(index_text)
+
+hero_source = "".join(parser.hero_code_text)
 # HTMLParser already unescapes entities in handle_data, so hero_source is
 # already unescaped. Normalize whitespace for comparison.
 if normalize_source(hero_source) != normalize_source(fixture_source):
@@ -2387,21 +2570,38 @@ if normalize_source(readme_source) != normalize_source(fixture_source):
         "tests/fixtures/quick_start.py (indentation-preserving)"
     )
 
-canonical_output = "0 1 1 2 3 5 8 13 21 34 55"
-if normalize_ws(readme_output) != canonical_output:
+# --- Documented output binding ---
+# Both published copies are compared byte-for-byte against the fixture the
+# `quick_start` integration test asserts the real binary produces.
+if readme_output != expected_output:
     raise SystemExit(
-        f"README Quick start '$ ./hello' output does not match the "
-        f"canonical expected stdout (whitespace-normalized): "
-        f"expected {canonical_output!r}, found {normalize_ws(readme_output)!r}"
+        f"README Quick start '$ ./hello' output does not match "
+        f"tests/fixtures/quick_start.expected.txt: "
+        f"expected {expected_output!r}, found {readme_output!r}"
+    )
+
+hero_output = "".join(parser.hero_output_text)
+if not hero_output:
+    raise SystemExit(
+        "site/index.html hero is missing an .output-window <pre><code> pane "
+        "carrying the quick-start program's documented stdout"
+    )
+if hero_output != expected_output:
+    raise SystemExit(
+        f"site/index.html hero .output-window pane does not match "
+        f"tests/fixtures/quick_start.expected.txt: "
+        f"expected {expected_output!r}, found {hero_output!r} "
+        f"(write the pane as `<pre><code>0` with no newline after <code>, "
+        f"and close it on the last output line)"
     )
 
 # --- Copy-button binding ---
 command_displayed = "".join(parser.command_text).strip()
 if command_displayed.startswith("$ "):
     command_displayed = command_displayed[2:]
-if command_displayed != "pycc check hello.py":
+if command_displayed != HERO_COMMAND:
     raise SystemExit(
-        f"site hero displayed command must be 'pycc check hello.py', "
+        f"site hero displayed command must be {HERO_COMMAND!r}, "
         f"found {command_displayed!r}"
     )
 if parser.copy_button_data is None:
@@ -2460,6 +2660,65 @@ if "planned" in command_note.lower():
         "(the quick-start example is tested, not planned)"
     )
 
+# --- Evidence-state marker ---
+if parser.evidence_state_attr is None:
+    raise SystemExit(
+        "site hero is missing an .evidence-state marker with a "
+        "data-evidence-state attribute"
+    )
+if parser.evidence_state_attr not in EVIDENCE_STATES:
+    raise SystemExit(
+        f"site hero data-evidence-state must be one of "
+        f"{sorted(EVIDENCE_STATES)}, found {parser.evidence_state_attr!r}"
+    )
+evidence_state_text = "".join(parser.evidence_state_text).strip()
+if evidence_state_text != parser.evidence_state_attr:
+    raise SystemExit(
+        f"site hero .evidence-state text ({evidence_state_text!r}) must match "
+        f"its data-evidence-state attribute "
+        f"({parser.evidence_state_attr!r})"
+    )
+
+# --- Provenance and limitations ---
+provenance = " ".join("".join(parser.provenance_text).split())
+if not provenance:
+    raise SystemExit(
+        "site hero is missing a .hero-provenance paragraph naming the example's "
+        "source fixture, its verifying test, and its limitations"
+    )
+for required in ("tests/fixtures/quick_start.py", "tests/quick_start.rs"):
+    if required not in provenance:
+        raise SystemExit(
+            f"site hero .hero-provenance must name {required!r}"
+        )
+if "Limitations:" not in provenance:
+    raise SystemExit(
+        "site hero .hero-provenance must carry a 'Limitations:' statement "
+        "bounding what the compiled example demonstrates"
+    )
+for required in ("tests/fixtures/quick_start.py", "tests/quick_start.rs"):
+    if not any(href.endswith(required) for href in parser.provenance_hrefs):
+        raise SystemExit(
+            f"site hero .hero-provenance must link to {required!r}, "
+            f"found hrefs {parser.provenance_hrefs!r}"
+        )
+
+# --- Negative control: the fabricated diagnostic card must stay deleted ---
+# The removed `.diagnostic-card` published a diagnostic no compiler version
+# ever emitted (a `help:` line pycc's `render_human` does not render, and a
+# span D-043 has not implemented). Reintroducing either shape is a relapse.
+if "diagnostic-card" in index_text:
+    raise SystemExit(
+        "site/index.html must not carry a .diagnostic-card: the hero's "
+        "diagnostic example was fabricated, and the real one lives in "
+        "README.md bound to a compiler-generated fixture (#197)"
+    )
+if "help:" in index_text:
+    raise SystemExit(
+        "site/index.html must not publish a 'help:' diagnostic line: "
+        "pycc's render_human does not emit one (D-083; D-043 owns the work)"
+    )
+
 # --- WEBSITE.md currency ---
 website_md = website_md_path.read_text()
 binding_phrase = "tested, executable v0.1 example"
@@ -2471,6 +2730,11 @@ if binding_phrase not in website_md:
 if "tests/fixtures/quick_start.py" not in website_md:
     raise SystemExit(
         "docs/WEBSITE.md must reference tests/fixtures/quick_start.py"
+    )
+if "tests/fixtures/quick_start.expected.txt" not in website_md:
+    raise SystemExit(
+        "docs/WEBSITE.md must reference tests/fixtures/quick_start.expected.txt "
+        "as the single source of truth for the documented stdout"
     )
 PY
 

@@ -30,8 +30,16 @@ fn quick_start_fixture_builds_and_prints_the_documented_sequence() {
         output.status.success(),
         "quick_start binary exited non-zero"
     );
+    // The documented stdout lives in `tests/fixtures/quick_start.expected.txt`,
+    // the single source of truth shared with README.md, site/index.html, and
+    // docs/WEBSITE.md (issue #197). Git on Windows checks that fixture out with
+    // `\r\n` under the default `core.autocrlf` text conversion, so the file's
+    // bytes are normalized before comparison against the binary's own stdout,
+    // which is always `\n`-terminated.
+    let expected = include_str!("fixtures/quick_start.expected.txt").replace("\r\n", "\n");
     assert_eq!(
-        output.stdout, b"0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n55\n",
+        String::from_utf8_lossy(&output.stdout),
+        expected,
         "quick_start fixture stdout must match the README/site documented output"
     );
 }

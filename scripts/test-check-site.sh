@@ -1537,7 +1537,7 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-14</lastmod>"""
+    <lastmod>2026-08-20</lastmod>"""
 assert entry in content
 path.write_text(content.replace(entry, entry + "\n    <lastmod>2026-07-30</lastmod>", 1))
 PY
@@ -1554,9 +1554,13 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-lastmod = "<lastmod>2026-08-14</lastmod>"
-assert lastmod in content
-path.write_text(content.replace(lastmod, "<lastmod>not-a-date</lastmod>", 1))
+# Anchored to the home entry's own <loc>: several pages legitimately share
+# a lastmod, so replacing a bare date literal would silently mutate whichever
+# entry comes first in document order instead of the one named here.
+entry = """    <loc>https://rotnov.github.io/pycc/</loc>
+    <lastmod>2026-08-20</lastmod>"""
+assert entry in content
+path.write_text(content.replace(entry, entry.replace("2026-08-20", "not-a-date"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -1571,9 +1575,10 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-lastmod = "<lastmod>2026-08-14</lastmod>"
-assert lastmod in content
-path.write_text(content.replace(lastmod, "<lastmod>9999-12-31</lastmod>", 1))
+entry = """    <loc>https://rotnov.github.io/pycc/</loc>
+    <lastmod>2026-08-20</lastmod>"""
+assert entry in content
+path.write_text(content.replace(entry, entry.replace("2026-08-20", "9999-12-31"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -2667,6 +2672,7 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert "def fib(n: int) -> int:\n    if n < 2:" in content
 content = content.replace(
     "def fib(n: int) -> int:\n    if n < 2:",
     "def fib(n: int) -> int :\n    if n < 2:",
@@ -2687,6 +2693,7 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert "def fib(n: int) -> int:\n    if n < 2:\n        return n" in content
 content = content.replace(
     "def fib(n: int) -> int:\n    if n < 2:\n        return n",
     "def fib(n: int) -> int:\n    if n < 2:\n    return n",
@@ -2706,6 +2713,7 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert '<span class="code-keyword">def</span> <span class="code-function">fib</span>' in content
 content = content.replace(
     '<span class="code-keyword">def</span> <span class="code-function">fib</span>',
     '<span class="code-keyword">def</span> <span class="code-function">fib2</span>',
@@ -2725,6 +2733,7 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert "def fib(n: int) -> int:" in content
 content = content.replace(
     "def fib(n: int) -> int:",
     "def fib(n: int) -> int :",
@@ -2744,6 +2753,7 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert "$ ./hello\n0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n55\n```" in content
 content = content.replace(
     "$ ./hello\n0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n55\n```",
     "$ ./hello\n0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n```",
@@ -2763,9 +2773,10 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert 'data-copy="pycc build hello.py -o hello"' in content
 content = content.replace(
-    'data-copy="pycc check hello.py"',
-    'data-copy="pycc build hello.py"',
+    'data-copy="pycc build hello.py -o hello"',
+    'data-copy="pycc run hello.py"',
     1,
 )
 path.write_text(content)
@@ -2782,9 +2793,10 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert 'data-copy="pycc build hello.py -o hello"' in content
 content = content.replace(
-    'data-copy="pycc check hello.py"',
-    'data-copy="pip install pycc && pycc check hello.py"',
+    'data-copy="pycc build hello.py -o hello"',
+    'data-copy="pip install pycc && pycc build hello.py -o hello"',
     1,
 )
 path.write_text(content)
@@ -2801,9 +2813,11 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+note = '<p class="command-note">Compile typed Python to a native binary · pre-alpha</p>'
+assert note in content
 content = content.replace(
-    '<p class="command-note">Type-check typed Python · pre-alpha</p>',
-    '<p class="command-note">Type-check typed Python · planned CLI · pre-alpha</p>',
+    note,
+    note.replace("· pre-alpha", "· planned CLI · pre-alpha"),
     1,
 )
 path.write_text(content)
@@ -2822,6 +2836,7 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert "## Quick start\n" in content
 content = content.replace(
     "## Quick start\n",
     "## Quick start (planned CLI)\n",
@@ -2841,6 +2856,7 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert "tested, executable v0.1 example" in content
 content = content.replace(
     "tested, executable v0.1 example",
     "design-target v0.1 example",
@@ -2861,15 +2877,16 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert '<code><span>$</span> pycc build hello.py -o hello</code>' in content
 content = content.replace(
-    '<code><span>$</span> pycc check hello.py</code>',
+    '<code><span>$</span> pycc build hello.py -o hello</code>',
     '<code><span>$</span> pycc run hello.py</code>',
     1,
 )
 path.write_text(content)
 PY
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
-  echo "Validator accepted a displayed command other than 'pycc check hello.py' (issue #197)" >&2
+  echo "Validator accepted a displayed command other than 'pycc build hello.py -o hello' (issue #197)" >&2
   exit 1
 fi
 
@@ -2880,6 +2897,7 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert "$ pycc check hello.py\n" in content
 content = content.replace(
     "$ pycc check hello.py\n",
     "$ pip install pycc\n$ pycc check hello.py\n",
@@ -2899,6 +2917,7 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert "$ pycc check hello.py\n" in content
 content = content.replace(
     "$ pycc check hello.py\n",
     "$ pycc@0.1.0 check hello.py\n",
@@ -2918,9 +2937,10 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
+assert 'data-copy="pycc build hello.py -o hello"' in content
 content = content.replace(
-    'data-copy="pycc check hello.py"',
-    'data-copy="pycc@0.1.0 check hello.py"',
+    'data-copy="pycc build hello.py -o hello"',
+    'data-copy="pycc@0.1.0 build hello.py -o hello"',
     1,
 )
 path.write_text(content)
@@ -2948,6 +2968,386 @@ if WEBSITE_MD_PATH="$fixture_root/WEBSITE.md" SITE_DIR="$fixture_root/site" "$re
   echo "Validator accepted WEBSITE.md without tests/fixtures/quick_start.py reference (issue #197)" >&2
   exit 1
 fi
+
+# Mutation: WEBSITE.md no longer names the canonical stdout fixture.
+cp "$repo_root/docs/WEBSITE.md" "$fixture_root/WEBSITE.md"
+python3 - "$fixture_root/WEBSITE.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+assert "tests/fixtures/quick_start.expected.txt" in content
+content = content.replace(
+    "tests/fixtures/quick_start.expected.txt",
+    "tests/fixtures/quick_start_output.txt",
+)
+path.write_text(content)
+PY
+if WEBSITE_MD_PATH="$fixture_root/WEBSITE.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted WEBSITE.md without the quick_start.expected.txt reference (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: drift the site hero output pane away from the canonical stdout.
+# This is the discriminating check for the parser's `.output-window` scoping:
+# if the pane were not accumulated separately from the `.code-window` source
+# pane, this mutation would go unnoticed and every other output assertion
+# below would be vacuous.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+assert "21\n34\n55</code></pre>" in content
+content = content.replace("21\n34\n55</code></pre>", "21\n34\n56</code></pre>", 1)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a hero output pane diverging from the canonical stdout (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: remove the hero output pane entirely.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+start = content.index('<div class="output-window">')
+end = content.index('<p class="hero-provenance">')
+path.write_text(content[:start] + content[end:])
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a hero with no output pane (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: open the output pane with a newline after `<code>`, which HTML
+# preserves as a leading blank line the canonical fixture does not have.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+assert "<pre><code>0\n1\n" in content
+content = content.replace("<pre><code>0\n1\n", "<pre><code>\n0\n1\n", 1)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a hero output pane with a leading blank line (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: drift the canonical stdout fixture itself, so both published
+# copies are checked against the fixture rather than only against each other.
+cp "$repo_root/tests/fixtures/quick_start.expected.txt" \
+  "$fixture_root/quick_start.expected.txt"
+python3 - "$fixture_root/quick_start.expected.txt" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+assert content.endswith("55\n")
+path.write_text(content[: -len("55\n")] + "89\n")
+PY
+if QUICK_START_EXPECTED_PATH="$fixture_root/quick_start.expected.txt" \
+  SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a stdout fixture diverging from the published output (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: reintroduce the fabricated .diagnostic-card the hero used to carry.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+marker = '<p class="hero-provenance">'
+assert marker in content
+content = content.replace(
+    marker,
+    '<div class="diagnostic-card"><strong>error[T0021]</strong></div>\n' + marker,
+    1,
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a reintroduced .diagnostic-card (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: publish a `help:` diagnostic line pycc's renderer never emits.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+marker = '<p class="hero-provenance">'
+assert marker in content
+content = content.replace(
+    marker,
+    '<p>help: did you mean <code>int("5")</code>?</p>\n' + marker,
+    1,
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a published 'help:' diagnostic line (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: use an evidence-state marker outside the shared #564 vocabulary.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+assert 'data-evidence-state="all-Tier-1">all-Tier-1<' in content
+content = content.replace(
+    'data-evidence-state="all-Tier-1">all-Tier-1<',
+    'data-evidence-state="fully-verified">fully-verified<',
+    1,
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an evidence-state outside the shared vocabulary (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: let the evidence-state label disagree with its own attribute.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+assert 'data-evidence-state="all-Tier-1">all-Tier-1<' in content
+content = content.replace(
+    'data-evidence-state="all-Tier-1">all-Tier-1<',
+    'data-evidence-state="partial">all-Tier-1<',
+    1,
+)
+path.write_text(content)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an evidence-state label disagreeing with its attribute (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: drop the provenance paragraph's limitations statement.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+assert "Limitations:" in content
+path.write_text(content.replace("Limitations:", "Notes:", 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a hero provenance note without a limitations statement (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: drop the link to the verifying test from the provenance note.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+assert "tests/quick_start.rs" in content
+path.write_text(content.replace("tests/quick_start.rs", "tests/slice1_codegen_depth.rs"))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a hero provenance note that does not name tests/quick_start.rs (issue #197)" >&2
+  exit 1
+fi
+
+# Restore immediately: this mutation strips every occurrence of
+# tests/quick_start.rs from the page, and a later block that leaves it in
+# place would fail on this residual dirt rather than on its own mutation.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# Mutation: rename the README diagnostic anchor's declared fixture.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+anchor = "<!-- #197: generated from tests/diagnostics/quick_start_type_error.expected.txt -->"
+assert anchor in content
+path.write_text(content.replace(anchor, "<!-- #197: generated from docs/CLI_SPEC.md -->", 1))
+PY
+if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a README diagnostic anchor naming the wrong fixture (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: remove the README diagnostic anchor entirely.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+anchor = "<!-- #197: generated from tests/diagnostics/quick_start_type_error.expected.txt -->\n"
+assert anchor in content
+path.write_text(content.replace(anchor, "", 1))
+PY
+if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a README with no diagnostic-example anchor (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: restore the fabricated span and `help:` line in the README block.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+line = " --> hello.py:1:1"
+assert line in content
+path.write_text(content.replace(line, " --> hello.py:8:15", 1))
+PY
+if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a README diagnostic span the compiler does not emit (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: change the README diagnostic body without touching its path line,
+# so the byte-for-byte comparison against the generated fixture is exercised
+# rather than only the two path-line spot checks.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+line = "error[T0021]: argument 1 of `fib` expects `int`, got `str`"
+assert line in content
+path.write_text(content.replace(line, line + " here", 1))
+PY
+if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a README diagnostic body diverging from the generated fixture (issue #197)" >&2
+  exit 1
+fi
+
+# Restore immediately: a later block that mutates something other than the
+# README would otherwise inherit this diverging diagnostic body and fail on
+# it instead of on the property it means to test.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+
+# Mutation: drift the generated diagnostic fixture's own span, proving the
+# published README block is bound to the fixture and not merely self-consistent.
+cp "$repo_root/tests/diagnostics/quick_start_type_error.expected.txt" \
+  "$fixture_root/quick_start_type_error.expected.txt"
+python3 - "$fixture_root/quick_start_type_error.expected.txt" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+line = " --> tests/diagnostics/quick_start_type_error.py:1:1"
+assert line in content
+path.write_text(content.replace(line, " --> tests/diagnostics/quick_start_type_error.py:8:15", 1))
+PY
+if QUICK_START_DIAGNOSTIC_PATH="$fixture_root/quick_start_type_error.expected.txt" \
+  SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a diagnostic fixture diverging from the published README block (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: drift the diagnostic example's source away from the canonical
+# quick-start fixture by appending a second line, so it is no longer "the file
+# above plus one line" the README describes. Only the diagnostic source is
+# overridden here: mutating tests/fixtures/quick_start.py instead would also
+# break the README `cat hello.py` and site hero source bindings, so it would
+# not prove this binding exists.
+cp "$repo_root/tests/diagnostics/quick_start_type_error.py" \
+  "$fixture_root/quick_start_type_error.py"
+python3 - "$fixture_root/quick_start_type_error.py" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+line = 'print(fib("5"))'
+assert line in content
+path.write_text(content.replace(line, line + '\nprint(fib("6"))', 1))
+PY
+if QUICK_START_DIAGNOSTIC_SOURCE_PATH="$fixture_root/quick_start_type_error.py" \
+  SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a diagnostic source that is not the quick-start fixture plus one line (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: change an early line of the diagnostic source's body rather than
+# appending one. The line count still matches, so only the full-string
+# equality against the canonical fixture can catch it.
+cp "$repo_root/tests/diagnostics/quick_start_type_error.py" \
+  "$fixture_root/quick_start_type_error.py"
+python3 - "$fixture_root/quick_start_type_error.py" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+line = "    if n < 2:"
+assert line in content
+path.write_text(content.replace(line, "    if n < 3:", 1))
+PY
+if QUICK_START_DIAGNOSTIC_SOURCE_PATH="$fixture_root/quick_start_type_error.py" \
+  SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a diagnostic source whose body diverges from the quick-start fixture (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: keep both source files intact but change the line the README claims
+# was appended, proving the prose sentence is bound to the real source rather
+# than being unchecked narration.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+claim = 'appending `print(fib("5"))` to the file'
+assert claim in content
+path.write_text(content.replace(claim, 'appending `print(fib("6"))` to the file', 1))
+PY
+if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a README naming an appended line the diagnostic source does not carry (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: drop the README's appended-line claim entirely, so the binding
+# cannot be satisfied vacuously by a missing sentence.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+claim = 'appending `print(fib("5"))` to the file'
+assert claim in content
+path.write_text(content.replace(claim, 'adding one more call to the file', 1))
+PY
+if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a README that no longer names the appended line (issue #197)" >&2
+  exit 1
+fi
+
+cp "$repo_root/README.md" "$fixture_root/README.md"
+
+# Restore the pristine landing page before the next section's fixtures run.
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
 # --- Issue #200: social preview image negative tests ---
 # Each mutation replaces og.png in the fixture with a deliberately invalid
