@@ -9,6 +9,7 @@ readme_path=${README_PATH:-"$repo_root/README.md"}
 quick_start_fixture=${QUICK_START_FIXTURE_PATH:-"$repo_root/tests/fixtures/quick_start.py"}
 quick_start_expected=${QUICK_START_EXPECTED_PATH:-"$repo_root/tests/fixtures/quick_start.expected.txt"}
 quick_start_diagnostic=${QUICK_START_DIAGNOSTIC_PATH:-"$repo_root/tests/diagnostics/quick_start_type_error.expected.txt"}
+quick_start_diagnostic_source=${QUICK_START_DIAGNOSTIC_SOURCE_PATH:-"$repo_root/tests/diagnostics/quick_start_type_error.py"}
 website_md_path=${WEBSITE_MD_PATH:-"$repo_root/docs/WEBSITE.md"}
 
 for required_file in \
@@ -2195,7 +2196,8 @@ python3 - \
   "$quick_start_fixture" \
   "$website_md_path" \
   "$quick_start_expected" \
-  "$quick_start_diagnostic" <<'PY'
+  "$quick_start_diagnostic" \
+  "$quick_start_diagnostic_source" <<'PY'
 from html.parser import HTMLParser
 from pathlib import Path
 import re
@@ -2396,10 +2398,12 @@ fixture_path = Path(sys.argv[3])
 website_md_path = Path(sys.argv[4])
 expected_output_path = Path(sys.argv[5])
 diagnostic_fixture_path = Path(sys.argv[6])
+diagnostic_source_path = Path(sys.argv[7])
 
 fixture_source = read_fixture(fixture_path)
 expected_output = read_fixture(expected_output_path)
 expected_diagnostic = read_fixture(diagnostic_fixture_path)
+diagnostic_source = read_fixture(diagnostic_source_path)
 
 # The published diagnostic is bound to the compiler's own generated fixture,
 # so the fixture itself must still be the placeholder-span shape D-083
@@ -2511,8 +2515,43 @@ if readme_diagnostic != substituted:
         f"'hello.py':\nexpected:\n{substituted}\nfound:\n{readme_diagnostic}"
     )
 
+# --- Diagnostic-source binding ---
+# The README states the type-error example is the quick-start file "above"
+# with one line appended. Nothing else enforces that sentence: the path-line
+# checks above only compare `DIAGNOSTIC_SOURCE_REL` as a string and never read
+# that file's body. Without this binding, editing tests/fixtures/quick_start.py
+# drags every other published surface along through its own binding while this
+# claim silently goes false. Bind all three: the README names the appended
+# line, and the diagnostic source must be the canonical fixture plus exactly
+# that one line.
+appended_match = re.search(
+    r"appending\s+`([^`]+)`\s+to\s+the\s+file\s+above",
+    readme_text,
+)
+if not appended_match:
+    raise SystemExit(
+        "README must describe the type-error example as appending a named "
+        "line to the quick-start file, in the form: appending `<line>` to "
+        "the file above"
+    )
+appended_line = appended_match.group(1)
+if "\n" in appended_line or not appended_line.strip():
+    raise SystemExit(
+        f"README's appended-line claim must name exactly one non-empty "
+        f"source line, found {appended_line!r}"
+    )
+expected_diagnostic_source = fixture_source + "\n" + appended_line
+if diagnostic_source != expected_diagnostic_source:
+    raise SystemExit(
+        f"{DIAGNOSTIC_SOURCE_REL} must be tests/fixtures/quick_start.py with "
+        f"exactly the one line the README names ({appended_line!r}) appended, "
+        f"so the README's 'the file above' claim stays true:\n"
+        f"expected:\n{expected_diagnostic_source}\n"
+        f"found:\n{diagnostic_source}"
+    )
+
 # --- Site hero extraction ---
-index_text = index_path.read_text()
+index_text = index_path.read_text().replace("\r\n", "\n")
 parser = HeroCodeParser()
 parser.feed(index_text)
 

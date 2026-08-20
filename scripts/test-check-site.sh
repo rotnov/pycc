@@ -3256,6 +3256,66 @@ if QUICK_START_DIAGNOSTIC_PATH="$fixture_root/quick_start_type_error.expected.tx
   exit 1
 fi
 
+# Mutation: drift the diagnostic example's source away from the canonical
+# quick-start fixture by appending a second line, so it is no longer "the file
+# above plus one line" the README describes. Only the diagnostic source is
+# overridden here: mutating tests/fixtures/quick_start.py instead would also
+# break the README `cat hello.py` and site hero source bindings, so it would
+# not prove this binding exists.
+cp "$repo_root/tests/diagnostics/quick_start_type_error.py" \
+  "$fixture_root/quick_start_type_error.py"
+python3 - "$fixture_root/quick_start_type_error.py" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+line = 'print(fib("5"))'
+assert line in content
+path.write_text(content.replace(line, line + '\nprint(fib("6"))', 1))
+PY
+if QUICK_START_DIAGNOSTIC_SOURCE_PATH="$fixture_root/quick_start_type_error.py" \
+  SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a diagnostic source that is not the quick-start fixture plus one line (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: keep both source files intact but change the line the README claims
+# was appended, proving the prose sentence is bound to the real source rather
+# than being unchecked narration.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+claim = 'appending `print(fib("5"))` to the file'
+assert claim in content
+path.write_text(content.replace(claim, 'appending `print(fib("6"))` to the file', 1))
+PY
+if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a README naming an appended line the diagnostic source does not carry (issue #197)" >&2
+  exit 1
+fi
+
+# Mutation: drop the README's appended-line claim entirely, so the binding
+# cannot be satisfied vacuously by a missing sentence.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+content = path.read_text()
+claim = 'appending `print(fib("5"))` to the file'
+assert claim in content
+path.write_text(content.replace(claim, 'adding one more call to the file', 1))
+PY
+if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a README that no longer names the appended line (issue #197)" >&2
+  exit 1
+fi
+
+cp "$repo_root/README.md" "$fixture_root/README.md"
+
 # Restore the pristine landing page before the next section's fixtures run.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
