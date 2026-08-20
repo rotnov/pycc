@@ -5,12 +5,13 @@
 //! Extracted from `lib.rs` per AGENTS.md's file-decomposition rule (issue
 //! #361, mirroring #141's `stmt.rs` extraction, D-148): `lower_expr` and
 //! every helper it needs formed one cohesive, already-separable unit, called
-//! only from `lib.rs`, `stmt.rs` (a sibling module), and two inline unit
-//! tests in `lib.rs`'s own `mod tests` that call `lower_comprehension_header`
-//! and `rename_name_in_expr` directly, bypassing the public `lower_checked`
-//! entry point -- unlike `stmt.rs`'s own extraction, this one is not fully
-//! test-transparent, so those two tests stayed in `lib.rs` with an explicit
-//! `use crate::expr::{...}` instead of moving here.
+//! only from `lib.rs`, `stmt.rs` (a sibling module), and two unit tests in the
+//! crate root's `mod tests` (`tests.rs`, moved out of `lib.rs` by issue #547)
+//! that call `lower_comprehension_header` and `rename_name_in_expr` directly,
+//! bypassing the public `lower_checked` entry point -- unlike `stmt.rs`'s own
+//! extraction, this one is not fully test-transparent, so those two tests
+//! stayed with the crate root's test module, which reaches them through an
+//! explicit `use crate::expr::{...}` instead of them moving here.
 //!
 //! `in_function: bool` (D-149) is this module's new piece of state, mirroring
 //! `in_loop`'s existing shape (`stmt.rs`, D-148) but on the expression side:
