@@ -9,9 +9,76 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-cp -R "$repo_root/site" "$fixture_root/site"
+# Every guarded block below mutates the fixture tree, then relies on the validator
+# rejecting that mutation. Restoring the whole tree after each block is what makes a
+# block's own guard the one that fires: without it a block inherits its predecessors'
+# mutations, and an earlier, unrelated guard can reject the tree first, masking whether
+# this block's own guard works at all (issue #644).
+restore_fixtures() {
+  rm -rf "$fixture_root/site" "$fixture_root/override"
+  cp -R "$repo_root/site" "$fixture_root/site"
+  cp "$repo_root/README.md" "$fixture_root/README.md"
+  cp "$repo_root/docs/WEBSITE.md" "$fixture_root/WEBSITE.md"
+  cp "$repo_root/tests/fixtures/quick_start.py" "$fixture_root/quick_start.py"
+  cp "$repo_root/tests/fixtures/quick_start.expected.txt" \
+    "$fixture_root/quick_start.expected.txt"
+  cp "$repo_root/tests/diagnostics/quick_start_type_error.py" \
+    "$fixture_root/quick_start_type_error.py"
+  cp "$repo_root/tests/diagnostics/quick_start_type_error.expected.txt" \
+    "$fixture_root/quick_start_type_error.expected.txt"
+}
+
+restore_fixtures
 
 SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null
+
+# The restoration invariant above is only worth as much as its uniformity: a
+# guarded block that forgets to restore hands its mutation to every block after
+# it, which is exactly the masking #644 reported. Enforce it structurally rather
+# than by convention, so a new block cannot silently opt out.
+python3 - "$0" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+lines = Path(sys.argv[1]).read_text().splitlines()
+offenders = []
+# Split so this checker's own source does not match the marker it searches for.
+marker = 'scripts/check-site' + '.sh"'
+for index, line in enumerate(lines):
+    if marker not in line:
+        continue
+    start = index
+    while start >= 0 and not re.match(r"^\s*if( !)? ", lines[start]):
+        start -= 1
+    if start < 0:
+        continue  # the unguarded smoke invocation above
+    depth = 0
+    end = None
+    for cursor in range(start, len(lines)):
+        stripped = lines[cursor].strip()
+        if re.match(r"^if( |$)", stripped):
+            depth += 1
+        elif stripped == "fi":
+            depth -= 1
+            if depth == 0:
+                end = cursor
+                break
+    following = lines[end + 1].strip() if end is not None and end + 1 < len(lines) else ""
+    if following != "restore_fixtures":
+        offenders.append(start + 1)
+
+if offenders:
+    unique = sorted(set(offenders))
+    sys.stderr.write(
+        "Guarded check-site.sh blocks must be followed by `restore_fixtures` so "
+        "each block's own guard is the one that fires (issue #644). Missing after "
+        "the block(s) starting at line(s): "
+        + ", ".join(str(number) for number in unique)
+        + "\n"
+    )
+    raise SystemExit(1)
+PY
 
 python3 - "$fixture_root/site/styles.css" <<'PY'
 from pathlib import Path
@@ -39,6 +106,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted non-wrapping narrow footer links" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/styles.css" "$fixture_root/site/styles.css"
 
@@ -70,6 +138,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a two-column narrow footer" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/styles.css" "$fixture_root/site/styles.css"
 
@@ -317,6 +386,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a site with a missing required file" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/robots.txt" "$fixture_root/site/robots.txt"
 python3 - "$fixture_root/site/index.html" <<'PY'
@@ -337,6 +407,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a site without the required robots directive" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 python3 - "$fixture_root/site/index.html" <<'PY'
@@ -357,6 +428,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an empty required metadata value" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 python3 - "$repo_root" "$fixture_root/site" <<'PY'
@@ -548,6 +620,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a site without the required AI authorship disclosure" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 python3 - "$fixture_root/site/index.html" <<'PY'
@@ -565,6 +638,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an AI authorship disclosure in a hidden subtree" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 python3 - "$fixture_root/site/index.html" <<'PY'
@@ -582,6 +656,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted disconnected JSON-LD project entities" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 python3 - "$fixture_root/site/3361fe03d0f44ab7cdbb1a3ce1461821.txt" <<'PY'
@@ -595,6 +670,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an invalid IndexNow ownership key" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/3361fe03d0f44ab7cdbb1a3ce1461821.txt" \
   "$fixture_root/site/3361fe03d0f44ab7cdbb1a3ce1461821.txt"
@@ -625,6 +701,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted the unregistered rel=sitemap link relation on the landing page" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
@@ -650,6 +727,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted the unregistered rel=sitemap link relation on a sub-page" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/architecture/index.html" \
   "$fixture_root/site/architecture/index.html"
@@ -678,6 +756,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a case-variant rel=Sitemap link relation" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
@@ -699,8 +778,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a site with a missing evidence page" >&2
   exit 1
 fi
-mv "$fixture_root/site/python-aot-compilers/index.html.missing" \
-  "$fixture_root/site/python-aot-compilers/index.html"
+restore_fixtures
 
 python3 - "$fixture_root/site/architecture/index.html" <<'PY'
 from pathlib import Path
@@ -717,6 +795,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an evidence page with the wrong canonical URL" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/architecture/index.html" \
   "$fixture_root/site/architecture/index.html"
@@ -956,6 +1035,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a comparison page without its official source link" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/python-aot-compilers/index.html" \
   "$fixture_root/site/python-aot-compilers/index.html"
@@ -975,6 +1055,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a comparison page without its LPython project source" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/python-aot-compilers/index.html" \
   "$fixture_root/site/python-aot-compilers/index.html"
@@ -993,6 +1074,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a comparison page without LPython maturity evidence" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/python-aot-compilers/index.html" \
   "$fixture_root/site/python-aot-compilers/index.html"
@@ -1011,6 +1093,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a comparison page without its pre-alpha warning" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/python-aot-compilers/index.html" \
   "$fixture_root/site/python-aot-compilers/index.html"
@@ -1029,6 +1112,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a comparison page without its no-benchmark disclosure" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/python-aot-compilers/index.html" \
   "$fixture_root/site/python-aot-compilers/index.html"
@@ -1546,6 +1630,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a sitemap URL entry with duplicate lastmod elements" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
 python3 - "$fixture_root/site/sitemap.xml" <<'PY'
@@ -1567,6 +1652,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a malformed sitemap lastmod" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
 python3 - "$fixture_root/site/sitemap.xml" <<'PY'
@@ -1585,6 +1671,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a future sitemap lastmod" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
 python3 - "$fixture_root/site/sitemap.xml" <<'PY'
@@ -1603,6 +1690,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a sitemap lastmod that disagrees with page dateModified" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
 python3 - "$fixture_root/site/sitemap.xml" <<'PY'
@@ -1623,6 +1711,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a sitemap that omitted an evidence page" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
 python3 - "$fixture_root/site/sitemap.xml" <<'PY'
@@ -1647,6 +1736,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a sitemap URL entry with multiple loc elements" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
 python3 - "$fixture_root/site/sitemap.xml" <<'PY'
@@ -1666,6 +1756,7 @@ if ! SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null
   echo "Validator rejected a complete sitemap solely because URL order changed" >&2
   exit 1
 fi
+restore_fixtures
 
 # --- Favicon mutations ---
 
@@ -1674,6 +1765,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a site with a missing favicon.svg asset" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/favicon.svg" "$fixture_root/site/favicon.svg"
 
@@ -1688,6 +1780,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a malformed favicon.svg" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/favicon.svg" "$fixture_root/site/favicon.svg"
 
@@ -1705,6 +1798,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a landing page without a favicon link" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
@@ -1722,6 +1816,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an evidence page without a favicon link" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/architecture/index.html" \
   "$fixture_root/site/architecture/index.html"
@@ -1744,6 +1839,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an evidence page with the wrong favicon path" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/architecture/index.html" \
   "$fixture_root/site/architecture/index.html"
@@ -1767,6 +1863,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a favicon link with the wrong type attribute" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
@@ -1789,6 +1886,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a favicon link with extra attributes" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
@@ -1809,6 +1907,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an oversized favicon.svg" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/favicon.svg" "$fixture_root/site/favicon.svg"
 
@@ -1824,6 +1923,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a favicon.svg with a non-SVG root element" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/favicon.svg" "$fixture_root/site/favicon.svg"
 
@@ -1842,6 +1942,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a landing page with a duplicate favicon link" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
@@ -1864,6 +1965,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a landing page with a nested favicon path" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
@@ -1876,6 +1978,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an empty 404.html" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
 python3 - "$fixture_root/site/404.html" <<'PY'
@@ -1893,6 +1996,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a 404 page without the noindex robots directive" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
 python3 - "$fixture_root/site/404.html" <<'PY'
@@ -1910,6 +2014,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a 404 page without a not-found heading" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
 python3 - "$fixture_root/site/404.html" <<'PY'
@@ -1926,6 +2031,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a 404 page without a home link" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
 python3 - "$fixture_root/site/404.html" <<'PY'
@@ -1943,6 +2049,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a 404 page without an evidence page link" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
 python3 - "$fixture_root/site/404.html" <<'PY'
@@ -1960,6 +2067,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a 404 page with a relative asset URL" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
 python3 - "$fixture_root/site/404.html" <<'PY'
@@ -1977,6 +2085,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a 404 page with a relative navigation link" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/404.html" "$fixture_root/site/404.html"
 
@@ -2004,6 +2113,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a corrupted README comparison cell (Codon type_enforcement)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Model-HTML mismatch: change the claims.json readme_projection label
 # without changing the README. The validator must reject the mismatch.
@@ -2025,6 +2135,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a corrupted claims.json readme_projection label" >&2
   exit 1
 fi
+restore_fixtures
 
 # Entity-set mutation: add an extra entity to the README table.
 cp "$repo_root/README.md" "$fixture_root/README.md"
@@ -2047,6 +2158,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an extra entity in the README comparison table" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/README.md" "$fixture_root/README.md"
 cp "$repo_root/site/python-aot-compilers/claims.json" "$fixture_root/site/python-aot-compilers/claims.json"
@@ -2071,6 +2183,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted programmingLanguage=Python (issue #203)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: add runtimePlatform back (misleading).
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2090,6 +2203,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted runtimePlatform=LLVM (issue #203)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: change license to GPL (false).
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2109,6 +2223,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted license=GPL (issue #203)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: add "AI compiler" to keywords.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2128,6 +2243,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted 'AI compiler' keyword (issue #203)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: change name to something false.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2146,6 +2262,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted name=pycc-compiler (issue #203)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: change alternateName to something false.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2165,6 +2282,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted alternateName=pycc AI compiler (issue #203)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: change SoftwareSourceCode url to a non-canonical URL.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2184,6 +2302,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted non-canonical SoftwareSourceCode url (issue #203)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: add production-ready claim to description.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2203,6 +2322,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted production-ready claim in JSON-LD (issue #203)" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
@@ -2225,6 +2345,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted Markdown without ROADMAP link (issue #206)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: remove the conformance claim from the Markdown.
 cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
@@ -2240,6 +2361,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted Markdown without mandelbrot-ascii claim (issue #206)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: add production-ready claim to the Markdown.
 cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
@@ -2258,6 +2380,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted Markdown with production-ready claim (issue #206)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: remove the code example feature mention.
 cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
@@ -2276,6 +2399,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted Markdown without conformance test reference (issue #206)" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/index.html.md" "$fixture_root/site/index.html.md"
 
@@ -2305,6 +2429,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted multi-line blockquote summary (issue #207)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: remove the Markdown landing link.
 cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
@@ -2324,6 +2449,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted llms.txt without Markdown landing link (issue #207)" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
 cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
@@ -2349,6 +2475,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted GitHub blob URL in non-optional section (issue #207)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: move the Source repository (a large GitHub UI page) from Optional
 # into the non-optional Project section. The validator must reject a large
@@ -2378,6 +2505,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a non-optional link absent from the manifest (issue #207)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: add the canonical HTML landing to the non-optional Project section,
 # duplicating the Markdown landing representation. The validator must reject
@@ -2401,6 +2529,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted duplicate HTML+Markdown landing in non-optional section (issue #207)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: shrink a per-resource budget below the actual file size so the
 # validator rejects an oversized document breaching its per-resource budget.
@@ -2420,6 +2549,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an oversized document breaching its per-resource budget (issue #207)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
 
 # Mutation: shrink the aggregate budget below the actual total so the
@@ -2438,6 +2568,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted aggregate expansion breaching the total budget (issue #207)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
 
 # Mutation: declare a non-optional document's representation as HTML. The
@@ -2459,6 +2590,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted HTML representation for a non-optional document (issue #207)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
 
 # Mutation: remove a non-optional link from llms.txt so the manifest and the
@@ -2480,6 +2612,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted llms.txt with a non-optional link missing from the manifest (issue #207)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/llms.txt" "$fixture_root/site/llms.txt"
 
 # --- Issue #39: table-driven mutation tests for required files ---
@@ -2515,6 +2648,7 @@ do
     echo "Validator accepted missing required file: $required_file (issue #39)" >&2
     exit 1
   fi
+  restore_fixtures
   mkdir -p "$(dirname "$target")"
   cp "$repo_root/site/$required_file" "$target"
 done
@@ -2568,6 +2702,7 @@ PY
     echo "Validator accepted missing required metadata: $meta_key (issue #39)" >&2
     exit 1
   fi
+  restore_fixtures
 done
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2598,6 +2733,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a landing page with the wrong canonical URL (issue #39)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
 # Sitemap origin in robots.txt: the validator must reject a robots.txt that
@@ -2615,6 +2751,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a robots.txt with the wrong sitemap origin (issue #39)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/robots.txt" "$fixture_root/site/robots.txt"
 
 # JSON-LD repository link: the validator must reject a SoftwareSourceCode
@@ -2635,6 +2772,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a JSON-LD codeRepository pointing to the wrong repository (issue #39)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
 # Local-only URLs: the validator must reject any site file containing a
@@ -2657,6 +2795,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a site containing a local-only URL (issue #39)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
 # --- Issue #197: quick-start example binding mutation tests ---
@@ -2684,6 +2823,7 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   echo "Validator accepted README source diverging from fixture (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: dedent the README `return n` line (syntactically invalid Python)
 # to verify the validator preserves indentation rather than collapsing it.
@@ -2705,6 +2845,7 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   echo "Validator accepted README source with indentation drift (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: change site hero `<pre><code>` text so it differs from the fixture.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2725,6 +2866,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted site hero source diverging from fixture (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: change the fixture source itself so the README no longer matches.
 cp "$repo_root/tests/fixtures/quick_start.py" "$fixture_root/quick_start.py"
@@ -2745,6 +2887,7 @@ if QUICK_START_FIXTURE_PATH="$fixture_root/quick_start.py" SITE_DIR="$fixture_ro
   echo "Validator accepted fixture source diverging from README (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: change README `$ ./hello` output block (drop the final `55`).
 cp "$repo_root/README.md" "$fixture_root/README.md"
@@ -2765,6 +2908,7 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   echo "Validator accepted README output diverging from canonical stdout (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: change `data-copy` to differ from the displayed command.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2785,6 +2929,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted copy-button data-copy diverging from displayed command (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: change copy-button command to a pip install command.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2805,6 +2950,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a package-manager install command in copy-button (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: add `planned` to the hero `.command-note`.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2826,6 +2972,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted 'planned' in hero command-note (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: rename README `## Quick start` to `## Quick start (planned CLI)`.
 # This is caught by the heading-existence guard (regex no longer matches),
@@ -2848,6 +2995,7 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   echo "Validator accepted 'planned' in README Quick start heading (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: remove the WEBSITE.md binding phrase.
 cp "$repo_root/docs/WEBSITE.md" "$fixture_root/WEBSITE.md"
@@ -2868,6 +3016,7 @@ if WEBSITE_MD_PATH="$fixture_root/WEBSITE.md" SITE_DIR="$fixture_root/site" "$re
   echo "Validator accepted WEBSITE.md without the binding phrase (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: change the displayed <code> command text (not data-copy) so it
 # differs from the canonical 'pycc check hello.py'.
@@ -2889,6 +3038,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a displayed command other than 'pycc build hello.py -o hello' (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: add a pip install command to the README quick-start console block.
 cp "$repo_root/README.md" "$fixture_root/README.md"
@@ -2909,6 +3059,7 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   echo "Validator accepted a package-manager install command in README (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: add a @<version> suffix to a README quick-start command.
 cp "$repo_root/README.md" "$fixture_root/README.md"
@@ -2929,6 +3080,7 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   echo "Validator accepted a @<version> suffix in README command (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: add a @<version> suffix to the copy-button command.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -2949,6 +3101,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a @<version> suffix in copy-button command (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: remove the tests/fixtures/quick_start.py reference from WEBSITE.md
 # (keeping the binding phrase intact) so the fixture-path guard is exercised.
@@ -2968,6 +3121,7 @@ if WEBSITE_MD_PATH="$fixture_root/WEBSITE.md" SITE_DIR="$fixture_root/site" "$re
   echo "Validator accepted WEBSITE.md without tests/fixtures/quick_start.py reference (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: WEBSITE.md no longer names the canonical stdout fixture.
 cp "$repo_root/docs/WEBSITE.md" "$fixture_root/WEBSITE.md"
@@ -2987,6 +3141,7 @@ if WEBSITE_MD_PATH="$fixture_root/WEBSITE.md" SITE_DIR="$fixture_root/site" "$re
   echo "Validator accepted WEBSITE.md without the quick_start.expected.txt reference (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: drift the site hero output pane away from the canonical stdout.
 # This is the discriminating check for the parser's `.output-window` scoping:
@@ -3007,6 +3162,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a hero output pane diverging from the canonical stdout (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: remove the hero output pane entirely.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -3023,6 +3179,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a hero with no output pane (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: open the output pane with a newline after `<code>`, which HTML
 # preserves as a leading blank line the canonical fixture does not have.
@@ -3040,6 +3197,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a hero output pane with a leading blank line (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: drift the canonical stdout fixture itself, so both published
 # copies are checked against the fixture rather than only against each other.
@@ -3058,6 +3216,7 @@ if QUICK_START_EXPECTED_PATH="$fixture_root/quick_start.expected.txt" \
   echo "Validator accepted a stdout fixture diverging from the published output (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: reintroduce the fabricated .diagnostic-card the hero used to carry.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -3079,6 +3238,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a reintroduced .diagnostic-card (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: publish a `help:` diagnostic line pycc's renderer never emits.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -3100,6 +3260,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a published 'help:' diagnostic line (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: use an evidence-state marker outside the shared #564 vocabulary.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -3120,6 +3281,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an evidence-state outside the shared vocabulary (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: let the evidence-state label disagree with its own attribute.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -3140,6 +3302,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an evidence-state label disagreeing with its attribute (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: drop the provenance paragraph's limitations statement.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -3155,6 +3318,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a hero provenance note without a limitations statement (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: drop the link to the verifying test from the provenance note.
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
@@ -3170,6 +3334,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a hero provenance note that does not name tests/quick_start.rs (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Restore immediately: this mutation strips every occurrence of
 # tests/quick_start.rs from the page, and a later block that leaves it in
@@ -3191,6 +3356,7 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   echo "Validator accepted a README diagnostic anchor naming the wrong fixture (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: remove the README diagnostic anchor entirely.
 cp "$repo_root/README.md" "$fixture_root/README.md"
@@ -3207,6 +3373,7 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   echo "Validator accepted a README with no diagnostic-example anchor (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: restore the fabricated span and `help:` line in the README block.
 cp "$repo_root/README.md" "$fixture_root/README.md"
@@ -3223,6 +3390,7 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   echo "Validator accepted a README diagnostic span the compiler does not emit (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: change the README diagnostic body without touching its path line,
 # so the byte-for-byte comparison against the generated fixture is exercised
@@ -3241,6 +3409,7 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   echo "Validator accepted a README diagnostic body diverging from the generated fixture (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Restore immediately: a later block that mutates something other than the
 # README would otherwise inherit this diverging diagnostic body and fail on
@@ -3265,6 +3434,7 @@ if QUICK_START_DIAGNOSTIC_PATH="$fixture_root/quick_start_type_error.expected.tx
   echo "Validator accepted a diagnostic fixture diverging from the published README block (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: drift the diagnostic example's source away from the canonical
 # quick-start fixture by appending a second line, so it is no longer "the file
@@ -3288,6 +3458,7 @@ if QUICK_START_DIAGNOSTIC_SOURCE_PATH="$fixture_root/quick_start_type_error.py" 
   echo "Validator accepted a diagnostic source that is not the quick-start fixture plus one line (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: change an early line of the diagnostic source's body rather than
 # appending one. The line count still matches, so only the full-string
@@ -3308,6 +3479,7 @@ if QUICK_START_DIAGNOSTIC_SOURCE_PATH="$fixture_root/quick_start_type_error.py" 
   echo "Validator accepted a diagnostic source whose body diverges from the quick-start fixture (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: keep both source files intact but change the line the README claims
 # was appended, proving the prose sentence is bound to the real source rather
@@ -3326,6 +3498,7 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   echo "Validator accepted a README naming an appended line the diagnostic source does not carry (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Mutation: drop the README's appended-line claim entirely, so the binding
 # cannot be satisfied vacuously by a missing sentence.
@@ -3343,6 +3516,7 @@ if README_PATH="$fixture_root/README.md" SITE_DIR="$fixture_root/site" "$repo_ro
   echo "Validator accepted a README that no longer names the appended line (issue #197)" >&2
   exit 1
 fi
+restore_fixtures
 
 cp "$repo_root/README.md" "$fixture_root/README.md"
 
@@ -3392,6 +3566,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted an og.png at or above 1 MB (issue #200)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/og.png" "$fixture_root/site/og.png"
 
 # Mutation: dimensions below 640x320 minimum.
@@ -3420,6 +3595,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted og.png with dimensions below 640x320 (issue #200)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/og.png" "$fixture_root/site/og.png"
 
 # Mutation: wrong dimensions (valid PNG but not 1280x640).
@@ -3447,6 +3623,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted og.png with wrong dimensions (not 1280x640) (issue #200)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/og.png" "$fixture_root/site/og.png"
 
 # Mutation: non-PNG format (JPEG magic bytes).
@@ -3462,6 +3639,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a non-PNG og.png (issue #200)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/og.png" "$fixture_root/site/og.png"
 
 # Mutation: wrong og:image target (points to a different file).
@@ -3481,6 +3659,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a wrong og:image target (issue #200)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
 # Mutation: wrong twitter:image target (points to a different file).
@@ -3500,6 +3679,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a wrong twitter:image target (issue #200)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 
 # Mutation: preview asset absent from the site directory (og.png deleted but
@@ -3511,6 +3691,7 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   echo "Validator accepted a missing og.png referenced by metadata (issue #200)" >&2
   exit 1
 fi
+restore_fixtures
 cp "$repo_root/site/og.png" "$fixture_root/site/og.png"
 
 # --- README_PATH override reaches every consumer (issue #649) ---
@@ -3519,9 +3700,12 @@ cp "$repo_root/site/og.png" "$fixture_root/site/og.png"
 # mutations pin the override's reach: the probe README lives outside the
 # directory that derivation would produce, so a run that honors it and a run
 # that silently re-derives cannot both pass.
-cp "$repo_root/README.md" "$fixture_root/README.md"
-mkdir -p "$fixture_root/override"
-cp "$repo_root/README.md" "$fixture_root/override/README.md"
+seed_readme_override() {
+  mkdir -p "$fixture_root/override"
+  cp "$repo_root/README.md" "$fixture_root/override/README.md"
+}
+
+seed_readme_override
 
 # Positive direction: an override pointing at a pristine README outside the
 # derived location is accepted, so a rejection below cannot be blamed on the
@@ -3530,10 +3714,12 @@ if ! README_PATH="$fixture_root/override/README.md" SITE_DIR="$fixture_root/site
   echo "Validator rejected a pristine README supplied via README_PATH (issue #649)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Negative direction: the same override pointing at a broken README must be
 # rejected. The derived path ($fixture_root/README.md) stays pristine, so a
 # validator that ignores the override accepts this and fails the test.
+seed_readme_override
 python3 - "$fixture_root/override/README.md" <<'PY'
 from pathlib import Path
 import sys
@@ -3552,12 +3738,13 @@ if README_PATH="$fixture_root/override/README.md" SITE_DIR="$fixture_root/site" 
   echo "Validator ignored README_PATH and re-derived the README location (issue #649)" >&2
   exit 1
 fi
+restore_fixtures
 
 # Unset direction: with no override, the site_dir-derived default is unchanged.
 if ! SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator rejected the site_dir-derived README with README_PATH unset (issue #649)" >&2
   exit 1
 fi
-rm -rf "$fixture_root/override"
+restore_fixtures
 
 echo "Website validator self-tests passed."
