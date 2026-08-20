@@ -36,9 +36,20 @@ pub(super) enum BigIntRefcount {
 /// int, so a release of a never-stored slot must reach neither the
 /// classifier nor a dereference.
 ///
-/// Leaves the builder positioned in a fresh continuation block. Callers that
-/// record a basic block for a phi incoming edge must therefore re-read
-/// `get_insert_block()` *after* calling this, never before.
+/// Emits nothing at all when `word` is a compile-time constant -- see the
+/// body for why that word is provably not a heap pointer.
+///
+/// Postcondition, on the non-constant path *only*: leaves the builder
+/// positioned in a fresh continuation block. Callers that record a basic
+/// block for a phi incoming edge must therefore re-read `get_insert_block()`
+/// *after* calling this, never before. On the constant path the builder is
+/// left exactly where it was, so such a caller would observe the *same*
+/// block rather than a stale one -- re-reading afterwards is correct in both
+/// cases, which is why the rule is stated unconditionally even though the
+/// block split is not. Do not invert it into "only re-read when the word is
+/// non-constant": whether a word is constant is not a property a caller can
+/// see, and guessing wrong reintroduces the phi miscompile this note exists
+/// to prevent.
 pub(super) fn emit_bigint_refcount_call<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,

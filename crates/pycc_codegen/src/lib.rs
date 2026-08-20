@@ -9958,6 +9958,56 @@ mod tests {
         assert_eq!((retains, releases), (0, 1), "got {calls:?}");
     }
 
+    /// D-181 decision 12: an in-range `IntLiteral` operand is a *constant*
+    /// tagged smallint, so `emit_bigint_refcount_call` must emit nothing at
+    /// all for it -- not even a guard LLVM would fold away.
+    ///
+    /// This pins the early return mechanically. Without it the literal `1`
+    /// below still reaches the emitter, whose four guard halves inkwell then
+    /// constant-folds, leaving a `bigint_rc_call`/`bigint_rc_cont` pair
+    /// behind a branch whose condition is no longer an SSA definition. The
+    /// other operand is a `Name`, which is borrowed and never released, so
+    /// the literal is the function's only candidate refcount site and the
+    /// whole body must therefore be free of guard blocks.
+    #[test]
+    fn an_in_range_literal_operand_emits_no_refcount_guard_at_all() {
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "borrowed_plus_literal".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::BinOp {
+                    op: pycc_mir::BinOpKind::Add,
+                    left: Box::new(int_name("n")),
+                    right: Box::new(MirExpr::IntLiteral(1)),
+                    ty: Ty::Int,
+                }))],
+            }],
+            class_defs: Vec::new(),
+        };
+        let dir = tempfile_dir("bigint_rc_const_literal");
+        let obj_path = dir.join("bigint_rc_const_literal.o");
+        let mut ir = String::new();
+        // D-029: never let `print_to_string`'s `LLVMString` drop; route it
+        // through `llvm_string_to_owned` exactly as the sibling tests do.
+        let mut observer = |module: &inkwell::module::Module<'_>, _| {
+            ir = llvm_string_to_owned(module.print_to_string());
+        };
+        compile_to_object_with_observer(&mir, &obj_path, None, false, Some(&mut observer))
+            .expect("codegen should succeed");
+        assert!(
+            !ir.contains("bigint_rc_call"),
+            "a constant word must not reach the guard emitter, but the IR \
+             contains a `bigint_rc_call` block:\n{ir}"
+        );
+        assert!(
+            !ir.contains("bigint_rc_cont"),
+            "a constant word must not reach the guard emitter, but the IR \
+             contains a `bigint_rc_cont` block:\n{ir}"
+        );
+    }
+
+
     /// The retain side of the same classification (#633 direction A):
     /// binding a tuple element to an `int` local makes that local a second
     /// owner of a word the tuple's supplier still holds, so the bind must
