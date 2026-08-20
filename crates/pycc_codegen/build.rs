@@ -93,27 +93,33 @@ fn main() {
         );
     }
 
-    // Re-entered from inside the nested build: doing anything here would
-    // recurse. The directives above have already been emitted, so the
-    // stdout contract still holds.
+    // Every path is computed, and every directive emitted, before the
+    // recursion guard below can return: the stdout contract is
+    // unconditional, so no directive may sit behind an early return or
+    // inside the work loop.
+    let triple = cross.then_some(&target);
+    let installs: Vec<(&str, PathBuf, PathBuf, PathBuf)> = PROFILES
+        .iter()
+        .map(|profile| {
+            let nested_root = out_dir.join(format!("pycc_rt-nested-{profile}"));
+            let built = profile_dir(&nested_root, profile, triple).join(archive_name);
+            let installed = profile_dir(&anchored.root, profile, triple).join(archive_name);
+            (*profile, nested_root, built, installed)
+        })
+        .collect();
+    for (_, _, _, installed) in &installs {
+        println!("cargo::rerun-if-changed={}", installed.display());
+    }
+
+    // Re-entered from inside the nested build: doing anything further here
+    // would recurse.
     if std::env::var_os(NESTED_BUILD_SENTINEL).is_some() {
         return;
     }
 
-    for profile in PROFILES {
-        let nested_root = out_dir.join(format!("pycc_rt-nested-{profile}"));
-        run_nested_cargo(
-            &workspace_root,
-            &nested_root,
-            profile,
-            cross.then_some(&target),
-        );
-
-        let built = profile_dir(&nested_root, profile, cross.then_some(&target)).join(archive_name);
-        let installed =
-            profile_dir(&anchored.root, profile, cross.then_some(&target)).join(archive_name);
-        install(&built, &installed);
-        println!("cargo::rerun-if-changed={}", installed.display());
+    for (profile, nested_root, built, installed) in &installs {
+        run_nested_cargo(&workspace_root, nested_root, profile, triple);
+        install(built, installed);
     }
 }
 

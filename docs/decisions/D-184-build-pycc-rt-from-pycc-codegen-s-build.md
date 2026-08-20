@@ -245,6 +245,16 @@ status: accepted
     Both host profiles are still produced, so nothing regresses relative
     to the previous manual step, but the archive is not where such a build
     would look.
+  - `cargo build --target <triple>` places artifacts under
+    `<root>/<triple>/<profile>/` whenever `--target` is passed at all, even
+    when the triple is the host's own default. A build script sees only the
+    resolved `TARGET`, never whether the flag was given, so this script
+    keys on `TARGET != HOST` and installs at the unqualified
+    `<root>/<profile>/` in that same-triple case. Nothing mislinks: the
+    existing `no pycc_rt build found (expected ...)` diagnostic fires and
+    names the directory it searched, exactly as it did before this change.
+    It is the same shape of gap as the custom-profile case above, and it is
+    recorded for the same reason.
   - Windows is the untested leg. Every measurement behind this entry is
     macOS 15 on arm64. The `.lib` naming, MSVC environment survival under
     the namespace scrub, and rename-over-an-existing-file semantics are
