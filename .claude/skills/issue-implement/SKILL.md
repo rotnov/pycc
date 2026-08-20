@@ -181,7 +181,7 @@ after the first. The dispatched agent works inside the same task branch and work
 session already created in step 1's D-021 preflight, so its commits are this session's own
 committed work, not something foreign to it. Give it a self-contained brief: the plan's own
 published text (or its issue-comment URL), the exact task branch and worktree to work in, which
-of the D-080/D-103 staged-pattern branches below applies if any (this session, not the
+of the D-080/D-103/D-185 staged-pattern branches below applies if any (this session, not the
 dispatched agent, makes that classification while reading the plan in step 3, since it decides
 how many pull requests this run opens), and the precise gate commands and thresholds below.
 Instruct it to return a compact report — files changed, gate results, any plan deviations — not
@@ -317,6 +317,12 @@ rather than the fixed two-PR stage/activate shape above.
 - **The pull request that finally brings the tracked file under the ~1,000-line threshold**
   (or removes or merges it away entirely) carries the real `Fixes #N` and runs the normal
   steps 4-8 unchanged, the same as any other issue's closing pull request.
+
+Each partial-decomposition PR's own step 5 review explicitly verifies that the extraction is
+genuinely cohesion-driven and rewrites no unrelated logic or behavior — the property
+`AGENTS.md`'s carve-out and D-185 itself require — and treats any ambiguity in that
+verification as a stop condition rather than a best-effort guess, the same discipline the
+D-080/D-103 stage PRs above already require for their own binding checks.
 
 Never treat a D-185 tracking issue's first pull request as the whole task: scope that one pull
 request to a handful of cohesion-driven submodules extracted cleanly, not an attempt at the
@@ -531,7 +537,9 @@ the rest of the pool):
   report twice in a row (the mechanical dispatch failure, distinct from the case above);
 - (when executing the staged CI-digest pattern) the digest computation is ambiguous;
 - (when executing the D-103 manifest-staging pattern) the staged successor's byte-content
-  binding to its manifest entry is ambiguous.
+  binding to its manifest entry is ambiguous;
+- (when executing the D-185 narrowing-PR pattern) whether an extraction is genuinely
+  cohesion-driven, with no unrelated logic or behavior rewritten, is ambiguous.
 
 Stop and report — with everything completed so far delivered — for any of the above.
 
