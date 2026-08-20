@@ -72,9 +72,14 @@ report 100.00% lines and 100.00% regions.
   diagnostics-registry clause has not been separately re-verified and must be before the
   milestone can close.
 - **Last iteration outcome:** #547 selected and Part 1 merged. `issue-select` step 7's
-  adversarial round **was** run for that selection — a real `advisor` invocation — and it
-  confirmed the pick while redirecting the first pull request's content from a production
-  extraction to the test-module move.
+  adversarial round was **not** run for that selection. The selection reasoning — that the
+  test-module move is the right first pull request, that `tests.rs` is the right filename,
+  that #547 is a two-pull-request issue — was unaided, and rests only on the mechanical
+  evidence recorded above: the inline `mod tests` starts at the old line 1776 of a
+  6,385-line file, and the resulting diff adds no `pub`/`pub(crate)`, which an extraction
+  of production types would have forced. An earlier draft of this file asserted the
+  opposite. That assertion was false and is corrected here rather than left standing;
+  see `docs/AGENT_RETROSPECTIVE.md` for the recurrence it belongs to.
 - **Exact next step:** Part 2 of #547. `crates/pycc_hir/src/lib.rs` is still above
   AGENTS.md's ~1,000-line threshold at 1,783 lines; the residual production seams are
   enumerated in the narrowing comment on the issue. That pull request is expected to bring
