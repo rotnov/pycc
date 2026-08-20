@@ -2950,6 +2950,23 @@ fn emit_expr_unchecked<'ctx>(
                     locals,
                     element,
                 );
+                // D-182: a tuple field takes its own reference at ingress.
+                // Only a *borrowed* element word is retained here -- that is
+                // what `retain_if_int_duplicate` classifies -- because an
+                // owning element (a fresh `BinOp` result, an out-of-range
+                // literal) already arrives with the single reference this
+                // field will hold. Retaining unconditionally would leave rc
+                // at 2 with only one owner, which a future `Ty::Tuple`
+                // slot-death release under D-124 could never balance.
+                //
+                // `emit_bigint_refcount_call`'s documented postcondition:
+                // on the non-constant path it leaves the builder positioned
+                // in a fresh continuation block, so `get_insert_block()`
+                // must be re-read unconditionally after this call. The
+                // `build_insert_value` below is block-agnostic and takes
+                // part in no phi, so nothing here depends on the block the
+                // element was evaluated in.
+                let scalar = retain_if_int_duplicate(context, builder, rt, element, scalar);
                 let field_value: inkwell::values::BasicValueEnum = match scalar {
                     Scalar::Int(v) => v.into(),
                     Scalar::Bool(v) => v.into(),
@@ -9956,10 +9973,16 @@ mod tests {
     }
 
     /// #146 Part 2 (D-181): the tuple-egress classification, from both
-    /// sides at once. `t[0]` is *borrowed* (a tuple field aliases whatever
-    /// supplied it, since `TupleLiteral` never retains what it stores), so
-    /// the `+` releases only its literal operand -- releasing `t[0]` too
-    /// would free a word `n` still holds.
+    /// sides at once. `t[0]` is *borrowed*: under D-182 the tuple field
+    /// holds its own ingress reference, and a read hands the same word
+    /// back out without transferring it, so the reader owns nothing. The
+    /// `+` therefore releases only its literal operand -- releasing `t[0]`
+    /// too would retire the tuple's own reference on a read, which is
+    /// exactly the #633 direction-A use-after-free D-181 closed.
+    ///
+    /// The `TupleLiteral` itself is where the two retains come from: `n`
+    /// is a borrowed `Name`, so D-182's ingress retain fires once per
+    /// element.
     ///
     /// The literal is `2^62` rather than a small one on purpose: only an
     /// out-of-range literal is materialized by a runtime
@@ -10004,7 +10027,7 @@ mod tests {
             .iter()
             .filter(|c| c.callee == "pycc_rt_bigint_release")
             .count();
-        assert_eq!((retains, releases), (0, 1), "got {calls:?}");
+        assert_eq!((retains, releases), (2, 1), "got {calls:?}");
     }
 
     /// D-181 decision 12: an in-range `IntLiteral` operand is a *constant*
@@ -10097,9 +10120,107 @@ mod tests {
             .iter()
             .filter(|c| c.callee == "pycc_rt_bigint_release")
             .count();
-        // The tuple bind's retain plus the `return`'s, against the `y`
-        // slot's own release-before-store.
-        assert_eq!((retains, releases), (2, 1), "got {calls:?}");
+        // D-182's two ingress retains for the `TupleLiteral`'s borrowed
+        // `n` elements, plus the tuple bind's retain and the `return`'s,
+        // against the `y` slot's own release-before-store.
+        assert_eq!((retains, releases), (4, 1), "got {calls:?}");
+    }
+
+    /// Counts the refcount calls in a one-statement function whose only
+    /// body is `t = TupleLiteral(elements)`, with `params` in scope.
+    fn tuple_literal_refcount_counts(
+        label: &str,
+        params: Vec<(String, Ty)>,
+        elements: Vec<MirExpr>,
+    ) -> (usize, usize) {
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "build_tuple".to_string(),
+                params,
+                return_ty: Ty::None,
+                body: vec![MirStmt::Assign {
+                    target: "t".to_string(),
+                    value: MirExpr::TupleLiteral(elements),
+                }],
+            }],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in(label, &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        (retains, releases)
+    }
+
+    /// #633 direction B (D-182): `MirExpr::TupleLiteral` takes a reference
+    /// for the field it is about to store -- but only for a *borrowed*
+    /// element word.
+    ///
+    /// This is the assertion that discriminates D-182's chosen shape from
+    /// the unconditional-retain shape it rejected. An owning element
+    /// already arrives holding the single reference the field will keep;
+    /// retaining it too would leave rc at 2 with one owner, which a future
+    /// `Ty::Tuple` slot-death release under D-124 could never balance.
+    ///
+    /// Nothing releases a tuple field today, so every case here expects a
+    /// release count of zero -- D-182's accepted, deliberate imbalance.
+    #[test]
+    fn a_tuple_literal_retains_only_its_borrowed_int_elements() {
+        // A borrowed `Name` element: exactly one ingress retain. The
+        // in-range `IntLiteral` sibling is a *constant* tagged smallint,
+        // so `emit_bigint_refcount_call` emits nothing at all for it.
+        assert_eq!(
+            tuple_literal_refcount_counts(
+                "bigint_rc_tuple_ingress_borrowed",
+                vec![("n".to_string(), Ty::Int)],
+                vec![int_name("n"), MirExpr::IntLiteral(1)],
+            ),
+            (1, 0)
+        );
+
+        // An *owning* element: no ingress retain. The literal is `2^62`
+        // rather than a small one on purpose -- only an out-of-range
+        // literal is materialized by a runtime `pycc_rt_int_from_i64`
+        // call, so only that shape produces a non-constant word that
+        // `emit_bigint_refcount_call` would not have skipped anyway. An
+        // in-range literal would prove nothing about the classification.
+        assert_eq!(
+            tuple_literal_refcount_counts(
+                "bigint_rc_tuple_ingress_owning",
+                Vec::new(),
+                vec![
+                    MirExpr::IntLiteral(4_611_686_018_427_387_904),
+                    MirExpr::IntLiteral(1),
+                ],
+            ),
+            (0, 0)
+        );
+
+        // `float`/`bool` elements are not `int` words at all: the
+        // `Scalar::Int` test in `retain_if_int_duplicate` filters them out
+        // before the source-expression classification is even consulted.
+        assert_eq!(
+            tuple_literal_refcount_counts(
+                "bigint_rc_tuple_ingress_non_int",
+                vec![("f".to_string(), Ty::Float), ("b".to_string(), Ty::Bool)],
+                vec![
+                    MirExpr::Name {
+                        name: "f".to_string(),
+                        ty: Ty::Float,
+                    },
+                    MirExpr::Name {
+                        name: "b".to_string(),
+                        ty: Ty::Bool,
+                    },
+                ],
+            ),
+            (0, 0)
+        );
     }
 
     // `declare_module_globals` builds a constant initializer with no

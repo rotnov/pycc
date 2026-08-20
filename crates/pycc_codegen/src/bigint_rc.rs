@@ -143,7 +143,8 @@ pub(super) fn release_int_slot_before_store<'ctx>(
 /// there would be orphaned -- a leak with no matching release. So the
 /// int-side retain is applied only where the value's new home actually
 /// takes ownership: an assignment target, a `return` value, an instance
-/// attribute, and a call argument.
+/// attribute, a call argument, and -- since D-182 -- a `Ty::Tuple`
+/// literal's element field.
 ///
 /// The predicate itself extends `str_value_is_a_duplicate_reference`'s:
 /// a bare `Name` or `AttrGet` read yields a *second* reference to a word
@@ -152,19 +153,23 @@ pub(super) fn release_int_slot_before_store<'ctx>(
 /// its value already owning exactly one reference.
 ///
 /// A `Ty::Int` element read out of a *tuple* is the third borrowed shape,
-/// and is matched here in addition to those two. `MirExpr::TupleLiteral`
-/// stores the element word it was handed without retaining it and
-/// `MirExpr::Subscript`'s tuple branch hands that same word straight back
-/// out, so a tuple field is a pure alias of whatever supplied it.
+/// and is matched here in addition to those two. Under D-182 a
+/// `MirExpr::TupleLiteral` element goes through this very helper at
+/// ingress, so a tuple field holds a reference of its own; but
+/// `MirExpr::Subscript`'s tuple branch hands the stored word straight back
+/// out **without transferring** that reference, which stays with the
+/// field. The reader therefore owns nothing and must take its own
+/// reference -- which is what this arm does.
 ///
-/// This arm carries an **unenforced precondition**: it is sound only while
-/// the tuple field holds no owned reference of its own, i.e. while the name
-/// that supplied the element is still bound to that word. D-181 records the
-/// converse direction -- overwriting the supplying name before the tuple is
-/// read -- as a known, unfixed use-after-free tracked by
-/// [#633](https://github.com/rotnov/pycc/issues/633). Whoever gives tuple
-/// fields a real owner must revisit both this arm and
-/// `int_value_is_a_duplicate_reference`'s matching one.
+/// D-181 shipped this arm under the opposite premise (the field was a pure
+/// alias, retaining nothing) and recorded the converse direction --
+/// overwriting the supplying name before the tuple is read -- as a known,
+/// unfixed use-after-free tracked by
+/// [#633](https://github.com/rotnov/pycc/issues/633). D-182 closes that
+/// direction by adding the ingress retain, and in doing so replaces the
+/// arm's old **unenforced precondition** (sound only while the supplying
+/// name is still bound) with a real reference. The classification itself
+/// is unchanged; only its justification is.
 ///
 /// Deliberately **not** shared with `int_value_is_a_duplicate_reference`
 /// even though the two predicates agree on today's three borrowed shapes.
@@ -174,12 +179,23 @@ pub(super) fn release_int_slot_before_store<'ctx>(
 /// every future ownership refinement a simultaneous edit to both an
 /// over-approximating and an under-approximating consumer.
 ///
-/// The tuple arm is balanced at each of this helper's four call sites:
+/// The tuple arm is balanced at four of this helper's five call sites:
 /// `MirStmt::Assign` is matched by the slot's own release-before-store,
 /// `MirStmt::Return` is matched by the caller's D-181 release of the
 /// `Call { ty: Int }` result, and the call-argument and `MirStmt::AttrSet`
 /// sites are unmatched -- exactly D-180 residual 3's existing shape, not a
 /// new leak class.
+///
+/// The fifth site, D-182's `MirExpr::TupleLiteral` ingress, is a
+/// **deliberate** imbalance: nothing releases a `Ty::Tuple` slot's fields
+/// when the slot is overwritten or dies, so a tuple's ingress reference is
+/// never retired. That is a new leak class -- a rebound supplier inside a
+/// loop leaks once per trip -- accepted knowingly under D-182 as the price
+/// of closing the #633 direction-B use-after-free. Only a *borrowed*
+/// element is retained: an owning element already arrives holding the one
+/// reference the field will keep, and retaining it too would leave rc at 2
+/// with a single owner, which a future `Ty::Tuple` slot-death release
+/// under D-124's container refcounting could never balance.
 pub(super) fn retain_if_int_duplicate<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -224,10 +240,15 @@ pub(super) fn retain_if_int_duplicate<'ctx>(
 ///
 /// - `Name { ty: Int }` and `AttrGet { ty: Int }` read a word a storage
 ///   slot still owns.
-/// - A `Subscript` on a *tuple* base (already known `Ty::Int`, see below). `MirExpr::TupleLiteral`
-///   inserts its element word without retaining it and the tuple branch of
-///   `MirExpr::Subscript` returns that same word unchanged, so the field is
-///   a pure alias. The *list* `Subscript` branch is not borrowed: D-141's
+/// - A `Subscript` on a *tuple* base (already known `Ty::Int`, see below).
+///   Under D-182 `MirExpr::TupleLiteral` retains a borrowed element at
+///   ingress, so the field holds a reference; but the tuple branch of
+///   `MirExpr::Subscript` returns that same word unchanged without
+///   transferring that reference, so the read is still a borrow. Keeping
+///   this arm `borrowed` is load-bearing: flipping it to owning would make
+///   `t[0] + 1` retire the tuple's own ingress reference on a mere read
+///   and reintroduce the #633 direction-A use-after-free D-181 closed.
+///   The *list* `Subscript` branch is not borrowed: D-141's
 ///   container ingress rejects bigints outright, so a list element is
 ///   always a smallint the guard filters out anyway.
 ///
