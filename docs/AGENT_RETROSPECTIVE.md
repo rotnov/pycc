@@ -28,6 +28,48 @@ never a merge gate.
 
 ---
 
+## 2026-08-20 — Shipped an inkwell-touching test that no local gate could exercise, and crashed the Windows CI job
+
+**What happened:** The codegen-depth IR test added for issue #624 called
+inkwell's `module.verify()` directly inside its observer closure. Every
+local gate passed on macOS — clippy, the full `cargo llvm-cov` run at
+100%/100%, the scripts suite, the Ruby checkers. CI then failed
+`native-build-test (windows-latest)` with `exit code: 0xc0000005,
+STATUS_ACCESS_VIOLATION`, which kills the whole `pycc_codegen` test binary
+rather than failing one test.
+
+**Root cause:** D-029. inkwell's `LLVMString` `Drop` calls
+`LLVMDisposeMessage`, which faults against the prebuilt LLVM 22.1.1 the
+Windows runner links — and `Module::verify` takes that path on its
+*success* branch too, not only on error. This crate already owns the
+Windows-safe wrapper for exactly that reason (`verify_module`, a no-op
+under `#[cfg(windows)]`); the new test reached past it to the raw inkwell
+API. The wrapper was a convention, not a boundary, so nothing objected.
+The blind spot is structural: the Windows job runs `cargo test --workspace`
+single-threaded *because of* D-029, so this entire failure class is only
+ever reachable in CI, and no gate on a macOS or Linux development host can
+observe it.
+
+**What fixed it:** Deleting the call outright rather than gating it
+(commit `b9d2924a`) — the guarantee was never lost, because
+`compile_to_object_with_observer` already runs `verify_module` on that
+exact module *before* it invokes the observer, so reaching the observer at
+all means the module passed. Windows went green on that head.
+
+**Lesson:** When a crate wraps a third-party API specifically to make it
+safe on one platform, new code — tests included — must go through the
+wrapper, and the wrapper needs a mechanical guard rather than a comment.
+A hazard whose only executing platform is CI cannot be caught by "run the
+gates locally first"; the only affordable substitute is a static assertion
+that the raw API has no call sites outside its wrapper. That guard now
+exists as
+`crates/pycc_codegen/src/lib.rs`'s
+`every_inkwell_llvm_string_call_routes_through_a_d029_wrapper`, which
+scans the crate's own source and fails on any escape. Generalizing: before
+adding a test that touches an FFI or platform-sensitive API, check whether
+the crate already owns a wrapper for it, and prefer extending the wrapper
+over calling the raw API from the test.
+
 ## 2026-08-20 — Chased a phantom flaky test for hours because a dispatched implementation agent was still writing the same file
 
 **What happened:** While finishing issue #624's review-fix round, two new

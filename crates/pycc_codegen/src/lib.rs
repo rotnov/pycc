@@ -9380,6 +9380,55 @@ mod tests {
         }
     }
 
+    // D-029 static guard. Every inkwell API that hands back an `LLVMString`
+    // is a Windows crash waiting to happen: the wrapper's `Drop` calls
+    // `LLVMDisposeMessage`, which faults against the prebuilt LLVM this
+    // project links there. This crate owns exactly two safe entry points --
+    // `llvm_string_to_owned`, which forgets the wrapper instead of dropping
+    // it, and `verify_module`, which is a no-op under `#[cfg(windows)]`.
+    // Reaching past either one to the raw inkwell API compiles and passes
+    // every local gate, then kills the whole test binary in CI, because the
+    // Windows job is the only place this class is ever executed. This test
+    // is the mechanical stand-in for that missing local gate: it reads the
+    // crate's own source and asserts nothing escapes the two wrappers.
+    //
+    // The needles are assembled at run time so this test's own body is not
+    // counted as a violation of itself. Comment lines are excluded, since
+    // the crate discusses both APIs at length in prose.
+    #[test]
+    fn every_inkwell_llvm_string_call_routes_through_a_d029_wrapper() {
+        // Read the whole crate rather than this one file, so a module added
+        // later is covered without anyone remembering to extend a list.
+        let sources: Vec<String> = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))
+            .expect("the crate's own source directory should be readable")
+            .map(|entry| entry.expect("a readable directory entry").path())
+            .filter(|path| path.extension() == Some(std::ffi::OsStr::new("rs")))
+            .map(|path| std::fs::read_to_string(path).expect("a readable source file"))
+            .collect();
+        let printer = format!(".{}()", "print_to_string");
+        let verifier = format!(".{}()", "verify");
+        let wrapped = format!("llvm_string_to_owned(module{printer})");
+        let code_lines = || {
+            sources
+                .iter()
+                .flat_map(|source| source.lines())
+                .filter(|line| !line.trim_start().starts_with("//"))
+        };
+
+        assert_eq!(
+            code_lines().filter(|line| line.contains(&printer)).count(),
+            code_lines().filter(|line| line.contains(&wrapped)).count(),
+            "every inkwell print_to_string call must be an argument of \
+             llvm_string_to_owned, or its LLVMString drops and faults on Windows (D-029)"
+        );
+        assert_eq!(
+            code_lines().filter(|line| line.contains(&verifier)).count(),
+            1,
+            "the only direct inkwell verify call may be the one inside verify_module, \
+             which is skipped on Windows; everything else must go through that wrapper (D-029)"
+        );
+    }
+
     // The in-range arm of `fits_tagged_smallint`: still folded to an
     // immediate, with no runtime call at all.
     #[test]
