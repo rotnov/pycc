@@ -388,8 +388,10 @@ The card is deleted, and `scripts/check-site.sh` fails if either
 The honest replacement lives in `README.md`, generated from
 `tests/diagnostics/quick_start_type_error.expected.txt` — the quick-start
 program plus a call that passes a `str` to its `int` parameter, whose expected
-output `tests/diagnostics_test.rs` regenerates from the real binary on every
-test run. `scripts/check-site.sh` extracts the README block through an explicit
+output `tests/diagnostics_test.rs` checks against the real binary on every
+test run — verifying the checked-in fixture, never rewriting it, so a renderer
+change surfaces as a failing test and the fixture is updated by hand.
+`scripts/check-site.sh` extracts the README block through an explicit
 `<!-- #197: generated from ... -->` anchor and requires it to equal that
 fixture with only the source path substituted for `hello.py`, so a renderer
 change that would falsify the published example fails the gate rather than

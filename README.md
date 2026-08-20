@@ -121,8 +121,11 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
 
 That block is the compiler's real output, not an illustration: it is
 generated from `tests/diagnostics/quick_start_type_error.expected.txt`,
-which `tests/diagnostics_test.rs` regenerates and compares on every test
-run, with only the file path substituted. Every `T0xxx` diagnostic's span
+which `tests/diagnostics_test.rs` checks against the real binary's live
+output on every test run, with only the file path substituted. The test
+verifies the fixture rather than rewriting it: a renderer change fails
+the test, and the fixture is then updated by hand from the new output.
+Every `T0xxx` diagnostic's span
 is currently the `Span::new(0, 0)` placeholder (`line 1, column 1`, a
 one-character caret) regardless of where the real error is, and the caret
 label always repeats the diagnostic's full message rather than an
