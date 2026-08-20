@@ -48,7 +48,12 @@ stage-then-activate pattern (see `docs/decisions/D-080-the-conformance-oracle-s-
 D-103 policy-successor-manifest stage-then-activate pattern
 (see `docs/decisions/D-103-keep-search-policy-successors-base-owned-through.md`),
 a second, stage-only pull request that does not itself carry `Fixes #N` is also authorized — see
-step 4's detection branches.
+step 4's detection branches. The same applies, without a fixed pull-request count, to a D-185
+oversized-file tracking issue (`AGENTS.md`'s "Keep source files decomposable" carve-out, see
+`docs/decisions/D-185-permit-a-dedicated-tracking-issue-per-oversized.md`): every partial-decomposition
+pull request against it that leaves the tracked file over the threshold, plus the narrowing
+comment left on the issue after each one merges, is authorized without carrying `Fixes #N` —
+see step 4's D-185 branch.
 
 Anything outside this set — touching another issue, editing an existing comment, force-pushing
 over commits this session did not create, changing repository settings — still requires asking
@@ -291,6 +296,31 @@ is correct (the SHA-256 matches, and the staged content is what the activation P
 ship byte-for-byte), and treats any ambiguity in that verification as a stop condition rather
 than a best-effort guess — the same discipline the digest-allowlist stage PR above already
 requires.
+
+**Separately, when the named issue is a D-185 oversized-file tracking issue** (`AGENTS.md`'s
+"Keep source files decomposable" carve-out — a dedicated issue filed for one Rust source file
+over the ~1,000-line threshold, per
+`docs/decisions/D-185-permit-a-dedicated-tracking-issue-per-oversized.md`): a file at many
+thousands of lines is not decomposed in one pull request, so treat it as an open-ended sequence
+rather than the fixed two-PR stage/activate shape above.
+
+- **Any pull request that extracts one or more cohesion-driven submodules but leaves the
+  tracked file over the threshold** does not carry `Fixes #N` — merging it must not close the
+  issue while work remains, the same reasoning the D-080/D-103 stage PRs above already apply.
+  Tag its body instead: "Partial decomposition for #N — see issue-implement's D-185
+  narrowing-PR pattern; does not itself close #N." It is exempt from step 6's `Fixes #N`
+  requirement and step 8's `Fixes #N` merge-confirmation step; every other part of steps 5
+  through 8 (review loop, monitoring, merge preconditions) applies to it unchanged. After it
+  merges, leave the narrowing comment `AGENTS.md`'s carve-out requires — what was extracted,
+  and which files or line ranges are still over threshold — as an authorized write under this
+  skill's own enumerated set, exactly like a partial-staleness-resolution comment.
+- **The pull request that finally brings the tracked file under the ~1,000-line threshold**
+  (or removes or merges it away entirely) carries the real `Fixes #N` and runs the normal
+  steps 4-8 unchanged, the same as any other issue's closing pull request.
+
+Never treat a D-185 tracking issue's first pull request as the whole task: scope that one pull
+request to a handful of cohesion-driven submodules extracted cleanly, not an attempt at the
+entire file, and leave the issue open and narrowed for the next session to continue from.
 
 If the tree refutes the plan mid-implementation — an assumption fails, a gate behaves
 differently than planned — do not force it. Record what refuted it, refresh the plan if the
