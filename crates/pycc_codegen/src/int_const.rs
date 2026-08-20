@@ -23,13 +23,19 @@ pub(super) fn fits_tagged_smallint(n: i64) -> Option<i64> {
 /// mirroring `emit_string_literal`: a bigint literal evaluated in a loop
 /// therefore allocates one `BigIntObj` per iteration.
 ///
-/// That allocation is still leaked. #146 Part 1 (D-180) narrowed D-058's
-/// blanket "never freed" concession to a listed residual set, and an
-/// *unbound temporary* -- which is exactly what this value is until
-/// something binds it to a name -- is one of the entries on that list. It
-/// is Part 2's ([#625](https://github.com/rotnov/pycc/issues/625)) subject,
-/// not a new class introduced here: a literal in a loop leaks for the same
-/// reason `a + b` discarded mid-expression does.
+/// That allocation is no longer leaked in the general case. #146 Part 1
+/// (D-180) narrowed D-058's blanket "never freed" concession to a listed
+/// residual set, on which an *unbound temporary* -- exactly what this value
+/// is until something binds it to a name -- was the largest entry. Part 2
+/// ([#625](https://github.com/rotnov/pycc/issues/625), D-181) retires the
+/// birth reference at each site that consumes such a word and discards it,
+/// so a literal in a loop is now released for the same reason `a + b`
+/// discarded mid-expression is.
+///
+/// Two shapes still leak the word this call produces, and only these two:
+/// a fresh `int` stored into a `MirExpr::TupleLiteral` element, and an
+/// operand whose release is skipped because a D-173 exception edge branched
+/// out of the expression first. Both are enumerated in D-181.
 pub(super) fn emit_int_constant<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,

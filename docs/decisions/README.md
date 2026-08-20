@@ -187,3 +187,4 @@ current.
 | [D-178](./D-178-materialize-out-of-range-int-literals-through-a.md) | Materialize out-of-range int literals through a runtime constructor | accepted |
 | [D-179](./D-179-range-loops-drive-bigint-bounds-steps-and.md) | range() loops drive bigint bounds, steps, and induction variables | accepted |
 | [D-180](./D-180-refcount-heap-bigints-and-release-them-at-named.md) | Refcount heap bigints and release them at named-storage and loop-induction sites | accepted |
+| [D-181](./D-181-release-a-heap-bigint-s-birth-reference-at-every.md) | Release a heap bigint's birth reference at every consuming site | accepted |

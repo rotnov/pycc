@@ -18,6 +18,11 @@ use exception::{
     ExceptionCodegenState, emit_exception_value, expression_can_set_exception,
     guard_statement_effects,
 };
+mod bigint_rc;
+use bigint_rc::{
+    BigIntRefcount, emit_bigint_refcount_call, int_temporary_word, release_if_int_temporary,
+    release_int_slot_before_store, release_scalar_if_int_temporary, retain_if_int_duplicate,
+};
 mod int_const;
 use int_const::{emit_int_constant, tag_smallint_const};
 
@@ -34,6 +39,12 @@ type CodegenObserver<'observer> =
 /// variant would not add information because MIR's static `Ty` determines
 /// whether that carrier means Python's unit value or a real boolean. Function
 /// returns of `None` remain LLVM `void`.
+///
+/// `Copy` because every payload is an inkwell SSA handle (itself `Copy`) --
+/// a `Scalar` names a value the module already holds, so duplicating the
+/// handle duplicates nothing. #146 Part 2 (D-181) needs a site to both hand
+/// a value onward and still classify the word it carried.
+#[derive(Clone, Copy)]
 enum Scalar<'ctx> {
     /// Tagged per D-061. Always LLVM `i64`.
     Int(IntValue<'ctx>),
@@ -2071,6 +2082,16 @@ fn emit_expr_unchecked<'ctx>(
                         .expect("build_call should not fail for a well-formed int binop")
                         .try_as_basic_value()
                         .expect_basic("pycc_rt_int_* functions all return a non-void `i64`");
+                    // #146 Part 2 (D-181): both operands are dead now. Every
+                    // `pycc_rt_int_*` above builds a bigint result through
+                    // `tag_bigint(BigIntObj::new(..))`, never by handing an
+                    // operand's own word back, so releasing here cannot free
+                    // the value just computed -- an invariant that arithmetic
+                    // export's own doc comment states and
+                    // `an_int_operation_never_returns_an_operand_s_own_word`
+                    // pins.
+                    release_if_int_temporary(context, builder, rt, left, l);
+                    release_if_int_temporary(context, builder, rt, right, r);
                     Scalar::Int(result.into_int_value())
                 }
                 Ty::Float => {
@@ -2289,6 +2310,11 @@ fn emit_expr_unchecked<'ctx>(
                 let cond = builder
                     .build_int_compare(predicate, ordering, zero, "cmp")
                     .expect("build_int_compare should not fail for two i32 operands");
+                // #146 Part 2 (D-181): `pycc_rt_int_cmp` returns an `i32`
+                // ordering and retains nothing, so both operands are dead
+                // the moment the comparison has been made.
+                release_if_int_temporary(context, builder, rt, left, l);
+                release_if_int_temporary(context, builder, rt, right, r);
                 builder
                     .build_int_z_extend(cond, context.i8_type(), "bool_from_cmp")
                     .expect("build_int_z_extend should not fail widening i1 to i8")
@@ -2564,7 +2590,12 @@ fn emit_expr_unchecked<'ctx>(
                                 inner,
                             );
                             let scalar = incref_if_str_duplicate(builder, rt, inner, scalar);
-                            to_str(builder, rt, scalar)
+                            let as_str = to_str(builder, rt, scalar);
+                            // #146 Part 2 (D-181): same pure-consumer shape
+                            // as `print`'s own argument above, and released
+                            // after `to_str` for the same reason.
+                            release_scalar_if_int_temporary(context, builder, rt, inner, &scalar);
+                            as_str
                         }
                     }
                 };
@@ -3888,147 +3919,6 @@ fn incref_if_str_duplicate<'ctx>(
     } else {
         scalar
     }
-}
-
-/// Which of `pycc_rt`'s two bigint refcount entry points
-/// `emit_bigint_refcount_call` should emit.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum BigIntRefcount {
-    Retain,
-    Release,
-}
-
-/// Emits a guarded `pycc_rt_bigint_retain`/`_release` call on the D-141
-/// encoded int word `word`.
-///
-/// The guard is emitted *inline*, as LLVM IR, rather than left to the
-/// runtime's own no-op arms: the predicate is `(word & 0b11) == 0 && word
-/// != 0`, exactly `classify_encoded_int`'s `BigInt` case, so an ordinary
-/// smallint loop performs one `and`, two `icmp`s and a not-taken branch per
-/// site instead of a call into `pycc_rt`. D-084/D-140's nbody throughput
-/// floor is measured on code that is entirely smallint; routing it through
-/// an unconditional call per assignment would regress that gate, which is
-/// the reason this guard exists at all and must not be simplified away.
-///
-/// Word `0` is excluded by the guard and *also* handled by the runtime:
-/// `storage_slot_at_entry` zero-initializes `int` slots, and `0` is
-/// `classify_encoded_int`'s fail-closed pattern rather than a valid encoded
-/// int, so a release of a never-stored slot must reach neither the
-/// classifier nor a dereference.
-///
-/// Leaves the builder positioned in a fresh continuation block. Callers that
-/// record a basic block for a phi incoming edge must therefore re-read
-/// `get_insert_block()` *after* calling this, never before.
-fn emit_bigint_refcount_call<'ctx>(
-    context: &'ctx Context,
-    builder: &inkwell::builder::Builder<'ctx>,
-    rt: &RtFns<'ctx>,
-    word: IntValue<'ctx>,
-    op: BigIntRefcount,
-) {
-    let i64_type = context.i64_type();
-    let low_tag = builder
-        .build_and(word, i64_type.const_int(0b11, false), "bigint_low_tag")
-        .expect("build_and should not fail for two i64 values");
-    let aligned = builder
-        .build_int_compare(
-            inkwell::IntPredicate::EQ,
-            low_tag,
-            i64_type.const_zero(),
-            "bigint_aligned",
-        )
-        .expect("build_int_compare should not fail for two i64 values");
-    let non_zero = builder
-        .build_int_compare(
-            inkwell::IntPredicate::NE,
-            word,
-            i64_type.const_zero(),
-            "bigint_non_zero",
-        )
-        .expect("build_int_compare should not fail for two i64 values");
-    let is_heap = builder
-        .build_and(aligned, non_zero, "bigint_is_heap")
-        .expect("build_and should not fail for two i1 values");
-    let function = builder
-        .get_insert_block()
-        .expect("builder is always positioned inside some block while emitting")
-        .get_parent()
-        .expect("the block the builder is positioned in always belongs to a function");
-    let call_block = context.append_basic_block(function, "bigint_rc_call");
-    let continue_block = context.append_basic_block(function, "bigint_rc_cont");
-    builder
-        .build_conditional_branch(is_heap, call_block, continue_block)
-        .expect("build_conditional_branch should not fail for a well-formed i1");
-    builder.position_at_end(call_block);
-    let callee = match op {
-        BigIntRefcount::Retain => rt.bigint_retain,
-        BigIntRefcount::Release => rt.bigint_release,
-    };
-    builder
-        .build_call(callee, &[word.into()], "bigint_rc")
-        .expect("build_call should not fail for a well-formed refcount call");
-    builder
-        .build_unconditional_branch(continue_block)
-        .expect("build_unconditional_branch should not fail for a fresh block");
-    builder.position_at_end(continue_block);
-}
-
-/// Loads `slot`'s current encoded word and releases it. `emit_assign` calls
-/// this for every `Ty::Int` slot before storing, which is what makes the
-/// slot's single owned reference an invariant: the slot holds `0` (released
-/// as a no-op) until its first store, and exactly one owned word after it.
-fn release_int_slot_before_store<'ctx>(
-    context: &'ctx Context,
-    builder: &inkwell::builder::Builder<'ctx>,
-    rt: &RtFns<'ctx>,
-    slot: &StorageSlot<'ctx>,
-) {
-    let old = builder
-        .build_load(context.i64_type(), slot.ptr, "old_int")
-        .expect("build_load should not fail for this function's own alloca")
-        .into_int_value();
-    emit_bigint_refcount_call(context, builder, rt, old, BigIntRefcount::Release);
-}
-
-/// `int`'s counterpart to [`incref_if_str_duplicate`], deliberately kept as
-/// a separate function applied at a strictly smaller set of call sites.
-///
-/// `incref_if_str_duplicate` runs at every site that *evaluates* a `str`,
-/// including the two that merely consume the value without taking ownership
-/// (`print`'s argument and `to_str`'s operand). That is harmless for `str`
-/// because those two paths decref again themselves, but an `int` retain
-/// there would be orphaned -- a leak with no matching release. So the
-/// int-side retain is applied only where the value's new home actually
-/// takes ownership: an assignment target, a `return` value, an instance
-/// attribute, and a call argument.
-///
-/// The predicate itself matches `str_value_is_a_duplicate_reference`'s:
-/// a bare `Name` or `AttrGet` read yields a *second* reference to a word
-/// something else already owns, whereas every other int-producing
-/// expression (`IntLiteral`, arithmetic, a call result) freshly constructs
-/// its value already owning exactly one reference.
-fn retain_if_int_duplicate<'ctx>(
-    context: &'ctx Context,
-    builder: &inkwell::builder::Builder<'ctx>,
-    rt: &RtFns<'ctx>,
-    source_expr: &MirExpr,
-    scalar: Scalar<'ctx>,
-) -> Scalar<'ctx> {
-    if let Scalar::Int(word) = scalar
-        && matches!(
-            source_expr,
-            MirExpr::Name {
-                ty: pycc_mir::Ty::Int,
-                ..
-            } | MirExpr::AttrGet {
-                ty: pycc_mir::Ty::Int,
-                ..
-            }
-        )
-    {
-        emit_bigint_refcount_call(context, builder, rt, word, BigIntRefcount::Retain);
-    }
-    scalar
 }
 
 /// Only meaningful for `Ty::Str` targets: loads the target's predeclared
@@ -5428,7 +5318,13 @@ fn emit_eval_print_arg<'ctx>(
     } else {
         let scalar = emit_expr(context, builder, module, rt, user_functions, locals, arg);
         let scalar = incref_if_str_duplicate(builder, rt, arg, scalar);
-        Some(to_str(builder, rt, scalar))
+        let as_str = to_str(builder, rt, scalar);
+        // #146 Part 2 (D-181): `print`'s own argument is a pure consumer --
+        // `to_str` reads the word and builds a separate `PyStrObj`, so the
+        // int word is dead afterwards and nothing else will retire it.
+        // Released *after* `to_str`, which reads a bigint's limbs.
+        release_scalar_if_int_temporary(context, builder, rt, arg, &scalar);
+        Some(as_str)
     }
 }
 
@@ -5581,7 +5477,11 @@ fn emit_stmt<'ctx>(
             Ok(())
         }
         MirStmt::ExprStmt(expr) => {
-            emit_expr(context, builder, module, rt, user_functions, locals, expr);
+            let scalar = emit_expr(context, builder, module, rt, user_functions, locals, expr);
+            // #146 Part 2 (D-181): a statement-position expression's value
+            // is discarded outright, so nothing else will ever retire the
+            // reference it was born with.
+            release_scalar_if_int_temporary(context, builder, rt, expr, &scalar);
             Ok(())
         }
         MirStmt::Assign { target, value } => {
@@ -5611,7 +5511,12 @@ fn emit_stmt<'ctx>(
             let function = builder.get_insert_block().unwrap().get_parent().unwrap();
             let cond = {
                 let scalar = emit_expr(context, builder, module, rt, user_functions, locals, test);
-                truthy(context, builder, rt, scalar)
+                let cond = truthy(context, builder, rt, scalar);
+                // #146 Part 2 (D-181): released *after* `truthy`, which
+                // reads a bigint operand's limbs -- releasing first could
+                // free the very word being tested.
+                release_scalar_if_int_temporary(context, builder, rt, test, &scalar);
+                cond
             };
             let then_bb = context.append_basic_block(function, "if_then");
             let merge_bb = context.append_basic_block(function, "if_merge");
@@ -5676,7 +5581,12 @@ fn emit_stmt<'ctx>(
             builder.position_at_end(test_bb);
             let cond = {
                 let scalar = emit_expr(context, builder, module, rt, user_functions, locals, test);
-                truthy(context, builder, rt, scalar)
+                let cond = truthy(context, builder, rt, scalar);
+                // #146 Part 2 (D-181): released *after* `truthy`, which
+                // reads a bigint operand's limbs -- releasing first could
+                // free the very word being tested.
+                release_scalar_if_int_temporary(context, builder, rt, test, &scalar);
+                cond
             };
             builder
                 .build_conditional_branch(cond, body_bb, after_bb)
@@ -5765,6 +5675,18 @@ fn emit_stmt<'ctx>(
             emit_bigint_refcount_call(context, builder, rt, start_v, BigIntRefcount::Retain);
             emit_bigint_refcount_call(context, builder, rt, stop_v, BigIntRefcount::Retain);
             emit_bigint_refcount_call(context, builder, rt, step_v, BigIntRefcount::Retain);
+            // #146 Part 2 (D-181): retire the *source expression's* birth
+            // reference for any operand that was freshly built rather than
+            // borrowed (`range(a + a, ...)`, or a literal outside D-061's
+            // tagged range). Safe immediately, and only immediately after
+            // the loop's own retains directly above: the loop is already an
+            // owner by this point, so the object survives to `for_after`.
+            // Deliberately does *not* conditionalize those retains -- D-180
+            // warns that making the loop's ownership depend on the operand's
+            // shape is what breaks the `n + 1`/`n + 1` release arithmetic.
+            release_if_int_temporary(context, builder, rt, start, start_v);
+            release_if_int_temporary(context, builder, rt, stop, stop_v);
+            release_if_int_temporary(context, builder, rt, step, step_v);
             // Re-read *after* the retains above: each one splits the block,
             // and the phi's incoming edge must name the block that actually
             // branches into `for_test`.
@@ -6635,7 +6557,7 @@ fn emit_stmt<'ctx>(
             //    each corresponding `For*` arm's own preheader/test/body
             //    shape exactly (see this arm's own doc comment for which
             //    `For*` arm each branch mirrors).
-            let (test_bb, after_bb, tail) = match source {
+            let (test_bb, after_bb, tail, owned_range_operands) = match source {
                 CompSource::Range { start, stop, step } => {
                     // Mirrors `MirStmt::ForRange`'s own shape exactly.
                     let start_v = range_operand_to_normalized_int(
@@ -6677,6 +6599,26 @@ fn emit_stmt<'ctx>(
                         start_v,
                         BigIntRefcount::Retain,
                     );
+                    // #146 Part 2 (D-181). `start_v`'s own birth reference
+                    // is retired immediately, exactly as in
+                    // `MirStmt::ForRange`: the retain directly above has
+                    // already made this loop an owner.
+                    //
+                    // `stop_v`/`step_v` cannot be: this emitter never
+                    // retains them (see the comment above), and
+                    // `pycc_rt_range_continue` re-reads both on *every*
+                    // iteration, so releasing a freshly built bound here
+                    // would be a use-after-free on trip two. They are
+                    // carried out to `after_bb` instead -- past the last
+                    // read -- and released there.
+                    release_if_int_temporary(context, builder, rt, start, start_v);
+                    let owned_range_operands: Vec<IntValue<'ctx>> = [
+                        int_temporary_word(stop, stop_v),
+                        int_temporary_word(step, step_v),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
                     // Re-read after the retain: it splits the block.
                     let preheader = builder.get_insert_block().unwrap();
 
@@ -6731,6 +6673,7 @@ fn emit_stmt<'ctx>(
                             current,
                             step_v,
                         },
+                        owned_range_operands,
                     )
                 }
                 CompSource::List(name) => {
@@ -6778,6 +6721,9 @@ fn emit_stmt<'ctx>(
                         test_bb,
                         after_bb,
                         CompLoopTail::Indexed { induction, current },
+                        // A container-iterating comprehension has no
+                        // `range` bounds to own.
+                        Vec::new(),
                     )
                 }
                 CompSource::Dict(name) => {
@@ -6856,6 +6802,9 @@ fn emit_stmt<'ctx>(
                         test_bb,
                         after_bb,
                         CompLoopTail::Indexed { induction, current },
+                        // A container-iterating comprehension has no
+                        // `range` bounds to own.
+                        Vec::new(),
                     )
                 }
                 CompSource::Set(name) => {
@@ -6903,6 +6852,9 @@ fn emit_stmt<'ctx>(
                         test_bb,
                         after_bb,
                         CompLoopTail::Indexed { induction, current },
+                        // A container-iterating comprehension has no
+                        // `range` bounds to own.
+                        Vec::new(),
                     )
                 }
             };
@@ -6931,6 +6883,15 @@ fn emit_stmt<'ctx>(
                         cond_expr,
                     );
                     let cond_i1 = truthy(context, builder, rt, cond_scalar);
+                    // #146 Part 2 (D-181): released after `truthy`, which
+                    // reads a bigint operand's limbs.
+                    release_scalar_if_int_temporary(
+                        context,
+                        builder,
+                        rt,
+                        cond_expr,
+                        &cond_scalar,
+                    );
                     let if_taken_bb = context.append_basic_block(function, "listcomp_if_taken");
                     let if_skip_bb = context.append_basic_block(function, "listcomp_if_skip");
                     builder
@@ -7024,6 +6985,11 @@ fn emit_stmt<'ctx>(
             if let Some(current) = unconsumed_current {
                 emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Release);
             }
+            // #146 Part 2 (D-181): the freshly built `range` bounds, past
+            // their last `pycc_rt_range_continue` read.
+            for word in owned_range_operands {
+                emit_bigint_refcount_call(context, builder, rt, word, BigIntRefcount::Release);
+            }
             // 5. Only now -- after the loop has fully run to completion,
             //    with every read of `target`'s own name during `source`/
             //    `cond`/`elt` evaluation already having happened against
@@ -7090,7 +7056,7 @@ fn emit_stmt<'ctx>(
             //    `ListCompAssign`'s own `match source` exactly (see that
             //    arm's own doc comment for which `For*` arm each branch
             //    mirrors).
-            let (test_bb, after_bb, tail) = match source {
+            let (test_bb, after_bb, tail, owned_range_operands) = match source {
                 CompSource::Range { start, stop, step } => {
                     let start_v = range_operand_to_normalized_int(
                         context,
@@ -7131,6 +7097,26 @@ fn emit_stmt<'ctx>(
                         start_v,
                         BigIntRefcount::Retain,
                     );
+                    // #146 Part 2 (D-181). `start_v`'s own birth reference
+                    // is retired immediately, exactly as in
+                    // `MirStmt::ForRange`: the retain directly above has
+                    // already made this loop an owner.
+                    //
+                    // `stop_v`/`step_v` cannot be: this emitter never
+                    // retains them (see the comment above), and
+                    // `pycc_rt_range_continue` re-reads both on *every*
+                    // iteration, so releasing a freshly built bound here
+                    // would be a use-after-free on trip two. They are
+                    // carried out to `after_bb` instead -- past the last
+                    // read -- and released there.
+                    release_if_int_temporary(context, builder, rt, start, start_v);
+                    let owned_range_operands: Vec<IntValue<'ctx>> = [
+                        int_temporary_word(stop, stop_v),
+                        int_temporary_word(step, step_v),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
                     // Re-read after the retain: it splits the block.
                     let preheader = builder.get_insert_block().unwrap();
 
@@ -7185,6 +7171,7 @@ fn emit_stmt<'ctx>(
                             current,
                             step_v,
                         },
+                        owned_range_operands,
                     )
                 }
                 CompSource::List(name) => {
@@ -7231,6 +7218,9 @@ fn emit_stmt<'ctx>(
                         test_bb,
                         after_bb,
                         CompLoopTail::Indexed { induction, current },
+                        // A container-iterating comprehension has no
+                        // `range` bounds to own.
+                        Vec::new(),
                     )
                 }
                 CompSource::Dict(name) => {
@@ -7299,6 +7289,9 @@ fn emit_stmt<'ctx>(
                         test_bb,
                         after_bb,
                         CompLoopTail::Indexed { induction, current },
+                        // A container-iterating comprehension has no
+                        // `range` bounds to own.
+                        Vec::new(),
                     )
                 }
                 CompSource::Set(name) => {
@@ -7345,6 +7338,9 @@ fn emit_stmt<'ctx>(
                         test_bb,
                         after_bb,
                         CompLoopTail::Indexed { induction, current },
+                        // A container-iterating comprehension has no
+                        // `range` bounds to own.
+                        Vec::new(),
                     )
                 }
             };
@@ -7367,6 +7363,15 @@ fn emit_stmt<'ctx>(
                         cond_expr,
                     );
                     let cond_i1 = truthy(context, builder, rt, cond_scalar);
+                    // #146 Part 2 (D-181): released after `truthy`, which
+                    // reads a bigint operand's limbs.
+                    release_scalar_if_int_temporary(
+                        context,
+                        builder,
+                        rt,
+                        cond_expr,
+                        &cond_scalar,
+                    );
                     let if_taken_bb = context.append_basic_block(function, "setcomp_if_taken");
                     let if_skip_bb = context.append_basic_block(function, "setcomp_if_skip");
                     builder
@@ -7454,6 +7459,11 @@ fn emit_stmt<'ctx>(
             if let Some(current) = unconsumed_current {
                 emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Release);
             }
+            // #146 Part 2 (D-181): the freshly built `range` bounds, past
+            // their last `pycc_rt_range_continue` read.
+            for word in owned_range_operands {
+                emit_bigint_refcount_call(context, builder, rt, word, BigIntRefcount::Release);
+            }
             // 5. Only now -- after the loop has fully run to completion --
             //    bind `target` to the now-fully-built set (see
             //    `ListCompAssign`'s own "point 5" comment above for why this
@@ -7512,7 +7522,7 @@ fn emit_stmt<'ctx>(
                 },
             }
 
-            let (test_bb, after_bb, tail) = match source {
+            let (test_bb, after_bb, tail, owned_range_operands) = match source {
                 CompSource::Range { start, stop, step } => {
                     let start_v = range_operand_to_normalized_int(
                         context,
@@ -7553,6 +7563,26 @@ fn emit_stmt<'ctx>(
                         start_v,
                         BigIntRefcount::Retain,
                     );
+                    // #146 Part 2 (D-181). `start_v`'s own birth reference
+                    // is retired immediately, exactly as in
+                    // `MirStmt::ForRange`: the retain directly above has
+                    // already made this loop an owner.
+                    //
+                    // `stop_v`/`step_v` cannot be: this emitter never
+                    // retains them (see the comment above), and
+                    // `pycc_rt_range_continue` re-reads both on *every*
+                    // iteration, so releasing a freshly built bound here
+                    // would be a use-after-free on trip two. They are
+                    // carried out to `after_bb` instead -- past the last
+                    // read -- and released there.
+                    release_if_int_temporary(context, builder, rt, start, start_v);
+                    let owned_range_operands: Vec<IntValue<'ctx>> = [
+                        int_temporary_word(stop, stop_v),
+                        int_temporary_word(step, step_v),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
                     // Re-read after the retain: it splits the block.
                     let preheader = builder.get_insert_block().unwrap();
 
@@ -7607,6 +7637,7 @@ fn emit_stmt<'ctx>(
                             current,
                             step_v,
                         },
+                        owned_range_operands,
                     )
                 }
                 CompSource::List(name) => {
@@ -7653,6 +7684,9 @@ fn emit_stmt<'ctx>(
                         test_bb,
                         after_bb,
                         CompLoopTail::Indexed { induction, current },
+                        // A container-iterating comprehension has no
+                        // `range` bounds to own.
+                        Vec::new(),
                     )
                 }
                 CompSource::Dict(name) => {
@@ -7727,6 +7761,9 @@ fn emit_stmt<'ctx>(
                         test_bb,
                         after_bb,
                         CompLoopTail::Indexed { induction, current },
+                        // A container-iterating comprehension has no
+                        // `range` bounds to own.
+                        Vec::new(),
                     )
                 }
                 CompSource::Set(name) => {
@@ -7773,6 +7810,9 @@ fn emit_stmt<'ctx>(
                         test_bb,
                         after_bb,
                         CompLoopTail::Indexed { induction, current },
+                        // A container-iterating comprehension has no
+                        // `range` bounds to own.
+                        Vec::new(),
                     )
                 }
             };
@@ -7796,6 +7836,15 @@ fn emit_stmt<'ctx>(
                         cond_expr,
                     );
                     let cond_i1 = truthy(context, builder, rt, cond_scalar);
+                    // #146 Part 2 (D-181): released after `truthy`, which
+                    // reads a bigint operand's limbs.
+                    release_scalar_if_int_temporary(
+                        context,
+                        builder,
+                        rt,
+                        cond_expr,
+                        &cond_scalar,
+                    );
                     let if_taken_bb = context.append_basic_block(function, "dictcomp_if_taken");
                     let if_skip_bb = context.append_basic_block(function, "dictcomp_if_skip");
                     builder
@@ -7905,6 +7954,11 @@ fn emit_stmt<'ctx>(
             builder.position_at_end(after_bb);
             if let Some(current) = unconsumed_current {
                 emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Release);
+            }
+            // #146 Part 2 (D-181): the freshly built `range` bounds, past
+            // their last `pycc_rt_range_continue` read.
+            for word in owned_range_operands {
+                emit_bigint_refcount_call(context, builder, rt, word, BigIntRefcount::Release);
             }
             // 5. Only now -- after the loop has fully run to completion --
             //    bind `target` to the now-fully-built dict (see
@@ -9770,6 +9824,177 @@ mod tests {
         // releasing it separately would free a word `stop` and `step` still
         // hold in exactly the aliased shape this fixture builds.
         assert_eq!((retains, releases), (4, 5), "got {calls:?}");
+    }
+
+    /// #146 Part 2 (D-181). `int_cmp` aborts on a bigint operand
+    /// (`require_inline_int`), so a comparison's operand releases can never
+    /// be reached with a real heap word from a compiled program -- this is
+    /// the only place the emitted shape is observable at all.
+    ///
+    /// `(n + n) < (n + n)`: each inner `+` has two borrowed `Name` operands
+    /// and releases neither, while the comparison itself consumes two
+    /// freshly built words and releases both.
+    #[test]
+    fn an_int_comparison_releases_both_of_its_freshly_built_operands() {
+        let sum = || MirExpr::BinOp {
+            op: pycc_mir::BinOpKind::Add,
+            left: Box::new(int_name("n")),
+            right: Box::new(int_name("n")),
+            ty: Ty::Int,
+        };
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "compare".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Bool,
+                body: vec![MirStmt::Return(Some(MirExpr::Compare {
+                    op: pycc_mir::CmpOpKind::Lt,
+                    left: Box::new(sum()),
+                    right: Box::new(sum()),
+                    ty: Ty::Bool,
+                }))],
+            }],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_compare_operands", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        assert_eq!((retains, releases), (0, 2), "got {calls:?}");
+    }
+
+    /// The same for a `*` result. `int_mul`/`int_floordiv`/`int_floormod`/
+    /// `int_pow` all reject a bigint operand exactly like `int_cmp` does,
+    /// and all four reach the identical release site in `MirExpr::BinOp`'s
+    /// own `Ty::Int` arm, so one of them stands for the group.
+    #[test]
+    fn a_multiplying_binop_releases_both_of_its_freshly_built_operands() {
+        let sum = || MirExpr::BinOp {
+            op: pycc_mir::BinOpKind::Add,
+            left: Box::new(int_name("n")),
+            right: Box::new(int_name("n")),
+            ty: Ty::Int,
+        };
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "multiply".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::BinOp {
+                    op: pycc_mir::BinOpKind::Mul,
+                    left: Box::new(sum()),
+                    right: Box::new(sum()),
+                    ty: Ty::Int,
+                }))],
+            }],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_mul_operands", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        assert_eq!((retains, releases), (0, 2), "got {calls:?}");
+    }
+
+    /// #146 Part 2 (D-181): the tuple-egress classification, from both
+    /// sides at once. `t[0]` is *borrowed* (a tuple field aliases whatever
+    /// supplied it, since `TupleLiteral` never retains what it stores), so
+    /// the `+` releases only its literal operand -- releasing `t[0]` too
+    /// would free a word `n` still holds.
+    #[test]
+    fn a_tuple_element_operand_is_borrowed_while_a_literal_operand_is_owned() {
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "read_tuple".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![
+                    MirStmt::Assign {
+                        target: "t".to_string(),
+                        value: MirExpr::TupleLiteral(vec![int_name("n"), int_name("n")]),
+                    },
+                    MirStmt::Return(Some(MirExpr::BinOp {
+                        op: pycc_mir::BinOpKind::Add,
+                        left: Box::new(MirExpr::Subscript {
+                            base: Box::new(MirExpr::Name {
+                                name: "t".to_string(),
+                                ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
+                            }),
+                            index: Box::new(MirExpr::IntLiteral(0)),
+                        }),
+                        right: Box::new(MirExpr::IntLiteral(1)),
+                        ty: Ty::Int,
+                    })),
+                ],
+            }],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_tuple_operand", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        assert_eq!((retains, releases), (0, 1), "got {calls:?}");
+    }
+
+    /// The retain side of the same classification (#633 direction A):
+    /// binding a tuple element to an `int` local makes that local a second
+    /// owner of a word the tuple's supplier still holds, so the bind must
+    /// retain. Without this arm, overwriting the local released a reference
+    /// it never owned and freed the supplier's object out from under it.
+    #[test]
+    fn binding_a_tuple_element_to_an_int_local_retains_the_shared_word() {
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "bind_tuple".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![
+                    MirStmt::Assign {
+                        target: "t".to_string(),
+                        value: MirExpr::TupleLiteral(vec![int_name("n"), int_name("n")]),
+                    },
+                    MirStmt::Assign {
+                        target: "y".to_string(),
+                        value: MirExpr::Subscript {
+                            base: Box::new(MirExpr::Name {
+                                name: "t".to_string(),
+                                ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
+                            }),
+                            index: Box::new(MirExpr::IntLiteral(0)),
+                        },
+                    },
+                    MirStmt::Return(Some(int_name("y"))),
+                ],
+            }],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_tuple_bind", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        // The tuple bind's retain plus the `return`'s, against the `y`
+        // slot's own release-before-store.
+        assert_eq!((retains, releases), (2, 1), "got {calls:?}");
     }
 
     // `declare_module_globals` builds a constant initializer with no
