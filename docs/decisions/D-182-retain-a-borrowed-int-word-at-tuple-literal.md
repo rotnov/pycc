@@ -106,8 +106,8 @@ status: accepted
   - **Leave #633 direction B open and document it harder.** Rejected. It is
     a use-after-free that hangs on a plain loop, not a leak; the whole
     point of D-180/D-181's refcounting is that a heap bigint's lifetime is
-    sound. A leak is a bounded-memory problem; this was a soundness
-    problem.
+    sound. A leak keeps every read well-defined and merely wastes memory;
+    this was a soundness problem.
 
 - Consequences:
 
@@ -143,10 +143,13 @@ status: accepted
     closes, since the tuple still pointed at it. The "after" column scales
     at 1.92x for a 2x trip count, which is the linearity claimed above.
 
-    It is accepted knowingly as the price
-    of closing a use-after-free, on the standing principle that a bounded
-    wrong-memory-usage is preferable to unbounded undefined behavior. It is
-    deliberately **not** gated by a peak-RSS ratio assertion in
+    The leak is *not* bounded: memory grows linearly in the trip count,
+    which is exactly what the table above measures. It is accepted
+    knowingly as the price of closing a use-after-free, on the standing
+    principle that well-defined memory growth is preferable to undefined
+    behavior -- a program that uses too much memory can still be reasoned
+    about, measured, and later fixed, while one that walks a freed object
+    cannot. It is deliberately **not** gated by a peak-RSS ratio assertion in
     `tests/issue_146_bigint_release.rs`'s `peak_rss` module: pinning a
     memory ceiling on a shape this decision knowingly regresses would
     enshrine the wrong number.
@@ -179,3 +182,15 @@ status: accepted
     `a_tuple_literal_retains_only_its_borrowed_int_elements` is new and is
     what discriminates decision 2's borrowed-only shape from the rejected
     unconditional one.
+
+  - The whole bigint-refcount IR-observer test cluster those assertions
+    belong to moved from `crates/pycc_codegen/src/lib.rs`'s test module
+    into a `#[cfg(test)] mod tests` in
+    `crates/pycc_codegen/src/bigint_rc.rs`, beside the emitter it
+    exercises. AGENTS.md's decomposability rule applies to the part of an
+    over-long file a change touches, and this change adds assertions to
+    that cluster; the cluster is self-contained -- no test outside it uses
+    its `RefcountCall` harness -- so it is the cohesive unit the rule
+    points at. `tempfile_dir` is now `pub(crate)` so the relocated tests
+    can still reach it. `lib.rs` drops from 20 440 to 19 826 lines;
+    `bigint_rc.rs` grows to 1 014, and no behavior changes.
