@@ -466,3 +466,15 @@ fn c0001_callable_builtin_exception() {
 fn c0001_callable_builtin_private_helper() {
     assert_diagnostic_matches_fixture("c0001_callable_builtin_private_helper");
 }
+
+// Issue #197: the published quick-start example's own type error. README.md
+// and site/index.html document what `pycc check` prints when the quick-start
+// program is given a `str` where its `fib` takes an `int`; this fixture is the
+// compiler-generated original those documents are bound to, so a renderer
+// change that would falsify them fails here first. Its rendering is the
+// D-083 placeholder shape (`1:1`, one-character caret repeating the full
+// message, no `help:` line); D-043 owns the real-span/help work.
+#[test]
+fn quick_start_type_error() {
+    assert_diagnostic_matches_fixture("quick_start_type_error");
+}
