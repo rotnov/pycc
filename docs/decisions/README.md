@@ -189,3 +189,4 @@ current.
 | [D-180](./D-180-refcount-heap-bigints-and-release-them-at-named.md) | Refcount heap bigints and release them at named-storage and loop-induction sites | accepted |
 | [D-181](./D-181-release-a-heap-bigint-s-birth-reference-at-every.md) | Release a heap bigint's birth reference at every consuming site | accepted |
 | [D-182](./D-182-retain-a-borrowed-int-word-at-tuple-literal.md) | Retain a borrowed int word at tuple-literal ingress | accepted |
+| [D-183](./D-183-honor-cargo-target-dir-when-locating-build.md) | Honor CARGO_TARGET_DIR when locating build artifacts | accepted |

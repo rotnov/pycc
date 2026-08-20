@@ -102,6 +102,53 @@ directory once project mode exists.
 -j N                parallelism (default: cores)
 ```
 
+## Environment
+
+`pycc build` looks for `pycc_rt`'s static library in the *Cargo target
+directory*, which Cargo — not `pycc` — produces. Resolution precedence,
+keeping Cargo's own relative order for the inputs `pycc` can observe
+(D-183):
+
+1. **`CARGO_TARGET_DIR`**, when set to a non-empty value.
+2. otherwise **`CARGO_BUILD_TARGET_DIR`**, when set to a non-empty value.
+   This is Cargo's generic config-to-environment mapping of the
+   `build.target-dir` config key; Cargo honors it whether or not any
+   `.cargo/config.toml` exists, and `CARGO_TARGET_DIR` outranks it.
+3. otherwise **`<workspace root>/target`**.
+
+An empty value at either level is treated as unset. That is a deliberate
+divergence from Cargo, which rejects an empty `CARGO_TARGET_DIR` outright
+(exit 101, "the target directory is set to an empty string ...") rather
+than falling back: honoring it here would resolve artifacts to a bare
+relative `debug/`, and an exported-but-empty variable is a shell accident
+rather than an intent to redirect.
+
+A relative value is used as-is, not re-anchored on the workspace root.
+Cargo resolves a relative target directory against the working directory
+of the process that invoked *it*; `pycc` is a separate process, so this
+agrees with Cargo when `pycc` runs from that same directory.
+
+Two inputs rank above all three levels in Cargo's own precedence and are
+**not honored**: the `--target-dir` **command-line flag**, and
+`build.target-dir` when set in a `.cargo/config.toml` **config file**.
+Reading the config-file form means re-implementing Cargo's
+ancestor-walking config discovery — the `$CARGO_HOME` merge, Cargo's own
+precedence and path-resolution rules — a materially larger surface than
+this gap. The flag's resolved path does reach an integration-test or
+bench binary, but only through the compile-time `CARGO_TARGET_TMPDIR`
+macro and never the runtime environment, and not at all to the `pycc`
+binary a user invokes; anchoring the shared resolver on it would give one
+function two resolution rules depending on which binary it was compiled
+into. A build whose
+artifacts were redirected by one of those two, with neither environment
+variable set, fails with the ordinary actionable exit-2 message naming
+the directory that was searched (`no pycc_rt build found (expected ...).
+Run \`cargo build -p pycc_rt\` first.`) rather than mislinking.
+
+Within the resolved directory the layout is Cargo's: `<root>/debug/` or
+`<root>/release/` for a host build, `<root>/<triple>/<profile>/` when
+`--target` is given.
+
 ## `pycc.toml`
 
 ```toml

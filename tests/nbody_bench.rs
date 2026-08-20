@@ -368,7 +368,8 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// (D-093): that first measurement conflated a real methodology gap with
 /// what turned out to be a real, separate implementation bug, both fixed
 /// before the gate itself was later revisited per-target:
-/// 1. `src/main.rs::find_pycc_rt_lib_dir_in` used to always link
+/// 1. `find_pycc_rt_lib_dir_in` (then in `src/main.rs`, now in
+///    `pycc_codegen::artifact_layout`) used to always link
 ///    `target/debug/libpycc_rt.a` regardless of `--release` (the flag only
 ///    optimized the compiled module's own LLVM IR, never selected an
 ///    optimized `pycc_rt` to link) -- fixed (D-092): it now takes a

@@ -1045,6 +1045,44 @@ fail-closed `ci-gate` remain required.
   - **A function generic over `impl Fn(..)` (dependency-injection for testability — e.g. passing in a fake filesystem-existence check) gets monomorphized once per distinct closure type**, and each monomorphized copy is tracked *separately*: a copy that's only ever called with an always-true fake never executes that copy's error branches, and that reads as a real gap even though the *production* closure (or a different test's fake) exercises them. Fix: take a plain `fn(..) -> ..` pointer instead of `impl Fn(..)` when every caller's closure is non-capturing (as is typical for this kind of fake) — one concrete function pointer type means one compiled body, so coverage from every caller (production and every test) accumulates on the same counters. Only reach for `impl Fn`/`Box<dyn Fn>` when a caller genuinely needs to capture state; don't default to it for simple fakes.
   - **The per-file summary takes the *maximum* covered-region count over each function's instantiations, then sums those per-function maxima — it is neither a union nor a sum across compilations.** LLVM's `RegionCoverageInfo::merge` (`CoverageSummaryInfo.h`) does `Covered = max(Covered, RHS.Covered); NumRegions = max(NumRegions, RHS.NumRegions)`, and instantiations are grouped by the function's *definition location* (file, line, column) — which is how generic monomorphizations and the plain-vs-`--cfg test` compilations of the same crate group together. A crate in this workspace is compiled at least twice: once plainly (linked into the `pycc` binary and therefore into every integration test under `tests/`) and once with `--cfg test` for its own unit-test binary. Consequence: **a function whose regions are covered by *different* instantiations still reports a deficit of `NumRegions - max(Covered over instantiations)`**. To reach 100% for a function, one single instantiation must cover all of its regions — "the integration suite covers the rest" does not compose. Diagnosed exactly this way on [#603](https://github.com/rotnov/pycc/issues/603): new `HirExpr::UnaryOp` arms in `pycc_hir`, `pycc_mir`, and `pycc_types` were exercised end to end by `tests/issue_603_unary_general_operand.rs` but by no inline `mod tests` case, and `build-test-coverage` failed. **Every merged view hides this** — `--show-missing-lines`, `--lcov`, `report --text` without `--show-instantiations`, and the JSON `files[].segments` array all report the per-source-range *union* and show the lines as covered; aggregating the JSON region counts per source range likewise reports zero missed, which is what made the first fix look complete when it was not. The diagnostic that actually reproduces the gate's number: take `cargo llvm-cov --workspace --json`, group `data[].functions[]` by `min((r[0], r[1]) for r in regions_in_target_file)` (the definition location), and for each group compute `max(len(regions))` minus `max(count of regions with r[4] > 0)`; the sum over groups equals the summary's missed-region count exactly. Fix: add inline unit tests in the crate's own `mod tests` for any arm an integration test is the only thing reaching.
   - **A test that skips itself when an optional local prerequisite is missing (e.g. `tests/slice0.rs`'s cross-compilation test, which skips unless a `--target`'s `pycc_rt` has already been built locally) makes the coverage gate depend on incidental developer-machine state, not on the test suite itself.** A dev machine that accumulated that prerequisite from earlier manual testing shows 100%; a fresh CI runner that never built it sees the test skip and the branch it alone exercises reads as a gap — caught exactly this way when `build-test-coverage`'s CI job (a clean checkout) showed 3 missed regions/1 missed line in `src/main.rs` that a local run right before pushing did not, and reproduced precisely by moving the local prerequisite build aside and rerunning. Fix: give the coverage-gated CI job whatever setup makes the skip-guard's precondition always true there (here, building that one cross-target's `pycc_rt` in the same job), so the gate never rides on whether *this specific* environment happens to have accumulated the right state.
+  - **A skip guard that hard-codes an artifact path is the same hazard one level down.** `tests/slice0.rs`'s cross-target guards used to ask whether `<manifest dir>/target/<triple>/debug/libpycc_rt.a` existed. Under the coverage job that path is only correct because the job symlinks `$GITHUB_WORKSPACE/target` at its isolated `CARGO_TARGET_DIR`; anywhere else that redirects the target directory, the guard reports "not available", the test skips, and the branch it alone exercises reads as a gap — a green test run and a red gate, from the same tree. Since [#629](https://github.com/rotnov/pycc/issues/629) every such lookup resolves through `pycc_codegen::artifact_layout::resolve_cargo_target_root` (D-183), which honors `CARGO_TARGET_DIR` and `CARGO_BUILD_TARGET_DIR`, so the guard answers correctly wherever Cargo actually wrote the artifact.
+
+### Mechanical gate: no hard-coded Cargo target-directory paths
+
+`tests/target_dir_literals.rs` is an ordinary workspace `#[test]`, not a CI
+step, and therefore runs inside the existing required `cargo test` and
+coverage jobs. It fails if any `.rs` file under `src/`, `crates/`, `tests/`,
+or `benches/` contains a `target/`-shaped path or a `.join("target")` in
+non-comment code, directing the author to
+`pycc_codegen::artifact_layout::resolve_cargo_target_root` instead.
+
+Three construction constraints, each load-bearing:
+
+- Its needles are assembled with `concat!`, so the gate does not match its
+  own source and cannot be made permanently red by its own existence.
+- It scans a written-out directory allowlist rather than walking the
+  workspace root: under the coverage job the root contains a `target`
+  symlink into the isolated artifact tree, and a recursive walk from there
+  would descend into build output. A companion test asserts the scan still
+  finds this workspace's Rust sources, so a renamed directory fails loudly
+  instead of silently scanning nothing.
+- It does not shell out to `git ls-files`: the coverage job runs as
+  `nobody` under `env -i` with no `git` on `PATH`.
+
+The matcher is a pure function over one file's text, unit-tested with both
+an offending and a clean sample. That is deliberate under D-014: driven
+only from the real tree, the "offender found" arm would never execute —
+because the tree is, and must stay, clean — and would read as a missed
+region.
+
+A CI step would have been the more obvious home, but `.github/workflows/ci.yml`
+is a manifest-protected path under D-103's staging rules, so adding one
+forces a two-PR stage-then-activate cycle for a check a workspace test
+enforces identically.
+
+It is a lexical gate and makes no claim beyond that: it catches the literal
+shape that caused #629, not every conceivable way to reconstruct an
+artifact path.
 
 ## Meta
 

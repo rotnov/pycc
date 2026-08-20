@@ -25,6 +25,7 @@ use bigint_rc::{
 };
 mod int_const;
 use int_const::{emit_int_constant, tag_smallint_const};
+pub mod artifact_layout;
 
 const RELEASE_PASS_PIPELINE: &str = "default<O3>";
 type CodegenObserver<'observer> =
@@ -18711,8 +18712,24 @@ mod tests {
     /// wasn't covered by that fix either, since it's a separate linker
     /// invocation from `main.rs`'s.
     fn link_object_with_runtime(obj_path: &std::path::Path, bin_path: &std::path::Path) {
-        let rt_lib_dir =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
+        // `CARGO_MANIFEST_DIR` is this *crate*'s directory, so the
+        // workspace root is two levels up; `parent()` twice rather than a
+        // `..` join keeps the rendered path readable in linker errors.
+        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("crate manifest dir has a workspace-root grandparent");
+        let target_root = crate::artifact_layout::resolve_cargo_target_root(
+            workspace_root,
+            crate::artifact_layout::cargo_target_dir_from_env,
+        );
+        let rt_lib_dir = crate::artifact_layout::find_pycc_rt_lib_dir_in(
+            &target_root,
+            None,
+            false,
+            std::path::Path::exists,
+        )
+        .expect("pycc_rt debug build must exist before these link-and-run tests");
 
         #[cfg(windows)]
         let mut cmd = {

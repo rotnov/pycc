@@ -21,7 +21,8 @@ fn pycc_bin() -> PathBuf {
 /// Testable core of `oracle_python_bin`: takes the "is this a Windows
 /// target" check as a parameter instead of calling `cfg!(windows)` directly,
 /// so one test can assert both filenames regardless of the host OS actually
-/// running the test (matching `pycc_rt_lib_filename` in `src/main.rs`,
+/// running the test (matching `pycc_rt_lib_filename` in
+/// `pycc_codegen::artifact_layout`,
 /// which parameterizes an analogous host-vs-target naming choice the same
 /// way after an earlier host-`cfg!`-keyed version was caught in review).
 fn oracle_binary_name(is_windows: bool) -> &'static str {
