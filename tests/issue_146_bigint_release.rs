@@ -84,7 +84,9 @@ fn a_named_bigint_start_bound_survives_the_loop_that_consumes_it() {
     // the loop ends.
     assert_runs_and_prints(
         "named_start_bound",
-        &format!("b: int = {PROMOTED}\nfor i in range(b, 4611686018427387907):\n    print(i)\nprint(b)\n"),
+        &format!(
+            "b: int = {PROMOTED}\nfor i in range(b, 4611686018427387907):\n    print(i)\nprint(b)\n"
+        ),
         "4611686018427387904\n4611686018427387905\n4611686018427387906\n4611686018427387904\n",
     );
 }
@@ -122,7 +124,9 @@ fn a_bigint_loop_variable_reassigned_to_a_smallint_inside_the_body_still_iterate
     // loop must keep advancing from the right value regardless.
     assert_runs_and_prints(
         "reassign_bound_target",
-        &format!("for i in range({PROMOTED}, 4611686018427387907):\n    print(i)\n    i = 5\n    print(i)\n"),
+        &format!(
+            "for i in range({PROMOTED}, 4611686018427387907):\n    print(i)\n    i = 5\n    print(i)\n"
+        ),
         "4611686018427387904\n5\n4611686018427387905\n5\n4611686018427387906\n5\n",
     );
 }
@@ -216,7 +220,9 @@ fn a_bool_assigned_into_a_bigint_valued_int_slot_releases_the_old_word() {
 fn a_list_comprehension_over_a_named_bigint_bound_leaves_the_bound_intact() {
     assert_runs_and_prints(
         "list_comp_named_bound",
-        &format!("b: int = {PROMOTED}\nxs = [0 for i in range(b, 4611686018427387906)]\nprint(len(xs))\nprint(b)\n"),
+        &format!(
+            "b: int = {PROMOTED}\nxs = [0 for i in range(b, 4611686018427387906)]\nprint(len(xs))\nprint(b)\n"
+        ),
         "2\n4611686018427387904\n",
     );
 }
@@ -225,7 +231,9 @@ fn a_list_comprehension_over_a_named_bigint_bound_leaves_the_bound_intact() {
 fn a_set_comprehension_over_a_named_bigint_bound_leaves_the_bound_intact() {
     assert_runs_and_prints(
         "set_comp_named_bound",
-        &format!("b: int = {PROMOTED}\nxs = {{0 for i in range(b, 4611686018427387906)}}\nprint(len(xs))\nprint(b)\n"),
+        &format!(
+            "b: int = {PROMOTED}\nxs = {{0 for i in range(b, 4611686018427387906)}}\nprint(len(xs))\nprint(b)\n"
+        ),
         "1\n4611686018427387904\n",
     );
 }
@@ -234,7 +242,9 @@ fn a_set_comprehension_over_a_named_bigint_bound_leaves_the_bound_intact() {
 fn a_dict_comprehension_over_a_named_bigint_bound_leaves_the_bound_intact() {
     assert_runs_and_prints(
         "dict_comp_named_bound",
-        &format!("b: int = {PROMOTED}\nxs = {{\"k\": 0 for i in range(b, 4611686018427387906)}}\nprint(len(xs))\nprint(b)\n"),
+        &format!(
+            "b: int = {PROMOTED}\nxs = {{\"k\": 0 for i in range(b, 4611686018427387906)}}\nprint(len(xs))\nprint(b)\n"
+        ),
         "1\n4611686018427387904\n",
     );
 }
@@ -267,7 +277,9 @@ fn a_dict_comprehension_over_a_named_bigint_bound_leaves_the_bound_intact() {
 fn nested_bigint_arithmetic_temporaries_produce_the_right_value() {
     assert_runs_and_prints(
         "nested_temporaries",
-        &format!("x: int = {PROMOTED}\ny: int = (x + 1) + 2\nprint(y)\nprint((x + x) + x)\nprint(x)\n"),
+        &format!(
+            "x: int = {PROMOTED}\ny: int = (x + 1) + 2\nprint(y)\nprint((x + x) + x)\nprint(x)\n"
+        ),
         "4611686018427387907\n13835058055282163712\n4611686018427387904\n",
     );
 }
@@ -409,7 +421,7 @@ fn a_bigint_read_out_of_a_tuple_is_not_freed_by_overwriting_the_reader() {
 
 #[cfg(unix)]
 mod peak_rss {
-    use super::{pycc_bin, write_case, PROMOTED};
+    use super::{PROMOTED, pycc_bin, write_case};
     use std::process::Command;
 
     /// Spawns `command`, waits for it via `wait4`, and returns the child's
@@ -459,10 +471,8 @@ mod peak_rss {
     /// LLVM and would swamp the signal.
     fn built_program_peak_rss(case: &str, source: &str) -> libc::c_long {
         let src = write_case(case, source);
-        let bin = std::env::temp_dir().join(format!(
-            "pycc_issue146_rss_{case}_{}",
-            std::process::id()
-        ));
+        let bin =
+            std::env::temp_dir().join(format!("pycc_issue146_rss_{case}_{}", std::process::id()));
         let build = Command::new(pycc_bin())
             .arg("build")
             .arg(&src)
@@ -589,9 +599,7 @@ mod peak_rss {
     /// `pycc_rt_int_from_i64` call instead. Neither form above reaches that
     /// path -- their `1`/`2` literals are folded immediates.
     fn literal_operand_repro(iterations: u32) -> String {
-        format!(
-            "y: int = 0\nfor i in range({iterations}):\n    y = {PROMOTED} + i\nprint(y)\n"
-        )
+        format!("y: int = 0\nfor i in range({iterations}):\n    y = {PROMOTED} + i\nprint(y)\n")
     }
 
     #[test]

@@ -6396,7 +6396,14 @@ fn emit_stmt<'ctx>(
             // describes: a separate storage slot written once per
             // iteration.
             let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
-            emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
+            emit_assign(
+                context,
+                builder,
+                rt,
+                locals,
+                var,
+                Scalar::Int(encoded_element),
+            );
             emit_body(
                 context,
                 builder,
@@ -6662,7 +6669,13 @@ fn emit_stmt<'ctx>(
                     builder.position_at_end(body_bb);
                     // Retain before `emit_assign`'s release-before-store,
                     // exactly as in `MirStmt::ForRange`.
-                    emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Retain);
+                    emit_bigint_refcount_call(
+                        context,
+                        builder,
+                        rt,
+                        current,
+                        BigIntRefcount::Retain,
+                    );
                     emit_assign(context, builder, rt, locals, var, Scalar::Int(current));
 
                     (
@@ -6715,7 +6728,14 @@ fn emit_stmt<'ctx>(
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
-                    emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
+                    emit_assign(
+                        context,
+                        builder,
+                        rt,
+                        locals,
+                        var,
+                        Scalar::Int(encoded_element),
+                    );
 
                     (
                         test_bb,
@@ -6846,7 +6866,14 @@ fn emit_stmt<'ctx>(
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
-                    emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
+                    emit_assign(
+                        context,
+                        builder,
+                        rt,
+                        locals,
+                        var,
+                        Scalar::Int(encoded_element),
+                    );
 
                     (
                         test_bb,
@@ -6885,13 +6912,7 @@ fn emit_stmt<'ctx>(
                     let cond_i1 = truthy(context, builder, rt, cond_scalar);
                     // #146 Part 2 (D-181): released after `truthy`, which
                     // reads a bigint operand's limbs.
-                    release_scalar_if_int_temporary(
-                        context,
-                        builder,
-                        rt,
-                        cond_expr,
-                        &cond_scalar,
-                    );
+                    release_scalar_if_int_temporary(context, builder, rt, cond_expr, &cond_scalar);
                     let if_taken_bb = context.append_basic_block(function, "listcomp_if_taken");
                     let if_skip_bb = context.append_basic_block(function, "listcomp_if_skip");
                     builder
@@ -7160,7 +7181,13 @@ fn emit_stmt<'ctx>(
                     builder.position_at_end(body_bb);
                     // Retain before `emit_assign`'s release-before-store,
                     // exactly as in `MirStmt::ForRange`.
-                    emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Retain);
+                    emit_bigint_refcount_call(
+                        context,
+                        builder,
+                        rt,
+                        current,
+                        BigIntRefcount::Retain,
+                    );
                     emit_assign(context, builder, rt, locals, var, Scalar::Int(current));
 
                     (
@@ -7212,7 +7239,14 @@ fn emit_stmt<'ctx>(
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
-                    emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
+                    emit_assign(
+                        context,
+                        builder,
+                        rt,
+                        locals,
+                        var,
+                        Scalar::Int(encoded_element),
+                    );
 
                     (
                         test_bb,
@@ -7332,7 +7366,14 @@ fn emit_stmt<'ctx>(
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
-                    emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
+                    emit_assign(
+                        context,
+                        builder,
+                        rt,
+                        locals,
+                        var,
+                        Scalar::Int(encoded_element),
+                    );
 
                     (
                         test_bb,
@@ -7365,13 +7406,7 @@ fn emit_stmt<'ctx>(
                     let cond_i1 = truthy(context, builder, rt, cond_scalar);
                     // #146 Part 2 (D-181): released after `truthy`, which
                     // reads a bigint operand's limbs.
-                    release_scalar_if_int_temporary(
-                        context,
-                        builder,
-                        rt,
-                        cond_expr,
-                        &cond_scalar,
-                    );
+                    release_scalar_if_int_temporary(context, builder, rt, cond_expr, &cond_scalar);
                     let if_taken_bb = context.append_basic_block(function, "setcomp_if_taken");
                     let if_skip_bb = context.append_basic_block(function, "setcomp_if_skip");
                     builder
@@ -7626,7 +7661,13 @@ fn emit_stmt<'ctx>(
                     builder.position_at_end(body_bb);
                     // Retain before `emit_assign`'s release-before-store,
                     // exactly as in `MirStmt::ForRange`.
-                    emit_bigint_refcount_call(context, builder, rt, current, BigIntRefcount::Retain);
+                    emit_bigint_refcount_call(
+                        context,
+                        builder,
+                        rt,
+                        current,
+                        BigIntRefcount::Retain,
+                    );
                     emit_assign(context, builder, rt, locals, var, Scalar::Int(current));
 
                     (
@@ -7678,7 +7719,14 @@ fn emit_stmt<'ctx>(
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
-                    emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
+                    emit_assign(
+                        context,
+                        builder,
+                        rt,
+                        locals,
+                        var,
+                        Scalar::Int(encoded_element),
+                    );
 
                     (
                         test_bb,
@@ -7804,7 +7852,14 @@ fn emit_stmt<'ctx>(
 
                     builder.position_at_end(body_bb);
                     let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
-                    emit_assign(context, builder, rt, locals, var, Scalar::Int(encoded_element));
+                    emit_assign(
+                        context,
+                        builder,
+                        rt,
+                        locals,
+                        var,
+                        Scalar::Int(encoded_element),
+                    );
 
                     (
                         test_bb,
@@ -7838,13 +7893,7 @@ fn emit_stmt<'ctx>(
                     let cond_i1 = truthy(context, builder, rt, cond_scalar);
                     // #146 Part 2 (D-181): released after `truthy`, which
                     // reads a bigint operand's limbs.
-                    release_scalar_if_int_temporary(
-                        context,
-                        builder,
-                        rt,
-                        cond_expr,
-                        &cond_scalar,
-                    );
+                    release_scalar_if_int_temporary(context, builder, rt, cond_expr, &cond_scalar);
                     let if_taken_bb = context.append_basic_block(function, "dictcomp_if_taken");
                     let if_skip_bb = context.append_basic_block(function, "dictcomp_if_skip");
                     builder
@@ -10006,7 +10055,6 @@ mod tests {
              contains a `bigint_rc_cont` block:\n{ir}"
         );
     }
-
 
     /// The retain side of the same classification (#633 direction A):
     /// binding a tuple element to an `int` local makes that local a second
@@ -12419,7 +12467,14 @@ mod tests {
             .ptr_type(inkwell::AddressSpace::default())
             .const_null();
         let rt = declare_rt_functions(&context, &module);
-        emit_assign(&context, &builder, &rt, &mut locals, "xs", Scalar::List(value));
+        emit_assign(
+            &context,
+            &builder,
+            &rt,
+            &mut locals,
+            "xs",
+            Scalar::List(value),
+        );
         builder
             .build_return(None)
             .expect("build_return should not fail for a void function");
