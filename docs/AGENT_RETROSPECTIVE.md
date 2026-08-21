@@ -33,6 +33,41 @@ never a merge gate.
 
 ---
 
+## 2026-08-21 — A subagent's measurable claims were verified and its completeness claim was not
+
+**What happened.** A dispatched agent extracted a 25,000-line test module into
+its own file and, beyond its brief, corrected six comments the move had
+invalidated. Its report and commit message both stated which comments were
+deliberately left alone and why: "`above`/`below` references between two tests,
+and between two production items, both still resolve within a single file."
+I checked every number it gave me — line counts with `wc -l`, the `pub`-bearing
+line count under three different patterns, byte-identity of the moved block
+against the base revision — and each one held. I did not check the sentence that
+was not a number. The pinned reviewer did, and it was false: a third category
+existed, a test comment naming a production item by file position, plus six
+coverage-rationale comments that had quietly stopped being true once the file
+left the coverage denominator.
+
+**Root cause.** Measurable claims invite verification because there is an obvious
+command to run; completeness claims do not, so they pass through on the strength
+of the surrounding report being accurate. That is exactly backwards. A count can
+be re-derived in one command and is therefore cheap for the *author* to have
+gotten right; "I found all of them" is the claim that requires a search the
+author may simply not have run, and it is the one no single command confirms.
+
+**What fixed it.** The reviewer's finding, then a sweep I ran myself: grep both
+files for positional deixis and for coverage-rationale wording, and classify each
+hit by whether its referent is a file position or a named item's internal
+ordering. That distinction is what separates the genuinely stale references from
+the ones that survived the move untouched, and it is now recorded in the commit
+so the next sweep does not relitigate them.
+
+**Lesson.** When a subagent reports both measurements and a completeness claim,
+the measurements are the part you can afford to spot-check and the completeness
+claim is the part you must re-derive. Ask what search would have had to run for
+the claim to be true, and run it. A report whose numbers all check out is
+evidence about its numbers and nothing else.
+
 ## 2026-08-21 — The advisor round ran when the tool call shared a turn with the sentence announcing it
 
 **What happened.** `issue-select`'s step 7 (an adversarial round with an
