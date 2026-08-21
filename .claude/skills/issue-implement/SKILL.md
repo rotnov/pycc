@@ -494,12 +494,13 @@ Immediately before merging, confirm which issues the merge will actually close �
 reading the body, but by asking GitHub what it parsed out of it:
 
 ```
-gh api graphql -f query='{repository(owner:"<owner>",name:"<repo>"){pullRequest(number:<n>){closingIssuesReferences(first:10){nodes{number}}}}}'
+gh api graphql -f query='{repository(owner:"<owner>",name:"<repo>"){pullRequest(number:<n>){closingIssuesReferences(first:20){totalCount nodes{number}}}}}'
 ```
 
-The returned set must equal the intended one exactly: the issue for a `Fixes #N` pull
-request, and empty for every stage, intermediate-activation, and narrowing pull request
-above. A body that never meant to close anything can still close something — GitHub scans
+`totalCount` must equal the intended count exactly — `1`, naming the issue, for a
+`Fixes #N` pull request, and `0` for every stage, intermediate-activation, and narrowing
+pull request above. Compare `totalCount` rather than the length of the returned page, so
+the answer cannot be truncated by the page size. A body that never meant to close anything can still close something — GitHub scans
 for a closing keyword adjacent to an issue reference and does not parse the English around
 it, so a disclaimer or a quotation containing the pattern closes the issue just as an
 instruction would (see AGENTS.md's pull-request rule). A mismatch is fixed by editing the

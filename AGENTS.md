@@ -123,8 +123,10 @@
   that an issue stays open, write "Part 1 of #N; #N stays open" or "does not
   carry `Fixes #N`" — phrasings that reference the issue without adjoining a
   keyword to it. Confirm intent after opening a pull request and before merging
-  with `gh api graphql -f query='{repository(owner:"<owner>",name:"<repo>"){pullRequest(number:<n>){closingIssuesReferences(first:10){nodes{number}}}}}'`,
-  which lists exactly the issues the merge will close.
+  with `gh api graphql -f query='{repository(owner:"<owner>",name:"<repo>"){pullRequest(number:<n>){closingIssuesReferences(first:20){totalCount nodes{number}}}}}'`,
+  which lists exactly the issues the merge will close. Read `totalCount`, not the
+  length of the returned page: it is authoritative even when more references exist
+  than the page requested, so `totalCount: 0` proves the merge closes nothing.
 
 ## Monitor only live repository events ([D-078](docs/decisions/D-078-external-repository-monitoring-is-checkpointed.md))
 
