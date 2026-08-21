@@ -21,10 +21,13 @@ use crate::{Environment, infer_expr_in, is_assignable};
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{HirExpr, ProtocolMember, Ty, extract_class_names, is_builtin_type_name};
 
-// Re-exported so every existing `class::bind_classes` /
+// A private import, not a re-export: it keeps this module's own unqualified
+// `expect_class` call sites compiling now that the function itself lives in
+// `class/binding.rs`.
+use binding::expect_class;
+// A re-export, so every existing `class::bind_classes` /
 // `class::resolve_instantiation` call site (and the doc comments in `lib.rs`
 // naming those paths) keeps working across the `class/binding.rs` extraction.
-use binding::expect_class;
 pub(crate) use binding::{bind_classes, resolve_instantiation};
 
 /// #380 (PR-20): Checks whether a concrete class structurally conforms to
@@ -351,11 +354,7 @@ fn t0047_super_instance_attr(attr: &str, declaring_class: &str) -> Diagnostic {
 /// mismatch code -- an instantiation call and a method call are both, at
 /// their core, "call this mangled function with these arguments," the same
 /// shape an ordinary function call already validates.
-pub(super) fn check_call_args(
-    callee: &str,
-    arg_tys: &[Ty],
-    param_tys: &[Ty],
-) -> Result<(), Diagnostic> {
+fn check_call_args(callee: &str, arg_tys: &[Ty], param_tys: &[Ty]) -> Result<(), Diagnostic> {
     if arg_tys.len() != param_tys.len() {
         return Err(Diagnostic::error(
             "T0021",

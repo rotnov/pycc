@@ -39,8 +39,9 @@ pub(crate) fn bind_classes(env: &mut Environment, hir: &HirModule) {
 }
 
 /// Looks up `class_name`'s declared shape, panicking if it isn't
-/// registered. Every caller in this module only ever calls this with a
-/// class name extracted from a real `Ty::Instance` payload (either produced
+/// registered. Every caller -- all of them in `class.rs`, this function's
+/// parent module -- only ever calls this with a class name extracted from a
+/// real `Ty::Instance` payload (either produced
 /// by `resolve_instantiation` below, which only ever builds one from a
 /// class `env.lookup_class` just confirmed exists, or from `self`'s own
 /// type, assigned directly by `pycc_hir::class::lower_method` from the
