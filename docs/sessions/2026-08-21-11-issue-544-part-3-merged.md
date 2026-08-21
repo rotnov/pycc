@@ -98,15 +98,18 @@ terminated. State to resume from:
 
 - **Directive scope:** work the tracker on autopilot toward the active
   milestone.
-- **Active milestone: v0.3, not met**, but **the gap figure must be
-  re-derived, not carried forward.** `docs/ROADMAP.md`'s Accept bullet requires
-  37 `PYTHON_STANDARDS.md` matrix rows at `◐`-or-better. Its progress note is
-  dated 2026-08-19 and records 29 of 37 with an 8-row gap — but every issue that
-  note names as tracking the gap (#572, #578, #579, #580) has since closed,
-  verified at the time this entry was committed. So either the count has moved
-  and the note is stale, or work closed without moving it. The next iteration's
-  `next-milestone` step 2 evidence check must re-count the matrix against the
-  tree rather than reuse the 29 figure; do not treat this bullet as the count.
+- **Active milestone: v0.3, not met — 31 of the required 37 rows, a 6-row gap.**
+  The figure was re-derived here rather than carried forward, and the roadmap
+  corrected in this same change. The note it replaced was dated 2026-08-19,
+  recorded 29 of 37, and named #572, #578, #579 and #580 as the trackers of the
+  remaining gap; all four have since closed, and the two rows they added are
+  what moved the count. The number is mechanically derived by
+  `python3 scripts/check_conformance_breadth.py`, which reports "31
+  evidence-backed rows, all declared (2 accepted as whole-PEP, 29 subset)" —
+  re-run it rather than trusting this line.
+- **The remaining 6 rows have no open tracker.** #572 and its parts are closed,
+  so identifying what still blocks those rows and filing it is outstanding work,
+  and it is the most direct path to v0.3.
 - **Last iteration's outcome:** #544 Part 3 merged; #544 narrowed, not closed.
 - **Next step:** re-enter `.claude/skills/issue-select/SKILL.md` at step 1 with
   a fresh baseline from `7db27a7c`.
@@ -122,9 +125,6 @@ terminated. State to resume from:
   #549 says 4,701 (now 4,614). #663's 4,578 is accurate.
 - #641's title still names only `macos-15-intel`.
 - #162 and #397 both carry `milestone: null`.
-- `docs/ROADMAP.md`'s v0.3 conformance-progress note cites four now-closed
-  issues as the live trackers of its 8-row gap. Whatever the recount shows, that
-  paragraph needs updating so it stops pointing at closed work.
 - Other open items: #623, #676, #677, #685; D-171's stale lines 8 and 12; the
   2026-08-01 issue-109 plan document's line 50 / Task 5; the orphaned
   `tests/fixtures/policy-successors/`; `src/project_config.rs:116` citing a
