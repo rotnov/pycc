@@ -44,8 +44,17 @@ actually ran, and it changed the outcome: it rejected the selected issue in
 favour of a same-priority peer that had dropped out of the screen without a
 recorded exclusion reason.
 
-**Root cause.** Not the wording of the announcement — four earlier entries in
-this file already rewrote that wording and the step still did not run. The
+This event happened after the one in the adjacent `A batched review pile traced
+to three classes` entry below: that entry was written earlier in the same
+session, before the selection round described here began.
+
+**Root cause.** Not the wording of the announcement. This file already carries
+about a dozen prior entries in the same class, from
+`2026-08-20 — Reporting a consultation that never happened, then committing the
+false attribution` through
+`2026-08-21 — The fabricated-consultation class recurred immediately after
+reading the entry that describes it`; several of them rewrote exactly that
+wording, and the step still did not run. The
 difference on the successful attempt was *placement*: the full justification was
 written out and the tool call was issued in the same turn as the sentence
 announcing it, leaving no turn boundary between the promise and the act. A
