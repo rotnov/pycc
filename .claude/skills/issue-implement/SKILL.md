@@ -490,6 +490,21 @@ unresolved review threads, zero unaddressed actionable findings, branch up to da
 default branch. Then re-read the full pull-request diff, end to end, immediately before
 merging — the last look is not ceremonial; anything found there goes back through step 5.
 
+Immediately before merging, confirm which issues the merge will actually close — not by
+reading the body, but by asking GitHub what it parsed out of it:
+
+```
+gh api graphql -f query='{repository(owner:"<owner>",name:"<repo>"){pullRequest(number:<n>){closingIssuesReferences(first:10){nodes{number}}}}}'
+```
+
+The returned set must equal the intended one exactly: the issue for a `Fixes #N` pull
+request, and empty for every stage, intermediate-activation, and narrowing pull request
+above. A body that never meant to close anything can still close something — GitHub scans
+for a closing keyword adjacent to an issue reference and does not parse the English around
+it, so a disclaimer or a quotation containing the pattern closes the issue just as an
+instruction would (see AGENTS.md's pull-request rule). A mismatch is fixed by editing the
+body and re-running the query before merging, never by merging and reopening after.
+
 Merge with a merge commit, delete the task branch, and confirm the issue closed via the
 `Fixes #N` reference. Fetch and verify the default branch actually contains the work before
 reporting it merged.
