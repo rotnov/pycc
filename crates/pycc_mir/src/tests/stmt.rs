@@ -302,3 +302,125 @@ fn a_value_less_annotated_assignment_does_not_bind_the_name() {
     };
     build(&hir);
 }
+
+// -- #627: `obj.attr = <bool>` into an `int`-declared slot ------------------
+
+/// Builds a module whose `Holder` class declares `n` with `slot_ty` and
+/// whose top level assigns `value` into `holder.n`, returning the lowered
+/// `MirStmt::AttrSet`'s own `value` expression.
+///
+/// The class is spelled out here rather than reusing `class_attr.rs`'s
+/// `point_module` because these cases turn on the *declared slot type*,
+/// which that fixture fixes at `Ty::Int`.
+fn lowered_attr_set_value(slot_ty: Ty, value: HirExpr) -> MirExpr {
+    use pycc_hir::HirClassDef;
+    let self_ty = Ty::Instance(Box::new("Holder".to_string()));
+    let init = HirItem::Function {
+        name: "Holder.__init__".to_string(),
+        params: vec![
+            ("self".to_string(), self_ty),
+            ("n".to_string(), slot_ty.clone()),
+        ],
+        return_ty: Ty::None,
+        body: vec![
+            HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "n".to_string(),
+                value: HirExpr::Name("n".to_string()),
+            },
+            HirStmt::Return(None),
+        ],
+    };
+    let hir = HirModule {
+        items: vec![
+            init,
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "holder".to_string(),
+                value: HirExpr::Call {
+                    callee: "Holder".to_string(),
+                    args: vec![HirExpr::IntLiteral(0)],
+                },
+            }),
+            HirItem::TopLevelStmt(HirStmt::AttrSet {
+                base: HirExpr::Name("holder".to_string()),
+                attr: "n".to_string(),
+                value,
+            }),
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: vec![(
+            "Holder".to_string(),
+            HirClassDef {
+                name: "Holder".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Holder".to_string()],
+                attrs: vec![("n".to_string(), slot_ty)],
+                methods: vec![("__init__".to_string(), "Holder.__init__".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        )],
+    };
+    let mir = build(&hir);
+    mir.items
+        .iter()
+        .find_map(|item| match item {
+            MirItem::TopLevelStmt(MirStmt::AttrSet { value, .. }) => Some(value.clone()),
+            _ => None,
+        })
+        .expect("the top-level attribute store must lower to a `MirStmt::AttrSet`")
+}
+
+#[test]
+fn an_attr_set_of_a_bool_into_an_int_declared_slot_widens_through_int_boundary() {
+    // #627: `c.n = True` where `n` is declared `int`. `pycc_types`
+    // accepts this (`docs/TYPE_SYSTEM.md`: `int` admits `bool` at a
+    // checked boundary), so the store is legal -- but the slot holds
+    // D-141-encoded `int` words, and an unencoded `bool` word lands
+    // there as a raw `1`/`0`. `0` is not a valid encoded int word at
+    // all, so the next read of the slot aborted the program
+    // (`pycc_rt: invalid encoded int word 0x0`). Wrap the value in
+    // `MirExpr::IntBoundary` exactly as the `AnnAssign` arm above
+    // does, which is the mechanism D-141 mandates for this widening,
+    // and which additionally makes `value.ty()` report `Ty::Int` so
+    // codegen's slot-release gate fires (D-180 Consequences item 6).
+    assert_eq!(
+        lowered_attr_set_value(Ty::Int, HirExpr::BoolLiteral(true)),
+        MirExpr::IntBoundary(Box::new(MirExpr::BoolLiteral(true))),
+    );
+}
+
+#[test]
+fn an_attr_set_of_a_non_bool_into_an_int_declared_slot_is_left_alone() {
+    // The second operand of the `&&`: an `int`-declared slot taking an
+    // already-`int` value must not gain a redundant boundary.
+    assert_eq!(
+        lowered_attr_set_value(Ty::Int, HirExpr::IntLiteral(7)),
+        MirExpr::IntLiteral(7),
+    );
+}
+
+#[test]
+fn an_attr_set_of_a_bool_into_a_bool_declared_slot_is_left_alone() {
+    // The first operand of the `&&`: a `bool`-declared slot stores its
+    // `bool` word verbatim. Wrapping here would be the regression the
+    // issue's own literal completion criterion would have introduced --
+    // `slot_word_to_scalar` truncates a `Ty::Bool` slot to `i8`, so the
+    // encoded `False` marker `0b0010` would read back as truthy and
+    // `print` would render it `True`.
+    assert_eq!(
+        lowered_attr_set_value(Ty::Bool, HirExpr::BoolLiteral(false)),
+        MirExpr::BoolLiteral(false),
+    );
+}

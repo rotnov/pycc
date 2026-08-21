@@ -322,7 +322,7 @@ pub(super) fn lower_stmt(
                 }
             }
             let flat_attrs = mro_attrs(class_def, classes);
-            let (slot, _) = flat_attrs
+            let (slot, (_, slot_ty)) = flat_attrs
                 .iter()
                 .enumerate()
                 .find(|(_, (name, _))| name == attr)
@@ -334,6 +334,33 @@ pub(super) fn lower_stmt(
                         class_def.name
                     )
                 });
+            // #627: `obj.attr = <bool>` where `attr` is declared `int`.
+            // `pycc_types::is_assignable` accepts this -- `int` admits
+            // `bool` as a subtype at a checked boundary
+            // (`docs/TYPE_SYSTEM.md`) -- and an attribute store is such a
+            // boundary, exactly like the `AnnAssign` arm above. The slot
+            // holds D-141-encoded `int` words, so an unencoded `bool`
+            // word lands there as a raw `1`/`0`: `1` reads back as the
+            // smallint `0`, and `0` is not a valid encoded word at all,
+            // aborting the next read with `pycc_rt: invalid encoded int
+            // word 0x0`. Widen through `MirExpr::IntBoundary`, the
+            // mechanism D-141 mandates ("MIR represents an annotated
+            // initializer boundary with `MirExpr::IntBoundary`, not
+            // synthetic arithmetic"), which preserves the runtime `True`/
+            // `False` identity CPython prints. The declared type comes
+            // from the same `flat_attrs` tuple the slot index did, never
+            // from a fresh lookup on the class's own `attrs`, because an
+            // MRO re-declaration can make the two differ (#432).
+            //
+            // Reporting `Ty::Int` for the stored value additionally makes
+            // codegen's `MirStmt::AttrSet` release gate fire, so a bigint
+            // already in the slot is released instead of leaked -- D-180
+            // Consequences item 6, corrected by D-187.
+            let value = if *slot_ty == Ty::Int && value.ty() == Ty::Bool {
+                MirExpr::IntBoundary(Box::new(value))
+            } else {
+                value
+            };
             MirStmt::AttrSet { base, slot, value }
         }
         HirStmt::Match { subject, cases } => {

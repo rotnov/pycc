@@ -86,3 +86,34 @@ range_dict = {
 print(range_dict["k0"])
 
 print(source() + 0)
+
+# #627: an attribute store is a checked bool-into-int boundary too. The
+# `int`-declared slot holds D-141 encoded words, so an unencoded `bool`
+# word landing there read back as `0` and then aborted the program.
+class Slots:
+    def __init__(self) -> None:
+        self.n = 0
+        self.flag = False
+
+
+slots = Slots()
+slots.n = True
+print(slots.n)
+slots.n = False
+print(slots.n)
+
+# The same slot after it has held a heap-allocated bigint: the store of a
+# bool must release the old word rather than leak it (D-180 Consequences
+# item 6), and must still print the bool identity.
+slots.n = 4611686018427387904 + 1
+print(slots.n)
+slots.n = True
+print(slots.n)
+
+# A `bool`-declared slot must keep storing its raw word: encoding a D-141
+# marker into it would truncate to a non-zero `i8` and print `True` for
+# `False`.
+slots.flag = True
+print(slots.flag)
+slots.flag = False
+print(slots.flag)
