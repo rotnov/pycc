@@ -111,7 +111,8 @@ fn a_set_typed_module_binding_gets_a_real_pointer_backed_global_slot() {
 
 #[test]
 fn defining_main_without_calling_it_produces_no_output() {
-    // The regression test for the bug this file's git history fixed:
+    // The regression test for a bug fixed before this file was split out
+    // of `lib.rs` by #545, so `git log --follow` is needed to reach it:
     // a function definition alone must never run, regardless of its
     // name -- matches CPython exactly (confirmed empirically against
     // python3.14 on this exact source: zero bytes of stdout).
@@ -5972,7 +5973,7 @@ fn a_for_list_loop_visits_every_element_in_order() {
     // from real source, because empirically that was not enough: with
     // this test and `a_module_level_list_binding_gets_a_null_
     // initialized_pointer_global` below absent, `cargo llvm-cov
-    // --workspace` reported this file at 99.68% regions with no
+    // --workspace` reported `lib.rs` at 99.68% regions with no
     // uncovered line to point at. That integration suite drives the
     // separate `pycc` binary, which links its own copy of this crate,
     // and llvm-cov's per-instantiation accounting does not always let
@@ -7324,7 +7325,7 @@ fn an_int_local_assigned_in_both_branches_of_an_if_else_is_readable_after_the_if
 
 #[test]
 fn a_str_local_first_assigned_inside_an_if_body_is_freed_at_top_level_completion() {
-    // Regression test for a review finding against this file's first
+    // Regression test for a review finding against the crate root's first
     // `str`-codegen task: `if True: s = "hi"` -- `s`'s *first*
     // assignment executes inside the `if`'s own `then` block, never at
     // the top level directly, and `s` is never read by any user code
@@ -8776,7 +8777,7 @@ fn a_list_sourced_list_comprehension_that_rebinds_its_own_source_name_reads_the_
     // brand-new empty list instead of the original one, and this
     // produced `len(xs) == 0` instead of `2`. Fixed by deferring
     // `emit_assign(target, ..)` until after the loop (see this arm's own
-    // "point 1"/"point 5" doc comments above).
+    // "point 1"/"point 5" doc comments on `ListCompAssign` in `lib.rs`).
     let mir = MirModule {
         items: vec![
             MirItem::TopLevelStmt(MirStmt::ListCompAssign {
@@ -9475,8 +9476,8 @@ fn a_dict_sourced_dict_comprehension_builds_an_independent_copy_and_leaves_the_s
     // pre-existing `dict[str, int]`, is the one `Dict`-sourced
     // `DictCompAssign` shape reachable from real, type-checked source
     // (T0036: `var`/`k` is `Ty::Str`, satisfying `dict[str, int]`'s own
-    // key-type gate directly -- see this arm's own doc comment above for
-    // the full argument). Confirms two things: `d2`'s own contents are
+    // key-type gate directly -- see this arm's own doc comment on
+    // `DictCompAssign` in `lib.rs` for the full argument). Confirms two things: `d2`'s own contents are
     // correct and independently readable, and building `d2` leaves `d`'s
     // own contents unaffected -- exactly what this arm's own
     // `incref_if_str_duplicate` call on `key` (mirroring `MirStmt::

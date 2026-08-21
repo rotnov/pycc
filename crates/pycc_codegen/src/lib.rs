@@ -3187,10 +3187,11 @@ fn emit_expr_unchecked<'ctx>(
         // its second call site, not a new declaration), and the dedup
         // check that makes a repeated `.add()` of an already-present value
         // a no-op lives entirely inside `pycc_rt_int_set_add` itself, not
-        // here (see that function's own doc comment). Repeated `s.add(x);
-        // s.add(x)` calls across two separate statements need no special
-        // reasoning at all: each is its own fully independent `MirStmt`,
-        // executed strictly in source order, each re-reading `s`'s current
+        // here (see that function's own doc comment). A separate
+        // `s.add(x)` statement whose value is already a member needs no
+        // special reasoning at all: each `.add()` is its own fully
+        // independent `MirStmt`, executed strictly in source order, each
+        // re-reading `s`'s current
         // (unchanged-by-`.add()`-itself-except-for-dedup-mutation) pointer
         // -- verified empirically: see the crate's `tests` module and its
         // `set_add_grows_the_set_and_a_repeated_value_still_dedups_codegens_and_runs`
