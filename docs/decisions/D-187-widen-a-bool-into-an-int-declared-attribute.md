@@ -15,8 +15,10 @@ status: accepted
   6's assertion that the bool-into-`int`-attribute leak "cannot" be pinned
   by a test because the shape reads back as `0` no matter what the
   refcounting does. That is no longer true, and the same change that makes
-  it false also restores D-180 *Decision* item 4's slot-typed release
-  invariant for `MirStmt::AttrSet`.
+  it false also makes `MirStmt::AttrSet`'s release gate agree with D-180
+  *Decision* item 4's slot-typed invariant -- by coincidence rather than by
+  construction, for the one widening that exists today. The gate itself
+  stays value-typed; see *Decision* below for why that distinction matters.
 - Context:
   `pycc_types` accepts `bool` where `int` is declared -- `int` admits
   `bool` as a subtype at a checked boundary
@@ -111,8 +113,10 @@ status: accepted
     base-class method assigning a `bool` into an attribute a derived class
     re-declares as `int` still misses it and still prints `0`. This is
     unchanged by this decision, not a regression it introduces, and is left
-    for its own diagnosis: a conflicting attribute re-declaration across an
-    MRO is arguably a type error rather than something to coerce silently.
+    for its own diagnosis in
+    [#676](https://github.com/rotnov/pycc/issues/676): a conflicting attribute
+    re-declaration across an MRO is arguably a type error rather than something
+    to coerce silently.
   - Every other `scalar_to_slot_word` caller is unaffected, since the
     function is untouched. `emit_enum_member_inits`, its only other caller,
     passes statically known `Int` and `Str` scalars.
