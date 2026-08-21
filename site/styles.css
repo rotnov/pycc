@@ -418,6 +418,37 @@ h1 span {
   font-size: 0.72rem;
 }
 
+.hero-evidence-details {
+  color: var(--ink-faint);
+  font-size: 0.72rem;
+  line-height: 1.6;
+}
+
+.hero-evidence-details summary {
+  width: fit-content;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-family: var(--mono);
+}
+
+.hero-evidence-details dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 12px 0;
+}
+
+.hero-evidence-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.hero-evidence-details ul {
+  padding-left: 18px;
+  margin: 8px 0 0;
+}
+
 .contract {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

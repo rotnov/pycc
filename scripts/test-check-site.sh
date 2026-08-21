@@ -15,7 +15,7 @@ trap cleanup EXIT HUP INT TERM
 # mutations, and an earlier, unrelated guard can reject the tree first, masking whether
 # this block's own guard works at all (issue #644).
 restore_fixtures() {
-  rm -rf "$fixture_root/site" "$fixture_root/override"
+  rm -rf "$fixture_root/site" "$fixture_root/override" "$fixture_root/evidence-root"
   cp -R "$repo_root/site" "$fixture_root/site"
   cp "$repo_root/README.md" "$fixture_root/README.md"
   cp "$repo_root/docs/WEBSITE.md" "$fixture_root/WEBSITE.md"
@@ -26,6 +26,17 @@ restore_fixtures() {
     "$fixture_root/quick_start_type_error.py"
   cp "$repo_root/tests/diagnostics/quick_start_type_error.expected.txt" \
     "$fixture_root/quick_start_type_error.expected.txt"
+  mkdir -p \
+    "$fixture_root/evidence-root/tests/fixtures" \
+    "$fixture_root/evidence-root/tests/diagnostics"
+  cp "$repo_root/tests/fixtures/quick_start.py" \
+    "$fixture_root/evidence-root/tests/fixtures/quick_start.py"
+  cp "$repo_root/tests/fixtures/quick_start.expected.txt" \
+    "$fixture_root/evidence-root/tests/fixtures/quick_start.expected.txt"
+  cp "$repo_root/tests/quick_start.rs" \
+    "$fixture_root/evidence-root/tests/quick_start.rs"
+  cp "$repo_root/tests/diagnostics/quick_start_type_error.expected.txt" \
+    "$fixture_root/evidence-root/tests/diagnostics/quick_start_type_error.expected.txt"
 }
 
 restore_fixtures
@@ -79,6 +90,391 @@ if offenders:
     )
     raise SystemExit(1)
 PY
+
+# Issue #564: every proof-page hero is owned by one versioned manifest.  The
+# canonical site gate must fail closed if that manifest disappears; otherwise
+# all of the field-level checks below could be bypassed by deleting their
+# input instead of keeping it current.
+rm -f "$fixture_root/site/evidence-heroes.json"
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a site without the evidence-hero manifest (issue #564)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# The schema is deliberately small enough to validate through mutations rather
+# than by trusting a second schema implementation.  These cases cover every
+# required field on the one accepted hero, every allowlisted evidence kind,
+# unavailable-state fail-closed behavior, and the stable-link boundary.  The
+# validator itself remains offline: each subprocess receives only fixture-tree
+# paths and the local Git object database.
+python3 - "$repo_root" "$fixture_root" <<'PY'
+import copy
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+repo_root = Path(sys.argv[1])
+fixture_root = Path(sys.argv[2])
+site_root = fixture_root / "site"
+manifest_path = site_root / "evidence-heroes.json"
+validator = repo_root / "scripts" / ("check-site" + ".sh")
+
+
+def reset_site():
+    shutil.rmtree(site_root, ignore_errors=True)
+    shutil.copytree(repo_root / "site", site_root)
+
+
+def rejected(label, mutate):
+    reset_site()
+    document = json.loads(manifest_path.read_text())
+    mutate(document)
+    manifest_path.write_text(json.dumps(document, indent=2) + "\n")
+    env = os.environ.copy()
+    env.update(
+        {
+            "SITE_DIR": str(site_root),
+            "README_PATH": str(fixture_root / "README.md"),
+            "WEBSITE_MD_PATH": str(fixture_root / "WEBSITE.md"),
+            "QUICK_START_FIXTURE_PATH": str(fixture_root / "quick_start.py"),
+            "QUICK_START_EXPECTED_PATH": str(
+                fixture_root / "quick_start.expected.txt"
+            ),
+            "QUICK_START_DIAGNOSTIC_PATH": str(
+                fixture_root / "quick_start_type_error.expected.txt"
+            ),
+            "QUICK_START_DIAGNOSTIC_SOURCE_PATH": str(
+                fixture_root / "quick_start_type_error.py"
+            ),
+            "EVIDENCE_ROOT_PATH": str(fixture_root / "evidence-root"),
+        }
+    )
+    result = subprocess.run(
+        [str(validator)],
+        cwd=repo_root,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode == 0:
+        raise SystemExit(
+            f"Validator accepted evidence-hero mutation: {label} (issue #564)"
+        )
+
+
+def delete_path(document, path):
+    node = document
+    for key in path[:-1]:
+        node = node[key]
+    del node[path[-1]]
+
+
+for field in ("schema_version", "evidence_states", "heroes"):
+    rejected(
+        f"missing root field {field}",
+        lambda doc, field=field: doc.pop(field),
+    )
+rejected("unsupported schema_version", lambda doc: doc.__setitem__("schema_version", "2.0.0"))
+rejected("mutated evidence-state vocabulary", lambda doc: doc["evidence_states"].append("verified"))
+rejected("missing one required hero", lambda doc: doc["heroes"].pop())
+
+required_hero_fields = (
+    "page_id",
+    "evidence_id",
+    "kind",
+    "route",
+    "page_path",
+    "fixture",
+    "test",
+    "command",
+    "snapshot",
+    "repository",
+    "attestation",
+    "environment",
+    "state",
+    "limitations",
+    "stable_links",
+    "projections",
+)
+for field in required_hero_fields:
+    rejected(
+        f"landing missing required field {field}",
+        lambda doc, field=field: doc["heroes"][0].pop(field),
+    )
+
+landing_nested_fields = (
+    ("fixture", "path"),
+    ("fixture", "sha256"),
+    ("test", "path"),
+    ("test", "name"),
+    ("test", "sha256"),
+    ("command", "build"),
+    ("command", "run"),
+    ("command", "compiler_flags"),
+    ("snapshot", "path"),
+    ("snapshot", "stream"),
+    ("snapshot", "text"),
+    ("snapshot", "sha256"),
+    ("repository", "commit"),
+    ("repository", "url"),
+    ("attestation", "workflow"),
+    ("attestation", "run_id"),
+    ("attestation", "run_url"),
+    ("environment", "python"),
+    ("environment", "rust"),
+    ("environment", "llvm"),
+    ("environment", "profile"),
+    ("environment", "platforms"),
+    ("stable_links", "fixture"),
+    ("stable_links", "test"),
+    ("stable_links", "snapshot"),
+    ("stable_links", "commit"),
+    ("stable_links", "run"),
+    ("projections", "html"),
+    ("projections", "markdown"),
+    ("projections", "llm"),
+    ("projections", "structured_data"),
+    ("projections", "social"),
+)
+for path in landing_nested_fields:
+    rejected(
+        "landing missing " + ".".join(path),
+        lambda doc, path=path: delete_path(doc["heroes"][0], path),
+    )
+
+for field in ("runner", "architecture", "job_url"):
+    rejected(
+        f"landing platform missing {field}",
+        lambda doc, field=field: doc["heroes"][0]["environment"][
+            "platforms"
+        ][0].pop(field),
+    )
+
+rejected(
+    "unavailable hero missing owner link",
+    lambda doc: doc["heroes"][1]["stable_links"].pop("owner"),
+)
+
+# Every allowlisted kind has a negative mutation.  A validator that checks only
+# the landing record would accept seven of these cases.
+for index, hero in enumerate(json.loads((repo_root / "site/evidence-heroes.json").read_text())["heroes"]):
+    rejected(
+        f"unsupported kind replacing {hero['kind']}",
+        lambda doc, index=index: doc["heroes"][index].__setitem__(
+            "kind", "decorative-terminal-card"
+        ),
+    )
+
+# Unavailable heroes must not grow decorative evidence.  Their owner issue is
+# the only stable link until a child issue lands a real artifact.
+for index in range(1, 8):
+    rejected(
+        f"unavailable {index} carries invented snapshot",
+        lambda doc, index=index: doc["heroes"][index].__setitem__(
+            "snapshot",
+            {
+                "path": "tests/fixtures/quick_start.expected.txt",
+                "stream": "stdout",
+                "text": "invented\n",
+                "sha256": "0" * 64,
+            },
+        ),
+    )
+
+# These values remain internally well-shaped, so only repository/artifact
+# binding and immutable-link validation can reject them.
+rejected(
+    "decorative repository commit",
+    lambda doc: doc["heroes"][0]["repository"].update(
+        {
+            "commit": "0" * 40,
+            "url": "https://github.com/rotnov/pycc/commit/" + "0" * 40,
+        }
+    ),
+)
+rejected(
+    "moving branch source link",
+    lambda doc: doc["heroes"][0]["stable_links"].__setitem__(
+        "fixture",
+        "https://github.com/rotnov/pycc/blob/main/tests/fixtures/quick_start.py",
+    ),
+)
+rejected(
+    "decorative platform architecture",
+    lambda doc: doc["heroes"][0]["environment"]["platforms"][0].__setitem__(
+        "architecture", "quantum-unknown-none"
+    ),
+)
+rejected(
+    "source and snapshot mixed across fixtures",
+    lambda doc: doc["heroes"][0]["snapshot"].update(
+        {
+            "path": "tests/diagnostics/quick_start_type_error.expected.txt",
+            "stream": "stderr",
+            "text": (
+                repo_root
+                / "tests/diagnostics/quick_start_type_error.expected.txt"
+            ).read_text(),
+        }
+    ),
+)
+
+reset_site()
+PY
+restore_fixtures
+
+# RED/negative projection control for #564: an unavailable Status hero must
+# not be able to advertise all-Tier-1 through a decorative HTML attribute.
+python3 - "$fixture_root/site/status/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+anchor = '''      <header
+        class="page-hero"
+        data-evidence-role="hero"
+        data-evidence-id="status-snapshot-v1"
+        data-evidence-kind="required-checks-snapshot"
+        data-evidence-state="unavailable"
+      >'''
+assert anchor in content
+path.write_text(
+    content.replace(
+        anchor,
+        anchor.replace(
+            'data-evidence-state="unavailable"',
+            'data-evidence-state="all-Tier-1"',
+        ),
+        1,
+    )
+)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an overstated decorative Status hero (issue #564)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# Markdown inventory cannot claim stronger evidence than the manifest.
+python3 - "$fixture_root/site/index.html.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+old = "<!-- evidence-hero: status | status-snapshot-v1 | required-checks-snapshot | unavailable | /status/ -->"
+new = old.replace("unavailable", "all-Tier-1")
+assert old in content
+path.write_text(content.replace(old, new, 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an overstated Markdown evidence state (issue #564)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# LLM inventory uses the same record and must fail independently.
+python3 - "$fixture_root/site/llms.txt" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+old = "<!-- evidence-hero: status | status-snapshot-v1 | required-checks-snapshot | unavailable | /status/ -->"
+new = old.replace("unavailable", "all-Tier-1")
+assert old in content
+path.write_text(content.replace(old, new, 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an overstated LLM evidence state (issue #564)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# Structured data carries the same tuple as visible HTML.
+python3 - "$fixture_root/site/status/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+old = '''                "propertyID": "pycc:evidence-state",
+                "value": "unavailable"'''
+new = old.replace('"unavailable"', '"all-Tier-1"')
+assert old in content
+path.write_text(content.replace(old, new, 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted overstated structured evidence data (issue #564)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# Social descriptions carry explicit evidence state rather than leaving answer
+# systems to infer proof from marketing copy.
+python3 - "$fixture_root/site/status/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+old = 'data-evidence-state="unavailable"'
+assert old in content
+path.write_text(content.replace(old, 'data-evidence-state="all-Tier-1"', 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an overstated social evidence state (issue #564)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# A moving branch URL in the visible projection is drift even while the
+# manifest keeps its exact-commit link.
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+old = "https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.py"
+new = "https://github.com/rotnov/pycc/blob/main/tests/fixtures/quick_start.py"
+assert old in content
+path.write_text(content.replace(old, new, 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a moving landing source link (issue #564)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# Removing any accepted artifact must fail the canonical gate, including the
+# test source itself (not just the HTML reference to its name).
+rm -f "$fixture_root/evidence-root/tests/fixtures/quick_start.py"
+if EVIDENCE_ROOT_PATH="$fixture_root/evidence-root" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a missing evidence fixture (issue #564)" >&2
+  exit 1
+fi
+restore_fixtures
+
+rm -f "$fixture_root/evidence-root/tests/quick_start.rs"
+if EVIDENCE_ROOT_PATH="$fixture_root/evidence-root" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a missing evidence test (issue #564)" >&2
+  exit 1
+fi
+restore_fixtures
+
+rm -f "$fixture_root/evidence-root/tests/fixtures/quick_start.expected.txt"
+if EVIDENCE_ROOT_PATH="$fixture_root/evidence-root" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a missing evidence snapshot (issue #564)" >&2
+  exit 1
+fi
+restore_fixtures
 
 python3 - "$fixture_root/site/styles.css" <<'PY'
 from pathlib import Path
@@ -1621,7 +2017,7 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-20</lastmod>"""
+    <lastmod>2026-08-21</lastmod>"""
 assert entry in content
 path.write_text(content.replace(entry, entry + "\n    <lastmod>2026-07-30</lastmod>", 1))
 PY
@@ -1643,9 +2039,9 @@ content = path.read_text()
 # a lastmod, so replacing a bare date literal would silently mutate whichever
 # entry comes first in document order instead of the one named here.
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-20</lastmod>"""
+    <lastmod>2026-08-21</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-20", "not-a-date"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-08-21", "not-a-date"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -1662,9 +2058,9 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-20</lastmod>"""
+    <lastmod>2026-08-21</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-20", "9999-12-31"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-08-21", "9999-12-31"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -1681,9 +2077,9 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/python-aot-compilers/</loc>
-    <lastmod>2026-08-14</lastmod>"""
+    <lastmod>2026-08-21</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-14", "2026-07-27"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-08-21", "2026-07-27"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -3172,7 +3568,9 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 start = content.index('<div class="output-window">')
-end = content.index('<p class="hero-provenance">')
+provenance = content.index('class="hero-provenance"', start)
+end = content.rfind("<p", start, provenance)
+assert end != -1
 path.write_text(content[:start] + content[end:])
 PY
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -3225,7 +3623,7 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
-marker = '<p class="hero-provenance">'
+marker = '          <p\n            class="hero-provenance"'
 assert marker in content
 content = content.replace(
     marker,
@@ -3247,7 +3645,7 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
-marker = '<p class="hero-provenance">'
+marker = '          <p\n            class="hero-provenance"'
 assert marker in content
 content = content.replace(
     marker,
@@ -3269,10 +3667,11 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
-assert 'data-evidence-state="all-Tier-1">all-Tier-1<' in content
+marker = 'data-evidence-state="all-Tier-1"\n              >all-Tier-1<'
+assert marker in content
 content = content.replace(
-    'data-evidence-state="all-Tier-1">all-Tier-1<',
-    'data-evidence-state="fully-verified">fully-verified<',
+    marker,
+    'data-evidence-state="fully-verified"\n              >fully-verified<',
     1,
 )
 path.write_text(content)
@@ -3290,10 +3689,11 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 content = path.read_text()
-assert 'data-evidence-state="all-Tier-1">all-Tier-1<' in content
+marker = 'data-evidence-state="all-Tier-1"\n              >all-Tier-1<'
+assert marker in content
 content = content.replace(
-    'data-evidence-state="all-Tier-1">all-Tier-1<',
-    'data-evidence-state="partial">all-Tier-1<',
+    marker,
+    'data-evidence-state="partial"\n              >all-Tier-1<',
     1,
 )
 path.write_text(content)

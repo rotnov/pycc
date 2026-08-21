@@ -9,6 +9,9 @@
       name="description"
       content="Explore pycc's implemented Rust and LLVM compiler pipeline, current crate boundaries, and the planned path from typed Python 3.14 to native binaries."
     >
+    <meta name="pycc:evidence-id" content="architecture-trace-v1">
+    <meta name="pycc:evidence-kind" content="compiler-pipeline-trace">
+    <meta name="pycc:evidence-state" content="unavailable">
     <meta
       name="robots"
       content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
@@ -26,6 +29,9 @@
     <meta
       property="og:description"
       content="The implemented v0.1 compiler pipeline, present crate boundaries, documented gaps, and planned strict typed-Python architecture—clearly separated."
+      data-evidence-id="architecture-trace-v1"
+      data-evidence-kind="compiler-pipeline-trace"
+      data-evidence-state="unavailable"
     >
     <meta property="og:image" content="https://rotnov.github.io/pycc/og.png">
     <meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
@@ -35,6 +41,9 @@
     <meta
       name="twitter:description"
       content="The implemented v0.1 compiler pipeline, present crate boundaries, documented gaps, and planned strict typed-Python architecture—clearly separated."
+      data-evidence-id="architecture-trace-v1"
+      data-evidence-kind="compiler-pipeline-trace"
+      data-evidence-state="unavailable"
     >
     <meta name="twitter:image" content="https://rotnov.github.io/pycc/og.png">
     <meta name="twitter:image:alt" content="pycc — typed Python in, native binaries out">
@@ -50,7 +59,24 @@
             "name": "pycc architecture — typed Python to LLVM native binaries",
             "description": "Explore pycc's implemented Rust and LLVM compiler pipeline, current crate boundaries, and the planned path from typed Python 3.14 to native binaries.",
             "inLanguage": "en",
-            "dateModified": "2026-08-14",
+            "dateModified": "2026-08-21",
+            "additionalProperty": [
+              {
+                "@type": "PropertyValue",
+                "propertyID": "pycc:evidence-id",
+                "value": "architecture-trace-v1"
+              },
+              {
+                "@type": "PropertyValue",
+                "propertyID": "pycc:evidence-kind",
+                "value": "compiler-pipeline-trace"
+              },
+              {
+                "@type": "PropertyValue",
+                "propertyID": "pycc:evidence-state",
+                "value": "unavailable"
+              }
+            ],
             "isPartOf": {
               "@id": "https://rotnov.github.io/pycc/#webpage"
             },
@@ -109,8 +135,14 @@
         <span>architecture</span>
       </nav>
 
-      <header class="page-hero">
-        <p class="eyebrow">Architecture · Updated 2026-08-14</p>
+      <header
+        class="page-hero"
+        data-evidence-role="hero"
+        data-evidence-id="architecture-trace-v1"
+        data-evidence-kind="compiler-pipeline-trace"
+        data-evidence-state="unavailable"
+      >
+        <p class="eyebrow">Architecture · Updated 2026-08-21</p>
         <h1>Python source to <span>native code.</span></h1>
         <p class="page-lede">
           pycc is a pre-alpha Rust compiler pipeline with an LLVM backend. The
@@ -119,6 +151,11 @@
           library support remain staged roadmap work.
         </p>
         <div class="page-meta">
+          <span
+            data-evidence-id="architecture-trace-v1"
+            data-evidence-kind="compiler-pipeline-trace"
+            data-evidence-state="unavailable"
+          ><strong>Evidence hero</strong> unavailable · fixture-derived trace tracked in <a href="https://github.com/rotnov/pycc/issues/566">#566</a></span>
           <span><strong>Frontend</strong> v0.1 checked</span>
           <span><strong>Backend</strong> LLVM 22 · v0.1 implemented</span>
           <span><strong>Output</strong> native executable</span>

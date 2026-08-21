@@ -4,12 +4,21 @@ Milestone = shippable + demo-able. Acceptance criteria are binary; a milestone i
 
 ## Current delivery status
 
-Last reviewed on 2026-08-07. This section describes the repository tree in the
+Last reviewed on 2026-08-21. This section describes the repository tree in the
 commit that contains it: behavior and evidence from that same commit count,
 while work that exists only in another open pull request or unmerged branch
 remains work in flight.
 
 **Current milestone: v0.2 — acceptance criteria met; v0.3 in progress.** All five v0.1 acceptance-checklist bullets below are green: the checked v0.1 surface reaches a native executable through MIR, LLVM, and the runtime; `fib` and `mandelbrot-ascii` match pinned CPython output on all five Tier-1 targets; `pycc check` clears its <75ms/1000 LOC throughput floor; its diagnostic output matches CLI_SPEC.md's example; the five-target CI matrix and cross-host compilation are live; and the 100% line/region coverage gate is required and green. The Language surface row's documented gaps below are accepted boundaries this milestone's acceptance criteria never required closing, not blockers still outstanding.
+
+The public evidence-hero boundary is now versioned and fail-closed (#564,
+D-186): `site/evidence-heroes.json` binds the tested landing source, stdout,
+test, exact commit, accepted five-target CI run, toolchains, limitations, and
+immutable links across HTML, Markdown, LLM, JSON-LD, and social projections.
+The other seven page kinds remain explicitly `unavailable` until their owner
+issues accept real artifacts; explanatory pages are not promoted into proof by
+their existence. This cross-cutting publication contract does not change the
+current compiler milestone or any acceptance checklist below.
 
 The D-094 `--release` contract now has a focused semantic regression that
 observes the exact `default<O3>` pipeline and its removal of a dead runtime

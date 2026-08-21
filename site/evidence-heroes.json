@@ -1,0 +1,270 @@
+{
+  "schema_version": "1.0.0",
+  "evidence_states": [
+    "all-Tier-1",
+    "partial",
+    "experimental",
+    "unavailable",
+    "superseded"
+  ],
+  "heroes": [
+    {
+      "page_id": "landing",
+      "evidence_id": "landing-quick-start-v1",
+      "kind": "native-build-output",
+      "route": "/",
+      "page_path": "site/index.html",
+      "fixture": {
+        "path": "tests/fixtures/quick_start.py",
+        "sha256": "09f7f6732d6837a0e7a91298eea549b0bdcba77d4908839ce1878955f4a0f043"
+      },
+      "test": {
+        "path": "tests/quick_start.rs",
+        "name": "quick_start_fixture_builds_and_prints_the_documented_sequence",
+        "sha256": "80f91b88d00598a8697c2988b64b2be60166c5067035c7ec57a295f10d9caadb"
+      },
+      "command": {
+        "build": "pycc build hello.py -o hello",
+        "run": "./hello",
+        "compiler_flags": []
+      },
+      "snapshot": {
+        "path": "tests/fixtures/quick_start.expected.txt",
+        "stream": "stdout",
+        "text": "0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n55\n",
+        "sha256": "668cec0e1f32369a43d6f74b1e795fe37f1e46bdb8eb0d7712b35c7e95e173e6"
+      },
+      "repository": {
+        "commit": "8ccc05b51477c23711d2cefce3eb9128aab1162a",
+        "url": "https://github.com/rotnov/pycc/commit/8ccc05b51477c23711d2cefce3eb9128aab1162a"
+      },
+      "attestation": {
+        "workflow": "CI",
+        "run_id": 32419646184,
+        "run_url": "https://github.com/rotnov/pycc/actions/runs/32419646184"
+      },
+      "environment": {
+        "python": "3.14.7",
+        "rust": "1.97.1",
+        "llvm": "22",
+        "profile": "debug",
+        "platforms": [
+          {
+            "runner": "macos-14",
+            "architecture": "aarch64-apple-darwin",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686638"
+          },
+          {
+            "runner": "macos-15-intel",
+            "architecture": "x86_64-apple-darwin",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686654"
+          },
+          {
+            "runner": "ubuntu-latest",
+            "architecture": "x86_64-unknown-linux-gnu",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686701"
+          },
+          {
+            "runner": "ubuntu-24.04-arm",
+            "architecture": "aarch64-unknown-linux-gnu",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686726"
+          },
+          {
+            "runner": "windows-latest",
+            "architecture": "x86_64-pc-windows-msvc",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588687208"
+          }
+        ]
+      },
+      "state": "all-Tier-1",
+      "limitations": "This compiles only the implemented v0.1 subset: statement-form if and while, recursive calls, and print. It does not prove support for classes, exceptions, generators, or imports.",
+      "stable_links": {
+        "fixture": "https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.py",
+        "test": "https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/quick_start.rs",
+        "snapshot": "https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.expected.txt",
+        "commit": "https://github.com/rotnov/pycc/commit/8ccc05b51477c23711d2cefce3eb9128aab1162a",
+        "run": "https://github.com/rotnov/pycc/actions/runs/32419646184"
+      },
+      "projections": {
+        "html": "site/index.html",
+        "markdown": "site/index.html.md",
+        "llm": "site/llms.txt",
+        "structured_data": "site/index.html",
+        "social": "site/index.html"
+      }
+    },
+    {
+      "page_id": "language",
+      "evidence_id": "language-support-v1",
+      "kind": "language-conformance",
+      "route": "/language-support/",
+      "page_path": null,
+      "fixture": null,
+      "test": null,
+      "command": null,
+      "snapshot": null,
+      "repository": null,
+      "attestation": null,
+      "environment": null,
+      "state": "unavailable",
+      "limitations": "No language-support hero artifact has been accepted yet. Issue #565 owns the fixture-backed page and its CPython comparison.",
+      "stable_links": {
+        "owner": "https://github.com/rotnov/pycc/issues/565"
+      },
+      "projections": {
+        "markdown": "site/index.html.md",
+        "llm": "site/llms.txt"
+      }
+    },
+    {
+      "page_id": "diagnostics",
+      "evidence_id": "diagnostics-v1",
+      "kind": "compiler-diagnostic",
+      "route": "/diagnostics/",
+      "page_path": null,
+      "fixture": null,
+      "test": null,
+      "command": null,
+      "snapshot": null,
+      "repository": null,
+      "attestation": null,
+      "environment": null,
+      "state": "unavailable",
+      "limitations": "No diagnostics hero artifact has been accepted yet. Issue #565 owns the exact compiler-generated diagnostic projection.",
+      "stable_links": {
+        "owner": "https://github.com/rotnov/pycc/issues/565"
+      },
+      "projections": {
+        "markdown": "site/index.html.md",
+        "llm": "site/llms.txt"
+      }
+    },
+    {
+      "page_id": "performance",
+      "evidence_id": "performance-v1",
+      "kind": "benchmark",
+      "route": "/performance/",
+      "page_path": null,
+      "fixture": null,
+      "test": null,
+      "command": null,
+      "snapshot": null,
+      "repository": null,
+      "attestation": null,
+      "environment": null,
+      "state": "unavailable",
+      "limitations": "No reproducible benchmark hero has been accepted yet. Issue #567 owns the benchmark contract and page.",
+      "stable_links": {
+        "owner": "https://github.com/rotnov/pycc/issues/567"
+      },
+      "projections": {
+        "markdown": "site/index.html.md",
+        "llm": "site/llms.txt"
+      }
+    },
+    {
+      "page_id": "architecture",
+      "evidence_id": "architecture-trace-v1",
+      "kind": "compiler-pipeline-trace",
+      "route": "/architecture/",
+      "page_path": "site/architecture/index.html",
+      "fixture": null,
+      "test": null,
+      "command": null,
+      "snapshot": null,
+      "repository": null,
+      "attestation": null,
+      "environment": null,
+      "state": "unavailable",
+      "limitations": "The explanatory architecture page is live, but no fixture-derived end-to-end hero trace has been accepted. Issue #566 owns that projection.",
+      "stable_links": {
+        "owner": "https://github.com/rotnov/pycc/issues/566"
+      },
+      "projections": {
+        "html": "site/architecture/index.html",
+        "markdown": "site/index.html.md",
+        "llm": "site/llms.txt",
+        "structured_data": "site/architecture/index.html",
+        "social": "site/architecture/index.html"
+      }
+    },
+    {
+      "page_id": "status",
+      "evidence_id": "status-snapshot-v1",
+      "kind": "required-checks-snapshot",
+      "route": "/status/",
+      "page_path": "site/status/index.html",
+      "fixture": null,
+      "test": null,
+      "command": null,
+      "snapshot": null,
+      "repository": null,
+      "attestation": null,
+      "environment": null,
+      "state": "unavailable",
+      "limitations": "The explanatory status page is live, but no accepted commit-bound required-check snapshot drives its hero. Issue #566 owns that projection.",
+      "stable_links": {
+        "owner": "https://github.com/rotnov/pycc/issues/566"
+      },
+      "projections": {
+        "html": "site/status/index.html",
+        "markdown": "site/index.html.md",
+        "llm": "site/llms.txt",
+        "structured_data": "site/status/index.html",
+        "social": "site/status/index.html"
+      }
+    },
+    {
+      "page_id": "comparison",
+      "evidence_id": "comparison-sources-v1",
+      "kind": "source-backed-comparison",
+      "route": "/python-aot-compilers/",
+      "page_path": "site/python-aot-compilers/index.html",
+      "fixture": null,
+      "test": null,
+      "command": null,
+      "snapshot": null,
+      "repository": null,
+      "attestation": null,
+      "environment": null,
+      "state": "unavailable",
+      "limitations": "The comparison table has its own source contract, but no unique commit-bound evidence hero has been accepted under the shared #564 model.",
+      "stable_links": {
+        "owner": "https://github.com/rotnov/pycc/issues/563"
+      },
+      "projections": {
+        "html": "site/python-aot-compilers/index.html",
+        "markdown": "site/index.html.md",
+        "llm": "site/llms.txt",
+        "structured_data": "site/python-aot-compilers/index.html",
+        "social": "site/python-aot-compilers/index.html"
+      }
+    },
+    {
+      "page_id": "provenance",
+      "evidence_id": "ai-provenance-v1",
+      "kind": "authorship-attestation",
+      "route": "/ai-native/",
+      "page_path": "site/ai-native/index.html",
+      "fixture": null,
+      "test": null,
+      "command": null,
+      "snapshot": null,
+      "repository": null,
+      "attestation": null,
+      "environment": null,
+      "state": "unavailable",
+      "limitations": "The policy page explains the human-managed, AI-created provenance claim, but no sanitized immutable evidence-hero record has been accepted yet.",
+      "stable_links": {
+        "owner": "https://github.com/rotnov/pycc/issues/217"
+      },
+      "projections": {
+        "html": "site/ai-native/index.html",
+        "markdown": "site/index.html.md",
+        "llm": "site/llms.txt",
+        "structured_data": "site/ai-native/index.html",
+        "social": "site/ai-native/index.html"
+      }
+    }
+  ]
+}

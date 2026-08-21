@@ -27,6 +27,67 @@ full multi-version conformance matrix, differential fuzzing, corpus testing,
 and production readiness remain roadmap work; design targets must not be
 interpreted as released features.
 
+## Evidence hero inventory
+
+Canonical machine-readable contract: https://rotnov.github.io/pycc/evidence-heroes.json
+Unavailable means no accepted unique hero artifact; it is not zero or failed evidence.
+
+<!-- evidence-hero: landing | landing-quick-start-v1 | native-build-output | all-Tier-1 | / -->
+<!-- evidence-hero: language | language-support-v1 | language-conformance | unavailable | /language-support/ -->
+<!-- evidence-hero: diagnostics | diagnostics-v1 | compiler-diagnostic | unavailable | /diagnostics/ -->
+<!-- evidence-hero: performance | performance-v1 | benchmark | unavailable | /performance/ -->
+<!-- evidence-hero: architecture | architecture-trace-v1 | compiler-pipeline-trace | unavailable | /architecture/ -->
+<!-- evidence-hero: status | status-snapshot-v1 | required-checks-snapshot | unavailable | /status/ -->
+<!-- evidence-hero: comparison | comparison-sources-v1 | source-backed-comparison | unavailable | /python-aot-compilers/ -->
+<!-- evidence-hero: provenance | ai-provenance-v1 | authorship-attestation | unavailable | /ai-native/ -->
+
+Accepted landing evidence: fixture tests/fixtures/quick_start.py; test
+tests/quick_start.rs::quick_start_fixture_builds_and_prints_the_documented_sequence;
+commands `pycc build hello.py -o hello` then `./hello`; exact stdout snapshot
+tests/fixtures/quick_start.expected.txt; commit
+8ccc05b51477c23711d2cefce3eb9128aab1162a; CI run
+https://github.com/rotnov/pycc/actions/runs/32419646184; all five Tier-1
+targets; CPython 3.14.7; Rust 1.97.1; LLVM 22; debug profile; no extra compiler
+flags. Canonical LF SHA-256: source
+09f7f6732d6837a0e7a91298eea549b0bdcba77d4908839ce1878955f4a0f043; test
+80f91b88d00598a8697c2988b64b2be60166c5067035c7ec57a295f10d9caadb; stdout
+668cec0e1f32369a43d6f74b1e795fe37f1e46bdb8eb0d7712b35c7e95e173e6. Tier-1
+jobs: macos-14 / aarch64-apple-darwin /
+https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686638;
+macos-15-intel / x86_64-apple-darwin /
+https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686654;
+ubuntu-latest / x86_64-unknown-linux-gnu /
+https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686701;
+ubuntu-24.04-arm / aarch64-unknown-linux-gnu /
+https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686726;
+windows-latest / x86_64-pc-windows-msvc /
+https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588687208.
+Limitations: This compiles only the implemented v0.1 subset: statement-form if
+and while, recursive calls, and print. It does not prove support for classes,
+exceptions, generators, or imports.
+
+Stable landing artifacts:
+https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.py,
+https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/quick_start.rs,
+https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.expected.txt,
+https://github.com/rotnov/pycc/commit/8ccc05b51477c23711d2cefce3eb9128aab1162a.
+
+Exact landing stdout:
+
+```text
+0
+1
+1
+2
+3
+5
+8
+13
+21
+34
+55
+```
+
 ## Project (Markdown-first)
 
 - [Markdown landing](https://rotnov.github.io/pycc/index.html.md): Clean text equivalent of the landing page for agents and constrained clients.
