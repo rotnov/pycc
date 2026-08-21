@@ -62,6 +62,40 @@ is explicitly a mutation suite, on the stated grounds that "a checker whose fail
 paths are never exercised is a checker that can rot into a no-op". The same bar
 applies to the tests themselves, and it costs one revert-and-rerun to meet.
 
+## 2026-08-21 — A documented "core gap" was written from an issue's body instead of from the tree, and shipped
+
+**What happened.** [#691](https://github.com/rotnov/pycc/pull/691) flipped PEP 560's
+conformance matrix row to `◐` and, as [D-177](decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md)
+requires of every `◐` row, recorded a `core` gap explaining why the row is a subset
+rather than whole-PEP acceptance. The gap it recorded — that annotation-position
+`ClassName[type_arg]` is not gated on `__class_getitem__` — was false at the moment
+it was written. That gating had already shipped and merged. The wrong text reached
+`docs/PYTHON_STANDARDS.md`, `docs/ROADMAP.md` and the breadth manifest, and needed a
+second pull request ([#694](https://github.com/rotnov/pycc/pull/694)) to correct.
+
+**Root cause.** The gap text was composed by quoting the referenced tracking issue's
+own body verbatim. That issue described the state of the tree on the day it was
+filed, and unrelated work had closed half of it since. No file in the crate the claim
+was about was opened before the claim was written. The issue was treated as a
+description of the current tree when it is only a description of a past one.
+
+**What fixed it.** Reading the implementation the claim describes, and pinning the
+claim to the lines that actually carry the behavior — the gate itself, the helper
+feeding it, and the tests covering both branches. Doing that showed a genuine but far
+narrower gap, which was filed as its own issue, and showed the referenced issue was
+fully discharged and could be closed with cited evidence.
+
+**Lesson.** A tracker issue is dated evidence about a past tree, never a statement
+about the current one. Before writing any durable claim about what the implementation
+does or does not do — a documented gap, a status marker, a manifest entry — open the
+source that would have to be true for the claim to hold and cite the specific lines.
+If the claim cannot be pinned to lines in the current tree, it is not yet known to be
+true, regardless of how authoritative the source that suggested it looks. This applies
+with most force to evidence-gated artifacts, where the whole point of the artifact is
+that a reader can trust it without re-deriving it.
+
+---
+
 ## 2026-08-21 — An append-only journal was destroyed by `cp`, and the rule saying so had been read
 
 **What happened.** The harden findings journal for issue #544 is documented as
