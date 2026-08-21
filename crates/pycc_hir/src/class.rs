@@ -2560,10 +2560,7 @@ mod tests {
         // `HirClassDef::type_param` for later monomorphization.
         let hir =
             lower_ok("class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\n");
-        assert_eq!(
-            hir.class_defs.len(),
-            1 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 1);
         assert_eq!(hir.class_defs[0].1.type_param, Some("T".to_string()));
     }
 
@@ -2584,10 +2581,7 @@ mod tests {
         // but semantically equivalent -- no inheritance -- so it must not
         // be rejected merely because `arguments` is `Some(_)`.
         let hir = lower_ok("class C():\n    def __init__(self) -> None:\n        return\n");
-        assert_eq!(
-            hir.class_defs.len(),
-            1 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 1);
     }
 
     #[test]
@@ -2615,10 +2609,7 @@ mod tests {
         let hir = lower_ok(
             "class C:\n    def __init__(self) -> None:\n        return\n    def foo(self) -> None:\n        return\n    def foo(self) -> None:\n        return\n",
         );
-        assert_eq!(
-            hir.class_defs.len(),
-            1 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 1);
         let (_, class_def) = &hir.class_defs[0];
         // The method table has exactly one `foo` entry (replaced, not
         // duplicated), plus the `__init__` entry.
@@ -3114,10 +3105,7 @@ mod tests {
         let hir = lower_ok(
             "class C:\n    def __init__(self, x: int) -> None:\n        self.x = x\n    def _helper(self, y) -> None:\n        return\n",
         );
-        assert_eq!(
-            hir.class_defs.len(),
-            1 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 1);
     }
 
     #[test]
@@ -3136,10 +3124,7 @@ mod tests {
         let hir = lower_ok(
             "class Point:\n    def __init__(self, x: int, y: int) -> None:\n        self.x = x\n        self.y = y\n",
         );
-        assert_eq!(
-            hir.class_defs.len(),
-            1 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 1);
         let (name, class_def) = &hir.class_defs[0];
         assert_eq!(name, "Point");
         assert_eq!(
@@ -3882,10 +3867,7 @@ mod tests {
         let hir = lower_ok(
             "class C:\n    def __init__(self) -> None:\n        return\n    def clone(self) -> Self:\n        return self\n",
         );
-        assert_eq!(
-            hir.class_defs.len(),
-            1 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 1);
         // The `clone` method should be lowered as a function with return
         // type `Ty::Instance("C")`.
         let clone = hir.items.iter().find_map(|item| match item {
@@ -4327,10 +4309,7 @@ mod tests {
         // cargo-llvm-cov issue #276 (instantiation-merge gap between
         // the library and integration-test binaries).
         let hir = lower_ok("class Color(Enum):\n    RED = 1\n    GREEN = 2\n    BLUE = 3\n");
-        assert_eq!(
-            hir.class_defs.len(),
-            1 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 1);
         let (_, class_def) = &hir.class_defs[0];
         assert!(!class_def.is_protocol);
         assert_eq!(class_def.enum_members.len(), 3);
@@ -4361,10 +4340,7 @@ mod tests {
     #[test]
     fn a_dataclass_with_two_fields_lowers_successfully() {
         let hir = lower_ok("@dataclass\nclass Point:\n    x: int\n    y: int\n");
-        assert_eq!(
-            hir.class_defs.len(),
-            1 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 1);
         let (_, class_def) = &hir.class_defs[0];
         assert!(class_def.is_dataclass);
         assert_eq!(
@@ -4380,10 +4356,7 @@ mod tests {
     #[test]
     fn a_dataclass_transform_decorator_lowers_successfully() {
         let hir = lower_ok("@dataclass_transform()\nclass Point:\n    x: int\n");
-        assert_eq!(
-            hir.class_defs.len(),
-            1 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 1);
         let (_, class_def) = &hir.class_defs[0];
         assert!(class_def.is_dataclass);
     }
@@ -4393,10 +4366,7 @@ mod tests {
         let hir = lower_ok(
             "@dataclass\nclass Base:\n    a: int\n@dataclass\nclass Derived(Base):\n    b: int\n",
         );
-        assert_eq!(
-            hir.class_defs.len(),
-            2 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 2);
         let (_, derived_def) = &hir.class_defs[1];
         assert!(derived_def.is_dataclass);
         // Parent field `a` comes before child field `b`.
@@ -4419,10 +4389,7 @@ mod tests {
         let hir = lower_ok(
             "@dataclass\nclass Base:\n    a: int\n@dataclass\nclass Derived(Base):\n    a: int\n",
         );
-        assert_eq!(
-            hir.class_defs.len(),
-            2 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 2);
         let (_, derived_def) = &hir.class_defs[1];
         assert!(derived_def.is_dataclass);
         // The field `a` appears only once (from the parent).
@@ -4446,10 +4413,7 @@ mod tests {
             "@dataclass\nclass A:\n    x: int\n@dataclass\nclass B(A):\n    x: int\n\
              @dataclass\nclass C(B):\n    y: int\n",
         );
-        assert_eq!(
-            hir.class_defs.len(),
-            3 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 3);
         let (_, c_def) = &hir.class_defs[2];
         assert!(c_def.is_dataclass);
         // `x` (from A, deduplicated against B's redeclaration) comes before
@@ -4498,10 +4462,7 @@ mod tests {
     #[test]
     fn a_zero_field_dataclass_lowers_successfully() {
         let hir = lower_ok("@dataclass\nclass Empty:\n    pass\n");
-        assert_eq!(
-            hir.class_defs.len(),
-            1 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 1);
         let (_, class_def) = &hir.class_defs[0];
         assert!(class_def.is_dataclass);
         assert!(class_def.dataclass_fields.is_empty());
@@ -4660,10 +4621,7 @@ mod tests {
     #[test]
     fn a_protocol_class_with_a_pass_body_lowers_successfully() {
         let hir = lower_ok("from typing import Protocol\nclass P(Protocol):\n    pass\n");
-        assert_eq!(
-            hir.class_defs.len(),
-            1 + crate::BUILTIN_EXCEPTION_CLASSES.len()
-        );
+        assert_eq!(hir.class_defs.len(), 1);
         assert!(hir.class_defs[0].1.is_protocol);
         assert!(hir.class_defs[0].1.protocol_members.is_empty());
     }

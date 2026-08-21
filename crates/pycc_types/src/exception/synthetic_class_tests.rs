@@ -27,6 +27,13 @@ fn resolve_source(source: &str) -> Result<HirModule, Diagnostic> {
     check_and_resolve(&parse_lower(source))
 }
 
+/// A module that references a builtin exception name and shadows none, so
+/// HIR lowering seeds the synthetic class table into it. Lowering only seeds
+/// a *referencing* module (Part 1 of #541's `frontend-perf-gate` fix), so a
+/// test that needs a seeded `Environment` has to start from a source like
+/// this rather than from a bare `print(1)`.
+const SEEDED_SOURCE: &str = "raise ValueError(\"boom\")\n";
+
 fn environment_for(source: &str) -> Environment {
     let hir = parse_lower(source);
     let mut env = Environment::new();
@@ -43,12 +50,30 @@ fn seeded_builtin_exception_classes_do_not_read_as_shadowed() {
     // shadowed". Now they are present, so the predicate has to distinguish
     // a synthetic entry from a user one; if it ever stops doing so, every
     // `except`/`raise` in the language starts being rejected.
-    let env = environment_for("print(1)\n");
+    let env = environment_for(SEEDED_SOURCE);
     for name in pycc_hir::BUILTIN_EXCEPTION_CLASSES {
         assert!(env.is_synthetic_class(name), "`{name}` must be synthetic");
         assert!(
             is_unshadowed_builtin_exception(&env, &[], name),
             "`{name}` must not read as shadowed"
+        );
+    }
+}
+
+#[test]
+fn an_unseeded_module_still_does_not_read_the_names_as_shadowed() {
+    // The property that makes gating the seeding safe: `is_user_defined_class`
+    // is `classes.contains_key(name) && !is_synthetic_class(name)`, so an
+    // *absent* name is not user-defined and therefore not shadowed -- exactly
+    // the pre-#541 reading. A module that never names one of the seven is
+    // seeded with none of them, and must still accept `except`/`raise`.
+    let env = environment_for("print(1)\n");
+    for name in pycc_hir::BUILTIN_EXCEPTION_CLASSES {
+        assert!(env.lookup_class(name).is_none(), "`{name}` must be absent");
+        assert!(!env.is_synthetic_class(name));
+        assert!(
+            is_unshadowed_builtin_exception(&env, &[], name),
+            "`{name}` must not read as shadowed while absent"
         );
     }
 }
@@ -66,7 +91,7 @@ fn rebinding_a_synthetic_name_with_a_user_definition_clears_the_marking() {
     // definition under the same name must un-mark it -- otherwise a
     // monomorphization pass that re-registers a class could leave a user
     // class marked synthetic and silently uninstantiable.
-    let mut env = environment_for("print(1)\n");
+    let mut env = environment_for(SEEDED_SOURCE);
     assert!(env.is_synthetic_class("ValueError"));
     env.bind_class(
         "ValueError".to_string(),
@@ -135,7 +160,7 @@ fn a_user_class_shadowing_a_builtin_exception_name_still_closes_the_gates() {
 
 #[test]
 fn instantiating_a_synthetic_builtin_exception_class_is_rejected() {
-    let env = environment_for("print(1)\n");
+    let env = environment_for(SEEDED_SOURCE);
     let err = crate::class::resolve_instantiation(&env, "ValueError", &[Ty::Str])
         .expect_err("a builtin exception class must not be instantiable as a value");
     assert_eq!(err.code, "C0001");
@@ -149,7 +174,7 @@ fn instantiating_a_synthetic_builtin_exception_class_is_rejected() {
 
 #[test]
 fn every_synthetic_builtin_exception_class_is_rejected_the_same_way() {
-    let env = environment_for("print(1)\n");
+    let env = environment_for(SEEDED_SOURCE);
     for name in pycc_hir::BUILTIN_EXCEPTION_CLASSES {
         let err = crate::class::resolve_instantiation(&env, name, &[Ty::Str])
             .expect_err("every builtin exception class must be uninstantiable");
@@ -166,6 +191,32 @@ fn a_user_class_shadowing_a_builtin_exception_name_stays_instantiable() {
          x = ValueError()\nprint(1)\n",
     )
     .expect("a user class named `ValueError` must stay instantiable");
+}
+
+#[test]
+fn attribute_access_on_a_bare_builtin_exception_class_name_reports_t0044() {
+    // A behavior change Part 1 of #541 introduces, pinned here. Before the
+    // seeding, `ValueError` was not in the class table and `ValueError.args`
+    // reported `T0021 name \`ValueError\` is not defined`. It is now a real
+    // class, so the same source reaches the class-attribute path and reports
+    // `T0044` instead. The synthetic classes deliberately declare no
+    // attribute slots (D-173 propagates a raised exception through global
+    // runtime state, not through an allocated instance), so `args` is
+    // genuinely absent rather than merely unreachable. See `docs/RUNTIME.md`.
+    //
+    // This also pins the reference scan's recursion: `ValueError` is spelled
+    // only as an `Expr::Attribute`'s value inside a call argument inside a
+    // function body. Were the scan not to reach it, the module would be
+    // seeded with nothing and this would report `T0021` again.
+    let err = check_source("def f() -> None:\n    print(ValueError.args)\n\nf()\n")
+        .expect_err("attribute access on a bare builtin exception class must be rejected");
+    assert_eq!(err.code, "T0044");
+    assert!(
+        err.message
+            .contains("class `ValueError` has no attribute named `args`"),
+        "unexpected message: {}",
+        err.message
+    );
 }
 
 // -- the new surface a real class table unlocks ------------------------

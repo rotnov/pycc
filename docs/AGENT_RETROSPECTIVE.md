@@ -33,6 +33,47 @@ never a merge gate.
 
 ---
 
+## 2026-08-21 — A per-module cost was cleared against an absolute budget that cannot see it
+
+**What happened.** Part 1 of #541 (`789afe51`) added a fixed per-module cost:
+seven synthetic `HirClassDef`s seeded into every module, plus a
+`bind_class`-time structural comparison that rebuilt all seven definitions on
+every call. The session that wrote it checked performance with
+`scripts/check_frontend_throughput.rb`, which is an *absolute* 75 ms budget on
+a 1000-LOC file, saw ~35 ms, and concluded there was no regression. CI then
+failed `frontend-perf-gate`, which is a *relative* 7% gate against a recorded
+baseline on a 15-line class-free fixture: 12.23 us to 43.10 us, a 252%
+regression with no overlap between the five previous and five current
+replicate medians.
+
+**Root cause.** The two instruments answer different questions. A fixed
+per-module cost is invisible under an absolute budget with 40 ms of headroom
+on a large input, and dominant under a relative gate on a small one. Choosing
+the instrument that was easy to run rather than the one whose failure mode
+matched the change's cost shape produced a false all-clear.
+
+**What fixed it.** Running `cargo bench --bench check_bench` at the base
+commit and at HEAD back to back on one machine, then splitting the delta
+across `pycc_hir::lower_checked` and `pycc_types::check` with a scratch
+criterion bench, and finally re-running the same measurement parameterized by
+module size (15 lines / 100 LOC / 1000 LOC) to establish how the added cost
+scaled. That localized ~10.4 us of ~13.2 us to the per-`bind_class` rebuild
+(fixed with a `LazyLock`) and showed the irreducible remainder was still ~10x
+over budget, which is what chose gating the seeding over making it cheaper.
+The size-parametric run also refuted a mid-task hypothesis that the added cost
+was superlinear: that inference came from comparing a release-mode microsecond
+measurement against a debug-mode millisecond one on a noisy shared runner, and
+back-to-back same-machine numbers showed the added cost is linear in item
+count.
+
+**Lesson.** Before using a performance check as evidence that a change is
+safe, state what cost shape the change adds and confirm the check can see
+that shape. An absolute budget with large headroom is not a regression
+detector. When a change adds a fixed per-module or per-item cost, the
+instrument is the relative gate on the smallest fixture, run at base and HEAD
+back to back on the same machine — and any cross-instrument comparison
+(release vs debug, local vs CI runner) is a hypothesis, not a measurement.
+
 ## 2026-08-21 — An accepted ADR asserted a defect that had never been reproduced
 
 **What happened.** `docs/decisions/D-188` and its commit message both stated,

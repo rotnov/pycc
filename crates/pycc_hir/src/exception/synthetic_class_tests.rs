@@ -197,7 +197,9 @@ fn a_non_name_assignment_target_does_not_shadow() {
 
 #[test]
 fn lowering_seeds_every_builtin_exception_class() {
-    let hir = lower("print(1)\n");
+    // `raise` is the cheapest spelling that makes the module a referencing
+    // one; the seeding gate is exercised name-by-name further below.
+    let hir = lower("raise ValueError(\"boom\")\n");
     assert_eq!(hir.class_defs.len(), BUILTIN_EXCEPTION_CLASSES.len());
     for name in BUILTIN_EXCEPTION_CLASSES {
         assert!(class_named(&hir, name).is_some(), "`{name}` must be seeded");
@@ -205,14 +207,116 @@ fn lowering_seeds_every_builtin_exception_class() {
 }
 
 #[test]
+fn a_module_that_references_no_builtin_exception_name_is_seeded_with_none() {
+    // The gate that keeps `frontend-perf-gate` green: every entry in
+    // `class_defs` costs per-item work in lowering and per-function class
+    // binding in `pycc_types`, and a module that never names one of the
+    // seven cannot observe the difference.
+    let hir = lower("print(1)\n");
+    assert!(hir.class_defs.is_empty());
+    assert!(
+        !hir.items
+            .iter()
+            .any(|item| matches!(item, HirItem::Function { name, .. } if name
+                == EXCEPTION_INIT_MANGLED_NAME))
+    );
+}
+
+#[test]
+fn a_class_bearing_module_that_names_no_builtin_exception_is_seeded_with_none() {
+    let hir = lower("class A:\n    def __init__(self) -> None:\n        pass\n");
+    assert_eq!(hir.class_defs.len(), 1);
+    assert_eq!(hir.class_defs[0].0, "A");
+}
+
+#[test]
 fn the_module_s_own_classes_come_first_in_source_order() {
     let hir = lower(
-        "class A:\n    def __init__(self) -> None:\n        pass\n\n\
+        "class A(Exception):\n    pass\n\n\
          class B:\n    def __init__(self) -> None:\n        pass\n",
     );
     assert_eq!(hir.class_defs[0].0, "A");
     assert_eq!(hir.class_defs[1].0, "B");
     assert_eq!(hir.class_defs.len(), 2 + BUILTIN_EXCEPTION_CLASSES.len());
+}
+
+// -- the reference gate -----------------------------------------------
+
+fn references(source: &str) -> bool {
+    module_references_builtin_exception_name(&parse(source))
+}
+
+#[test]
+fn every_builtin_exception_name_is_recognized_as_a_reference() {
+    for name in BUILTIN_EXCEPTION_CLASSES {
+        assert!(references(&format!("x = {name}\n")), "`{name}` must count");
+    }
+}
+
+#[test]
+fn a_module_naming_none_of_the_seven_references_nothing() {
+    assert!(!references("print(1)\n"));
+    assert!(!references(
+        "class A:\n    def __init__(self) -> None:\n        pass\n"
+    ));
+    // A *similar* name is not one of the seven.
+    assert!(!references("x = ValueErrors\n"));
+    // A string that merely spells one is not a reference: `annotation_to_ty`
+    // does not resolve string forward references either.
+    assert!(!references("x = \"ValueError\"\n"));
+}
+
+#[test]
+fn every_spelling_that_can_reach_the_class_table_counts_as_a_reference() {
+    // Each of these is a position from which the frontend consults the class
+    // table for one of the seven, so each must seed the module. A spelling
+    // missed here fails silently -- as a spurious `C0001` or an
+    // internal-compiler-error abort -- which is why the scan is ruff's own
+    // exhaustive walker rather than a hand-rolled match.
+    for source in [
+        // a base class
+        "class MyError(ValueError):\n    pass\n",
+        // a `raise` operand
+        "raise ValueError(\"boom\")\n",
+        // an `except` type, at nested depth
+        "def f() -> None:\n    try:\n        pass\n    except ValueError:\n        pass\n",
+        // an `except ... as` type inside a nested function
+        "def outer() -> None:\n    def inner() -> None:\n        try:\n            pass\n        except KeyError as e:\n            print(e)\n",
+        // a parameter annotation
+        "def f(e: ValueError) -> None:\n    return\n",
+        // a return annotation
+        "def f() -> TypeError:\n    return\n",
+        // an annotated assignment
+        "x: IndexError = 1\n",
+        // an `isinstance` argument
+        "def f(x: int) -> None:\n    print(isinstance(x, RuntimeError))\n",
+        // an `issubclass` argument
+        "def f() -> None:\n    print(issubclass(ZeroDivisionError, Exception))\n",
+        // attribute access on the bare class name
+        "def f() -> None:\n    print(ValueError.args)\n",
+        // a type alias
+        "type Alias = ValueError\n",
+        // buried inside a comprehension
+        "xs = [ValueError for i in range(3)]\n",
+        // buried inside an f-string interpolation
+        "s = f\"{Exception}\"\n",
+        // buried inside a subscript
+        "x = holder[KeyError]\n",
+        // a decorator
+        "@Exception\ndef f() -> None:\n    return\n",
+    ] {
+        assert!(references(source), "must be a reference: {source:?}");
+    }
+}
+
+#[test]
+fn a_shadowing_module_is_not_seeded_even_though_it_references_the_name() {
+    // Both gates must pass. A `class ValueError:` is simultaneously a
+    // reference (the class body's own name) and a shadow, and shadowing wins.
+    let source = "class ValueError:\n    def __init__(self) -> None:\n        pass\n";
+    assert!(module_shadows_builtin_exception_name(&parse(source)));
+    let hir = lower(source);
+    assert_eq!(hir.class_defs.len(), 1);
 }
 
 #[test]

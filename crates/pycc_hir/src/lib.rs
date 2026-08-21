@@ -768,12 +768,21 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     // hierarchy a real presence in the class table, seeded *before* any
     // user statement is lowered so a user class can inherit from one
     // (`class MyError(ValueError):`) exactly as it inherits from a user
-    // base. The seeding is all-or-nothing and is skipped entirely for a
-    // module that binds any of the seven names itself -- see
-    // `exception::module_shadows_builtin_exception_name` for why, and for
-    // why every existing name-collision check below then applies to the
-    // synthetic definitions with no exemption.
-    if !exception::module_shadows_builtin_exception_name(module) {
+    // base. Two gates, both of which must pass:
+    //
+    // * The module must actually *reference* one of the seven names. Every
+    //   entry in `class_defs` costs the per-item work below (the projected
+    //   class slice, the name-collision checks) and the per-function class
+    //   binding in `pycc_types`, and a module that never names a builtin
+    //   exception cannot observe the difference -- see
+    //   `exception::module_references_builtin_exception_name`.
+    // * The module's own top level must not *bind* any of the seven names.
+    //   That gate is all-or-nothing, so every existing name-collision check
+    //   below applies to the synthetic definitions with no exemption -- see
+    //   `exception::module_shadows_builtin_exception_name`.
+    if exception::module_references_builtin_exception_name(module)
+        && !exception::module_shadows_builtin_exception_name(module)
+    {
         class_defs.extend(builtin_exception_class_defs());
     }
     // Seeded at the *front* so every lookup below (base resolution,
