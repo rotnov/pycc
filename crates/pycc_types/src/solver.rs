@@ -5,9 +5,9 @@
 //! constraint solver. This submodule holds the solver's control-flow join
 //! helpers, extracted from [`lib.rs`] per the repository's source-file
 //! decomposition rule (AGENTS.md "Keep source files decomposable"). The
-//! [`ConstraintEnvironment`] struct and the [`collect_block_constraints`]
-//! arms that call these helpers remain in [`lib.rs`] because they are
-//! deeply intertwined with the rest of the type-inference solver
+//! [`ConstraintEnvironment`] struct and the [`collect_block_constraints`](crate::constraints::collect_block_constraints)
+//! arms that call these helpers live in [`constraints`](crate::constraints)
+//! because they are deeply intertwined with the rest of the type-inference solver
 //! (`collect_expr_constraints`, `unify_terms`, `fresh_term`, etc.).
 
 use std::collections::HashSet;
