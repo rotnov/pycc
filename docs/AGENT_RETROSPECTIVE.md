@@ -24,7 +24,12 @@ never a merge gate.
   ambiguous design call (that belongs in `docs/DECISIONS.md` as a decision
   with alternatives, not here as a mistake); anything containing
   credentials, secrets, or personal information.
-- Newest entries first.
+- Newest entries first. Entries sharing a date are ordered by when the
+  event described happened, not by when the entry was written — several
+  may be added in one commit, so authorship order settles nothing. When
+  the relative order of two same-day events cannot be recovered from
+  their own content, say so in the later entry rather than implying a
+  sequence the file cannot support.
 
 ---
 
