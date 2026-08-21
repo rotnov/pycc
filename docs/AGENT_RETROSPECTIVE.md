@@ -33,6 +33,72 @@ never a merge gate.
 
 ---
 
+## 2026-08-21 — An accepted ADR asserted a defect that had never been reproduced
+
+**What happened.** `docs/decisions/D-188` and its commit message both stated,
+as one of the three defects motivating Part 1 of #541, that a bare
+`e = ValueError("x")` "slipped past the type checker into MIR and codegen,
+where `pycc_rt`'s exception object was read as an ordinary instance --
+undefined behavior with no diagnostic anywhere on the path." That was
+inherited from the plan's problem statement and written into an accepted
+decision record without ever being run. A pre-change build at `7116ed0d`
+rejects that exact program with `C0001 call to builtin \`ValueError\` is
+valid Python but not implemented yet` -- the same four `c0001_callable_builtin_*`
+fixtures that predate the change already assert it. No value reached codegen,
+and there was no UB.
+
+**Root cause.** The session's own evidence contradicted the claim and was not
+read as contradicting it: the four fixtures were inspected (and found to need
+no regeneration) precisely *because* the old compiler already rejected that
+spelling. A plan's motivating narrative was treated as established fact
+because it was upstream of the task rather than authored during it.
+
+**What fixed it.** Building a scratch worktree at the base commit and running
+four candidate spellings through `pycc check` on both revisions. That found
+the two defects that are real -- `class MyError(ValueError):` was rejected
+with `C0001 inherits from unknown class`, and
+`except ValueError as e: print(e.args)` aborted with an internal compiler
+error in `class::expect_class` -- and the Context, Consequences,
+`docs/RUNTIME.md`, `docs/ROADMAP.md`, `docs/TYPE_SYSTEM.md` and the commit
+body were rewritten to those.
+
+**Lesson.** A defect claim in an ADR is a factual assertion about a specific
+revision, and the cost of checking it is one scratch worktree plus one CLI
+invocation. Before writing "before this change, X happened", build the base
+commit and make X happen. A green suite on the *new* code proves nothing
+about the old behavior, and a plan or issue body describing the defect is
+the claim to verify, not the evidence for it.
+
+## 2026-08-21 — Seeding a vector that hundreds of tests index positionally cost three fix rounds
+
+**What happened.** Part 1 of #541 seeds seven synthetic `HirClassDef`s into
+`HirModule::class_defs`. The first attempt appended them at the end and
+emitted the synthetic `Exception.__init__` item unconditionally; that broke
+147 `pycc_hir` tests. Moving the seeding to the front and rotating it back
+after lowering fixed 70 of them, making the `__init__` item conditional on a
+user class's MRO actually reaching a seeded class fixed 63 more, a missing
+`synthetic_class_count > 0` guard fixed one, and the last 14 were hardcoded
+`assert_eq!(hir.class_defs.len(), N)` assertions in `class.rs`.
+
+**Root cause.** The placement decision (front, back, or front-then-rotate)
+and the emission decision (always, or only when inherited) were both made
+from the implementation's own logic and then validated against the test
+suite, instead of being derived from what the existing test surface actually
+asserts about the vector. Both constraints were discoverable up front by
+grepping for `class_defs[0]`, `class_defs.len()`, and `items.len()`.
+
+**What fixed it.** Seed at the front (so base resolution, annotation
+projection, and all eight name-collision checks see the definitions), then
+`rotate_left(synthetic_class_count)` before returning so the module's own
+classes still come first in source order.
+
+**Lesson.** Before inserting entries into a shared collection that existing
+code and tests index or count, grep the tree for positional and cardinality
+assertions on it first, and let those decide the insertion point. Three
+rounds of "run the suite, read the new failure count, adjust" is the
+signature of having skipped that grep.
+
+
 ## 2026-08-21 — A test written to close a review finding passed against the broken code it was meant to guard
 
 **What happened.** The pinned reviewer flagged that `check_conformance_breadth.py`

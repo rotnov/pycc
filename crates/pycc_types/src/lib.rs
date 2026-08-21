@@ -108,6 +108,27 @@ pub struct Environment {
     /// constructor this crate has (`check_with_signatures`,
     /// `concrete_function_environment`) -- see `class::bind_classes`.
     classes: Arc<HashMap<String, HirClassDef>>,
+    /// Part 1 of #541 (extending D-173): the subset of `classes` whose
+    /// entries were *synthesized* by HIR lowering for the seven builtin
+    /// exception names rather than written by the user
+    /// (`pycc_hir::builtin_exception_class_defs`). Kept as a side table
+    /// instead of a `HirClassDef` flag on purpose: "who authored this
+    /// definition" is a fact about the environment's provenance, not part
+    /// of a class's declared shape, and a flag would have to be threaded
+    /// through every `HirClassDef` literal in the tree.
+    ///
+    /// Needed because `is_unshadowed_builtin_exception` used to read
+    /// "`ValueError` is absent from `classes`" as "the user has not
+    /// shadowed `ValueError`". Once the frontend seeds the builtin classes
+    /// that inference inverts: every builtin exception would look shadowed
+    /// and every `except ValueError:`/`raise ValueError("x")` would be
+    /// rejected. Membership here restores the intended meaning -- present
+    /// *and* not synthetic is what "shadowed" means.
+    ///
+    /// Maintained by [`Self::bind_class`], the sole mutator of `classes`,
+    /// so the two tables cannot drift apart regardless of which
+    /// environment constructor or monomorphization path registered a class.
+    synthetic_classes: Arc<HashSet<String>>,
     /// PEP 695 (#387): the name of the generic *function* currently being
     /// body-checked, if any. Set by `check_function_in` from the function's
     /// own signature via `generic_type_param_name`; `None` for a non-generic
@@ -274,8 +295,29 @@ impl Environment {
 
     /// Registers `name` as a declared class with shape `def` (D-154, Part 1
     /// of #375), mirroring [`Self::bind_generic`]'s own shape exactly.
+    /// Part 1 of #541: also records whether `def` is exactly the definition
+    /// `pycc_hir` synthesizes for one of the seven builtin exception names,
+    /// keeping `synthetic_classes` in step with `classes` on every path
+    /// that registers a class (this is their sole mutator). A user class
+    /// that happens to be named `ValueError` is *not* recorded, and
+    /// re-binding a name with a user definition clears any earlier
+    /// synthetic marking.
     pub fn bind_class(&mut self, name: String, def: HirClassDef) {
+        if pycc_hir::is_builtin_exception_class_def(&name, &def) {
+            Arc::make_mut(&mut self.synthetic_classes).insert(name.clone());
+        } else {
+            Arc::make_mut(&mut self.synthetic_classes).remove(&name);
+        }
         Arc::make_mut(&mut self.classes).insert(name, def);
+    }
+
+    /// Part 1 of #541: whether `name`'s registered class shape was
+    /// synthesized by HIR lowering for a builtin exception class rather
+    /// than written by the user. `false` for an unregistered name and for
+    /// every user-authored class, including one that shadows a builtin
+    /// exception name.
+    pub(crate) fn is_synthetic_class(&self, name: &str) -> bool {
+        self.synthetic_classes.contains(name)
     }
 
     /// Looks up `name`'s declared class shape, if `name` was registered via

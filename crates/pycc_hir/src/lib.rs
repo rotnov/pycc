@@ -11,8 +11,9 @@ mod typecheck;
 
 pub use class::{HirClassDef, PropertyDef, ProtocolMember};
 pub use exception::{
-    BUILTIN_EXCEPTION_CLASSES, HirExceptHandler, builtin_exception_parent,
-    is_builtin_exception_class,
+    BUILTIN_EXCEPTION_CLASSES, EXCEPTION_INIT_MANGLED_NAME, HirExceptHandler,
+    builtin_exception_class_defs, builtin_exception_init_item, builtin_exception_parent,
+    is_builtin_exception_class, is_builtin_exception_class_def,
 };
 pub(crate) use func::{
     annotation_to_ty, lower_arg_list, lower_function, lower_return_annotation, type_param_name,
@@ -763,6 +764,23 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     let mut imports: Vec<ImportBinding> = Vec::new();
     let mut class_defs: Vec<(String, HirClassDef)> = Vec::new();
     let mut items = Vec::with_capacity(module.body.len());
+    // Part 1 of #541 (extending D-173): give the builtin exception
+    // hierarchy a real presence in the class table, seeded *before* any
+    // user statement is lowered so a user class can inherit from one
+    // (`class MyError(ValueError):`) exactly as it inherits from a user
+    // base. The seeding is all-or-nothing and is skipped entirely for a
+    // module that binds any of the seven names itself -- see
+    // `exception::module_shadows_builtin_exception_name` for why, and for
+    // why every existing name-collision check below then applies to the
+    // synthetic definitions with no exemption.
+    if !exception::module_shadows_builtin_exception_name(module) {
+        class_defs.extend(builtin_exception_class_defs());
+    }
+    // Seeded at the *front* so every lookup below (base resolution,
+    // annotation projection, the name-collision checks) sees them, then
+    // rotated to the back once lowering finishes so `class_defs` still
+    // opens with the module's own classes in source order.
+    let synthetic_class_count = class_defs.len();
     for stmt in &module.body {
         // #380 (PR-20): build the projected class slice `annotation_to_ty`
         // uses to resolve cross-class annotations; #611 (PEP 560) added the
@@ -930,6 +948,27 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
             )?),
         };
         items.push(item);
+    }
+    class_defs.rotate_left(synthetic_class_count);
+    // The synthetic `Exception.__init__` body is emitted only when a user
+    // class actually inherits it -- that is, when some user class's
+    // computed MRO reaches one of the seeded builtin exception classes.
+    // The class-table entries above are metadata every module needs for
+    // name and base resolution; this is *code*, and emitting an
+    // uncallable constructor into every compiled module would put a dead
+    // function in every object file. The synthetic classes themselves can
+    // never call it: instantiating one is rejected by the type checker
+    // (`pycc_types::class::resolve_instantiation`).
+    if synthetic_class_count > 0
+        && class_defs[..class_defs.len() - synthetic_class_count]
+            .iter()
+            .any(|(_, def)| {
+                def.mro
+                    .iter()
+                    .any(|ancestor| is_builtin_exception_class(ancestor))
+            })
+    {
+        items.push(builtin_exception_init_item());
     }
     Ok(HirModule {
         items,

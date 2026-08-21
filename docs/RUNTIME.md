@@ -45,6 +45,39 @@ Supported builtin exception types: `Exception` (tag 0, catch-all),
 `ZeroDivisionError` (5), `RuntimeError` (6). The hierarchy is flat:
 every type is a direct subclass of `Exception`.
 
+**Class-table presence (Part 1 of #541, D-188).** HIR lowering synthesizes a
+real `HirClassDef` for each of those seven names, seeded before any
+user statement is lowered, so they participate in the same class table
+user-defined classes do. `Exception` carries a synthetic
+`__init__(self, message: str)`; the other six inherit it through their MRO.
+Three consequences:
+
+- `class MyError(ValueError):` resolves its base and linearizes an MRO
+  (`MyError`, `ValueError`, `Exception`) like any other inheritance, and
+  `MyError("boom")` resolves the inherited constructor.
+- `isinstance`/`issubclass` and annotations naming a builtin exception class
+  resolve against the class table instead of failing to find a definition.
+- A *synthetic* builtin exception class is still not a value:
+  `e = ValueError("x")` remains rejected with `C0001` (unchanged by Part 1 --
+  the diagnostic comes from the callable-builtin check, and a second guard in
+  `class::resolve_instantiation` now backs it up), because D-173 propagates a
+  raised exception through global runtime state rather than through an
+  allocated instance with fields. Raising remains the only way to construct
+  one. For the same reason the synthetic definitions declare no attribute
+  slots -- there is no storage for a `message` slot to name, so
+  `except ValueError as e: print(e.args)` reports `T0044` (before Part 1 the
+  same program aborted the compiler with an internal error, since no
+  `HirClassDef` existed to look the attribute up in).
+
+The synthetic `__init__` signature deliberately diverges from CPython's
+`Exception(*args)`: this compiler has no variadic-argument support, and the
+supported surface (`raise ValueError("msg")`) is exactly one `str` message.
+
+The synthesis is all-or-nothing per module: a module whose own top level
+binds any of the seven names (a `class`, `def`, `type` alias, annotated
+assignment, or assignment target spelling one of them) is seeded with none of
+them, and that name keeps its ordinary user-defined meaning.
+
 Supported syntax: `try`/`except`/`else`/`finally`, `raise ExceptionType("msg")`,
 bare `raise` (re-raise), `raise ... from ...` (PEP 409 cause chaining),
 `except ExceptionType as e` (named bindings), bare `except:` (catch-all).
@@ -72,8 +105,9 @@ Uncaught exceptions at the top level are printed to stderr
 
 Exception objects are leak-only in this first implementation. Explicit
 `raise ... from cause` records `cause`; implicit `__context__` is reserved but
-not wired. **Planned (post-Part 1):** `except*` groups (PEP 654), custom
-exception classes, full traceback with `.py` lines, implicit exception
+not wired. **Planned (post-Part 1):** `except*` groups (PEP 654), raising and catching
+user-defined exception classes (Part 2 of #541 -- Part 1 gives them a class
+identity, not yet `raise`/`except` behavior), full traceback with `.py` lines, implicit exception
 context, `raise ... from None`, exception lifetime management, and deletion
 of an `except ... as name` binding after the handler.
 

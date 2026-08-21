@@ -194,3 +194,4 @@ current.
 | [D-185](./D-185-permit-a-dedicated-tracking-issue-per-oversized.md) | Permit a dedicated tracking issue per oversized source file, without weakening the same-change decomposition rule | accepted |
 | [D-186](./D-186-bind-evidence-heroes-to-an-offline-versioned.md) | Bind evidence heroes to an offline versioned manifest with reviewed immutable attestations | accepted |
 | [D-187](./D-187-widen-a-bool-into-an-int-declared-attribute.md) | Widen a bool into an int-declared attribute slot in MIR, not in codegen | accepted |
+| [D-188](./D-188-synthesize-hirclassdefs-for-the-builtin-exception.md) | Synthesize HirClassDefs for the builtin exception classes | accepted |

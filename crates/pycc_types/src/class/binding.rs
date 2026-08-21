@@ -105,6 +105,26 @@ pub(crate) fn resolve_instantiation(
             Span::new(0, 0),
         ));
     }
+    // Part 1 of #541 (extending D-173): a *synthetic* builtin exception
+    // class cannot be instantiated as a value. D-173 propagates a raised
+    // exception through global runtime state rather than through an
+    // allocated instance, so `e = ValueError("x")` has nothing to bind and
+    // no storage to allocate; `raise ValueError("x")` is the only supported
+    // construction, and it is checked by `exception::check_raise_operand`
+    // without ever reaching here. Keyed on `is_synthetic_class`, not on the
+    // name alone: a user's own `class ValueError:` is an ordinary class and
+    // stays instantiable.
+    if env.is_synthetic_class(class_name) {
+        return Err(Diagnostic::error(
+            "C0001",
+            format!(
+                "cannot instantiate builtin exception class `{class_name}` -- \
+                 a builtin exception can only be constructed by raising it \
+                 (`raise {class_name}(\"message\")`), not bound as a value"
+            ),
+            Span::new(0, 0),
+        ));
+    }
     // #432: walk the MRO to find the first class with an `__init__` method.
     let mangled = class_def
         .mro
