@@ -35,6 +35,16 @@ The matrix is parsed with exactly the rules `tests/conformance_matrix_guard.rs`
 uses -- five-cell rows whose status cell is one of the documented markers, and
 backtick spans ending in `.py` as the cited fixtures -- so the two checks cannot
 disagree about which rows are evidence-backed or which fixtures a row cites.
+
+Issue #623's third completion criterion adds one more binding: `docs/ROADMAP.md`
+states the same totals in prose, and that prose used to drift silently. The
+checker now parses the bold `**Conformance progress (...)**` headline and
+requires every number in it -- the evidence-backed total, the required-row
+target, the derived gap, and the whole-PEP count -- to agree with what the
+matrix says, plus the checker's own summary line to appear quoted verbatim in
+the paragraph. The parse is fail-closed: a missing, duplicated, or unparseable
+headline is a failure, so rewording the paragraph cannot quietly disable the
+guard.
 """
 
 from __future__ import annotations
@@ -42,6 +52,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -329,6 +340,111 @@ def validate(markdown: str, manifest: Any, harness: str) -> None:
         raise BreadthError("\n".join(failures))
 
 
+#: The bold headline `docs/ROADMAP.md` uses to state the conformance totals. It
+#: is matched non-greedily and must occur exactly once: zero matches means the
+#: paragraph was renamed away, and two mean the file states the totals twice.
+ROADMAP_HEADLINE = re.compile(r"\*\*Conformance progress \([^)]*\):(?P<body>.*?)\*\*", re.DOTALL)
+
+#: The numbers inside that headline. Anchoring here rather than on the
+#: surrounding paragraph keeps the historical figures it narrates -- earlier
+#: totals and earlier gaps -- from being mistaken for the current claim.
+ROADMAP_FIGURES = re.compile(
+    r"(?P<total>\d+) of the required (?P<required>\d+) matrix rows are at `"
+    + SUBSET
+    + r"` or better, leaving a (?P<gap>\d+)-row gap; "
+    r"(?P<accepted>\d+) of those (?P<restated_total>\d+) are `"
+    + ACCEPTED
+    + r"`"
+)
+
+
+def summary_body(rows: list[MatrixRow]) -> str:
+    """Render the totals sentence shared by the printed summary and the roadmap.
+
+    `docs/ROADMAP.md` quotes this exact string, minus the `conformance breadth: `
+    prefix `main` prints in front of it, so there is one source for both.
+    """
+
+    accepted = sum(1 for row in rows if row.status == ACCEPTED)
+    return (
+        f"{len(rows)} evidence-backed rows, all declared "
+        f"({accepted} accepted as whole-PEP, {len(rows) - accepted} subset)"
+    )
+
+
+def check_roadmap_counts(
+    roadmap: str, rows: list[MatrixRow], label: str = "docs/ROADMAP.md"
+) -> None:
+    """Bind `docs/ROADMAP.md`'s stated totals to the ones the matrix supports.
+
+    `label` names the file in diagnostics. `main` passes the path relative to
+    the repository root when the file lives inside it, so the ordinary run
+    reports `docs/ROADMAP.md` rather than an absolute path, and an out-of-tree
+    `--roadmap` is reported as itself.
+
+    Raises `BreadthError` when the headline is missing, ambiguous, unparseable,
+    internally inconsistent, or disagrees with `rows`.
+    """
+
+    headlines = ROADMAP_HEADLINE.findall(roadmap)
+    if len(headlines) != 1:
+        raise BreadthError(
+            f"{label}: expected exactly one `**Conformance progress (...)**` "
+            f"headline stating the matrix totals, found {len(headlines)} -- this guard "
+            f"is fail-closed, so restore the headline rather than rewording it away"
+        )
+
+    figures = ROADMAP_FIGURES.search(headlines[0])
+    if figures is None:
+        raise BreadthError(
+            f"{label}: the conformance-progress headline no longer states its "
+            "totals in the form this guard parses (`N of the required M matrix rows "
+            f"are at `{SUBSET}` or better, leaving a G-row gap; A of those N are "
+            f"`{ACCEPTED}`)"
+        )
+
+    total = int(figures["total"])
+    required = int(figures["required"])
+    gap = int(figures["gap"])
+    accepted = int(figures["accepted"])
+    restated_total = int(figures["restated_total"])
+
+    computed_total = len(rows)
+    computed_accepted = sum(1 for row in rows if row.status == ACCEPTED)
+
+    failures: list[str] = []
+    if total != computed_total:
+        failures.append(
+            f"{label} claims {total} evidence-backed rows, but the matrix has "
+            f"{computed_total}"
+        )
+    if accepted != computed_accepted:
+        failures.append(
+            f"{label} claims {accepted} whole-PEP (`{ACCEPTED}`) rows, but the "
+            f"matrix has {computed_accepted}"
+        )
+    if restated_total != total:
+        failures.append(
+            f"{label}'s headline states {total} evidence-backed rows but then "
+            f"says `{accepted} of those {restated_total}`"
+        )
+    if gap != required - total:
+        failures.append(
+            f"{label} states a {gap}-row gap, but {required} required minus "
+            f"{total} evidence-backed is {required - total}"
+        )
+
+    expected = summary_body(rows)
+    if expected not in roadmap:
+        failures.append(
+            f"{label} does not quote the checker's current summary verbatim; "
+            f"expected to find {expected!r}"
+        )
+
+    if failures:
+        raise BreadthError("\n".join(failures))
+
+
 def main(argv: list[str] | None = None) -> int:
     root = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -339,6 +455,7 @@ def main(argv: list[str] | None = None) -> int:
         default=root / "tests/fixtures/conformance-breadth-manifest.json",
     )
     parser.add_argument("--harness", type=Path, default=root / "tests/conformance.rs")
+    parser.add_argument("--roadmap", type=Path, default=root / "docs/ROADMAP.md")
     args = parser.parse_args(argv)
 
     try:
@@ -358,11 +475,18 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     rows = evidence_rows(args.matrix.read_text(encoding="utf-8"))
-    accepted = sum(1 for row in rows if row.status == ACCEPTED)
-    print(
-        f"conformance breadth: {len(rows)} evidence-backed rows, all declared "
-        f"({accepted} accepted as whole-PEP, {len(rows) - accepted} subset)"
-    )
+
+    try:
+        try:
+            label = str(args.roadmap.resolve().relative_to(root))
+        except ValueError:
+            label = str(args.roadmap)
+        check_roadmap_counts(args.roadmap.read_text(encoding="utf-8"), rows, label)
+    except BreadthError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+    print(f"conformance breadth: {summary_body(rows)}")
     return 0
 
 

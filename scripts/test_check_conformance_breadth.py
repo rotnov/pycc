@@ -14,9 +14,12 @@ checked-in manifest stops describing the checked-in matrix.
 from __future__ import annotations
 
 import copy
+import contextlib
 import importlib.util
+import io
 import json
 from pathlib import Path
+import tempfile
 import unittest
 
 CHECKER_PATH = Path(__file__).with_name("check_conformance_breadth.py")
@@ -33,6 +36,8 @@ evidence_rows = CHECKER.evidence_rows
 is_registered = CHECKER.is_registered
 parse_matrix = CHECKER.parse_matrix
 validate = CHECKER.validate
+check_roadmap_counts = CHECKER.check_roadmap_counts
+summary_body = CHECKER.summary_body
 
 REPOSITORY_ROOT = CHECKER_PATH.resolve().parent.parent
 
@@ -114,6 +119,17 @@ def manifest() -> dict:
             },
         ],
     }
+
+
+#: A stand-in for `docs/ROADMAP.md`'s conformance paragraph. It deliberately
+#: narrates superseded figures — an earlier total and an earlier gap — so the
+#: tests prove the guard reads the bold headline rather than the first number
+#: it can find in the prose.
+ROADMAP = """
+## v0.3
+
+**Conformance progress (2026-01-01): 2 of the required 5 matrix rows are at `◐` or better, leaving a 3-row gap; 1 of those 2 are `✅` (whole-PEP acceptance), which is reported but not gated before v1.0.** This figure is derived mechanically — `python3 scripts/check_conformance_breadth.py` reports "2 evidence-backed rows, all declared (1 accepted as whole-PEP, 1 subset)" — and supersedes the earlier figure of 1, which took the count from 0 to 1 and left a 4-row gap.
+""".lstrip()
 
 
 class ParsingTests(unittest.TestCase):
@@ -398,6 +414,13 @@ class RepositoryTests(unittest.TestCase):
         harness = (REPOSITORY_ROOT / "tests/conformance.rs").read_text(encoding="utf-8")
         validate(matrix, self._checked_in_manifest(), harness)
 
+    def test_the_checked_in_roadmap_states_the_checked_in_totals(self) -> None:
+        matrix = (REPOSITORY_ROOT / "docs/PYTHON_STANDARDS.md").read_text(
+            encoding="utf-8"
+        )
+        roadmap = (REPOSITORY_ROOT / "docs/ROADMAP.md").read_text(encoding="utf-8")
+        check_roadmap_counts(roadmap, evidence_rows(matrix))
+
     def test_every_evidence_row_records_at_least_one_unproven_category(self) -> None:
         # Not a validator rule -- a row that genuinely proves everything and
         # has no non-goal to record is legitimate -- but a manifest where *no*
@@ -418,6 +441,92 @@ class RepositoryTests(unittest.TestCase):
         }
         self.assertTrue(kinds)
         self.assertTrue(kinds <= {"core", "out-of-scope"}, kinds)
+
+
+class RoadmapCountTests(unittest.TestCase):
+    """#623's third criterion: the roadmap's stated totals cannot drift silently."""
+
+    ROWS = evidence_rows(MATRIX)
+
+    def assert_rejected(self, roadmap: str, expected: str) -> None:
+        with self.assertRaises(BreadthError) as caught:
+            check_roadmap_counts(roadmap, self.ROWS)
+        self.assertIn(expected, str(caught.exception))
+
+    def test_the_summary_body_is_the_string_the_roadmap_quotes(self) -> None:
+        self.assertEqual(
+            summary_body(self.ROWS),
+            "2 evidence-backed rows, all declared (1 accepted as whole-PEP, 1 subset)",
+        )
+
+    def test_matching_counts_pass(self) -> None:
+        check_roadmap_counts(ROADMAP, self.ROWS)
+
+    def test_diagnostics_name_the_roadmap_that_was_actually_read(self) -> None:
+        with self.assertRaises(BreadthError) as caught:
+            check_roadmap_counts(
+                ROADMAP.replace("2 of the required 5", "3 of the required 5"),
+                self.ROWS,
+                "/tmp/other-roadmap.md",
+            )
+        message = str(caught.exception)
+        self.assertIn("/tmp/other-roadmap.md claims 3 evidence-backed rows", message)
+        self.assertNotIn("docs/ROADMAP.md", message)
+
+    def test_a_divergent_total_is_rejected(self) -> None:
+        self.assert_rejected(
+            ROADMAP.replace("2 of the required 5", "3 of the required 5"),
+            "claims 3 evidence-backed rows, but the matrix has 2",
+        )
+
+    def test_a_divergent_whole_pep_count_is_rejected(self) -> None:
+        self.assert_rejected(
+            ROADMAP.replace("1 of those 2 are", "2 of those 2 are"),
+            "claims 2 whole-PEP (`✅`) rows, but the matrix has 1",
+        )
+
+    def test_a_restated_total_that_contradicts_the_headline_is_rejected(self) -> None:
+        self.assert_rejected(
+            ROADMAP.replace("1 of those 2 are", "1 of those 7 are"),
+            "states 2 evidence-backed rows but then says `1 of those 7`",
+        )
+
+    def test_a_divergent_gap_is_rejected(self) -> None:
+        self.assert_rejected(
+            ROADMAP.replace("leaving a 3-row gap", "leaving a 4-row gap"),
+            "states a 4-row gap, but 5 required minus 2 evidence-backed is 3",
+        )
+
+    def test_a_quoted_summary_that_no_longer_matches_is_rejected(self) -> None:
+        self.assert_rejected(
+            ROADMAP.replace("(1 accepted as whole-PEP, 1 subset)", "(1 accepted, 1 sub)"),
+            "does not quote the checker's current summary verbatim",
+        )
+
+    def test_a_missing_headline_is_a_failure_not_a_silent_pass(self) -> None:
+        self.assert_rejected(
+            ROADMAP.replace("**Conformance progress (2026-01-01):", "Conformance notes:"),
+            "found 0",
+        )
+
+    def test_a_duplicated_headline_is_a_failure(self) -> None:
+        self.assert_rejected(ROADMAP + ROADMAP, "found 2")
+
+    def test_an_unparseable_headline_is_a_failure(self) -> None:
+        self.assert_rejected(
+            ROADMAP.replace(
+                "2 of the required 5 matrix rows", "a couple of the required few rows"
+            ),
+            "no longer states its totals in the form this guard parses",
+        )
+
+    def test_historical_figures_in_the_prose_are_not_mistaken_for_the_claim(
+        self,
+    ) -> None:
+        check_roadmap_counts(
+            ROADMAP + "\n\nEarlier this was 9 rows, leaving a 28-row gap.\n",
+            self.ROWS,
+        )
 
 
 class CiWiringTest(unittest.TestCase):
@@ -464,6 +573,82 @@ class CiWiringTest(unittest.TestCase):
         # gate green while the contract is violated.
         governance = self._job_body("governance")
         self.assertNotIn("continue-on-error", governance)
+
+
+class CommandLineTests(unittest.TestCase):
+    """`main`'s own wiring, distinct from the functions it calls.
+
+    `check_roadmap_counts` is mutation-tested directly above, but the argument
+    that reaches it and the exit status that leaves the process are `main`'s
+    own code. CI runs this checker with default arguments against a passing
+    tree, so nothing else ever executes the roadmap branch's failure path.
+    """
+
+    @staticmethod
+    def _run(argv: list[str]) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            status = CHECKER.main(argv)
+        return status, out.getvalue(), err.getvalue()
+
+    def test_the_default_invocation_reports_the_checked_in_totals(self) -> None:
+        status, stdout, _ = self._run([])
+        self.assertEqual(status, 0)
+        matrix = (REPOSITORY_ROOT / "docs/PYTHON_STANDARDS.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(summary_body(evidence_rows(matrix)), stdout)
+
+    def test_a_divergent_roadmap_fails_the_command(self) -> None:
+        roadmap = (REPOSITORY_ROOT / "docs/ROADMAP.md").read_text(encoding="utf-8")
+        matrix = (REPOSITORY_ROOT / "docs/PYTHON_STANDARDS.md").read_text(
+            encoding="utf-8"
+        )
+        total = len(evidence_rows(matrix))
+        drifted = roadmap.replace(
+            f"{total} of the required", f"{total + 1} of the required", 1
+        )
+        self.assertNotEqual(drifted, roadmap)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ROADMAP.md"
+            path.write_text(drifted, encoding="utf-8")
+            status, stdout, stderr = self._run(["--roadmap", str(path)])
+        self.assertEqual(status, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn(f"but the matrix has {total}", stderr)
+
+    def test_an_out_of_tree_roadmap_is_named_as_itself(self) -> None:
+        # The relative-label shortening in `main` applies to files inside the
+        # repository; anything else must still be identifiable in diagnostics.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "elsewhere.md"
+            path.write_text("no headline here\n", encoding="utf-8")
+            status, _, stderr = self._run(["--roadmap", str(path)])
+        self.assertEqual(status, 1)
+        self.assertIn(str(path), stderr)
+
+    def test_an_in_tree_roadmap_is_named_relative_to_the_repository(self) -> None:
+        # A document inside the repository that carries no headline at all --
+        # the fail-closed branch -- names itself by its repository-relative
+        # path, not by the absolute path the argument parser resolved.
+        # Passed as an absolute path deliberately: a relative argument would
+        # already read as its own short label and prove nothing.
+        status, _, stderr = self._run(
+            ["--roadmap", str(REPOSITORY_ROOT / "docs/SPEC.md")]
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("fail-closed", stderr)
+        self.assertIn("docs/SPEC.md", stderr)
+        self.assertNotIn(str(REPOSITORY_ROOT), stderr)
+
+    def test_an_unreadable_manifest_fails_before_anything_else(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            path.write_text("{not json", encoding="utf-8")
+            status, stdout, stderr = self._run(["--manifest", str(path)])
+        self.assertEqual(status, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("invalid JSON", stderr)
 
 
 if __name__ == "__main__":
