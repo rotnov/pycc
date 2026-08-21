@@ -310,11 +310,16 @@ impl Environment {
     /// lowering synthesized* (D-188), recording it in `synthetic_classes`.
     ///
     /// Only `class::bind_classes` calls this, and only for a name it has
-    /// established was seeded by `lower_checked` -- provenance is carried
+    /// established was seeded by `lower_checked`. The visibility is
+    /// `pub(crate)` so that restriction is enforced by the compiler rather
+    /// than by convention: marking an arbitrary name synthetic would
+    /// silently exclude a user-authored class from `is_user_defined_class`,
+    /// which is exactly the defect D-188's provenance record exists to
+    /// prevent -- provenance is carried
     /// from the lowering step through `HirModule`, never re-derived from a
     /// definition's shape, because a user-authored class can be
     /// structurally identical to a synthetic one.
-    pub fn bind_synthetic_class(&mut self, name: String, def: HirClassDef) {
+    pub(crate) fn bind_synthetic_class(&mut self, name: String, def: HirClassDef) {
         Arc::make_mut(&mut self.synthetic_classes).insert(name.clone());
         Arc::make_mut(&mut self.classes).insert(name, def);
     }
