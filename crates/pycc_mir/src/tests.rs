@@ -1989,7 +1989,7 @@ fn list_literal_subscript_and_for_list_derive_their_type_from_actual_elements_no
     // this crate from a real compiled program, but this crate's own
     // lowering must not bake in that assumption independently of the
     // type it actually observes -- exactly the class of bug the
-    // `AnnAssign` widening fix in `lib.rs`'s `lower_stmt` already
+    // `AnnAssign` widening fix in `stmt.rs`'s `lower_stmt` already
     // guards against (MIR's `ty` silently diverging from what codegen
     // must produce). Uses `str` elements specifically because they are
     // trivially distinguishable from the `Ty::Int` a hardcoded bug
