@@ -33,6 +33,72 @@ never a merge gate.
 
 ---
 
+## 2026-08-21 — An append-only journal was destroyed by `cp`, and the rule saying so had been read
+
+**What happened.** The harden findings journal for issue #544 is documented as
+append-only. Mid-task I needed to seed it and used `cp` to place a file at that
+path, silently truncating it and destroying the previous iteration's one refuted
+finding. The loss is permanent: that directory is excluded from version control,
+and the task logs reference the path without its contents.
+
+**Root cause.** Not ignorance of the rule — the rule is one sentence in the
+skill reference I had read in the same session. The failure mode is that an
+overwrite of an append-only file *succeeds*. Nothing reports anything, and the
+resulting file is still well-formed, so there is no moment at which the mistake
+announces itself. This is a compliance gap, not a knowledge gap, and text cannot
+close a compliance gap that has already been read and then not applied.
+
+**What fixed it.** Nothing recovered the data. The guard is mechanical: the
+append-only flag is now set on all thirteen journals (`chflags uappnd` on macOS,
+`chattr +a` on Linux). Proven in both directions — appends return 0 and preserve
+content, while truncation and `cp` over the file are refused by the kernel with
+`Operation not permitted`. The exact command that caused the loss now fails.
+
+**Lesson.** When a file's contract is "append-only" and the host cannot gate it
+(here: excluded from version control, so no hook, CI check, or reviewer can ever
+see it), enforce the contract at the only rung that reaches it — the filesystem.
+A documented invariant that no mechanism enforces is a convention. Set the flag
+when the file is created, not after the first loss.
+
+## 2026-08-21 — A public issue reported the output of a command that does not produce it
+
+**What happened.** Issue #687 was filed with a "Current output on `main`" block
+listing three rustdoc diagnostics under a named reproduction command. Verifying
+an unrelated premise a few steps later, I ran that exact command: it emits two,
+not three. All three defects are real, but I had composed the block from
+fragments of two different runs — one with the strict flag, one without — rather
+than pasting a single run. The third diagnostic belongs to a different lint and
+is unreachable under the flagged command, which aborts on the first two.
+
+**Root cause.** The block *looked* like evidence, and that is precisely why it
+was not re-checked. Pasted command output normally carries its own authority, so
+a composed block inherits authority it never earned. Every individual fact in it
+was one I had genuinely observed; the falsehood was created by the assembly, not
+by any single claim, which is why re-reading it for accuracy would not have
+caught it. Only re-running would.
+
+**What fixed it.** A correcting comment on #687 with the verified reproduction,
+both output forms, and the precise condition separating them. The corrected run
+also surfaced something the composed block had hidden: *every* crate in the
+workspace warns under `--document-private-items`, so the gate promotion this
+issue motivates is workspace-scoped work, not a side effect of fixing three
+links.
+
+**Lesson.** A claim about what a command prints is written by running the
+command and pasting its output, in one action. Never assemble an output block
+from memory or from separate runs, and never do it for a public artefact.
+
+**Postscript, from proofreading this entry before committing it.** The entry as
+first written closed by citing "the two prose-drift entries below it" in this
+file, and the entry above closed by calling itself "the second time in this
+journal" that a convention lost to a careless command. Neither survived a grep:
+the prose-drift records are in a different journal, and no prior entry here
+describes a comparable loss. Both were rhetorical cross-references composed for
+weight rather than derived from the file — the same failure as the composed
+output block, committed twice inside the entry warning against it. That is the
+sharper lesson: the reflex to reach for "this is the Nth time" is itself the
+tell. A recurrence count is a claim about a file, and it is written by counting.
+
 ## 2026-08-21 — A subagent's measurable claims were verified and its completeness claim was not
 
 **What happened.** A dispatched agent extracted a 25,000-line test module into
