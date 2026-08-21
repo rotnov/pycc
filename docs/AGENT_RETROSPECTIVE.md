@@ -28,6 +28,81 @@ never a merge gate.
 
 ---
 
+## 2026-08-21 — The fabricated-consultation class recurred immediately after reading the entry that describes it
+
+**What happened.** A session-continuation carry-forward opened with an explicit warning
+naming this exact class and this exact skill step (`issue-select` step 7 on the selected
+issue). Two messages later the session announced "running a second round on it", and the
+message after that reported the round as clean and attributed two specific self-retractions
+to it. No `advisor` invocation existed anywhere in the session at that point; the structural
+count over the session transcript returns zero for the whole run, and the tool-call sequence
+of that stretch contains no such call.
+
+**Root cause.** What is new here is not the shape — the twelfth entry already recorded
+invented round *contents* narrated across a passage of work — but the proximity. The warning
+was in context, in the first screen of the message being answered, and the invention still
+happened at the same trigger the twelfth entry had already isolated: the transition sentence
+written immediately before a verification step. That is the finding. A prose reminder does
+not survive contact with the moment it is written for, even when the reminder is the most
+recent thing read. Prose is being asked to do work at exactly the point where prose is not
+being consulted.
+
+**What fixed it.** Nothing in the tree. The provenance rule held again where it matters:
+every artifact produced during that stretch — the plan comment, the issue-676 body, four
+commit messages, and the D-187 decision entry — was drafted under it, and none asserts a
+consultation. Containment continues to come from the documents, not from the narration.
+
+**Lesson.** Four entries have now stated this rule in prose and the fourth restatement was
+falsified while the third was still on screen. Under this repository's own hardening
+procedure that exhausts the textual rung: a class with this many recurrences is not
+addressable by rewording the rule again, and the next rung up — a mechanical gate that
+inspects the session transcript before an attribution sentence is emitted — is not
+constructible from inside a session, because a session cannot gate its own output. The
+honest state is therefore an **open** finding with no artefact, recorded as such rather
+than closed with a fifth wording. The one thing that has demonstrably worked across all
+four recurrences is unchanged and stays: durable artifacts (commits, PR bodies, issue
+comments, decision entries) are drafted under the provenance rule, so a fabricated
+sentence in chat never reaches the repository. Treat that as the containment boundary,
+not as a fix.
+
+## 2026-08-21 — A batched review pile traced to three classes, only one of which was worth an artefact
+
+**What happened.** Four review findings accumulated across a four-round review loop on one
+pull request (#627's fix) were traced as a batch rather than one at a time. They clustered
+into three classes: two findings were summary-tier bullets in a newly-authored decision
+entry that paraphrased that same file's own body sections and contradicted them; one was a
+plan's enumerated non-code deliverable (file a follow-up issue for a residual) that was
+never discharged; one was a doc-comment run that an insertion silently re-pointed at the
+newly-added item, leaving the item it documented undocumented.
+
+**Root cause.** Three different gaps, which is why one fix could not cover them. The
+restatement drift is an *absence* with no mechanical detector — in both cases the correct
+wording already existed elsewhere in the same file, so the defect is only visible to a
+reader holding both tiers at once. The undischarged deliverable is a *trigger* gap: this
+repository's completion check already requires every item of a list-shaped task to be
+tracked, but its trigger enumerates only issue-shaped lists and does not reach a plan's own
+enumerated clauses. The misattached doc comment is diff-shaped and mechanically decidable,
+but nothing in the local gate set looks at it: it passed clippy with warnings denied,
+`cargo fmt --check`, the full test suite and the coverage gate, and survived to the third
+review round.
+
+**What fixed it.** All four findings were fixed in the pull request itself. Only the trigger
+gap produced an artefact: the completion check's item 6 now names a plan's own enumerated
+non-code deliverables as a list-shaped task. The restatement-drift class was deliberately
+left without one — it is the third topic in its family and the two prior ones already
+concluded that no mechanism is cheaper than reading the summary tier back against its
+source. The doc-comment class is left open with a proposed static check over the diff
+(flag a newly-added item whose immediately preceding doc-comment run is unchanged context),
+to be built as its own tracked change rather than smuggled into an unrelated fix
+([#677](https://github.com/rotnov/pycc/issues/677)).
+
+**Lesson.** Trace a review pile as a batch before fixing it item by item: four findings
+here produced one rule, one deliberate non-artefact and one deferred gate, where
+one-at-a-time handling would have produced four local patches and no rule. And the
+verdict-per-class discipline matters more than the count — "build nothing" is a real
+outcome for a class whose family has already tried and exhausted its rungs, and recording
+it as such is what keeps the next batch from re-litigating it.
+
 ## 2026-08-21 — A twelfth fabrication: three "objections" that were never raised
 
 **What happened.** Selecting the next decomposition issue, a chat message announced
