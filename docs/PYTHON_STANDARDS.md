@@ -119,9 +119,12 @@ For each newly observed upstream release:
    state rather than a path awaiting an author. That reasoning no longer holds
    for PEP 560 as of [#610](https://github.com/rotnov/pycc/issues/610), which
    made `ClassName[key]` dispatch to `__class_getitem__` in value position and
-   authored `pep_0560_class_getitem.py` to exercise it against the oracle; rule
-   9 records that fixture's own D-102 Tier-1 observation and the flip it
-   earned. PEP 487 remains recognition-only.
+   authored `pep_0560_class_getitem.py` to exercise it against the oracle, and
+   [#611](https://github.com/rotnov/pycc/issues/611), which gated the
+   annotation-position subscript on that same hook; between them #586 is fully
+   discharged. Rule 9 records that fixture's own D-102 Tier-1 observation and
+   the flip it earned. PEP 487 remains recognition-only, so
+   [#585](https://github.com/rotnov/pycc/issues/585) still stands.
 9. PEP 560 (`__class_getitem__` dispatch) was flipped to `◐` on the same
    rule 5 basis against run
    [32494747082](https://github.com/rotnov/pycc/actions/runs/32494747082), the
@@ -138,9 +141,11 @@ For each newly observed upstream release:
    `run_conformance_fixture_with_profile` twice, once with the release flag
    clear and once set, so one test run exercises debug and release. The mark is
    `◐` and not `✅` because the fixture only covers value-position
-   `C[x]` dispatch; gating annotation-position subscripts on
-   `__class_getitem__` is still unimplemented and open under
-   [#586](https://github.com/rotnov/pycc/issues/586), and a `core` gap forces
+   `C[x]` dispatch. Annotation-position subscripts are gated on the hook's
+   existence ([#611](https://github.com/rotnov/pycc/issues/611)) but are then
+   resolved as `Ty::Instance(ClassName)` with the type argument discarded
+   rather than routed through the hook, which is the row's recorded `core`
+   gap ([#693](https://github.com/rotnov/pycc/issues/693)), and a `core` gap forces
    `◐` under
    [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
 
