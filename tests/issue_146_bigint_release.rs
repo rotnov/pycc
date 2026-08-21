@@ -623,11 +623,6 @@ mod peak_rss {
         );
     }
 
-    /// #146 Part 2 (D-181): the nested arithmetic temporary. `(x + 1)` is
-    /// an unbound `int` value whose single consumer is the outer `+`, and
-    /// before Part 2 nothing ever retired its birth reference. Measured at
-    /// the plan's own baseline this form grew with ratio 1.925 against the
-    /// `< 1.35` gate below.
     /// #627/D-187: a bigint parked in an *instance attribute* slot,
     /// overwritten by a `bool` on every iteration. Each iteration puts a
     /// freshly allocated `BigIntObj` in the slot and then replaces it with
@@ -674,6 +669,11 @@ mod peak_rss {
         );
     }
 
+    /// #146 Part 2 (D-181): the nested arithmetic temporary. `(x + 1)` is
+    /// an unbound `int` value whose single consumer is the outer `+`, and
+    /// before Part 2 nothing ever retired its birth reference. Measured at
+    /// the plan's own baseline this form grew with ratio 1.925 against the
+    /// `< 1.35` gate below.
     fn nested_temporary_repro(iterations: u32) -> String {
         format!(
             "x: int = {PROMOTED}\ny: int = 0\nfor i in range({iterations}):\n    \
