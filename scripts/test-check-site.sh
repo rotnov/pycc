@@ -1267,14 +1267,14 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "Only custom exceptions remain planned.",
-        "Only custom exceptions and protocols remain planned.",
+        "user-defined exception class remains planned.",
+        "user-defined exception classes and protocols remain planned.",
         "status page that understates landed v0.3 class-model items",
     ),
     (
         site_dir / "status" / "index.html",
-        "Still ahead for v0.3: custom exceptions are the",
-        "Still ahead for v0.3: custom exceptions and protocols are the",
+        "Still ahead for v0.3: raising and catching a",
+        "Still ahead for v0.3: raising, catching, and protocols are a",
         "status page that understates landed v0.3 class-model items in the next-slice prose",
     ),
     (
