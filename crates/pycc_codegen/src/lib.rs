@@ -6172,23 +6172,31 @@ fn emit_stmt<'ctx>(
             if value_ty == pycc_mir::Ty::Str {
                 decref_str_attr_slot_before_store(context, builder, rt, base_ptr, slot_index);
             }
-            // #146 Part 1, accepted gap: unlike a local's storage slot, an
-            // instance attribute's declared `Ty` is not reachable from
-            // `MirStmt::AttrSet` (it carries only a slot *index*), so this
-            // release is gated on the value's type rather than the slot's.
-            // The one shape that diverges is a `bool` value assigned into
-            // an `int`-declared attribute, which skips the release of a
-            // bigint the attribute still holds -- a leak, never a
-            // use-after-free. That gap is documented in D-180 Consequences
-            // item 6 but deliberately *not* pinned by a test: the shape is
-            // unobservable today because `scalar_to_slot_word` stores a
-            // `Scalar::Bool` as a raw `zext` rather than a D-141 encoded
-            // word, so the attribute reads back as `0` regardless of any
-            // refcounting (a separate, pre-existing D-154 defect, tracked
-            // in D-180 Consequences item 6). A fixture here could only
-            // enshrine that wrong output. Threading the declared type
-            // through from `mir.class_defs` is deliberately left out of
-            // Part 1's scope.
+            // Unlike a local's storage slot, an instance attribute's
+            // declared `Ty` is not reachable from `MirStmt::AttrSet` (it
+            // carries only a slot *index*), so this release is gated on
+            // the *value's* type rather than the slot's.
+            //
+            // #146 Part 1 recorded one shape that diverged: a `bool` value
+            // assigned into an `int`-declared attribute reported
+            // `Ty::Bool` here, skipping the release of a bigint the
+            // attribute still held -- a leak, never a use-after-free
+            // (D-180 Consequences item 6). #627 closed that divergence in
+            // MIR instead of here: `pycc_mir`'s `HirStmt::AttrSet` arm now
+            // wraps such a value in `MirExpr::IntBoundary`, whose `ty()`
+            // is `Ty::Int`, so the release below fires and the store
+            // encodes a D-141 word. `tests/issue_146_bigint_release.rs`
+            // pins the observable half and `bigint_rc.rs`'s own
+            // `an_int_attribute_slot_store_of_a_bool_emits_a_guarded_release`
+            // pins this release. D-187 records the correction.
+            //
+            // The gate stays literally value-typed and only *coincides*
+            // with D-180 Decision item 4's slot-typed invariant because
+            // `bool` -> `int` is the sole widening `pycc_types` permits at
+            // an attribute boundary (`bool` into a `float` attribute is
+            // rejected with `error[T0021]`). A future widening would break
+            // the coincidence silently; threading the declared type
+            // through from `mir.class_defs` remains out of scope.
             if value_ty == pycc_mir::Ty::Int {
                 release_int_attr_slot_before_store(context, builder, rt, base_ptr, slot_index);
             }

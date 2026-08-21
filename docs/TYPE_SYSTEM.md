@@ -83,8 +83,14 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   `int` binding preserves the static `int` representation and, per D-141, the
   source object's runtime `False`/`True` identity. D-074/D-141 carry that
   decision through MIR and code generation at assignment, argument, return,
-  container-value, and `range` boundaries; range consumes the numeric value
-  and produces ordinary int objects rather than forwarding bool identity.
+  container-value, instance-attribute-store, and `range` boundaries; range
+  consumes the numeric value and produces ordinary int objects rather than
+  forwarding bool identity. The instance-attribute store joined that list in
+  [#627](https://github.com/rotnov/pycc/issues/627) (D-187): `pycc_mir`
+  widens the value through `MirExpr::IntBoundary` when the slot's declared
+  type is `int` and the value's is `bool`, so `c.n = True; print(c.n)` prints
+  `True`. A `bool`-**declared** slot is left alone and keeps storing its raw
+  word.
 - Python numeric semantics apply during inference: `bool` is an `int`
   subtype, mixed `int`/`float` arithmetic promotes to `float`, and true
   division `/` always returns `float` even for two integer operands.

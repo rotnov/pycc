@@ -1014,4 +1014,101 @@ mod tests {
             (0, 0)
         );
     }
+
+    #[test]
+    fn an_int_attribute_slot_store_of_a_bool_emits_a_guarded_release() {
+        // #627/D-187: the `MirStmt::AttrSet` release is gated on the
+        // *value's* `Ty`, not the slot's. `pycc_mir` now wraps a `bool`
+        // stored into an `int`-declared attribute in `MirExpr::IntBoundary`
+        // (whose `ty()` is `Ty::Int`), which is what makes this release
+        // fire at all -- before #627 the value reported `Ty::Bool` and the
+        // bigint the slot still held was dropped on the floor (D-180
+        // Consequences item 6).
+        //
+        // What this pins and what it does not: because `IntBoundary::ty()`
+        // is already `Ty::Int`, a hand-built `MirStmt::AttrSet` like this
+        // one emits the release on the pre-#627 tree too. This is a
+        // *codegen* pin -- that a `Ty::Int`-reporting value reaching an
+        // attribute store emits the guarded release. The lowering half,
+        // that a `bool` into an `int` slot now produces such a value, is
+        // pinned by `pycc_mir`'s
+        // `an_attr_set_of_a_bool_into_an_int_declared_slot_widens_through_int_boundary`.
+        // Only the two together pin the leak fix; the release itself is
+        // invisible in program output, so no conformance fixture can.
+        //
+        // This module's other tests all build `class_defs: Vec::new()` and
+        // never construct an instance, so the class/`Instantiate`/`AttrSet`
+        // scaffolding below is duplicated from `crate::tests`'s own
+        // `class_instantiation_attribute_and_method_call_codegens_and_runs`.
+        // The test lives here rather than there because `refcount_calls_in`
+        // and `guarded_bigint_refcount_calls` -- which prove the release is
+        // *guarded* on its own operand -- are private to this module, and
+        // duplicating that guard-parsing would be the larger duplication.
+        // Both files compile in the same `--cfg test` instantiation
+        // (`lib.rs`'s `#[cfg(test)] mod tests;`), so the choice is
+        // coverage-neutral.
+        let self_ty = Ty::Instance(Box::new("Holder".to_string()));
+        let init = MirItem::Function {
+            name: "Holder.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("n".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 0,
+                    value: int_name("n"),
+                },
+                MirStmt::Return(None),
+            ],
+        };
+        let mir = MirModule {
+            items: vec![
+                init,
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "h".to_string(),
+                    value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
+                        ctor: "Holder.__init__".to_string(),
+                        attr_count: 1,
+                        args: vec![MirExpr::IntLiteral(0)],
+                        ty: self_ty.clone(),
+                    })),
+                }),
+                MirItem::TopLevelStmt(MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "h".to_string(),
+                        ty: self_ty,
+                    },
+                    slot: 0,
+                    value: MirExpr::IntBoundary(Box::new(MirExpr::BoolLiteral(true))),
+                }),
+            ],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_int_attr_slot_bool_store", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        // Two releases, one per `AttrSet`: `__init__`'s (into a
+        // zero-initialized slot, so its guard is false at runtime) and the
+        // top-level store of the encoded `True` word over whatever slot 0
+        // then held. The single retain is `__init__`'s own `n` parameter --
+        // a duplicate reference the slot becomes a second owner of. The
+        // `IntBoundary` value contributes no retain: an `IntBoundary` is a
+        // freshly produced word, and
+        // `int_value_is_a_duplicate_reference` groups it into its `false`
+        // arm. Every call listed was proved guarded, on its own operand, by
+        // `guarded_bigint_refcount_calls`.
+        assert_eq!((retains, releases), (1, 2), "got {calls:?}");
+    }
 }

@@ -212,6 +212,30 @@ fn a_bool_assigned_into_a_bigint_valued_int_slot_releases_the_old_word() {
     );
 }
 
+#[test]
+fn a_bool_assigned_into_a_bigint_valued_int_attribute_slot_releases_the_old_word() {
+    // #627/D-187, the attribute-slot mirror of the local-slot case just
+    // above. `MirStmt::AttrSet` carries only a slot *index*, so codegen
+    // gates its release on the value's `Ty`; `pycc_mir` now widens a
+    // `bool` bound for an `int`-declared attribute through
+    // `MirExpr::IntBoundary`, which both encodes the D-141 word and makes
+    // the value report `Ty::Int` so that gate fires (D-180 Consequences
+    // item 6).
+    //
+    // Before that widening this program did not merely leak: the raw
+    // `bool` word `0` is not a valid encoded int word, so `print(h.n)`
+    // after `h.n = False` aborted with
+    // `pycc_rt: invalid encoded int word 0x0` (exit 134).
+    assert_runs_and_prints(
+        "bool_into_int_attribute_slot",
+        &format!(
+            "class Holder:\n    def __init__(self) -> None:\n        self.n = 0\n\n\nh = Holder()\nh.n = {PROMOTED}\nprint(h.n)\nh.n = True\nprint(h.n)\nh.n = False\nprint(h.n)\n"
+        ),
+        // D-141 keeps bool identity through the int-encoded word.
+        &format!("{PROMOTED}\nTrue\nFalse\n"),
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Comprehensions: the same induction-variable ownership, three more emitters.
 // ---------------------------------------------------------------------------
@@ -596,6 +620,52 @@ mod peak_rss {
             "peak RSS must not scale with the loop trip count: \
              500k iterations={single} 1M iterations={double} ratio={ratio:.4} \
              (a per-iteration `BigIntObj` leak reads as ratio ~2.0)"
+        );
+    }
+
+    /// #627/D-187: a bigint parked in an *instance attribute* slot,
+    /// overwritten by a `bool` on every iteration. Each iteration puts a
+    /// freshly allocated `BigIntObj` in the slot and then replaces it with
+    /// the encoded `True` word; if the `bool` store skips the slot release
+    /// -- which it did before `pycc_mir` widened the value through
+    /// `MirExpr::IntBoundary` -- one `BigIntObj` is stranded per iteration.
+    /// The release is invisible in program output, which is why this is a
+    /// ratio measurement rather than an assertion on what the program
+    /// prints.
+    fn bool_over_bigint_attribute_repro(iterations: u32) -> String {
+        [
+            "class Holder:",
+            "    def __init__(self) -> None:",
+            "        self.n = 0",
+            "",
+            "",
+            "h = Holder()",
+            &format!("for i in range({iterations}):"),
+            &format!("    h.n = {PROMOTED} + i"),
+            "    h.n = True",
+            "print(h.n)",
+            "",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn a_bool_overwriting_a_bigint_attribute_does_not_grow_with_the_iteration_count() {
+        let single = built_program_peak_rss(
+            "rss_attr_bool_1x",
+            &bool_over_bigint_attribute_repro(500_000),
+        );
+        let double = built_program_peak_rss(
+            "rss_attr_bool_2x",
+            &bool_over_bigint_attribute_repro(1_000_000),
+        );
+        let ratio = double as f64 / single as f64;
+        assert!(
+            ratio < 1.35,
+            "peak RSS must not scale with the loop trip count: \
+             500k iterations={single} 1M iterations={double} ratio={ratio:.4} \
+             (one `BigIntObj` stranded per bool-over-bigint attribute store \
+             reads as ratio ~2.0)"
         );
     }
 
