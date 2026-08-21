@@ -107,9 +107,14 @@ terminated. State to resume from:
   `python3 scripts/check_conformance_breadth.py`, which reports "31
   evidence-backed rows, all declared (2 accepted as whole-PEP, 29 subset)" —
   re-run it rather than trusting this line.
-- **The remaining 6 rows have no open tracker.** #572 and its parts are closed,
-  so identifying what still blocks those rows and filing it is outstanding work,
-  and it is the most direct path to v0.3.
+- **The remaining 6 rows are now tracked by #690**, filed in this session after
+  #572 and its parts were found closed. It carries the per-row analysis and
+  names PEP 560 as the single row that may need no code — its fixture is
+  authored and registered in both profiles and was green on a completed `main`
+  run, so the only open question is whether that run meets D-102's "all 5
+  Tier-1 targets" bar, given the fifth target is covered by
+  `build-test-coverage` rather than the `native-build-test` matrix. Settling
+  that is the cheapest available step toward v0.3.
 - **Last iteration's outcome:** #544 Part 3 merged; #544 narrowed, not closed.
 - **Next step:** re-enter `.claude/skills/issue-select/SKILL.md` at step 1 with
   a fresh baseline from `7db27a7c`.
