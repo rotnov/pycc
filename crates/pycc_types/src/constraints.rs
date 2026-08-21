@@ -1758,8 +1758,9 @@ pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environme
     // Part 1 of #541: register the class table through `bind_class` (via
     // `bind_classes`) rather than by populating `classes` directly, so this
     // second `Environment` constructor cannot drift from the first on which
-    // entries are marked synthetic. `bind_class` is the sole mutator of
-    // both tables precisely so that invariant holds by construction.
+    // entries are marked synthetic. `bind_class` and `bind_synthetic_class`
+    // are together the sole mutators of both tables precisely so that
+    // invariant holds by construction.
     crate::class::bind_classes(&mut env, hir);
     Some(env)
 }

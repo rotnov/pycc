@@ -125,9 +125,10 @@ pub struct Environment {
     /// rejected. Membership here restores the intended meaning -- present
     /// *and* not synthetic is what "shadowed" means.
     ///
-    /// Maintained by [`Self::bind_class`], the sole mutator of `classes`,
-    /// so the two tables cannot drift apart regardless of which
-    /// environment constructor or monomorphization path registered a class.
+    /// Maintained by [`Self::bind_class`] and [`Self::bind_synthetic_class`],
+    /// together the sole mutators of `classes`, so the two tables cannot
+    /// drift apart regardless of which environment constructor or
+    /// monomorphization path registered a class.
     synthetic_classes: Arc<HashSet<String>>,
     /// PEP 695 (#387): the name of the generic *function* currently being
     /// body-checked, if any. Set by `check_function_in` from the function's
