@@ -1362,7 +1362,7 @@ fn homogeneous_private_solver_scalar_list_element_accepts_a_single_scalar() {
 
 #[test]
 fn constraint_collection_treats_a_slice_as_unconstrained_but_recurses_into_base_and_bounds() {
-    // PR-12 Task 7 (D-118): mirrors `Subscript`'s own solver arm above --
+    // PR-12 Task 7 (D-118): mirrors `Subscript`'s own solver arm in `lib.rs` --
     // structurally identical recursion, no term produced for the slice
     // itself.
     let signatures = HashMap::new();
@@ -1746,7 +1746,7 @@ fn constraint_collection_propagates_an_error_from_a_set_add_value() {
 fn constraint_collection_len_call_returns_int_for_a_concretely_bound_list() {
     // `lst`'s binding is a directly concrete `TypeTerm` (`Ok(Ty::List(_))`)
     // rather than one produced by `ListLiteral` (which always returns
-    // `Ok(None)` in this solver, per its own comment above) -- this is
+    // `Ok(None)` in this solver, per its own comment in `lib.rs`) -- this is
     // the only way to get a concrete `Ty::List` term to validate against
     // at constraint-collection time.
     let signatures = HashMap::new();
@@ -5560,7 +5560,7 @@ fn a_heterogeneous_list_literal_is_rejected_as_t0032() {
 fn a_list_literal_of_bool_and_int_is_rejected_since_homogeneity_uses_exact_ty_equality() {
     // D-105 requires the *exact same* `Ty` for every element -- unlike
     // `is_assignable`'s bool-is-an-int-subtype rule used elsewhere in
-    // this file, `[1, True]` is still T0032.
+    // the crate, `[1, True]` is still T0032.
     let env = Environment::new();
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::BoolLiteral(true)]);
     assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0032");
@@ -8392,7 +8392,7 @@ fn collect_block_constraints_visits_a_set_comp_assign_s_cond_and_elt() {
 #[test]
 fn collect_block_constraints_visits_a_dict_comp_assign_s_cond_key_and_value() {
     // Pins the `HirStmt::DictCompAssign` solver arm (its own separate
-    // key/value split, not shared with the list/set arm above), with a
+    // key/value split, not shared with the list/set arm in `lib.rs`), with a
     // `cond` present so its own `cond.is_some()` branch is covered too.
     let hir = HirModule {
         items: vec![
@@ -14188,8 +14188,9 @@ fn instantiate_generic_call_substitutes_nested_ann_assign_annotation() {
     // an embedded `Ty` beyond the function's own signature, and must be
     // substituted too, not just `params`/`return_ty`. Compares the whole
     // specialized item by value (rather than destructuring it with a
-    // `let-else`/`unreachable!()`, which this file's own coverage gate
-    // would otherwise always flag as an untaken branch).
+    // `let-else`/`unreachable!()`, which the coverage gate would
+    // otherwise always flag as an untaken branch when this test still
+    // lived in `lib.rs`).
     let param = Ty::Param(Box::new("T".to_string()));
     let func = HirItem::Function {
         name: "f".to_string(),

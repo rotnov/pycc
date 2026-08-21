@@ -3391,8 +3391,8 @@ fn infer_expr_in(
         // unreachable from any real Python source: `{}` always parses as an
         // empty *dict* (Python has no empty-set literal spelling at all --
         // `set()` is a call, not a literal), so this only fires for a
-        // hand-built `HirExpr::SetLiteral(vec![])` (e.g. this file's own
-        // unit tests).
+        // hand-built `HirExpr::SetLiteral(vec![])` (e.g. the crate root's
+        // own unit tests, in `tests.rs`).
         HirExpr::SetLiteral(elements) => {
             let Some(first) = elements.first() else {
                 return Err(Diagnostic::error(
@@ -3610,7 +3610,7 @@ fn infer_expr_in(
         // applied here to base-type-before-bound-type) -- pinned by
         // `slicing_reports_the_base_type_error_before_any_bound_error` and
         // `slicing_reports_the_element_type_error_before_any_bound_error`
-        // below.
+        // in `tests.rs`.
         HirExpr::Slice {
             base,
             start,
