@@ -119,9 +119,30 @@ For each newly observed upstream release:
    state rather than a path awaiting an author. That reasoning no longer holds
    for PEP 560 as of [#610](https://github.com/rotnov/pycc/issues/610), which
    made `ClassName[key]` dispatch to `__class_getitem__` in value position and
-   authored `pep_0560_class_getitem.py` to exercise it against the oracle; the
-   row itself stays `☐` until that fixture's own D-102 Tier-1 observation.
-   PEP 487 remains recognition-only.
+   authored `pep_0560_class_getitem.py` to exercise it against the oracle; rule
+   9 records that fixture's own D-102 Tier-1 observation and the flip it
+   earned. PEP 487 remains recognition-only.
+9. PEP 560 (`__class_getitem__` dispatch) was flipped to `◐` on the same
+   rule 5 basis against run
+   [32494747082](https://github.com/rotnov/pycc/actions/runs/32494747082), the
+   completed, fully successful run for `82d63301`, where
+   `pep_0560_class_getitem.py` was observed green on all five Tier-1 targets.
+   Four of them come from the `native-build-test` matrix
+   (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+   `x86_64-apple-darwin`, `x86_64-pc-windows-msvc`); the fifth,
+   `aarch64-apple-darwin`, is covered by the `build-test-coverage` job on
+   `macos-14`. Both jobs ran the fixture rather than skipping it. "Both build
+   profiles" in rule 5 means the profile the fixture's own `pycc build` uses,
+   not the profile the Rust harness is compiled in: the single
+   `pep_0560_class_getitem_matches_cpython_3_14_7_byte_for_byte` test calls
+   `run_conformance_fixture_with_profile` twice, once with the release flag
+   clear and once set, so one test run exercises debug and release. The mark is
+   `◐` and not `✅` because the fixture only covers value-position
+   `C[x]` dispatch; gating annotation-position subscripts on
+   `__class_getitem__` is still unimplemented and open under
+   [#586](https://github.com/rotnov/pycc/issues/586), and a `core` gap forces
+   `◐` under
+   [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
 
 ## Python 3.0–3.2 (foundations)
 
@@ -189,7 +210,7 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [553](https://peps.python.org/pep-0553/) | `breakpoint()` | rt | `py37/pep_0553_breakpoint.py` | ☐ |
 | [557](https://peps.python.org/pep-0557/) | **dataclasses** | sem | `pep_0557_dataclasses.py` | ◐ |
-| [560](https://peps.python.org/pep-0560/) | `__class_getitem__` typing support | typing | fixture authored for value-position dispatch ([#610](https://github.com/rotnov/pycc/issues/610)); row pending the D-102 Tier-1 observation | ☐ |
+| [560](https://peps.python.org/pep-0560/) | `__class_getitem__` dispatch for value-position subscripts | typing | `pep_0560_class_getitem.py` (authored by [#610](https://github.com/rotnov/pycc/issues/610); observed green across all 5 Tier-1 targets in both profiles on run [32494747082](https://github.com/rotnov/pycc/actions/runs/32494747082), the completed run for `82d63301`) | ◐ |
 | [562](https://peps.python.org/pep-0562/) | Module `__getattr__` | sem | `py37/pep_0562_mod_getattr.py` | ☐ |
 | [563](https://peps.python.org/pep-0563/) | `from __future__ import annotations` (superseded by 649) | typing | `py37/pep_0563_lazy_annotations.py` | ☐ |
 | — | `dict` insertion order guaranteed (`dict[str, int]`, D-123) | sem | `dict_order.py` | ◐ |

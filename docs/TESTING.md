@@ -86,6 +86,25 @@ second, independently-editable gate for the same contract.
 it fails if the step is removed from `governance`, if `governance` leaves
 `ci-gate`'s fan-in, or if the step is made advisory with `continue-on-error`.
 
+The same checker also binds `docs/ROADMAP.md`'s prose to the matrix, which is
+[#623](https://github.com/rotnov/pycc/issues/623)'s third completion criterion.
+The roadmap states the conformance totals in a bold
+`**Conformance progress (...)**` headline and quotes the checker's own summary
+line; both used to be maintained by hand and both had drifted. The checker now
+parses that headline — the evidence-backed total, the required-row target, the
+derived gap, and the whole-PEP count — and fails when any of them disagrees
+with the matrix, when the headline contradicts itself, or when the quoted
+summary is no longer the string the checker prints. It is deliberately
+fail-closed: a headline that is missing, duplicated, or reworded past the
+parse is a failure rather than a silent pass, because a guard that quietly
+stops guarding when someone rewrites the paragraph is exactly the drift #623
+describes. Anchoring on the bold span rather than the paragraph is what keeps
+the superseded totals the paragraph narrates historically from being read as
+the current claim. The path is overridable with `--roadmap` alongside
+`--matrix`, `--manifest` and `--harness`; CI runs the checker with its
+defaults, so the roadmap binding is enforced by the same `governance` step and
+needs no separate job.
+
 Both of those guards reason about which fixtures a row cites and how much of
 the PEP they cover. Neither says anything about what the registered tests
 actually compare, and until [#224](https://github.com/rotnov/pycc/issues/224)
