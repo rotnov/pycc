@@ -114,6 +114,19 @@
   to a temporary file and use `--body-file <path>`. Never inline a heredoc
   in the `--body` argument — nested quoting in a shell command call is not
   reliable and will fail on bodies containing apostrophes or backticks.
+- Never write a closing keyword (`close`, `closes`, `closed`, `fix`, `fixes`,
+  `fixed`, `resolve`, `resolves`, `resolved`) immediately followed by an issue
+  reference in a pull-request body unless merging that pull request really
+  should close that issue. GitHub scans the body for the pattern and does not
+  parse the surrounding English, so negation, quotation, and hedging give no
+  protection: a disclaimer such as "this does not close #N" closes #N. To state
+  that an issue stays open, write "Part 1 of #N; #N stays open" or "does not
+  carry `Fixes #N`" — phrasings that reference the issue without adjoining a
+  keyword to it. Confirm intent after opening a pull request and before merging
+  with `gh api graphql -f query='{repository(owner:"<owner>",name:"<repo>"){pullRequest(number:<n>){closingIssuesReferences(first:20){totalCount nodes{number}}}}}'`,
+  which lists exactly the issues the merge will close. Read `totalCount`, not the
+  length of the returned page: it is authoritative even when more references exist
+  than the page requested, so `totalCount: 0` proves the merge closes nothing.
 
 ## Monitor only live repository events ([D-078](docs/decisions/D-078-external-repository-monitoring-is-checkpointed.md))
 

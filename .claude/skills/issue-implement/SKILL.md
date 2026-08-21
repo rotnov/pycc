@@ -282,7 +282,7 @@ activation PR does not deliver the issue's actual requested fix yet; it only cle
 the next PR in the sequence. Carrying `Fixes #N` here would close the issue on merge, before the
 outer pair (or any further intermediate cycle) has landed. Tag an intermediate activation's body
 instead: "Intermediate activation for #N (step `<k>` of `<total>`) — see issue-implement's D-103
-manifest-staging pattern; does not itself close #N." Only the sequence's own last PR — the one
+manifest-staging pattern; #N stays open." Only the sequence's own last PR — the one
 that actually satisfies the issue's premise — carries `Fixes #N`, and every PR the composed
 sequence requires (every stage and every intermediate activation) is explicitly named and
 authorized up front, exactly like the systemic stop condition below already requires for a
@@ -308,7 +308,7 @@ rather than the fixed two-PR stage/activate shape above.
   tracked file over the threshold** does not carry `Fixes #N` — merging it must not close the
   issue while work remains, the same reasoning the D-080/D-103 stage PRs above already apply.
   Tag its body instead: "Partial decomposition for #N — see issue-implement's D-185
-  narrowing-PR pattern; does not itself close #N." It is exempt from step 6's `Fixes #N`
+  narrowing-PR pattern; #N stays open." It is exempt from step 6's `Fixes #N`
   requirement and step 8's `Fixes #N` merge-confirmation step; every other part of steps 5
   through 8 (review loop, monitoring, merge preconditions) applies to it unchanged. After it
   merges, leave the narrowing comment `AGENTS.md`'s carve-out requires — what was extracted,
@@ -489,6 +489,22 @@ Preconditions, all of them: every required check green including the coverage ga
 unresolved review threads, zero unaddressed actionable findings, branch up to date with the
 default branch. Then re-read the full pull-request diff, end to end, immediately before
 merging — the last look is not ceremonial; anything found there goes back through step 5.
+
+Immediately before merging, confirm which issues the merge will actually close — not by
+reading the body, but by asking GitHub what it parsed out of it:
+
+```
+gh api graphql -f query='{repository(owner:"<owner>",name:"<repo>"){pullRequest(number:<n>){closingIssuesReferences(first:20){totalCount nodes{number}}}}}'
+```
+
+`totalCount` must equal the intended count exactly — `1`, naming the issue, for a
+`Fixes #N` pull request, and `0` for every stage, intermediate-activation, and narrowing
+pull request above. Compare `totalCount` rather than the length of the returned page, so
+the answer cannot be truncated by the page size. A body that never meant to close anything can still close something — GitHub scans
+for a closing keyword adjacent to an issue reference and does not parse the English around
+it, so a disclaimer or a quotation containing the pattern closes the issue just as an
+instruction would (see AGENTS.md's pull-request rule). A mismatch is fixed by editing the
+body and re-running the query before merging, never by merging and reopening after.
 
 Merge with a merge commit, delete the task branch, and confirm the issue closed via the
 `Fixes #N` reference. Fetch and verify the default branch actually contains the work before
