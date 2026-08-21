@@ -9,9 +9,9 @@ use super::*;
 // (issue #361, D-149) but the two tests below call them directly,
 // bypassing the public `lower_checked` entry point -- unlike every other
 // test in this module, so a `super::*` glob import alone does not reach
-// them (it only reaches items defined directly in `lib.rs`, not items
-// re-exported from a sibling module). See `expr.rs`'s own module doc
-// comment for why these two stayed here instead of moving.
+// them (the crate root neither defines nor re-exports them). See
+// `expr.rs`'s own module doc comment for why these two stayed here
+// instead of moving.
 use crate::expr::{lower_comprehension_header, rename_name_in_expr};
 
 fn assert_capability_error(source: &str, expected_message: &str, expected_span: Span) {

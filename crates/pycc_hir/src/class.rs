@@ -2905,7 +2905,7 @@ mod tests {
         // above, exercised through the legacy `X: TypeAlias = <expr>`
         // spelling (`lower_legacy_type_alias_ann_assign`) instead of `type X
         // = <expr>` (`lower_type_alias_stmt`) -- the two are lowered by
-        // independent functions in `lib.rs`, each needing its own check and
+        // independent functions in `import.rs`, each needing its own check and
         // its own regression test.
         let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
             "class Foo:\n    def __init__(self) -> None:\n        return\nFoo: TypeAlias = int\n",
