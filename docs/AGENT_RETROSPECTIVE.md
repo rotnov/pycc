@@ -33,6 +33,35 @@ never a merge gate.
 
 ---
 
+## 2026-08-21 — A test written to close a review finding passed against the broken code it was meant to guard
+
+**What happened.** The pinned reviewer flagged that `check_conformance_breadth.py`
+reported an absolute path in diagnostics where its own docstring promised a
+repository-relative one. I fixed the path derivation and wrote a test asserting
+the short label appears in the message. The test passed. It also passed when the
+fix was reverted — it proved nothing. The reason: the test invoked the checker
+with an already-relative path argument, so the broken code and the fixed code
+produced identical output for that input.
+
+**Root cause.** The test was written from the shape of the fix rather than from
+the shape of the failure. "Assert the message contains `docs/SPEC.md`" looks like
+a test of the label derivation, but the derivation is only observable when the
+input and the output differ — that is, when the argument is absolute. Choosing a
+convenient input silently moved the assertion outside the code path under test.
+A green test is indistinguishable from a load-bearing one until it is mutated.
+
+**What fixed it.** Reverting the fix and re-running the suite before trusting it.
+One of the two new tests failed as expected; the other did not, which is what
+exposed the defect. Passing the path as absolute made the input and output differ
+and the test became load-bearing; re-running the same mutation then failed it.
+
+**Lesson.** A new test that closes a review finding is not evidence until the
+change it guards has been reverted and the test observed to fail. This repository
+already applies that discipline to its checkers — `test_check_conformance_breadth.py`
+is explicitly a mutation suite, on the stated grounds that "a checker whose failure
+paths are never exercised is a checker that can rot into a no-op". The same bar
+applies to the tests themselves, and it costs one revert-and-rerun to meet.
+
 ## 2026-08-21 — An append-only journal was destroyed by `cp`, and the rule saying so had been read
 
 **What happened.** The harden findings journal for issue #544 is documented as
