@@ -134,41 +134,6 @@ pub fn builtin_exception_init_item() -> HirItem {
     }
 }
 
-/// The seven synthetic definitions, built once per process.
-///
-/// [`is_builtin_exception_class_def`] runs on *every* `bind_class` call, and
-/// `bind_class` runs once per class per `Environment` construction -- of
-/// which the type checker performs one per checked function. Rebuilding the
-/// seven definitions (seven `HirClassDef`s, each with owned `String`s and
-/// `Vec<String>`s) on each of those calls made class binding cost
-/// `O(items x classes x 7)` allocations; caching collapses that to a single
-/// construction. Measured on `benches/check_bench.rs`'s fixture, the rebuild
-/// alone accounted for ~10.4 us of the ~13.2 us the seeding added to
-/// `pycc_types::check`.
-static SYNTHETIC_CLASS_DEFS: std::sync::LazyLock<Vec<(String, HirClassDef)>> =
-    std::sync::LazyLock::new(builtin_exception_class_defs);
-
-/// Whether `def` is exactly the synthetic definition
-/// [`builtin_exception_class_defs`] produces for `name` (Part 1 of #541).
-///
-/// This is how the type checker tells a synthesized builtin exception class
-/// apart from a user class that happens to share one of the seven names.
-/// Structural equality is sufficient and exact: HIR lowering seeds the
-/// synthetic definitions all-or-nothing, and only for a module that
-/// references at least one of the seven names and binds none of them
-/// itself, so a user-authored `class ValueError:` is never accompanied by a
-/// synthetic one.
-///
-/// The name test comes first so an ordinary user class -- the overwhelmingly
-/// common case -- costs one `is_builtin_exception_class` scan rather than up
-/// to seven deep `HirClassDef` comparisons.
-pub fn is_builtin_exception_class_def(name: &str, def: &HirClassDef) -> bool {
-    is_builtin_exception_class(name)
-        && SYNTHETIC_CLASS_DEFS
-            .iter()
-            .any(|(synthetic_name, synthetic_def)| synthetic_name == name && synthetic_def == def)
-}
-
 /// Whether `module` spells any of the seven names in
 /// [`BUILTIN_EXCEPTION_CLASSES`] anywhere at all (Part 1 of #541).
 ///
@@ -262,10 +227,14 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
 ///   `ValueError` whose `bases`/`mro` name an `Exception` that a user's own
 ///   `class Exception:` has replaced resolves its inherited `__init__`
 ///   against the wrong class.
-/// * It keeps [`is_builtin_exception_class_def`]'s structural comparison
-///   exact. A user class can never be mistaken for a synthetic one, because
-///   a module containing a user binding of any of the seven names carries no
-///   synthetic definitions at all.
+/// * It makes `HirModule::seeded_builtin_exception_classes` -- the single
+///   flag `lower_checked` records when it seeds -- an exact provenance
+///   record. Because a module containing a user binding of any of the seven
+///   names carries no synthetic definitions at all, "the flag is set and the
+///   name is one of the seven" identifies precisely the compiler-produced
+///   entries, with no user class among them. Provenance is never re-derived
+///   from a definition's shape: a user can author a class structurally
+///   identical to a synthetic one (see D-188).
 ///
 /// The scan is deliberately conservative: it reports `true` for any
 /// top-level `class`/`def`/`type`-alias/annotated-assignment/assignment

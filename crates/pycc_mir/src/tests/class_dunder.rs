@@ -56,6 +56,7 @@ fn dataclass_point_module(extra_items: Vec<HirItem>) -> HirModule {
     let mut items = vec![init, eq, repr];
     items.extend(extra_items);
     HirModule {
+        seeded_builtin_exception_classes: false,
         items,
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -231,6 +232,7 @@ fn an_eq_comparison_between_instances_without_eq_falls_through_to_mir_compare() 
         body: vec![HirStmt::Return(None)],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             HirItem::TopLevelStmt(HirStmt::Assign {
@@ -302,6 +304,7 @@ fn print_of_an_instance_with_an_unregistered_class_passes_through() {
     // panic later, but we only test the MIR lowering here).
     let ghost_ty = Ty::Instance(Box::new("Ghost".to_string()));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "test".to_string(),
             params: vec![("g".to_string(), ghost_ty.clone())],

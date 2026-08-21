@@ -32,9 +32,23 @@ use super::check_call_args;
 /// every `Environment` constructor this crate has (`check_with_signatures`'s
 /// own per-item loop, `concrete_function_environment`'s literal), mirroring
 /// how each already registers every function's signature.
+///
+/// Part 1 of #541 (D-188): a class is marked synthetic if and only if
+/// *this compiler's own* HIR lowering produced it. The provenance record is
+/// `hir.seeded_builtin_exception_classes`, set by `lower_checked` at the
+/// point it seeds; combined with `is_builtin_exception_class` it is exact,
+/// because seeding is all-on/all-off and its shadow gate guarantees a
+/// seeded module has no user top-level binding of any of the seven names.
+/// Nothing here inspects a `HirClassDef`'s shape: a user-authored class can
+/// be structurally identical to a synthetic one, so shape is not evidence
+/// of origin.
 pub(crate) fn bind_classes(env: &mut Environment, hir: &HirModule) {
     for (name, class_def) in &hir.class_defs {
-        env.bind_class(name.clone(), class_def.clone());
+        if hir.seeded_builtin_exception_classes && pycc_hir::is_builtin_exception_class(name) {
+            env.bind_synthetic_class(name.clone(), class_def.clone());
+        } else {
+            env.bind_class(name.clone(), class_def.clone());
+        }
     }
 }
 

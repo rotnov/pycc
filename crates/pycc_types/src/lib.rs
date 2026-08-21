@@ -295,19 +295,26 @@ impl Environment {
 
     /// Registers `name` as a declared class with shape `def` (D-154, Part 1
     /// of #375), mirroring [`Self::bind_generic`]'s own shape exactly.
-    /// Part 1 of #541: also records whether `def` is exactly the definition
-    /// `pycc_hir` synthesizes for one of the seven builtin exception names,
-    /// keeping `synthetic_classes` in step with `classes` on every path
-    /// that registers a class (this is their sole mutator). A user class
-    /// that happens to be named `ValueError` is *not* recorded, and
-    /// re-binding a name with a user definition clears any earlier
-    /// synthetic marking.
+    /// Part 1 of #541: registers `name` as *user-authored*, clearing any
+    /// earlier synthetic marking for that name and keeping
+    /// `synthetic_classes` in step with `classes`. Every caller that is not
+    /// replaying HIR lowering's own seeding belongs here; the one caller
+    /// that is uses [`Self::bind_synthetic_class`] instead.
     pub fn bind_class(&mut self, name: String, def: HirClassDef) {
-        if pycc_hir::is_builtin_exception_class_def(&name, &def) {
-            Arc::make_mut(&mut self.synthetic_classes).insert(name.clone());
-        } else {
-            Arc::make_mut(&mut self.synthetic_classes).remove(&name);
-        }
+        Arc::make_mut(&mut self.synthetic_classes).remove(&name);
+        Arc::make_mut(&mut self.classes).insert(name, def);
+    }
+
+    /// Part 1 of #541: registers `name` as a class *this compiler's own HIR
+    /// lowering synthesized* (D-188), recording it in `synthetic_classes`.
+    ///
+    /// Only `class::bind_classes` calls this, and only for a name it has
+    /// established was seeded by `lower_checked` -- provenance is carried
+    /// from the lowering step through `HirModule`, never re-derived from a
+    /// definition's shape, because a user-authored class can be
+    /// structurally identical to a synthetic one.
+    pub fn bind_synthetic_class(&mut self, name: String, def: HirClassDef) {
+        Arc::make_mut(&mut self.synthetic_classes).insert(name.clone());
         Arc::make_mut(&mut self.classes).insert(name, def);
     }
 

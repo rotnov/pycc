@@ -38,6 +38,7 @@ fn static_class_hir(extra_items: Vec<HirItem>) -> HirModule {
     let mut items = vec![init, static_fn, class_fn];
     items.extend(extra_items);
     HirModule {
+        seeded_builtin_exception_classes: false,
         items,
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -208,6 +209,7 @@ fn static_method_call_through_class_name_with_ghost_mro_panics() {
     // method name `missing` is not in `C`'s own static_methods, so the
     // `find_map` continues to `Ghost` and panics.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
             HirExpr::MethodCall {
                 base: Box::new(HirExpr::Name("C".to_string())),
@@ -253,6 +255,7 @@ fn class_method_call_through_class_name_with_ghost_mro_panics() {
     // class_methods, so both walks reach `Ghost` and the second one
     // (class_methods) panics.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
             HirExpr::MethodCall {
                 base: Box::new(HirExpr::Name("C".to_string())),
@@ -298,6 +301,7 @@ fn static_method_call_through_instance_with_ghost_mro_panics() {
     // static_methods MRO walk.
     let self_ty = Ty::Instance(Box::new("Derived".to_string()));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "Derived.__init__".to_string(),
@@ -355,6 +359,7 @@ fn class_method_call_through_instance_with_ghost_mro_panics() {
     // walk does.
     let self_ty = Ty::Instance(Box::new("Derived".to_string()));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "Derived.__init__".to_string(),

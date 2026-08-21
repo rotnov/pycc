@@ -10,6 +10,7 @@ use pycc_hir::{BinOpKind, HirExpr, HirItem, HirModule, HirStmt, Ty};
 #[test]
 fn builds_an_assignment_and_a_later_name_reference() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -47,6 +48,7 @@ fn builds_an_assignment_and_a_later_name_reference() {
 #[test]
 fn builds_a_function_with_typed_params_and_return() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "add".to_string(),
             params: vec![("a".to_string(), Ty::Int), ("b".to_string(), Ty::Int)],
@@ -92,6 +94,7 @@ fn a_top_level_call_to_a_function_defined_later_resolves_via_two_pass_registrati
     // `hir.items` -- exactly the forward-reference case D-038/D-039
     // already fixed on the `pycc_types::check` side.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
                 callee: "helper".to_string(),
@@ -122,6 +125,7 @@ fn a_top_level_call_to_a_function_defined_later_resolves_via_two_pass_registrati
 #[test]
 fn a_function_can_call_itself_recursively_and_resolves_its_own_return_type() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "fact".to_string(),
             params: vec![("n".to_string(), Ty::Int)],
@@ -157,6 +161,7 @@ fn a_function_can_call_itself_recursively_and_resolves_its_own_return_type() {
 #[test]
 fn a_function_resolves_a_module_global_assigned_after_its_definition() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "read_x".to_string(),
@@ -191,6 +196,7 @@ fn a_function_resolves_a_module_global_assigned_after_its_definition() {
 #[test]
 fn assigning_bool_to_an_existing_int_binding_preserves_its_mir_type() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -220,6 +226,7 @@ fn assigning_bool_to_an_existing_int_binding_preserves_its_mir_type() {
 #[should_panic(expected = "has no recorded type")]
 fn a_top_level_read_still_cannot_resolve_a_later_assignment() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
             HirItem::TopLevelStmt(HirStmt::Assign {
@@ -243,6 +250,7 @@ fn referencing_an_unbound_name_panics_with_an_internal_error() {
     // -- this HIR could never come from a real `check_and_resolve`
     // success, but the panic path itself still needs direct coverage.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name(
             "undefined".to_string(),
         )))],
@@ -262,6 +270,7 @@ fn a_function_local_shadowing_a_module_global_of_a_different_type_resolves_its_o
     // `f`'s own `x = 5; return x` must resolve to `f`'s own fresh
     // `Ty::Int`, never falling through to the module global's `Ty::Str`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -311,6 +320,7 @@ fn a_sibling_function_after_a_shadowing_function_still_reads_the_unshadowed_glob
     // lowering one function's shadowing assignment must not mutate the
     // module scope seen by a later sibling function.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -360,6 +370,7 @@ fn a_function_parameter_shadowing_a_module_global_resolves_its_own_type() {
     // parameter named the same as a module global must resolve to the
     // parameter's own type, never fall through to the global's.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -397,6 +408,7 @@ fn a_for_range_variable_shadowing_a_module_global_resolves_its_own_type() {
     // list (it's a binding form, matching Python's own `for`-target
     // classification), so it must shadow a same-named module global too.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "i".to_string(),
@@ -453,6 +465,7 @@ fn a_local_first_assigned_inside_nested_if_and_else_bodies_shadows_a_module_glob
     // function-local even when its only assignment is nested inside a
     // conditional, not just when it appears directly in the body.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -514,6 +527,7 @@ fn a_local_first_assigned_inside_nested_if_and_else_bodies_shadows_a_module_glob
 fn a_local_first_assigned_inside_a_while_body_shadows_a_module_global() {
     // Exercises `lower_stmt` recursing into a `While` body.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -569,6 +583,7 @@ fn a_local_first_assigned_inside_a_for_range_body_shadows_a_module_global() {
     // itself, already covered by
     // `a_for_range_variable_shadowing_a_module_global_resolves_its_own_type`).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),

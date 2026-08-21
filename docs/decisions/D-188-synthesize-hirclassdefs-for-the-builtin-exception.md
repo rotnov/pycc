@@ -65,11 +65,25 @@ status: accepted
     ordinary meaning. This gate is deliberately *not* fused into the
     reference scan's single pass: shadowing is a property of a module's top
     level only, while a reference counts at any depth.
-  - **A provenance side table, not a flag.** `Environment` carries
-    `synthetic_classes: Arc<HashSet<String>>`, maintained by `bind_class` --
-    the sole mutator of `classes` -- rather than a field on `HirClassDef`.
-    Who authored a definition is a fact about the environment, not part of a
-    class's declared shape.
+  - **Recorded provenance, carried from the lowering step.** A class is
+    marked synthetic **if and only if** this compiler's own HIR lowering
+    produced it, and that fact is *recorded where it happens* rather than
+    re-derived downstream. `lower_checked` sets
+    `HirModule::seeded_builtin_exception_classes` at the point it extends
+    `class_defs` with `builtin_exception_class_defs()`; `bind_classes` reads
+    that flag, and marks exactly the entries whose name is one of the seven.
+    A single boolean is sufficient and exact because seeding is
+    all-or-nothing *and* its shadow gate guarantees a seeded module has no
+    user top-level binding of any of the seven names -- so within a seeded
+    module, "one of the seven" and "compiler-produced" coincide. The flag is
+    propagated verbatim through `monomorphize`, which rebuilds the
+    `HirModule` and re-runs `bind_classes` on the result.
+  - **A provenance side table, not a field on `HirClassDef`.** `Environment`
+    carries `synthetic_classes: Arc<HashSet<String>>`, maintained by
+    `bind_class` (which always registers a *user* definition, clearing any
+    earlier marking) and `bind_synthetic_class` (the one path that marks) --
+    together the sole mutators of `classes`. Who authored a definition is a
+    fact about the environment, not part of a class's declared shape.
   - **Shadowing is redefined in terms of provenance.**
     `is_unshadowed_builtin_exception` used to read "absent from `classes`" as
     "not shadowed"; seeding inverts that. It now reads "present *and not
@@ -118,15 +132,38 @@ status: accepted
   - *Derive "synthetic" by counting, or by name alone.* Rejected: name alone
     cannot tell a synthetic `ValueError` from a user's own, which is exactly
     the distinction the instantiation guard and the shadowing predicate both
-    need. The all-or-nothing seeding makes structural comparison against
-    `builtin_exception_class_defs()` exact instead.
+    need.
+  - *Derive "synthetic" by structural equality against
+    `builtin_exception_class_defs()`.* Implemented first, then **rejected as
+    unsound** within this same change, after the D-068 reviewer found a
+    regression it causes. The argument for it was that all-or-nothing
+    seeding means a user-authored `class ValueError:` is never accompanied
+    by a synthetic one *in the same module* -- true, but it answers the
+    wrong question. The case that breaks it has no synthetic entries in the
+    module at all: a module that *shadows* one of the seven names is never
+    seeded, and the user's own class can still be byte-for-byte identical to
+    the cached synthetic definition. `class Exception:` with a single
+    `def __init__(self) -> None: pass` lowers to exactly the synthetic
+    `Exception`'s `HirClassDef`, so structural equality marked the user's own
+    class synthetic; `is_user_defined_class` then reported the name as not
+    user-defined and the builtin-exception paths took the class over,
+    rejecting `Exception()` with `C0001` where it had previously compiled.
+    The general lesson, recorded in `docs/AGENT_RETROSPECTIVE.md`: no
+    property of a value's *shape* is evidence of its *origin*, whatever
+    invariants hold about co-presence. Provenance must be recorded by the
+    step that creates the value.
   - *Seed unconditionally and make the construction cheap.* Rejected on
     measurement. Caching the seven definitions in a `LazyLock` removed ~10.4
     us of the ~13.2 us the seeding added to `pycc_types::check` on
-    `benches/check_bench.rs`'s fixture -- a real fix, kept -- but the
-    irreducible remainder (seven `HirClassDef` clones per `bind_classes`, the
-    per-item projected class slice) still left the fixture at 12.5 us against
-    a 7% budget of 8.4 us, roughly ten times over. No amount of making the
+    `benches/check_bench.rs`'s fixture, but the irreducible remainder (seven
+    `HirClassDef` clones per `bind_classes`, the per-item projected class
+    slice) still left the fixture at 12.5 us against a 7% budget of 8.4 us,
+    roughly ten times over. That cache existed only to make the per-
+    `bind_class` structural comparison affordable, and it went away with the
+    comparison itself when recorded provenance replaced it:
+    `builtin_exception_class_defs()` is now called once per lowering, at the
+    single point that seeds, so there is nothing left to cache. The
+    measurement above stands as history; the cache does not. No amount of making the
     construction cheaper closes a gap that size; only not doing the work does.
   - *Fuse the reference scan into the shadow scan's existing pass.* Rejected:
     the two questions have different scope semantics. Shadowing is about

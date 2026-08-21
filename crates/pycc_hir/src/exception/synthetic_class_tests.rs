@@ -113,24 +113,35 @@ fn the_synthetic_constructor_takes_self_and_a_str_message() {
 }
 
 #[test]
-fn is_builtin_exception_class_def_accepts_only_the_exact_synthetic_shape() {
-    for (name, def) in builtin_exception_class_defs() {
-        assert!(is_builtin_exception_class_def(&name, &def));
-        // A definition under a *different* builtin exception name is not
-        // the synthetic definition for that name.
-        assert!(!is_builtin_exception_class_def("KeyError", &def) || name == "KeyError");
-    }
-    let mut user_shaped = builtin_exception_class_defs()
+fn lowering_records_provenance_for_the_seeded_names() {
+    // The provenance record (D-188) is set exactly when the seven
+    // definitions were seeded, and is the *only* thing downstream marks
+    // synthetic membership from.
+    let seeded = lower("raise ValueError(\"boom\")\n");
+    assert!(seeded.seeded_builtin_exception_classes);
+    assert_eq!(seeded.class_defs.len(), BUILTIN_EXCEPTION_CLASSES.len());
+
+    // No reference to any of the seven: no seeding, no provenance.
+    let unseeded = lower("def main() -> None:\n    pass\n");
+    assert!(!unseeded.seeded_builtin_exception_classes);
+    assert!(unseeded.class_defs.is_empty());
+
+    // A user class that is byte-for-byte the synthetic `Exception` still
+    // carries no provenance, because lowering did not produce it. Both
+    // halves are asserted together: the structural-equality half keeps this
+    // test honest if the synthetic shape ever changes.
+    let user = lower("class Exception:\n    def __init__(self) -> None:\n        pass\n");
+    assert!(!user.seeded_builtin_exception_classes);
+    let synthetic_exception = builtin_exception_class_defs()
         .into_iter()
-        .find(|(name, _)| name == "ValueError")
-        .expect("`ValueError` must be synthesized")
+        .find(|(name, _)| name == "Exception")
+        .expect("`Exception` must be synthesized")
         .1;
-    user_shaped.attrs.push(("code".to_string(), Ty::Int));
-    assert!(!is_builtin_exception_class_def("ValueError", &user_shaped));
-    assert!(!is_builtin_exception_class_def(
-        "NotAnException",
-        &user_shaped
-    ));
+    assert_eq!(
+        class_named(&user, "Exception"),
+        Some(&synthetic_exception),
+        "fixture must stay structurally identical to the synthetic definition"
+    );
 }
 
 // -- the all-or-nothing shadow pre-scan ------------------------------
@@ -310,13 +321,31 @@ fn every_spelling_that_can_reach_the_class_table_counts_as_a_reference() {
 }
 
 #[test]
-fn a_shadowing_module_is_not_seeded_even_though_it_references_the_name() {
-    // Both gates must pass. A `class ValueError:` is simultaneously a
-    // reference (the class body's own name) and a shadow, and shadowing wins.
+fn a_bare_shadowing_class_is_not_seeded_on_the_shadow_gate_alone() {
+    // The shadow gate alone decides this source: the reference scan never
+    // sees it. `ReferenceScan` overrides only `visit_expr`, and this source
+    // contains no `Expr::Name` at all -- a `ClassDef`'s own name is a bare
+    // `Identifier` on the statement node, and the `-> None` annotation
+    // parses as `Expr::NoneLiteral`, not as a name.
     let source = "class ValueError:\n    def __init__(self) -> None:\n        pass\n";
-    assert!(module_shadows_builtin_exception_name(&parse(source)));
+    assert!(!references(source));
+    assert!(shadows(source));
     let hir = lower(source);
+    assert!(!hir.seeded_builtin_exception_classes);
     assert_eq!(hir.class_defs.len(), 1);
+}
+
+#[test]
+fn a_module_passing_the_reference_gate_is_still_blocked_by_the_shadow_gate() {
+    // Both gates are exercised here: the annotation's `Expr::Name` makes
+    // this a genuine reference, and the class's own name makes it a shadow.
+    // Shadowing wins, so nothing is seeded -- and the annotation resolves
+    // against the user's own class.
+    let source = "class ValueError:\n    def __init__(self) -> None:\n        pass\n\ndef f(e: ValueError) -> None:\n    pass\n";
+    assert!(references(source));
+    assert!(shadows(source));
+    let hir = lower(source);
+    assert!(!hir.seeded_builtin_exception_classes);
 }
 
 #[test]

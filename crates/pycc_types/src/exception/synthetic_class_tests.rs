@@ -87,8 +87,9 @@ fn a_user_class_of_the_same_name_still_reads_as_shadowed() {
 
 #[test]
 fn rebinding_a_synthetic_name_with_a_user_definition_clears_the_marking() {
-    // `bind_class` is the sole mutator of both tables, so a later user
-    // definition under the same name must un-mark it -- otherwise a
+    // `bind_class`/`bind_synthetic_class` are the sole mutators of both
+    // tables, and `bind_class` always registers a *user* definition, so a
+    // later user definition under the same name must un-mark it -- otherwise a
     // monomorphization pass that re-registers a class could leave a user
     // class marked synthetic and silently uninstantiable.
     let mut env = environment_for(SEEDED_SOURCE);
@@ -308,4 +309,100 @@ fn binding_a_caught_builtin_exception_without_reading_it_still_checks() {
         "def main() -> None:\n    try:\n        raise ValueError(\"x\")\n    except ValueError as e:\n        print(\"caught\")\n",
     )
     .expect("binding a caught builtin exception must keep checking");
+}
+
+// -- provenance, not shape, decides synthetic membership (D-188) -----
+
+/// The exact program the D-068 reviewer found regressing: a user
+/// `class Exception:` whose lowered `HirClassDef` is byte-for-byte the
+/// synthetic one. Under the previous structural-equality detection it was
+/// marked synthetic, which made `is_user_defined_class` report the name as
+/// *not* user-defined and handed the user's own class to the builtin
+/// exception paths, rejecting the call with `C0001`.
+#[test]
+fn a_user_class_structurally_identical_to_the_synthetic_one_stays_the_users() {
+    let source = "class Exception:\n    def __init__(self) -> None:\n        pass\n\ndef main() -> None:\n    x = Exception()\n\nmain()\n";
+    let hir = parse_lower(source);
+    // The fixture is only meaningful while it really is structurally
+    // identical to the synthetic definition -- assert that, so a future
+    // change to the synthetic shape cannot make this test pass vacuously.
+    let user_def = hir
+        .class_defs
+        .iter()
+        .find(|(name, _)| name == "Exception")
+        .map(|(_, def)| def.clone())
+        .expect("the user class must be in the class table");
+    let synthetic_def = pycc_hir::builtin_exception_class_defs()
+        .into_iter()
+        .find(|(name, _)| name == "Exception")
+        .expect("`Exception` must be synthesized")
+        .1;
+    assert_eq!(
+        user_def, synthetic_def,
+        "fixture must stay structurally identical to the synthetic definition"
+    );
+    assert!(!hir.seeded_builtin_exception_classes);
+
+    let env = environment_for(source);
+    assert!(!env.is_synthetic_class("Exception"));
+    check(&hir).expect("a user-authored `Exception` must stay instantiable");
+}
+
+/// The general property, asserted directly rather than through one shape:
+/// a class is marked synthetic **if and only if** this compiler's own HIR
+/// lowering seeded it. Provenance travels on
+/// `HirModule::seeded_builtin_exception_classes`; no property of a
+/// `HirClassDef`'s own shape participates.
+#[test]
+fn a_class_is_synthetic_exactly_when_lowering_seeded_it() {
+    for source in [
+        // Seeded: references one of the seven, shadows none.
+        SEEDED_SOURCE,
+        "class MyError(ValueError):\n    pass\n\nprint(1)\n",
+        // Unseeded: never names one of the seven.
+        "print(1)\n",
+        "class Point:\n    def __init__(self) -> None:\n        pass\n",
+        // Unseeded because the module shadows a name -- including with a
+        // class structurally identical to a synthetic one.
+        "class Exception:\n    def __init__(self) -> None:\n        pass\n",
+        "class ValueError:\n    def __init__(self) -> None:\n        pass\n",
+        "class TypeError:\n    def __init__(self) -> None:\n        self.n = 1\n",
+    ] {
+        let hir = parse_lower(source);
+        let env = environment_for(source);
+        for (name, _) in &hir.class_defs {
+            let expected =
+                hir.seeded_builtin_exception_classes && pycc_hir::is_builtin_exception_class(name);
+            assert_eq!(
+                env.is_synthetic_class(name),
+                expected,
+                "`{name}` synthetic marking must follow lowering provenance in {source:?}"
+            );
+        }
+        // A user-authored class is never marked, whatever its shape.
+        if !hir.seeded_builtin_exception_classes {
+            for name in pycc_hir::BUILTIN_EXCEPTION_CLASSES {
+                assert!(
+                    !env.is_synthetic_class(name),
+                    "`{name}` must not be synthetic in an unseeded module: {source:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Monomorphization rebuilds the `HirModule` and re-runs `bind_classes` on
+/// the result, so provenance has to survive that rewrite -- otherwise the
+/// synthetic classes silently become instantiable after the pass.
+#[test]
+fn provenance_survives_monomorphization() {
+    let resolved = resolve_source(
+        "class Box[T]:\n    def __init__(self, value: T) -> None:\n        self.value = value\n\ndef main() -> None:\n    b = Box(1)\n    raise ValueError(\"boom\")\n\nmain()\n",
+    )
+    .expect("the generic fixture must resolve");
+    assert!(resolved.seeded_builtin_exception_classes);
+    let mut env = Environment::new();
+    crate::class::bind_classes(&mut env, &resolved);
+    assert!(env.is_synthetic_class("ValueError"));
+    assert!(!env.is_synthetic_class("Box"));
 }

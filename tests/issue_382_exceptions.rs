@@ -51,6 +51,7 @@ fn check_only(dir: &std::path::Path, src_name: &str, source: &str) -> (bool, Str
 #[test]
 fn direct_type_api_rejects_an_unknown_exception_handler() {
     let hir = pycc_hir::HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![pycc_hir::HirItem::TopLevelStmt(pycc_hir::HirStmt::Try {
             body: vec![],
             handlers: vec![pycc_hir::HirExceptHandler {
@@ -86,6 +87,7 @@ fn direct_type_api_rewrites_every_try_and_raise_operand_path() {
         body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             identity,
             HirItem::TopLevelStmt(HirStmt::Try {
@@ -163,6 +165,7 @@ fn generic_rewrite_fixture(
         is_abstract: false,
     };
     pycc_hir::HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![d_init, producer, HirItem::TopLevelStmt(stmt)],
         type_aliases: vec![],
         imports: vec![],
@@ -308,6 +311,7 @@ fn direct_type_api_propagates_generic_rewrite_errors_from_raise_operands() {
 #[test]
 fn direct_type_api_rejects_bare_return_from_a_value_function() {
     let hir = pycc_hir::HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![pycc_hir::HirItem::Function {
             name: "broken".to_string(),
             params: vec![],

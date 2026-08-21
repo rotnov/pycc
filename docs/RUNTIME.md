@@ -73,6 +73,14 @@ Three consequences:
   `T0021 name \`ValueError\` is not defined`, because the name was absent
   from the class table entirely.
 
+Synthetic versus user-authored is decided by *provenance*, never by a
+definition's shape: HIR lowering records on the `HirModule` that it seeded,
+and the type checker marks a class synthetic if and only if that record says
+this compiler produced it. A class is otherwise indistinguishable -- a user
+`class Exception:` with a single `def __init__(self) -> None: pass` lowers to
+exactly the synthetic `Exception`'s definition, and stays the user's own
+class.
+
 The synthetic `__init__` signature deliberately diverges from CPython's
 `Exception(*args)`: this compiler has no variadic-argument support, and the
 supported surface (`raise ValueError("msg")`) is exactly one `str` message.

@@ -16,6 +16,7 @@ fn try_module(
     finalbody: Vec<HirStmt>,
 ) -> HirModule {
     HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Try {
             body,
             handlers,
@@ -215,6 +216,7 @@ fn lowers_try_with_else_and_finally_to_mir() {
 #[test]
 fn lowers_raise_value_error_to_mir() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Raise {
             exc: Some(HirExpr::Call {
                 callee: "ValueError".to_string(),
@@ -236,6 +238,7 @@ fn lowers_raise_value_error_to_mir() {
 #[test]
 fn lowers_raise_from_to_mir() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Raise {
             exc: Some(HirExpr::Call {
                 callee: "ValueError".to_string(),
@@ -261,6 +264,7 @@ fn lowers_raise_from_to_mir() {
 #[test]
 fn lowers_bare_reraise_to_mir() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Raise {
             exc: None,
             cause: None,
@@ -289,6 +293,7 @@ fn resolve_exception_tag_maps_all_builtin_types() {
 fn lowers_raise_with_no_args_uses_fallback_message() {
     // `raise ValueError()` — no args, should use "unknown" fallback.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Raise {
             exc: Some(HirExpr::Call {
                 callee: "ValueError".to_string(),

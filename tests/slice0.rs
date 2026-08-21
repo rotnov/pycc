@@ -1268,6 +1268,7 @@ fn direct_type_api_rejects_a_for_target_representation_change() {
 #[test]
 fn module_type_api_rejects_a_for_target_representation_change() {
     let hir = pycc_hir::HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![pycc_hir::HirItem::Function {
             name: "loop_over".to_string(),
             params: vec![("value".to_string(), pycc_hir::Ty::Str)],
@@ -1290,6 +1291,7 @@ fn module_type_api_rejects_a_for_target_representation_change() {
 #[test]
 fn direct_type_api_rejects_an_unconstrained_private_parameter() {
     let hir = pycc_hir::HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![pycc_hir::HirItem::Function {
             name: "_unused".to_string(),
             params: vec![("value".to_string(), pycc_hir::Ty::Infer)],
@@ -1309,6 +1311,7 @@ fn direct_type_api_rejects_an_unconstrained_private_parameter() {
 #[test]
 fn direct_type_api_rejects_an_unconstrained_private_return() {
     let hir = pycc_hir::HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![pycc_hir::HirItem::Function {
             name: "_unknown".to_string(),
             params: vec![],
@@ -1329,6 +1332,7 @@ fn direct_type_api_rejects_an_unconstrained_private_return() {
 #[test]
 fn direct_type_api_propagates_an_annotated_binary_result() {
     let hir = pycc_hir::HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![pycc_hir::HirItem::Function {
             name: "_inc".to_string(),
             params: vec![("value".to_string(), pycc_hir::Ty::Infer)],
@@ -1349,6 +1353,7 @@ fn direct_type_api_propagates_an_annotated_binary_result() {
 #[test]
 fn direct_type_api_rejects_incompatible_resolved_binary_operands() {
     let hir = pycc_hir::HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             pycc_hir::HirItem::Function {
                 name: "_bad_add".to_string(),

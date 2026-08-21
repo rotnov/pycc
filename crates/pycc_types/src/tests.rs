@@ -10,6 +10,7 @@ use super::*;
 #[test]
 fn v0_1_slice_always_type_checks() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -25,6 +26,7 @@ fn v0_1_slice_always_type_checks() {
 #[test]
 fn bare_super_in_check_returns_c0001() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![],
@@ -42,6 +44,7 @@ fn bare_super_in_check_returns_c0001() {
 #[test]
 fn concrete_signatures_take_the_validation_only_fast_path() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "identity".to_string(),
             params: vec![("value".to_string(), Ty::Int)],
@@ -63,6 +66,7 @@ fn concrete_signatures_take_the_validation_only_fast_path() {
 #[test]
 fn inferred_signatures_keep_the_constraint_solver_path() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_identity".to_string(),
             params: vec![("value".to_string(), Ty::Infer)],
@@ -80,6 +84,7 @@ fn inferred_signatures_keep_the_constraint_solver_path() {
 #[test]
 fn concrete_fast_path_preserves_solver_first_diagnostic_selection() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "takes_int".to_string(),
@@ -150,6 +155,7 @@ fn constraint_collection_rejects_bound_and_unbound_local_call_targets() {
         ),
     ] {
         let hir = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![HirItem::Function {
                 name: "_caller".to_string(),
                 params: vec![],
@@ -168,6 +174,7 @@ fn constraint_collection_rejects_bound_and_unbound_local_call_targets() {
 #[test]
 fn constraint_collection_skips_already_concrete_call_arguments() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "takes_int".to_string(),
@@ -196,6 +203,7 @@ fn constraint_collection_skips_already_concrete_call_arguments() {
 #[test]
 fn constraint_collection_reuses_a_top_level_for_binding() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "item".to_string(),
@@ -226,6 +234,7 @@ fn constraint_collection_reuses_a_top_level_for_binding() {
 #[test]
 fn constraint_collection_rejects_a_non_integer_top_level_for_binding() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "item".to_string(),
@@ -263,6 +272,7 @@ fn a_list_literal_still_type_checks_correctly_when_an_unrelated_private_helper_f
     // That solver-side pass must stay lenient (`Ok(None)`, recurse only)
     // for list forms -- confirms it doesn't wrongly reject a valid list.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -289,6 +299,7 @@ fn a_heterogeneous_list_literal_is_still_rejected_when_the_solver_path_runs_firs
     // through to the real, list-aware check pass (`check_with_signatures`)
     // that runs after the solver, which is what actually raises T0032.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -314,6 +325,7 @@ fn a_heterogeneous_list_literal_is_still_rejected_when_the_solver_path_runs_firs
 #[test]
 fn a_for_list_loop_still_type_checks_correctly_when_the_solver_path_runs_first() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -352,6 +364,7 @@ fn a_for_list_loop_still_type_checks_correctly_when_the_solver_path_runs_first()
 #[test]
 fn slicing_type_checks_through_the_full_check_pipeline_on_the_fast_path() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -381,6 +394,7 @@ fn slicing_type_checks_through_the_full_check_pipeline_on_the_fast_path() {
 #[test]
 fn slicing_a_list_of_str_is_rejected_through_the_full_check_pipeline() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -412,6 +426,7 @@ fn slicing_type_checks_correctly_when_an_unrelated_private_helper_forces_the_sol
     // wrongly rejecting a valid slice, and that the real check pass
     // (`check_with_signatures`) run afterward still type-checks it.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -450,6 +465,7 @@ fn slicing_a_list_of_str_is_still_rejected_when_the_solver_path_runs_first() {
     // not swallow a genuine `T0034` -- it has to fall through to the
     // real, list-aware check pass that runs after the solver.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -2153,6 +2169,7 @@ fn a_private_helper_can_use_an_annotated_assignment_during_signature_inference()
     // re-check (`check_stmt_in_function`), not just the direct unit
     // tests above.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_helper".to_string(),
             params: vec![],
@@ -2175,6 +2192,7 @@ fn a_private_helper_can_use_an_annotated_assignment_during_signature_inference()
 #[test]
 fn an_annotated_private_local_preserves_known_bool_initializer_evidence() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_identity".to_string(),
@@ -2212,6 +2230,7 @@ fn an_annotated_private_local_preserves_known_bool_initializer_evidence() {
 #[test]
 fn an_annotated_private_local_does_not_retag_the_returned_initializer() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_echo".to_string(),
@@ -2248,6 +2267,7 @@ fn an_annotated_private_local_does_not_retag_the_returned_initializer() {
 #[test]
 fn an_annotated_private_local_supplies_a_fallback_without_call_site_evidence() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_helper".to_string(),
             params: vec![("x".to_string(), Ty::Infer)],
@@ -2278,6 +2298,7 @@ fn an_annotated_private_local_supplies_a_fallback_without_call_site_evidence() {
 #[test]
 fn a_container_annotation_cannot_escape_the_scalar_only_private_solver() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_helper".to_string(),
             params: vec![("x".to_string(), Ty::Infer)],
@@ -2305,6 +2326,7 @@ fn a_container_annotation_cannot_escape_the_scalar_only_private_solver() {
 #[test]
 fn a_container_annotated_target_cannot_resolve_an_inferred_private_return() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_helper".to_string(),
             params: vec![],
@@ -2335,6 +2357,7 @@ fn a_container_annotated_target_cannot_resolve_an_inferred_private_return() {
 #[test]
 fn hard_call_evidence_cannot_turn_a_container_local_into_an_inferred_signature() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_sink".to_string(),
@@ -2377,6 +2400,7 @@ fn hard_call_evidence_cannot_turn_a_container_local_into_an_inferred_signature()
 #[test]
 fn an_unrelated_container_local_does_not_block_scalar_signature_inference() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_helper".to_string(),
@@ -2413,6 +2437,7 @@ fn an_unrelated_container_local_does_not_block_scalar_signature_inference() {
 #[test]
 fn scalar_hard_evidence_on_a_container_local_reaches_final_validation() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_sink".to_string(),
@@ -2455,6 +2480,7 @@ fn scalar_hard_evidence_on_a_container_local_reaches_final_validation() {
 #[test]
 fn an_annotated_private_local_fallback_propagates_through_a_binary_expression() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_helper".to_string(),
             params: vec![("x".to_string(), Ty::Infer)],
@@ -2488,6 +2514,7 @@ fn an_annotated_private_local_fallback_propagates_through_a_binary_expression() 
 #[test]
 fn an_annotated_private_local_fallback_rechecks_binary_operand_conflicts() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_helper".to_string(),
             params: vec![("x".to_string(), Ty::Infer)],
@@ -2522,6 +2549,7 @@ fn an_annotated_private_local_fallback_rechecks_binary_operand_conflicts() {
 #[test]
 fn later_nested_call_evidence_wins_over_an_earlier_annotation_fallback() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_echo".to_string(),
@@ -2586,6 +2614,7 @@ fn multiple_annotation_bounds_choose_bool_in_either_declaration_order() {
         let mut body = assignments;
         body.push(HirStmt::Return(Some(HirExpr::Name("b".to_string()))));
         let hir = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![HirItem::Function {
                 name: "_helper".to_string(),
                 params: vec![("x".to_string(), Ty::Infer)],
@@ -2627,6 +2656,7 @@ fn incompatible_annotation_bounds_fail_identically_in_either_declaration_order()
             vec![int_assignment, string_assignment]
         };
         let hir = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![HirItem::Function {
                 name: "_helper".to_string(),
                 params: vec![("x".to_string(), Ty::Infer)],
@@ -2648,6 +2678,7 @@ fn incompatible_annotation_bounds_fail_identically_in_either_declaration_order()
 #[test]
 fn annotated_private_local_rejects_known_int_to_bool_narrowing_with_t0025() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_narrow".to_string(),
@@ -2679,6 +2710,7 @@ fn annotated_private_local_rejects_known_int_to_bool_narrowing_with_t0025() {
 #[test]
 fn annotated_private_local_binds_when_a_container_subscript_has_no_solver_term() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -2717,6 +2749,7 @@ fn annotated_private_local_binds_when_a_container_subscript_has_no_solver_term()
 #[test]
 fn no_term_initializer_still_reaches_directional_final_validation() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -2751,6 +2784,7 @@ fn no_term_initializer_still_reaches_directional_final_validation() {
 #[test]
 fn constraint_collection_leaves_top_level_return_to_validation() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Return(Some(HirExpr::IntLiteral(1)))),
             HirItem::Function {
@@ -3024,6 +3058,7 @@ fn check_and_resolve_also_rejects_a_top_level_return_with_t0024() {
     // that actually rejects it with T0024, exactly like the
     // `pycc_types::check` entry point already does.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Return(None))],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -3233,6 +3268,7 @@ fn value_less_declaration_still_raises_t0021_on_a_premature_read_at_function_sco
     // must never satisfy `lookup`, so this stays T0021, exactly as an
     // ordinary local without any annotation would.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "f".to_string(),
@@ -3626,6 +3662,7 @@ fn an_annotation_only_declaration_does_not_bind_a_value() {
     // this end-to-end module mirrors
     // tests/diagnostics/d0026_annotation_only_unbound.py exactly).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "f".to_string(),
@@ -3767,6 +3804,7 @@ fn a_for_target_cannot_change_an_existing_binding_representation() {
 #[test]
 fn a_for_target_cannot_change_a_parameter_representation() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "loop_over".to_string(),
             params: vec![("value".to_string(), Ty::Str)],
@@ -3806,6 +3844,7 @@ fn direct_function_check_rejects_a_for_target_representation_change() {
 #[test]
 fn a_private_for_target_infers_an_unannotated_parameter_as_int() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_loop".to_string(),
             params: vec![("value".to_string(), Ty::Infer)],
@@ -4803,6 +4842,7 @@ fn check_accepts_a_module_level_comprehension_whose_target_is_read_afterward() {
     // top-level statement's environment, exactly like an ordinary
     // `Assign`'s binding already does.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::ListCompAssign {
                 target: "xs".to_string(),
@@ -5123,6 +5163,7 @@ fn an_entirely_unannotated_private_helper_containing_a_comprehension_fails_with_
     // literal, confirming it is the same pre-existing gap, not a new one
     // introduced by this statement.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_h".to_string(),
             params: vec![],
@@ -6417,6 +6458,7 @@ fn adding_propagates_an_ill_typed_value_s_error() {
 #[test]
 fn list_pop_type_checks_correctly_when_an_unrelated_private_helper_forces_the_solver_path() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -6446,6 +6488,7 @@ fn list_pop_type_checks_correctly_when_an_unrelated_private_helper_forces_the_so
 fn dict_get_or_default_type_checks_correctly_when_an_unrelated_private_helper_forces_the_solver_path()
  {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "d".to_string(),
@@ -6479,6 +6522,7 @@ fn dict_get_or_default_type_checks_correctly_when_an_unrelated_private_helper_fo
 #[test]
 fn set_add_type_checks_correctly_when_an_unrelated_private_helper_forces_the_solver_path() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "s".to_string(),
@@ -6517,6 +6561,7 @@ fn list_pop_on_a_list_typed_parameter_infers_the_scalar_element_type_inside_an_u
     // misleading "not bound before this use" even though the assignment
     // was textually right above it.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_h".to_string(),
             params: vec![("xs".to_string(), Ty::List(Box::new(Ty::Int)))],
@@ -6551,6 +6596,7 @@ fn dict_get_or_default_assigned_inside_an_unannotated_private_helper_hits_the_pr
     // above, exercised through `DictGetOrDefault`'s own
     // `collect_expr_constraints` arm (also `Ok(None)`) instead.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_h".to_string(),
             params: vec![("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))))],
@@ -6747,6 +6793,7 @@ fn math_sqrt_and_pi_type_check_through_the_constraint_solver_path() {
     // call/name -- this is `inferred_signatures_keep_the_constraint_
     // solver_path`'s own precedent, applied to the new stdlib branch.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_root_plus_pi".to_string(),
             // `x` is annotated (not `Ty::Infer`) deliberately: like
@@ -6782,6 +6829,7 @@ fn math_sqrt_and_pi_type_check_through_the_constraint_solver_path() {
 #[test]
 fn math_sqrt_wrong_arity_is_rejected_by_the_constraint_solver_path() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_bad_call".to_string(),
             params: vec![],
@@ -6803,6 +6851,7 @@ fn math_sqrt_wrong_arity_is_rejected_by_the_constraint_solver_path() {
 #[test]
 fn math_sqrt_wrong_argument_type_is_rejected_by_the_constraint_solver_path() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_bad_call".to_string(),
             params: vec![],
@@ -6824,6 +6873,7 @@ fn math_sqrt_wrong_argument_type_is_rejected_by_the_constraint_solver_path() {
 #[test]
 fn math_pi_called_like_a_function_is_rejected_by_the_constraint_solver_path() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_bad_call".to_string(),
             params: vec![],
@@ -6845,6 +6895,7 @@ fn math_pi_called_like_a_function_is_rejected_by_the_constraint_solver_path() {
 #[test]
 fn math_sqrt_used_as_a_bare_value_is_rejected_by_the_constraint_solver_path() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_bad_ref".to_string(),
             params: vec![],
@@ -6982,6 +7033,7 @@ fn enum_marker_called_like_a_function_is_rejected_as_t0021() {
 #[test]
 fn enum_marker_used_as_a_bare_value_is_rejected_by_the_constraint_solver_path() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_bad_ref".to_string(),
             params: vec![],
@@ -7002,6 +7054,7 @@ fn enum_marker_used_as_a_bare_value_is_rejected_by_the_constraint_solver_path() 
 #[test]
 fn enum_marker_called_like_a_function_is_rejected_by_the_constraint_solver_path() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_bad_call".to_string(),
             params: vec![],
@@ -7078,6 +7131,7 @@ fn math_sqrt_and_pi_are_shadowed_by_a_bound_local_through_the_constraint_solver_
     // (`collect_expr_constraints`) needs the same shadowing guard as
     // `infer_expr_in` above.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_shadowed".to_string(),
             params: vec![("math".to_string(), Ty::Float)],
@@ -7103,6 +7157,7 @@ fn math_pi_bare_reference_is_shadowed_by_a_bound_local_through_the_constraint_so
     // covered by `math_sqrt_and_pi_are_shadowed_by_a_bound_local_
     // through_the_constraint_solver_path` above.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_shadowed_pi".to_string(),
             params: vec![("math".to_string(), Ty::Float)],
@@ -7552,6 +7607,7 @@ fn a_bad_dict_literal_is_still_rejected_when_the_solver_path_runs_first() {
     // signature must not let the solver's own leniency swallow a genuine T0036 --
     // it has to fall through to the real, dict-aware check pass.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -8047,6 +8103,7 @@ fn collect_block_constraints_treats_a_list_comp_assign_target_as_a_no_op() {
     // (mirrors
     // `a_bad_dict_literal_is_still_rejected_when_the_solver_path_runs_first`).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::ListCompAssign {
                 target: "xs".to_string(),
@@ -8095,6 +8152,7 @@ fn private_helper_parameter_is_inferred_through_a_comprehension_s_elt() {
     // accepts the program (`_sink` returns `int`, satisfying the list
     // comprehension's own `T0034` gate).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_sink".to_string(),
@@ -8141,6 +8199,7 @@ fn bind_comp_loop_var_unifies_a_range_comprehension_s_loop_variable_with_an_exis
     // already bound to an inferred term (via forwarding into another
     // annotated helper) before the comprehension re-binds it to `Ty::Int`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_sink".to_string(),
@@ -8190,6 +8249,7 @@ fn collect_block_constraints_unifies_a_range_comprehension_s_stop_forwarded_from
     // unify against `Ty::Int` -- exactly like a plain `for i in
     // range(n):` loop's own `ForRange` arm already does.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_h".to_string(),
             params: vec![("n".to_string(), Ty::Infer)],
@@ -8226,6 +8286,7 @@ fn collect_block_constraints_rejects_a_range_comprehension_whose_stop_was_alread
     // ...)` call must propagate the resulting conflict rather than
     // silently accepting it.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_sink_str".to_string(),
@@ -8276,6 +8337,7 @@ fn collect_block_constraints_rejects_a_range_comprehension_whose_loop_variable_c
     // `Range`'s `Ty::Int` fact genuinely conflicts with the existing
     // binding.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_h".to_string(),
@@ -8319,6 +8381,7 @@ fn collect_block_constraints_gives_a_name_iterable_comprehension_s_loop_variable
     // the subsequent `check_with_signatures` pass's job. Every other
     // solver-path comprehension test above uses `CompIter::Range`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_h".to_string(),
@@ -8357,6 +8420,7 @@ fn collect_block_constraints_visits_a_set_comp_assign_s_cond_and_elt() {
     // that pattern and the `cond.is_some()` branch, both distinct
     // coverage regions from the `ListCompAssign`/`cond: None` case.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_h".to_string(),
@@ -8397,6 +8461,7 @@ fn collect_block_constraints_visits_a_dict_comp_assign_s_cond_key_and_value() {
     // key/value split, not shared with the list/set arm in `lib.rs`), with a
     // `cond` present so its own `cond.is_some()` branch is covered too.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_h".to_string(),
@@ -8438,6 +8503,7 @@ fn collect_block_constraints_visits_a_dict_comp_assign_s_key_and_value_with_no_c
     // arm's `cond.is_none()` branch, which that test's `cond: Some(...)`
     // shape never reaches.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_h".to_string(),
@@ -8487,6 +8553,7 @@ fn collect_block_constraints_propagates_an_error_from_a_range_comprehension_s_st
     // pass), so only a genuine *local-but-not-yet-bound* read actually
     // triggers this solver's own `unbound_local` error.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_h".to_string(),
             params: vec![],
@@ -8531,6 +8598,7 @@ fn collect_block_constraints_keeps_a_name_iterable_comprehension_s_loop_variable
     // would instead reject as unbound, never reaching the
     // comprehension at all).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_h".to_string(),
             params: vec![
@@ -8572,6 +8640,7 @@ fn collect_block_constraints_propagates_an_error_from_a_list_comp_assign_s_cond(
     // to a same-body local, not a plain undefined name, is required to
     // exercise this solver's own error path.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_h".to_string(),
             params: vec![],
@@ -8605,6 +8674,7 @@ fn collect_block_constraints_propagates_an_error_from_a_list_comp_assign_s_cond(
 #[test]
 fn collect_block_constraints_propagates_an_error_from_a_list_comp_assign_s_elt() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_h".to_string(),
             params: vec![],
@@ -8642,6 +8712,7 @@ fn collect_block_constraints_propagates_an_error_from_a_dict_comp_assign_s_loop_
     // failing outright, using the same loop-variable-collision shape as
     // the list-comprehension version above.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_h".to_string(),
@@ -8684,6 +8755,7 @@ fn collect_block_constraints_propagates_an_error_from_a_dict_comp_assign_s_cond(
     // plain undefined name, is required to exercise this solver's own
     // error path (rather than being leniently ignored as `Ok(None)`).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_h".to_string(),
             params: vec![],
@@ -8718,6 +8790,7 @@ fn collect_block_constraints_propagates_an_error_from_a_dict_comp_assign_s_cond(
 #[test]
 fn collect_block_constraints_propagates_an_error_from_a_dict_comp_assign_s_key() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_h".to_string(),
             params: vec![],
@@ -8752,6 +8825,7 @@ fn collect_block_constraints_propagates_an_error_from_a_dict_comp_assign_s_key()
 #[test]
 fn collect_block_constraints_propagates_an_error_from_a_dict_comp_assign_s_value() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_h".to_string(),
             params: vec![],
@@ -9061,6 +9135,7 @@ fn a_bad_set_literal_is_still_rejected_when_the_solver_path_runs_first() {
     // leniency swallow a genuine T0038 -- it has to fall through to the
     // real, set-aware check pass.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -9263,6 +9338,7 @@ fn a_tuple_literal_propagates_an_ill_typed_element_s_error() {
 #[test]
 fn tuple_index_with_a_literal_in_range_int_infers_the_positional_element_type() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "t".to_string(),
@@ -9361,6 +9437,7 @@ fn a_bad_tuple_literal_is_still_rejected_when_the_solver_path_runs_first() {
     // leniency swallow a genuine T0039 -- it has to fall through to the
     // real, tuple-aware check pass.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -9437,6 +9514,7 @@ fn constraint_collection_propagates_an_error_from_a_tuple_literal_element() {
 #[test]
 fn a_top_level_binary_addition_type_checks() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::BinOp {
             op: BinOpKind::Add,
             left: Box::new(HirExpr::IntLiteral(1)),
@@ -9452,6 +9530,7 @@ fn a_top_level_binary_addition_type_checks() {
 #[test]
 fn a_top_level_reference_to_an_undefined_name_is_a_clean_error() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name(
             "undefined".to_string(),
         )))],
@@ -9466,6 +9545,7 @@ fn a_top_level_reference_to_an_undefined_name_is_a_clean_error() {
 #[test]
 fn a_top_level_call_to_a_previously_defined_function_type_checks() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "main".to_string(),
@@ -9492,6 +9572,7 @@ fn a_function_can_call_a_sibling_function_defined_before_it() {
     // ordinary module-level functions -- a valid, non-recursive call
     // between two sibling functions was wrongly rejected with T0021.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "helper".to_string(),
@@ -9529,6 +9610,7 @@ fn a_function_can_call_a_sibling_function_defined_after_it() {
     // from the *other* direction: `main` is checked first (it's first in
     // the module) yet still must see `helper`, which is defined later.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "main".to_string(),
@@ -9568,6 +9650,7 @@ fn a_function_can_read_a_module_level_global_defined_before_it() {
     // bindings to empty, so `f`'s body couldn't see `x` even though it's
     // an ordinary module-level constant, not some caller's local.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -9594,6 +9677,7 @@ fn a_function_can_read_a_module_level_global_defined_after_it() {
     // global defined later in the file is still visible inside an
     // earlier function's body.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "f".to_string(),
@@ -9616,6 +9700,7 @@ fn a_function_can_read_a_module_level_global_defined_after_it() {
 #[test]
 fn a_function_parameter_shadows_a_module_level_global_of_the_same_name() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -9640,6 +9725,7 @@ fn a_function_parameter_shadows_a_module_level_global_of_the_same_name() {
 #[test]
 fn a_later_local_assignment_blocks_fallback_to_a_same_named_global() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -9676,6 +9762,7 @@ fn a_later_local_assignment_blocks_fallback_to_a_same_named_global() {
 #[test]
 fn a_read_before_local_assignment_is_local_even_without_a_global() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![],
@@ -9815,6 +9902,7 @@ fn block_always_returns_treats_a_for_list_loop_as_not_always_returning() {
 #[test]
 fn a_call_before_local_assignment_cannot_fall_back_to_a_global_function() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "helper".to_string(),
@@ -9854,6 +9942,7 @@ fn a_call_before_local_assignment_cannot_fall_back_to_a_global_function() {
 #[test]
 fn a_call_before_local_assignment_cannot_fall_back_to_print() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![],
@@ -9885,6 +9974,7 @@ fn a_call_before_local_assignment_cannot_fall_back_to_print() {
 #[test]
 fn a_bound_local_value_cannot_fall_back_to_a_function_registry_entry() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "helper".to_string(),
@@ -9924,6 +10014,7 @@ fn a_bound_local_value_cannot_fall_back_to_a_function_registry_entry() {
 #[test]
 fn a_parameter_cannot_fall_back_to_a_same_named_builtin() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![("print".to_string(), Ty::Int)],
@@ -10023,6 +10114,7 @@ fn direct_function_check_rejects_calling_a_bound_local_value() {
 #[test]
 fn a_module_value_binding_shadows_a_same_named_function_call() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "helper".to_string(),
@@ -10060,6 +10152,7 @@ fn a_module_value_binding_shadows_a_same_named_function_call() {
 #[test]
 fn a_module_value_binding_shadows_a_builtin_call() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "print".to_string(),
@@ -10086,6 +10179,7 @@ fn a_module_value_binding_shadows_a_builtin_call() {
 #[test]
 fn an_annotated_body_call_sees_the_module_value_binding() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "helper".to_string(),
@@ -10128,6 +10222,7 @@ fn an_annotated_body_call_sees_the_module_value_binding() {
 #[test]
 fn a_private_helper_call_sees_the_module_value_binding() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "helper".to_string(),
@@ -10173,6 +10268,7 @@ fn a_private_helper_call_sees_the_module_value_binding() {
 #[test]
 fn a_rebinding_after_the_only_call_still_rejects_the_body_call() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "helper".to_string(),
@@ -10222,6 +10318,7 @@ fn a_rebinding_after_the_only_call_still_rejects_the_body_call() {
 #[test]
 fn a_shadowed_callee_reports_before_its_argument_errors() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "helper".to_string(),
@@ -10251,6 +10348,7 @@ fn a_shadowed_callee_reports_before_its_argument_errors() {
 #[test]
 fn calling_a_bound_value_that_shadows_nothing_reports_non_callable() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -10284,6 +10382,7 @@ fn calling_a_bound_value_that_shadows_nothing_reports_non_callable() {
 #[test]
 fn a_private_helper_calling_a_shadowed_non_function_needs_the_mirror_gate() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -10317,6 +10416,7 @@ fn a_private_helper_calling_a_shadowed_non_function_needs_the_mirror_gate() {
 #[test]
 fn a_private_helper_calling_a_shadowed_builtin_is_rejected() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "print".to_string(),
@@ -10351,6 +10451,7 @@ fn a_private_helper_calling_a_shadowed_builtin_is_rejected() {
 #[test]
 fn a_compatible_reassignment_after_the_def_shadows_it_again() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "helper".to_string(),
@@ -10394,6 +10495,7 @@ fn a_compatible_reassignment_after_the_def_shadows_it_again() {
 #[test]
 fn a_parameter_colliding_with_a_def_rebound_name_reports_non_callable() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "helper".to_string(),
@@ -10435,6 +10537,7 @@ fn a_parameter_colliding_with_a_def_rebound_name_reports_non_callable() {
 #[test]
 fn a_compatible_reassignment_after_the_def_shadows_it_in_the_solver_too() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "helper".to_string(),
@@ -10481,6 +10584,7 @@ fn a_compatible_reassignment_after_the_def_shadows_it_in_the_solver_too() {
 #[test]
 fn a_value_reassignment_after_the_def_still_enforces_representation() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "helper".to_string(),
@@ -10521,6 +10625,7 @@ fn a_value_reassignment_after_the_def_still_enforces_representation() {
 #[test]
 fn a_later_def_rebinds_over_an_earlier_value_binding() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "helper".to_string(),
@@ -10555,6 +10660,7 @@ fn a_later_def_rebinds_over_an_earlier_value_binding() {
 #[test]
 fn a_body_call_resolves_when_a_later_def_rebinds_the_value() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "helper".to_string(),
@@ -10590,6 +10696,7 @@ fn a_body_call_resolves_when_a_later_def_rebinds_the_value() {
 #[test]
 fn a_private_helper_resolves_when_a_later_def_rebinds_the_value() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "helper".to_string(),
@@ -10626,6 +10733,7 @@ fn a_private_helper_resolves_when_a_later_def_rebinds_the_value() {
 #[test]
 fn a_top_level_call_before_the_shadowing_assignment_still_resolves() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "helper".to_string(),
@@ -10880,6 +10988,7 @@ fn infer_expr_in_super_method_call_propagates_arg_error() {
 #[test]
 fn a_local_first_assignment_does_not_inherit_the_globals_type() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -10909,6 +11018,7 @@ fn a_local_first_assignment_does_not_inherit_the_globals_type() {
 #[test]
 fn a_self_referential_first_local_assignment_cannot_read_the_global() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -10944,6 +11054,7 @@ fn a_self_referential_first_local_assignment_cannot_read_the_global() {
 #[test]
 fn an_assignment_nested_in_if_classifies_the_name_as_function_local() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -10978,6 +11089,7 @@ fn an_assignment_nested_in_if_classifies_the_name_as_function_local() {
 #[test]
 fn a_nested_for_target_classifies_the_name_as_function_local() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "i".to_string(),
@@ -11014,6 +11126,7 @@ fn a_nested_for_target_classifies_the_name_as_function_local() {
 #[test]
 fn a_for_target_is_local_while_its_range_operands_are_evaluated() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "i".to_string(),
@@ -11045,6 +11158,7 @@ fn a_for_target_is_local_while_its_range_operands_are_evaluated() {
 #[test]
 fn private_helper_inference_rejects_a_read_before_local_assignment() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -11095,6 +11209,7 @@ fn check_function_the_public_api_still_has_no_sibling_visibility() {
 #[test]
 fn a_function_body_is_now_checked() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![],
@@ -11659,6 +11774,7 @@ fn a_function_local_if_with_no_else_then_read_is_t0041() {
     // `def f(): if cond: x = 1; return x` -- T0041 (possibly-unbound
     // read in function body).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![("cond".to_string(), Ty::Bool)],
@@ -11687,6 +11803,7 @@ fn a_function_local_if_with_no_else_then_read_is_t0041() {
 fn a_function_local_while_then_read_is_t0041() {
     // `def f(): while cond: x = 1; return x` -- T0041.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![("cond".to_string(), Ty::Bool)],
@@ -11714,6 +11831,7 @@ fn a_function_local_while_then_read_is_t0041() {
 fn a_function_local_both_branches_if_then_read_succeeds() {
     // `def f(): if cond: x = 1 else: x = 2; return x` -- succeeds.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![("cond".to_string(), Ty::Bool)],
@@ -11745,6 +11863,7 @@ fn a_function_local_for_range_then_read_is_t0041() {
     // `def f(): for i in range(3): x = i; return x` -- T0041 (the loop
     // body may execute zero times, so `x` is maybe-bound).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![],
@@ -11776,6 +11895,7 @@ fn a_function_local_for_range_var_then_read_is_t0041() {
     // `def f(): for i in range(3): pass; return i` -- T0041 (the loop
     // variable is maybe-bound after the loop).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![],
@@ -11804,6 +11924,7 @@ fn a_function_local_pre_bound_then_for_range_var_read_succeeds() {
     // `def f(): i = 0; for i in range(3): pass; return i` -- succeeds
     // because `i` was definitely bound before the loop.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![],
@@ -11834,6 +11955,7 @@ fn a_function_local_pre_bound_then_for_range_var_read_succeeds() {
 fn a_function_local_for_list_then_read_is_t0041() {
     // `def f(xs: list[int]): for i in xs: x = i; return x` -- T0041.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![("xs".to_string(), Ty::List(Box::new(Ty::Int)))],
@@ -11864,6 +11986,7 @@ fn a_function_local_pre_bound_for_list_var_survives_as_definite() {
     // succeeds because `i` was definitely bound before the loop
     // (issue #118 Part 1).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![("xs".to_string(), Ty::List(Box::new(Ty::Int)))],
@@ -11894,6 +12017,7 @@ fn a_function_local_maybe_then_definite_upgrade_succeeds() {
     // `x` from the if-body is upgraded to definite by the unconditional
     // `x = 2`, so the return read succeeds.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![("c".to_string(), Ty::Bool)],
@@ -12530,6 +12654,7 @@ fn a_dict_comprehension_s_value_propagates_an_ill_typed_error_in_a_function_body
 #[test]
 fn private_identity_signature_is_inferred_from_its_call_site_and_return() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_identity".to_string(),
@@ -12559,6 +12684,7 @@ fn check_and_resolve_takes_the_fast_path_for_an_already_concrete_valid_module() 
     // Unrelated to this task's list-typing work, but cheap and in-scope
     // to close here rather than leave dangling.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "identity".to_string(),
             params: vec![("value".to_string(), Ty::Int)],
@@ -12577,6 +12703,7 @@ fn check_and_resolve_takes_the_fast_path_for_an_already_concrete_valid_module() 
 #[test]
 fn check_and_resolve_materializes_private_signatures_without_mutating_input() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_identity".to_string(),
@@ -12618,6 +12745,7 @@ fn check_and_resolve_materializes_private_signatures_without_mutating_input() {
 #[test]
 fn annotated_int_result_propagates_back_to_a_private_binary_parameter() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_inc".to_string(),
             params: vec![("value".to_string(), Ty::Infer)],
@@ -12659,6 +12787,7 @@ fn a_public_function_may_return_string_repetition() {
     // Validation-pass consumer: `check` never runs the solver for a
     // fully annotated module.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "banner".to_string(),
             params: vec![("count".to_string(), Ty::Int)],
@@ -12680,6 +12809,7 @@ fn a_public_function_may_return_string_repetition() {
 #[test]
 fn a_public_function_may_return_string_repetition_with_the_count_first() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "banner".to_string(),
             params: vec![("count".to_string(), Ty::Bool)],
@@ -12701,6 +12831,7 @@ fn a_public_function_may_return_string_repetition_with_the_count_first() {
 #[test]
 fn a_public_function_still_cannot_multiply_a_str_by_a_float() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "banner".to_string(),
             params: vec![("count".to_string(), Ty::Float)],
@@ -12726,6 +12857,7 @@ fn a_private_helper_infers_str_from_string_repetition() {
     // are both `Ty::Infer`, so `check_and_resolve` reaches
     // `propagate_binop_constraints`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_rep".to_string(),
@@ -12763,6 +12895,7 @@ fn a_private_helper_infers_str_from_string_repetition() {
 #[test]
 fn a_private_helper_infers_str_with_the_count_on_the_left() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_rep".to_string(),
@@ -12794,6 +12927,7 @@ fn a_private_helper_infers_str_with_the_count_on_the_left() {
 #[test]
 fn a_private_helper_infers_str_from_a_bool_repetition_count() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_rep".to_string(),
@@ -12825,6 +12959,7 @@ fn a_private_helper_infers_str_from_a_bool_repetition_count() {
 #[test]
 fn a_private_helper_still_rejects_a_float_repetition_count() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_rep".to_string(),
@@ -12853,6 +12988,7 @@ fn a_private_helper_still_rejects_a_float_repetition_count() {
 #[test]
 fn a_private_helper_still_rejects_subtracting_an_int_from_a_str() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_rep".to_string(),
@@ -12884,6 +13020,7 @@ fn a_repetition_over_an_undefined_operand_is_still_reported() {
     // diagnostics raised before `numeric_result_type` ever sees a pair
     // of types.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "banner".to_string(),
             params: vec![("count".to_string(), Ty::Int)],
@@ -12911,6 +13048,7 @@ fn a_private_helper_repetition_over_an_undefined_operand_fails_closed() {
     // fails closed with "cannot infer return type" rather than
     // inventing a signature. Repetition does not change that.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_rep".to_string(),
@@ -12941,6 +13079,7 @@ fn a_private_helper_repetition_over_an_undefined_operand_fails_closed() {
 #[test]
 fn annotated_int_result_propagates_back_to_a_right_binary_parameter() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_inc".to_string(),
             params: vec![("value".to_string(), Ty::Infer)],
@@ -12975,6 +13114,7 @@ fn annotated_int_result_propagates_back_to_a_right_binary_parameter() {
 #[test]
 fn annotated_int_result_rejects_a_known_string_left_operand() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_bad".to_string(),
             params: vec![("value".to_string(), Ty::Infer)],
@@ -12995,6 +13135,7 @@ fn annotated_int_result_rejects_a_known_string_left_operand() {
 #[test]
 fn annotated_int_result_rejects_a_known_string_right_operand() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_bad".to_string(),
             params: vec![("value".to_string(), Ty::Infer)],
@@ -13024,6 +13165,7 @@ fn private_parameter_is_inferred_by_forwarding_into_an_annotated_callee() {
     // fail with a spurious "add an annotation" T0021 instead of
     // correctly inferring `x: int` from forwarding into `_sink`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_sink".to_string(),
@@ -13051,6 +13193,7 @@ fn private_parameter_is_inferred_by_forwarding_into_an_annotated_callee() {
 #[test]
 fn private_binary_helper_signature_is_inferred_across_operator_constraints() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_add".to_string(),
@@ -13080,6 +13223,7 @@ fn private_binary_helper_signature_is_inferred_across_operator_constraints() {
 #[test]
 fn private_true_division_helper_infers_a_float_return() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_ratio".to_string(),
@@ -13109,6 +13253,7 @@ fn private_true_division_helper_infers_a_float_return() {
 #[test]
 fn private_helper_without_a_return_infers_none() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_log".to_string(),
             params: vec![],
@@ -13135,6 +13280,7 @@ fn private_helper_without_a_return_infers_none() {
 #[test]
 fn private_helper_with_a_bare_return_infers_none() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_stop".to_string(),
             params: vec![],
@@ -13151,6 +13297,7 @@ fn private_helper_with_a_bare_return_infers_none() {
 #[test]
 fn private_constant_helper_infers_a_float_return() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_constant".to_string(),
             params: vec![],
@@ -13167,6 +13314,7 @@ fn private_constant_helper_infers_a_float_return() {
 #[test]
 fn private_range_helper_infers_its_parameter_as_int() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_loop".to_string(),
             params: vec![("limit".to_string(), Ty::Infer)],
@@ -13199,6 +13347,7 @@ fn private_range_helper_infers_its_parameter_as_int() {
 #[test]
 fn unresolved_private_parameter_requests_an_annotation() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_constant".to_string(),
             params: vec![("unused".to_string(), Ty::Infer)],
@@ -13217,6 +13366,7 @@ fn unresolved_private_parameter_requests_an_annotation() {
 #[test]
 fn unresolved_private_return_requests_an_annotation() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_unknown".to_string(),
             params: vec![],
@@ -13235,6 +13385,7 @@ fn unresolved_private_return_requests_an_annotation() {
 #[test]
 fn undefined_call_cannot_silently_resolve_a_private_return() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_unknown".to_string(),
             params: vec![],
@@ -13254,6 +13405,7 @@ fn undefined_call_cannot_silently_resolve_a_private_return() {
 #[test]
 fn unresolved_binary_operand_cannot_silently_resolve_a_private_return() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_unknown".to_string(),
             params: vec![],
@@ -13274,6 +13426,7 @@ fn unresolved_binary_operand_cannot_silently_resolve_a_private_return() {
 #[test]
 fn unresolved_private_binary_parameters_request_annotations() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_add".to_string(),
             params: vec![
@@ -13297,6 +13450,7 @@ fn unresolved_private_binary_parameters_request_annotations() {
 #[test]
 fn unresolved_call_argument_does_not_invent_a_private_parameter_type() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_identity".to_string(),
@@ -13319,6 +13473,7 @@ fn unresolved_call_argument_does_not_invent_a_private_parameter_type() {
 #[test]
 fn private_parameter_inference_rejects_conflicting_call_sites() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_identity".to_string(),
@@ -13345,6 +13500,7 @@ fn private_parameter_inference_rejects_conflicting_call_sites() {
 #[test]
 fn private_return_inference_rejects_conflicting_return_types() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_choose".to_string(),
             params: vec![("condition".to_string(), Ty::Bool)],
@@ -13376,6 +13532,7 @@ fn nested_private_call_conflict() -> HirExpr {
 
 fn private_constraint_error_fixture(stmt: HirStmt) -> HirModule {
     HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_identity".to_string(),
@@ -13508,6 +13665,7 @@ fn private_slice_base_recursion_pins_an_otherwise_unconstrained_parameter() {
     // `Slice` arm to a bare `Ok(None)` flips this test from `Ok(())` to
     // exactly that `Err`; restoring the real arm makes it pass again.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_id_list".to_string(),
@@ -13549,6 +13707,7 @@ fn private_slice_start_bound_recursion_pins_an_otherwise_unconstrained_parameter
     // call rather than mirroring the brief-review's own bare `xs[x:]`
     // sketch literally.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_id".to_string(),
@@ -13718,6 +13877,7 @@ fn private_assignment_propagates_nested_constraint_errors() {
 #[test]
 fn private_assignment_with_an_unresolved_value_is_checked_after_inference() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_assign".to_string(),
             params: vec![],
@@ -13766,6 +13926,7 @@ fn private_while_test_propagates_nested_constraint_errors() {
 #[test]
 fn private_range_parameter_rejects_a_conflicting_call_site_type() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_loop".to_string(),
@@ -13794,6 +13955,7 @@ fn private_range_parameter_rejects_a_conflicting_call_site_type() {
 #[test]
 fn private_implicit_none_return_rejects_an_int_constrained_call_site() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_noop".to_string(),
@@ -13822,6 +13984,7 @@ fn private_implicit_none_return_rejects_an_int_constrained_call_site() {
 #[test]
 fn private_division_return_rejects_an_int_constrained_call_site() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_ratio".to_string(),
@@ -13854,6 +14017,7 @@ fn private_division_return_rejects_an_int_constrained_call_site() {
 #[test]
 fn private_binary_constraint_rejects_incompatible_resolved_operands() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "_bad_add".to_string(),
@@ -14613,6 +14777,7 @@ fn check_alone_type_checks_a_module_containing_a_valid_generic_function() {
         }],
     }));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, top],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -14633,6 +14798,7 @@ fn check_reports_the_same_generic_diagnostic_as_check_and_resolve() {
         body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![func],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -14655,6 +14821,7 @@ fn check_and_resolve_rejects_a_generic_call_site_with_the_wrong_arity() {
         args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
     }));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity.clone(), top.clone()],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -14662,6 +14829,7 @@ fn check_and_resolve_rejects_a_generic_call_site_with_the_wrong_arity() {
     };
     assert_eq!(check(&hir).unwrap_err().code, "T0021");
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, top],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -14682,6 +14850,7 @@ fn check_and_resolve_rejects_a_type_parameter_nested_in_a_parameter_container() 
         body: vec![HirStmt::Return(None)],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![func],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -14733,6 +14902,7 @@ fn check_and_resolve_monomorphizes_a_nested_generic_call_and_drops_the_original(
     let param = Ty::Param(Box::new("T".to_string()));
     let identity = generic_identity_fn(param.clone(), param);
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             identity,
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
@@ -14812,6 +14982,7 @@ fn monomorphize_lets_a_non_generic_function_read_a_module_global_defined_later_i
         }],
     }));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             identity,
             uses_global.clone(),
@@ -14857,6 +15028,7 @@ fn check_and_resolve_monomorphizes_two_call_sites_at_different_concrete_types_in
         }],
     }));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, call_int, call_str],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -14937,6 +15109,7 @@ fn check_and_resolve_dedupes_two_call_sites_with_the_same_concrete_type() {
         }],
     }));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, use_twice, top],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -14980,6 +15153,7 @@ fn check_and_resolve_monomorphizes_a_generic_function_alongside_an_inferred_priv
         }],
     }));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, helper, use_helper, top],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15026,6 +15200,7 @@ fn an_unannotated_private_helper_fed_a_generic_call_s_result_reports_a_clean_dia
         }],
     }));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, helper, use_helper],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15072,6 +15247,7 @@ fn an_unannotated_private_helper_s_argument_passed_directly_into_a_generic_param
         args: vec![HirExpr::IntLiteral(1)],
     }));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, helper, use_helper],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15109,6 +15285,7 @@ fn an_unannotated_private_helper_s_return_type_fed_directly_from_a_generic_call_
         args: vec![],
     }));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, helper, use_helper],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15149,6 +15326,7 @@ fn check_and_resolve_rewrites_generic_calls_inside_binop_and_compare() {
         }))],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f, g],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15175,6 +15353,7 @@ fn check_and_resolve_rewrites_a_generic_call_inside_an_fstring_interpolation() {
         ])))],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15221,6 +15400,7 @@ fn check_and_resolve_rewrites_generic_calls_inside_list_set_and_tuple_literals()
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15250,6 +15430,7 @@ fn check_and_resolve_rewrites_a_generic_call_inside_a_dict_literal() {
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15301,6 +15482,7 @@ fn check_and_resolve_rewrites_generic_calls_inside_subscript_and_slice() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15344,6 +15526,7 @@ fn check_and_resolve_rewrites_generic_calls_inside_list_append_and_set_add() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15386,6 +15569,7 @@ fn check_and_resolve_rewrites_generic_calls_inside_dict_get_or_default() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15442,6 +15626,7 @@ fn check_and_resolve_rewrites_generic_calls_inside_if_while_and_for_range() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15476,6 +15661,7 @@ fn check_and_resolve_rewrites_a_generic_call_inside_for_list_over_a_list() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15512,6 +15698,7 @@ fn check_and_resolve_rewrites_a_generic_call_inside_for_list_over_a_dict() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15545,6 +15732,7 @@ fn check_and_resolve_rewrites_a_generic_call_inside_for_list_over_a_set() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15585,6 +15773,7 @@ fn check_and_resolve_rewrites_generic_calls_inside_ann_assign_with_and_without_a
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15624,6 +15813,7 @@ fn check_and_resolve_rewrites_generic_calls_inside_a_dict_set_statement() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15694,6 +15884,7 @@ fn check_and_resolve_rewrites_generic_calls_inside_comprehension_assignments() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15727,6 +15918,7 @@ fn check_and_resolve_leaves_a_list_pop_expression_untouched_as_a_structural_leaf
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15756,6 +15948,7 @@ fn monomorphize_propagates_an_instantiation_error_from_inside_a_function_body() 
         })],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15775,6 +15968,7 @@ fn monomorphize_propagates_an_instantiation_error_from_a_top_level_statement() {
         args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
     }));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, top],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15814,6 +16008,7 @@ fn monomorphize_propagates_an_instantiation_error_from_a_dict_comp_assign_cond()
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -15845,6 +16040,7 @@ fn assert_monomorphize_propagates_error(body: Vec<HirStmt>) {
         body,
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -16194,6 +16390,7 @@ fn rewrite_generic_calls_in_stmt_raise_with_no_generic_calls_succeeds() {
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -16221,6 +16418,7 @@ fn rewrite_generic_calls_in_stmt_raise_with_non_generic_cause_succeeds() {
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -16253,6 +16451,7 @@ fn monomorphize_defends_a_for_list_over_a_non_container_binding_defensively() {
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -16284,6 +16483,7 @@ fn monomorphize_defends_a_comprehension_over_a_non_container_binding_defensively
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -16305,6 +16505,7 @@ fn monomorphize_defends_a_comprehension_over_a_non_container_binding_defensively
 fn self_recursive_generic_module() -> HirModule {
     let param = Ty::Param(Box::new("T".to_string()));
     HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "rec".to_string(),
@@ -16688,6 +16889,7 @@ fn check_rejects_a_generic_function_calling_another_generic_function() {
     // `g` is declared *after* `f`, proving the gate does not depend on
     // source order (pass 1 binds every signature before any body runs).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![f, g],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -16734,6 +16936,7 @@ fn a_generic_function_body_can_call_a_non_generic_sibling() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             helper,
             g,
@@ -16763,6 +16966,7 @@ fn check_and_resolve_returns_empty_type_aliases_on_both_paths() {
     let param = Ty::Param(Box::new("T".to_string()));
     let aliases = vec![("MyInt".to_string(), Ty::Int)];
     let non_generic = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![("x".to_string(), Ty::Int)],
@@ -16774,6 +16978,7 @@ fn check_and_resolve_returns_empty_type_aliases_on_both_paths() {
         class_defs: Vec::new(),
     };
     let generic = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             generic_identity_fn(param.clone(), param),
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
@@ -16803,6 +17008,7 @@ fn check_and_resolve_returns_empty_type_aliases_on_both_paths() {
 #[test]
 fn incompatible_redefinition_with_different_param_count_is_rejected() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "foo".to_string(),
@@ -16836,6 +17042,7 @@ fn checked_function_signatures_rejects_incompatible_redefinition() {
     // Exercises the fast path in checked_function_signatures that calls
     // check_incompatible_redefinitions before trying concrete or solver.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "foo".to_string(),
@@ -16868,6 +17075,7 @@ fn checked_function_signatures_rejects_incompatible_redefinition() {
 #[test]
 fn incompatible_redefinition_with_different_return_type_is_rejected() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "foo".to_string(),
@@ -16899,6 +17107,7 @@ fn incompatible_redefinition_with_different_return_type_is_rejected() {
 #[test]
 fn incompatible_redefinition_with_different_param_type_is_rejected() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "foo".to_string(),
@@ -16930,6 +17139,7 @@ fn incompatible_redefinition_with_different_param_type_is_rejected() {
 #[test]
 fn compatible_redefinition_with_same_signature_is_accepted() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "foo".to_string(),
@@ -16967,6 +17177,7 @@ fn check_incompatible_redefinitions_rejects_infer_signature_mismatch() {
     // it unconditionally against check_incompatible_redefinitions's
     // `seen` map correctly flags this as a mismatch.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "foo".to_string(),
@@ -17006,6 +17217,7 @@ fn check_and_resolve_rejects_the_issue_402_reproduction_fixture() {
     // checked_function_signatures, before check_and_resolve ever
     // builds a resolved HIR.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "foo".to_string(),
@@ -17052,6 +17264,7 @@ fn checked_function_signatures_rejects_the_issue_402_reproduction_fixture() {
     // exercised independently rather than relying on one to cover the
     // other.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "foo".to_string(),
@@ -17090,6 +17303,7 @@ fn infer_signature_redefinition_is_rejected_regardless_of_body_evidence() {
     // (Infer, Infer) vs (Str, Str) already disagree, so this is
     // rejected before the solver ever sees the first body.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "foo".to_string(),
@@ -17131,6 +17345,7 @@ fn compatible_infer_signature_redefinition_with_call_site_evidence_is_accepted()
     // return type; without one, this fixture would fail for an
     // unrelated reason ("cannot infer type of parameter").
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "foo".to_string(),
@@ -17168,6 +17383,7 @@ fn check_and_resolve_rejects_incompatible_redefinition_with_infer_signature() {
     // `checked_function_signatures`, reached before `check_and_resolve`
     // ever builds a resolved HIR.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "foo".to_string(),
@@ -17205,6 +17421,7 @@ fn incompatible_redefinition_with_bare_return_type_is_rejected() {
     // only the return position differs by Infer-vs-concrete -- this
     // isolates that the fix triggers on the return position alone.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "foo".to_string(),
@@ -17247,6 +17464,7 @@ fn mangled_method_name_does_not_collide_with_same_named_top_level_function() {
     // same name". Accepting it is a stronger check than accepting two
     // identical signatures would be.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "Foo.bar".to_string(),
@@ -17666,6 +17884,7 @@ fn solver_private_helper_with_maybe_bound_return_does_not_infer_wrong_type() {
     // unification when x is maybe-bound. With an explicit annotation,
     // the validation pass catches T0041 separately (see the next test).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_helper".to_string(),
             params: vec![("cond".to_string(), Ty::Bool)],
@@ -17700,6 +17919,7 @@ fn solver_private_helper_with_annotation_catches_t0041_for_maybe_bound() {
     // doesn't need to infer the return type, so the validation pass
     // runs and catches T0041 for the maybe-bound read of x.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_helper".to_string(),
             params: vec![("cond".to_string(), Ty::Bool)],
@@ -17729,6 +17949,7 @@ fn solver_private_helper_with_both_branches_binding_infers_correctly() {
     // End-to-end: a private helper with both if-branches binding x
     // should infer the return type correctly (x is definitely bound).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_helper".to_string(),
             params: vec![("cond".to_string(), Ty::Bool)],
@@ -17761,6 +17982,7 @@ fn solver_private_helper_with_unconditional_upgrade_infers_correctly() {
     // `x = 2` after the maybe-binding `if` upgrades x to definitely
     // bound, so the solver can infer the return type from `return x`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "_helper".to_string(),
             params: vec![("cond".to_string(), Ty::Bool)],
@@ -17830,6 +18052,7 @@ fn generic_class_module_with_call() -> HirModule {
         is_abstract: false,
     };
     HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
@@ -17918,6 +18141,7 @@ fn check_and_resolve_monomorphizes_a_generic_class_with_no_param_in_methods() {
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
@@ -18003,6 +18227,7 @@ fn check_and_resolve_monomorphizes_the_last_redefined_method_of_a_generic_class(
         body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             fetch_first,
@@ -18095,6 +18320,7 @@ fn check_and_resolve_monomorphizes_a_generic_class_property_getter() {
         }))],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             getter,
@@ -18207,6 +18433,7 @@ fn check_and_resolve_monomorphizes_a_generic_class_property_getter_and_setter() 
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             getter,
@@ -18292,6 +18519,7 @@ fn check_and_resolve_monomorphizes_properties_with_missing_functions() {
     // Note: no getter or setter HirItem::Function in hir.items —
     // the property table references them but they don't exist.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
@@ -18407,6 +18635,7 @@ fn check_and_resolve_dedups_property_getter_and_setter_monomorphization() {
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             getter,
@@ -18441,6 +18670,7 @@ fn type_check_expr_rejects_generic_class_instantiate_for_undefined_class() {
     // Exercises `type_check_expr`'s `GenericClassInstantiate` arm's
     // error path (class not in `env.classes`).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
             HirExpr::GenericClassInstantiate {
                 class: "NoSuchClass".to_string(),
@@ -18510,6 +18740,7 @@ fn reject_generic_calls_in_expr_handles_generic_class_instantiate() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             generic_fn,
@@ -19041,6 +19272,7 @@ fn instantiate_generic_class_methods_skips_a_nonexistent_class() {
     // `instantiate_generic_class_methods` should `continue` past it
     // (the `let Some(class_def) = ... else { continue }` arm).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
             HirExpr::GenericClassInstantiate {
                 class: "Ghost".to_string(),
@@ -19123,6 +19355,7 @@ fn check_and_resolve_monomorphizes_a_generic_class_with_self_typed_method() {
         is_abstract: false,
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             merge,
@@ -19235,6 +19468,7 @@ fn check_and_resolve_monomorphizes_a_generic_class_with_control_flow_methods() {
         is_abstract: false,
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             process,
@@ -19324,6 +19558,7 @@ fn check_and_resolve_monomorphizes_generic_class_instantiation_inside_a_function
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![init, caller],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -19351,6 +19586,7 @@ fn check_and_resolve_dedupes_identical_generic_class_instantiations() {
     let hir = generic_class_module_with_call();
     // Add a second call site.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: hir
             .items
             .into_iter()
@@ -19379,6 +19615,7 @@ fn check_and_resolve_monomorphizes_two_different_type_args_into_distinct_classes
     // C[int](1) and C[str](1) should produce two monomorphized classes.
     let hir = generic_class_module_with_call();
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: hir
             .items
             .into_iter()
@@ -19447,6 +19684,7 @@ fn is_assignable_param_clause_accepts_scalar_assignment_in_generic_method() {
         is_abstract: false,
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![init],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -19474,6 +19712,7 @@ fn check_and_resolve_rejects_generic_class_instantiate_for_undefined_class() {
     // Since `check` rejects undefined classes first, this test verifies
     // that `check` catches it (T0001), which is the user-facing behavior.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
             HirExpr::GenericClassInstantiate {
                 class: "Ghost".to_string(),
@@ -19542,6 +19781,7 @@ fn check_and_resolve_rejects_generic_class_instantiate_for_non_generic_class() {
         body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             d_init,
             identity,
@@ -19617,6 +19857,7 @@ fn instantiate_generic_class_methods_skips_non_generic_class_instantiation() {
         body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             identity,
@@ -19694,6 +19935,7 @@ fn instantiate_generic_class_methods_skips_class_not_in_class_defs() {
     // with a hand-built HIR that has a GCI for a class not in
     // `class_defs`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
             HirExpr::GenericClassInstantiate {
                 class: "Ghost".to_string(),
@@ -19772,6 +20014,7 @@ fn instantiate_generic_class_methods_skips_non_function_method_item() {
         body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             identity,
@@ -19830,6 +20073,7 @@ fn instantiate_generic_class_methods_skips_nonexistent_static_method_function() 
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
@@ -19887,6 +20131,7 @@ fn instantiate_generic_class_methods_skips_nonexistent_class_method_function() {
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
@@ -19967,6 +20212,7 @@ fn collect_expr_constraints_propagates_error_from_generic_class_instantiate_arg(
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             // Top-level assignment creates a non-callable binding `y`
@@ -20031,6 +20277,7 @@ fn is_assignable_accepts_a_scalar_assigned_to_a_param_typed_attribute() {
         is_abstract: false,
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
@@ -20130,6 +20377,7 @@ fn reject_generic_calls_in_expr_propagates_error_from_generic_class_instantiate_
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![init, g],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -20198,6 +20446,7 @@ fn instantiate_generic_class_methods_skips_duplicate_method_entry() {
         body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             identity,
@@ -20331,6 +20580,7 @@ fn check_and_resolve_rewrites_a_generic_class_instantiate_inside_a_generic_class
         is_abstract: false,
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             box_init,
             maker_init,
@@ -20484,6 +20734,7 @@ fn check_and_resolve_propagates_an_error_from_pass_2b_rewrite() {
         is_abstract: false,
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             d_init,
             maker_init,
@@ -20736,6 +20987,7 @@ fn generic_class_with_static_and_class_methods() -> HirModule {
         is_abstract: false,
     };
     HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             static_fn,
@@ -20857,6 +21109,7 @@ fn instantiate_generic_class_methods_skips_duplicate_static_method_entry() {
         is_abstract: false,
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             static_fn,
@@ -20930,6 +21183,7 @@ fn instantiate_generic_class_methods_skips_duplicate_class_method_entry() {
         is_abstract: false,
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             class_fn,
@@ -23667,6 +23921,7 @@ fn reject_generic_calls_in_stmt_rejects_a_generic_call_in_a_match_subject() {
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -23696,6 +23951,7 @@ fn reject_generic_calls_in_stmt_rejects_a_generic_call_in_a_match_guard() {
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -23725,6 +23981,7 @@ fn reject_generic_calls_in_stmt_rejects_a_generic_call_in_a_match_body() {
         }],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, f],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -25035,6 +25292,7 @@ fn monomorphize_propagates_an_instantiation_error_from_a_subscript_index() {
         }),
     }));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![identity, top],
         type_aliases: Vec::new(),
         imports: Vec::new(),

@@ -33,6 +33,56 @@ never a merge gate.
 
 ---
 
+## 2026-08-22 — Structural equality was used as a provenance proxy, and its own doc comment argued the wrong premise
+
+**What happened.** Part 1 of #541 needed to tell a compiler-synthesized
+builtin exception class apart from a user-authored class of the same name.
+`pycc_hir::exception::is_builtin_exception_class_def` answered that by
+comparing the `HirClassDef` for structural equality against a cached copy of
+`builtin_exception_class_defs()`. Its doc comment asserted the check was
+"sufficient and exact", and the D-188 rejected-alternatives section repeated
+the claim. It was wrong: a user `class Exception:` whose body is only
+`def __init__(self) -> None: pass` lowers to a definition byte-for-byte
+identical to the synthetic one, so it was marked synthetic,
+`is_user_defined_class` reported the name as *not* user-defined, and the
+builtin-exception paths took the user's own class over — `Exception()`
+compiled at the base commit and was rejected with `C0001` after. Reviewer-
+found on PR #710 and confirmed empirically against a base-commit binary
+before any fix was attempted.
+
+**Root cause.** The exactness argument was made from a premise that does not
+cover the failing case. It argued that seeding is all-or-nothing, so a
+synthetic definition and a same-named user class are never co-present *in one
+module*. True, and irrelevant: the module that breaks it has no synthetic
+entries at all, because it *shadows* one of the seven names and was therefore
+never seeded. The premise reasoned about co-presence; the check is applied to
+every module, seeded or not. A stated invariant was accepted as covering the
+whole input domain without checking which inputs it actually ranges over.
+
+**What fixed it.** Recording provenance at the step that creates the value:
+`lower_checked` now sets `HirModule::seeded_builtin_exception_classes` at the
+point it seeds, `bind_classes` marks membership from that record, and
+`is_builtin_exception_class_def` is deleted rather than left as a dead public
+helper. The new tests assert both halves together — the fixture is still
+structurally identical to the synthetic definition *and* is not marked
+synthetic — so the property cannot pass vacuously if the synthetic shape
+changes later.
+
+**Lesson.** *A value's shape is never evidence of its origin.* When code needs
+to know who produced a value — compiler-synthesized versus user-authored,
+generated versus hand-written, trusted versus untrusted — record that fact at
+the point of creation and carry it; do not reconstruct it by comparing the
+value against what the producer would have made. The cost of carrying a flag
+through a struct is mechanical and one-time; the cost of a wrong provenance
+answer is a silent behavior change on someone's valid program. And when
+writing a doc comment that argues a check is exact, state the input domain
+the argument ranges over and check that it is the domain the check actually
+runs on — an exactness claim whose premise is about a *different* set of
+inputs than the callers supply is the shape this defect took, and it survived
+review precisely because the premise it stated was itself true.
+
+---
+
 ## 2026-08-21 — A per-module cost was cleared against an absolute budget that cannot see it
 
 **What happened.** Part 1 of #541 (`789afe51`) added a fixed per-module cost:

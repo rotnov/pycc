@@ -13,7 +13,7 @@ pub use class::{HirClassDef, PropertyDef, ProtocolMember};
 pub use exception::{
     BUILTIN_EXCEPTION_CLASSES, EXCEPTION_INIT_MANGLED_NAME, HirExceptHandler,
     builtin_exception_class_defs, builtin_exception_init_item, builtin_exception_parent,
-    is_builtin_exception_class, is_builtin_exception_class_def,
+    is_builtin_exception_class,
 };
 pub(crate) use func::{
     annotation_to_ty, lower_arg_list, lower_function, lower_return_annotation, type_param_name,
@@ -745,6 +745,20 @@ pub struct HirModule {
     /// `class::lower_class`'s own doc comment for the mangling scheme and
     /// the reasoning for not adding a dedicated `HirItem::ClassDef` variant).
     pub class_defs: Vec<(String, HirClassDef)>,
+    /// Provenance for the builtin exception hierarchy (Part 1 of #541,
+    /// D-188): `true` exactly when *this* lowering pass seeded the seven
+    /// `BUILTIN_EXCEPTION_CLASSES` entries into `class_defs`, and `false`
+    /// for every module whose classes are all user-authored.
+    ///
+    /// Seeding is all-or-nothing and its shadow gate guarantees no user
+    /// top-level binding of any of the seven names survives alongside it,
+    /// so this single flag plus `is_builtin_exception_class` identifies the
+    /// synthetic entries exactly -- see `pycc_types`'s `bind_classes`.
+    /// Provenance is recorded here rather than re-derived downstream
+    /// because *no* property of a `HirClassDef`'s own shape is a sound
+    /// proxy for who produced it: a user can author a class that is
+    /// byte-for-byte identical to a synthetic one.
+    pub seeded_builtin_exception_classes: bool,
 }
 
 /// Lowers a parsed module into the HIR subset implemented by this pycc
@@ -780,9 +794,10 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     //   That gate is all-or-nothing, so every existing name-collision check
     //   below applies to the synthetic definitions with no exemption -- see
     //   `exception::module_shadows_builtin_exception_name`.
-    if exception::module_references_builtin_exception_name(module)
-        && !exception::module_shadows_builtin_exception_name(module)
-    {
+    let seeded_builtin_exception_classes =
+        exception::module_references_builtin_exception_name(module)
+            && !exception::module_shadows_builtin_exception_name(module);
+    if seeded_builtin_exception_classes {
         class_defs.extend(builtin_exception_class_defs());
     }
     // Seeded at the *front* so every lookup below (base resolution,
@@ -984,6 +999,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
         type_aliases: aliases,
         imports,
         class_defs,
+        seeded_builtin_exception_classes,
     })
 }
 
