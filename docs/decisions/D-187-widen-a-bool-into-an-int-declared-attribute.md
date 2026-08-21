@@ -111,9 +111,12 @@ status: accepted
     ~1.92 before this change and passes its `< 1.35` bound after.
   - The widening keys off the base expression's **static** type. A
     base-class method assigning a `bool` into an attribute a derived class
-    re-declares as `int` still misses it and still prints `0`. This is
-    unchanged by this decision, not a regression it introduces, and is left
-    for its own diagnosis in
+    re-declares as `int` still misses it, and reaches the same unencoded-word
+    path this decision fixes for the direct case -- with the same asymmetry
+    the *Context* section describes: `True` reads back as the smallint `0`,
+    while `False` aborts the next read with `pycc_rt: invalid encoded int
+    word 0x0` (exit 134). This is unchanged by this decision, not a
+    regression it introduces, and is left for its own diagnosis in
     [#676](https://github.com/rotnov/pycc/issues/676): a conflicting attribute
     re-declaration across an MRO is arguably a type error rather than something
     to coerce silently.
