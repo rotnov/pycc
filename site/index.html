@@ -10,6 +10,9 @@
       content="pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM; AI-created and human-managed."
     >
     <meta name="author" content="pycc AI agents">
+    <meta name="pycc:evidence-id" content="landing-quick-start-v1">
+    <meta name="pycc:evidence-kind" content="native-build-output">
+    <meta name="pycc:evidence-state" content="all-Tier-1">
     <meta
       name="google-site-verification"
       content="JYWBkUpaYuJgPDksjf5oGOn49o8X41PqUxS--u-eF24"
@@ -31,6 +34,9 @@
     <meta
       property="og:description"
       content="A pre-alpha AOT compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM, created by AI and managed by a human."
+      data-evidence-id="landing-quick-start-v1"
+      data-evidence-kind="native-build-output"
+      data-evidence-state="all-Tier-1"
     >
     <meta property="og:image" content="https://rotnov.github.io/pycc/og.png">
     <meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
@@ -40,6 +46,9 @@
     <meta
       name="twitter:description"
       content="A pre-alpha AOT compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM, created by AI and managed by a human."
+      data-evidence-id="landing-quick-start-v1"
+      data-evidence-kind="native-build-output"
+      data-evidence-state="all-Tier-1"
     >
     <meta name="twitter:image" content="https://rotnov.github.io/pycc/og.png">
     <meta name="twitter:image:alt" content="pycc — typed Python in, native binaries out">
@@ -55,7 +64,24 @@
             "name": "pycc — AOT compiler for typed Python to native binaries",
             "description": "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM; AI-created and human-managed.",
             "inLanguage": "en",
-            "dateModified": "2026-08-20",
+            "dateModified": "2026-08-21",
+            "additionalProperty": [
+              {
+                "@type": "PropertyValue",
+                "propertyID": "pycc:evidence-id",
+                "value": "landing-quick-start-v1"
+              },
+              {
+                "@type": "PropertyValue",
+                "propertyID": "pycc:evidence-kind",
+                "value": "native-build-output"
+              },
+              {
+                "@type": "PropertyValue",
+                "propertyID": "pycc:evidence-state",
+                "value": "all-Tier-1"
+              }
+            ],
             "mainEntity": {
               "@id": "https://rotnov.github.io/pycc/#project"
             }
@@ -109,7 +135,14 @@
     </header>
 
     <main id="main-content">
-      <section class="hero" aria-labelledby="hero-title">
+      <section
+        class="hero"
+        aria-labelledby="hero-title"
+        data-evidence-role="hero"
+        data-evidence-id="landing-quick-start-v1"
+        data-evidence-kind="native-build-output"
+        data-evidence-state="all-Tier-1"
+      >
         <div class="hero-copy">
           <p class="eyebrow">
             <span class="signal" aria-hidden="true"></span>
@@ -171,7 +204,12 @@ i = <span class="code-number">0</span>
                 <span></span><span></span><span></span>
               </div>
               <span>$ ./hello</span>
-              <span class="evidence-state" data-evidence-state="all-Tier-1">all-Tier-1</span>
+              <span
+                class="evidence-state"
+                data-evidence-id="landing-quick-start-v1"
+                data-evidence-kind="native-build-output"
+                data-evidence-state="all-Tier-1"
+              >all-Tier-1</span>
             </div>
             <pre><code>0
 1
@@ -185,15 +223,43 @@ i = <span class="code-number">0</span>
 34
 55</code></pre>
           </div>
-          <p class="hero-provenance">
-            Source: <a href="https://github.com/rotnov/pycc/blob/main/tests/fixtures/quick_start.py"><code>tests/fixtures/quick_start.py</code></a>.
-            Output verified on every test run by
-            <a href="https://github.com/rotnov/pycc/blob/main/tests/quick_start.rs"><code>tests/quick_start.rs</code></a>.
-            Limitations: this compiles only the implemented v0.1 subset —
-            statement-form <code>if</code> and <code>while</code>, recursive
-            calls, and <code>print</code>; classes, exceptions, generators, and
-            imports are not compiled yet.
+          <p
+            class="hero-provenance"
+            data-evidence-id="landing-quick-start-v1"
+            data-evidence-kind="native-build-output"
+            data-evidence-state="all-Tier-1"
+          >
+            Source: <a href="https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.py"><code>tests/fixtures/quick_start.py</code></a>.
+            Snapshot: <a href="https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.expected.txt"><code>tests/fixtures/quick_start.expected.txt</code></a>.
+            Test: <a href="https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/quick_start.rs"><code>tests/quick_start.rs::quick_start_fixture_builds_and_prints_the_documented_sequence</code></a>.
+            Accepted at <a href="https://github.com/rotnov/pycc/commit/8ccc05b51477c23711d2cefce3eb9128aab1162a"><code>8ccc05b</code></a>
+            in <a href="https://github.com/rotnov/pycc/actions/runs/32419646184">CI run 32419646184</a>
+            on all five Tier-1 targets (Linux x64/arm64, macOS x64/arm64,
+            Windows x64), with CPython 3.14.7, Rust 1.97.1, LLVM 22, the debug
+            profile, and no extra compiler flags. Limitations: This compiles
+            only the implemented v0.1 subset: statement-form <code>if</code>
+            and <code>while</code>, recursive calls, and <code>print</code>. It
+            does not prove support for classes, exceptions, generators, or
+            imports.
           </p>
+          <details class="hero-evidence-details">
+            <summary>Artifact integrity and five Tier-1 CI jobs</summary>
+            <dl>
+              <dt>Source SHA-256</dt>
+              <dd><code>09f7f6732d6837a0e7a91298eea549b0bdcba77d4908839ce1878955f4a0f043</code></dd>
+              <dt>Test SHA-256</dt>
+              <dd><code>80f91b88d00598a8697c2988b64b2be60166c5067035c7ec57a295f10d9caadb</code></dd>
+              <dt>Stdout SHA-256</dt>
+              <dd><code>668cec0e1f32369a43d6f74b1e795fe37f1e46bdb8eb0d7712b35c7e95e173e6</code></dd>
+            </dl>
+            <ul>
+              <li><a href="https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686638"><code>macos-14 · aarch64-apple-darwin</code></a></li>
+              <li><a href="https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686654"><code>macos-15-intel · x86_64-apple-darwin</code></a></li>
+              <li><a href="https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686701"><code>ubuntu-latest · x86_64-unknown-linux-gnu</code></a></li>
+              <li><a href="https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686726"><code>ubuntu-24.04-arm · aarch64-unknown-linux-gnu</code></a></li>
+              <li><a href="https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588687208"><code>windows-latest · x86_64-pc-windows-msvc</code></a></li>
+            </ul>
+          </details>
         </div>
       </section>
 

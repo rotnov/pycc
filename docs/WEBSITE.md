@@ -416,13 +416,77 @@ markup must open as `<pre><code>0` with no newline after `<code>`: HTML
 preserves it, and it would become a leading blank line the fixture does not
 have.
 
-Full HTML/Markdown parity for the new output pane and provenance note is
-[#206](https://github.com/rotnov/pycc/issues/206)'s scope; the generated
-evidence-hero contract that owns the `all-Tier-1` / `partial` / `experimental`
-/ `unavailable` / `superseded` evidence-state vocabulary reused by the hero
-marker is [#564](https://github.com/rotnov/pycc/issues/564)'s, and a dedicated
-Diagnostics evidence page is
-[#565](https://github.com/rotnov/pycc/issues/565)'s.
+Full HTML/Markdown parity for the output pane and provenance note remains
+[#206](https://github.com/rotnov/pycc/issues/206)'s semantic source contract.
+The shared evidence-hero mechanism is implemented by
+`site/evidence-heroes.json`, `scripts/check-site.sh`, and
+`scripts/test-check-site.sh` under [#564](https://github.com/rotnov/pycc/issues/564)
+and D-186. Dedicated Language Support and Diagnostics pages remain
+[#565](https://github.com/rotnov/pycc/issues/565)'s scope.
+
+## Versioned evidence-hero contract
+
+`site/evidence-heroes.json` schema version `1.0.0` is the canonical ordered
+inventory for the landing, language, diagnostics, performance, architecture,
+status, comparison, and provenance heroes. Every record has the same required
+field set and one allowlisted evidence kind. The state vocabulary is closed:
+`all-Tier-1`, `partial`, `experimental`, `unavailable`, or `superseded`.
+Missing, delayed, unaccepted, or not-yet-authored proof is `unavailable`; it is
+never rewritten as a zero, a failure, or a decorative terminal transcript.
+
+The landing record is the only accepted evidence hero in version 1. It binds
+`tests/fixtures/quick_start.py`,
+`tests/quick_start.rs::quick_start_fixture_builds_and_prints_the_documented_sequence`,
+and `tests/fixtures/quick_start.expected.txt` to their canonical LF SHA-256
+identities and to the same bytes at exact commit
+`8ccc05b51477c23711d2cefce3eb9128aab1162a`. Its accepted attestation is exact
+CI run `32419646184`: the coverage runner plus the four native matrix jobs
+cover Linux x64/arm64, macOS x64/arm64, and Windows x64 with CPython 3.14.7,
+Rust 1.97.1, LLVM 22, the debug profile, and no extra compiler flags. The hero
+links to the exact source, test, snapshot, commit, run, and five jobs, not to a
+moving `main` branch.
+
+The other seven records remain explicitly `unavailable`. Language,
+Diagnostics, and Performance have no published route until #565/#567 provide
+real artifacts. Architecture, Status, Comparison, and Provenance retain their
+useful explanatory pages, but the first screen now says that its unique
+commit-bound hero is unavailable and links to the responsible issue. This
+state does not invalidate the pages' separately owned semantic source
+contracts; it prevents those contracts from being mistaken for the unique
+fixture/run proof required by the evidence-first redesign. #566 owns the
+Architecture and Status artifacts, #563 coordinates the Comparison hero, and
+#217 owns the sanitized immutable Provenance record.
+
+The validator is hermetic. It reads only the checkout, the local Git object
+database, and the manifest; it never calls GitHub or another provider and
+stores no credential, cookie, account identity, session, or private trace. It
+requires the exact eight-record inventory, field set, kinds, states, null
+shape for unavailable evidence, artifact paths, digests, test name, command,
+stdout, commit, reviewed run/platform tuple, immutable URLs, environment, and
+limitations. Local artifact bytes must match both their manifest digests and
+the same blobs resolved from the exact evidence commit. Changing a source and
+snapshot together therefore cannot create a new accepted proof without also
+changing the reviewed allowlist and projections.
+
+HTML carries one visible `data-evidence-role="hero"` tuple, matching custom
+metadata, Open Graph/X description attributes, and WebPage JSON-LD
+`additionalProperty` values. `site/index.html.md` and `site/llms.txt` carry one
+exact inventory marker for every record and the landing artifact details. The
+landing HTML, Markdown, and LLM projections must each contain the command,
+exact stdout, artifact paths and SHA-256 identities, full commit and run,
+environment, limitations, immutable links, and every Tier-1 job tuple. A
+projection may not claim a stronger state than its manifest record.
+
+Mutation tests remove every required field from the accepted record, replace
+each of the eight evidence kinds, add invented output to every unavailable
+record, mix a diagnostic snapshot with the landing source, drift commit or
+platform data, replace an exact link with `main`, delete the fixture/test/
+snapshot or one inventory record, and independently overstate HTML, Markdown,
+LLM, JSON-LD, and social metadata. Every case must fail the same canonical
+site gate. Accepting a child issue's hero requires filling its null fields,
+adding a reviewed immutable attestation tuple, projecting every required
+surface, updating D-186 through a superseding decision when the versioned
+contract changes, and extending both positive and negative mutations.
 
 ## Status-page freshness enforcement
 

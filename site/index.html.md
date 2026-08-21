@@ -18,6 +18,58 @@ constraints.
 
 Compile typed Python to a native binary · pre-alpha.
 
+## Evidence hero inventory
+
+The versioned [evidence-hero manifest](https://rotnov.github.io/pycc/evidence-heroes.json)
+is the canonical machine-readable inventory. An unavailable state means the
+explanatory page may exist, but its unique fixture-backed hero has not been
+accepted; it never means a zero or a failed measurement.
+
+<!-- evidence-hero: landing | landing-quick-start-v1 | native-build-output | all-Tier-1 | / -->
+- **Home:** `all-Tier-1` — real source → build → native binary → stdout evidence.
+<!-- evidence-hero: language | language-support-v1 | language-conformance | unavailable | /language-support/ -->
+- **Language support:** `unavailable` — fixture-backed CPython comparison is tracked in [#565](https://github.com/rotnov/pycc/issues/565).
+<!-- evidence-hero: diagnostics | diagnostics-v1 | compiler-diagnostic | unavailable | /diagnostics/ -->
+- **Diagnostics:** `unavailable` — exact compiler diagnostic projection is tracked in [#565](https://github.com/rotnov/pycc/issues/565).
+<!-- evidence-hero: performance | performance-v1 | benchmark | unavailable | /performance/ -->
+- **Performance:** `unavailable` — reproducible benchmark evidence is tracked in [#567](https://github.com/rotnov/pycc/issues/567).
+<!-- evidence-hero: architecture | architecture-trace-v1 | compiler-pipeline-trace | unavailable | /architecture/ -->
+- **Architecture:** `unavailable` — the explanatory page is live; its fixture-derived trace is tracked in [#566](https://github.com/rotnov/pycc/issues/566).
+<!-- evidence-hero: status | status-snapshot-v1 | required-checks-snapshot | unavailable | /status/ -->
+- **Status:** `unavailable` — the explanatory page is live; its commit-bound checks snapshot is tracked in [#566](https://github.com/rotnov/pycc/issues/566).
+<!-- evidence-hero: comparison | comparison-sources-v1 | source-backed-comparison | unavailable | /python-aot-compilers/ -->
+- **Comparison:** `unavailable` — the source-backed table is live; its shared commit-bound hero remains tracked in [#563](https://github.com/rotnov/pycc/issues/563).
+<!-- evidence-hero: provenance | ai-provenance-v1 | authorship-attestation | unavailable | /ai-native/ -->
+- **AI provenance:** `unavailable` — the policy page is live; its sanitized immutable hero record is tracked in [#217](https://github.com/rotnov/pycc/issues/217).
+
+### Accepted landing evidence
+
+- Evidence ID/kind/state: `landing-quick-start-v1` / `native-build-output` / `all-Tier-1`.
+- Fixture: [`tests/fixtures/quick_start.py`](https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.py).
+- Test: [`tests/quick_start.rs::quick_start_fixture_builds_and_prints_the_documented_sequence`](https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/quick_start.rs).
+- Commands: `pycc build hello.py -o hello`, then `./hello`; debug profile, no extra compiler flags.
+- Exact stdout: [`tests/fixtures/quick_start.expected.txt`](https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.expected.txt).
+
+```text
+0
+1
+1
+2
+3
+5
+8
+13
+21
+34
+55
+```
+
+- Canonical LF SHA-256: source `09f7f6732d6837a0e7a91298eea549b0bdcba77d4908839ce1878955f4a0f043`; test `80f91b88d00598a8697c2988b64b2be60166c5067035c7ec57a295f10d9caadb`; stdout `668cec0e1f32369a43d6f74b1e795fe37f1e46bdb8eb0d7712b35c7e95e173e6`.
+- Revision/attestation: commit [`8ccc05b`](https://github.com/rotnov/pycc/commit/8ccc05b51477c23711d2cefce3eb9128aab1162a), [CI run 32419646184](https://github.com/rotnov/pycc/actions/runs/32419646184).
+- Environment: all five Tier-1 targets (Linux x64/arm64, macOS x64/arm64, Windows x64), CPython 3.14.7, Rust 1.97.1, LLVM 22.
+- Tier-1 jobs: [`macos-14 · aarch64-apple-darwin`](https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686638); [`macos-15-intel · x86_64-apple-darwin`](https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686654); [`ubuntu-latest · x86_64-unknown-linux-gnu`](https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686701); [`ubuntu-24.04-arm · aarch64-unknown-linux-gnu`](https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686726); [`windows-latest · x86_64-pc-windows-msvc`](https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588687208).
+- Limitations: This compiles only the implemented v0.1 subset: statement-form `if` and `while`, recursive calls, and `print`. It does not prove support for classes, exceptions, generators, or imports.
+
 ## Design contract
 
 - **3.14** — Standard Python target

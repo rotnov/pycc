@@ -192,3 +192,4 @@ current.
 | [D-183](./D-183-honor-cargo-target-dir-when-locating-build.md) | Honor CARGO_TARGET_DIR when locating build artifacts | accepted |
 | [D-184](./D-184-build-pycc-rt-from-pycc-codegen-s-build.md) | Build pycc_rt from pycc_codegen's build script | accepted |
 | [D-185](./D-185-permit-a-dedicated-tracking-issue-per-oversized.md) | Permit a dedicated tracking issue per oversized source file, without weakening the same-change decomposition rule | accepted |
+| [D-186](./D-186-bind-evidence-heroes-to-an-offline-versioned.md) | Bind evidence heroes to an offline versioned manifest with reviewed immutable attestations | accepted |
