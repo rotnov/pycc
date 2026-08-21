@@ -1,0 +1,304 @@
+//! Statement lowering (`stmt::lower_stmt`).
+//!
+//! Covers `if`, `while`, `for ... in range(...)`, `return`, and annotated
+//! assignment, including the bool-to-int widening an annotation forces and
+//! the value-less annotation that binds nothing.
+
+use crate::*;
+use pycc_hir::{CmpOpKind, HirExpr, HirItem, HirModule, HirStmt, Ty};
+
+#[test]
+fn builds_an_if_statement_lowering_both_branches() {
+    let hir = HirModule {
+        items: vec![HirItem::TopLevelStmt(HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            })],
+            orelse: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::IntLiteral(2)],
+            })],
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![MirItem::TopLevelStmt(MirStmt::If {
+            test: MirExpr::BoolLiteral(true),
+            body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::IntLiteral(1)],
+                ty: Ty::None,
+            })],
+            orelse: vec![MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::IntLiteral(2)],
+                ty: Ty::None,
+            })],
+        })]
+    );
+}
+
+#[test]
+fn builds_a_while_loop() {
+    let hir = HirModule {
+        items: vec![HirItem::TopLevelStmt(HirStmt::While {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            })],
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![MirItem::TopLevelStmt(MirStmt::While {
+            test: MirExpr::BoolLiteral(true),
+            body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::IntLiteral(1)],
+                ty: Ty::None,
+            })],
+        })]
+    );
+}
+
+#[test]
+fn builds_a_for_range_loop_binding_its_variable_as_int() {
+    let hir = HirModule {
+        items: vec![HirItem::TopLevelStmt(HirStmt::ForRange {
+            var: "i".to_string(),
+            start: HirExpr::IntLiteral(0),
+            stop: HirExpr::IntLiteral(3),
+            step: HirExpr::IntLiteral(1),
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Name("i".to_string())],
+            })],
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![MirItem::TopLevelStmt(MirStmt::ForRange {
+            var: "i".to_string(),
+            start: MirExpr::IntLiteral(0),
+            stop: MirExpr::IntLiteral(3),
+            step: MirExpr::IntLiteral(1),
+            body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::Name {
+                    name: "i".to_string(),
+                    ty: Ty::Int
+                }],
+                ty: Ty::None,
+            })],
+        })]
+    );
+}
+
+#[test]
+fn builds_a_return_with_no_value() {
+    let hir = HirModule {
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![MirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![MirStmt::Return(None)],
+        }]
+    );
+}
+
+#[test]
+fn an_annotated_assignment_whose_value_type_already_matches_the_annotation_lowers_unchanged() {
+    // `x: int = 1` -- the initializer's own inferred type (`Ty::Int`)
+    // already matches the annotation, so this is `lower_stmt`'s
+    // "no widening needed" branch and `value` passes through
+    // unchanged. This case cannot by itself distinguish binding the
+    // annotation's type from binding the value's type (they're equal
+    // here) -- the sibling test below, where they differ, is what
+    // actually proves `lower_stmt` binds the annotation.
+    let hir = HirModule {
+        items: vec![
+            HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                is_final: false,
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::IntLiteral(1)),
+            }),
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::IntLiteral(1),
+            }),
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Int,
+            })),
+        ]
+    );
+}
+
+#[test]
+fn an_annotated_assignment_with_a_bool_value_under_an_int_annotation_widens_and_binds_int() {
+    // `x: int = True` -- `pycc_types::is_assignable` accepts a `bool`
+    // initializer under an `int` annotation as its one widening case,
+    // and `pycc_types` itself binds its checker `env` to `Ty::Int`
+    // (the annotation), not `Ty::Bool` (the initializer's own type) --
+    // see its own comment citing this exact invariant. `lower_stmt`
+    // must agree (D-074's "first assignment fixes a binding's
+    // representation" rule): it wraps the lowered `BoolLiteral` in an
+    // `IntBoundary` reporting `Ty::Int`, preserving D-141 runtime
+    // identity without manufacturing arithmetic, and binds `x` to
+    // `Ty::Int`, so a later
+    // `Name` reference -- and any later plain reassignment -- agrees.
+    // Before this fix, `lower_stmt` bound `Ty::Bool` here instead, and
+    // the divergence from `pycc_types`' `Ty::Int` silently mis-sized
+    // `x`'s eventual codegen slot (confirmed end to end:
+    // `x: int = True; x = 5; return x` printed `11`, not `5`).
+    let hir = HirModule {
+        items: vec![
+            HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                is_final: false,
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::BoolLiteral(true)),
+            }),
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::IntBoundary(Box::new(MirExpr::BoolLiteral(true))),
+            }),
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Int,
+            })),
+        ]
+    );
+}
+
+#[test]
+fn an_annotated_assignment_with_a_bool_typed_compare_value_also_widens() {
+    // The widening branch above is reachable for *any* `Ty::Bool`-typed
+    // initializer under an `int` annotation, not merely a literal
+    // `True`/`False` -- `pycc_types::is_assignable(Bool, Int)` accepts
+    // a `Compare` result, a bool-typed name, or a bool-returning call
+    // identically. This proves the same `IntBoundary` wrapping triggers
+    // for a `Compare`-sourced `bool`, not only the literal
+    // case the previous test exercises.
+    let hir = HirModule {
+        items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+            is_final: false,
+            target: "x".to_string(),
+            annotation: Ty::Int,
+            value: Some(HirExpr::Compare {
+                op: CmpOpKind::Lt,
+                left: Box::new(HirExpr::IntLiteral(1)),
+                right: Box::new(HirExpr::IntLiteral(2)),
+            }),
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![MirItem::TopLevelStmt(MirStmt::Assign {
+            target: "x".to_string(),
+            value: MirExpr::IntBoundary(Box::new(MirExpr::Compare {
+                op: CmpOpKind::Lt,
+                left: Box::new(MirExpr::IntLiteral(1)),
+                right: Box::new(MirExpr::IntLiteral(2)),
+                ty: Ty::Bool,
+            })),
+        })]
+    );
+}
+
+#[test]
+fn a_value_less_annotated_assignment_lowers_to_a_no_op_and_binds_nothing() {
+    // `y: int` alone has no runtime action -- CPython itself does
+    // nothing observable for it either. `lower_stmt` must produce
+    // `MirStmt::NoOp` and must NOT bind `y` in scope (matching
+    // `pycc_types`' own Task 4 choice not to bind a value-less
+    // declaration): a later read of `y` with no intervening assignment
+    // still panics via `lookup`, proving no phantom binding leaked
+    // through.
+    let hir = HirModule {
+        items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+            is_final: false,
+            target: "y".to_string(),
+            annotation: Ty::Int,
+            value: None,
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(mir.items, vec![MirItem::TopLevelStmt(MirStmt::NoOp)]);
+}
+
+#[test]
+#[should_panic(expected = "has no recorded type")]
+fn a_value_less_annotated_assignment_does_not_bind_the_name() {
+    let hir = HirModule {
+        items: vec![
+            HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                is_final: false,
+                target: "y".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            }),
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("y".to_string()))),
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    build(&hir);
+}
