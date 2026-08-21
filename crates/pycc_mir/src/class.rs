@@ -18,7 +18,7 @@ use std::collections::HashMap;
 /// table doesn't have: both are impossible from a program
 /// `pycc_types::check` (or `check_and_resolve`) already accepted, so only a
 /// hand-built `MirExpr`/`HirModule` bypassing that validation (e.g. this
-/// crate's own internal-error tests in `tests.rs`) can reach either panic.
+/// crate's own internal-error tests under `tests/`) can reach either panic.
 /// #378 (PR-18): If `expr` is a class-instance-typed expression whose
 /// class has a `__repr__` method (found via the MRO), rewrites it to a
 /// `MirExpr::Call` to that `__repr__` method, passing the original
