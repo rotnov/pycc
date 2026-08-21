@@ -6102,9 +6102,10 @@ fn appending_a_mismatched_value_type_is_rejected_as_t0021() {
 
 #[test]
 fn appending_a_bool_to_a_list_of_int_is_accepted_since_bool_is_an_int_subtype() {
-    // D-086, matching Subscript's own index check above: `x.append(True)`
-    // on an already-typed `list[int]` is ordinary, CPython-valid Python
-    // (`bool` is an `int` subtype) -- `is_assignable` applies here, not
+    // D-086, matching `Subscript`'s own index check in `lib.rs`:
+    // `x.append(True)` on an already-typed `list[int]` is ordinary,
+    // CPython-valid Python (`bool` is an `int` subtype) --
+    // `is_assignable` applies here, not
     // ListLiteral's stricter exact-equality homogeneity rule (which
     // answers a different question: inferring an as-yet-unknown element
     // type, not checking a value against an already-known one). Found
@@ -7160,8 +7161,9 @@ fn known_callable_builtins_table_is_sorted() {
     // If this invariant is ever violated, binary search silently returns
     // false negatives -- a known builtin would be misclassified as
     // T0021 instead of C0001. The explicit `let` bindings ensure both
-    // values are always evaluated (coverage), while the `assert!`
-    // without format args avoids an uncovered panic-message branch.
+    // values are always evaluated, and the `assert!` carries no format
+    // args -- the idiom these tests adopted while they lived in `lib.rs`
+    // and counted toward the D-014 denominator.
     for w in KNOWN_CALLABLE_BUILTINS.windows(2) {
         let prev = w[0];
         let next = w[1];
@@ -12747,9 +12749,10 @@ fn a_private_helper_infers_str_from_string_repetition() {
 
     let resolved = check_and_resolve(&hir).unwrap();
     // Extracted with `assert!(matches!(..))` rather than a `let ... else
-    // { unreachable!() }`, because the `else` arm would be an unexercised
-    // line and region under the D-014 gate. This is the idiom the
-    // surrounding private-inference tests already use.
+    // { unreachable!() }`, because the `else` arm would have been an
+    // unexercised line and region under the D-014 gate while these tests
+    // lived in `lib.rs`. This is the idiom the surrounding
+    // private-inference tests already use.
     assert!(matches!(
         &resolved.items[0],
         HirItem::Function { params, return_ty, .. }
@@ -14750,9 +14753,9 @@ fn check_and_resolve_monomorphizes_a_nested_generic_call_and_drops_the_original(
     assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
     // Compared against the whole expected statement (not a
     // `let-else { panic!() }` destructure) so the never-taken failure
-    // arm isn't its own uncovered branch -- mirrors this file's
-    // existing convention (see Task 2's own note on `unreachable!()` in
-    // test bodies).
+    // arm was not its own uncovered branch while these tests lived in
+    // `lib.rs` -- mirrors the convention described in Task 2's own note
+    // on `unreachable!()` in test bodies.
     assert_eq!(
         resolved.items[0],
         HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
@@ -18020,9 +18023,10 @@ fn check_and_resolve_monomorphizes_the_last_redefined_method_of_a_generic_class(
     let mono_fetch =
         find_function(&resolved, "0gen_C__T_int.fetch").expect("monomorphized fetch should exist");
     // The inner `matches!` uses a guard (`if n == 2`) rather than a bare
-    // pattern so that llvm-cov does not flag the implicit `_ => false` arm
-    // as an uncovered region under D-014 — the guard's own true/false
-    // branch is the tracked region, and it is exercised here.
+    // pattern so that llvm-cov would not flag the implicit `_ => false`
+    // arm as an uncovered region under D-014 while these tests lived in
+    // `lib.rs` — the guard's own true/false branch is the tracked region,
+    // and it is exercised here.
     assert!(
         matches!(
             mono_fetch,
@@ -18110,8 +18114,9 @@ fn check_and_resolve_monomorphizes_a_generic_class_property_getter() {
     let mono_getter = find_function(&resolved, "0gen_Box__T_int.val")
         .expect("monomorphized property getter should exist");
     // Use `matches!` with a guard rather than `if let`/`let else` so that
-    // llvm-cov does not flag the implicit else branch as uncovered under
-    // D-014 — the guard's own true branch is the tracked region.
+    // llvm-cov would not flag the implicit else branch as uncovered under
+    // D-014 while these tests lived in `lib.rs` — the guard's own true
+    // branch is the tracked region.
     assert!(
         matches!(mono_getter, HirItem::Function { return_ty, .. } if *return_ty == Ty::Int),
         "monomorphized getter should be a Function returning Int"
@@ -20595,8 +20600,9 @@ fn rewrite_generic_calls_in_instantiation_skips_a_non_function_item() {
     assert!(result.is_ok());
     // The non-Function item should be unchanged (the helper returns
     // early without modifying it). Verified via the mangled name rather
-    // than a `matches!` on the variant to avoid an uncovered `_ => false`
-    // arm in the test's own coverage.
+    // than a `matches!` on the variant, which avoided an uncovered
+    // `_ => false` arm back when these tests lived in `lib.rs` and counted
+    // toward the D-014 denominator.
     assert_eq!(instantiations[0].mangled_name, "ghost");
 }
 
