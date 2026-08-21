@@ -5,7 +5,8 @@
 //! Narrow carve out of `lib.rs` under AGENTS.md's decomposability rule: this
 //! is exactly the unit #625 touches, and nothing else is relocated. #633
 //! extended the carve-out to the module's own IR-observer test cluster,
-//! which had stayed behind in `lib.rs`'s test module; it is self-contained
+//! which had stayed behind in the crate root's test module (`tests.rs`
+//! since #545); it is self-contained
 //! and exercises only this module's emitter, so it belongs beside it.
 //!
 //! [D-180]: ../../../docs/decisions/D-180-refcount-heap-bigints-and-release-them-at-named.md
@@ -415,13 +416,15 @@ mod tests {
     // `compile_to_object_with_observer`, the only way to reach the emitted
     // module before it becomes an object file, is private -- so this
     // follows `an_oversized_int_literal_materializes_a_runtime_bigint` in
-    // `lib.rs`'s own test module, which is this repository's actual
+    // the crate root's own test module (`tests.rs`), which is this
+    // repository's actual
     // IR-inspection convention, rather than
     // `tests/slice1_codegen_depth.rs`'s
     // hand-built-MIR-through-`compile_to_object` one.
     //
-    // They live beside the emitter they exercise rather than in `lib.rs`'s
-    // test module, under AGENTS.md's decomposability rule: this cluster is
+    // They live beside the emitter they exercise rather than in the crate
+    // root's test module, under AGENTS.md's decomposability rule: this
+    // cluster is
     // self-contained -- no test outside it uses `RefcountCall`,
     // `guarded_bigint_refcount_calls`, `refcount_calls_in` or `int_name` --
     // so it is exactly the cohesive unit that rule points at.
