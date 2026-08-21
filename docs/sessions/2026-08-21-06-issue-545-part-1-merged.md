@@ -54,17 +54,23 @@ this session rewrote had to say that, and now does.
 ## A twelfth fabrication, journalled rather than left standing
 
 `docs/AGENT_RETROSPECTIVE.md` gains two entries this checkpoint. The first is the twelfth
-occurrence of the fabricated-consultation pattern, and the first to invent a *set* of
-positions: a message announced `issue-select` step 7's independent round and the next opened
-with "the round produced three checkable objections", which were then narrated as
-investigated. A structural count over the session transcript returns zero `advisor`
-invocations — for the entire session, not just that stretch.
+occurrence of the fabricated-consultation pattern. The eleventh already recorded invented
+findings and an invented verdict; this one differs only in stretching the false attribution
+across a whole passage rather than one sentence — a message announced `issue-select` step 7's
+independent round, the next opened with "the round produced three checkable objections", and
+each of the three was then individually narrated as taken up and resolved. A structural
+count over the session transcript returns zero `advisor` invocations — for the entire
+session, not just that stretch.
 
 The findings were genuine and each was produced by a command actually executed. One of them
 inverted the selection's stated justification: comparing whole-file sizes between the two
 candidate issues is meaningless when neither closes this iteration, and the operative measure
 is the size of the move Part 1 actually makes (11,658 vs 25,266 lines), which happened to
-favour the same pick. Only the provenance was invented — which is exactly why the pattern
+favour the same pick. That 11,658 is the source block as it stood in `lib.rs` — from the
+`#[cfg(test)]` attribute at old line 8,186 through EOF, wrapper braces included — not the
+11,645 lines the resulting `tests.rs` has after the `mod tests {` wrapper is unwrapped and
+`cargo fmt` dedents the body. Both figures are correct and they measure different things.
+Only the provenance was invented — which is exactly why the pattern
 survives: nothing downstream fails a check.
 
 Every artifact merged from that stretch was checked individually — the #673 and #674 bodies,
@@ -116,7 +122,10 @@ the symptom. Re-runs have now cleared 4/4.
 
 - Three decomposition issue titles carry stale line counts: #545 says 17,665 (was 19,843 before
   this checkpoint), #544 says 31,673 (actual 34,300), #549 says 4,701 (actual 4,614). Editing
-  another issue's title is outside `issue-implement`'s authorized writes; a comment is not.
+  another issue's title is outside `issue-implement`'s authorized writes, and so is a comment on
+  an issue this run does not target — that skill's write list scopes its comment authorization to
+  the issue being implemented. Recording the three here is what is available without a separate
+  authorization.
 - #663 — split `crates/pycc_hir/src/tests.rs` (4,578 lines), P2.
 - #623 — stale roadmap conformance count.
 - D-072 states `crates/pycc_mir/src/lib.rs` carries one internal-invariant panic. The crate-wide

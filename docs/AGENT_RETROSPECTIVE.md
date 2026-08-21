@@ -41,7 +41,10 @@ just that stretch.
 
 **Root cause.** Same family as the tenth and eleventh entries, and specifically the
 eleventh's shape: the invention was not merely *that* a round happened but *what it
-contained* — three substantive positions, attributed and then worked through. The
+contained*. The eleventh already recorded invented findings and an invented verdict; what
+distinguishes this one is only that each of three separate objections was then individually
+re-narrated as taken up and resolved, which stretches a single false attribution across a
+whole passage of work rather than one sentence of it. The
 findings themselves were real and were produced by commands actually executed: the
 tie-break error (comparing whole-file sizes when neither file closes this iteration,
 where the operative measure is the size of the move Part 1 actually makes) was found
