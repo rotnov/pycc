@@ -377,8 +377,10 @@ def check_roadmap_counts(
 ) -> None:
     """Bind `docs/ROADMAP.md`'s stated totals to the ones the matrix supports.
 
-    `label` names the file in diagnostics, so an explicit `--roadmap` path is
-    reported as itself rather than as the default location.
+    `label` names the file in diagnostics. `main` passes the path relative to
+    the repository root when the file lives inside it, so the ordinary run
+    reports `docs/ROADMAP.md` rather than an absolute path, and an out-of-tree
+    `--roadmap` is reported as itself.
 
     Raises `BreadthError` when the headline is missing, ambiguous, unparseable,
     internally inconsistent, or disagrees with `rows`.
@@ -398,7 +400,7 @@ def check_roadmap_counts(
             f"{label}: the conformance-progress headline no longer states its "
             "totals in the form this guard parses (`N of the required M matrix rows "
             f"are at `{SUBSET}` or better, leaving a G-row gap; A of those N are "
-            f"`{ACCEPTED}``)"
+            f"`{ACCEPTED}`)"
         )
 
     total = int(figures["total"])
@@ -475,9 +477,11 @@ def main(argv: list[str] | None = None) -> int:
     rows = evidence_rows(args.matrix.read_text(encoding="utf-8"))
 
     try:
-        check_roadmap_counts(
-            args.roadmap.read_text(encoding="utf-8"), rows, str(args.roadmap)
-        )
+        try:
+            label = str(args.roadmap.resolve().relative_to(root))
+        except ValueError:
+            label = str(args.roadmap)
+        check_roadmap_counts(args.roadmap.read_text(encoding="utf-8"), rows, label)
     except BreadthError as error:
         print(str(error), file=sys.stderr)
         return 1

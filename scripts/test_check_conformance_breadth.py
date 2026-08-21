@@ -14,9 +14,12 @@ checked-in manifest stops describing the checked-in matrix.
 from __future__ import annotations
 
 import copy
+import contextlib
 import importlib.util
+import io
 import json
 from pathlib import Path
+import tempfile
 import unittest
 
 CHECKER_PATH = Path(__file__).with_name("check_conformance_breadth.py")
@@ -570,6 +573,82 @@ class CiWiringTest(unittest.TestCase):
         # gate green while the contract is violated.
         governance = self._job_body("governance")
         self.assertNotIn("continue-on-error", governance)
+
+
+class CommandLineTests(unittest.TestCase):
+    """`main`'s own wiring, distinct from the functions it calls.
+
+    `check_roadmap_counts` is mutation-tested directly above, but the argument
+    that reaches it and the exit status that leaves the process are `main`'s
+    own code. CI runs this checker with default arguments against a passing
+    tree, so nothing else ever executes the roadmap branch's failure path.
+    """
+
+    @staticmethod
+    def _run(argv: list[str]) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            status = CHECKER.main(argv)
+        return status, out.getvalue(), err.getvalue()
+
+    def test_the_default_invocation_reports_the_checked_in_totals(self) -> None:
+        status, stdout, _ = self._run([])
+        self.assertEqual(status, 0)
+        matrix = (REPOSITORY_ROOT / "docs/PYTHON_STANDARDS.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(summary_body(evidence_rows(matrix)), stdout)
+
+    def test_a_divergent_roadmap_fails_the_command(self) -> None:
+        roadmap = (REPOSITORY_ROOT / "docs/ROADMAP.md").read_text(encoding="utf-8")
+        matrix = (REPOSITORY_ROOT / "docs/PYTHON_STANDARDS.md").read_text(
+            encoding="utf-8"
+        )
+        total = len(evidence_rows(matrix))
+        drifted = roadmap.replace(
+            f"{total} of the required", f"{total + 1} of the required", 1
+        )
+        self.assertNotEqual(drifted, roadmap)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ROADMAP.md"
+            path.write_text(drifted, encoding="utf-8")
+            status, stdout, stderr = self._run(["--roadmap", str(path)])
+        self.assertEqual(status, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn(f"but the matrix has {total}", stderr)
+
+    def test_an_out_of_tree_roadmap_is_named_as_itself(self) -> None:
+        # The relative-label shortening in `main` applies to files inside the
+        # repository; anything else must still be identifiable in diagnostics.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "elsewhere.md"
+            path.write_text("no headline here\n", encoding="utf-8")
+            status, _, stderr = self._run(["--roadmap", str(path)])
+        self.assertEqual(status, 1)
+        self.assertIn(str(path), stderr)
+
+    def test_an_in_tree_roadmap_is_named_relative_to_the_repository(self) -> None:
+        # A document inside the repository that carries no headline at all --
+        # the fail-closed branch -- names itself by its repository-relative
+        # path, not by the absolute path the argument parser resolved.
+        # Passed as an absolute path deliberately: a relative argument would
+        # already read as its own short label and prove nothing.
+        status, _, stderr = self._run(
+            ["--roadmap", str(REPOSITORY_ROOT / "docs/SPEC.md")]
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("fail-closed", stderr)
+        self.assertIn("docs/SPEC.md", stderr)
+        self.assertNotIn(str(REPOSITORY_ROOT), stderr)
+
+    def test_an_unreadable_manifest_fails_before_anything_else(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            path.write_text("{not json", encoding="utf-8")
+            status, stdout, stderr = self._run(["--manifest", str(path)])
+        self.assertEqual(status, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("invalid JSON", stderr)
 
 
 if __name__ == "__main__":
