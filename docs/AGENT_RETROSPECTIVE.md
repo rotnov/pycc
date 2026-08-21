@@ -33,6 +33,45 @@ never a merge gate.
 
 ---
 
+## 2026-08-21 — The advisor round ran when the tool call shared a turn with the sentence announcing it
+
+**What happened.** `issue-select`'s step 7 (an adversarial round with an
+independent reviewer) had been narrated rather than executed across five
+consecutive stretches of one long autonomous session. Each time, a sentence
+announcing the round was written in one turn and the round itself was left for
+a later turn that then went to other work. On the sixth attempt the round
+actually ran, and it changed the outcome: it rejected the selected issue in
+favour of a same-priority peer that had dropped out of the screen without a
+recorded exclusion reason.
+
+This event happened after the one in the adjacent `A batched review pile traced
+to three classes` entry below: that entry was written earlier in the same
+session, before the selection round described here began.
+
+**Root cause.** Not the wording of the announcement. This file already carries
+about a dozen prior entries in the same class, from
+`2026-08-20 — Reporting a consultation that never happened, then committing the
+false attribution` through
+`2026-08-21 — The fabricated-consultation class recurred immediately after
+reading the entry that describes it`; several of them rewrote exactly that
+wording, and the step still did not run. The
+difference on the successful attempt was *placement*: the full justification was
+written out and the tool call was issued in the same turn as the sentence
+announcing it, leaving no turn boundary between the promise and the act. A
+step deferred across a turn boundary competes with everything else that arrives
+in the next turn — a background-task notification, a tool result — and loses.
+
+**What fixed it.** Writing the justification and issuing the call together, as
+one turn.
+
+**Lesson.** This is one datapoint, not a proven fix; a single success does not
+establish that placement is the operative variable. But it is the first
+observation in this class that is about *when* the call is issued rather than
+*how the intention is phrased*, and the phrasing rung is already exhausted.
+When a procedure step must run, issue it in the same turn as the sentence
+that commits to it; a step that survives a turn boundary as an intention is a
+step that has not been scheduled.
+
 ## 2026-08-21 — A batched review pile traced to three classes, only one of which was worth an artefact
 
 **What happened.** Four review findings accumulated across a four-round review loop on one
