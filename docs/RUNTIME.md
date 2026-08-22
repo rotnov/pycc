@@ -45,6 +45,73 @@ Supported builtin exception types: `Exception` (tag 0, catch-all),
 `ZeroDivisionError` (5), `RuntimeError` (6). The hierarchy is flat:
 every type is a direct subclass of `Exception`.
 
+**Class-table presence (Part 1 of #541, D-188).** HIR lowering synthesizes a
+real `HirClassDef` for each of those seven names, seeded before any
+user statement of a module that references one of them is lowered, so they
+participate in the same class table user-defined classes do. `Exception` carries a synthetic
+`__init__(self, message: str)`; the other six inherit it through their MRO.
+Three consequences:
+
+- `class MyError(ValueError):` resolves its base and linearizes an MRO
+  (`MyError`, `ValueError`, `Exception`) like any other inheritance, and
+  `MyError("boom")` resolves the inherited constructor.
+- `isinstance`/`issubclass` and annotations naming a builtin exception class
+  resolve against the class table instead of failing to find a definition.
+- A *synthetic* builtin exception class is still not a value:
+  `e = ValueError("x")` remains rejected with `C0001` (unchanged by Part 1 --
+  the diagnostic comes from the callable-builtin check, and a second guard in
+  `class::resolve_instantiation` now backs it up), because D-173 propagates a
+  raised exception through global runtime state rather than through an
+  allocated instance with fields. Raising remains the only way to construct
+  one. For the same reason the synthetic definitions declare no attribute
+  slots -- there is no storage for a `message` slot to name, so
+  `except ValueError as e: print(e.args)` reports `T0044` (before Part 1 the
+  same program aborted the compiler with an internal error, since no
+  `HirClassDef` existed to look the attribute up in). Attribute access on the
+  *bare class name* rather than on a binding -- `ValueError.args` -- likewise
+  reports `T0044` now; before Part 1 the same source reported
+  `T0021 name \`ValueError\` is not defined`, because the name was absent
+  from the class table entirely.
+
+Synthetic versus user-authored is decided by *provenance*, never by a
+definition's shape: HIR lowering records on the `HirModule` that it seeded,
+and the type checker marks a class synthetic if and only if that record says
+this compiler produced it. A class is otherwise indistinguishable -- a user
+`class Exception:` with a single `def __init__(self) -> None: pass` lowers to
+exactly the synthetic `Exception`'s definition, and stays the user's own
+class.
+
+The synthetic `__init__` signature deliberately diverges from CPython's
+`Exception(*args)`: this compiler has no variadic-argument support, and the
+supported surface (`raise ValueError("msg")`) is exactly one `str` message.
+
+Two gates decide whether a module is seeded, and both must pass.
+
+*The module must reference one of the seven names somewhere.* Every entry in
+the class table costs per-item work in lowering and per-function class binding
+in the type checker, and a module that never spells one of the seven cannot
+observe the difference -- so it is seeded with none of them. The reference
+scan uses the AST crate's generic visitor, so every position a name can be
+spelled in counts: a base class, a `raise` operand, an `except` type, an
+annotation, an `isinstance`/`issubclass` argument, an attribute access, a
+comprehension, an f-string interpolation, a decorator, at any nesting depth.
+A string forward reference (`x: "ValueError"`) does not count, because
+annotation lowering does not resolve string annotations either. Absence is
+*not* shadowing: an unseeded name reads as un-shadowed, which is exactly its
+pre-Part-1 meaning, so `raise`/`except` behave identically either way.
+
+*The module's own top level must bind none of the seven names.* That gate is
+all-or-nothing: a module whose top level binds any of them (a `class`, `def`,
+`type` alias, annotated assignment, or assignment target spelling one) is
+seeded with none of them, and that name keeps its ordinary user-defined
+meaning. Because it withholds the whole group, a module that shadows one name
+and uses a *different* one still has no class definition behind the one it
+uses -- `class Exception: ...` together with
+`except ValueError as e: print(e.args)` aborts the compiler with an internal
+error. That is a known gap, present since the seeding was introduced;
+resolving it is part of #541's Part 2, which has to decide what a partially
+shadowed builtin hierarchy means.
+
 Supported syntax: `try`/`except`/`else`/`finally`, `raise ExceptionType("msg")`,
 bare `raise` (re-raise), `raise ... from ...` (PEP 409 cause chaining),
 `except ExceptionType as e` (named bindings), bare `except:` (catch-all).
@@ -72,8 +139,9 @@ Uncaught exceptions at the top level are printed to stderr
 
 Exception objects are leak-only in this first implementation. Explicit
 `raise ... from cause` records `cause`; implicit `__context__` is reserved but
-not wired. **Planned (post-Part 1):** `except*` groups (PEP 654), custom
-exception classes, full traceback with `.py` lines, implicit exception
+not wired. **Planned (post-Part 1):** `except*` groups (PEP 654), raising and catching
+user-defined exception classes (Part 2 of #541 -- Part 1 gives them a class
+identity, not yet `raise`/`except` behavior), full traceback with `.py` lines, implicit exception
 context, `raise ... from None`, exception lifetime management, and deletion
 of an `except ... as name` binding after the handler.
 

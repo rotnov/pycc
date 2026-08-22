@@ -64,6 +64,7 @@ fn point_module(extra_items: Vec<HirItem>) -> HirModule {
     let mut items = vec![init, bump];
     items.extend(extra_items);
     HirModule {
+        seeded_builtin_exception_classes: false,
         items,
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -180,6 +181,7 @@ fn a_method_call_with_arguments_lowers_each_argument_after_self() {
         body: vec![HirStmt::Return(None)],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             add,
@@ -401,6 +403,7 @@ fn attr_get_on_a_non_instance_base_panics_with_an_internal_error() {
     // e.g. `referencing_an_unbound_name_panics_with_an_internal_error`
     // above).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -432,6 +435,7 @@ fn attr_get_over_an_instance_typed_parameter_from_an_unregistered_class_panics_w
     // module's own side table has no entry for.
     let ghost_ty = Ty::Instance(Box::new("Ghost".to_string()));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![("x".to_string(), ghost_ty)],
@@ -545,6 +549,7 @@ fn attr_set_on_a_read_only_property_panics_with_an_internal_error() {
         }))],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             getter,
@@ -604,6 +609,7 @@ fn attr_set_on_a_read_only_property_panics_with_an_internal_error() {
 )]
 fn generic_class_instantiate_reaching_mir_panics_with_an_internal_error() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
             HirExpr::GenericClassInstantiate {
                 class: "C".to_string(),
@@ -645,6 +651,7 @@ fn enum_member_attr_get_lowers_to_synthetic_global() {
         is_abstract: false,
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
             callee: "print".to_string(),
             args: vec![HirExpr::AttrGet {

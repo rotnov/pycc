@@ -10,6 +10,7 @@ use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt, Ty};
 #[test]
 fn lowers_list_literal_to_mir() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
@@ -38,6 +39,7 @@ fn lowers_list_literal_to_mir() {
 #[test]
 fn lowers_for_list_to_mir_for_list() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -77,6 +79,7 @@ fn lowers_for_list_to_mir_for_list() {
 #[test]
 fn lowers_subscript_to_mir_recursively() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -113,6 +116,7 @@ fn lowers_subscript_to_mir_recursively() {
 #[test]
 fn lowers_list_append_to_mir_recursively() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -143,6 +147,7 @@ fn lowers_list_pop_to_mir_deriving_its_element_type_from_the_list_binding() {
     // own `Ty::List` binding via `lookup`, mirroring
     // `HirExpr::Subscript`'s own base-type lookup.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -185,6 +190,7 @@ fn list_pop_over_a_non_list_binding_panics_with_an_internal_error() {
     // coverage, mirroring `a_for_list_loop_over_a_non_list_non_dict_non_set_binding_panics_with_an_internal_error`
     // above.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -207,6 +213,7 @@ fn lowers_dict_get_or_default_to_mir_recursively_deriving_its_value_type() {
     // from `d`'s own `Ty::Dict` binding's value type, and both `key`
     // and `default` are recursively lowered.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "d".to_string(),
@@ -249,6 +256,7 @@ fn dict_get_or_default_over_a_non_dict_binding_panics_with_an_internal_error() {
     // Same reasoning as `list_pop_over_a_non_list_binding_panics_with_an_internal_error`
     // above, for `HirExpr::DictGetOrDefault`'s own defensive panic path.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "d".to_string(),
@@ -273,6 +281,7 @@ fn lowers_set_add_to_mir_recursively() {
     // shape exactly -- `set` is carried as a plain name, `value` is
     // recursively lowered.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "s".to_string(),
@@ -314,6 +323,7 @@ fn list_literal_subscript_and_for_list_derive_their_type_from_actual_elements_no
     // trivially distinguishable from the `Ty::Int` a hardcoded bug
     // would wrongly report.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -414,6 +424,7 @@ fn a_for_list_loop_over_a_non_list_non_dict_non_set_binding_panics_with_an_inter
     // defensive panic path in `lower_stmt`'s `ForList` arm still needs
     // direct coverage.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -446,6 +457,7 @@ fn an_empty_dict_literals_ty_panics_with_an_internal_error() {
 #[test]
 fn dict_literal_lowers_to_mir_dict_literal_with_correct_ty() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::DictLiteral(vec![(
@@ -479,6 +491,7 @@ fn dict_get_ty_unwraps_the_value_type() {
     // unwraps the dict's value type, mirroring `dict_get_ty_unwraps_the_value_type`
     // in the task brief.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -533,6 +546,7 @@ fn a_list_subscript_still_lowers_to_mir_subscript_not_dict_get() {
     // the base's *actual* derived type, not assume every subscript is a
     // dict read now that `MirExpr::DictGet` exists.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -569,6 +583,7 @@ fn a_list_subscript_still_lowers_to_mir_subscript_not_dict_get() {
 #[test]
 fn dict_set_lowers_to_mir_dict_set_stmt() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -601,6 +616,7 @@ fn dict_set_lowers_to_mir_dict_set_stmt() {
 #[test]
 fn for_k_in_dict_lowers_to_mir_for_dict() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -736,6 +752,7 @@ fn a_tuple_subscript_out_of_range_ty_panics_with_an_internal_error() {
 #[test]
 fn tuple_literal_lowers_to_mir_tuple_literal_with_correct_ty() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::TupleLiteral(vec![HirExpr::IntLiteral(1), HirExpr::BoolLiteral(true)]),
@@ -763,6 +780,7 @@ fn tuple_literal_lowers_to_mir_tuple_literal_with_correct_ty() {
 #[test]
 fn set_literal_lowers_to_mir_set_literal_with_correct_ty() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
@@ -786,6 +804,7 @@ fn set_literal_lowers_to_mir_set_literal_with_correct_ty() {
 #[test]
 fn for_x_in_set_lowers_to_mir_for_set() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),

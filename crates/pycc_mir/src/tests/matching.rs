@@ -13,6 +13,7 @@ use pycc_hir::{
 
 fn match_module(cases: Vec<HirMatchCase>) -> HirModule {
     HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -31,6 +32,7 @@ fn match_module(cases: Vec<HirMatchCase>) -> HirModule {
 
 fn match_module_list(cases: Vec<HirMatchCase>) -> HirModule {
     HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -49,6 +51,7 @@ fn match_module_list(cases: Vec<HirMatchCase>) -> HirModule {
 
 fn match_module_dict(cases: Vec<HirMatchCase>) -> HirModule {
     HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -247,6 +250,7 @@ fn lowers_match_with_class_pattern_to_mir() {
         is_abstract: false,
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),

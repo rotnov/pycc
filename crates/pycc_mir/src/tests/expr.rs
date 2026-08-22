@@ -12,6 +12,7 @@ use pycc_hir::{
 #[test]
 fn builds_a_compare_expression_with_bool_type() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::Compare {
@@ -42,6 +43,7 @@ fn builds_a_compare_expression_with_bool_type() {
 #[test]
 fn builds_an_f_string_with_a_literal_and_an_interpolation() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -78,6 +80,7 @@ fn builds_an_f_string_with_a_literal_and_an_interpolation() {
 #[test]
 fn string_concatenation_infers_str() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::BinOp {
@@ -115,6 +118,7 @@ fn string_concatenation_infers_str() {
 #[test]
 fn string_repetition_by_an_int_infers_str() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::BinOp {
@@ -145,6 +149,7 @@ fn string_repetition_by_an_int_infers_str() {
 #[test]
 fn string_repetition_with_the_count_on_the_left_infers_str() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::BinOp {
@@ -177,6 +182,7 @@ fn string_repetition_by_a_bool_infers_str() {
     // `bool <: int`, so a `bool` count is accepted in either order --
     // matching `pycc_types::numeric_result_type` exactly.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -233,6 +239,7 @@ fn multiplying_two_ints_still_infers_int_after_the_repetition_clause() {
     // Negative control for the repetition clause: `Mul` alone must not
     // route a purely numeric pair into `Ty::Str`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::BinOp {
@@ -270,6 +277,7 @@ fn multiplying_a_str_by_a_float_does_not_take_the_repetition_clause() {
     // program covers. The clause must decline, leaving the ordinary
     // numeric rule to answer `Ty::Float`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::BinOp {
@@ -304,6 +312,7 @@ fn multiplying_a_float_by_a_str_does_not_take_the_repetition_clause() {
     // fallback of the repetition clause's
     // `matches!(left, Ty::Int | Ty::Bool)`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::BinOp {
@@ -334,6 +343,7 @@ fn multiplying_a_float_by_a_str_does_not_take_the_repetition_clause() {
 #[test]
 fn true_division_of_two_ints_infers_float() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::BinOp {
@@ -364,6 +374,7 @@ fn true_division_of_two_ints_infers_float() {
 #[test]
 fn adding_a_float_left_operand_and_an_int_infers_float() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::BinOp {
@@ -397,6 +408,7 @@ fn adding_an_int_and_a_float_right_operand_infers_float() {
     // `right == Ty::Float` specifically (`left == Ty::Float` is false
     // here), not just `binop_result_ty`'s overall `Float` outcome.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "x".to_string(),
             value: HirExpr::BinOp {
@@ -429,6 +441,7 @@ fn adding_an_int_and_a_float_right_operand_infers_float() {
 /// unary case below states only the arithmetic rewrite it expects.
 fn assert_unary_over_param_lowers_to(op: UnaryOpKind, ty: Ty, expected: MirExpr) {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![("p".to_string(), ty.clone())],

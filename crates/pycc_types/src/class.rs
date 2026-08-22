@@ -1023,6 +1023,7 @@ mod tests {
         let mut items = vec![init, bump];
         items.extend(extra_items);
         HirModule {
+            seeded_builtin_exception_classes: false,
             items,
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -1429,6 +1430,7 @@ mod tests {
             body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
         };
         let hir = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![
                 init,
                 bump,
@@ -1517,6 +1519,7 @@ mod tests {
             ],
         };
         let hir = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![init, bad],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -1573,6 +1576,7 @@ mod tests {
             ],
         };
         let hir1 = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![bad_base],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -1598,6 +1602,7 @@ mod tests {
             ],
         };
         let hir2 = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![bad_arg],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -1632,6 +1637,7 @@ mod tests {
             ],
         };
         let hir1 = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![bad_base],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -1657,6 +1663,7 @@ mod tests {
             ],
         };
         let hir2 = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![bad_value],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -1855,6 +1862,7 @@ mod tests {
             }))],
         };
         let hir1 = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![bad_base],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -1876,6 +1884,7 @@ mod tests {
             }))],
         };
         let hir2 = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![bad_arg],
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -2391,6 +2400,7 @@ mod tests {
         let mut items = vec![init, getter, setter];
         items.extend(extra_items);
         HirModule {
+            seeded_builtin_exception_classes: false,
             items,
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -2452,6 +2462,7 @@ mod tests {
         let mut items = vec![init, getter];
         items.extend(extra_items);
         HirModule {
+            seeded_builtin_exception_classes: false,
             items,
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -2806,6 +2817,7 @@ mod tests {
         let mut items = vec![animal_init, animal_speak, dog_init, dog_speak];
         items.extend(extra_items);
         HirModule {
+            seeded_builtin_exception_classes: false,
             items,
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -2957,6 +2969,7 @@ mod tests {
         let mut items = vec![base_init];
         items.extend(extra_items);
         HirModule {
+            seeded_builtin_exception_classes: false,
             items,
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -3088,6 +3101,7 @@ mod tests {
             )))],
         };
         let hir = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![
                 base_init,
                 base_greet,
@@ -3192,6 +3206,7 @@ mod tests {
         let mut items = vec![init, static_fn, class_fn];
         items.extend(extra_items);
         HirModule {
+            seeded_builtin_exception_classes: false,
             items,
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -3880,6 +3895,7 @@ mod tests {
             body: vec![HirStmt::Return(Some(HirExpr::BoolLiteral(true)))],
         };
         let hir = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![
                 init,
                 eq,
@@ -3971,6 +3987,7 @@ mod tests {
             body: vec![HirStmt::Return(Some(HirExpr::BoolLiteral(true)))],
         };
         let hir = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![
                 init,
                 eq,
@@ -4371,6 +4388,7 @@ mod tests {
 
         // --- Trigger `check_protocol_conformance` via `c: P = C()` ---
         let hir = HirModule {
+            seeded_builtin_exception_classes: false,
             items: vec![
                 c_init,
                 c_getter,

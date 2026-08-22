@@ -14,6 +14,7 @@ use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt, Ty};
 /// against the same shapes those frontend tests already pin.
 fn xs_list_then_slice(slice: HirExpr) -> HirModule {
     HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -185,6 +186,7 @@ fn a_slice_expressions_base_and_every_present_bound_are_recursively_lowered() {
     // `lower_expr`'s `HirExpr::Call` arm resolves their `ty` via the
     // real `$fn:` lookup instead of panicking.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "f".to_string(),

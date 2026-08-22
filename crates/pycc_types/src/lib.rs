@@ -108,6 +108,28 @@ pub struct Environment {
     /// constructor this crate has (`check_with_signatures`,
     /// `concrete_function_environment`) -- see `class::bind_classes`.
     classes: Arc<HashMap<String, HirClassDef>>,
+    /// Part 1 of #541 (extending D-173): the subset of `classes` whose
+    /// entries were *synthesized* by HIR lowering for the seven builtin
+    /// exception names rather than written by the user
+    /// (`pycc_hir::builtin_exception_class_defs`). Kept as a side table
+    /// instead of a `HirClassDef` flag on purpose: "who authored this
+    /// definition" is a fact about the environment's provenance, not part
+    /// of a class's declared shape, and a flag would have to be threaded
+    /// through every `HirClassDef` literal in the tree.
+    ///
+    /// Needed because `is_unshadowed_builtin_exception` used to read
+    /// "`ValueError` is absent from `classes`" as "the user has not
+    /// shadowed `ValueError`". Once the frontend seeds the builtin classes
+    /// that inference inverts: every builtin exception would look shadowed
+    /// and every `except ValueError:`/`raise ValueError("x")` would be
+    /// rejected. Membership here restores the intended meaning -- present
+    /// *and* not synthetic is what "shadowed" means.
+    ///
+    /// Maintained by [`Self::bind_class`] and [`Self::bind_synthetic_class`],
+    /// together the sole mutators of `classes`, so the two tables cannot
+    /// drift apart regardless of which environment constructor or
+    /// monomorphization path registered a class.
+    synthetic_classes: Arc<HashSet<String>>,
     /// PEP 695 (#387): the name of the generic *function* currently being
     /// body-checked, if any. Set by `check_function_in` from the function's
     /// own signature via `generic_type_param_name`; `None` for a non-generic
@@ -274,8 +296,41 @@ impl Environment {
 
     /// Registers `name` as a declared class with shape `def` (D-154, Part 1
     /// of #375), mirroring [`Self::bind_generic`]'s own shape exactly.
+    /// Part 1 of #541: registers `name` as *user-authored*, clearing any
+    /// earlier synthetic marking for that name and keeping
+    /// `synthetic_classes` in step with `classes`. Every caller that is not
+    /// replaying HIR lowering's own seeding belongs here; the one caller
+    /// that is uses [`Self::bind_synthetic_class`] instead.
     pub fn bind_class(&mut self, name: String, def: HirClassDef) {
+        Arc::make_mut(&mut self.synthetic_classes).remove(&name);
         Arc::make_mut(&mut self.classes).insert(name, def);
+    }
+
+    /// Part 1 of #541: registers `name` as a class *this compiler's own HIR
+    /// lowering synthesized* (D-188), recording it in `synthetic_classes`.
+    ///
+    /// Only `class::bind_classes` calls this, and only for a name it has
+    /// established was seeded by `lower_checked`. The visibility is
+    /// `pub(crate)` so that restriction is enforced by the compiler rather
+    /// than by convention: marking an arbitrary name synthetic would
+    /// silently exclude a user-authored class from `is_user_defined_class`,
+    /// which is exactly the defect D-188's provenance record exists to
+    /// prevent -- provenance is carried
+    /// from the lowering step through `HirModule`, never re-derived from a
+    /// definition's shape, because a user-authored class can be
+    /// structurally identical to a synthetic one.
+    pub(crate) fn bind_synthetic_class(&mut self, name: String, def: HirClassDef) {
+        Arc::make_mut(&mut self.synthetic_classes).insert(name.clone());
+        Arc::make_mut(&mut self.classes).insert(name, def);
+    }
+
+    /// Part 1 of #541: whether `name`'s registered class shape was
+    /// synthesized by HIR lowering for a builtin exception class rather
+    /// than written by the user. `false` for an unregistered name and for
+    /// every user-authored class, including one that shadows a builtin
+    /// exception name.
+    pub(crate) fn is_synthetic_class(&self, name: &str) -> bool {
+        self.synthetic_classes.contains(name)
     }
 
     /// Looks up `name`'s declared class shape, if `name` was registered via

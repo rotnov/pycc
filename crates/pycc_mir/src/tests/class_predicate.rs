@@ -14,6 +14,7 @@ use pycc_hir::{HirClassDef, HirExpr, HirItem, HirModule, HirStmt, Ty};
 fn isinstance_lowers_to_bool_literal_for_user_class() {
     // `isinstance(D(), D)` — D is in D's MRO, so the result is `true`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
             callee: "print".to_string(),
             args: vec![HirExpr::Call {
@@ -67,6 +68,7 @@ fn isinstance_lowers_to_bool_literal_for_user_class() {
 fn issubclass_lowers_to_bool_literal_for_same_class() {
     // `issubclass(D, D)` — D is in D's MRO, so the result is `true`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
             callee: "print".to_string(),
             args: vec![HirExpr::Call {
@@ -118,6 +120,7 @@ fn isinstance_with_float_lowers_to_bool_literal_true() {
     // `isinstance(1.5, float)` — covers the `Ty::Float` arm in
     // `eval_isinstance_single` at the MIR level.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
             callee: "print".to_string(),
             args: vec![HirExpr::Call {
@@ -148,6 +151,7 @@ fn issubclass_with_int_int_lowers_to_bool_literal_true() {
     // `issubclass(int, int)` — covers the `return cls == target_class`
     // line in `eval_issubclass_single` at the MIR level.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
             callee: "print".to_string(),
             args: vec![HirExpr::Call {
@@ -178,6 +182,7 @@ fn issubclass_with_user_class_vs_builtin_lowers_to_false() {
     // `issubclass(D, int)` — user class vs builtin target, covers the
     // `return false` line in `eval_issubclass_single`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
             callee: "print".to_string(),
             args: vec![HirExpr::Call {
@@ -231,6 +236,7 @@ fn issubclass_with_non_name_first_arg_panics() {
     // In practice, the type checker rejects this before MIR lowering,
     // but the MIR function must handle the case defensively.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
             callee: "print".to_string(),
             args: vec![HirExpr::Call {

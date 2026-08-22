@@ -1,3 +1,11 @@
+/// Ruff's own generic AST visitor, re-exported through this facade so
+/// downstream crates can walk every node of a module without hand-rolling
+/// (and having to keep exhaustive) a `Stmt`/`Expr` match of their own. The
+/// trait's default methods recurse through every child node, so an
+/// implementor that overrides a single `visit_*` method still sees the
+/// whole tree, and an upstream AST addition is covered automatically.
+pub use ruff_python_ast::visitor;
+
 pub use ruff_python_ast::{
     Arguments, CmpOp, Comprehension, ConversionFlag, Decorator, ElifElseClause, ExceptHandler,
     ExceptHandlerExceptHandler, Expr, ExprBinOp, ExprBooleanLiteral, ExprCall, ExprCompare,

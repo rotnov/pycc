@@ -129,7 +129,7 @@ fn check_raise_operand(
     }
 
     let ty = infer_expr_in(env, local_names, expr)?;
-    if matches!(&ty, Ty::Instance(class_name) if pycc_hir::is_builtin_exception_class(class_name) && !env.classes.contains_key(class_name.as_ref()))
+    if matches!(&ty, Ty::Instance(class_name) if pycc_hir::is_builtin_exception_class(class_name) && !is_user_defined_class(env, class_name))
     {
         return Ok(());
     }
@@ -149,7 +149,17 @@ pub(super) fn is_unshadowed_builtin_exception(
         & env.lookup_any(name).is_none()
         & !local_names.contains(&name)
         & !env.functions.contains_key(name)
-        & !env.classes.contains_key(name)
+        & !is_user_defined_class(env, name)
+}
+
+/// Whether `name` is registered as a *user-authored* class (Part 1 of
+/// #541). Since HIR lowering now seeds a `HirClassDef` for each of the
+/// seven builtin exception names, mere presence in `Environment::classes`
+/// no longer means the user shadowed the name -- only a non-synthetic
+/// entry does. Without this distinction every `except ValueError:` and
+/// `raise ValueError("x")` in the language would start being rejected.
+fn is_user_defined_class(env: &Environment, name: &str) -> bool {
+    env.classes.contains_key(name) && !env.is_synthetic_class(name)
 }
 
 fn check_stmt_shared(
@@ -164,3 +174,6 @@ fn check_stmt_shared(
         check_stmt(env, stmt)
     }
 }
+
+#[cfg(test)]
+mod synthetic_class_tests;

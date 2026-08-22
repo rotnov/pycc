@@ -491,6 +491,7 @@ fn method_call_on_protocol_typed_parameter_resolves_via_class_def_of() {
     // with a protocol-typed parameter and a method call on it.
     let proto_ty = Ty::Protocol(Box::new("P".to_string()));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "P.foo".to_string(),
@@ -549,6 +550,7 @@ fn protocol_typed_annassign_binds_concrete_type() {
     let proto_ty = Ty::Protocol(Box::new("P".to_string()));
     let instance_ty = Ty::Instance(Box::new("C".to_string()));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
             target: "c".to_string(),
             annotation: proto_ty,
@@ -671,6 +673,7 @@ fn isinstance_with_protocol_target_goes_through_lower_isinstance() {
         is_abstract: false,
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "c".to_string(),

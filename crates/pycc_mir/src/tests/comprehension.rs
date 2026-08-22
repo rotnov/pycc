@@ -16,6 +16,7 @@ fn a_range_sourced_list_comprehension_lowers_to_comp_source_range_with_var_ty_in
     // that arm need at least one executing test for D-014's coverage
     // gate).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::ListCompAssign {
                 target: "y".to_string(),
@@ -80,6 +81,7 @@ fn a_bare_name_list_sourced_list_comprehension_resolves_comp_source_list_with_th
     // so `var_ty` is trivially distinguishable from the `Ty::Int` a
     // hardcoded bug would wrongly report.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "xs".to_string(),
@@ -121,6 +123,7 @@ fn a_range_sourced_set_comprehension_lowers_to_comp_source_range_with_var_ty_int
     // (distinct closures from `ListCompAssign`'s own, needing their own
     // executing test for D-014's coverage gate).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::SetCompAssign {
             target: "y".to_string(),
             var: "i".to_string(),
@@ -162,6 +165,7 @@ fn a_bare_name_set_sourced_set_comprehension_resolves_comp_source_set() {
     // Exercises `resolve_comp_source`'s `CompIter::Name` branch resolving
     // to `Ty::Set`.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "s".to_string(),
@@ -208,6 +212,7 @@ fn a_bare_name_dict_sourced_dict_comprehension_resolves_comp_source_dict_with_va
     // above binds a `dict[str, int]`'s loop variable as `Ty::Str`, the
     // key type, for the same reason).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "d".to_string(),
@@ -256,6 +261,7 @@ fn a_comprehension_over_a_non_list_non_dict_non_set_binding_panics_with_an_inter
     // `resolve_comp_source`'s own defensive panic path still needs
     // direct coverage via a hand-built HIR that bypasses that guarantee.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),

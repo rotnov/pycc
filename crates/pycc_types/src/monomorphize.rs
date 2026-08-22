@@ -1733,6 +1733,11 @@ pub(crate) fn instantiate_generic_class_methods(
             abstract_methods: Vec::new(),
             is_abstract: false,
         };
+        // `bind_class` clears any synthetic marking for the name it binds
+        // (Part 1 of #541, D-188), which is harmless here: `mangled_class`
+        // always carries `mangle_generic_instantiation`'s `0gen_` prefix, so
+        // it can never equal one of the seven `BUILTIN_EXCEPTION_CLASSES`
+        // names and can never unmark a synthetic entry `bind_classes` made.
         env.bind_class(mangled_class.clone(), new_class_def.clone());
         new_class_defs.push((mangled_class, new_class_def));
     }
@@ -2408,6 +2413,10 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
         // -- not `pycc_mir`, not `pycc_codegen` -- reads the field after
         // lowering, so the resolved HIR's `type_aliases` is empty by design.
         return Ok(HirModule {
+            // Provenance travels with the module: monomorphization
+            // rewrites and extends `class_defs`, but never changes who
+            // produced the builtin exception entries already in it.
+            seeded_builtin_exception_classes: hir.seeded_builtin_exception_classes,
             items: hir.items.clone(),
             type_aliases: Vec::new(),
             imports: Vec::new(),
@@ -2596,6 +2605,10 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     let mut class_defs = hir.class_defs.clone();
     class_defs.extend(new_class_defs);
     Ok(HirModule {
+        // Provenance travels with the module: monomorphization
+        // rewrites and extends `class_defs`, but never changes who
+        // produced the builtin exception entries already in it.
+        seeded_builtin_exception_classes: hir.seeded_builtin_exception_classes,
         items,
         type_aliases: Vec::new(),
         imports: Vec::new(),

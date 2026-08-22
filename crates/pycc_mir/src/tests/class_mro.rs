@@ -47,6 +47,7 @@ fn ghost_mro_param_module(body: Vec<HirStmt>) -> HirModule {
         body,
     };
     HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![init, user_fn],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -148,6 +149,7 @@ fn mro_attrs_with_a_ghost_class_in_the_mro_panics_with_an_internal_error() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             HirItem::TopLevelStmt(HirStmt::Assign {
@@ -197,6 +199,7 @@ fn instantiate_with_no_init_in_the_mro_panics_with_an_internal_error() {
     // panic fires.
     use pycc_hir::HirClassDef;
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "c".to_string(),
             value: HirExpr::Call {
@@ -273,6 +276,7 @@ fn mro_attrs_deduplicates_a_redeclared_attribute_across_the_mro() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             base_init,
             init,
@@ -395,6 +399,7 @@ fn mro_attrs_overrides_type_for_a_redeclared_attribute_with_a_different_type() {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             base_init,
             init,

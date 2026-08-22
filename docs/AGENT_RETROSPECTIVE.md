@@ -33,6 +33,163 @@ never a merge gate.
 
 ---
 
+## 2026-08-22 — Structural equality was used as a provenance proxy, and its own doc comment argued the wrong premise
+
+**What happened.** Part 1 of #541 needed to tell a compiler-synthesized
+builtin exception class apart from a user-authored class of the same name.
+`pycc_hir::exception::is_builtin_exception_class_def` answered that by
+comparing the `HirClassDef` for structural equality against a cached copy of
+`builtin_exception_class_defs()`. Its doc comment asserted the check was
+"sufficient and exact", and the D-188 rejected-alternatives section repeated
+the claim. It was wrong: a user `class Exception:` whose body is only
+`def __init__(self) -> None: pass` lowers to a definition byte-for-byte
+identical to the synthetic one, so it was marked synthetic,
+`is_user_defined_class` reported the name as *not* user-defined, and the
+builtin-exception paths took the user's own class over — `Exception()`
+compiled at the base commit and was rejected with `C0001` after. Reviewer-
+found on PR #710 and confirmed empirically against a base-commit binary
+before any fix was attempted.
+
+**Root cause.** The exactness argument was made from a premise that does not
+cover the failing case. It argued that seeding is all-or-nothing, so a
+synthetic definition and a same-named user class are never co-present *in one
+module*. True, and irrelevant: the module that breaks it has no synthetic
+entries at all, because it *shadows* one of the seven names and was therefore
+never seeded. The premise reasoned about co-presence; the check is applied to
+every module, seeded or not. A stated invariant was accepted as covering the
+whole input domain without checking which inputs it actually ranges over.
+
+**What fixed it.** Recording provenance at the step that creates the value:
+`lower_checked` now sets `HirModule::seeded_builtin_exception_classes` at the
+point it seeds, `bind_classes` marks membership from that record, and
+`is_builtin_exception_class_def` is deleted rather than left as a dead public
+helper. The new tests assert both halves together — the fixture is still
+structurally identical to the synthetic definition *and* is not marked
+synthetic — so the property cannot pass vacuously if the synthetic shape
+changes later.
+
+**Lesson.** *A value's shape is never evidence of its origin.* When code needs
+to know who produced a value — compiler-synthesized versus user-authored,
+generated versus hand-written, trusted versus untrusted — record that fact at
+the point of creation and carry it; do not reconstruct it by comparing the
+value against what the producer would have made. The cost of carrying a flag
+through a struct is mechanical and one-time; the cost of a wrong provenance
+answer is a silent behavior change on someone's valid program. And when
+writing a doc comment that argues a check is exact, state the input domain
+the argument ranges over and check that it is the domain the check actually
+runs on — an exactness claim whose premise is about a *different* set of
+inputs than the callers supply is the shape this defect took, and it survived
+review precisely because the premise it stated was itself true.
+
+---
+
+## 2026-08-21 — A per-module cost was cleared against an absolute budget that cannot see it
+
+**What happened.** Part 1 of #541 (`789afe51`) added a fixed per-module cost:
+seven synthetic `HirClassDef`s seeded into every module, plus a
+`bind_class`-time structural comparison that rebuilt all seven definitions on
+every call. The session that wrote it checked performance with
+`scripts/check_frontend_throughput.rb`, which is an *absolute* 75 ms budget on
+a 1000-LOC file, saw ~35 ms, and concluded there was no regression. CI then
+failed `frontend-perf-gate`, which is a *relative* 7% gate against a recorded
+baseline on a 15-line class-free fixture: 12.23 us to 43.10 us, a 252%
+regression with no overlap between the five previous and five current
+replicate medians.
+
+**Root cause.** The two instruments answer different questions. A fixed
+per-module cost is invisible under an absolute budget with 40 ms of headroom
+on a large input, and dominant under a relative gate on a small one. Choosing
+the instrument that was easy to run rather than the one whose failure mode
+matched the change's cost shape produced a false all-clear.
+
+**What fixed it.** Running `cargo bench --bench check_bench` at the base
+commit and at HEAD back to back on one machine, then splitting the delta
+across `pycc_hir::lower_checked` and `pycc_types::check` with a scratch
+criterion bench, and finally re-running the same measurement parameterized by
+module size (15 lines / 100 LOC / 1000 LOC) to establish how the added cost
+scaled. That localized ~10.4 us of ~13.2 us to the per-`bind_class` rebuild
+(fixed with a `LazyLock`) and showed the irreducible remainder was still ~10x
+over budget, which is what chose gating the seeding over making it cheaper.
+The size-parametric run also refuted a mid-task hypothesis that the added cost
+was superlinear: that inference came from comparing a release-mode microsecond
+measurement against a debug-mode millisecond one on a noisy shared runner, and
+back-to-back same-machine numbers showed the added cost is linear in item
+count.
+
+**Lesson.** Before using a performance check as evidence that a change is
+safe, state what cost shape the change adds and confirm the check can see
+that shape. An absolute budget with large headroom is not a regression
+detector. When a change adds a fixed per-module or per-item cost, the
+instrument is the relative gate on the smallest fixture, run at base and HEAD
+back to back on the same machine — and any cross-instrument comparison
+(release vs debug, local vs CI runner) is a hypothesis, not a measurement.
+
+## 2026-08-21 — An accepted ADR asserted a defect that had never been reproduced
+
+**What happened.** `docs/decisions/D-188` and its commit message both stated,
+as one of the three defects motivating Part 1 of #541, that a bare
+`e = ValueError("x")` "slipped past the type checker into MIR and codegen,
+where `pycc_rt`'s exception object was read as an ordinary instance --
+undefined behavior with no diagnostic anywhere on the path." That was
+inherited from the plan's problem statement and written into an accepted
+decision record without ever being run. A pre-change build at `7116ed0d`
+rejects that exact program with `C0001 call to builtin \`ValueError\` is
+valid Python but not implemented yet` -- the same four `c0001_callable_builtin_*`
+fixtures that predate the change already assert it. No value reached codegen,
+and there was no UB.
+
+**Root cause.** The session's own evidence contradicted the claim and was not
+read as contradicting it: the four fixtures were inspected (and found to need
+no regeneration) precisely *because* the old compiler already rejected that
+spelling. A plan's motivating narrative was treated as established fact
+because it was upstream of the task rather than authored during it.
+
+**What fixed it.** Building a scratch worktree at the base commit and running
+four candidate spellings through `pycc check` on both revisions. That found
+the two defects that are real -- `class MyError(ValueError):` was rejected
+with `C0001 inherits from unknown class`, and
+`except ValueError as e: print(e.args)` aborted with an internal compiler
+error in `class::expect_class` -- and the Context, Consequences,
+`docs/RUNTIME.md`, `docs/ROADMAP.md`, `docs/TYPE_SYSTEM.md` and the commit
+body were rewritten to those.
+
+**Lesson.** A defect claim in an ADR is a factual assertion about a specific
+revision, and the cost of checking it is one scratch worktree plus one CLI
+invocation. Before writing "before this change, X happened", build the base
+commit and make X happen. A green suite on the *new* code proves nothing
+about the old behavior, and a plan or issue body describing the defect is
+the claim to verify, not the evidence for it.
+
+## 2026-08-21 — Seeding a vector that hundreds of tests index positionally cost three fix rounds
+
+**What happened.** Part 1 of #541 seeds seven synthetic `HirClassDef`s into
+`HirModule::class_defs`. The first attempt appended them at the end and
+emitted the synthetic `Exception.__init__` item unconditionally; that broke
+147 `pycc_hir` tests. Moving the seeding to the front and rotating it back
+after lowering fixed 70 of them, making the `__init__` item conditional on a
+user class's MRO actually reaching a seeded class fixed 63 more, a missing
+`synthetic_class_count > 0` guard fixed one, and the last 14 were hardcoded
+`assert_eq!(hir.class_defs.len(), N)` assertions in `class.rs`.
+
+**Root cause.** The placement decision (front, back, or front-then-rotate)
+and the emission decision (always, or only when inherited) were both made
+from the implementation's own logic and then validated against the test
+suite, instead of being derived from what the existing test surface actually
+asserts about the vector. Both constraints were discoverable up front by
+grepping for `class_defs[0]`, `class_defs.len()`, and `items.len()`.
+
+**What fixed it.** Seed at the front (so base resolution, annotation
+projection, and all eight name-collision checks see the definitions), then
+`rotate_left(synthetic_class_count)` before returning so the module's own
+classes still come first in source order.
+
+**Lesson.** Before inserting entries into a shared collection that existing
+code and tests index or count, grep the tree for positional and cardinality
+assertions on it first, and let those decide the insertion point. Three
+rounds of "run the suite, read the new failure count, adjust" is the
+signature of having skipped that grep.
+
+
 ## 2026-08-21 — A test written to close a review finding passed against the broken code it was meant to guard
 
 **What happened.** The pinned reviewer flagged that `check_conformance_breadth.py`

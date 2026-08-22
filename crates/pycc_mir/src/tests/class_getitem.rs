@@ -50,6 +50,7 @@ fn class_getitem_hir(hook_kind: &str, extra_items: Vec<HirItem>) -> HirModule {
         )
     };
     HirModule {
+        seeded_builtin_exception_classes: false,
         items,
         type_aliases: Vec::new(),
         imports: Vec::new(),

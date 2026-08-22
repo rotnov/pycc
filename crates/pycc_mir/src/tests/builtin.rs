@@ -14,6 +14,7 @@ fn lowers_math_sqrt_call_to_mir_with_float_type_without_panicking() {
     // to find, even though `pycc_types` already accepts `math.sqrt(x)`
     // as valid, `Ty::Float`-typed.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "n".to_string(),
             value: HirExpr::Call {
@@ -46,6 +47,7 @@ fn lowers_math_pi_name_to_mir_with_float_type_without_panicking() {
     // is never bound in `scopes` the way an ordinary assigned variable
     // is.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
             target: "n".to_string(),
             value: HirExpr::Name("math.pi".to_string()),
@@ -75,6 +77,7 @@ fn lowers_len_call_to_mir_with_int_type_without_panicking() {
     // signature is ever registered -- even though `pycc_types` already
     // accepts `len(lst)` as valid, `Ty::Int`-typed (D-105 point 3).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -118,6 +121,7 @@ fn lowers_float_call_to_mir_with_float_type_without_panicking() {
     // `$fn:float` signature is ever registered -- even though
     // `pycc_types` already accepts `float(x)` as valid, `Ty::Float`-typed.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -162,6 +166,7 @@ fn a_user_defined_float_function_is_lowered_as_a_real_call_not_the_builtin() {
     // silently override the user function's own registered `Ty::Int`
     // return type.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "float".to_string(),

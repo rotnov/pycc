@@ -32,9 +32,23 @@ use super::check_call_args;
 /// every `Environment` constructor this crate has (`check_with_signatures`'s
 /// own per-item loop, `concrete_function_environment`'s literal), mirroring
 /// how each already registers every function's signature.
+///
+/// Part 1 of #541 (D-188): a class is marked synthetic if and only if
+/// *this compiler's own* HIR lowering produced it. The provenance record is
+/// `hir.seeded_builtin_exception_classes`, set by `lower_checked` at the
+/// point it seeds; combined with `is_builtin_exception_class` it is exact,
+/// because seeding is all-on/all-off and its shadow gate guarantees a
+/// seeded module has no user top-level binding of any of the seven names.
+/// Nothing here inspects a `HirClassDef`'s shape: a user-authored class can
+/// be structurally identical to a synthetic one, so shape is not evidence
+/// of origin.
 pub(crate) fn bind_classes(env: &mut Environment, hir: &HirModule) {
     for (name, class_def) in &hir.class_defs {
-        env.bind_class(name.clone(), class_def.clone());
+        if hir.seeded_builtin_exception_classes && pycc_hir::is_builtin_exception_class(name) {
+            env.bind_synthetic_class(name.clone(), class_def.clone());
+        } else {
+            env.bind_class(name.clone(), class_def.clone());
+        }
     }
 }
 
@@ -101,6 +115,26 @@ pub(crate) fn resolve_instantiation(
                 "cannot instantiate protocol class `{class_name}` -- \
                  a protocol is a compile-time-only interface description, \
                  not an instantiable class"
+            ),
+            Span::new(0, 0),
+        ));
+    }
+    // Part 1 of #541 (extending D-173): a *synthetic* builtin exception
+    // class cannot be instantiated as a value. D-173 propagates a raised
+    // exception through global runtime state rather than through an
+    // allocated instance, so `e = ValueError("x")` has nothing to bind and
+    // no storage to allocate; `raise ValueError("x")` is the only supported
+    // construction, and it is checked by `exception::check_raise_operand`
+    // without ever reaching here. Keyed on `is_synthetic_class`, not on the
+    // name alone: a user's own `class ValueError:` is an ordinary class and
+    // stays instantiable.
+    if env.is_synthetic_class(class_name) {
+        return Err(Diagnostic::error(
+            "C0001",
+            format!(
+                "cannot instantiate builtin exception class `{class_name}` -- \
+                 a builtin exception can only be constructed by raising it \
+                 (`raise {class_name}(\"message\")`), not bound as a value"
             ),
             Span::new(0, 0),
         ));

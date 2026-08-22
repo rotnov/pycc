@@ -18,6 +18,7 @@ use pycc_hir::{HirClassDef, HirExpr, HirItem, HirModule, HirStmt, Ty};
 #[should_panic(expected = "pycc_mir: internal error: a bare `HirExpr::Super` reached MIR lowering")]
 fn bare_super_reaching_mir_panics_with_an_internal_error() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Super))],
         type_aliases: Vec::new(),
         imports: Vec::new(),
@@ -40,6 +41,7 @@ fn bare_super_reaching_mir_panics_with_an_internal_error() {
 )]
 fn super_attr_get_outside_method_panics_with_an_internal_error() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::AttrGet {
             base: Box::new(HirExpr::Super),
             attr: "x".to_string(),
@@ -57,6 +59,7 @@ fn super_attr_get_outside_method_panics_with_an_internal_error() {
 )]
 fn super_method_call_outside_method_panics_with_an_internal_error() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
             HirExpr::MethodCall {
                 base: Box::new(HirExpr::Super),
@@ -79,6 +82,7 @@ fn super_module() -> HirModule {
     let self_a = Ty::Instance(Box::new("A".to_string()));
     let self_b = Ty::Instance(Box::new("B".to_string()));
     HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             // A.__init__
             HirItem::Function {
@@ -235,6 +239,7 @@ fn super_attr_get_naming_an_instance_attr_panics_with_an_internal_error() {
     let self_a = Ty::Instance(Box::new("A".to_string()));
     let self_b = Ty::Instance(Box::new("B".to_string()));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "A.__init__".to_string(),
@@ -314,6 +319,7 @@ fn super_property_lowers_to_call_to_base_getter() {
     let self_a = Ty::Instance(Box::new("A".to_string()));
     let self_b = Ty::Instance(Box::new("B".to_string()));
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::Function {
                 name: "A.__init__".to_string(),

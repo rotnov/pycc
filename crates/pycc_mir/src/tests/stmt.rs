@@ -10,6 +10,7 @@ use pycc_hir::{CmpOpKind, HirExpr, HirItem, HirModule, HirStmt, Ty};
 #[test]
 fn builds_an_if_statement_lowering_both_branches() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::If {
             test: HirExpr::BoolLiteral(true),
             body: vec![HirStmt::ExprStmt(HirExpr::Call {
@@ -47,6 +48,7 @@ fn builds_an_if_statement_lowering_both_branches() {
 #[test]
 fn builds_a_while_loop() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::While {
             test: HirExpr::BoolLiteral(true),
             body: vec![HirStmt::ExprStmt(HirExpr::Call {
@@ -75,6 +77,7 @@ fn builds_a_while_loop() {
 #[test]
 fn builds_a_for_range_loop_binding_its_variable_as_int() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::ForRange {
             var: "i".to_string(),
             start: HirExpr::IntLiteral(0),
@@ -112,6 +115,7 @@ fn builds_a_for_range_loop_binding_its_variable_as_int() {
 #[test]
 fn builds_a_return_with_no_value() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![],
@@ -144,6 +148,7 @@ fn an_annotated_assignment_whose_value_type_already_matches_the_annotation_lower
     // here) -- the sibling test below, where they differ, is what
     // actually proves `lower_stmt` binds the annotation.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::AnnAssign {
                 is_final: false,
@@ -191,6 +196,7 @@ fn an_annotated_assignment_with_a_bool_value_under_an_int_annotation_widens_and_
     // `x`'s eventual codegen slot (confirmed end to end:
     // `x: int = True; x = 5; return x` printed `11`, not `5`).
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::AnnAssign {
                 is_final: false,
@@ -230,6 +236,7 @@ fn an_annotated_assignment_with_a_bool_typed_compare_value_also_widens() {
     // for a `Compare`-sourced `bool`, not only the literal
     // case the previous test exercises.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
             is_final: false,
             target: "x".to_string(),
@@ -269,6 +276,7 @@ fn a_value_less_annotated_assignment_lowers_to_a_no_op_and_binds_nothing() {
     // still panics via `lookup`, proving no phantom binding leaked
     // through.
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
             is_final: false,
             target: "y".to_string(),
@@ -287,6 +295,7 @@ fn a_value_less_annotated_assignment_lowers_to_a_no_op_and_binds_nothing() {
 #[should_panic(expected = "has no recorded type")]
 fn a_value_less_annotated_assignment_does_not_bind_the_name() {
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             HirItem::TopLevelStmt(HirStmt::AnnAssign {
                 is_final: false,
@@ -332,6 +341,7 @@ fn lowered_attr_set_value(slot_ty: Ty, value: HirExpr) -> MirExpr {
         ],
     };
     let hir = HirModule {
+        seeded_builtin_exception_classes: false,
         items: vec![
             init,
             HirItem::TopLevelStmt(HirStmt::Assign {

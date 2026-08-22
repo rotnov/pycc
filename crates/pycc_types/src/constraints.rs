@@ -1462,15 +1462,20 @@ pub(crate) fn collect_block_constraints(
             HirStmt::Raise { exc, cause } => {
                 // #382 (PR-22 Part 1): A raise expression that is a direct
                 // call to a builtin exception class (e.g.
-                // `ValueError("msg")`) would be classified as C0001 by
-                // `collect_expr_constraints` (the callee is a known callable
-                // builtin, not a user-defined function or registered class).
-                // The actual validation is done by `check_raise_stmt` in the
-                // check pass, so errors from constraint collection for raise
-                // operands are deliberately ignored here — they would
-                // otherwise prevent the solver path from reaching
-                // `check_with_signatures`, where `bind_classes` registers
-                // the builtin exception classes and the real check succeeds.
+                // `ValueError("msg")`) is classified as C0001 by
+                // `collect_expr_constraints`: that collector resolves a
+                // callee against the `signatures` map it was handed, which
+                // holds only `HirItem::Function` entries, so a class name
+                // misses and falls through to the known-callable-builtin
+                // arm. Part 1 of #541 seeded the seven builtin exception
+                // names into `Environment::classes`, but that table is not
+                // what this collector consults, so the classification is
+                // unchanged. The actual validation is done by
+                // `check_raise_stmt` in the check pass, so errors from
+                // constraint collection for raise operands are deliberately
+                // ignored here — they would otherwise prevent the solver
+                // path from reaching `check_with_signatures`, where the
+                // real check succeeds.
                 if let Some(exc_expr) = exc {
                     let _ = collect_expr_constraints(
                         signatures,
@@ -1736,19 +1741,28 @@ pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environme
             ),
         );
     }
-    Some(Environment {
+    let mut env = Environment {
         bindings: HashMap::new(),
         declared: HashMap::new(),
         functions: Arc::new(functions),
         def_rebound: HashSet::new(),
         defined_functions: HashSet::new(),
         generics: Arc::new(generics),
-        classes: Arc::new(hir.class_defs.iter().cloned().collect()),
+        classes: Arc::new(HashMap::new()),
+        synthetic_classes: Arc::new(HashSet::new()),
         own_type_param: None,
         current_class: None,
         finals: HashSet::new(),
         in_except_handler: false,
-    })
+    };
+    // Part 1 of #541: register the class table through `bind_class` (via
+    // `bind_classes`) rather than by populating `classes` directly, so this
+    // second `Environment` constructor cannot drift from the first on which
+    // entries are marked synthetic. `bind_class` and `bind_synthetic_class`
+    // are together the sole mutators of both tables precisely so that
+    // invariant holds by construction.
+    crate::class::bind_classes(&mut env, hir);
+    Some(env)
 }
 
 pub(crate) fn infer_function_signatures_with_solver(

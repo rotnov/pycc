@@ -11,7 +11,8 @@ mod typecheck;
 
 pub use class::{HirClassDef, PropertyDef, ProtocolMember};
 pub use exception::{
-    BUILTIN_EXCEPTION_CLASSES, HirExceptHandler, builtin_exception_parent,
+    BUILTIN_EXCEPTION_CLASSES, EXCEPTION_INIT_MANGLED_NAME, HirExceptHandler,
+    builtin_exception_class_defs, builtin_exception_init_item, builtin_exception_parent,
     is_builtin_exception_class,
 };
 pub(crate) use func::{
@@ -744,6 +745,20 @@ pub struct HirModule {
     /// `class::lower_class`'s own doc comment for the mangling scheme and
     /// the reasoning for not adding a dedicated `HirItem::ClassDef` variant).
     pub class_defs: Vec<(String, HirClassDef)>,
+    /// Provenance for the builtin exception hierarchy (Part 1 of #541,
+    /// D-188): `true` exactly when *this* lowering pass seeded the seven
+    /// `BUILTIN_EXCEPTION_CLASSES` entries into `class_defs`, and `false`
+    /// for every module whose classes are all user-authored.
+    ///
+    /// Seeding is all-or-nothing and its shadow gate guarantees no user
+    /// top-level binding of any of the seven names survives alongside it,
+    /// so this single flag plus `is_builtin_exception_class` identifies the
+    /// synthetic entries exactly -- see `pycc_types`'s `bind_classes`.
+    /// Provenance is recorded here rather than re-derived downstream
+    /// because *no* property of a `HirClassDef`'s own shape is a sound
+    /// proxy for who produced it: a user can author a class that is
+    /// byte-for-byte identical to a synthetic one.
+    pub seeded_builtin_exception_classes: bool,
 }
 
 /// Lowers a parsed module into the HIR subset implemented by this pycc
@@ -763,6 +778,33 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     let mut imports: Vec<ImportBinding> = Vec::new();
     let mut class_defs: Vec<(String, HirClassDef)> = Vec::new();
     let mut items = Vec::with_capacity(module.body.len());
+    // Part 1 of #541 (extending D-173): give the builtin exception
+    // hierarchy a real presence in the class table, seeded *before* any
+    // user statement is lowered so a user class can inherit from one
+    // (`class MyError(ValueError):`) exactly as it inherits from a user
+    // base. Two gates, both of which must pass:
+    //
+    // * The module must actually *reference* one of the seven names. Every
+    //   entry in `class_defs` costs the per-item work below (the projected
+    //   class slice, the name-collision checks) and the per-function class
+    //   binding in `pycc_types`, and a module that never names a builtin
+    //   exception cannot observe the difference -- see
+    //   `exception::module_references_builtin_exception_name`.
+    // * The module's own top level must not *bind* any of the seven names.
+    //   That gate is all-or-nothing, so every existing name-collision check
+    //   below applies to the synthetic definitions with no exemption -- see
+    //   `exception::module_shadows_builtin_exception_name`.
+    let seeded_builtin_exception_classes =
+        exception::module_references_builtin_exception_name(module)
+            && !exception::module_shadows_builtin_exception_name(module);
+    if seeded_builtin_exception_classes {
+        class_defs.extend(builtin_exception_class_defs());
+    }
+    // Seeded at the *front* so every lookup below (base resolution,
+    // annotation projection, the name-collision checks) sees them, then
+    // rotated to the back once lowering finishes so `class_defs` still
+    // opens with the module's own classes in source order.
+    let synthetic_class_count = class_defs.len();
     for stmt in &module.body {
         // #380 (PR-20): build the projected class slice `annotation_to_ty`
         // uses to resolve cross-class annotations; #611 (PEP 560) added the
@@ -931,11 +973,33 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
         };
         items.push(item);
     }
+    class_defs.rotate_left(synthetic_class_count);
+    // The synthetic `Exception.__init__` body is emitted only when a user
+    // class actually inherits it -- that is, when some user class's
+    // computed MRO reaches one of the seeded builtin exception classes.
+    // The class-table entries above are metadata every module needs for
+    // name and base resolution; this is *code*, and emitting an
+    // uncallable constructor into every compiled module would put a dead
+    // function in every object file. The synthetic classes themselves can
+    // never call it: instantiating one is rejected by the type checker
+    // (`pycc_types::class::resolve_instantiation`).
+    if synthetic_class_count > 0
+        && class_defs[..class_defs.len() - synthetic_class_count]
+            .iter()
+            .any(|(_, def)| {
+                def.mro
+                    .iter()
+                    .any(|ancestor| is_builtin_exception_class(ancestor))
+            })
+    {
+        items.push(builtin_exception_init_item());
+    }
     Ok(HirModule {
         items,
         type_aliases: aliases,
         imports,
         class_defs,
+        seeded_builtin_exception_classes,
     })
 }
 
