@@ -45,14 +45,16 @@ never assumed:
    satisfied by finding a second failing PR whose error text superficially
    matches. Actively construct and refute the alternative hypothesis "this
    candidate's own diff explains the failure" -- do not merely fail to
-   think of it. Concrete near-miss this must reject: a PR proposing a
-   genuinely new, not-yet-recognized manifest transition can fail
-   `check_ci_permissions.rb`'s `validate_policy_successor_transition` with
-   error text that pattern-matches an already-documented class, purely
-   because *that PR's own content* introduces a digest or target the base
-   checker does not yet recognize -- a correct, single-PR-fixable defect,
-   not external state, even though the error text looks identical to a
-   genuine cross-PR deadlock. Check whether the specific file(s) implicated
+   think of it. Concrete near-miss this must reject: a PR that edits
+   `.github/workflows/ci.yml` without first registering the resulting
+   digest in `check_roadmap_evidence.rb`'s
+   `REVIEWED_PERF_CI_WORKFLOW_SHA256S` allowlist fails with `does not match
+   a reviewed active-or-staged performance CI workflow` -- error text that
+   pattern-matches an already-documented class, purely because *that PR's
+   own content* introduces bytes the base checker does not yet recognize --
+   a correct, single-PR-fixable defect (D-080's own staging step), not
+   external state, even though the text looks identical to a genuine
+   cross-PR deadlock. Check whether the specific file(s) implicated
    in the failure are ones the motivating PR itself modifies; if so, the
    failure's cause cannot be external to that PR by construction, and this
    condition fails regardless of what a second PR shows.

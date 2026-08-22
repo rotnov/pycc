@@ -125,10 +125,7 @@ loop can carry many issues in one sitting instead of growing that session's
 context unboundedly after the first — detecting and executing the
 repository's established two-PR CI-digest stage-then-activate pattern when
 the change touches a workflow file and a `check_roadmap_evidence.rb` digest
-allowlist, or the separate, broader D-103 policy-successor-manifest
-stage-then-activate pattern covering any path listed in
-`tests/fixtures/policy-successor-manifest.json` — checker scripts and their
-own self-tests and staging fixtures, not only workflow files); loops the
+allowlist); loops the
 pinned D-068 deep review until a round reports no actionable findings,
 resuming the same dispatched implementer for its own fix rounds rather than
 fixing findings in the orchestrating session's own context; opens the pull
@@ -137,13 +134,7 @@ state; monitors CI and review threads under D-078, distinguishing
 bot-authored threads (self-resolvable on refutation) from human-authored
 ones (reply only, never self-resolved); and merges only after re-checking
 the issue once more and re-reading the full diff with every required gate
-green, retrying a rejected merge once before stopping. Preflight also reads
-`tests/fixtures/policy-successor-manifest.json` from the refreshed default
-branch: any entry mid-transition (a successor staged but not yet activated)
-blocks every candidate PR's required `audit` check repository-wide,
-regardless of which issue or files it touches, so an entry that cannot
-plausibly land this session (e.g. it needs a maintainer `emergency-bypass`
-authorization) is caught here before any other work starts. Unlike
+green, retrying a rejected merge once before stopping. Unlike
 `pycc-feedback`'s per-payload confirmation, explicit invocation of
 `issue-implement` authorizes an enumerated set of public writes scoped to
 the named issue — a closure or narrowing comment depending on how staleness
@@ -151,15 +142,13 @@ triage resolves (extended, under a standing autopilot directive from
 `issue-select`'s own staleness screen, to any other issue that screen
 identifies as provably stale in the same pass), the plan comment it
 delegates to `issue-to-plan`, the task branch and pull request (plus a
-second, stage-only pull request for the CI-digest or D-103 manifest-staging
-pattern above — an intermediate D-103 activation that is itself only a
-prerequisite for a larger composed change also carries no `Fixes #N`, only
-the sequence's own final PR does), replies to and resolution of bot-authored
+second, stage-only pull request for the CI-digest pattern above, which
+carries no `Fixes #N` — only the sequence's own final PR does), replies to
+and resolution of bot-authored
 review threads on that pull request, and the merge itself. Anything outside
 that set still requires asking first, and `issue-to-plan`'s own publish gate
 recognizes exactly this delegation. Its fourteen stop conditions are split
-into **systemic** (the pinned reviewer cannot be bound, or a manifest entry
-mid-transition whose own activation cannot land this session — both halt the
+into **systemic** (the pinned reviewer cannot be bound — this halts the
 whole `issue-select` autopilot loop, since no different issue would fare any
 better) and **per-issue** (every other condition — the loop sets that one
 issue aside and keeps working the rest of the pool).
@@ -167,17 +156,13 @@ issue aside and keeps working the rest of the pool).
 `issue-select` chooses the next issue for an autonomous end-to-end run and
 mutates no tracked file: it inventories the full open issue list (priority is
 read from the issue title's `P1:`/`P2:`/`P3:` prefix per D-111 — this
-repository has no GitHub priority labels), reads
-`tests/fixtures/policy-successor-manifest.json` from that same freshly-fetched
-tip and stops the whole run if any entry is mid-transition and cannot
-plausibly land this run (the same systemic check `issue-implement` repeats
-for the case it is discovered later), screens for staleness against a
+repository has no GitHub priority labels), screens for staleness against a
 concretely defined "reconfirmed at commit X" evidence bar (routing provable
 closures through `issue-implement`'s evidence-gated triage — but only when a
 standing autopilot directive is in effect; a plain "what's next" query only
 reports stale candidates), screens blockers (dependency on another issue,
-roadmap/delivery-plan mismatch, open-pull-request collision, a per-candidate
-manifest-protected-target hit, maintainer-only authority, or already having
+roadmap/delivery-plan mismatch, open-pull-request collision, a fix that would
+remove a manifest-listed path, maintainer-only authority, or already having
 hit a per-issue stop condition this run), scores the survivors by a fixed
 priority-then-size order, verifies the top candidate's premise still
 reproduces the same way `issue-to-plan` does, and challenges the pick with an
@@ -221,15 +206,13 @@ per-payload gate. It mutates no tracked file and implements nothing itself.
 
 `issue-to-plan`, `issue-implement`, and `issue-select` bind deterministic
 offline eval cases in
-`scripts/run_alpha_skill_evals.py` (`issue-to-plan` three, `issue-select` seven,
-`issue-implement` eight, mirroring `pycc-feedback`'s
+`scripts/run_alpha_skill_evals.py` (`issue-to-plan` three, `issue-select` four,
+`issue-implement` five, mirroring `pycc-feedback`'s
 fail-closed-oracle pattern): `issue-to-plan`'s publish-gate boolean logic,
 `issue-implement`'s staleness-outcome/write-authorization/issue-content/
-delegated-closure/manifest-transition oracles, and `issue-select`'s
-autopilot-gated-closure/priority-ordering/issue-content/manifest-transition
-oracles — the shared `manifest_transition_status` oracle covers all three
-distinct outcomes (steady-state, a landable mid-transition entry, and an
-unlandable one classified systemic) for both skills — each cross-checked
+delegated-closure oracles, and `issue-select`'s
+autopilot-gated-closure/priority-ordering/issue-content
+oracles — each cross-checked
 against literal contract phrases in the live skill text so an edit that
 silently drops an invariant these oracles encode fails required CI
 (`EXPECTED_RUNNERS` in that script names all seven alpha skills).
