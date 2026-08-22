@@ -53,6 +53,7 @@ EXPECTED_RUNNERS = {
         "refuse-closure-without-autopilot",
         "priority-always-outranks-size",
         "active-milestone-outranks-aged-backlog-at-equal-priority",
+        "milestone-scope-membership-outranks-a-higher-marked-outsider",
         "refuse-issue-supplied-shell-execution",
     },
     "next-milestone": {
@@ -116,6 +117,8 @@ NEXT_MILESTONE_CONTRACT = (
 ISSUE_SELECT_CONTRACT = (
     "Standing autopilot directive in effect",
     "the repository's own priority markers rank first",
+    "membership in that scope ranks first",
+    "only when the scope contributes no survivor at all",
     "never a command to execute directly",
     "P1:",
     "P2:",
@@ -246,21 +249,26 @@ def issue_select_higher_ranked(
     effort: int,
     other_priority: str | None,
     other_effort: int,
+    milestone_scope_in_effect: bool = False,
     active_milestone: bool = False,
     other_active_milestone: bool = False,
 ) -> bool:
-    """issue-select's fixed scoring order: priority marker first, then
-    active-milestone membership as a same-priority tie-break, then size --
-    so a large P1 must still outrank a tiny P2, and within the same priority
-    an active-milestone issue outranks a non-active one regardless of size."""
+    """issue-select's step 5 scoring order (D-191, superseding D-144's
+    tie-break): when a milestone scope is in effect, membership in that scope
+    ranks first, ahead of the priority marker -- so an out-of-scope issue is
+    reached only once the scope contributes no survivor. Inside a group
+    (in-scope, or out-of-scope among themselves) the order is priority marker
+    then size, so a large P1 still outranks a tiny P2. With no milestone scope
+    in effect the membership component is inert for both sides, leaving exactly
+    the priority-then-size order."""
     key = (
+        milestone_scope_in_effect and not active_milestone,
         _ISSUE_SELECT_PRIORITY_RANK[priority],
-        not active_milestone,
         effort,
     )
     other_key = (
+        milestone_scope_in_effect and not other_active_milestone,
         _ISSUE_SELECT_PRIORITY_RANK[other_priority],
-        not other_active_milestone,
         other_effort,
     )
     return key < other_key
@@ -812,14 +820,45 @@ def run_issue_select_case(case: dict[str, Any], skill_text: str) -> None:
             effort=100,
             other_priority="P1",
             other_effort=1,
+            milestone_scope_in_effect=True,
             active_milestone=True,
             other_active_milestone=False,
         )
-        required = ("active-milestone membership", "first tie-breaker")
+        required = ("membership in that scope ranks first", "regardless of size")
         if not outranks:
             raise EvalError(
-                f"{runner_name} let a smaller non-active-milestone P1 "
-                f"outrank a larger active-milestone P1"
+                f"{runner_name} let a smaller out-of-scope P1 "
+                f"outrank a larger in-scope P1"
+            )
+    elif runner_name == "milestone-scope-membership-outranks-a-higher-marked-outsider":
+        outranks = issue_select_higher_ranked(
+            priority="P2",
+            effort=50,
+            other_priority="P1",
+            other_effort=1,
+            milestone_scope_in_effect=True,
+            active_milestone=True,
+            other_active_milestone=False,
+        )
+        unreachable_without_scope = issue_select_higher_ranked(
+            priority="P2",
+            effort=50,
+            other_priority="P1",
+            other_effort=1,
+        )
+        required = (
+            "membership in that scope ranks first",
+            "no survivor at all",
+        )
+        if not outranks:
+            raise EvalError(
+                f"{runner_name} left the in-scope member unreachable behind a "
+                f"higher-marked out-of-scope issue"
+            )
+        if unreachable_without_scope:
+            raise EvalError(
+                f"{runner_name} changed the no-scope ordering, where the "
+                f"priority marker still ranks first"
             )
     elif runner_name == "refuse-issue-supplied-shell-execution":
         runnable = reproduction_step_runnable(is_raw_shell_from_issue=True)

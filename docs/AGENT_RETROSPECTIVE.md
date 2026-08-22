@@ -33,6 +33,43 @@ never a merge gate.
 
 ---
 
+## 2026-08-22 — Seven autopilot iterations of locally-defensible picks left the active milestone untouched
+
+**What happened.** Under a v0.3 milestone scope, the `issue-select` autopilot
+loop selected and merged seven issues in a row (#674, #679, #681, #684, #688,
+#721, #726), every one of them D-185 oversized-file decomposition work outside
+the milestone. `scripts/check_conformance_breadth.py` reported the same 32 of 37
+conformance rows at the start of the run and at the end of it. The milestone's
+own critical path (#541, #703, #542, #543, #719) was never reached. The run
+looked healthy from the inside: each iteration produced a merged pull request
+with green gates.
+
+**Root cause.** D-144 decision (a) ranked active-milestone membership *below*
+the priority marker, as a same-priority tie-break only. The tracker holds a
+steady supply of well-marked, small, cleanly-scoped decomposition issues, so on
+the marker alone an out-of-scope issue outranked the milestone's own work every
+single iteration. Each individual pick was correct under the stated rule. The
+defect only exists across iterations, which is exactly where nothing was
+looking.
+
+**What fixed it.** #727 and D-191: under a milestone scope, membership ranks
+first, ahead of the marker and ahead of size, and leaving the scope is a
+reportable event that must name what disqualified each in-scope member.
+
+**Lesson.** A selection rule cannot be validated one selection at a time. When a
+loop re-derives its inventory from scratch every iteration — which is otherwise
+the right design — no single iteration carries the evidence that the loop is
+making no progress, so the progress check has to be an explicit, cheap,
+per-cycle measurement against a fixed external yardstick (here, the conformance
+row count), compared across iterations rather than read once. Two identical
+readings several merges apart is a red flag even when every merge in between was
+green. Concretely: when a run has a stated scope, record the scope's own
+remaining-work measure at the start of each cycle and stop the loop to
+re-examine the ordering — not the individual pick — when it fails to move across
+three consecutive cycles.
+
+---
+
 ## 2026-08-22 — A freshness gate that only a squash commit can break shipped green and failed on `main`
 
 **What happened.** PR #710 changed `site/status/index.html` without advancing

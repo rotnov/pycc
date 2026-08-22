@@ -409,7 +409,7 @@ class AlphaSkillEvalTests(unittest.TestCase):
             )
         )
 
-    def test_issue_select_oracle_covers_its_three_scenarios(self) -> None:
+    def test_issue_select_oracle_covers_every_case(self) -> None:
         skill = evals.canonical_skill("claude", "issue-select")
         for case in evals.load_cases("issue-select"):
             evals.run_issue_select_case(case, skill)
@@ -449,14 +449,15 @@ class AlphaSkillEvalTests(unittest.TestCase):
         )
 
     def test_issue_select_active_milestone_outranks_at_equal_priority(self) -> None:
-        # Same priority, active-milestone member outranks non-member regardless
-        # of size -- the tie-break fires before size.
+        # Same priority, in-scope member outranks the out-of-scope issue
+        # regardless of size -- membership sorts before priority and size.
         self.assertTrue(
             evals.issue_select_higher_ranked(
                 priority="P1",
                 effort=100,
                 other_priority="P1",
                 other_effort=1,
+                milestone_scope_in_effect=True,
                 active_milestone=True,
                 other_active_milestone=False,
             )
@@ -467,6 +468,7 @@ class AlphaSkillEvalTests(unittest.TestCase):
                 effort=1,
                 other_priority="P1",
                 other_effort=100,
+                milestone_scope_in_effect=True,
                 active_milestone=False,
                 other_active_milestone=True,
             )
@@ -478,6 +480,7 @@ class AlphaSkillEvalTests(unittest.TestCase):
                 effort=1,
                 other_priority="P2",
                 other_effort=5,
+                milestone_scope_in_effect=True,
                 active_milestone=True,
                 other_active_milestone=True,
             )
@@ -489,7 +492,62 @@ class AlphaSkillEvalTests(unittest.TestCase):
                 effort=1,
                 other_priority="P2",
                 other_effort=5,
+                milestone_scope_in_effect=True,
                 active_milestone=False,
+                other_active_milestone=False,
+            )
+        )
+
+    def test_issue_select_milestone_scope_membership_ranks_first(self) -> None:
+        # #727 (D-191): under a milestone scope, an in-scope issue outranks a
+        # higher-marked, smaller out-of-scope issue -- membership ranks ahead
+        # of the priority marker, so the scope cannot be starved by a steady
+        # supply of attractive outsiders.
+        self.assertTrue(
+            evals.issue_select_higher_ranked(
+                priority="P2",
+                effort=50,
+                other_priority="P1",
+                other_effort=1,
+                milestone_scope_in_effect=True,
+                active_milestone=True,
+                other_active_milestone=False,
+            )
+        )
+        # An unmarked in-scope issue still outranks an out-of-scope P1: the
+        # deliberate consequence of membership ranking first.
+        self.assertTrue(
+            evals.issue_select_higher_ranked(
+                priority=None,
+                effort=50,
+                other_priority="P1",
+                other_effort=1,
+                milestone_scope_in_effect=True,
+                active_milestone=True,
+                other_active_milestone=False,
+            )
+        )
+        # Among out-of-scope issues, marker-then-size still decides.
+        self.assertTrue(
+            evals.issue_select_higher_ranked(
+                priority="P1",
+                effort=100,
+                other_priority="P2",
+                other_effort=1,
+                milestone_scope_in_effect=True,
+                active_milestone=False,
+                other_active_milestone=False,
+            )
+        )
+        # With no milestone scope in effect the membership flags are inert and
+        # the ordering degenerates to exactly the priority-then-size rule.
+        self.assertFalse(
+            evals.issue_select_higher_ranked(
+                priority="P2",
+                effort=50,
+                other_priority="P1",
+                other_effort=1,
+                active_milestone=True,
                 other_active_milestone=False,
             )
         )
@@ -634,6 +692,30 @@ class AlphaSkillEvalTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(evals.EvalError, "is missing"):
             evals.run_issue_select_case(case, skill)
+
+    def test_issue_select_eval_fails_when_the_scope_ordering_text_is_missing(
+        self,
+    ) -> None:
+        # #727 (D-191): the milestone-scope ordering is the newest part of
+        # step 5 and needs its own pin -- a reword back to something vague
+        # ("prefer milestone work where practical") must fail the eval even
+        # though the older priority sentence survives untouched.
+        raw = evals.canonical_skill("claude", "issue-select")
+        normalized = " ".join(raw.split())
+        case = next(
+            case
+            for case in evals.load_cases("issue-select")
+            if case["runner"]
+            == "milestone-scope-membership-outranks-a-higher-marked-outsider"
+        )
+        for phrase in (
+            "membership in that scope ranks first",
+            "only when the scope contributes no survivor at all",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, normalized)
+                with self.assertRaisesRegex(evals.EvalError, "is missing"):
+                    evals.run_issue_select_case(case, normalized.replace(phrase, ""))
 
     def test_issue_select_eval_fails_when_the_priority_marker_syntax_is_missing(
         self,
