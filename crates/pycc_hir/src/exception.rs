@@ -14,13 +14,13 @@ pub const BUILTIN_EXCEPTION_CLASSES: [&str; 7] = [
     "RuntimeError",
 ];
 
-/// Part 2 of #541 (D-190): the first runtime exception type tag available to
+/// Part 2 of #541 (D-189): the first runtime exception type tag available to
 /// a user-defined exception class. Tags `0..=6` are permanently reserved for
 /// [`BUILTIN_EXCEPTION_CLASSES`], in that array's order, and are resolved by
 /// name rather than assigned per module.
 pub const FIRST_USER_EXCEPTION_TYPE_TAG: u8 = BUILTIN_EXCEPTION_CLASSES.len() as u8;
 
-/// Part 2 of #541 (D-190): how many user-defined exception classes one module
+/// Part 2 of #541 (D-189): how many user-defined exception classes one module
 /// may declare. The runtime carries the type tag as a `u8`, so the whole
 /// hierarchy is capped at 256 types; the builtin seven take the low tags and
 /// the remaining `7..=255` are available to the module's own classes.

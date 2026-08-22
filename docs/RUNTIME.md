@@ -42,8 +42,47 @@ unchanged and no native unwinding is used.
 
 Supported builtin exception types: `Exception` (tag 0, catch-all),
 `ValueError` (1), `TypeError` (2), `KeyError` (3), `IndexError` (4),
-`ZeroDivisionError` (5), `RuntimeError` (6). The hierarchy is flat:
-every type is a direct subclass of `Exception`.
+`ZeroDivisionError` (5), `RuntimeError` (6). The builtin hierarchy is flat:
+every one of the other six is a direct subclass of `Exception`.
+
+**User-defined exception classes (Part 2 of #541, D-189).** A user-declared
+class whose MRO reaches one of those seven is raisable and catchable. HIR
+lowering assigns it a type tag from `7..=255` in module source order and
+records it on `HirClassDef::exception_type_tag`; the builtins keep `0..=6` and
+carry `None` there, since they are resolved by name rather than assigned per
+module. A module declaring more than 249 such classes is rejected with
+`C0001` -- the tag is a `u8` on `PyExceptionObj` and in every runtime entry
+point that carries one.
+
+Because each class in a user hierarchy carries a *different* tag, a handler
+naming a class accepts a **set** of tags, not one: its own plus every raisable
+class whose MRO reaches it, sorted ascending so the emitted IR does not depend
+on the class table's hash-map iteration order. Codegen emits one
+`pycc_rt_exception_type_matches` call per tag, joined by `or`. `except
+Exception:` stays a single tag, because tag 0 is already the runtime's own
+catch-all.
+
+`PyExceptionObj` carries the class name (`name: *const u8`, `name_len`)
+alongside the tag. Before Part 2 the runtime derived the printed name from the
+tag with a `match` over the seven builtin constants, which can name no user
+class; the name now travels with the object, supplied by codegen from a
+private constant and by the runtime's own `raise_builtin` from a
+`&'static str`.
+
+Two shapes stay rejected. A user exception class that declares its own
+`__init__` -- or inherits one from a non-synthetic ancestor -- is `C0001`: the
+message string is the only payload the exception object carries, so the
+class's own fields would be silently dropped. And `except MyError as e:` is
+`C0001` rather than merely unimplemented: binding would give `e` a
+`Ty::Instance`, which every consumer reads as a `PyInstanceObj`, while the
+value the runtime holds is a `PyExceptionObj`. Both wait on Part 3 of #541
+(#703), which materializes a real instance.
+
+`raise <bound value>` (`e = MyError("x"); raise e`) is `T0021` for the same
+reason, and the type checker's acceptance is keyed structurally on the call
+shape rather than on the inferred type -- `e` and `MyError("boom")` infer the
+identical `Ty::Instance("MyError")`, so a type-keyed rule could not tell them
+apart and would reinterpret a `PyInstanceObj*` as a `PyExceptionObj*`.
 
 **Class-table presence (Part 1 of #541, D-188).** HIR lowering synthesizes a
 real `HirClassDef` for each of those seven names, seeded before any
@@ -108,9 +147,11 @@ meaning. Because it withholds the whole group, a module that shadows one name
 and uses a *different* one still has no class definition behind the one it
 uses -- `class Exception: ...` together with
 `except ValueError as e: print(e.args)` aborts the compiler with an internal
-error. That is a known gap, present since the seeding was introduced;
-resolving it is part of #541's Part 2, which has to decide what a partially
-shadowed builtin hierarchy means.
+error. That is a known gap, present since the seeding was introduced, and
+Part 2 of #541 did **not** close it: raisability keys on the MRO reaching a
+builtin exception class, which is orthogonal to a partially shadowed
+hierarchy. It is tracked independently by
+[#704](https://github.com/rotnov/pycc/issues/704).
 
 Supported syntax: `try`/`except`/`else`/`finally`, `raise ExceptionType("msg")`,
 bare `raise` (re-raise), `raise ... from ...` (PEP 409 cause chaining),
@@ -139,11 +180,12 @@ Uncaught exceptions at the top level are printed to stderr
 
 Exception objects are leak-only in this first implementation. Explicit
 `raise ... from cause` records `cause`; implicit `__context__` is reserved but
-not wired. **Planned (post-Part 1):** `except*` groups (PEP 654), raising and catching
-user-defined exception classes (Part 2 of #541 -- Part 1 gives them a class
-identity, not yet `raise`/`except` behavior), full traceback with `.py` lines, implicit exception
-context, `raise ... from None`, exception lifetime management, and deletion
-of an `except ... as name` binding after the handler.
+not wired. **Planned (post-Part 2):** `except*` groups (PEP 654), a materialized
+exception instance so `except ... as e` can bind a user exception class and so
+a class with its own `__init__` can be raised (Part 3 of #541, #703), full
+traceback with `.py` lines, implicit exception context, exception lifetime
+management, and deletion of an `except ... as name` binding after the
+handler.
 
 ## Generators & iterators
 

@@ -1,4 +1,4 @@
-//! Part 2 of #541 (D-190): assignment of runtime exception type tags to
+//! Part 2 of #541 (D-189): assignment of runtime exception type tags to
 //! user-declared exception classes during HIR lowering.
 //!
 //! Kept in its own file rather than appended to `crates/pycc_hir/src/tests.rs`

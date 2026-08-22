@@ -28,7 +28,7 @@ pub(super) fn check_try_stmt(
         if let Some(exc_type) = &handler.exc_type {
             let builtin = is_unshadowed_builtin_exception(&body_env, local_names, exc_type);
             if !builtin {
-                // Part 2 of #541 (D-190): a user-declared class whose MRO
+                // Part 2 of #541 (D-189): a user-declared class whose MRO
                 // reaches a builtin exception is catchable too.
                 let Some(def) = user_exception_class(&body_env, local_names, exc_type) else {
                     return Err(Diagnostic::error(
@@ -154,7 +154,7 @@ fn check_raise_operand(
         return Ok(());
     }
 
-    // Part 2 of #541 (D-190): `raise MyError("boom")` for a user-declared class
+    // Part 2 of #541 (D-189): `raise MyError("boom")` for a user-declared class
     // whose MRO reaches a builtin exception.
     //
     // This acceptance is keyed *structurally*, on the `HirExpr::Call` shape
@@ -214,7 +214,7 @@ fn is_user_defined_class(env: &Environment, name: &str) -> bool {
 /// The [`HirClassDef`] of a user-declared, unshadowed exception class -- one
 /// HIR lowering assigned a runtime type tag to, which it does exactly when the
 /// class's MRO reaches one of the seeded builtin exception classes (Part 2 of
-/// #541, D-190). `None` for anything else, including a class that never
+/// #541, D-189). `None` for anything else, including a class that never
 /// touches the exception hierarchy and a name rebound by a local, a parameter,
 /// or a function.
 fn user_exception_class<'e>(

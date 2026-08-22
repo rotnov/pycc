@@ -194,7 +194,7 @@ pub struct HirClassDef {
     /// (rejected with `C0001`). The `ABC` base is consumed as a marker
     /// (like `Enum`/`Protocol`), not recorded as a real base.
     pub is_abstract: bool,
-    /// Part 2 of #541 (D-190): the runtime exception type tag this class is
+    /// Part 2 of #541 (D-189): the runtime exception type tag this class is
     /// raised and caught under, or `None` when the class is **not raisable**.
     ///
     /// `None` never means "synthetic". D-188 makes

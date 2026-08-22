@@ -1,5 +1,5 @@
 //! Type-checking tests for raising and catching user-defined exception
-//! classes (Part 2 of #541, D-190).
+//! classes (Part 2 of #541, D-189).
 //!
 //! In its own submodule rather than appended to the crate's `tests.rs`, per
 //! AGENTS.md's decomposability rule.

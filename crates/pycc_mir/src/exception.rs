@@ -10,7 +10,7 @@ pub enum MirExceptionValue {
         type_tag: u8,
         /// The exception class's source name, carried through so codegen can
         /// hand the runtime a name to print for an uncaught exception. Part 2
-        /// of #541 (D-190) moved the tag -> name mapping off the runtime's own
+        /// of #541 (D-189) moved the tag -> name mapping off the runtime's own
         /// `match`, which could only ever name the seven builtin classes.
         class_name: String,
         message: MirExpr,
@@ -21,7 +21,7 @@ pub enum MirExceptionValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirExceptHandler {
     /// The runtime exception type tags this handler accepts, sorted ascending,
-    /// or `None` for a bare `except:`. Part 2 of #541 (D-190) widened this
+    /// or `None` for a bare `except:`. Part 2 of #541 (D-189) widened this
     /// from a single tag to a set: `except MyError:` must also catch every
     /// user-defined subclass of `MyError`, and each subclass carries its own
     /// distinct tag. The vector is sorted so codegen's emitted IR does not
@@ -93,13 +93,13 @@ pub(super) fn lower_exception_value(
 
 /// Resolves an exception class name to its runtime type tag, whether it is one
 /// of the seven builtins or a user-defined class that HIR lowering assigned a
-/// tag to (Part 2 of #541, D-190).
+/// tag to (Part 2 of #541, D-189).
 pub(super) fn exception_type_tag(name: &str, classes: &HashMap<String, HirClassDef>) -> Option<u8> {
     resolve_exception_tag(name).or_else(|| classes.get(name).and_then(|def| def.exception_type_tag))
 }
 
 /// The full set of runtime type tags an `except <name>:` handler accepts,
-/// sorted ascending (Part 2 of #541, D-190).
+/// sorted ascending (Part 2 of #541, D-189).
 ///
 /// A handler naming a class must also catch that class's subclasses, and each
 /// user-defined exception class carries its own distinct tag, so the set is

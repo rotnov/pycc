@@ -1,5 +1,5 @@
 //! End-to-end coverage for raising and catching user-defined exception
-//! classes (Part 2 of #541, issue #702, D-190).
+//! classes (Part 2 of #541, issue #702, D-189).
 //!
 //! Everything here goes through the public `pycc` CLI: the point is that the
 //! whole pipeline -- HIR tag assignment, MIR handler tag sets, the type

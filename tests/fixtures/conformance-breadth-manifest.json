@@ -112,6 +112,10 @@
         {
           "category": "an exception propagating across a function-call boundary to a caller's handler",
           "evidence": "pep_3110_exceptions.py"
+        },
+        {
+          "category": "user-defined exception classes derived from `Exception`: raising them, catching them by their own name, and catching a subclass through a base-class or `Exception` handler",
+          "evidence": "pep_3110_exceptions.py"
         }
       ],
       "not_proven": [
@@ -121,9 +125,9 @@
           "reason": "pycc does not materialize an exception object a handler can bind yet; handler selection is by type alone. Tracked by #382's remaining cluster."
         },
         {
-          "category": "user-defined exception classes derived from `Exception`",
+          "category": "a user-defined exception class that declares its own `__init__`, and the instance state such a constructor would carry",
           "kind": "core",
-          "reason": "Only built-in exception types can be raised and caught today. Tracked by #541."
+          "reason": "pycc raises and catches by runtime type tag; the message string is the only payload the exception object carries, so a class with its own constructor is rejected with `C0001`. Tracked by #703."
         },
         {
           "category": "`except*` and `ExceptionGroup` (PEP 654)",

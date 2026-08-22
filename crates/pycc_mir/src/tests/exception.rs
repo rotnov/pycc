@@ -350,7 +350,7 @@ fn an_unknown_exception_handler_cannot_silently_become_a_bare_handler() {
     let _ = build(&hir);
 }
 
-// Part 2 of #541 (D-190): user-defined exception classes.
+// Part 2 of #541 (D-189): user-defined exception classes.
 
 /// A minimal raisable user exception class: `class <name>(<mro[1]>): pass`,
 /// carrying the tag HIR lowering would have assigned it.

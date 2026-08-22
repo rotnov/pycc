@@ -147,7 +147,7 @@ pub(super) fn guard_statement_effects<'ctx>(
 /// Emits a private constant holding an exception class's name, and returns a
 /// pointer to its bytes plus its length -- the pair `pycc_rt_exception_alloc`
 /// stores on the exception object so an uncaught exception can be printed with
-/// its real class name (Part 2 of #541, D-190). The bytes are not
+/// its real class name (Part 2 of #541, D-189). The bytes are not
 /// NUL-terminated; the runtime reads exactly `len` of them.
 fn emit_class_name_constant<'ctx>(
     context: &'ctx Context,
@@ -390,7 +390,7 @@ pub(super) fn emit_try<'ctx>(
             };
             builder.position_at_end(dispatch_bbs[i]);
             let matches = if let Some(tags) = handler.exc_type_tag.as_deref() {
-                // Part 2 of #541 (D-190): a handler naming a class accepts
+                // Part 2 of #541 (D-189): a handler naming a class accepts
                 // that class and every user-defined subclass of it, each of
                 // which carries its own tag, so the test is an OR over the
                 // whole set. A single-tag handler -- every builtin one --

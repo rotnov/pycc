@@ -154,7 +154,7 @@ pub(super) struct RtFns<'ctx> {
     pub(super) exception_clear: FunctionValue<'ctx>,
     /// `exception_alloc(type_tag: u8, name: *const u8, name_len: usize,
     /// message: *mut PyStrObj) -> *mut PyExceptionObj`. Part 2 of #541
-    /// (D-190) added the class name: user-defined exception classes carry
+    /// (D-189) added the class name: user-defined exception classes carry
     /// module-assigned tags the runtime cannot map back to a name.
     pub(super) exception_alloc: FunctionValue<'ctx>,
     /// `exception_raise(obj: *mut PyExceptionObj)` — sets pending state (void).

@@ -195,3 +195,4 @@ current.
 | [D-186](./D-186-bind-evidence-heroes-to-an-offline-versioned.md) | Bind evidence heroes to an offline versioned manifest with reviewed immutable attestations | accepted |
 | [D-187](./D-187-widen-a-bool-into-an-int-declared-attribute.md) | Widen a bool into an int-declared attribute slot in MIR, not in codegen | accepted |
 | [D-188](./D-188-synthesize-hirclassdefs-for-the-builtin-exception.md) | Synthesize HirClassDefs for the builtin exception classes | accepted |
+| [D-189](./D-189-assign-user-exception-classes-a-compile-time.md) | Assign user exception classes a compile-time type tag and carry the class name on the exception object | accepted |

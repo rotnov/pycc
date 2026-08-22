@@ -22,7 +22,7 @@ pub const EXCEPTION_TYPE_RUNTIME_ERROR: u8 = 6;
 pub struct PyExceptionObj {
     pub(crate) type_tag: u8,
     /// The exception class's source name, as a pointer to UTF-8 bytes with no
-    /// terminator, plus `name_len`. Part 2 of #541 (D-190): the name used to
+    /// terminator, plus `name_len`. Part 2 of #541 (D-189): the name used to
     /// be derived from `type_tag` by a `match` in this module, which could
     /// only ever name the seven builtin classes. User-defined exception
     /// classes carry module-assigned tags this runtime knows nothing about, so
@@ -204,7 +204,7 @@ mod tests {
     use super::*;
 
     /// Allocates an exception carrying a class name, the shape every
-    /// production caller uses since Part 2 of #541 (D-190).
+    /// production caller uses since Part 2 of #541 (D-189).
     fn alloc_named(type_tag: u8, name: &'static str, msg: &str) -> *mut PyExceptionObj {
         pycc_rt_exception_alloc(
             type_tag,

@@ -11614,7 +11614,7 @@ fn try_with_multiple_handlers_dispatches_to_next() {
 
 #[test]
 fn a_multi_tag_handler_ors_every_tag_it_accepts() {
-    // Part 2 of #541 (D-190): `except AppError:` over a hierarchy where
+    // Part 2 of #541 (D-189): `except AppError:` over a hierarchy where
     // `AppError` is tag 7 and its subclasses are 8 and 9 emits three
     // `pycc_rt_exception_type_matches` calls joined by `or`. Only the second
     // accumulation step reaches `build_or`, so a single-tag handler cannot

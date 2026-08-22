@@ -977,7 +977,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     let user_class_count = class_defs.len() - synthetic_class_count;
     let mut any_user_exception_class = false;
     if synthetic_class_count > 0 {
-        // Part 2 of #541 (D-190): assign each raisable user class its runtime
+        // Part 2 of #541 (D-189): assign each raisable user class its runtime
         // exception type tag here, in source order, so every downstream
         // consumer (`pycc_types`, `pycc_mir`, `pycc_codegen`) reads the same
         // number for the same class without re-deriving it. Source order is
