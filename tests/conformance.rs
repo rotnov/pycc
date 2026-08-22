@@ -1274,3 +1274,31 @@ fn pep_0409_raise_from_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0409_raise_from.py"
     );
 }
+
+// #719 (PEP 701): the formalized f-string grammar. Covers nested same-quote
+// f-strings, nesting to depth 5, single quotes inside a double-quoted
+// f-string and the all-single-quote form, multi-line interpolation
+// expressions, a `#` comment inside a multi-line interpolation, `\N{...}`
+// named escapes both inside an interpolation and in a literal part, adjacent
+// interpolations, escaped braces, raw f-strings, and implicit adjacent
+// f-string concatenation. Conversion flags, format specs and the `=` debug
+// specifier (#720) are deliberately absent -- they are recorded core gaps in
+// pycc's f-string lowering rather than PEP 701 grammar points.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn pep_0701_fstring_grammar_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0701_fstring_grammar.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0701_fstring_grammar_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/pep_0701_fstring_grammar.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0701_fstring_grammar_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0701_fstring_grammar.py"
+    );
+}
