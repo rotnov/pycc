@@ -148,6 +148,30 @@ For each newly observed upstream release:
    gap ([#693](https://github.com/rotnov/pycc/issues/693)), and a `core` gap forces
    `◐` under
    [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
+10. PEP 701 (formalized f-string grammar) was flipped to `◐` on the same
+    rule 5 basis against run
+    [32566309109](https://github.com/rotnov/pycc/actions/runs/32566309109), the
+    completed, fully successful `main` push run for `a8fce4f5`, where
+    `pep_0701_fstring_grammar.py` was observed green on all five Tier-1
+    targets. Four of them come from the `native-build-test` matrix
+    (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+    `x86_64-apple-darwin`, `x86_64-pc-windows-msvc`); the fifth,
+    `aarch64-apple-darwin`, is covered by the `build-test-coverage` job on
+    `macos-14`. Both jobs ran the fixture rather than skipping it. As in rule
+    9, "both build profiles" means the profile the fixture's own `pycc build`
+    uses: the single
+    `pep_0701_fstring_grammar_matches_cpython_3_14_7_byte_for_byte` test calls
+    `run_conformance_fixture_with_profile` twice, once with the release flag
+    clear and once set, so one test run exercises debug and release. The mark
+    is `◐` and not `✅` because the fixture covers PEP 701's grammar surface
+    only — nested same-quote and multi-line interpolations, comments and
+    backslash escapes inside interpolations, adjacent interpolations, escaped
+    braces, raw and implicitly concatenated f-strings — while pycc's f-string
+    lowering still rejects conversion flags (`!r`/`!s`/`!a`) and format specs
+    (`{x:...}`) outright, and diverges from CPython on the `=` debug specifier
+    ([#720](https://github.com/rotnov/pycc/issues/720)). Those are recorded
+    `core` gaps, and a `core` gap forces `◐` under
+    [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
 
 ## Python 3.0–3.2 (foundations)
 
@@ -275,7 +299,7 @@ For each newly observed upstream release:
 | [695](https://peps.python.org/pep-0695/) | **`type` statement + generic functions** `def f[T](x: T) -> T` (v0.2 scope per D-088 — no class support exists yet) | typing | `pep_0695_generics.py` | ◐ |
 | [695](https://peps.python.org/pep-0695/) | Generic classes `class C[T]` (#387 Part 3) — single type param, scalar-only instantiation, monomorphized at compile time | typing | `pep_0695_generic_classes.py` | ◐ |
 | [698](https://peps.python.org/pep-0698/) | `@override` | typing | `pep_0698_override.py` | ◐ |
-| [701](https://peps.python.org/pep-0701/) | Formalized f-string grammar | syntax | `py312/pep_0701_fstring_grammar.py` | ☐ |
+| [701](https://peps.python.org/pep-0701/) | Formalized f-string grammar | syntax | `pep_0701_fstring_grammar.py` (authored by [#719](https://github.com/rotnov/pycc/issues/719); observed green across all 5 Tier-1 targets in both profiles on run [32566309109](https://github.com/rotnov/pycc/actions/runs/32566309109), the completed run for `a8fce4f5`) | ◐ |
 | [709](https://peps.python.org/pep-0709/) | Comprehension inlining semantics -- pycc has no bytecode/frame model to "inline" the way CPython's own PEP 709 change does; this row instead verifies the one CPython-observable, statically-testable guarantee PEP 709 depends on: a comprehension's own loop variable does not leak into an enclosing same-named binding (D-117/D-120) | sem | `pep_0709_comp_inline.py` | ◐ |
 
 *n/a for native execution: PEP 684 configures CPython interpreter GILs, while
