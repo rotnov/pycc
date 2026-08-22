@@ -259,8 +259,9 @@ fn reject_own_constructor(env: &Environment, def: &HirClassDef) -> Result<(), Di
     Err(Diagnostic::error(
         "C0001",
         format!(
-            "exception class `{}` defines its own `__init__`; pycc supports only exception \
-             classes that inherit `Exception`'s single-message constructor (Part 3 of #541)",
+            "exception class `{}` declares or inherits an `__init__` other than \
+             `Exception`'s; pycc supports only exception classes that inherit \
+             `Exception`'s single-message constructor (Part 3 of #541)",
             def.name
         ),
         Span::new(0, 0),

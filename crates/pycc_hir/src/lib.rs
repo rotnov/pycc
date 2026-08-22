@@ -1007,7 +1007,9 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
                 return Err(Diagnostic::error(
                     "C0001",
                     format!(
-                        "module declares more than {} exception classes; pycc                          supports at most {} user-defined exception classes per                          module",
+                        "module declares more than {} exception classes; pycc \
+                         supports at most {} user-defined exception classes \
+                         per module",
                         MAX_USER_EXCEPTION_CLASSES, MAX_USER_EXCEPTION_CLASSES
                     ),
                     Span::new(0, 0),

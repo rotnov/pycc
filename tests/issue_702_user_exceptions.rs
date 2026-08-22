@@ -261,7 +261,7 @@ fn an_exception_class_with_its_own_constructor_is_rejected() {
     );
     assert!(text.contains("C0001"), "unexpected diagnostic: {text}");
     assert!(
-        text.contains("defines its own `__init__`"),
+        text.contains("declares or inherits an `__init__` other than"),
         "unexpected diagnostic: {text}"
     );
 }

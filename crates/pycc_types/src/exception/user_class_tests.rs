@@ -131,7 +131,9 @@ fn raising_an_exception_class_with_its_own_constructor_is_a_capability_gap() {
     ));
     assert_eq!(diagnostic.code, "C0001");
     assert!(
-        diagnostic.message.contains("defines its own `__init__`"),
+        diagnostic
+            .message
+            .contains("declares or inherits an `__init__` other than"),
         "unexpected message: {}",
         diagnostic.message
     );
@@ -145,7 +147,9 @@ fn catching_an_exception_class_with_its_own_constructor_is_a_capability_gap() {
     ));
     assert_eq!(diagnostic.code, "C0001");
     assert!(
-        diagnostic.message.contains("defines its own `__init__`"),
+        diagnostic
+            .message
+            .contains("declares or inherits an `__init__` other than"),
         "unexpected message: {}",
         diagnostic.message
     );
@@ -163,7 +167,7 @@ fn a_subclass_inheriting_an_own_constructor_is_also_a_capability_gap() {
     assert!(
         diagnostic
             .message
-            .contains("`DatabaseError` defines its own `__init__`"),
+            .contains("`DatabaseError` declares or inherits an `__init__` other than"),
         "unexpected message: {}",
         diagnostic.message
     );
