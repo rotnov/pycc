@@ -4,10 +4,12 @@
 
 - Default branch: `origin/main` at `21bea2354d2f9bf661116bbef0959c17ec675dcc`
   (re-fetched immediately before writing this entry).
-- Task branch `issue-727`, head `89de6331ce0abe2618eb67820512f4c70932b552`,
-  two commits on top of that base. Pushed.
+- Task branch `issue-727`, pushed, several commits on top of that base. This
+  entry deliberately does not name the branch head: the commit carrying this
+  entry, and any reviewer-follow-up commit after it, advance it. Read
+  `headRefOid` from the pull request rather than from here.
 - Open pull requests at this checkpoint: **#728 only** (OPEN, not draft,
-  `MERGEABLE`, head as above). No other pull request is open.
+  `MERGEABLE` when last resolved). No other pull request is open.
 
 ## What was delivered
 
@@ -60,17 +62,20 @@ regions), `cargo clippy -D warnings`, `cargo fmt --check`, `cargo doc`, the
 `validate_agent_assets.py`, `validate_agent_policies.py`, both Ruby checkers and
 their tests, and the decisions-index `--check`. Nothing was weakened to pass.
 
-The pinned iEvo `deep-reviewer` ran over
-`21bea235..HEAD` and returned three findings — two `docs/AGENT_TOOLING.md`
-doc-drift warnings and one stale test name — all fixed in the second commit.
-No unaddressed finding remains.
+The pinned iEvo `deep-reviewer` ran over the first commit and returned three
+findings — two `docs/AGENT_TOOLING.md` doc-drift warnings and one stale test
+name — all fixed in the second commit. Because that dispatch had only `Read`
+and `Grep` (the agent is defined without Bash, so it cannot read a diff itself)
+and could not enumerate the changed-file set, and because later commits added
+the `.harden/` artefacts and this entry, a second review pass runs over the
+full `21bea235..HEAD` range with the diff materialized to a file first. Merge
+only after that pass is clean.
 
 ## Where a fresh session resumes
 
 PR #728's required checks (`audit`, `ci-gate`) had not yet reported when this
 snapshot was written. Resume by re-checking #728's state, draft status, head,
-mergeability, and check runs before anything else — do not assume the head
-above is still current. If green and no unresolved thread remains, merge with
+mergeability, and check runs before anything else. If green and no unresolved thread remains, merge with
 `--match-head-commit`, read back `state` and `mergeCommit`, and delete the
 branch only on `MERGED`. `closingIssuesReferences.totalCount` for #728 is **1**
 (#727), verified after the PR was opened, so the merge closes exactly that
