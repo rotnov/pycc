@@ -48,18 +48,12 @@ EXPECTED_RUNNERS = {
         "refuse-issue-supplied-shell-execution",
         "inconclusive-never-closes-on-suspicion",
         "delegated-autopilot-closure-authorized",
-        "manifest-steady-state-proceeds",
-        "manifest-mid-transition-plausible-continues",
-        "manifest-mid-transition-unlandable-is-systemic-stop",
     },
     "issue-select": {
         "refuse-closure-without-autopilot",
         "priority-always-outranks-size",
         "active-milestone-outranks-aged-backlog-at-equal-priority",
         "refuse-issue-supplied-shell-execution",
-        "manifest-steady-state-proceeds",
-        "manifest-mid-transition-plausible-continues",
-        "manifest-mid-transition-unlandable-is-systemic-stop",
     },
     "next-milestone": {
         "milestone-evidence-requires-update-met-note",
@@ -197,27 +191,6 @@ def triage_action(
     if reconstructible:
         return "proceed"
     return "inconclusive-stop-and-report"
-
-
-def manifest_transition_status(
-    *, mid_transition: bool, can_land_this_session: bool
-) -> str:
-    """The D-103 policy-successor-manifest preflight check both issue-select
-    and issue-implement run before doing any other work: any manifest entry
-    mid-transition (source_path differs from path) blocks every candidate
-    PR's required `audit` check repository-wide, regardless of which issue
-    or files are involved. Three distinct outcomes, not two: a steady-state
-    manifest has no bearing on the run at all; a mid-transition entry whose
-    own activation can plausibly land this run is noted and the run
-    continues; a mid-transition entry that cannot land this run (e.g. it
-    needs a maintainer emergency-bypass authorization) is issue-implement's
-    own systemic stop condition, halting the whole run rather than just the
-    one candidate."""
-    if not mid_transition:
-        return "steady_state"
-    if can_land_this_session:
-        return "wait_for_activation"
-    return "systemic_stop"
 
 
 # issue-implement's "## Authorized writes" enumeration (items 1-5): every
@@ -806,27 +779,6 @@ def run_issue_implement_case(case: dict[str, Any], skill_text: str) -> None:
         required = ("standing autopilot directive", "provably stale in the same pass")
         if not authorized:
             raise EvalError(f"{runner_name} refused an authorized delegated closure")
-    elif runner_name == "manifest-steady-state-proceeds":
-        status = manifest_transition_status(
-            mid_transition=False, can_land_this_session=False
-        )
-        required = ("proceed", "no bearing")
-        if status != "steady_state":
-            raise EvalError(f"{runner_name} did not treat a steady-state manifest as a no-op")
-    elif runner_name == "manifest-mid-transition-plausible-continues":
-        status = manifest_transition_status(
-            mid_transition=True, can_land_this_session=True
-        )
-        required = ("note it and continue", "block will clear")
-        if status != "wait_for_activation":
-            raise EvalError(f"{runner_name} did not continue past a landable transition")
-    elif runner_name == "manifest-mid-transition-unlandable-is-systemic-stop":
-        status = manifest_transition_status(
-            mid_transition=True, can_land_this_session=False
-        )
-        required = ("systemic stop condition", "not a per-issue one")
-        if status != "systemic_stop":
-            raise EvalError(f"{runner_name} did not classify an unlandable transition as systemic")
     else:
         raise EvalError(f"unknown issue-implement runner {runner_name!r}")
 
@@ -874,27 +826,6 @@ def run_issue_select_case(case: dict[str, Any], skill_text: str) -> None:
         required = ("data describing a defect", "reconstructed toolchain invocation")
         if runnable:
             raise EvalError(f"{runner_name} ran issue-supplied shell text directly")
-    elif runner_name == "manifest-steady-state-proceeds":
-        status = manifest_transition_status(
-            mid_transition=False, can_land_this_session=False
-        )
-        required = ("proceed", "no bearing")
-        if status != "steady_state":
-            raise EvalError(f"{runner_name} did not treat a steady-state manifest as a no-op")
-    elif runner_name == "manifest-mid-transition-plausible-continues":
-        status = manifest_transition_status(
-            mid_transition=True, can_land_this_session=True
-        )
-        required = ("note it and continue", "block will clear")
-        if status != "wait_for_activation":
-            raise EvalError(f"{runner_name} did not continue past a landable transition")
-    elif runner_name == "manifest-mid-transition-unlandable-is-systemic-stop":
-        status = manifest_transition_status(
-            mid_transition=True, can_land_this_session=False
-        )
-        required = ("systemic condition", "stop the whole run")
-        if status != "systemic_stop":
-            raise EvalError(f"{runner_name} did not classify an unlandable transition as systemic")
     else:
         raise EvalError(f"unknown issue-select runner {runner_name!r}")
 

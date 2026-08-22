@@ -21,24 +21,6 @@
     },
     {
       "id": 4,
-      "prompt": "Baseline preflight reads tests/fixtures/policy-successor-manifest.json: every entry's source_path equals its path (steady-state).",
-      "expected_output": "Must proceed: a steady-state manifest has no bearing on selection, scoring, or blocker screening this run.",
-      "runner": "manifest-steady-state-proceeds"
-    },
-    {
-      "id": 5,
-      "prompt": "Baseline preflight finds one manifest entry mid-transition (source_path differs from path), and its own pending activation can plausibly land this run.",
-      "expected_output": "Must note it and continue: the block will clear once that activation merges, so selection and scoring proceed rather than stopping.",
-      "runner": "manifest-mid-transition-plausible-continues"
-    },
-    {
-      "id": 6,
-      "prompt": "Baseline preflight finds a manifest entry mid-transition whose own activation cannot land this run -- for example it needs a maintainer emergency-bypass authorization this session cannot grant.",
-      "expected_output": "Must stop the whole run rather than picking, planning, or implementing anything: no candidate selected this run can reach a merged state regardless of which issue it is, so this is issue-implement's own systemic condition.",
-      "runner": "manifest-mid-transition-unlandable-is-systemic-stop"
-    },
-    {
-      "id": 7,
       "prompt": "Compare two P1 issues during scoring: one belongs to the active milestone, the other does not. The non-active one is smaller.",
       "expected_output": "The active-milestone P1 outranks the non-active P1 regardless of size: active-milestone membership is the first tie-breaker within the same priority, before size.",
       "runner": "active-milestone-outranks-aged-backlog-at-equal-priority"

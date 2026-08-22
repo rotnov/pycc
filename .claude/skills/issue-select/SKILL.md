@@ -43,10 +43,10 @@ Hard exclusions — needs authority or state an agent session does not have:
 - anything whose execution path requires an explicit maintainer sign-off by this repository's
   own governance documents.
 
-Deprioritized, not excluded — take only deliberately: changes requiring this repository's D-103
-policy-successor-manifest stage-then-activate process, a broader mechanism than (and independent
-of) the narrower staged CI-workflow digest process — a single file can be protected by either,
-both, or neither; see step 1's run-wide check and step 4's per-candidate one; changes that would
+Deprioritized, not excluded — take only deliberately: changes requiring the staged CI-workflow
+digest process, the two-pull-request D-080 stage-then-activate cycle `/issue-implement`'s own
+step 4 executes for a change that edits a workflow file and registers its digest in a
+`check_roadmap_evidence.rb` allowlist; changes that would
 conflict with an open pull request's in-flight rewrite of the same files; tree-wide mechanical
 sweeps that bloat review surface.
 
@@ -74,22 +74,6 @@ issues are probably real, and it means staleness closures will be rare finds rat
 default expectation.
 
 Also read `docs/ROADMAP.md`'s ordered `## vX.Y` sections to establish which milestone is currently active — apply the same evidence-reading rule `next-milestone`'s own step 2 uses (an explicit "Update (`<date>`): met." note backed by a named PR, CI run, or cross-referenced count, not a bare unqualified claim; verify any cited evidence against the current tree). This makes `issue-select` self-sufficient: it works identically whether invoked directly (no milestone named) or handed off from `next-milestone`.
-
-Also read `tests/fixtures/policy-successor-manifest.json` from that freshly-fetched tip: if any
-entry's `source_path` differs from its `path` (mid-transition — a successor has been staged but
-not yet activated), every candidate pull request this run opens will fail the required `audit`
-check, regardless of what it touches. This is unconditional, not a risk specific to issues that
-edit that entry's own target: `scripts/check_ci_permissions.rb`'s `validate_policy_successor_transition`
-compares *every* manifest target's content in the candidate tree against the trusted staged
-content, target by target, for every candidate PR — a PR that never touches the affected file
-still inherits the unactivated (pre-successor) content at that path from the base branch, which
-no longer matches what the checker now expects there. Search open pull requests for that entry's
-own pending activation. If it can plausibly land this run, note it and continue — the block will
-clear once it merges. If it cannot — for example it is explicitly flagged as needing a
-maintainer `emergency-bypass` authorization this session cannot grant — nothing selected this run
-can reach a merged state no matter which issue it is: report this and stop the whole run rather
-than picking, planning, or implementing anything (`/issue-implement`'s own Stop-conditions
-section names this the run's systemic condition).
 
 ### 2. Inventory the full open list
 
@@ -156,19 +140,20 @@ Drop or defer, with a recorded reason each:
 - **Open-pull-request collision** — an open pull request is actively rewriting the same files;
   weigh landing order and conflict surface, and prefer targets whose diff stays out of the
   contested code unless the fix is urgent enough to justify the rebase burden on either side.
-- **Manifest-protected target** — (this is a per-candidate signal distinct from step 1's
-  run-wide manifest check, which must already have passed to reach this step at all) check every
-  file the issue's likely fix would edit against `tests/fixtures/policy-successor-manifest.json`
-  (`grep` its `path` entries). The manifest covers more than `.github/workflows/*.yml` — checker
-  scripts, their self-tests, and staging fixtures are listed too, and a candidate PR that edits
-  any listed path directly, without a pre-staged successor, fails the required `audit` CI check.
-  This is not a hard exclusion — the two-merge stage-then-activate process
-  (`docs/decisions/D-103-keep-search-policy-successors-base-owned-through.md`)
-  is a legitimate way to land the fix — but it is real, multi-PR work that a single-PR autopilot
-  pass cannot absorb silently, so treat a hit here as the same deprioritized category as the
-  staged CI-workflow digest process above.
 - **Already attempted this run** — the issue is on this run's denylist (see `## Loop`).
 - The hard authority exclusions above.
+
+One thing this screen deliberately does **not** defer for: a fix that would rename, delete, or
+move a path listed in `tests/fixtures/policy-successor-manifest.json`.
+`.github/workflows/workflow-policy.yml` still reads that manifest as a bounded inventory of
+files the `audit` job materializes from the head tree, and throws when a listed path is absent,
+so such a fix has to update the manifest in the same pull request — one extra edit inside the
+same pull request, which costs a candidate nothing at selection time. Note it for the plan and
+score the issue on its own merits. *Editing* a listed path's contents needs no handling at all
+on the manifest's account: D-172 retired D-103's stage-then-activate mechanism (PR #570), and
+`scripts/check_ci_permissions.rb` no longer reads the manifest. That says nothing about D-080 —
+`.github/workflows/ci.yml` is itself a manifest entry, and editing it still carries D-080's own
+separate, still-live two-pull-request digest cycle, which is the deprioritized category above.
 
 ### 5. Score the survivors
 
