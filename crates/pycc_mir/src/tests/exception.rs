@@ -4,6 +4,7 @@
 //! `raise ... from ...`, bare re-raise, `resolve_exception_tag` over every
 //! builtin type, and the test helpers' own panic arms.
 
+use crate::exception::resolve_exception_tag;
 use crate::*;
 use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt, Ty};
 
@@ -68,7 +69,9 @@ fn expect_top_level_raise_from(item: &MirItem) -> (&MirExceptionValue, &MirExcep
 
 fn expect_constructed_exception(value: &MirExceptionValue) -> (&u8, &MirExpr) {
     match value {
-        MirExceptionValue::Constructed { type_tag, message } => (type_tag, message),
+        MirExceptionValue::Constructed {
+            type_tag, message, ..
+        } => (type_tag, message),
         MirExceptionValue::Existing(_) => panic!("expected constructed exception"),
     }
 }
@@ -152,7 +155,7 @@ fn lowers_try_with_value_error_handler_to_mir() {
     let (body, handlers, orelse, finalbody) = expect_top_level_try(&mir.items[0]);
     assert_eq!(body.len(), 1);
     assert_eq!(handlers.len(), 1);
-    assert_eq!(handlers[0].exc_type_tag, Some(1)); // ValueError = 1
+    assert_eq!(handlers[0].exc_type_tag, Some(vec![1])); // ValueError = 1
     assert!(orelse.is_empty());
     assert!(finalbody.is_empty());
 }
@@ -208,7 +211,7 @@ fn lowers_try_with_else_and_finally_to_mir() {
     let (body, handlers, orelse, finalbody) = expect_top_level_try(&mir.items[0]);
     assert_eq!(body.len(), 1);
     assert_eq!(handlers.len(), 1);
-    assert_eq!(handlers[0].exc_type_tag, Some(0)); // Exception = 0
+    assert_eq!(handlers[0].exc_type_tag, Some(vec![0])); // Exception = 0
     assert_eq!(orelse.len(), 1);
     assert_eq!(finalbody.len(), 1);
 }

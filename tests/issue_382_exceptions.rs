@@ -373,6 +373,7 @@ fn raw_mir_exception_paths_are_checked_in_the_dependency_instance() {
         MirStmt::Raise {
             exception: MirExceptionValue::Constructed {
                 type_tag: 1,
+                class_name: "ValueError".to_string(),
                 message: MirExpr::IntLiteral(42),
             },
         },
@@ -383,10 +384,12 @@ fn raw_mir_exception_paths_are_checked_in_the_dependency_instance() {
         MirStmt::RaiseFrom {
             exception: MirExceptionValue::Constructed {
                 type_tag: 1,
+                class_name: "ValueError".to_string(),
                 message: MirExpr::StringLiteral("error".to_string()),
             },
             cause: MirExceptionValue::Constructed {
                 type_tag: 2,
+                class_name: "TypeError".to_string(),
                 message: MirExpr::IntLiteral(42),
             },
         },
@@ -415,7 +418,7 @@ fn raw_mir_exception_paths_are_checked_in_the_dependency_instance() {
             pycc_mir::MirStmt::Try {
                 body: vec![MirStmt::NoOp],
                 handlers: vec![pycc_mir::MirExceptHandler {
-                    exc_type_tag: Some(1),
+                    exc_type_tag: Some(vec![1]),
                     binding_name: None,
                     binding_ty: None,
                     body: vec![undefined_void_call("missing_handler")],
@@ -464,6 +467,7 @@ fn raw_mir_exception_paths_are_checked_in_the_dependency_instance() {
             body: vec![MirStmt::Raise {
                 exception: MirExceptionValue::Constructed {
                     type_tag: 1,
+                    class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("error".to_string()),
                 },
             }],

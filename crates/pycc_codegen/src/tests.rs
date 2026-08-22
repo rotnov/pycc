@@ -10896,7 +10896,7 @@ fn exception_terminal_analysis_covers_structured_paths() {
     ])]));
 
     let terminal_handler = MirExceptHandler {
-        exc_type_tag: Some(1),
+        exc_type_tag: Some(vec![1]),
         binding_name: None,
         binding_ty: None,
         body: vec![returned()],
@@ -10930,6 +10930,7 @@ fn bare_except_codegen_builds_and_runs() {
             body: vec![MirStmt::Raise {
                 exception: MirExceptionValue::Constructed {
                     type_tag: 1, // ValueError
+                    class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("test".to_string()),
                 },
             }],
@@ -10966,6 +10967,7 @@ fn raise_with_non_string_message_is_a_codegen_error() {
         items: vec![MirItem::TopLevelStmt(MirStmt::Raise {
             exception: MirExceptionValue::Constructed {
                 type_tag: 1,
+                class_name: "ValueError".to_string(),
                 message: MirExpr::IntLiteral(42),
             },
         })],
@@ -11005,11 +11007,12 @@ fn raising_a_bound_existing_exception_builds_successfully() {
             body: vec![MirStmt::Raise {
                 exception: MirExceptionValue::Constructed {
                     type_tag: 1,
+                    class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("original".to_string()),
                 },
             }],
             handlers: vec![MirExceptHandler {
-                exc_type_tag: Some(1),
+                exc_type_tag: Some(vec![1]),
                 binding_name: Some("error".to_string()),
                 binding_ty: Some(exception_ty.clone()),
                 body: vec![MirStmt::Raise {
@@ -11038,10 +11041,12 @@ fn raise_from_with_non_string_message_is_a_codegen_error() {
         items: vec![MirItem::TopLevelStmt(MirStmt::RaiseFrom {
             exception: MirExceptionValue::Constructed {
                 type_tag: 1,
+                class_name: "ValueError".to_string(),
                 message: MirExpr::IntLiteral(42),
             },
             cause: MirExceptionValue::Constructed {
                 type_tag: 2,
+                class_name: "TypeError".to_string(),
                 message: MirExpr::StringLiteral("cause".to_string()),
             },
         })],
@@ -11064,10 +11069,12 @@ fn raise_from_with_non_string_cause_is_a_codegen_error() {
         items: vec![MirItem::TopLevelStmt(MirStmt::RaiseFrom {
             exception: MirExceptionValue::Constructed {
                 type_tag: 1,
+                class_name: "ValueError".to_string(),
                 message: MirExpr::StringLiteral("msg".to_string()),
             },
             cause: MirExceptionValue::Constructed {
                 type_tag: 2,
+                class_name: "TypeError".to_string(),
                 message: MirExpr::IntLiteral(42),
             },
         })],
@@ -11094,7 +11101,7 @@ fn try_body_emit_error_propagates() {
         items: vec![MirItem::TopLevelStmt(MirStmt::Try {
             body: vec![call_user_fn("nonexistent_in_try_body")],
             handlers: vec![MirExceptHandler {
-                exc_type_tag: Some(1),
+                exc_type_tag: Some(vec![1]),
                 binding_name: None,
                 binding_ty: None,
                 body: vec![call_print(99)],
@@ -11124,7 +11131,7 @@ fn try_handler_body_emit_error_propagates() {
         items: vec![MirItem::TopLevelStmt(MirStmt::Try {
             body: vec![call_print(1)],
             handlers: vec![MirExceptHandler {
-                exc_type_tag: Some(1),
+                exc_type_tag: Some(vec![1]),
                 binding_name: None,
                 binding_ty: None,
                 body: vec![call_user_fn("nonexistent_in_handler")],
@@ -11154,7 +11161,7 @@ fn try_else_body_emit_error_propagates() {
         items: vec![MirItem::TopLevelStmt(MirStmt::Try {
             body: vec![call_print(1)],
             handlers: vec![MirExceptHandler {
-                exc_type_tag: Some(1),
+                exc_type_tag: Some(vec![1]),
                 binding_name: None,
                 binding_ty: None,
                 body: vec![call_print(99)],
@@ -11184,7 +11191,7 @@ fn try_finally_body_emit_error_propagates() {
         items: vec![MirItem::TopLevelStmt(MirStmt::Try {
             body: vec![call_print(1)],
             handlers: vec![MirExceptHandler {
-                exc_type_tag: Some(1),
+                exc_type_tag: Some(vec![1]),
                 binding_name: None,
                 binding_ty: None,
                 body: vec![call_print(99)],
@@ -11226,7 +11233,7 @@ fn try_body_with_return_does_not_fall_through() {
             body: vec![MirStmt::Try {
                 body: vec![return_int(1)],
                 handlers: vec![MirExceptHandler {
-                    exc_type_tag: Some(1),
+                    exc_type_tag: Some(vec![1]),
                     binding_name: None,
                     binding_ty: None,
                     body: vec![call_print(99)],
@@ -11257,7 +11264,7 @@ fn try_handler_body_with_return_does_not_fall_through() {
             body: vec![MirStmt::Try {
                 body: vec![call_print(1)],
                 handlers: vec![MirExceptHandler {
-                    exc_type_tag: Some(1),
+                    exc_type_tag: Some(vec![1]),
                     binding_name: None,
                     binding_ty: None,
                     body: vec![return_int(2)],
@@ -11288,7 +11295,7 @@ fn try_else_body_with_return_does_not_fall_through() {
             body: vec![MirStmt::Try {
                 body: vec![call_print(1)],
                 handlers: vec![MirExceptHandler {
-                    exc_type_tag: Some(1),
+                    exc_type_tag: Some(vec![1]),
                     binding_name: None,
                     binding_ty: None,
                     body: vec![call_print(99)],
@@ -11319,7 +11326,7 @@ fn try_finally_body_with_return_does_not_fall_through() {
             body: vec![MirStmt::Try {
                 body: vec![call_print(1)],
                 handlers: vec![MirExceptHandler {
-                    exc_type_tag: Some(1),
+                    exc_type_tag: Some(vec![1]),
                     binding_name: None,
                     binding_ty: None,
                     body: vec![call_print(99)],
@@ -11441,15 +11448,17 @@ fn raise_from_codegen_builds_and_runs() {
             body: vec![MirStmt::RaiseFrom {
                 exception: MirExceptionValue::Constructed {
                     type_tag: 1, // ValueError
+                    class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("bad".to_string()),
                 },
                 cause: MirExceptionValue::Constructed {
                     type_tag: 2, // TypeError
+                    class_name: "TypeError".to_string(),
                     message: MirExpr::StringLiteral("cause".to_string()),
                 },
             }],
             handlers: vec![MirExceptHandler {
-                exc_type_tag: Some(1),
+                exc_type_tag: Some(vec![1]),
                 binding_name: None,
                 binding_ty: None,
                 body: vec![MirStmt::ExprStmt(MirExpr::Call {
@@ -11483,11 +11492,12 @@ fn reraise_codegen_builds() {
             body: vec![MirStmt::Raise {
                 exception: MirExceptionValue::Constructed {
                     type_tag: 1,
+                    class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("orig".to_string()),
                 },
             }],
             handlers: vec![MirExceptHandler {
-                exc_type_tag: Some(1),
+                exc_type_tag: Some(vec![1]),
                 binding_name: None,
                 binding_ty: None,
                 body: vec![MirStmt::Reraise],
@@ -11520,6 +11530,7 @@ fn try_with_no_handlers_branches_to_finally() {
             body: vec![MirStmt::Raise {
                 exception: MirExceptionValue::Constructed {
                     type_tag: 1,
+                    class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("uncaught".to_string()),
                 },
             }],
@@ -11559,12 +11570,13 @@ fn try_with_multiple_handlers_dispatches_to_next() {
             body: vec![MirStmt::Raise {
                 exception: MirExceptionValue::Constructed {
                     type_tag: 3, // KeyError
+                    class_name: "KeyError".to_string(),
                     message: MirExpr::StringLiteral("key".to_string()),
                 },
             }],
             handlers: vec![
                 MirExceptHandler {
-                    exc_type_tag: Some(1), // ValueError — does not match
+                    exc_type_tag: Some(vec![1]), // ValueError — does not match
                     binding_name: None,
                     binding_ty: None,
                     body: vec![MirStmt::ExprStmt(MirExpr::Call {
@@ -11574,7 +11586,7 @@ fn try_with_multiple_handlers_dispatches_to_next() {
                     })],
                 },
                 MirExceptHandler {
-                    exc_type_tag: Some(3), // KeyError — matches
+                    exc_type_tag: Some(vec![3]), // KeyError — matches
                     binding_name: None,
                     binding_ty: None,
                     body: vec![MirStmt::ExprStmt(MirExpr::Call {
@@ -11613,7 +11625,7 @@ fn try_else_body_falls_through_to_finally() {
                 ty: Ty::None,
             })],
             handlers: vec![MirExceptHandler {
-                exc_type_tag: Some(1),
+                exc_type_tag: Some(vec![1]),
                 binding_name: None,
                 binding_ty: None,
                 body: vec![MirStmt::ExprStmt(MirExpr::Call {
