@@ -11,9 +11,9 @@ mod typecheck;
 
 pub use class::{HirClassDef, PropertyDef, ProtocolMember};
 pub use exception::{
-    BUILTIN_EXCEPTION_CLASSES, EXCEPTION_INIT_MANGLED_NAME, HirExceptHandler,
-    builtin_exception_class_defs, builtin_exception_init_item, builtin_exception_parent,
-    is_builtin_exception_class,
+    BUILTIN_EXCEPTION_CLASSES, EXCEPTION_INIT_MANGLED_NAME, FIRST_USER_EXCEPTION_TYPE_TAG,
+    HirExceptHandler, MAX_USER_EXCEPTION_CLASSES, builtin_exception_class_defs,
+    builtin_exception_init_item, builtin_exception_parent, is_builtin_exception_class,
 };
 pub(crate) use func::{
     annotation_to_ty, lower_arg_list, lower_function, lower_return_annotation, type_param_name,
@@ -974,24 +974,62 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
         items.push(item);
     }
     class_defs.rotate_left(synthetic_class_count);
+    let user_class_count = class_defs.len() - synthetic_class_count;
+    let mut any_user_exception_class = false;
+    if synthetic_class_count > 0 {
+        // Part 2 of #541 (D-189): assign each raisable user class its runtime
+        // exception type tag here, in source order, so every downstream
+        // consumer (`pycc_types`, `pycc_mir`, `pycc_codegen`) reads the same
+        // number for the same class without re-deriving it. Source order is
+        // the only ordering available that is stable across runs -- a hash
+        // map's iteration order is not (risk R3 of this issue's plan).
+        //
+        // A class is raisable when its MRO reaches one of the seeded builtin
+        // exception classes. `synthetic_class_count > 0` is exactly
+        // `seeded_builtin_exception_classes`, so this branch never mistakes a
+        // user class named `Exception` for the builtin one.
+        let mut next_tag: u16 = u16::from(FIRST_USER_EXCEPTION_TYPE_TAG);
+        for (_, def) in &mut class_defs[..user_class_count] {
+            if !def
+                .mro
+                .iter()
+                .any(|ancestor| is_builtin_exception_class(ancestor))
+            {
+                continue;
+            }
+            any_user_exception_class = true;
+            if next_tag > u16::from(u8::MAX) {
+                // The tag is a `u8` in `PyExceptionObj` and in every runtime
+                // entry point that carries one, so the hierarchy cannot grow
+                // past 256 types. No span is available here: `class_defs`
+                // records no source range, and the diagnostic is about the
+                // module's class count rather than any one declaration.
+                return Err(Diagnostic::error(
+                    "C0001",
+                    format!(
+                        "module declares more than {} exception classes; pycc \
+                         supports at most {} user-defined exception classes \
+                         per module",
+                        MAX_USER_EXCEPTION_CLASSES, MAX_USER_EXCEPTION_CLASSES
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            def.exception_type_tag = Some(next_tag as u8);
+            next_tag += 1;
+        }
+    }
     // The synthetic `Exception.__init__` body is emitted only when a user
-    // class actually inherits it -- that is, when some user class's
-    // computed MRO reaches one of the seeded builtin exception classes.
-    // The class-table entries above are metadata every module needs for
-    // name and base resolution; this is *code*, and emitting an
-    // uncallable constructor into every compiled module would put a dead
-    // function in every object file. The synthetic classes themselves can
-    // never call it: instantiating one is rejected by the type checker
+    // class actually inherits it -- that is, when some user class's computed
+    // MRO reaches one of the seeded builtin exception classes, which is
+    // exactly the condition that assigned at least one tag above. The
+    // class-table entries above are metadata every module needs for name and
+    // base resolution; this is *code*, and emitting an uncallable constructor
+    // into every compiled module would put a dead function in every object
+    // file. The synthetic classes themselves can never call it: instantiating
+    // one is rejected by the type checker
     // (`pycc_types::class::resolve_instantiation`).
-    if synthetic_class_count > 0
-        && class_defs[..class_defs.len() - synthetic_class_count]
-            .iter()
-            .any(|(_, def)| {
-                def.mro
-                    .iter()
-                    .any(|ancestor| is_builtin_exception_class(ancestor))
-            })
-    {
+    if any_user_exception_class {
         items.push(builtin_exception_init_item());
     }
     Ok(HirModule {

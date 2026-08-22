@@ -10798,6 +10798,7 @@ fn infer_expr_in_resolves_super_attr_get() {
     env.bind_class(
         "A".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "A".to_string(),
             bases: vec![],
             mro: vec!["A".to_string()],
@@ -10824,6 +10825,7 @@ fn infer_expr_in_resolves_super_attr_get() {
     env.bind_class(
         "B".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "B".to_string(),
             bases: vec!["A".to_string()],
             mro: vec!["B".to_string(), "A".to_string()],
@@ -10865,6 +10867,7 @@ fn infer_expr_in_resolves_super_method_call() {
     env.bind_class(
         "A".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "A".to_string(),
             bases: vec![],
             mro: vec!["A".to_string()],
@@ -10887,6 +10890,7 @@ fn infer_expr_in_resolves_super_method_call() {
     env.bind_class(
         "B".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "B".to_string(),
             bases: vec!["A".to_string()],
             mro: vec!["B".to_string(), "A".to_string()],
@@ -10930,6 +10934,7 @@ fn infer_expr_in_super_method_call_propagates_arg_error() {
     env.bind_class(
         "A".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "A".to_string(),
             bases: vec![],
             mro: vec!["A".to_string()],
@@ -10952,6 +10957,7 @@ fn infer_expr_in_super_method_call_propagates_arg_error() {
     env.bind_class(
         "B".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "B".to_string(),
             bases: vec!["A".to_string()],
             mro: vec!["B".to_string(), "A".to_string()],
@@ -18033,6 +18039,7 @@ fn generic_class_module_with_call() -> HirModule {
         }],
     };
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "C".to_string(),
         bases: Vec::new(),
         mro: vec!["C".to_string()],
@@ -18109,6 +18116,7 @@ fn check_and_resolve_monomorphizes_a_generic_class_instantiation() {
 #[test]
 fn check_and_resolve_monomorphizes_a_generic_class_with_no_param_in_methods() {
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "Marker".to_string(),
         bases: Vec::new(),
         mro: vec!["Marker".to_string()],
@@ -18178,6 +18186,7 @@ fn check_and_resolve_monomorphizes_a_generic_class_with_no_param_in_methods() {
 fn check_and_resolve_monomorphizes_the_last_redefined_method_of_a_generic_class() {
     let param = Ty::Param(Box::new("T".to_string()));
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "C".to_string(),
         bases: Vec::new(),
         mro: vec!["C".to_string()],
@@ -18269,6 +18278,7 @@ fn check_and_resolve_monomorphizes_the_last_redefined_method_of_a_generic_class(
 fn check_and_resolve_monomorphizes_a_generic_class_property_getter() {
     let param = Ty::Param(Box::new("T".to_string()));
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "Box".to_string(),
         bases: Vec::new(),
         mro: vec!["Box".to_string()],
@@ -18366,6 +18376,7 @@ fn check_and_resolve_monomorphizes_a_generic_class_property_getter() {
 fn check_and_resolve_monomorphizes_a_generic_class_property_getter_and_setter() {
     let param = Ty::Param(Box::new("T".to_string()));
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "Box".to_string(),
         bases: Vec::new(),
         mro: vec!["Box".to_string()],
@@ -18481,6 +18492,7 @@ fn check_and_resolve_monomorphizes_a_generic_class_property_getter_and_setter() 
 #[test]
 fn check_and_resolve_monomorphizes_properties_with_missing_functions() {
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "Box".to_string(),
         bases: Vec::new(),
         mro: vec!["Box".to_string()],
@@ -18560,6 +18572,7 @@ fn check_and_resolve_monomorphizes_properties_with_missing_functions() {
 fn check_and_resolve_dedups_property_getter_and_setter_monomorphization() {
     let param = Ty::Param(Box::new("T".to_string()));
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "Box".to_string(),
         bases: Vec::new(),
         mro: vec!["Box".to_string()],
@@ -18695,6 +18708,7 @@ fn reject_generic_calls_in_expr_handles_generic_class_instantiate() {
     // into args (here, a `Name` leaf), proving the arm is traversed.
     let param = Ty::Param(Box::new("T".to_string()));
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "C".to_string(),
         bases: Vec::new(),
         mro: vec!["C".to_string()],
@@ -19333,6 +19347,7 @@ fn check_and_resolve_monomorphizes_a_generic_class_with_self_typed_method() {
         body: vec![HirStmt::Return(None)],
     };
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "C".to_string(),
         bases: Vec::new(),
         mro: vec!["C".to_string()],
@@ -19446,6 +19461,7 @@ fn check_and_resolve_monomorphizes_a_generic_class_with_control_flow_methods() {
         ],
     };
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "C".to_string(),
         bases: Vec::new(),
         mro: vec!["C".to_string()],
@@ -19526,6 +19542,7 @@ fn check_and_resolve_monomorphizes_generic_class_instantiation_inside_a_function
         }],
     };
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "C".to_string(),
         bases: Vec::new(),
         mro: vec!["C".to_string()],
@@ -19665,6 +19682,7 @@ fn is_assignable_param_clause_accepts_scalar_assignment_in_generic_method() {
         }],
     };
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "C".to_string(),
         bases: Vec::new(),
         mro: vec!["C".to_string()],
@@ -19755,6 +19773,7 @@ fn check_and_resolve_rejects_generic_class_instantiate_for_non_generic_class() {
         }],
     };
     let d_class_def = HirClassDef {
+        exception_type_tag: None,
         name: "D".to_string(),
         bases: Vec::new(),
         mro: vec!["D".to_string()],
@@ -19815,6 +19834,7 @@ fn instantiate_generic_class_methods_skips_non_generic_class_instantiation() {
     // method's HirItem, so it continues.
     let self_ty = Ty::Instance(Box::new("E".to_string()));
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "E".to_string(),
         bases: Vec::new(),
         mro: vec!["E".to_string()],
@@ -19973,6 +19993,7 @@ fn instantiate_generic_class_methods_skips_non_function_method_item() {
     // skipped (the `find` returns None → continue at the `else`).
     let self_ty = Ty::Instance(Box::new("F".to_string()));
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "F".to_string(),
         bases: Vec::new(),
         mro: vec!["F".to_string()],
@@ -20041,6 +20062,7 @@ fn instantiate_generic_class_methods_skips_nonexistent_static_method_function() 
     // table references a mangled name that has no matching `HirItem`.
     let self_ty = Ty::Instance(Box::new("F".to_string()));
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "F".to_string(),
         bases: Vec::new(),
         mro: vec!["F".to_string()],
@@ -20099,6 +20121,7 @@ fn instantiate_generic_class_methods_skips_nonexistent_class_method_function() {
     // table references a mangled name that has no matching `HirItem`.
     let self_ty = Ty::Instance(Box::new("F".to_string()));
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "F".to_string(),
         bases: Vec::new(),
         mro: vec!["F".to_string()],
@@ -20176,6 +20199,7 @@ fn collect_expr_constraints_propagates_error_from_generic_class_instantiate_arg(
         }],
     };
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "C".to_string(),
         bases: Vec::new(),
         mro: vec!["C".to_string()],
@@ -20258,6 +20282,7 @@ fn is_assignable_accepts_a_scalar_assigned_to_a_param_typed_attribute() {
         }],
     };
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "C".to_string(),
         bases: Vec::new(),
         mro: vec!["C".to_string()],
@@ -20339,6 +20364,7 @@ fn reject_generic_calls_in_expr_propagates_error_from_generic_class_instantiate_
         }],
     };
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "C".to_string(),
         bases: Vec::new(),
         mro: vec!["C".to_string()],
@@ -20415,6 +20441,7 @@ fn instantiate_generic_class_methods_skips_duplicate_method_entry() {
         }],
     };
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "D".to_string(),
         bases: Vec::new(),
         mro: vec!["D".to_string()],
@@ -20501,6 +20528,7 @@ fn check_and_resolve_rewrites_a_generic_class_instantiate_inside_a_generic_class
         }],
     };
     let box_class_def = HirClassDef {
+        exception_type_tag: None,
         name: "Box".to_string(),
         bases: Vec::new(),
         mro: vec!["Box".to_string()],
@@ -20558,6 +20586,7 @@ fn check_and_resolve_rewrites_a_generic_class_instantiate_inside_a_generic_class
         ],
     };
     let maker_class_def = HirClassDef {
+        exception_type_tag: None,
         name: "Maker".to_string(),
         bases: Vec::new(),
         mro: vec!["Maker".to_string()],
@@ -20655,6 +20684,7 @@ fn check_and_resolve_propagates_an_error_from_pass_2b_rewrite() {
         }],
     };
     let d_class_def = HirClassDef {
+        exception_type_tag: None,
         name: "D".to_string(),
         bases: Vec::new(),
         mro: vec!["D".to_string()],
@@ -20712,6 +20742,7 @@ fn check_and_resolve_propagates_an_error_from_pass_2b_rewrite() {
         ],
     };
     let maker_class_def = HirClassDef {
+        exception_type_tag: None,
         name: "Maker".to_string(),
         bases: Vec::new(),
         mro: vec!["Maker".to_string()],
@@ -20968,6 +20999,7 @@ fn generic_class_with_static_and_class_methods() -> HirModule {
         body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
     };
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "C".to_string(),
         bases: Vec::new(),
         mro: vec!["C".to_string()],
@@ -21086,6 +21118,7 @@ fn instantiate_generic_class_methods_skips_duplicate_static_method_entry() {
         body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
     };
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "D".to_string(),
         bases: Vec::new(),
         mro: vec!["D".to_string()],
@@ -21160,6 +21193,7 @@ fn instantiate_generic_class_methods_skips_duplicate_class_method_entry() {
         body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
     };
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "D".to_string(),
         bases: Vec::new(),
         mro: vec!["D".to_string()],
@@ -22733,6 +22767,7 @@ fn match_enum_exhaustive_type_checks() {
     env.bind_class(
         "Color".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "Color".to_string(),
             bases: Vec::new(),
             mro: vec!["Color".to_string()],
@@ -22785,6 +22820,7 @@ fn match_enum_non_exhaustive_reports_t0030() {
     env.bind_class(
         "Color".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "Color".to_string(),
             bases: Vec::new(),
             mro: vec!["Color".to_string()],
@@ -22829,6 +22865,7 @@ fn match_enum_exhaustive_with_other_class_pattern() {
     env.bind_class(
         "Color".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "Color".to_string(),
             bases: Vec::new(),
             mro: vec!["Color".to_string()],
@@ -22851,6 +22888,7 @@ fn match_enum_exhaustive_with_other_class_pattern() {
     env.bind_class(
         "Other".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "Other".to_string(),
             bases: Vec::new(),
             mro: vec!["Other".to_string()],
@@ -23182,6 +23220,7 @@ fn check_exhaustive_instance_non_enum_not_exhaustive() {
     env.bind_class(
         "P".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "P".to_string(),
             bases: Vec::new(),
             mro: vec!["P".to_string()],
@@ -23223,6 +23262,7 @@ fn check_exhaustive_enum_all_covered() {
     env.bind_class(
         "Color".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "Color".to_string(),
             bases: Vec::new(),
             mro: vec!["Color".to_string()],
@@ -23264,6 +23304,7 @@ fn check_exhaustive_enum_partial_not_exhaustive() {
     env.bind_class(
         "Color".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "Color".to_string(),
             bases: Vec::new(),
             mro: vec!["Color".to_string()],
@@ -23635,6 +23676,7 @@ fn check_pattern_class_with_subclass_subject_type_checks() {
     env.bind_class(
         "Base".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "Base".to_string(),
             bases: vec![],
             mro: vec!["Base".to_string()],
@@ -23657,6 +23699,7 @@ fn check_pattern_class_with_subclass_subject_type_checks() {
     env.bind_class(
         "Derived".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "Derived".to_string(),
             bases: vec!["Base".to_string()],
             mro: vec!["Derived".to_string(), "Base".to_string()],
@@ -23696,6 +23739,7 @@ fn check_pattern_class_with_error_positional_subpattern_reports_error() {
     env.bind_class(
         "P".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "P".to_string(),
             bases: vec![],
             mro: vec!["P".to_string()],
@@ -23735,6 +23779,7 @@ fn check_pattern_class_with_error_keyword_subpattern_reports_error() {
     env.bind_class(
         "P".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "P".to_string(),
             bases: vec![],
             mro: vec!["P".to_string()],

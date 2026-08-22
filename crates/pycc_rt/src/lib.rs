@@ -228,7 +228,11 @@ fn int_floordiv(a: i64, b: i64) -> i64 {
         // generated code checks `pycc_rt_exception_active()` after this
         // call and branches to the exception handler before using the
         // result.
-        raise_builtin(EXCEPTION_TYPE_ZERO_DIV_ERROR, "integer division by zero");
+        raise_builtin(
+            EXCEPTION_TYPE_ZERO_DIV_ERROR,
+            "ZeroDivisionError",
+            "integer division by zero",
+        );
         return tag_smallint(0);
     }
     // Deviation from the task brief: the brief's own code guarded here
@@ -267,7 +271,11 @@ fn int_floormod(a: i64, b: i64) -> i64 {
     let b = require_inline_int(b, "computing the modulo of");
     if b == 0 {
         // D-173: set the pending exception flag instead of panicking.
-        raise_builtin(EXCEPTION_TYPE_ZERO_DIV_ERROR, "integer modulo by zero");
+        raise_builtin(
+            EXCEPTION_TYPE_ZERO_DIV_ERROR,
+            "ZeroDivisionError",
+            "integer modulo by zero",
+        );
         return tag_smallint(0);
     }
     // Deviation from the task brief: the brief's own code special-cased
@@ -575,7 +583,11 @@ pub extern "C" fn pycc_rt_int_from_i64(v: i64) -> i64 {
 fn float_div(a: f64, b: f64) -> f64 {
     if b == 0.0 {
         // D-173: set the pending exception flag instead of panicking.
-        raise_builtin(EXCEPTION_TYPE_ZERO_DIV_ERROR, "float division by zero");
+        raise_builtin(
+            EXCEPTION_TYPE_ZERO_DIV_ERROR,
+            "ZeroDivisionError",
+            "float division by zero",
+        );
         return 0.0;
     }
     a / b
@@ -594,6 +606,7 @@ fn float_divmod(a: f64, b: f64) -> (f64, f64) {
         // D-173: set the pending exception flag instead of panicking.
         raise_builtin(
             EXCEPTION_TYPE_ZERO_DIV_ERROR,
+            "ZeroDivisionError",
             "float floor division or modulo by zero",
         );
         return (0.0, 0.0);
@@ -1172,7 +1185,11 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
         // Restore the payload before returning (not required for
         // correctness in single-shot FFI usage, but cheap insurance).
         list.items.set(items);
-        raise_builtin(EXCEPTION_TYPE_INDEX_ERROR, "list index out of range");
+        raise_builtin(
+            EXCEPTION_TYPE_INDEX_ERROR,
+            "IndexError",
+            "list index out of range",
+        );
         return tag_smallint(0);
     }
     let value = items[index as usize];
@@ -1447,7 +1464,7 @@ fn dict_get(dict: &PyDictObj, key: *mut PyStrObj) -> i64 {
     dict.entries.set(entries);
     found.unwrap_or_else(|| {
         // D-173: set the pending exception flag instead of panicking.
-        raise_builtin(EXCEPTION_TYPE_KEY_ERROR, "dict key not found");
+        raise_builtin(EXCEPTION_TYPE_KEY_ERROR, "KeyError", "dict key not found");
         tag_smallint(0)
     })
 }

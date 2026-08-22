@@ -3,8 +3,9 @@
 
 use super::matching::lower_match;
 use super::{
-    HirClassDef, MirExceptHandler, MirExpr, MirStmt, bind, bind_variable, class_def_of, lookup,
-    lower_expr, lower_raise, mro_attrs, mro_class_def, resolve_comp_source, resolve_exception_tag,
+    HirClassDef, MirExceptHandler, MirExpr, MirStmt, bind, bind_variable, class_def_of,
+    handler_type_tags, lookup, lower_expr, lower_raise, mro_attrs, mro_class_def,
+    resolve_comp_source,
 };
 use pycc_hir::{HirStmt, Ty};
 use std::collections::HashMap;
@@ -379,10 +380,10 @@ pub(super) fn lower_stmt(
             let handlers = handlers
                 .iter()
                 .map(|h| {
-                    let exc_type_tag = h.exc_type.as_deref().map(|name| {
-                        resolve_exception_tag(name)
-                            .expect("pycc_types rejects unknown exception handler types before MIR")
-                    });
+                    let exc_type_tag = h
+                        .exc_type
+                        .as_deref()
+                        .map(|name| handler_type_tags(name, classes));
                     if let (Some(exc_type), Some(name)) = (&h.exc_type, &h.name) {
                         // The type checker binds `except T as name` only in
                         // the handler's cloned environment. MIR maintains

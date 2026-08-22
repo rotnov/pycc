@@ -21,6 +21,15 @@ pub const EXCEPTION_TYPE_RUNTIME_ERROR: u8 = 6;
 /// exception drops the runtime reference but does not free the object.
 pub struct PyExceptionObj {
     pub(crate) type_tag: u8,
+    /// The exception class's source name, as a pointer to UTF-8 bytes with no
+    /// terminator, plus `name_len`. Part 2 of #541 (D-189): the name used to
+    /// be derived from `type_tag` by a `match` in this module, which could
+    /// only ever name the seven builtin classes. User-defined exception
+    /// classes carry module-assigned tags this runtime knows nothing about, so
+    /// the name now travels with the object. Null means "unknown", which
+    /// prints as `Exception`.
+    pub(crate) name: *const u8,
+    pub(crate) name_len: usize,
     pub(crate) message: *mut PyStrObj,
     /// Explicit `raise ... from cause` chain.
     pub(crate) cause: *mut PyExceptionObj,
@@ -63,10 +72,14 @@ pub extern "C" fn pycc_rt_exception_clear() {
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_exception_alloc(
     type_tag: u8,
+    name: *const u8,
+    name_len: usize,
     message: *mut PyStrObj,
 ) -> *mut PyExceptionObj {
     Box::into_raw(Box::new(PyExceptionObj {
         type_tag,
+        name,
+        name_len,
         message,
         cause: std::ptr::null_mut(),
         _context: std::ptr::null_mut(),
@@ -117,6 +130,21 @@ pub unsafe extern "C" fn pycc_rt_exception_type_matches(
     i8::from(type_tag == EXCEPTION_TYPE_EXCEPTION || obj_tag == type_tag)
 }
 
+/// The exception class's name, or `Exception` when the object carries none.
+///
+/// # Safety
+///
+/// A non-null `exc.name` must point to `exc.name_len` readable UTF-8 bytes
+/// that outlive this call. Codegen only ever supplies a static string
+/// constant, and `raise_builtin` only ever supplies a `&'static str`.
+fn exception_type_name(exc: &PyExceptionObj) -> &str {
+    if exc.name.is_null() {
+        return "Exception";
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(exc.name, exc.name_len) };
+    std::str::from_utf8(bytes).unwrap_or("Exception")
+}
+
 #[cfg(not(test))]
 fn exception_print_and_exit(obj: *mut PyExceptionObj) -> ! {
     if obj.is_null() {
@@ -124,16 +152,7 @@ fn exception_print_and_exit(obj: *mut PyExceptionObj) -> ! {
         std::process::exit(1);
     }
     let exc = unsafe { &*obj };
-    let type_name = match exc.type_tag {
-        EXCEPTION_TYPE_EXCEPTION => "Exception",
-        EXCEPTION_TYPE_VALUE_ERROR => "ValueError",
-        EXCEPTION_TYPE_TYPE_ERROR => "TypeError",
-        EXCEPTION_TYPE_KEY_ERROR => "KeyError",
-        EXCEPTION_TYPE_INDEX_ERROR => "IndexError",
-        EXCEPTION_TYPE_ZERO_DIV_ERROR => "ZeroDivisionError",
-        EXCEPTION_TYPE_RUNTIME_ERROR => "RuntimeError",
-        _ => "Exception",
-    };
+    let type_name = exception_type_name(exc);
     if exc.message.is_null() {
         eprintln!("{type_name}");
     } else {
@@ -170,24 +189,67 @@ fn alloc_exception_message(msg: &str) -> *mut PyStrObj {
     }))
 }
 
-pub(crate) fn raise_builtin(type_tag: u8, msg: &str) {
+pub(crate) fn raise_builtin(type_tag: u8, name: &'static str, msg: &str) {
     let message = alloc_exception_message(msg);
-    pycc_rt_exception_raise(pycc_rt_exception_alloc(type_tag, message));
+    pycc_rt_exception_raise(pycc_rt_exception_alloc(
+        type_tag,
+        name.as_ptr(),
+        name.len(),
+        message,
+    ));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Allocates an exception carrying a class name, the shape every
+    /// production caller uses since Part 2 of #541 (D-189).
+    fn alloc_named(type_tag: u8, name: &'static str, msg: &str) -> *mut PyExceptionObj {
+        pycc_rt_exception_alloc(
+            type_tag,
+            name.as_ptr(),
+            name.len(),
+            alloc_exception_message(msg),
+        )
+    }
+
+    #[test]
+    fn class_name_round_trips_through_the_exception_object() {
+        let obj = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "MyError", "boom");
+        assert_eq!(exception_type_name(unsafe { &*obj }), "MyError");
+    }
+
+    #[test]
+    fn a_nameless_exception_object_reports_the_root_class() {
+        let obj = pycc_rt_exception_alloc(
+            EXCEPTION_TYPE_VALUE_ERROR,
+            std::ptr::null(),
+            0,
+            alloc_exception_message("boom"),
+        );
+        assert_eq!(exception_type_name(unsafe { &*obj }), "Exception");
+    }
+
+    #[test]
+    fn a_non_utf8_class_name_reports_the_root_class() {
+        // Codegen never emits one; the runtime still must not panic on it.
+        const INVALID: [u8; 2] = [0xff, 0xfe];
+        let obj = pycc_rt_exception_alloc(
+            EXCEPTION_TYPE_VALUE_ERROR,
+            INVALID.as_ptr(),
+            INVALID.len(),
+            alloc_exception_message("boom"),
+        );
+        assert_eq!(exception_type_name(unsafe { &*obj }), "Exception");
+    }
+
     #[test]
     fn state_starts_clear_and_clear_resets_value() {
         pycc_rt_exception_clear();
         assert_eq!(pycc_rt_exception_active(), 0);
         assert!(pycc_rt_exception_value().is_null());
-        let obj = pycc_rt_exception_alloc(
-            EXCEPTION_TYPE_RUNTIME_ERROR,
-            alloc_exception_message("clear test"),
-        );
+        let obj = alloc_named(EXCEPTION_TYPE_RUNTIME_ERROR, "RuntimeError", "clear test");
         pycc_rt_exception_raise(obj);
         assert_eq!(pycc_rt_exception_active(), 1);
         assert_eq!(pycc_rt_exception_value(), obj);
@@ -200,10 +262,7 @@ mod tests {
     fn state_is_isolated_between_threads() {
         pycc_rt_exception_clear();
         let child = std::thread::spawn(|| {
-            let obj = pycc_rt_exception_alloc(
-                EXCEPTION_TYPE_VALUE_ERROR,
-                alloc_exception_message("child"),
-            );
+            let obj = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "child");
             pycc_rt_exception_raise(obj);
             assert_eq!(pycc_rt_exception_value(), obj);
             assert_eq!(pycc_rt_exception_active(), 1);
@@ -215,7 +274,7 @@ mod tests {
 
     #[test]
     fn type_matching_is_exact_except_for_exception_root() {
-        let obj = pycc_rt_exception_alloc(EXCEPTION_TYPE_KEY_ERROR, alloc_exception_message("key"));
+        let obj = alloc_named(EXCEPTION_TYPE_KEY_ERROR, "KeyError", "key");
         assert_eq!(
             unsafe { pycc_rt_exception_type_matches(obj, EXCEPTION_TYPE_KEY_ERROR) },
             1
@@ -237,12 +296,8 @@ mod tests {
     #[test]
     fn explicit_cause_and_default_fields_are_preserved() {
         pycc_rt_exception_clear();
-        let cause =
-            pycc_rt_exception_alloc(EXCEPTION_TYPE_VALUE_ERROR, alloc_exception_message("cause"));
-        let exc = pycc_rt_exception_alloc(
-            EXCEPTION_TYPE_RUNTIME_ERROR,
-            alloc_exception_message("effect"),
-        );
+        let cause = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "cause");
+        let exc = alloc_named(EXCEPTION_TYPE_RUNTIME_ERROR, "RuntimeError", "effect");
         assert_eq!(unsafe { (*(*exc).message).bytes() }, b"effect");
         assert!(unsafe { (*exc).cause }.is_null());
         assert!(unsafe { (*exc)._context }.is_null());
@@ -272,7 +327,7 @@ mod tests {
     #[test]
     fn builtin_raise_sets_the_requested_tag() {
         pycc_rt_exception_clear();
-        raise_builtin(EXCEPTION_TYPE_ZERO_DIV_ERROR, "zero");
+        raise_builtin(EXCEPTION_TYPE_ZERO_DIV_ERROR, "ZeroDivisionError", "zero");
         let obj = pycc_rt_exception_value();
         assert_eq!(unsafe { (*obj).type_tag }, EXCEPTION_TYPE_ZERO_DIV_ERROR);
         pycc_rt_exception_clear();

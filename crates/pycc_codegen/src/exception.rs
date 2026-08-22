@@ -144,6 +144,31 @@ pub(super) fn guard_statement_effects<'ctx>(
     builder.position_at_end(continuation);
 }
 
+/// Emits a private constant holding an exception class's name, and returns a
+/// pointer to its bytes plus its length -- the pair `pycc_rt_exception_alloc`
+/// stores on the exception object so an uncaught exception can be printed with
+/// its real class name (Part 2 of #541, D-189). The bytes are not
+/// NUL-terminated; the runtime reads exactly `len` of them.
+fn emit_class_name_constant<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+    class_name: &str,
+) -> (PointerValue<'ctx>, inkwell::values::IntValue<'ctx>) {
+    let bytes = class_name.as_bytes();
+    let global = module.add_global(
+        context.i8_type().array_type(bytes.len() as u32),
+        None,
+        "exc_class_name",
+    );
+    global.set_initializer(&context.const_string(bytes, false));
+    global.set_constant(true);
+    global.set_linkage(inkwell::module::Linkage::Private);
+    (
+        global.as_pointer_value(),
+        context.i64_type().const_int(bytes.len() as u64, false),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_exception_value<'ctx>(
     context: &'ctx Context,
@@ -156,7 +181,11 @@ pub(super) fn emit_exception_value<'ctx>(
     role: &str,
 ) -> Result<PointerValue<'ctx>, String> {
     match value {
-        MirExceptionValue::Constructed { type_tag, message } => {
+        MirExceptionValue::Constructed {
+            type_tag,
+            class_name,
+            message,
+        } => {
             let message = emit_expr(
                 context,
                 builder,
@@ -175,10 +204,17 @@ pub(super) fn emit_exception_value<'ctx>(
                 return Err(format!("{prefix} message must be a string"));
             };
             let type_tag = context.i8_type().const_int(*type_tag as u64, false);
+            let (class_name_ptr, class_name_len) =
+                emit_class_name_constant(context, module, class_name);
             Ok(builder
                 .build_call(
                     rt.exception_alloc,
-                    &[type_tag.into(), message.into()],
+                    &[
+                        type_tag.into(),
+                        class_name_ptr.into(),
+                        class_name_len.into(),
+                        message.into(),
+                    ],
                     &format!("{role}_alloc"),
                 )
                 .expect("build_call should not fail for exception_alloc")
@@ -353,18 +389,33 @@ pub(super) fn emit_try<'ctx>(
                 no_match_bb
             };
             builder.position_at_end(dispatch_bbs[i]);
-            let matches = if let Some(tag) = handler.exc_type_tag {
-                let tag_val = context.i8_type().const_int(tag as u64, false);
-                builder
-                    .build_call(
-                        rt.exception_type_matches,
-                        &[exc_val.into(), tag_val.into()],
-                        "exc_matches",
-                    )
-                    .expect("build_call should not fail for exception_type_matches")
-                    .try_as_basic_value()
-                    .expect_basic("pycc_rt_exception_type_matches returns i8")
-                    .into_int_value()
+            let matches = if let Some(tags) = handler.exc_type_tag.as_deref() {
+                // Part 2 of #541 (D-189): a handler naming a class accepts
+                // that class and every user-defined subclass of it, each of
+                // which carries its own tag, so the test is an OR over the
+                // whole set. A single-tag handler -- every builtin one --
+                // emits exactly the call it emitted before, with no `or`.
+                let mut accumulated: Option<inkwell::values::IntValue<'ctx>> = None;
+                for tag in tags {
+                    let tag_val = context.i8_type().const_int(u64::from(*tag), false);
+                    let one = builder
+                        .build_call(
+                            rt.exception_type_matches,
+                            &[exc_val.into(), tag_val.into()],
+                            "exc_matches",
+                        )
+                        .expect("build_call should not fail for exception_type_matches")
+                        .try_as_basic_value()
+                        .expect_basic("pycc_rt_exception_type_matches returns i8")
+                        .into_int_value();
+                    accumulated = Some(match accumulated {
+                        Some(previous) => builder
+                            .build_or(previous, one, "exc_matches_any")
+                            .expect("build_or should not fail"),
+                        None => one,
+                    });
+                }
+                accumulated.expect("pycc_mir never emits an empty handler tag set")
             } else {
                 // Bare `except:` — always matches.
                 context.i8_type().const_int(1, false)

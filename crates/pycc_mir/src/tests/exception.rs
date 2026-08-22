@@ -4,6 +4,7 @@
 //! `raise ... from ...`, bare re-raise, `resolve_exception_tag` over every
 //! builtin type, and the test helpers' own panic arms.
 
+use crate::exception::{handler_type_tags, lower_exception_value, resolve_exception_tag};
 use crate::*;
 use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt, Ty};
 
@@ -68,7 +69,9 @@ fn expect_top_level_raise_from(item: &MirItem) -> (&MirExceptionValue, &MirExcep
 
 fn expect_constructed_exception(value: &MirExceptionValue) -> (&u8, &MirExpr) {
     match value {
-        MirExceptionValue::Constructed { type_tag, message } => (type_tag, message),
+        MirExceptionValue::Constructed {
+            type_tag, message, ..
+        } => (type_tag, message),
         MirExceptionValue::Existing(_) => panic!("expected constructed exception"),
     }
 }
@@ -152,7 +155,7 @@ fn lowers_try_with_value_error_handler_to_mir() {
     let (body, handlers, orelse, finalbody) = expect_top_level_try(&mir.items[0]);
     assert_eq!(body.len(), 1);
     assert_eq!(handlers.len(), 1);
-    assert_eq!(handlers[0].exc_type_tag, Some(1)); // ValueError = 1
+    assert_eq!(handlers[0].exc_type_tag, Some(vec![1])); // ValueError = 1
     assert!(orelse.is_empty());
     assert!(finalbody.is_empty());
 }
@@ -208,7 +211,7 @@ fn lowers_try_with_else_and_finally_to_mir() {
     let (body, handlers, orelse, finalbody) = expect_top_level_try(&mir.items[0]);
     assert_eq!(body.len(), 1);
     assert_eq!(handlers.len(), 1);
-    assert_eq!(handlers[0].exc_type_tag, Some(0)); // Exception = 0
+    assert_eq!(handlers[0].exc_type_tag, Some(vec![0])); // Exception = 0
     assert_eq!(orelse.len(), 1);
     assert_eq!(finalbody.len(), 1);
 }
@@ -345,4 +348,140 @@ fn an_unknown_exception_handler_cannot_silently_become_a_bare_handler() {
         Vec::new(),
     );
     let _ = build(&hir);
+}
+
+// Part 2 of #541 (D-189): user-defined exception classes.
+
+/// A minimal raisable user exception class: `class <name>(<mro[1]>): pass`,
+/// carrying the tag HIR lowering would have assigned it.
+fn user_exception_class(name: &str, mro: &[&str], tag: Option<u8>) -> (String, HirClassDef) {
+    (
+        name.to_string(),
+        HirClassDef {
+            exception_type_tag: tag,
+            name: name.to_string(),
+            bases: mro
+                .get(1)
+                .map(|base| vec![base.to_string()])
+                .unwrap_or_default(),
+            mro: mro.iter().map(|entry| entry.to_string()).collect(),
+            attrs: Vec::new(),
+            methods: vec![(
+                "__init__".to_string(),
+                pycc_hir::EXCEPTION_INIT_MANGLED_NAME.to_string(),
+            )],
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            type_param: None,
+            enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: Vec::new(),
+            abstract_methods: Vec::new(),
+            is_abstract: false,
+        },
+    )
+}
+
+fn exception_hierarchy() -> HashMap<String, HirClassDef> {
+    HashMap::from([
+        user_exception_class("AppError", &["AppError", "Exception"], Some(7)),
+        user_exception_class(
+            "DatabaseError",
+            &["DatabaseError", "AppError", "Exception"],
+            Some(9),
+        ),
+        user_exception_class(
+            "ConfigError",
+            &["ConfigError", "AppError", "Exception"],
+            Some(8),
+        ),
+        // Rooted at a builtin other than `Exception`, so a `ValueError`
+        // handler has to widen to it (#702).
+        user_exception_class(
+            "ParseError",
+            &["ParseError", "ValueError", "Exception"],
+            Some(10),
+        ),
+        user_exception_class("Unrelated", &["Unrelated"], None),
+    ])
+}
+
+#[test]
+fn a_user_exception_handler_accepts_its_own_tag_and_every_subclass_tag_sorted() {
+    let classes = exception_hierarchy();
+    // Sorted ascending even though `ConfigError` (8) was declared after
+    // `DatabaseError` (9) and `classes` iterates in hash-map order.
+    assert_eq!(handler_type_tags("AppError", &classes), vec![7, 8, 9]);
+}
+
+#[test]
+fn a_leaf_user_exception_handler_accepts_only_its_own_tag() {
+    let classes = exception_hierarchy();
+    assert_eq!(handler_type_tags("DatabaseError", &classes), vec![9]);
+}
+
+#[test]
+fn a_builtin_handler_also_accepts_its_user_defined_subclasses() {
+    let classes = exception_hierarchy();
+    // `ParseError` derives from `ValueError`, not from `Exception`, so the
+    // handler widens from `ValueError`'s own tag 1 to include it.
+    assert_eq!(handler_type_tags("ValueError", &classes), vec![1, 10]);
+}
+
+#[test]
+fn a_builtin_handler_without_user_subclasses_stays_a_single_tag() {
+    let classes = exception_hierarchy();
+    // No class in the fixture reaches `TypeError`.
+    assert_eq!(handler_type_tags("TypeError", &classes), vec![2]);
+}
+
+#[test]
+fn an_exception_handler_stays_a_single_catch_all_tag() {
+    // Tag 0 is `pycc_rt_exception_type_matches`'s own catch-all, so listing
+    // every user tag alongside it would emit dead comparisons.
+    let classes = exception_hierarchy();
+    assert_eq!(handler_type_tags("Exception", &classes), vec![0]);
+}
+
+#[test]
+fn raising_a_user_exception_class_lowers_to_a_constructed_value_with_its_name() {
+    let classes = exception_hierarchy();
+    let mut scopes = vec![HashMap::new()];
+    let value = lower_exception_value(
+        &HirExpr::Call {
+            callee: "DatabaseError".to_string(),
+            args: vec![HirExpr::StringLiteral("boom".to_string())],
+        },
+        &mut scopes,
+        &classes,
+        None,
+    );
+    assert!(matches!(
+        value,
+        MirExceptionValue::Constructed {
+            type_tag: 9,
+            ref class_name,
+            message: MirExpr::StringLiteral(ref message),
+        } if class_name == "DatabaseError" && message == "boom"
+    ));
+}
+
+#[test]
+fn calling_an_untagged_class_is_not_an_exception_construction() {
+    let classes = exception_hierarchy();
+    let mut scopes = vec![HashMap::new()];
+    let value = lower_exception_value(
+        &HirExpr::Call {
+            callee: "Unrelated".to_string(),
+            args: Vec::new(),
+        },
+        &mut scopes,
+        &classes,
+        None,
+    );
+    assert!(matches!(value, MirExceptionValue::Existing(_)));
 }

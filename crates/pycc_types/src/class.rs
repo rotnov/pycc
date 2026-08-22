@@ -1030,6 +1030,7 @@ mod tests {
             class_defs: vec![(
                 "Point".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "Point".to_string(),
                     bases: Vec::new(),
                     mro: vec!["Point".to_string()],
@@ -1446,6 +1447,7 @@ mod tests {
             class_defs: vec![(
                 "Point".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "Point".to_string(),
                     bases: Vec::new(),
                     mro: vec!["Point".to_string()],
@@ -1526,6 +1528,7 @@ mod tests {
             class_defs: vec![(
                 "Point".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "Point".to_string(),
                     bases: Vec::new(),
                     mro: vec!["Point".to_string()],
@@ -1806,6 +1809,7 @@ mod tests {
         hir.class_defs.push((
             "Counter".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "Counter".to_string(),
                 bases: Vec::new(),
                 mro: vec!["Counter".to_string()],
@@ -1920,6 +1924,7 @@ mod tests {
         env.bind_class(
             "Ghost".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "Ghost".to_string(),
                 bases: Vec::new(),
                 mro: vec!["Ghost".to_string()],
@@ -1961,6 +1966,7 @@ mod tests {
         env.bind_class(
             "Ghost".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "Ghost".to_string(),
                 bases: Vec::new(),
                 mro: vec!["Ghost".to_string()],
@@ -2002,6 +2008,7 @@ mod tests {
         env.bind_class(
             "Ghost".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "Ghost".to_string(),
                 bases: Vec::new(),
                 mro: vec!["Ghost".to_string()],
@@ -2063,6 +2070,7 @@ mod tests {
             env.bind_class(
                 "A".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
                     mro: vec!["A".to_string()],
@@ -2089,6 +2097,7 @@ mod tests {
             env.bind_class(
                 "B".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
                     mro: vec!["B".to_string(), "A".to_string()],
@@ -2131,6 +2140,7 @@ mod tests {
             env.bind_class(
                 "A".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
                     mro: vec!["A".to_string()],
@@ -2153,6 +2163,7 @@ mod tests {
             env.bind_class(
                 "B".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
                     mro: vec!["B".to_string(), "A".to_string()],
@@ -2193,6 +2204,7 @@ mod tests {
             env.bind_class(
                 "A".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
                     mro: vec!["A".to_string()],
@@ -2215,6 +2227,7 @@ mod tests {
             env.bind_class(
                 "B".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
                     mro: vec!["B".to_string(), "A".to_string()],
@@ -2252,6 +2265,7 @@ mod tests {
             env.bind_class(
                 "A".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
                     mro: vec!["A".to_string()],
@@ -2274,6 +2288,7 @@ mod tests {
             env.bind_class(
                 "B".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
                     mro: vec!["B".to_string(), "A".to_string()],
@@ -2304,6 +2319,7 @@ mod tests {
             env.bind_class(
                 "A".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
                     mro: vec!["A".to_string()],
@@ -2326,6 +2342,7 @@ mod tests {
             env.bind_class(
                 "B".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
                     mro: vec!["B".to_string(), "A".to_string()],
@@ -2407,6 +2424,7 @@ mod tests {
             class_defs: vec![(
                 "Box".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "Box".to_string(),
                     bases: Vec::new(),
                     mro: vec!["Box".to_string()],
@@ -2469,6 +2487,7 @@ mod tests {
             class_defs: vec![(
                 "Box".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "Box".to_string(),
                     bases: Vec::new(),
                     mro: vec!["Box".to_string()],
@@ -2825,6 +2844,7 @@ mod tests {
                 (
                     "Animal".to_string(),
                     HirClassDef {
+                        exception_type_tag: None,
                         name: "Animal".to_string(),
                         bases: Vec::new(),
                         mro: vec!["Animal".to_string()],
@@ -2850,6 +2870,7 @@ mod tests {
                 (
                     "Dog".to_string(),
                     HirClassDef {
+                        exception_type_tag: None,
                         name: "Dog".to_string(),
                         bases: vec!["Animal".to_string()],
                         mro: vec!["Dog".to_string(), "Animal".to_string()],
@@ -2977,6 +2998,7 @@ mod tests {
                 (
                     "Base".to_string(),
                     HirClassDef {
+                        exception_type_tag: None,
                         name: "Base".to_string(),
                         bases: Vec::new(),
                         mro: vec!["Base".to_string()],
@@ -2999,6 +3021,7 @@ mod tests {
                 (
                     "Derived".to_string(),
                     HirClassDef {
+                        exception_type_tag: None,
                         name: "Derived".to_string(),
                         bases: vec!["Base".to_string()],
                         mro: vec!["Derived".to_string(), "Base".to_string()],
@@ -3124,6 +3147,7 @@ mod tests {
                 (
                     "Base".to_string(),
                     HirClassDef {
+                        exception_type_tag: None,
                         name: "Base".to_string(),
                         bases: Vec::new(),
                         mro: vec!["Base".to_string()],
@@ -3149,6 +3173,7 @@ mod tests {
                 (
                     "Derived".to_string(),
                     HirClassDef {
+                        exception_type_tag: None,
                         name: "Derived".to_string(),
                         bases: vec!["Base".to_string()],
                         mro: vec!["Derived".to_string(), "Base".to_string()],
@@ -3213,6 +3238,7 @@ mod tests {
             class_defs: vec![(
                 "C".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "C".to_string(),
                     bases: Vec::new(),
                     mro: vec!["C".to_string()],
@@ -3408,6 +3434,7 @@ mod tests {
         env.bind_class(
             "C".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "C".to_string(),
                 bases: Vec::new(),
                 mro: vec!["C".to_string()],
@@ -3452,6 +3479,7 @@ mod tests {
         env.bind_class(
             "C".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "C".to_string(),
                 bases: Vec::new(),
                 mro: vec!["C".to_string()],
@@ -3483,6 +3511,7 @@ mod tests {
         env.bind_class(
             "Derived".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "Derived".to_string(),
                 bases: vec!["Ghost".to_string()],
                 mro: vec!["Derived".to_string(), "Ghost".to_string()],
@@ -3522,6 +3551,7 @@ mod tests {
         env.bind_class(
             "C".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "C".to_string(),
                 bases: Vec::new(),
                 mro: vec!["C".to_string()],
@@ -3556,6 +3586,7 @@ mod tests {
         env.bind_class(
             "C".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "C".to_string(),
                 bases: Vec::new(),
                 mro: vec!["C".to_string()],
@@ -3927,6 +3958,7 @@ mod tests {
             class_defs: vec![(
                 "EqPoint".to_string(),
                 pycc_hir::HirClassDef {
+                    exception_type_tag: None,
                     name: "EqPoint".to_string(),
                     bases: Vec::new(),
                     mro: vec!["EqPoint".to_string()],
@@ -4019,6 +4051,7 @@ mod tests {
             class_defs: vec![(
                 "PlainEq".to_string(),
                 pycc_hir::HirClassDef {
+                    exception_type_tag: None,
                     name: "PlainEq".to_string(),
                     bases: Vec::new(),
                     mro: vec!["PlainEq".to_string()],
@@ -4314,6 +4347,7 @@ mod tests {
 
         // --- Protocol "P": requires attribute `x: int` ---
         let proto_def = HirClassDef {
+            exception_type_tag: None,
             name: "P".to_string(),
             bases: Vec::new(),
             mro: vec!["P".to_string()],
@@ -4361,6 +4395,7 @@ mod tests {
             }))],
         };
         let c_def = HirClassDef {
+            exception_type_tag: None,
             name: "C".to_string(),
             bases: Vec::new(),
             mro: vec!["C".to_string()],
@@ -4427,6 +4462,7 @@ mod tests {
         env.bind_class(
             "Ghost".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "Ghost".to_string(),
                 bases: Vec::new(),
                 mro: vec!["Ghost".to_string()],

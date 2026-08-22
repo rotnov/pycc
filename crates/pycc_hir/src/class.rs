@@ -194,6 +194,25 @@ pub struct HirClassDef {
     /// (rejected with `C0001`). The `ABC` base is consumed as a marker
     /// (like `Enum`/`Protocol`), not recorded as a real base.
     pub is_abstract: bool,
+    /// Part 2 of #541 (D-189): the runtime exception type tag this class is
+    /// raised and caught under, or `None` when the class is **not raisable**.
+    ///
+    /// `None` never means "synthetic". D-188 makes
+    /// `HirModule::seeded_builtin_exception_classes` the sole provenance
+    /// signal for syntheticness, and this field carries no provenance
+    /// information whatsoever: the seven synthetic builtin exception classes
+    /// carry `None` here even though they are the most raisable classes in
+    /// the language, because their tags are fixed constants resolved by name
+    /// (`resolve_exception_tag`) rather than assigned per module. Reading
+    /// `None` as "user-defined" or `Some` as "user-defined" is equally wrong.
+    ///
+    /// A tag is assigned by `lower_checked` to every user-declared class whose
+    /// MRO reaches a builtin exception class, in a deterministic order, from
+    /// the range `7..=255` — `0..=6` are reserved for the builtin hierarchy.
+    /// A module declaring more than 249 such classes is rejected with `C0001`.
+    /// Every other class — including a user class that never touches the
+    /// exception hierarchy — keeps `None`.
+    pub exception_type_tag: Option<u8>,
 }
 
 /// PEP 544 (#380, PR-20): a single required member of a protocol class.
@@ -714,6 +733,7 @@ fn lower_protocol_class(
     }
     Ok((
         HirClassDef {
+            exception_type_tag: None,
             name: class_name,
             bases,
             mro,
@@ -841,6 +861,7 @@ fn lower_enum_class(
     // runtime-instantiated objects.
     Ok((
         HirClassDef {
+            exception_type_tag: None,
             name: class_name,
             bases,
             mro,
@@ -1838,6 +1859,7 @@ pub(crate) fn lower_class(
     }
     Ok((
         HirClassDef {
+            exception_type_tag: None,
             name: class_name,
             bases,
             mro,
@@ -3130,6 +3152,7 @@ mod tests {
         assert_eq!(
             *class_def,
             HirClassDef {
+                exception_type_tag: None,
                 name: "Point".to_string(),
                 bases: Vec::new(),
                 mro: vec!["Point".to_string()],

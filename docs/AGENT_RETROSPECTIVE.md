@@ -33,6 +33,35 @@ never a merge gate.
 
 ---
 
+## 2026-08-22 — `git checkout <file>` used to undo one debug line reverted an entire work item
+
+**What happened.** While implementing Part 2 of #541 (#702) I added a
+temporary `eprintln!` to `crates/pycc_mir/src/exception.rs` to trace which
+`MirExceptionValue` arm a `raise` was taking, then removed it with
+`git checkout crates/pycc_mir/src/exception.rs`. That file also held every
+uncommitted change of work item 2 (the `Constructed` payload widening, the
+`handler_type_tags` helper, the `exception_type_tag` lookup), all of which
+was silently discarded. The whole work item had to be re-applied from
+scratch.
+
+**Root cause.** `git checkout -- <path>` is whole-file, not
+whole-hunk. Reaching for it to undo a single edit treats it as an
+editor-level undo, which it is not, and it destroys uncommitted work
+without a prompt or a reflog entry to recover from.
+
+**What fixed it.** Re-typing the file's changes. There was no recovery
+path — the content had never been staged or committed.
+
+**Lesson.** Never use `git checkout`/`git restore` on a file with
+uncommitted work you intend to keep. To remove a temporary debug line,
+delete the line (an `Edit`, or `sed -i` on that exact line). If a
+throwaway edit really does warrant a checkout, `git add` the work you
+want to keep first — then `git checkout` restores from the index rather
+than from HEAD and the real change survives. Committing a `wip:` commit
+before adding any debug instrumentation is cheaper still.
+
+---
+
 ## 2026-08-22 — Structural equality was used as a provenance proxy, and its own doc comment argued the wrong premise
 
 **What happened.** Part 1 of #541 needed to tell a compiler-synthesized

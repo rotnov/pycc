@@ -152,7 +152,10 @@ pub(super) struct RtFns<'ctx> {
     pub(super) exception_value: FunctionValue<'ctx>,
     /// `exception_clear` resets the thread-local pending state (void).
     pub(super) exception_clear: FunctionValue<'ctx>,
-    /// `exception_alloc(type_tag: u8, message: *mut PyStrObj) -> *mut PyExceptionObj`.
+    /// `exception_alloc(type_tag: u8, name: *const u8, name_len: usize,
+    /// message: *mut PyStrObj) -> *mut PyExceptionObj`. Part 2 of #541
+    /// (D-189) added the class name: user-defined exception classes carry
+    /// module-assigned tags the runtime cannot map back to a name.
     pub(super) exception_alloc: FunctionValue<'ctx>,
     /// `exception_raise(obj: *mut PyExceptionObj)` — sets pending state (void).
     pub(super) exception_raise: FunctionValue<'ctx>,
@@ -423,7 +426,15 @@ pub(super) fn declare_rt_functions<'ctx>(
         exception_clear: declare("pycc_rt_exception_clear", void_type.fn_type(&[], false)),
         exception_alloc: declare(
             "pycc_rt_exception_alloc",
-            ptr_type.fn_type(&[context.i8_type().into(), ptr_type.into()], false),
+            ptr_type.fn_type(
+                &[
+                    context.i8_type().into(),
+                    ptr_type.into(),
+                    context.i64_type().into(),
+                    ptr_type.into(),
+                ],
+                false,
+            ),
         ),
         exception_raise: declare(
             "pycc_rt_exception_raise",
