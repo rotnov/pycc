@@ -2156,6 +2156,18 @@ def validate_skill_parity(
                     f"{relative}: must preserve the canonical explicit-only "
                     "invocation gate"
                 )
+        if frontmatter_scalar(canonical_path, "requires-agent-dispatch") == "true":
+            if (
+                "explicitly asks for sub-agents, delegation, and parallel agent work"
+                not in normalized_text
+                or "`spawn_agent`" not in normalized_text
+                or "`wait_agent`" not in normalized_text
+                or "If sub-agent dispatch is unavailable" not in normalized_text
+            ):
+                failures.append(
+                    f"{relative}: must map the canonical sub-agent dispatch step "
+                    "to a Codex capability with a named fallback"
+                )
 
 def markdown_indent(line: str) -> tuple[int, int]:
     columns = 0

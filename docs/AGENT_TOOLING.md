@@ -408,6 +408,28 @@ revision, provide the equivalent Codex capability or a safe documented fallback,
 extend the pinned-marketplace and parity checks in the same pull request before adding
 the required reference.
 
+### Sub-agent dispatch across the two surfaces
+
+Codex's sub-agent tools — `spawn_agent` to start a sub-agent and `wait_agent` to join it —
+are the sanctioned mapping for Claude's `Agent` tool when a canonical skill dispatches
+sub-agents on its primary path (D-190). Codex exposes no `subagent_type`, so a Claude
+`subagent_type=Explore` dispatch maps to a `spawn_agent` brief that imposes read-only
+discipline in its own text rather than through a tool list.
+
+The `multi_agent` feature is reported `stable` and enabled by default by the Codex CLI
+release observed locally while this mapping was written, **0.148.0**; required CI pins
+`CODEX_CLI_VERSION: "0.145.0"` (`.github/workflows/agent-assets.yml`). The mapping was
+derived from the binary's advertised feature list and tool names, not from an authenticated
+Codex session, and the surrounding surface is visibly churning — `multi_agent_v2` is
+`stable` but off, and `enable_fanout` is already `removed`. A named unavailability fallback
+is therefore mandatory rather than decorative: an adapter must say what to do when the
+feature is disabled, the agent depth limit is reached, or `spawn_agent` is simply not
+offered, and must never silently skip the canonical step.
+
+A canonical skill opts into this contract with `requires-agent-dispatch: true` in its
+frontmatter; `validate_skill_parity` in `scripts/validate_agent_assets.py` then requires
+the Codex adapter to name both tools and to carry the fallback paragraph.
+
 ## Machine-local iEvo hook lifecycle
 
 The tracked `.ievo/evo-auto.flag` shares corrections-only intent, but generated

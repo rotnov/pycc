@@ -426,6 +426,89 @@ class AgentAssetValidationTests(unittest.TestCase):
             )
             self.assertEqual(failures, [])
 
+    def dispatch_failures(
+        self,
+        wrapper_body: str,
+        *,
+        canonical_requires_dispatch: bool = True,
+    ) -> list[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical_root = root / "canonical"
+            codex_root = root / "codex"
+            self.write_skill(
+                canonical_root,
+                "example",
+                "Example workflow.",
+                "# Canonical",
+                extra_frontmatter=(
+                    "requires-agent-dispatch: true\n"
+                    if canonical_requires_dispatch
+                    else ""
+                ),
+            )
+            self.write_skill(
+                codex_root,
+                "example",
+                "Example workflow.",
+                wrapper_body,
+            )
+            failures: list[str] = []
+            validator.validate_skill_parity(
+                canonical_root,
+                codex_root,
+                failures,
+            )
+            return failures
+
+    def dispatch_wrapper_body(self) -> str:
+        return (
+            "Read `.claude/skills/example/SKILL.md` completely as the canonical "
+            "workflow. This skill explicitly asks for sub-agents, delegation, and "
+            "parallel agent work, so use `spawn_agent` and join with `wait_agent`. "
+            "If sub-agent dispatch is unavailable in this session, run the step "
+            "inline and say so."
+        )
+
+    def test_dispatch_mapping_in_the_codex_wrapper_is_accepted(self) -> None:
+        self.assertEqual(self.dispatch_failures(self.dispatch_wrapper_body()), [])
+
+    def test_dispatch_wrapper_without_a_named_fallback_is_rejected(self) -> None:
+        body = self.dispatch_wrapper_body()
+        truncated = body[: body.index("If sub-agent dispatch is unavailable")].rstrip()
+        failures = self.dispatch_failures(truncated)
+        self.assertTrue(
+            any(
+                "must map the canonical sub-agent dispatch step to a Codex "
+                "capability with a named fallback" in failure
+                for failure in failures
+            )
+        )
+
+    def test_dispatch_wrapper_missing_any_required_literal_is_rejected(self) -> None:
+        for literal in (
+            "explicitly asks for sub-agents, delegation, and parallel agent work",
+            "`spawn_agent`",
+            "`wait_agent`",
+            "If sub-agent dispatch is unavailable",
+        ):
+            with self.subTest(literal=literal):
+                body = self.dispatch_wrapper_body().replace(literal, "REDACTED")
+                failures = self.dispatch_failures(body)
+                self.assertTrue(
+                    any("named fallback" in failure for failure in failures)
+                )
+
+    def test_unmarked_canonical_skill_needs_no_dispatch_mapping(self) -> None:
+        self.assertEqual(
+            self.dispatch_failures(
+                "Read `.claude/skills/example/SKILL.md` completely as the "
+                "canonical workflow.",
+                canonical_requires_dispatch=False,
+            ),
+            [],
+        )
+
     def instruction_parity_failures(
         self,
         claude_text: str,
