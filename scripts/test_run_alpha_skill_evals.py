@@ -409,7 +409,7 @@ class AlphaSkillEvalTests(unittest.TestCase):
             )
         )
 
-    def test_issue_select_oracle_covers_its_three_scenarios(self) -> None:
+    def test_issue_select_oracle_covers_every_case(self) -> None:
         skill = evals.canonical_skill("claude", "issue-select")
         for case in evals.load_cases("issue-select"):
             evals.run_issue_select_case(case, skill)

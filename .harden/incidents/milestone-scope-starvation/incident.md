@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-22
 **Topic:** milestone-scope-starvation
-**Verdict:** pending
+**Verdict:** profit on the one harness that produced usable data (codex 1/3 -> 3/3); the other three are uninformative
 
 ## Symptom
 
@@ -76,7 +76,49 @@ Self-contained: no `gh`, no network, no `setup.py`.
 
 ## Arena verdict
 
-Pending — see the campaign result recorded below when it completes.
+`.harden/arena/20260822-080436-fixture/` — 24 runs, `--runs 3`, four harnesses
+(claude sonnet/low, codex gpt-5.6-luna/low, devin glm-5-2, grok grok-4.5/low),
+zero infrastructure failures. The arena's own verdict line reads **"The patch
+works on every harness tested - ship it"**, computed from 2 of 4 harnesses. On
+inspection of `results.jsonl` only one of those two carries usable data:
+
+| harness | control | patch |
+|---|---|---|
+| claude | 0/3 | 1/3 |
+| codex  | 1/3 | 3/3 |
+| devin  | 3/3 | 3/3 (no baseline) |
+| grok   | 3/3 | 3/3 (no baseline) |
+
+Recorded with its caveats rather than as a clean win:
+
+- **codex is the only clean signal.** 1/3 → 3/3 with real tool calls in every
+  run, one edit per run, comparable token spend across conditions. This is the
+  reproduction: under control it reached out of the scope, under patch it did
+  not.
+- **claude's numbers are not evidence at all.** Five of its six runs made zero
+  tool calls and zero edits in a single turn, and the blind judge's notes on two
+  of them read "OAuth session expired before any work" / "OAuth session expired
+  mid-run, no selection.md written, task not attempted." Those are
+  infrastructure failures the arena did not classify as such, so they count as
+  `fail` in the table and inflate the apparent 0/3 → 1/3 profit. Only
+  `claude/patch#1` (2 calls, 1 edit) actually ran. Read claude as excluded, not
+  as a second confirming harness — which means the arena's own headline
+  "**The patch works** on every harness tested" rests on codex alone.
+- **devin and grok had no baseline** — their control runs passed every time.
+  This is exactly the risk the pre-campaign fixture review named: `task.md`'s
+  standing directive ("work the v0.3 milestone") is itself an imperative, and a
+  model that follows the prompt over the ambient `AGENTS.md` picks in-scope
+  under both conditions. Softening the directive was explicitly rejected — it is
+  the patch rule's own trigger, so weakening it would make the rule
+  inapplicable. The consequence is that this fixture cannot discriminate on
+  harnesses that weight the prompt above project rules; that is a property of
+  the experiment, not evidence about the rule.
+- **One judge disagreement worth noting**, unrelated to the rule under test: in
+  `codex/patch#1` the blind judge found the justification cited specific issue
+  numbers, markers and diff sizes that no tool call had read. `verify.py` passed
+  that run on the selection itself, which is the measured property; the
+  fabricated justification is a separate defect class already tracked by the
+  `subagent-fabricated-evidence` incident.
 
 ## Verify
 

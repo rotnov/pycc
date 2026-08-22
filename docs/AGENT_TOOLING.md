@@ -165,8 +165,10 @@ roadmap/delivery-plan mismatch, open-pull-request collision, maintainer-only
 authority, or already having hit a per-issue stop condition this run — a fix
 that would rename or delete a manifest-listed path is explicitly *not* one,
 since updating the manifest in the same pull request costs a candidate
-nothing at selection time), scores the survivors by a fixed
-priority-then-size order, verifies the top candidate's premise still
+nothing at selection time), scores the survivors by a fixed order — under a
+milestone scope, membership in that scope first, then the priority marker,
+then size within each group (D-191); with no scope in effect, priority marker
+then size — verifies the top candidate's premise still
 reproduces the same way `issue-to-plan` does, and challenges the pick with an
 independent adversarial advisor in a fresh context instead of escalating
 "does this need the maintainer?" to the user. With a standing autopilot
@@ -208,12 +210,12 @@ per-payload gate. It mutates no tracked file and implements nothing itself.
 
 `issue-to-plan`, `issue-implement`, and `issue-select` bind deterministic
 offline eval cases in
-`scripts/run_alpha_skill_evals.py` (`issue-to-plan` three, `issue-select` four,
+`scripts/run_alpha_skill_evals.py` (`issue-to-plan` three, `issue-select` five,
 `issue-implement` five, mirroring `pycc-feedback`'s
 fail-closed-oracle pattern): `issue-to-plan`'s publish-gate boolean logic,
 `issue-implement`'s staleness-outcome/write-authorization/issue-content/
 delegated-closure oracles, and `issue-select`'s
-autopilot-gated-closure/priority-ordering/issue-content
+autopilot-gated-closure/priority-ordering/milestone-scope-ordering/issue-content
 oracles — each cross-checked
 against literal contract phrases in the live skill text so an edit that
 silently drops an invariant these oracles encode fails required CI
