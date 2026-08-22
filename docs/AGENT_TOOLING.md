@@ -161,9 +161,11 @@ concretely defined "reconfirmed at commit X" evidence bar (routing provable
 closures through `issue-implement`'s evidence-gated triage — but only when a
 standing autopilot directive is in effect; a plain "what's next" query only
 reports stale candidates), screens blockers (dependency on another issue,
-roadmap/delivery-plan mismatch, open-pull-request collision, a fix that would
-remove a manifest-listed path, maintainer-only authority, or already having
-hit a per-issue stop condition this run), scores the survivors by a fixed
+roadmap/delivery-plan mismatch, open-pull-request collision, maintainer-only
+authority, or already having hit a per-issue stop condition this run — a fix
+that would rename or delete a manifest-listed path is explicitly *not* one,
+since updating the manifest in the same pull request costs a candidate
+nothing at selection time), scores the survivors by a fixed
 priority-then-size order, verifies the top candidate's premise still
 reproduces the same way `issue-to-plan` does, and challenges the pick with an
 independent adversarial advisor in a fresh context instead of escalating

@@ -44,7 +44,9 @@ Hard exclusions — needs authority or state an agent session does not have:
   own governance documents.
 
 Deprioritized, not excluded — take only deliberately: changes requiring the staged CI-workflow
-digest process (see step 4's per-candidate check); changes that would
+digest process, the two-pull-request D-080 stage-then-activate cycle `/issue-implement`'s own
+step 4 executes for a change that edits a workflow file and registers its digest in a
+`check_roadmap_evidence.rb` allowlist; changes that would
 conflict with an open pull request's in-flight rewrite of the same files; tree-wide mechanical
 sweeps that bloat review surface.
 
@@ -138,16 +140,20 @@ Drop or defer, with a recorded reason each:
 - **Open-pull-request collision** — an open pull request is actively rewriting the same files;
   weigh landing order and conflict surface, and prefer targets whose diff stays out of the
   contested code unless the fix is urgent enough to justify the rebase burden on either side.
-- **Manifest-listed path removal** — check whether the issue's likely fix would rename, delete,
-  or move any path listed in `tests/fixtures/policy-successor-manifest.json` (`grep` its `path`
-  and `source_path` entries). `.github/workflows/workflow-policy.yml` still reads that manifest
-  as a bounded inventory of files the `audit` job materializes from the head tree, and throws
-  when a listed path is absent, so such a fix has to update the manifest in the same pull
-  request. This is a small extra step, not a deprioritization. *Editing* a listed path's contents
-  carries no special cost: D-172 retired D-103's stage-then-activate mechanism (PR #570), and
-  `scripts/check_ci_permissions.rb` no longer reads the manifest at all.
 - **Already attempted this run** — the issue is on this run's denylist (see `## Loop`).
 - The hard authority exclusions above.
+
+One thing this screen deliberately does **not** defer for: a fix that would rename, delete, or
+move a path listed in `tests/fixtures/policy-successor-manifest.json`.
+`.github/workflows/workflow-policy.yml` still reads that manifest as a bounded inventory of
+files the `audit` job materializes from the head tree, and throws when a listed path is absent,
+so such a fix has to update the manifest in the same pull request — one extra edit inside the
+same pull request, which costs a candidate nothing at selection time. Note it for the plan and
+score the issue on its own merits. *Editing* a listed path's contents needs no handling at all
+on the manifest's account: D-172 retired D-103's stage-then-activate mechanism (PR #570), and
+`scripts/check_ci_permissions.rb` no longer reads the manifest. That says nothing about D-080 —
+`.github/workflows/ci.yml` is itself a manifest entry, and editing it still carries D-080's own
+separate, still-live two-pull-request digest cycle, which is the deprioritized category above.
 
 ### 5. Score the survivors
 
