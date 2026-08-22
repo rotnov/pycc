@@ -185,7 +185,9 @@ fn an_uncaught_user_exception_prints_its_own_class_name() {
     // class. The name now travels on `PyExceptionObj`.
     let (ok, stdout, stderr) = build_and_run(
         "uncaught",
-        &format!("{HIERARCHY}def main() -> None:\n    raise ConfigError(\"missing\")\n\n\nmain()\n"),
+        &format!(
+            "{HIERARCHY}def main() -> None:\n    raise ConfigError(\"missing\")\n\n\nmain()\n"
+        ),
     );
     assert!(!ok, "an uncaught exception must exit non-zero");
     assert_eq!(stdout, "");
@@ -271,7 +273,10 @@ fn a_non_string_constructor_argument_reports_the_argument_diagnostic() {
         &format!("{HIERARCHY}def main() -> None:\n    raise AppError(3)\n"),
     );
     assert!(text.contains("T0021"), "unexpected diagnostic: {text}");
-    assert!(text.contains("expects `str`"), "unexpected diagnostic: {text}");
+    assert!(
+        text.contains("expects `str`"),
+        "unexpected diagnostic: {text}"
+    );
 }
 
 #[test]

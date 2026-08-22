@@ -59,7 +59,9 @@ fn raising_a_bound_user_exception_value_stays_rejected() {
     ));
     assert_eq!(diagnostic.code, "T0021");
     assert!(
-        diagnostic.message.contains("can only raise exception instances"),
+        diagnostic
+            .message
+            .contains("can only raise exception instances"),
         "unexpected message: {}",
         diagnostic.message
     );
@@ -83,7 +85,9 @@ fn catching_a_class_outside_the_exception_hierarchy_is_rejected() {
     ));
     assert_eq!(diagnostic.code, "T0021");
     assert!(
-        diagnostic.message.contains("is not a recognized exception class"),
+        diagnostic
+            .message
+            .contains("is not a recognized exception class"),
         "unexpected message: {}",
         diagnostic.message
     );
@@ -97,7 +101,9 @@ fn binding_a_caught_user_exception_with_as_is_a_capability_gap() {
     ));
     assert_eq!(diagnostic.code, "C0001");
     assert!(
-        diagnostic.message.contains("with `as` is not supported yet"),
+        diagnostic
+            .message
+            .contains("with `as` is not supported yet"),
         "unexpected message: {}",
         diagnostic.message
     );
@@ -155,7 +161,9 @@ fn a_subclass_inheriting_an_own_constructor_is_also_a_capability_gap() {
     ));
     assert_eq!(diagnostic.code, "C0001");
     assert!(
-        diagnostic.message.contains("`DatabaseError` defines its own `__init__`"),
+        diagnostic
+            .message
+            .contains("`DatabaseError` defines its own `__init__`"),
         "unexpected message: {}",
         diagnostic.message
     );

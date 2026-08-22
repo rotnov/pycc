@@ -360,7 +360,10 @@ fn user_exception_class(name: &str, mro: &[&str], tag: Option<u8>) -> (String, H
         HirClassDef {
             exception_type_tag: tag,
             name: name.to_string(),
-            bases: mro.get(1).map(|base| vec![base.to_string()]).unwrap_or_default(),
+            bases: mro
+                .get(1)
+                .map(|base| vec![base.to_string()])
+                .unwrap_or_default(),
             mro: mro.iter().map(|entry| entry.to_string()).collect(),
             attrs: Vec::new(),
             methods: vec![(

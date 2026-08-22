@@ -97,9 +97,8 @@ fn many_exception_classes(count: usize) -> String {
 #[test]
 fn the_maximum_number_of_user_exception_classes_still_lowers() {
     assert_eq!(MAX_USER_EXCEPTION_CLASSES, 249);
-    let module = pycc_parser_test_helper::parse(&many_exception_classes(
-        MAX_USER_EXCEPTION_CLASSES,
-    ));
+    let module =
+        pycc_parser_test_helper::parse(&many_exception_classes(MAX_USER_EXCEPTION_CLASSES));
     let lowered = lower_checked(&module).expect("249 exception classes must lower");
     let last = lowered
         .class_defs
@@ -111,9 +110,8 @@ fn the_maximum_number_of_user_exception_classes_still_lowers() {
 
 #[test]
 fn one_exception_class_past_the_maximum_is_rejected() {
-    let module = pycc_parser_test_helper::parse(&many_exception_classes(
-        MAX_USER_EXCEPTION_CLASSES + 1,
-    ));
+    let module =
+        pycc_parser_test_helper::parse(&many_exception_classes(MAX_USER_EXCEPTION_CLASSES + 1));
     let diagnostic = lower_checked(&module).expect_err("250 exception classes must be rejected");
     assert_eq!(diagnostic.code, "C0001");
     assert!(
