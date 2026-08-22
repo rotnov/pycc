@@ -1,0 +1,290 @@
+//! End-to-end coverage for raising and catching user-defined exception
+//! classes (Part 2 of #541, issue #702, D-190).
+//!
+//! Everything here goes through the public `pycc` CLI: the point is that the
+//! whole pipeline -- HIR tag assignment, MIR handler tag sets, the type
+//! checker's raisability gate, codegen's OR-chain, and the runtime's
+//! name-carrying `PyExceptionObj` -- agrees on one numbering.
+
+use std::io::Write;
+use std::process::Command;
+
+fn pycc_bin() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_pycc"))
+}
+
+fn scratch(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("pycc_702_{tag}_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    let mut file = std::fs::File::create(&path).unwrap();
+    file.write_all(source.as_bytes()).unwrap();
+    path
+}
+
+/// `(exit_success, stdout, stderr)` of the built program.
+fn build_and_run(tag: &str, source: &str) -> (bool, String, String) {
+    let dir = scratch(tag);
+    let src = write_fixture(&dir, &format!("{tag}.py"), source);
+    let out = dir.join(tag);
+    let build = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&out).output().unwrap();
+    (
+        run.status.success(),
+        String::from_utf8_lossy(&run.stdout).to_string(),
+        String::from_utf8_lossy(&run.stderr).to_string(),
+    )
+}
+
+/// The combined diagnostic text of a rejected `pycc check`.
+fn check_error(tag: &str, source: &str) -> String {
+    let dir = scratch(tag);
+    let src = write_fixture(&dir, &format!("{tag}.py"), source);
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "expected `{tag}` to be rejected");
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+const HIERARCHY: &str = "class AppError(Exception):\n    pass\n\n\n\
+                         class DatabaseError(AppError):\n    pass\n\n\n\
+                         class ConfigError(AppError):\n    pass\n\n\n";
+
+#[test]
+fn a_handler_selects_the_most_specific_matching_user_class() {
+    let (ok, stdout, stderr) = build_and_run(
+        "dispatch",
+        &format!(
+            "{HIERARCHY}\
+             def load(kind: str) -> None:\n\
+             \x20   if kind == \"db\":\n        raise DatabaseError(\"refused\")\n\
+             \x20   if kind == \"cfg\":\n        raise ConfigError(\"missing\")\n\
+             \x20   raise ValueError(\"unknown\")\n\n\n\
+             def attempt(kind: str) -> None:\n\
+             \x20   try:\n        load(kind)\n\
+             \x20   except DatabaseError:\n        print(\"database\")\n\
+             \x20   except AppError:\n        print(\"app\")\n\
+             \x20   except ValueError:\n        print(\"value\")\n\n\n\
+             def main() -> None:\n\
+             \x20   attempt(\"db\")\n    attempt(\"cfg\")\n    attempt(\"other\")\n\n\n\
+             main()\n"
+        ),
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "database\napp\nvalue\n");
+}
+
+#[test]
+fn a_base_class_handler_catches_every_subclass() {
+    let (ok, stdout, stderr) = build_and_run(
+        "base_catch",
+        &format!(
+            "{HIERARCHY}\
+             def main() -> None:\n\
+             \x20   try:\n        raise ConfigError(\"missing\")\n\
+             \x20   except AppError:\n        print(\"app\")\n\n\n\
+             main()\n"
+        ),
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "app\n");
+}
+
+#[test]
+fn an_exception_handler_catches_a_user_class() {
+    let (ok, stdout, stderr) = build_and_run(
+        "root_catch",
+        &format!(
+            "{HIERARCHY}\
+             def main() -> None:\n\
+             \x20   try:\n        raise DatabaseError(\"refused\")\n\
+             \x20   except Exception:\n        print(\"root\")\n\n\n\
+             main()\n"
+        ),
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "root\n");
+}
+
+#[test]
+fn a_subclass_handler_does_not_catch_its_sibling() {
+    let (ok, stdout, stderr) = build_and_run(
+        "sibling",
+        &format!(
+            "{HIERARCHY}\
+             def main() -> None:\n\
+             \x20   try:\n        raise ConfigError(\"missing\")\n\
+             \x20   except DatabaseError:\n        print(\"database\")\n\
+             \x20   except Exception:\n        print(\"other\")\n\n\n\
+             main()\n"
+        ),
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "other\n");
+}
+
+#[test]
+fn a_user_exception_propagates_across_a_call_boundary_through_finally() {
+    let (ok, stdout, stderr) = build_and_run(
+        "propagate",
+        &format!(
+            "{HIERARCHY}\
+             def inner() -> None:\n\
+             \x20   try:\n        raise DatabaseError(\"refused\")\n\
+             \x20   finally:\n        print(\"inner finally\")\n\n\n\
+             def main() -> None:\n\
+             \x20   try:\n        inner()\n\
+             \x20   except AppError:\n        print(\"outer\")\n\n\n\
+             main()\n"
+        ),
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "inner finally\nouter\n");
+}
+
+#[test]
+fn a_bare_raise_reraises_a_user_exception_to_an_enclosing_try() {
+    let (ok, stdout, stderr) = build_and_run(
+        "reraise",
+        &format!(
+            "{HIERARCHY}\
+             def main() -> None:\n\
+             \x20   try:\n\
+             \x20       try:\n            raise DatabaseError(\"refused\")\n\
+             \x20       except AppError:\n            print(\"inner\")\n            raise\n\
+             \x20   except DatabaseError:\n        print(\"outer\")\n\n\n\
+             main()\n"
+        ),
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "inner\nouter\n");
+}
+
+#[test]
+fn an_uncaught_user_exception_prints_its_own_class_name() {
+    // The runtime used to map tag -> name with a `match` over the seven
+    // builtin tags, which would have printed `Exception` for every user
+    // class. The name now travels on `PyExceptionObj`.
+    let (ok, stdout, stderr) = build_and_run(
+        "uncaught",
+        &format!("{HIERARCHY}def main() -> None:\n    raise ConfigError(\"missing\")\n\n\nmain()\n"),
+    );
+    assert!(!ok, "an uncaught exception must exit non-zero");
+    assert_eq!(stdout, "");
+    assert_eq!(stderr, "ConfigError: missing\n");
+}
+
+#[test]
+fn an_uncaught_builtin_exception_still_prints_its_own_class_name() {
+    let (ok, stdout, stderr) = build_and_run(
+        "uncaught_builtin",
+        "def main() -> None:\n    raise KeyError(\"nope\")\n\n\nmain()\n",
+    );
+    assert!(!ok, "an uncaught exception must exit non-zero");
+    assert_eq!(stdout, "");
+    assert_eq!(stderr, "KeyError: nope\n");
+}
+
+#[test]
+fn raise_from_accepts_a_user_exception_cause() {
+    let (ok, stdout, stderr) = build_and_run(
+        "cause",
+        &format!(
+            "{HIERARCHY}\
+             def main() -> None:\n\
+             \x20   try:\n\
+             \x20       raise DatabaseError(\"refused\") from ConfigError(\"missing\")\n\
+             \x20   except AppError:\n        print(\"caught\")\n\n\n\
+             main()\n"
+        ),
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "caught\n");
+}
+
+#[test]
+fn raising_a_bound_user_exception_value_is_rejected() {
+    let text = check_error(
+        "bound",
+        &format!("{HIERARCHY}def main() -> None:\n    e = AppError(\"x\")\n    raise e\n"),
+    );
+    assert!(text.contains("T0021"), "unexpected diagnostic: {text}");
+    assert!(
+        text.contains("can only raise exception instances"),
+        "unexpected diagnostic: {text}"
+    );
+}
+
+#[test]
+fn binding_a_caught_user_exception_is_rejected() {
+    let text = check_error(
+        "as_binding",
+        &format!(
+            "{HIERARCHY}def main() -> None:\n    try:\n        raise AppError(\"x\")\n\
+             \x20   except AppError as exc:\n        print(\"caught\")\n"
+        ),
+    );
+    assert!(text.contains("C0001"), "unexpected diagnostic: {text}");
+    assert!(
+        text.contains("with `as` is not supported yet"),
+        "unexpected diagnostic: {text}"
+    );
+}
+
+#[test]
+fn an_exception_class_with_its_own_constructor_is_rejected() {
+    let text = check_error(
+        "own_init",
+        "class AppError(Exception):\n\
+         \x20   def __init__(self, code: int) -> None:\n        self.code = code\n\n\n\
+         def main() -> None:\n    raise AppError(3)\n",
+    );
+    assert!(text.contains("C0001"), "unexpected diagnostic: {text}");
+    assert!(
+        text.contains("defines its own `__init__`"),
+        "unexpected diagnostic: {text}"
+    );
+}
+
+#[test]
+fn a_non_string_constructor_argument_reports_the_argument_diagnostic() {
+    let text = check_error(
+        "bad_arg",
+        &format!("{HIERARCHY}def main() -> None:\n    raise AppError(3)\n"),
+    );
+    assert!(text.contains("T0021"), "unexpected diagnostic: {text}");
+    assert!(text.contains("expects `str`"), "unexpected diagnostic: {text}");
+}
+
+#[test]
+fn a_module_with_more_user_exception_classes_than_tags_is_rejected() {
+    let mut source = String::new();
+    for index in 0..250 {
+        source.push_str(&format!("class E{index}(Exception):\n    pass\n\n\n"));
+    }
+    source.push_str("def main() -> None:\n    raise E0(\"x\")\n");
+    let text = check_error("too_many", &source);
+    assert!(text.contains("C0001"), "unexpected diagnostic: {text}");
+    assert!(
+        text.contains("at most 249"),
+        "unexpected diagnostic: {text}"
+    );
+}

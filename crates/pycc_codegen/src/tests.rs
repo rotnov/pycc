@@ -11613,6 +11613,112 @@ fn try_with_multiple_handlers_dispatches_to_next() {
 }
 
 #[test]
+fn a_multi_tag_handler_ors_every_tag_it_accepts() {
+    // Part 2 of #541 (D-190): `except AppError:` over a hierarchy where
+    // `AppError` is tag 7 and its subclasses are 8 and 9 emits three
+    // `pycc_rt_exception_type_matches` calls joined by `or`. Only the second
+    // accumulation step reaches `build_or`, so a single-tag handler cannot
+    // cover it. The raised tag is 9 -- the *last* tag in the set -- so a
+    // chain that stopped short would fall through to the bare handler.
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::Try {
+            body: vec![MirStmt::Raise {
+                exception: MirExceptionValue::Constructed {
+                    type_tag: 9,
+                    class_name: "DatabaseError".to_string(),
+                    message: MirExpr::StringLiteral("boom".to_string()),
+                },
+            }],
+            handlers: vec![
+                MirExceptHandler {
+                    exc_type_tag: Some(vec![7, 8, 9]),
+                    binding_name: None,
+                    binding_ty: None,
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::StringLiteral("app".to_string())],
+                        ty: Ty::None,
+                    })],
+                },
+                MirExceptHandler {
+                    exc_type_tag: None,
+                    binding_name: None,
+                    binding_ty: None,
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::StringLiteral("bare".to_string())],
+                        ty: Ty::None,
+                    })],
+                },
+            ],
+            orelse: Vec::new(),
+            finalbody: Vec::new(),
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("try_multi_tag");
+    let obj_path = dir.join("try_multi_tag.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("try_multi_tag");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"app\n");
+    assert!(output.status.success());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_multi_tag_handler_declines_a_tag_outside_its_set() {
+    // The complement of the test above: every `or` operand evaluates false,
+    // so the OR-chain must produce zero rather than a stray one.
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::Try {
+            body: vec![MirStmt::Raise {
+                exception: MirExceptionValue::Constructed {
+                    type_tag: 3,
+                    class_name: "KeyError".to_string(),
+                    message: MirExpr::StringLiteral("key".to_string()),
+                },
+            }],
+            handlers: vec![
+                MirExceptHandler {
+                    exc_type_tag: Some(vec![7, 8, 9]),
+                    binding_name: None,
+                    binding_ty: None,
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::StringLiteral("app".to_string())],
+                        ty: Ty::None,
+                    })],
+                },
+                MirExceptHandler {
+                    exc_type_tag: None,
+                    binding_name: None,
+                    binding_ty: None,
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::StringLiteral("bare".to_string())],
+                        ty: Ty::None,
+                    })],
+                },
+            ],
+            orelse: Vec::new(),
+            finalbody: Vec::new(),
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("try_multi_tag_miss");
+    let obj_path = dir.join("try_multi_tag_miss.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("try_multi_tag_miss");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"bare\n");
+    assert!(output.status.success());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn try_else_body_falls_through_to_finally() {
     // Exercises the `else_falls_through` branch (lines 7569-7571):
     // a non-empty else body that completes normally (no return/raise)

@@ -316,3 +316,6 @@ mod tests {
 
 #[cfg(test)]
 mod synthetic_class_tests;
+
+#[cfg(test)]
+mod tag_tests;
