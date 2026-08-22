@@ -2,6 +2,7 @@
 name: improve-codebase-architecture
 description: Explicit invocation only; never select this skill implicitly. Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick.
 disable-model-invocation: true
+requires-agent-dispatch: true
 ---
 
 <!-- ievo:start -->
@@ -29,7 +30,7 @@ This command is _informed_ by the project's domain model and built on a shared d
 
 Read the project's domain glossary (`CONTEXT.md`) and any ADRs in the area you're touching first.
 
-Then use the Agent tool with `subagent_type=Explore` to walk the codebase. Don't follow rigid heuristics — explore organically and note where you experience friction:
+Then use the Agent tool with `subagent_type=Explore` to walk the codebase. On Codex, the equivalent sub-agent dispatch is mapped in this skill's Codex adapter under .agents/skills — keep the two in step when either changes. Don't follow rigid heuristics — explore organically and note where you experience friction:
 
 - Where does understanding one concept require bouncing between many small modules?
 - Where are modules **shallow** — interface nearly as complex as the implementation?
