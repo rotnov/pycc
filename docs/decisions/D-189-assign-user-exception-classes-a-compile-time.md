@@ -92,3 +92,19 @@ status: accepted
     here.
   - `pycc_rt_exception_alloc`'s signature changed, so a stale prebuilt
     `libpycc_rt.a` fails to link rather than silently mismatching.
+  - `instantiate_generic_class_methods` hardcodes `exception_type_tag: None` on
+    the monomorphized `HirClassDef`, which would be a tag-stripping hazard if a
+    generic class could inherit an exception class. It cannot: #432 rejects any
+    generic class with base classes during HIR lowering
+    (`crates/pycc_hir/src/class.rs:1092`), long before monomorphization runs.
+    Verified at this revision — `class MyError[T](Exception)` reports `C0001:
+    generic class \`MyError\` with base classes is not supported yet` — and
+    locked by
+    `a_generic_class_cannot_inherit_from_an_exception_class` in
+    `tests/issue_702_user_exceptions.rs`, so relaxing #432 cannot silently mint
+    a tagless exception class.
+  - A user class rooted at a builtin other than `Exception` (for example
+    `class ParseError(ValueError)`) is fully supported: it receives a user tag,
+    and a `ValueError` handler widens its tag set to include it. This follows
+    from keying raisability on the MRO reaching *any* builtin exception rather
+    than on `Exception` specifically.

@@ -293,3 +293,39 @@ fn a_module_with_more_user_exception_classes_than_tags_is_rejected() {
         "unexpected diagnostic: {text}"
     );
 }
+
+/// A user class rooted at a builtin *other* than `Exception` still gets a tag,
+/// and a handler for that builtin widens to it (#702). Verified byte-identical
+/// to CPython 3.14.
+#[test]
+fn a_class_derived_from_a_non_exception_builtin_is_raisable_and_caught_by_its_base() {
+    let (ok, stdout, stderr) = build_and_run(
+        "value_error_root",
+        "class ParseError(ValueError):\n    pass\n\n\n\
+         def main() -> None:\n\
+         \x20   try:\n        raise ParseError(\"bad token\")\n\
+         \x20   except ValueError:\n        print(\"caught via ValueError\")\n\
+         \x20   try:\n        raise ParseError(\"again\")\n\
+         \x20   except ParseError:\n        print(\"caught via ParseError\")\n\n\n\
+         main()\n",
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "caught via ValueError\ncaught via ParseError\n");
+}
+
+/// A generic class may not inherit at all (#432), so `class E[T](Exception)`
+/// never reaches monomorphization -- which is why the monomorphized
+/// `HirClassDef` may hardcode `exception_type_tag: None`. This locks that
+/// rejection so relaxing #432 cannot silently mint a tagless exception class.
+#[test]
+fn a_generic_class_cannot_inherit_from_an_exception_class() {
+    let text = check_error(
+        "generic_exception",
+        "class MyError[T](Exception):\n    pass\n\n\n\
+         def main() -> None:\n    raise MyError[int](\"boom\")\n",
+    );
+    assert!(
+        text.contains("generic class `MyError` with base classes"),
+        "expected the #432 rejection, got: {text}"
+    );
+}

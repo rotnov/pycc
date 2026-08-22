@@ -399,6 +399,13 @@ fn exception_hierarchy() -> HashMap<String, HirClassDef> {
             &["ConfigError", "AppError", "Exception"],
             Some(8),
         ),
+        // Rooted at a builtin other than `Exception`, so a `ValueError`
+        // handler has to widen to it (#702).
+        user_exception_class(
+            "ParseError",
+            &["ParseError", "ValueError", "Exception"],
+            Some(10),
+        ),
         user_exception_class("Unrelated", &["Unrelated"], None),
     ])
 }
@@ -420,8 +427,16 @@ fn a_leaf_user_exception_handler_accepts_only_its_own_tag() {
 #[test]
 fn a_builtin_handler_also_accepts_its_user_defined_subclasses() {
     let classes = exception_hierarchy();
-    // `ValueError` has no user subclass here, so it stays a single tag.
-    assert_eq!(handler_type_tags("ValueError", &classes), vec![1]);
+    // `ParseError` derives from `ValueError`, not from `Exception`, so the
+    // handler widens from `ValueError`'s own tag 1 to include it.
+    assert_eq!(handler_type_tags("ValueError", &classes), vec![1, 10]);
+}
+
+#[test]
+fn a_builtin_handler_without_user_subclasses_stays_a_single_tag() {
+    let classes = exception_hierarchy();
+    // No class in the fixture reaches `TypeError`.
+    assert_eq!(handler_type_tags("TypeError", &classes), vec![2]);
 }
 
 #[test]
