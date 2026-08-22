@@ -990,7 +990,7 @@
           "evidence": "pep_0701_fstring_grammar.py"
         },
         {
-          "category": "multi-line expressions inside a single-line f-string interpolation",
+          "category": "multi-line expressions inside a triple-quoted f-string interpolation",
           "evidence": "pep_0701_fstring_grammar.py"
         },
         {
@@ -1010,7 +1010,7 @@
           "evidence": "pep_0701_fstring_grammar.py"
         },
         {
-          "category": "raw f-strings (`rf\"...\"`) and implicit concatenation of f-string with plain string literals",
+          "category": "raw f-strings (`rf\"...\"`) and implicit concatenation of adjacent f-string literals",
           "evidence": "pep_0701_fstring_grammar.py"
         }
       ],
