@@ -87,3 +87,12 @@ status: accepted
   - Adding `requires-agent-dispatch` to a canonical skill without extending its
     adapter is now a hard `agent-assets` failure, which is the point — the marker
     is what keeps the canonical step and the adapter mapping from drifting apart.
+  - The marker lives in the frontmatter of a canonical `SKILL.md` that also carries
+    an `<!-- ievo:start -->` overlay block, so the obvious question is whether an
+    iEvo refresh can drop it. It cannot, as far as this repository is concerned:
+    these bodies are ordinary tracked files, and `scripts/manage_ievo_hooks.py`
+    governs hook wiring only — the machine-local lifecycle of D-023/D-077/D-081
+    covers `.ievo/hooks/`, not skill bodies. No mechanism here regenerates a
+    tracked `SKILL.md`. This is recorded because the failure would be silent if it
+    ever changed: the check is opt-in, so a dropped key stops requiring the Codex
+    mapping rather than failing.
