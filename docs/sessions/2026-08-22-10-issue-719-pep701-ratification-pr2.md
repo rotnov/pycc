@@ -110,7 +110,7 @@ then re-run the milestone evidence check — 33 of 37 is not met, so re-enter
 context boundary and is recorded as unrecovered rather than reconstructed.
 
 **First item of the next iteration:** within-scope starvation.
-[D-191](../decisions/) fixed cross-scope starvation, but inside the scope the
+[D-191](../decisions/D-191-milestone-membership-ranks-first-in-issue-select.md) fixed cross-scope starvation, but inside the scope the
 ordering is still priority-marker-first, and v0.3's critical path
 #541 → #703 → #542 → #543 — which carries exactly the four rows that take 33 to
 37 — is unmarked and therefore sorts below roughly 22 in-scope P2s.
