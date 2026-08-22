@@ -63,6 +63,7 @@ fn dataclass_point_module(extra_items: Vec<HirItem>) -> HirModule {
         class_defs: vec![(
             "Point".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "Point".to_string(),
                 bases: Vec::new(),
                 mro: vec!["Point".to_string()],
@@ -263,6 +264,7 @@ fn an_eq_comparison_between_instances_without_eq_falls_through_to_mir_compare() 
         class_defs: vec![(
             "Plain".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "Plain".to_string(),
                 bases: Vec::new(),
                 mro: vec!["Plain".to_string()],

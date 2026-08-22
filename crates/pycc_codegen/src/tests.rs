@@ -10653,6 +10653,7 @@ fn enum_member_singleton_init_emits_and_runs() {
     // per-member singleton init sequence before the top-level
     // statement loop.
     let class_def = pycc_mir::HirClassDef {
+        exception_type_tag: None,
         name: "Color".to_string(),
         bases: vec![],
         mro: vec!["Color".to_string()],
@@ -10756,6 +10757,7 @@ fn abstract_method_body_with_non_none_return_emits_default_value() {
         class_defs: vec![(
             "Animal".to_string(),
             pycc_mir::HirClassDef {
+                exception_type_tag: None,
                 name: "Animal".to_string(),
                 bases: Vec::new(),
                 mro: vec!["Animal".to_string()],

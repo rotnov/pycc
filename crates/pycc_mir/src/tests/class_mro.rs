@@ -54,6 +54,7 @@ fn ghost_mro_param_module(body: Vec<HirStmt>) -> HirModule {
         class_defs: vec![(
             "Derived".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "Derived".to_string(),
                 bases: vec!["Ghost".to_string()],
                 mro: vec!["Derived".to_string(), "Ghost".to_string()],
@@ -165,6 +166,7 @@ fn mro_attrs_with_a_ghost_class_in_the_mro_panics_with_an_internal_error() {
         class_defs: vec![(
             "Derived".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "Derived".to_string(),
                 bases: vec!["Ghost".to_string()],
                 mro: vec!["Derived".to_string(), "Ghost".to_string()],
@@ -212,6 +214,7 @@ fn instantiate_with_no_init_in_the_mro_panics_with_an_internal_error() {
         class_defs: vec![(
             "C".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "C".to_string(),
                 bases: vec!["Ghost".to_string()],
                 mro: vec!["C".to_string(), "Ghost".to_string()],
@@ -301,6 +304,7 @@ fn mro_attrs_deduplicates_a_redeclared_attribute_across_the_mro() {
             (
                 "Base".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "Base".to_string(),
                     bases: Vec::new(),
                     mro: vec!["Base".to_string()],
@@ -323,6 +327,7 @@ fn mro_attrs_deduplicates_a_redeclared_attribute_across_the_mro() {
             (
                 "Derived".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "Derived".to_string(),
                     bases: vec!["Base".to_string()],
                     mro: vec!["Derived".to_string(), "Base".to_string()],
@@ -424,6 +429,7 @@ fn mro_attrs_overrides_type_for_a_redeclared_attribute_with_a_different_type() {
             (
                 "Base".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "Base".to_string(),
                     bases: Vec::new(),
                     mro: vec!["Base".to_string()],
@@ -446,6 +452,7 @@ fn mro_attrs_overrides_type_for_a_redeclared_attribute_with_a_different_type() {
             (
                 "Derived".to_string(),
                 HirClassDef {
+                    exception_type_tag: None,
                     name: "Derived".to_string(),
                     bases: vec!["Base".to_string()],
                     mro: vec!["Derived".to_string(), "Base".to_string()],

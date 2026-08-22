@@ -7,7 +7,7 @@ mod exception;
 #[cfg(test)]
 use exception::lower_exception_value;
 pub use exception::{MirExceptHandler, MirExceptionValue};
-use exception::{lower_raise, resolve_exception_tag};
+use exception::{handler_type_tags, lower_raise};
 mod expr;
 use expr::lower_expr;
 mod matching;
@@ -498,9 +498,11 @@ pub enum MirStmt {
     /// assignment with the nested `if` chain.
     Seq(Vec<MirStmt>),
     /// `try`/`except`/`else`/`finally` (PEP 3110, #382, PR-22 Part 1).
-    /// Each handler's `exc_type_tag` is the resolved runtime exception
-    /// type tag (matching `pycc_rt`'s `EXCEPTION_TYPE_*` constants), or
-    /// `None` for a bare `except:`.
+    /// Each handler's `exc_type_tag` is the sorted set of runtime exception
+    /// type tags it accepts — the named class's own tag (matching `pycc_rt`'s
+    /// `EXCEPTION_TYPE_*` constants for the seven builtins, or the tag HIR
+    /// lowering assigned the class for a user-defined one) plus every
+    /// raisable subclass's tag — or `None` for a bare `except:`.
     Try {
         body: Vec<MirStmt>,
         handlers: Vec<MirExceptHandler>,

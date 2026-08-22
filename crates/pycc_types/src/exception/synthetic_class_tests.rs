@@ -97,6 +97,7 @@ fn rebinding_a_synthetic_name_with_a_user_definition_clears_the_marking() {
     env.bind_class(
         "ValueError".to_string(),
         HirClassDef {
+            exception_type_tag: None,
             name: "ValueError".to_string(),
             bases: Vec::new(),
             mro: vec!["ValueError".to_string()],

@@ -231,6 +231,7 @@ fn lowers_match_with_mapping_rest_pattern_to_mir() {
 #[test]
 fn lowers_match_with_class_pattern_to_mir() {
     let class_def = HirClassDef {
+        exception_type_tag: None,
         name: "P".to_string(),
         bases: Vec::new(),
         mro: vec!["P".to_string()],

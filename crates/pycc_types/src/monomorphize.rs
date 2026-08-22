@@ -1715,6 +1715,7 @@ pub(crate) fn instantiate_generic_class_methods(
             })
             .collect::<Vec<_>>();
         let new_class_def = HirClassDef {
+            exception_type_tag: None,
             name: mangled_class.clone(),
             bases: Vec::new(),
             mro: vec![mangled_class.clone()],

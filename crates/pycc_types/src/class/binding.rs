@@ -182,6 +182,7 @@ mod tests {
         env.bind_class(
             "Ghost".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "Ghost".to_string(),
                 bases: Vec::new(),
                 mro: vec!["Ghost".to_string()],
@@ -231,6 +232,7 @@ mod tests {
         env.bind_class(
             "Ghost".to_string(),
             HirClassDef {
+                exception_type_tag: None,
                 name: "Ghost".to_string(),
                 bases: vec!["Phantom".to_string()],
                 mro: vec!["Ghost".to_string(), "Phantom".to_string()],
