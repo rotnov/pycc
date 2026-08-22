@@ -7,6 +7,11 @@
 
 use super::*;
 
+// `lib.rs` used to import this for its own inference code; that code now
+// lives in `expr.rs`, which imports it directly, so the crate root no longer
+// carries the import these tests inherited through `use super::*`.
+use crate::binop::numeric_result_type;
+
 #[test]
 fn v0_1_slice_always_type_checks() {
     let hir = HirModule {
