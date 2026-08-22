@@ -197,3 +197,4 @@ current.
 | [D-188](./D-188-synthesize-hirclassdefs-for-the-builtin-exception.md) | Synthesize HirClassDefs for the builtin exception classes | accepted |
 | [D-189](./D-189-assign-user-exception-classes-a-compile-time.md) | Assign user exception classes a compile-time type tag and carry the class name on the exception object | accepted |
 | [D-190](./D-190-map-claude-s-agent-tool-to-codex-s-spawn-agent.md) | Map Claude's Agent tool to Codex's spawn_agent/wait_agent in dual-surface skills, with a mandatory unavailability fallback | accepted |
+| [D-191](./D-191-milestone-membership-ranks-first-in-issue-select.md) | Milestone membership ranks first in issue-select's step 5 ordering | accepted |

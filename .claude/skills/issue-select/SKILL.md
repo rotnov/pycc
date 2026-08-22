@@ -157,13 +157,29 @@ separate, still-live two-pull-request digest cycle, which is the deprioritized c
 
 ### 5. Score the survivors
 
-The ordering is fixed: **the repository's own priority markers rank first** (P1 before P2
-before P3 before unmarked). Within the same priority tier, **active-milestone membership is
-the first tie-breaker** — an issue belonging to the currently active milestone ranks above a
-same-priority issue that does not, regardless of size. Only after that tie-break does **smaller
+When a **milestone scope is in effect** — `next-milestone` handed off with an active milestone,
+or step 1's own milestone-determination read established one — **membership in that scope ranks
+first**, ahead of every other signal. Inside the scope, order by the repository's own priority
+markers (P1 before P2 before P3 before unmarked), then by size, smaller first. Issues outside
+the scope keep that same marker-then-size order among themselves, but they sort below every
+in-scope survivor, so the scope is exhausted before any of them is reached. Reaching outside the
+scope is therefore permitted only when the scope contributes no survivor at all — never merely
+because an out-of-scope issue looks more attractive. The pool itself is never restricted: an
+out-of-scope issue stays selectable, it is simply reached last.
+
+Leaving the scope is a reportable event. The justification must state that the scope contributed
+no survivor and name what disqualified each of its members — closed already, excluded by step 4's
+blocker screen, denylisted this run, premise unreproducible at step 6 — so a starved milestone is
+visible in the report rather than silent. One consequence is deliberate and worth stating plainly:
+under a scope, an *unmarked* in-scope issue outranks an out-of-scope P1. Membership ranking first
+is what stops steady out-of-scope merges from leaving the milestone's own critical path untouched.
+
+With **no milestone scope in effect**, the ordering is fixed: **the repository's own priority
+markers rank first** (P1 before P2 before P3 before unmarked), and only then does **smaller
 win** — least effort, smallest blast radius, cleanest scope. Fast merges of the most important
-work beat both "biggest first" and "easiest first". Within that frame, use as further
-tie-breakers and modifiers:
+work beat both "biggest first" and "easiest first".
+
+In either case, use as further tie-breakers and modifiers:
 
 - **Scope clarity** — itemized completion criteria and a pinned root cause make an issue
   cheap to plan and safe to execute; a vague aspiration is expensive at every later step.
@@ -208,7 +224,9 @@ change the pick mean the scoring was wrong — redo step 5 with what was learned
 ### 8. Hand off
 
 Report: the selected issue with the justification (fit, unblocked-ness, the no-user-decisions
-rationale, the advisor's verdict), the runners-up with one-line reasons, the stale issues found
+rationale, the advisor's verdict), the step 5 scope-departure record when a milestone scope was
+in effect and the selection came from outside it — that the scope contributed no survivor, and
+what disqualified each of its members — the runners-up with one-line reasons, the stale issues found
 during the screen — closed, if a standing autopilot directive authorized it, or reported for
 separate action otherwise — and the exclusions worth the maintainer's own attention. With a
 standing autopilot directive, invoke `/issue-implement` on the selection; its enumerated write

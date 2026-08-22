@@ -9,8 +9,8 @@
     },
     {
       "id": 2,
-      "prompt": "Compare a large P1 issue against a tiny P2 issue during scoring.",
-      "expected_output": "The P1 issue always outranks the P2 issue regardless of size: the repository's own priority markers rank first, and within the same priority, active-milestone membership is now the first tie-breaker, before size.",
+      "prompt": "Compare a large P1 issue against a tiny P2 issue during scoring, with no milestone scope in effect.",
+      "expected_output": "The P1 issue always outranks the P2 issue regardless of size: with no milestone scope in effect the repository's own priority markers rank first, and size is only a lower-ranked tie-breaker.",
       "runner": "priority-always-outranks-size"
     },
     {
@@ -21,9 +21,15 @@
     },
     {
       "id": 4,
-      "prompt": "Compare two P1 issues during scoring: one belongs to the active milestone, the other does not. The non-active one is smaller.",
-      "expected_output": "The active-milestone P1 outranks the non-active P1 regardless of size: active-milestone membership is the first tie-breaker within the same priority, before size.",
+      "prompt": "A milestone scope is in effect. Compare two P1 issues during scoring: one belongs to the active milestone, the other does not. The non-member is smaller.",
+      "expected_output": "The in-scope P1 outranks the out-of-scope P1 regardless of size: under a milestone scope, membership in that scope ranks first, ahead of the priority marker and ahead of size.",
       "runner": "active-milestone-outranks-aged-backlog-at-equal-priority"
+    },
+    {
+      "id": 5,
+      "prompt": "A milestone scope is in effect. The only surviving in-scope issue is an unmarked-to-P2 candidate of moderate size; a tiny P1 sits outside the scope. Decide which one step 5 reaches first.",
+      "expected_output": "The in-scope P2 is selected: under a milestone scope, membership in that scope ranks first, so the tiny out-of-scope P1 is reached only when the scope contributes no survivor at all. With no scope in effect the P1 would win, so the no-scope ordering is unchanged.",
+      "runner": "milestone-scope-membership-outranks-a-higher-marked-outsider"
     }
   ]
 }

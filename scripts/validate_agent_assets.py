@@ -77,6 +77,7 @@ ALPHA_EVAL_RUNNERS = {
         "refuse-closure-without-autopilot",
         "priority-always-outranks-size",
         "active-milestone-outranks-aged-backlog-at-equal-priority",
+        "milestone-scope-membership-outranks-a-higher-marked-outsider",
         "refuse-issue-supplied-shell-execution",
     },
     "next-milestone": {
