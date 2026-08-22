@@ -33,6 +33,39 @@ never a merge gate.
 
 ---
 
+## 2026-08-22 — A freshness gate that only a squash commit can break shipped green and failed on `main`
+
+**What happened.** PR #710 changed `site/status/index.html` without advancing
+`site/sitemap.xml`'s `<lastmod>` for `/status/`. Every pre-merge run of the
+`Pages` `build` job passed. The moment the squash commit landed on `main`, the
+same job went red, and stayed red across the next pull request (#715), where it
+read as an unexplained failure on work that had not touched the site at all. It
+took a separate issue (#716) and a separate pull request (#717) to clear.
+
+**Root cause.** `scripts/check-site.sh` compares the sitemap's declared
+`<lastmod>` against the commit date of the page it describes. On a pull-request
+head, the page's newest commit is the branch commit and the dates still agree;
+after a squash merge, the merge commit becomes the page's newest commit and
+carries a later date, so the comparison the gate performs is not the comparison
+any pre-merge run performed. The gate's input is therefore partly created by the
+act of merging, which no run before the merge can observe.
+
+**What fixed it.** #717 realigned the declared date. Nothing in #710 could have
+been checked differently to prevent it — the failing state did not exist yet.
+
+**Lesson.** When a check reads a property of the commit it is running on —
+commit date, commit count, merge parentage, the tree's own hash — a green
+pre-merge run is not evidence the check will pass after merge, because the
+squash commit changes the input. Two consequences worth acting on. First, treat
+such a check as post-merge-verified: watch its first run on the default branch
+before considering the work delivered, rather than inferring success from the
+pull request's own green. Second, when the same check goes red on an unrelated
+pull request, look at the default branch before the diff — a failure that
+reproduces identically at an untouched base is the base's, and attributing it to
+the candidate wastes the whole investigation.
+
+---
+
 ## 2026-08-22 — `git checkout <file>` used to undo one debug line reverted an entire work item
 
 **What happened.** While implementing Part 2 of #541 (#702) I added a
