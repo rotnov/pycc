@@ -29,7 +29,10 @@ without per-payload confirmation:
 
 1. a comment on that issue citing the triage evidence — a closure comment plus closing it when
    staleness is fully proven, or a narrowing comment without closing when it is only partially
-   resolved;
+   resolved. When the unit of work handed over is a checklist item inside a standing umbrella
+   issue, this item authorizes a comment about **that item** only: the umbrella issue itself is
+   never closed and never narrowed by it (see step 2's umbrella carve-out and step 4's D-192
+   branch);
 2. the plan comment that `/issue-to-plan` publishes to that issue when this skill invokes it;
 3. pushing the task branch and opening the pull request that names the issue;
 4. replies to review threads on that pull request; resolution of threads opened by a recognized
@@ -130,6 +133,16 @@ Four outcomes:
 - **Inconclusive.** Stop and report. Never close on suspicion — the same bar D-022 sets for
   filing reports applies to closing them.
 
+**Umbrella carve-out.** When the unit of work is a checklist item inside a standing umbrella issue
+(step 4's D-192 branch), triage evaluates that **item**, not the umbrella, and the outcomes above
+never close or narrow the umbrella issue itself — it is a standing container with no completion
+state, so "close it" and "narrow it to what remains" are both meaningless for it. **Resolved** means
+the item's premise is already satisfied: tick the item off (or strike it) with the same per-item
+comment the D-192 branch defines, citing the same evidence standard, and report the item as
+delivered-by-someone-else rather than opening a pull request. **Partially resolved** narrows the
+*item*, and the implementation covers the remainder. **Still current** and **Inconclusive** are
+unchanged. A stale checklist item is retired by that comment mechanism, never by closing anything.
+
 ### 3. Obtain a current plan
 
 Look for an implementation plan in the issue's comments. Plans published by `/issue-to-plan`
@@ -175,7 +188,7 @@ after the first. The dispatched agent works inside the same task branch and work
 session already created in step 1's D-021 preflight, so its commits are this session's own
 committed work, not something foreign to it. Give it a self-contained brief: the plan's own
 published text (or its issue-comment URL), the exact task branch and worktree to work in, which
-of the D-080/D-185 staged-pattern branches below applies if any (this session, not the
+of the D-080/D-185/D-192 staged-pattern branches below applies if any (this session, not the
 dispatched agent, makes that classification while reading the plan in step 3, since it decides
 how many pull requests this run opens), and the precise gate commands and thresholds below.
 Instruct it to return a compact report — files changed, gate results, any plan deviations — not
@@ -220,7 +233,12 @@ does not compute a digest against ephemeral local state:
 - **Activation PR:** opened only after the stage PR's commit is confirmed present on the default
   branch. Replaces `ci.yml` byte-for-byte from the now-checked-in fixture and carries the real
   `Fixes #N`; the activation commit must byte-identically match the fixture the stage PR already
-  landed, or the pattern is broken. Runs the normal steps 4-8 unchanged.
+  landed, or the pattern is broken. Runs the normal steps 4-8 unchanged. **When this pattern is
+  triggered by an umbrella checklist item** rather than by an ordinary issue — a CI-governance
+  item is exactly the kind of work that registers a digest in a workflow file — the activation PR
+  carries the D-192 umbrella body tag in place of `Fixes #N`, since closing the umbrella is never
+  correct, and the D-192 tick-off comment still applies after it merges. Both pull requests then
+  report `totalCount: 0` in step 8.
 
 The stage PR's step 5 review explicitly verifies the fixture-to-allowlisted-digest binding is
 correct and that the fixture is byte-identical to what the activation PR intends to ship, and
@@ -286,10 +304,13 @@ by a delivery.
   already apply. Tag its body instead: "Umbrella checklist item for #N — see issue-implement's
   D-192 umbrella branch; #N stays open." It is exempt from step 6's `Fixes #N` requirement and
   step 8's `Fixes #N` merge-confirmation step; every other part of steps 5 through 8 (review loop,
-  monitoring, merge preconditions) applies to it unchanged. After it merges, leave the tick-off
-  comment on the umbrella issue — which item was delivered, and by which pull request — as an
-  authorized write under this skill's own enumerated set, exactly like the D-185 narrowing comment.
-  The umbrella issue stays open and is narrowed by that comment, never closed.
+  monitoring, merge preconditions) applies to it unchanged. **The tick-off comment:** this session
+  (not the dispatched implementer) posts it on the umbrella issue immediately after step 8 confirms
+  the merge commit is present on the default branch — never before the merge — as an authorized
+  write under this skill's own enumerated set, exactly like the D-185 narrowing comment. It states
+  which checklist item was delivered, quoted as it appears in the umbrella body; the merged pull
+  request's number and link; and what remains of that item if the delivery was partial. The
+  umbrella issue stays open and is narrowed by that comment, never closed.
 - **There is no closing pull request for an umbrella issue.** Unlike a D-185 tracker, it has no
   completion threshold: it accumulates items for as long as its area exists. A delivery that
   happens to empty the current checklist still leaves the issue open.
@@ -297,6 +318,13 @@ by a delivery.
 Scope one pull request to one checklist item unless two are genuinely inseparable, so the quota
 `issue-select` step 5 counts against — which counts each such merge as non-milestone work — stays
 a faithful measure of how much capacity apparatus work consumed.
+
+Each umbrella-checklist PR's step 5 review explicitly verifies that the pull request delivers
+exactly the checklist item claimed in its body tag and no adjacent umbrella scope — an item
+silently widened into neighbouring checklist entries defeats both the one-item scoping above and
+the quota's measure — and treats any ambiguity in that verification as a stop condition rather
+than a best-effort guess, the same discipline the D-080 stage PR and the D-185 narrowing PR above
+already require for their own binding checks.
 
 If the tree refutes the plan mid-implementation — an assumption fails, a gate behaves
 differently than planned — do not force it. Record what refuted it, refresh the plan if the
@@ -523,7 +551,10 @@ the rest of the pool):
   report twice in a row (the mechanical dispatch failure, distinct from the case above);
 - (when executing the staged CI-digest pattern) the digest computation is ambiguous;
 - (when executing the D-185 narrowing-PR pattern) whether an extraction is genuinely
-  cohesion-driven, with no unrelated logic or behavior rewritten, is ambiguous.
+  cohesion-driven, with no unrelated logic or behavior rewritten, is ambiguous;
+- (when executing the D-192 umbrella-checklist pattern) whether the pull request delivers exactly
+  the claimed checklist item and no adjacent umbrella scope is ambiguous, or whether two checklist
+  items are genuinely inseparable enough to share one pull request is unclear.
 
 Stop and report — with everything completed so far delivered — for any of the above.
 
