@@ -53,6 +53,13 @@ pull request against it that leaves the tracked file over the threshold, plus th
 comment left on the issue after each one merges, is authorized without carrying `Fixes #N` —
 see step 4's D-185 branch.
 
+The same shape applies a third time when the named unit of work is a checklist item inside one of
+the standing umbrella issues [D-192](../../../docs/decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md)
+rule 1 establishes (CI governance, website, agent tooling): the pull request delivering that item
+carries no `Fixes #N` — closing the umbrella would defeat its purpose — and the tick-off comment
+left on the umbrella issue after it merges is an authorized write, exactly as the D-185 narrowing
+comment already is. See step 4's D-192 branch.
+
 Anything outside this set — touching another issue, editing an existing comment, force-pushing
 over commits this session did not create, changing repository settings — still requires asking
 first. `pycc-feedback`'s per-payload confirmation gate is deliberately not carried over here;
@@ -266,6 +273,31 @@ Never treat a D-185 tracking issue's first pull request as the whole task: scope
 request to a handful of cohesion-driven submodules extracted cleanly, not an attempt at the
 entire file, and leave the issue open and narrowed for the next session to continue from.
 
+**Separately again, when the unit of work handed over is a checklist item inside a standing
+umbrella issue** (`AGENTS.md`'s D-021 step 9 rule, per
+`docs/decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md`: each cross-cutting area —
+CI governance, website, agent tooling — has exactly one umbrella issue whose checklist items are
+themselves selectable work, and `issue-select` may hand over an item rather than a whole issue):
+the umbrella issue is a standing container, not a task that ever completes, so it is never closed
+by a delivery.
+
+- **The pull request delivering one checklist item** does not carry `Fixes #N` — merging it must
+  not close the umbrella, the same reasoning the D-080 stage PR and the D-185 narrowing PR above
+  already apply. Tag its body instead: "Umbrella checklist item for #N — see issue-implement's
+  D-192 umbrella branch; #N stays open." It is exempt from step 6's `Fixes #N` requirement and
+  step 8's `Fixes #N` merge-confirmation step; every other part of steps 5 through 8 (review loop,
+  monitoring, merge preconditions) applies to it unchanged. After it merges, leave the tick-off
+  comment on the umbrella issue — which item was delivered, and by which pull request — as an
+  authorized write under this skill's own enumerated set, exactly like the D-185 narrowing comment.
+  The umbrella issue stays open and is narrowed by that comment, never closed.
+- **There is no closing pull request for an umbrella issue.** Unlike a D-185 tracker, it has no
+  completion threshold: it accumulates items for as long as its area exists. A delivery that
+  happens to empty the current checklist still leaves the issue open.
+
+Scope one pull request to one checklist item unless two are genuinely inseparable, so the quota
+`issue-select` step 5 counts against — which counts each such merge as non-milestone work — stays
+a faithful measure of how much capacity apparatus work consumed.
+
 If the tree refutes the plan mid-implementation — an assumption fails, a gate behaves
 differently than planned — do not force it. Record what refuted it, refresh the plan if the
 refutation changes the approach, and note the deviation in the pull request body. A plan
@@ -343,7 +375,8 @@ objects to the direction taken, that is a stop condition — do not open the pul
 
 Re-fetch. If the default branch moved, rebase the task branch — own committed work only,
 never over commits this session did not create — and rerun the local gates. Push and open the
-pull request: `Fixes #N` in the body, a summary of what was built, any plan deviations with
+pull request: `Fixes #N` in the body — or, for a pull request exempted by step 4's D-080, D-185,
+or D-192 branch, that branch's own body tag in place of `Fixes #N` — a summary of what was built, any plan deviations with
 their reasons, and the test evidence. Write the PR body to a temporary file and use
 `gh pr create --body-file <path>` — never inline a heredoc in `--body`, which fails on
 bodies containing apostrophes or backticks. Add **at most one** new dated file under
@@ -440,16 +473,18 @@ gh api graphql -f query='{repository(owner:"<owner>",name:"<repo>"){pullRequest(
 ```
 
 `totalCount` must equal the intended count exactly — `1`, naming the issue, for a
-`Fixes #N` pull request, and `0` for every stage, intermediate-activation, and narrowing
-pull request above. Compare `totalCount` rather than the length of the returned page, so
+`Fixes #N` pull request, and `0` for every stage, intermediate-activation, narrowing, and
+umbrella-checklist pull request above. Compare `totalCount` rather than the length of the returned page, so
 the answer cannot be truncated by the page size. A body that never meant to close anything can still close something — GitHub scans
 for a closing keyword adjacent to an issue reference and does not parse the English around
 it, so a disclaimer or a quotation containing the pattern closes the issue just as an
 instruction would (see AGENTS.md's pull-request rule). A mismatch is fixed by editing the
 body and re-running the query before merging, never by merging and reopening after.
 
-Merge with a merge commit, delete the task branch, and confirm the issue closed via the
-`Fixes #N` reference. Fetch and verify the default branch actually contains the work before
+Merge with a merge commit, delete the task branch, and — for a pull request that carries
+`Fixes #N` — confirm the issue closed via that reference. For a stage, narrowing, or
+umbrella-checklist pull request, which closes nothing by design, confirm instead that the issue is
+still open and leave its narrowing or tick-off comment. Fetch and verify the default branch actually contains the work before
 reporting it merged.
 
 If the merge call is rejected (e.g. the branch fell behind between the up-to-date check and the
