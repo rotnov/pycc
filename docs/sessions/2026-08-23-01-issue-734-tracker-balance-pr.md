@@ -45,9 +45,11 @@ batched tracer produced three root-cause classes rather than seven traces.
   `issue-to-plan` step 3 now requires an affected-site inventory, and step 6's plan-contents
   enumeration names it. That second edit exists because turning the rule on its own file found
   the same omission inside the commit introducing it.
-- **Class B** (3 findings) — a summary tier disagreeing with its own body. Fourth adjudication
-  in a three-topic family, and the second occurrence of this topic rather than a new one;
-  `build nothing`, on the evidence rather than by deference to the prior adjudications.
+- **Class B** (3 findings) — a summary tier disagreeing with its own body. A recurrence in a
+  family consolidated into one class on 2026-08-21; `build nothing`, on the evidence rather
+  than by deference to the prior adjudications. No running tally of that family is restated
+  here — two attempts at one produced two different wrong numbers, which is the defect the
+  class is about.
 - **Class C** (1 finding) — a policy forbidding its own bootstrap. Escalated alone on
   severity; singleton counter seeded, deliberately not folded into the other two.
 

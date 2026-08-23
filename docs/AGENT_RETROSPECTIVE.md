@@ -77,13 +77,14 @@ step as evidence for the opposite of what that step states; a stop-conditions
 list asserted a trigger the body it summarizes never declares.
 
 **Root cause.** Each restatement was written from memory of what the source says
-rather than by re-reading it. This is the fourth `build nothing` adjudication in
-a three-topic family (`own-change-falsifies-adjacent-prose`,
+rather than by re-reading it. It recurs in a family consolidated into one class on
+2026-08-21 (`own-change-falsifies-adjacent-prose`,
 `unmeasured-claim-about-external-tool-behavior`,
-`summary-tier-contradicts-its-own-body`) — the second occurrence of the third
-topic, not a new fourth one, per that topic's own 2026-08-21 consolidation. The
-verdict was reached here on the evidence rather than by deferring to the
-precedent: the defect is a disagreement between two passages of prose,
+`summary-tier-contradicts-its-own-body`), all of whose members reached
+`build nothing`. This entry deliberately states no running tally of that family:
+two attempts to restate one produced two different wrong numbers, which is the very
+defect being recorded. The verdict was reached here on the evidence rather than by
+deferring to the precedent: the defect is a disagreement between two passages of prose,
 visible only to a reader holding both at once.
 
 **What fixed it.** The three findings individually (`66c25027`, `36d19f33`), plus
