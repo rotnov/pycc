@@ -30,6 +30,18 @@
       "prompt": "A milestone scope is in effect. The only surviving in-scope issue is an unmarked-to-P2 candidate of moderate size; a tiny P1 sits outside the scope. Decide which one step 5 reaches first.",
       "expected_output": "The in-scope P2 is selected: under a milestone scope, membership in that scope ranks first, so the tiny out-of-scope P1 is reached only when the scope contributes no survivor at all. With no scope in effect the P1 would win, so the no-scope ordering is unchanged.",
       "runner": "milestone-scope-membership-outranks-a-higher-marked-outsider"
+    },
+    {
+      "id": 6,
+      "prompt": "70 open issues carry no milestone, far above D-192's ceiling of 20. A cross-cutting observation about a CI gate needs a home, and the CI-governance umbrella issue does not exist yet.",
+      "expected_output": "No ordinary non-milestone issue may be filed while the ceiling is in force: the observation goes to the retrospective or onto the area's umbrella checklist. Opening the standing umbrella issue itself is the one exemption from the ceiling as a creation gate, so it may be created now and counts toward the ceiling once open.",
+      "runner": "non-milestone-ceiling-blocks-filing-but-not-an-umbrella"
+    },
+    {
+      "id": 7,
+      "prompt": "The last five selection-output merges on the default branch include one that closed only issues with no milestone. The top-ranked surviving candidate also carries no milestone.",
+      "expected_output": "The quota is spent: decline the non-milestone candidate and fall through to the next-ranked survivor, naming the quota and its count in the report. The quota never blocks a milestone-assigned candidate, and it lapses once that non-milestone merge falls out of the five-merge window.",
+      "runner": "spent-quota-declines-a-non-milestone-candidate"
     }
   ]
 }

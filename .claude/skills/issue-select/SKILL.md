@@ -106,10 +106,10 @@ gh issue list --repo <owner>/<repo> --state open --limit 300 \
   --json number,milestone --jq '[.[] | select(.milestone == null)] | length'
 ```
 
-Read the number, do not estimate it. The count is gross — it includes the standing umbrella issues and the D-185 per-oversized-file trackers that D-192 permits to carry no milestone, which consume the cap deliberately, so no exclusion list has to be reconstructed here. Opening one of the three standing umbrella issues is the one exemption: it may be created at any count (it counts toward the ceiling once open), because otherwise the routing target for cross-cutting observations could never be created while the backlog is over the cap. Otherwise, at or above the ceiling this run files no new non-milestone
+Read the number, do not estimate it. The count is gross — it includes the standing umbrella issues and the D-185 per-oversized-file trackers that D-192 permits to carry no milestone, which consume the cap deliberately, so no exclusion list has to be reconstructed here. Opening one of the three standing umbrella issues — CI governance, website, agent tooling, and no other self-declared area — is the one exemption: it may be created at any count (it counts toward the ceiling once open), because otherwise the routing target for cross-cutting observations could never be created while the backlog is over the cap. Otherwise, at or above the ceiling this run files no new non-milestone
 issue of its own and proposes none to any other skill; a genuine observation that cannot be filed
 goes to `docs/AGENT_RETROSPECTIVE.md` or onto the standing umbrella issue for its cross-cutting
-area (AGENTS.md's D-021 step 9). The milestone triage above is what actually drains the count —
+area (AGENTS.md's D-021 step 9). A checklist item inside an umbrella issue is itself selectable: score the item, not the umbrella, and treat the umbrella as the issue reference the delivering pull request names in its body without a closing keyword — the umbrella stays open, and the merge comments on it to tick the item off, exactly as a D-185 tracker is narrowed rather than closed per pull request. The milestone triage above is what actually drains the count —
 every assignment made there moves an issue out of the non-milestone set — so run the count *after*
 this pass's assignments, not before. Report the count and whether the ceiling is in force in the
 step 8 hand-off, since a selection made under a full ceiling is a different decision from one made
@@ -218,7 +218,7 @@ gh pr view <n> --repo <owner>/<repo> --json closingIssuesReferences \
   --jq '[.closingIssuesReferences[].number] | join(" ")'
 ```
 
-A pull request that closes no issue is not selection output — skip it and keep walking. For the
+A pull request that closes no issue is not selection output — skip it and keep walking, with one exception: a pull request delivering a checklist item from a standing umbrella issue deliberately carries no `Fixes #N` (closing the umbrella would defeat its purpose), yet it *is* selection output and it is non-milestone work. Count it toward the quota when its body references an umbrella issue as the item it delivers. Without this, rule 1's own success — moving apparatus work off individually filed issues and onto umbrella checklists — would progressively empty the quota's sample and leave that work unbounded. For the
 first five that do close an issue, resolve each closed issue's milestone:
 
 ```bash
