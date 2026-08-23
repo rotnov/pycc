@@ -115,6 +115,17 @@ of the exact output and finding none proves nothing. Reach the "no documentation
 conclusion — when it is reached at all — at the convention level, and state it that way in the
 plan.
 
+When the change adds an exceptional case to a rule an existing document already branches on,
+the plan enumerates **every site that dispatches on the general rule**, not only the sites the
+issue names. Salience and decision-relevance are different sets: the issue names where the new
+case is interesting, while the sites that will get it wrong are wherever the document already
+asks "which case is this?" and now has one answer too few. Derive that list by searching for the
+rule's own decision points — the places that branch, not the places that mention — and record it
+in the plan as the change's affected-site inventory, with a line per site saying whether the new
+case needs a branch there or provably does not. A site left off that inventory is the defect
+this step exists to prevent, and it survives repair rounds: a fix that extends the inventory by
+one more site reproduces the same omission for every site still missing.
+
 ### 4. Verify empirically where verification is possible
 
 Prefer running the check to reasoning about it, and check whether the environment can run it
@@ -178,10 +189,13 @@ Cover, in this order:
 2. Corrections to the issue's own premises.
 3. Recommended shape, with the alternatives that were rejected and why.
 4. Concrete work items: files, functions, tests, in dependency order.
-5. Decision-log and documentation updates required in the same change.
-6. Gates the change must satisfy, and how to check each one locally.
-7. Risks, with a handling line each.
-8. Explicitly out of scope.
+5. The affected-site inventory step 3 requires whenever the change adds a case to a rule an
+   existing document already branches on — every dispatching site, with a line each saying
+   whether it needs a branch or provably does not.
+6. Decision-log and documentation updates required in the same change.
+7. Gates the change must satisfy, and how to check each one locally.
+8. Risks, with a handling line each.
+9. Explicitly out of scope.
 
 When the plan cannot responsibly be a single change — for example because new thresholds must be
 derived from evidence that does not exist yet — say so and split it into phases with a stated
