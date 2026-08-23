@@ -53,7 +53,7 @@ repair loop inherited the same scope: a fix aimed at the one site just found
 missing reproduces the omission for every site still missing, which is why the
 class survived two of its own repair rounds rather than converging.
 
-**What fixed it.** Rounds 4, 5 and 6 (`36d19f33`, `468a5c76`), and then a
+**What fixed it.** Rounds 2, 3 and 5 (`3f19c276`, `227ece4e`, `468a5c76`), and then a
 planning-gate rule landed in `.claude/skills/issue-to-plan/SKILL.md` step 3:
 when a change adds an exceptional case to a rule an existing document already
 branches on, the plan enumerates every site that dispatches on the general rule
@@ -77,12 +77,13 @@ step as evidence for the opposite of what that step states; a stop-conditions
 list asserted a trigger the body it summarizes never declares.
 
 **Root cause.** Each restatement was written from memory of what the source says
-rather than by re-reading it. This is the fourth topic in a family
-(`own-change-falsifies-adjacent-prose`,
+rather than by re-reading it. This is the fourth `build nothing` adjudication in
+a three-topic family (`own-change-falsifies-adjacent-prose`,
 `unmeasured-claim-about-external-tool-behavior`,
-`summary-tier-contradicts-its-own-body`) that has now reached `build nothing`
-four times, and it was reached here on the evidence rather than by deferring to
-the precedent: the defect is a disagreement between two passages of prose,
+`summary-tier-contradicts-its-own-body`) — the second occurrence of the third
+topic, not a new fourth one, per that topic's own 2026-08-21 consolidation. The
+verdict was reached here on the evidence rather than by deferring to the
+precedent: the defect is a disagreement between two passages of prose,
 visible only to a reader holding both at once.
 
 **What fixed it.** The three findings individually (`66c25027`, `36d19f33`), plus
