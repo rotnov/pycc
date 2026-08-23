@@ -36,6 +36,17 @@ pub struct MirExceptHandler {
 /// catch-all rather than as an ordinary equality test.
 const EXCEPTION_TAG_CATCH_ALL: u8 = 0;
 
+/// Resolves one of the original flat seven builtin exception names to its
+/// fixed tag, independent of the class table. Part 2 of #543 (#739) widened
+/// [`pycc_hir::BUILTIN_EXCEPTION_CLASSES`] with a 16-member `OSError` family
+/// that is *not* resolved here -- those 16 carry their own fixed tag directly
+/// on their `HirClassDef` (see `pycc_hir::exception::builtin_exception_class_defs`)
+/// and are picked up by [`exception_type_tag`]'s class-table fallback below
+/// instead. This `match` implements exactly the 7-name set
+/// `pycc_hir::is_flat_builtin_exception_class` names as its single source of
+/// truth; the two must be kept in sync by construction, not by a shared
+/// constant, since a `match` on `&str` cannot be built from an array at
+/// compile time here.
 pub(super) fn resolve_exception_tag(name: &str) -> Option<u8> {
     match name {
         "Exception" => Some(0),
@@ -92,8 +103,11 @@ pub(super) fn lower_exception_value(
 }
 
 /// Resolves an exception class name to its runtime type tag, whether it is one
-/// of the seven builtins or a user-defined class that HIR lowering assigned a
-/// tag to (Part 2 of #541, D-189).
+/// of the original flat seven builtins (resolved by name, above), one of the
+/// 16-member `OSError` family that carries a fixed tag on its own
+/// `HirClassDef` (Part 2 of #543, #739), or a user-defined class that HIR
+/// lowering assigned a tag to (Part 2 of #541, D-189) -- the class-table
+/// fallback below resolves both of the latter two identically.
 pub(super) fn exception_type_tag(name: &str, classes: &HashMap<String, HirClassDef>) -> Option<u8> {
     resolve_exception_tag(name).or_else(|| classes.get(name).and_then(|def| def.exception_type_tag))
 }

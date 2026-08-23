@@ -29,16 +29,16 @@ fn user_exception_classes_are_tagged_in_source_order_from_seven() {
     assert_eq!(
         tags[..3].to_vec(),
         vec![
-            ("AppError".to_string(), Some(7)),
-            ("DatabaseError".to_string(), Some(8)),
-            ("ConfigError".to_string(), Some(9)),
+            ("AppError".to_string(), Some(23)),
+            ("DatabaseError".to_string(), Some(24)),
+            ("ConfigError".to_string(), Some(25)),
         ]
     );
 }
 
 #[test]
 fn the_first_user_tag_sits_immediately_above_the_builtin_range() {
-    assert_eq!(FIRST_USER_EXCEPTION_TYPE_TAG, 7);
+    assert_eq!(FIRST_USER_EXCEPTION_TYPE_TAG, 23);
     let tags = tags_of(
         "class AppError(Exception):\n    pass\n\n\n\
          def main() -> None:\n    raise AppError(\"x\")\n",
@@ -47,20 +47,41 @@ fn the_first_user_tag_sits_immediately_above_the_builtin_range() {
 }
 
 #[test]
-fn the_synthetic_builtin_classes_are_never_tagged() {
-    // D-188 property 3: `None` here means "not raisable by tag assignment",
-    // never "synthetic". The builtins are the most raisable classes there are
-    // and still carry `None`, because their tags are fixed constants resolved
-    // by name rather than assigned per module.
+fn the_original_flat_seven_are_never_tagged_by_this_pass() {
+    // D-188 property 3: `None` here means "not raisable by *this per-module
+    // tag-assignment pass*", never "synthetic". The original flat seven are
+    // the most raisable classes there are and still carry `None`, because
+    // their tags are fixed constants resolved by name rather than assigned
+    // per module. Part 2 of #543 (#739) widened `BUILTIN_EXCEPTION_CLASSES`
+    // with the 16-member `OSError` family, which *does* carry a tag of its
+    // own -- fixed at HIR-construction time in `builtin_exception_class_defs`,
+    // not by this per-module pass either, but nonzero -- so this test checks
+    // only the flat seven, not every `is_builtin_exception_class` name.
     let tags = tags_of(
         "class AppError(Exception):\n    pass\n\n\n\
          def main() -> None:\n    raise AppError(\"x\")\n",
     );
     for (name, tag) in &tags {
-        if crate::is_builtin_exception_class(name) {
-            assert_eq!(*tag, None, "builtin `{name}` must carry no assigned tag");
+        if crate::is_flat_builtin_exception_class(name) {
+            assert_eq!(*tag, None, "flat builtin `{name}` must carry no assigned tag");
         }
     }
+}
+
+#[test]
+fn the_oserror_family_carries_its_fixed_tag_alongside_a_user_class() {
+    // The 16-member `OSError` family's tags are fixed at HIR-construction
+    // time, not by the per-module user-class pass, but they must still show
+    // up correctly in a module's `class_defs` next to a user-declared class.
+    let tags = tags_of(
+        "class AppError(Exception):\n    pass\n\n\n\
+         def main() -> None:\n    raise AppError(\"x\")\n",
+    );
+    let os_error = tags
+        .iter()
+        .find(|(name, _)| name == "OSError")
+        .expect("`OSError` must be seeded");
+    assert_eq!(os_error.1, Some(7));
 }
 
 #[test]
@@ -71,7 +92,7 @@ fn a_class_outside_the_exception_hierarchy_is_not_tagged() {
          def main() -> None:\n    raise AppError(\"x\")\n",
     );
     assert_eq!(tags[0], ("Point".to_string(), None));
-    assert_eq!(tags[1].1, Some(7));
+    assert_eq!(tags[1].1, Some(23));
 }
 
 #[test]
@@ -96,14 +117,14 @@ fn many_exception_classes(count: usize) -> String {
 
 #[test]
 fn the_maximum_number_of_user_exception_classes_still_lowers() {
-    assert_eq!(MAX_USER_EXCEPTION_CLASSES, 249);
+    assert_eq!(MAX_USER_EXCEPTION_CLASSES, 233);
     let module =
         pycc_parser_test_helper::parse(&many_exception_classes(MAX_USER_EXCEPTION_CLASSES));
-    let lowered = lower_checked(&module).expect("249 exception classes must lower");
+    let lowered = lower_checked(&module).expect("233 exception classes must lower");
     let last = lowered
         .class_defs
         .iter()
-        .find(|(name, _)| name == "E248")
+        .find(|(name, _)| name == "E232")
         .expect("the last class must be present");
     assert_eq!(last.1.exception_type_tag, Some(u8::MAX));
 }
@@ -112,10 +133,10 @@ fn the_maximum_number_of_user_exception_classes_still_lowers() {
 fn one_exception_class_past_the_maximum_is_rejected() {
     let module =
         pycc_parser_test_helper::parse(&many_exception_classes(MAX_USER_EXCEPTION_CLASSES + 1));
-    let diagnostic = lower_checked(&module).expect_err("250 exception classes must be rejected");
+    let diagnostic = lower_checked(&module).expect_err("234 exception classes must be rejected");
     assert_eq!(diagnostic.code, "C0001");
     assert!(
-        diagnostic.message.contains("at most 249"),
+        diagnostic.message.contains("at most 233"),
         "unexpected message: {}",
         diagnostic.message
     );

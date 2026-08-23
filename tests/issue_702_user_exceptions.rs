@@ -289,7 +289,7 @@ fn a_module_with_more_user_exception_classes_than_tags_is_rejected() {
     let text = check_error("too_many", &source);
     assert!(text.contains("C0001"), "unexpected diagnostic: {text}");
     assert!(
-        text.contains("at most 249"),
+        text.contains("at most 233"),
         "unexpected diagnostic: {text}"
     );
 }

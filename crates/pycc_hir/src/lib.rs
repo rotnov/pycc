@@ -14,6 +14,7 @@ pub use exception::{
     BUILTIN_EXCEPTION_CLASSES, EXCEPTION_INIT_MANGLED_NAME, FIRST_USER_EXCEPTION_TYPE_TAG,
     HirExceptHandler, MAX_USER_EXCEPTION_CLASSES, builtin_exception_class_defs,
     builtin_exception_init_item, builtin_exception_parent, is_builtin_exception_class,
+    is_flat_builtin_exception_class,
 };
 pub(crate) use func::{
     annotation_to_ty, lower_arg_list, lower_function, lower_return_annotation, type_param_name,

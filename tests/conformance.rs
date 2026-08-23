@@ -1302,3 +1302,35 @@ fn pep_0701_fstring_grammar_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0701_fstring_grammar.py"
     );
 }
+
+// Part 2 of #543 (#739, PEP 3151): the real `OSError` hierarchy -- `OSError`
+// itself, its 10 other direct subclasses, and `ConnectionError`'s 4 further
+// subclasses. Covers raising and catching at every tree depth (a direct
+// `OSError` child, a `ConnectionError` grandchild caught via `ConnectionError`
+// and via the `OSError` root, a sibling handler that does not catch an
+// unrelated family member), handler ordering across several `except` clauses
+// on one `try`, and `finally` running on the exceptional path. Left off the
+// matrix's row (docs/PYTHON_STANDARDS.md line 202, still `☐`) until a green
+// Tier-1 run of this test is actually observed, per D-102 -- this fixture and
+// its registration exist so that observation can happen in a follow-up, not
+// to claim it here. errno-based construction/dispatch and the
+// `errno`/`filename`/`strerror`/`winerror` instance attributes are out of
+// scope for this issue (blocked on Part 3 of #541, #703) and are not
+// exercised here.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn pep_3151_oserror_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_3151_oserror.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_3151_oserror_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/pep_3151_oserror.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_3151_oserror_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_3151_oserror.py"
+    );
+}

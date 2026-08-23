@@ -61,20 +61,36 @@ fn seeded_builtin_exception_classes_do_not_read_as_shadowed() {
 }
 
 #[test]
-fn an_unseeded_module_still_does_not_read_the_names_as_shadowed() {
+fn an_unseeded_module_still_does_not_read_the_flat_seven_as_shadowed() {
     // The property that makes gating the seeding safe: `is_user_defined_class`
     // is `classes.contains_key(name) && !is_synthetic_class(name)`, so an
     // *absent* name is not user-defined and therefore not shadowed -- exactly
-    // the pre-#541 reading. A module that never names one of the seven is
-    // seeded with none of them, and must still accept `except`/`raise`.
+    // the pre-#541 reading. A module that never names one of the original
+    // flat seven is seeded with none of them, and must still accept
+    // `except`/`raise` for those seven, because `resolve_exception_tag`
+    // resolves them by name independent of the class table.
     let env = environment_for("print(1)\n");
     for name in pycc_hir::BUILTIN_EXCEPTION_CLASSES {
         assert!(env.lookup_class(name).is_none(), "`{name}` must be absent");
         assert!(!env.is_synthetic_class(name));
-        assert!(
-            is_unshadowed_builtin_exception(&env, &[], name),
-            "`{name}` must not read as shadowed while absent"
-        );
+        let unshadowed = is_unshadowed_builtin_exception(&env, &[], name);
+        if pycc_hir::is_flat_builtin_exception_class(name) {
+            assert!(unshadowed, "`{name}` must not read as shadowed while absent");
+        } else {
+            // Part 2 of #543 (#739), work item 5: an `OSError`-family name
+            // has no name-based fallback, so absence from the class table
+            // must *not* be read as "unshadowed" -- unlike the flat seven,
+            // it has to actually be present to be treated as raisable or
+            // catchable. This is what turns the module-wide shadow gate's
+            // withheld seeding into a clean `T0021` (see
+            // `check_raise_operand`/`check_try_stmt`) instead of a
+            // `handler_type_tags` panic when the name is genuinely
+            // referenced but seeding was withheld elsewhere in the module.
+            assert!(
+                !unshadowed,
+                "`{name}` (OSError family) must not read as unshadowed while absent from the class table"
+            );
+        }
     }
 }
 
@@ -407,3 +423,4 @@ fn provenance_survives_monomorphization() {
     assert!(env.is_synthetic_class("ValueError"));
     assert!(!env.is_synthetic_class("Box"));
 }
+
