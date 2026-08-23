@@ -33,6 +33,71 @@ never a merge gate.
 
 ---
 
+## 2026-08-23 — A new exceptional case reached the steps it was about, not every step that branched on the rule
+
+**What happened.** The change for #734 added a third `Fixes #N`-exempt
+pull-request shape to `.claude/skills/issue-implement/SKILL.md`, modelled on the
+two that already existed. It took five adversarial review rounds to land, and
+three of them were the same defect: round 2 found the consumer skill had no
+awareness of the new shape at all; round 3 found the round-2 fix had wired it
+into steps 5 through 8 while step 2's triage outcome stayed unconditional, so
+triage would still have closed the very container the shape exists to keep open;
+round 5 found the round-4 repair for *that* had drawn a bright line contradicting
+step 2's own outcome. Each round extended the coverage by exactly one site and
+stopped.
+
+**Root cause.** The sites enumerated were the ones the issue named — where the
+new case is *interesting* — rather than every site the document already
+dispatches from. Coverage tracked salience instead of decision-relevance. The
+repair loop inherited the same scope: a fix aimed at the one site just found
+missing reproduces the omission for every site still missing, which is why the
+class survived two of its own repair rounds rather than converging.
+
+**What fixed it.** Rounds 2, 3 and 5 (`3f19c276`, `227ece4e`, `468a5c76`), and then a
+planning-gate rule landed in `.claude/skills/issue-to-plan/SKILL.md` step 3:
+when a change adds an exceptional case to a rule an existing document already
+branches on, the plan enumerates every site that dispatches on the general rule
+as an affected-site inventory, one line per site saying whether the new case
+needs a branch there or provably does not. Journalled as
+`.harden/incidents/new-case-misses-branching-sites/`.
+
+**Lesson.** After adding a case to a branching rule, do not ask "did I update
+the sections this change is about". Search for the rule's own decision points —
+the places that branch, not the places that mention — and answer for each one
+before the first review round, because a review that finds one missing site
+produces a fix scoped to that site and nothing else.
+
+## 2026-08-23 — Three restatements disagreed with sources one command away
+
+**What happened.** In the same review loop, three further findings were prose
+disagreeing with something authoritative nearby: the quota's prose said five
+preceding merges while the pinned oracle it describes slices four (and the ADR's
+own normative rule repeated the identical error); a clause cited a neighbouring
+step as evidence for the opposite of what that step states; a stop-conditions
+list asserted a trigger the body it summarizes never declares.
+
+**Root cause.** Each restatement was written from memory of what the source says
+rather than by re-reading it. It recurs in a family consolidated into one class on
+2026-08-21 (`own-change-falsifies-adjacent-prose`,
+`unmeasured-claim-about-external-tool-behavior`,
+`summary-tier-contradicts-its-own-body`), all of whose members reached
+`build nothing`. This entry deliberately states no running tally of that family:
+two attempts to restate one produced two different wrong numbers, which is the very
+defect being recorded. The verdict was reached here on the evidence rather than by
+deferring to the precedent: the defect is a disagreement between two passages of prose,
+visible only to a reader holding both at once.
+
+**What fixed it.** The three findings individually (`66c25027`, `36d19f33`), plus
+one partial promotion banked as a side effect rather than as an artefact: the
+eval contract now pins the quota's prose literal, so prose and oracle cannot
+drift apart again without a required check failing.
+
+**Lesson.** A sentence that restates a fact from another file, another step, or a
+pinned literal is written with that source open, not from the memory of having
+read it — and where the restated thing is a literal, pinning it in a checked
+contract turns the next drift into a failing gate instead of a review finding.
+
+
 ## 2026-08-22 — Seven autopilot iterations of locally-defensible picks left the active milestone untouched
 
 **What happened.** Under a v0.3 milestone scope, the `issue-select` autopilot

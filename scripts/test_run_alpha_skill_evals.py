@@ -677,6 +677,53 @@ class AlphaSkillEvalTests(unittest.TestCase):
                 with self.assertRaisesRegex(evals.EvalError, "is missing"):
                     evals.run_ultra_review_case(case, stripped)
 
+    def test_issue_select_ceiling_exempts_only_the_standing_umbrella(self) -> None:
+        # #734 (D-192): the ceiling counts non-milestone issues grossly, so
+        # over the cap it would otherwise forbid creating the very umbrella
+        # issue that cross-cutting observations are routed into.
+        self.assertFalse(
+            evals.issue_select_non_milestone_filing_permitted(open_non_milestone=70)
+        )
+        self.assertFalse(
+            evals.issue_select_non_milestone_filing_permitted(open_non_milestone=20)
+        )
+        self.assertTrue(
+            evals.issue_select_non_milestone_filing_permitted(open_non_milestone=19)
+        )
+        self.assertTrue(
+            evals.issue_select_non_milestone_filing_permitted(
+                open_non_milestone=70, is_standing_umbrella=True
+            )
+        )
+
+    def test_issue_select_quota_counts_four_preceding_merges_plus_the_candidate(
+        self,
+    ) -> None:
+        # #734 (D-192): at most one non-milestone merge in every five, where
+        # the window is the candidate plus the four merges preceding it, so a
+        # non-milestone merge stops blocking once it is no longer one of those
+        # four rather than latching.
+        self.assertFalse(
+            evals.issue_select_non_milestone_merge_permitted(
+                recent_non_milestone_merges=(True, False, False, False, False)
+            )
+        )
+        self.assertFalse(
+            evals.issue_select_non_milestone_merge_permitted(
+                recent_non_milestone_merges=(False, False, False, True, False)
+            )
+        )
+        self.assertTrue(
+            evals.issue_select_non_milestone_merge_permitted(
+                recent_non_milestone_merges=(False, False, False, False, True)
+            )
+        )
+        self.assertTrue(
+            evals.issue_select_non_milestone_merge_permitted(
+                recent_non_milestone_merges=()
+            )
+        )
+
     def test_issue_select_eval_fails_when_the_scoring_order_text_is_missing(
         self,
     ) -> None:

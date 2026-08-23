@@ -1,0 +1,26 @@
+{
+  "net_pypi": "200",
+  "system_python": "Python 3.13.9",
+  "system_has_matplotlib": true,
+  "system_has_pandas": true,
+  "uv": "uv 0.11.7 (9d177269e 2026-04-15 aarch64-apple-darwin)",
+  "sandbox": {
+    "placement": {
+      "devin": "docker",
+      "codex": "docker"
+    },
+    "image": "sha256:a5be6f625ee471368f0472dd9547f41071c3dba6ce9d009b5e6f08cba5db9b55"
+  },
+  "models": {
+    "claude": "sonnet/low",
+    "devin": "glm-5-2",
+    "codex": "gpt-5.6-luna/low",
+    "grok": "grok-4.5/low"
+  },
+  "judge": "sonnet",
+  "container_python": "Python 3.11.2",
+  "container_has_pandas": false,
+  "container_has_matplotlib": false,
+  "devin": "devin 3000.3.27 (0becb483)",
+  "codex": "codex-cli 0.147.0"
+}

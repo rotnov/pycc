@@ -6,7 +6,11 @@ description: Use at a checkpoint the agent itself creates — a /harden cycle sh
 # Sessions: the handoff log
 
 One snapshot per checkpoint under `docs/sessions/`: what state the work is in
-and what a fresh session should pick up. Distinct from `.harden/incidents/`,
+and what a fresh session should pick up. **In this repository the trigger is
+narrower than the generic one below:**
+[D-192](../../../docs/decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md)
+allows at most one file per *merged pull request*, and routes everything else a
+checkpoint would have captured to `docs/AGENT_RETROSPECTIVE.md`. Distinct from `.harden/incidents/`,
 which records what went wrong — this records where things stand.
 
 ## If the project has no handoff log yet

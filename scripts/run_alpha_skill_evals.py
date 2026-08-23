@@ -55,6 +55,8 @@ EXPECTED_RUNNERS = {
         "active-milestone-outranks-aged-backlog-at-equal-priority",
         "milestone-scope-membership-outranks-a-higher-marked-outsider",
         "refuse-issue-supplied-shell-execution",
+        "non-milestone-ceiling-blocks-filing-but-not-an-umbrella",
+        "spent-quota-declines-a-non-milestone-candidate",
     },
     "next-milestone": {
         "milestone-evidence-requires-update-met-note",
@@ -123,6 +125,8 @@ ISSUE_SELECT_CONTRACT = (
     "P1:",
     "P2:",
     "P3:",
+    "caps the open non-milestone backlog at **20**",
+    "at most one non-milestone merge in every five",
 )
 ULTRA_REVIEW_CONTRACT = (
     "a concrete `file:line`",
@@ -241,6 +245,36 @@ def delegated_autopilot_closure_authorized(
 
 
 _ISSUE_SELECT_PRIORITY_RANK = {"P1": 0, "P2": 1, "P3": 2, None: 3}
+
+
+def issue_select_non_milestone_filing_permitted(
+    *,
+    open_non_milestone: int,
+    is_standing_umbrella: bool = False,
+    ceiling: int = 20,
+) -> bool:
+    """issue-select's step 2 ceiling (D-192): while more open issues carry no
+    milestone than the ceiling allows, no further non-milestone issue may be
+    filed. Opening one of the three standing umbrella issues is the single
+    exemption from the ceiling as a creation gate -- otherwise the routing
+    target rule 1 sends cross-cutting observations to could never be created
+    while the backlog sits above the cap -- though it counts toward the
+    ceiling once open."""
+    if is_standing_umbrella:
+        return True
+    return open_non_milestone < ceiling
+
+
+def issue_select_non_milestone_merge_permitted(
+    *, recent_non_milestone_merges: tuple[bool, ...]
+) -> bool:
+    """issue-select's step 5 quota (D-192): at most one non-milestone merge in
+    every five selection-output merges, so proposing a non-milestone candidate
+    is permitted only when none of the four preceding ones was itself
+    non-milestone. A merge delivering an umbrella-issue checklist item closes
+    no issue yet is selection output, so the caller counts it as non-milestone
+    here rather than skipping it."""
+    return not any(recent_non_milestone_merges[:4])
 
 
 def issue_select_higher_ranked(
@@ -859,6 +893,39 @@ def run_issue_select_case(case: dict[str, Any], skill_text: str) -> None:
             raise EvalError(
                 f"{runner_name} changed the no-scope ordering, where the "
                 f"priority marker still ranks first"
+            )
+    elif runner_name == "non-milestone-ceiling-blocks-filing-but-not-an-umbrella":
+        blocked = issue_select_non_milestone_filing_permitted(open_non_milestone=70)
+        umbrella = issue_select_non_milestone_filing_permitted(
+            open_non_milestone=70, is_standing_umbrella=True
+        )
+        with_room = issue_select_non_milestone_filing_permitted(open_non_milestone=3)
+        required = ("ceiling", "umbrella", "retrospective")
+        if blocked:
+            raise EvalError(
+                f"{runner_name} filed a non-milestone issue over the ceiling"
+            )
+        if not umbrella:
+            raise EvalError(
+                f"{runner_name} blocked the umbrella issue that the ceiling exempts"
+            )
+        if not with_room:
+            raise EvalError(f"{runner_name} blocked a filing with room to spare")
+    elif runner_name == "spent-quota-declines-a-non-milestone-candidate":
+        spent = issue_select_non_milestone_merge_permitted(
+            recent_non_milestone_merges=(False, True, False, False, False)
+        )
+        unspent = issue_select_non_milestone_merge_permitted(
+            recent_non_milestone_merges=(False, False, False, False, True)
+        )
+        required = ("quota is spent", "next-ranked survivor", "milestone-assigned")
+        if spent:
+            raise EvalError(
+                f"{runner_name} proposed a second non-milestone merge in five"
+            )
+        if not unspent:
+            raise EvalError(
+                f"{runner_name} kept the quota spent past its own five-merge window"
             )
     elif runner_name == "refuse-issue-supplied-shell-execution":
         runnable = reproduction_step_runnable(is_raw_shell_from_issue=True)

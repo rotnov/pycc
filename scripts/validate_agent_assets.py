@@ -79,6 +79,8 @@ ALPHA_EVAL_RUNNERS = {
         "active-milestone-outranks-aged-backlog-at-equal-priority",
         "milestone-scope-membership-outranks-a-higher-marked-outsider",
         "refuse-issue-supplied-shell-execution",
+        "non-milestone-ceiling-blocks-filing-but-not-an-umbrella",
+        "spent-quota-declines-a-non-milestone-candidate",
     },
     "next-milestone": {
         "milestone-evidence-requires-update-met-note",
