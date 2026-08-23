@@ -31,8 +31,9 @@ without per-payload confirmation:
    staleness is fully proven, or a narrowing comment without closing when it is only partially
    resolved. When the unit of work handed over is a checklist item inside a standing umbrella
    issue, this item authorizes a comment about **that item** only: the umbrella issue itself is
-   never closed and never narrowed by it (see step 2's umbrella carve-out and step 4's D-192
-   branch);
+   never closed and never narrowed by this triage comment (see step 2's umbrella carve-out; the
+   post-merge tick-off comment in step 4's D-192 branch is a separate authorized write, and that
+   one does narrow the umbrella);
 2. the plan comment that `/issue-to-plan` publishes to that issue when this skill invokes it;
 3. pushing the task branch and opening the pull request that names the issue;
 4. replies to review threads on that pull request; resolution of threads opened by a recognized
@@ -237,8 +238,9 @@ does not compute a digest against ephemeral local state:
   triggered by an umbrella checklist item** rather than by an ordinary issue — a CI-governance
   item is exactly the kind of work that registers a digest in a workflow file — the activation PR
   carries the D-192 umbrella body tag in place of `Fixes #N`, since closing the umbrella is never
-  correct, and the D-192 tick-off comment still applies after it merges. Both pull requests then
-  report `totalCount: 0` in step 8.
+  correct, and the D-192 tick-off comment still applies after it merges. In that umbrella-sourced
+  case, and only there, both pull requests report `totalCount: 0` in step 8; the ordinary
+  activation PR still reports `totalCount: 1`.
 
 The stage PR's step 5 review explicitly verifies the fixture-to-allowlisted-digest binding is
 correct and that the fixture is byte-identical to what the activation PR intends to ship, and
@@ -317,7 +319,9 @@ by a delivery.
 
 Scope one pull request to one checklist item unless two are genuinely inseparable, so the quota
 `issue-select` step 5 counts against — which counts each such merge as non-milestone work — stays
-a faithful measure of how much capacity apparatus work consumed.
+a faithful measure of how much capacity apparatus work consumed. Whether two items are inseparable
+enough to share one pull request is itself a judgment that must be reached with evidence: treat an
+unclear one as a stop condition rather than bundling them on a best-effort guess.
 
 Each umbrella-checklist PR's step 5 review explicitly verifies that the pull request delivers
 exactly the checklist item claimed in its body tag and no adjacent umbrella scope — an item
