@@ -106,7 +106,7 @@ gh issue list --repo <owner>/<repo> --state open --limit 300 \
   --json number,milestone --jq '[.[] | select(.milestone == null)] | length'
 ```
 
-Read the number, do not estimate it. The count is gross — it includes the standing umbrella issues and the D-185 per-oversized-file trackers that D-192 permits to carry no milestone, which consume the cap deliberately, so no exclusion list has to be reconstructed here. At or above the ceiling this run files no new non-milestone
+Read the number, do not estimate it. The count is gross — it includes the standing umbrella issues and the D-185 per-oversized-file trackers that D-192 permits to carry no milestone, which consume the cap deliberately, so no exclusion list has to be reconstructed here. Opening one of the three standing umbrella issues is the one exemption: it may be created at any count (it counts toward the ceiling once open), because otherwise the routing target for cross-cutting observations could never be created while the backlog is over the cap. Otherwise, at or above the ceiling this run files no new non-milestone
 issue of its own and proposes none to any other skill; a genuine observation that cannot be filed
 goes to `docs/AGENT_RETROSPECTIVE.md` or onto the standing umbrella issue for its cross-cutting
 area (AGENTS.md's D-021 step 9). The milestone triage above is what actually drains the count —
