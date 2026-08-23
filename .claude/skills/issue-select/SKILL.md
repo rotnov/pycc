@@ -200,8 +200,11 @@ work beat both "biggest first" and "easiest first".
 
 **The 4:1 non-milestone merge quota.** Ordering decides what is reached first; the quota decides
 whether a non-milestone candidate may be proposed at all. [D-192](../../../docs/decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md) allows **at most one
-non-milestone merge in every five**. Before proposing a candidate that carries no milestone, count
-the last five issue-closing merges on the default branch — never estimate from memory, and never
+non-milestone merge in every five**. The window is the candidate plus the four merges preceding it:
+**the candidate itself occupies the fifth slot**, so before proposing a candidate that carries no
+milestone, count the **four** most recent issue-closing merges on the default branch. Counting five
+preceding merges instead would enforce a 1-in-6 quota, not the 1-in-5 D-192 states. Never estimate
+from memory, and never
 count merge commits alone, since this repository mixes squash subjects (`... (#731)`) with real
 merge commits (`Merge pull request #730 from ...`) and also carries commits pushed straight to the
 branch that close nothing:
@@ -218,15 +221,35 @@ gh pr view <n> --repo <owner>/<repo> --json closingIssuesReferences \
   --jq '[.closingIssuesReferences[].number] | join(" ")'
 ```
 
-A pull request that closes no issue is not selection output — skip it and keep walking, with one exception: a pull request delivering a checklist item from a standing umbrella issue deliberately carries no `Fixes #N` (closing the umbrella would defeat its purpose), yet it *is* selection output and it is non-milestone work. Count it toward the quota when its body references an umbrella issue as the item it delivers. Without this, rule 1's own success — moving apparatus work off individually filed issues and onto umbrella checklists — would progressively empty the quota's sample and leave that work unbounded. For the
-first five that do close an issue, resolve each closed issue's milestone:
+A pull request that closes no issue is normally not selection output — skip it and keep walking. The
+one exception is a pull request delivering a checklist item from a standing umbrella issue: it
+deliberately carries no `Fixes #N` (closing the umbrella would defeat its purpose), so the query
+above returns empty for it, yet it *is* selection output and it *is* non-milestone work. Such a
+merge **occupies one of the four counted slots** — it is not an extra item counted alongside them.
+Because the default walk cannot see it, check every pull request whose
+`closingIssuesReferences` came back empty before skipping it:
+
+```bash
+gh pr view <n> --repo <owner>/<repo> --json body --jq '.body'
+```
+
+If the body references a standing umbrella issue as the item it delivers — an `Umbrella: <area> — ...`
+issue reference, by number or by title — the merge fills a slot and counts as non-milestone. Only a
+pull request that neither closes an issue nor names an umbrella issue is skipped. Without this,
+rule 1's own success — moving apparatus work off individually filed issues and onto umbrella
+checklists — would progressively empty the quota's sample and leave that work unbounded. For the
+four slots so filled, resolve each closed issue's milestone:
 
 ```bash
 gh issue view <i> --repo <owner>/<repo> --json milestone --jq '.milestone.title // "none"'
 ```
 
-A merge counts as **non-milestone** when every issue it closed reports `none`. If the 40-commit window yields fewer than five issue-closing merges, widen it (`-n 100`) rather than judging on a short sample; if the branch genuinely holds fewer than five, the quota is not yet spent and the count says so in the report. If one or more of
-those five already counts as non-milestone, the quota is spent: decline the non-milestone candidate
+A merge counts as **non-milestone** when every issue it closed reports `none` (an umbrella-checklist
+merge closes nothing and counts as non-milestone by the rule above). If the 40-commit window yields
+fewer than four slot-filling merges, widen it (`-n 100`) rather than judging on a short sample; if
+the branch genuinely holds fewer than four, the quota is not yet spent and the count says so in the
+report. If one or more of those four preceding slots already counts as non-milestone, the quota is
+spent: decline the non-milestone candidate
 and fall through to the next-ranked survivor, exactly as the blocker screen's exclusions already
 work. Declining is reportable — step 8 must name the quota as the reason and give the count that
 produced it, so a starved apparatus backlog is as visible as a starved milestone. The quota never

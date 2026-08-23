@@ -696,9 +696,13 @@ class AlphaSkillEvalTests(unittest.TestCase):
             )
         )
 
-    def test_issue_select_quota_spends_and_lapses_within_five_merges(self) -> None:
-        # #734 (D-192): one non-milestone merge in every five, so the quota
-        # lapses once that merge falls out of the window rather than latching.
+    def test_issue_select_quota_counts_four_preceding_merges_plus_the_candidate(
+        self,
+    ) -> None:
+        # #734 (D-192): at most one non-milestone merge in every five, where
+        # the window is the candidate plus the four merges preceding it, so a
+        # non-milestone merge stops blocking once it is no longer one of those
+        # four rather than latching.
         self.assertFalse(
             evals.issue_select_non_milestone_merge_permitted(
                 recent_non_milestone_merges=(True, False, False, False, False)

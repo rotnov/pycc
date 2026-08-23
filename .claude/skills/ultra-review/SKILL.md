@@ -155,7 +155,8 @@ For each finding the reviewer reports, in severity order (`blocker` first):
   Under [D-192](../../../docs/decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md)
   a milestone is required at filing and the former "no milestone — cross-cutting" escape
   hatch is closed — a finding that fits no milestone is not filed as its own issue. A
-  cross-cutting finding (CI governance, website/SEO, agent-tooling infrastructure) becomes
+  cross-cutting finding (CI governance, website, agent tooling — those three exact area
+  names, since umbrella discovery matches on the title string) becomes
   a checklist item on that area's one standing umbrella issue instead, and a finding about
   the project's own apparatus must first clear D-192's filing bar: it becomes tracked work
   only if it can cause an incorrect merge decision or hide a compiler defect. Everything
