@@ -199,3 +199,4 @@ current.
 | [D-190](./D-190-map-claude-s-agent-tool-to-codex-s-spawn-agent.md) | Map Claude's Agent tool to Codex's spawn_agent/wait_agent in dual-surface skills, with a mandatory unavailability fallback | accepted |
 | [D-191](./D-191-milestone-membership-ranks-first-in-issue-select.md) | Milestone membership ranks first in issue-select's step 5 ordering | accepted |
 | [D-192](./D-192-bound-the-tracker-with-milestone-at-filing-a.md) | Bound the tracker: milestone at filing, a 4:1 merge quota, a ceiling on non-milestone issues, and one session file per merged pull request | accepted |
+| [D-193](./D-193-reuse-l0001-for-context-invalid-finally-exit.md) | Reuse `L0001` for `return`/`break`/`continue` that exit a `finally` block, gated on a valid escape target (PEP 765, #738) | accepted |

@@ -92,12 +92,14 @@ the diagnostic's span and message come directly from the underlying parse \
 error. L0001 is also reused, without a parser \"expected set\", for a \
 post-parse context violation caught during HIR lowering rather than \
 parsing: `break`/`continue` outside a loop, `async for` outside an async \
-function, and `yield`/`yield from` outside a function -- CPython classifies \
-all of these as `SyntaxError` too, even though pycc only detects them one \
-lowering stage later than the grammar itself. `T0024` (\"`return` outside a \
-function\") is the closest existing precedent for this same \"keyword valid \
-only in a specific context\" family but deliberately stayed under `T0xxx` \
-instead, an accepted, unfixed inconsistency.",
+function, `yield`/`yield from` outside a function, and `return`/`break`/ \
+`continue` inside a `finally` block that would exit it (PEP 765) -- CPython \
+classifies all of these as `SyntaxError` too (a `SyntaxWarning` as of \
+CPython 3.14 for the `finally` case specifically), even though pycc only \
+detects them one lowering stage later than the grammar itself. `T0024` \
+(\"`return` outside a function\") is the closest existing precedent for this \
+same \"keyword valid only in a specific context\" family but deliberately \
+stayed under `T0xxx` instead, an accepted, unfixed inconsistency.",
         example: "\
 def f(:
     pass

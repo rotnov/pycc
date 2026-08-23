@@ -1067,6 +1067,167 @@ fn a_break_inside_an_if_inside_a_for_loop_is_still_unsupported() {
     );
 }
 
+// -- PEP 765 (#738, Part 1 of #543): `return`/`break`/`continue` inside a
+// `finally` block --
+//
+// The exact shape below (one `in_finally` flag shared by all three
+// statement kinds, reset by the nearest enclosing loop reached from inside
+// the `finally` but not by a plain conditional or a nested non-`finally`
+// `try` part) was verified empirically against CPython 3.14's actual
+// `SyntaxWarning` behavior rather than assumed from the PEP text alone --
+// see `stmt.rs`'s own module doc comment for the full account, including
+// the naive-but-wrong two-flag design this rejected (a `return` inside a
+// loop defined inside the `finally` is, perhaps counter-intuitively, NOT
+// flagged by CPython even though it still exits the function).
+
+#[test]
+fn a_return_directly_in_a_finally_block_is_context_invalid() {
+    assert_context_invalid_error_message(
+        "def f() -> int:\n    try:\n        pass\n    finally:\n        return 3\n",
+        "'return' in a 'finally' block",
+    );
+}
+
+#[test]
+fn a_break_directly_in_a_finally_block_is_context_invalid() {
+    // The classic PEP 765 pattern: a real enclosing loop exists outside
+    // the `try`/`finally` (`in_loop` is `true`), but the `finally`
+    // violation takes precedence over the pre-existing valid-but-
+    // unimplemented `C0001` path.
+    assert_context_invalid_error_message(
+        "def f() -> None:\n    while True:\n        try:\n            pass\n        finally:\n            break\n",
+        "'break' in a 'finally' block",
+    );
+}
+
+#[test]
+fn a_continue_directly_in_a_finally_block_is_context_invalid() {
+    assert_context_invalid_error_message(
+        "def f() -> None:\n    while True:\n        try:\n            pass\n        finally:\n            continue\n",
+        "'continue' in a 'finally' block",
+    );
+}
+
+#[test]
+fn a_return_nested_under_if_inside_a_finally_block_is_still_context_invalid() {
+    // Guards the `If` arm's pass-through of `in_finally`: a conditional
+    // does not shield a `return` from the enclosing `finally`.
+    assert_context_invalid_error_message(
+        "def f() -> int:\n    try:\n        pass\n    finally:\n        if True:\n            return 3\n",
+        "'return' in a 'finally' block",
+    );
+}
+
+#[test]
+fn a_return_in_the_try_body_of_a_nested_try_inside_a_finally_block_is_context_invalid() {
+    // Guards the `Try` arm's pass-through of `in_finally` for its own
+    // `body`/`handlers`/`orelse` (only entering a *new* `finalbody` forces
+    // it back to `true` unconditionally) -- a nested try's non-`finally`
+    // parts still inherit the outer `finally`'s restriction.
+    assert_context_invalid_error_message(
+        "def f() -> int:\n    try:\n        pass\n    finally:\n        try:\n            return 3\n        except ValueError:\n            pass\n",
+        "'return' in a 'finally' block",
+    );
+}
+
+#[test]
+fn a_return_in_the_except_body_of_a_nested_try_inside_a_finally_block_is_context_invalid() {
+    assert_context_invalid_error_message(
+        "def f() -> None:\n    while True:\n        try:\n            pass\n        finally:\n            try:\n                pass\n            except ValueError:\n                break\n",
+        "'break' in a 'finally' block",
+    );
+}
+
+#[test]
+fn a_return_in_the_else_body_of_a_nested_try_inside_a_finally_block_is_context_invalid() {
+    // Guards the `Try` arm's pass-through of `in_finally` for its own
+    // `orelse` (the `else:` clause), the last of the three non-`finally`
+    // `Try` parts -- `body` and `handlers` are already covered by the two
+    // sibling tests above.
+    assert_context_invalid_error_message(
+        "def f() -> int:\n    try:\n        pass\n    finally:\n        try:\n            pass\n        except ValueError:\n            pass\n        else:\n            return 3\n",
+        "'return' in a 'finally' block",
+    );
+}
+
+#[test]
+fn a_break_in_a_nested_finally_inside_a_finally_block_is_context_invalid() {
+    // A nested `try`/`finally`'s own `finalbody`, itself lexically inside
+    // an outer `finally`, is a violation on its own -- entering it forces
+    // `in_finally` back to `true` regardless of the outer state, so no
+    // loop needs to intervene for this to already be true.
+    assert_context_invalid_error_message(
+        "def f() -> None:\n    while True:\n        try:\n            pass\n        finally:\n            try:\n                pass\n            finally:\n                break\n",
+        "'break' in a 'finally' block",
+    );
+}
+
+#[test]
+fn a_return_in_a_loop_defined_inside_a_finally_block_lowers_successfully() {
+    // A loop introduced *inside* the finally shields `return` from the
+    // enclosing `finally`, exactly like `break`/`continue` (see the two
+    // tests below) -- verified directly against CPython 3.14 rather than
+    // assumed: despite a naive PEP-text-only reading predicting this
+    // *should* still be rejected (a `return` inside the inner loop still
+    // exits the function, same as it would without the loop), CPython's
+    // actual compiler does not flag it. `Stmt::Return` has no capability
+    // gap of its own (unlike `break`/`continue`, whose control-flow
+    // codegen is unimplemented for any real loop), so this lowers all the
+    // way through successfully rather than landing on `C0001`.
+    let module = pycc_parser_test_helper::parse(
+        "def f() -> int:\n    try:\n        pass\n    finally:\n        for i in range(3):\n            return i\n",
+    );
+    lower_checked(&module).expect("a return shielded by an inner loop must lower successfully");
+}
+
+#[test]
+fn a_break_targeting_a_loop_defined_inside_a_finally_block_is_still_unsupported() {
+    // A `break` that targets a loop defined *inside* the `finally` itself
+    // does not escape the finally -- it falls through to the ordinary
+    // valid-but-unimplemented `C0001` path (break/continue codegen isn't
+    // implemented at all yet, independent of this PEP 765 check), not the
+    // new `L0001` finally violation.
+    assert_capability_error_message(
+        "def f() -> None:\n    try:\n        pass\n    finally:\n        for i in range(3):\n            break\n",
+        "statement kind not supported yet",
+    );
+}
+
+#[test]
+fn a_continue_targeting_a_loop_defined_inside_a_finally_block_is_still_unsupported() {
+    assert_capability_error_message(
+        "def f() -> None:\n    try:\n        pass\n    finally:\n        for i in range(3):\n            continue\n",
+        "statement kind not supported yet",
+    );
+}
+
+#[test]
+fn a_return_in_a_match_case_inside_a_finally_block_is_context_invalid() {
+    // Guards `lower_match`'s pass-through of `in_finally` to each case
+    // body.
+    assert_context_invalid_error_message(
+        "def f(x: int) -> int:\n    try:\n        pass\n    finally:\n        match x:\n            case 1:\n                return 1\n            case _:\n                pass\n",
+        "'return' in a 'finally' block",
+    );
+}
+
+#[test]
+fn a_return_in_a_nested_def_inside_a_finally_block_hits_capability_error_not_context_invalid() {
+    // A nested function definition has its own return scope and would NOT
+    // be a PEP 765 violation in real Python -- but nested `def`s are
+    // wholesale unsupported in this compiler today (`Stmt::FunctionDef`
+    // has no arm in `lower_stmt`'s match, so it falls to the generic
+    // "statement kind not supported yet" catch-all before this check
+    // could ever run). This is a negative control proving the new
+    // `in_finally` check doesn't misfire on it: the nested `def` itself is
+    // what's rejected, with the pre-existing `C0001`, not the new PEP 765
+    // `L0001`.
+    assert_capability_error_message(
+        "def f() -> int:\n    try:\n        pass\n    finally:\n        def g() -> int:\n            return 1\n        return g()\n",
+        "statement kind not supported yet",
+    );
+}
+
 #[test]
 fn a_top_level_yield_is_context_invalid() {
     // Issue #361 / D-149, this crate's expression-lowering sequel to

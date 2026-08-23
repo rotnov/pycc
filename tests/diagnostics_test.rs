@@ -147,6 +147,54 @@ fn c0001_yield_from_inside_function() {
     assert_diagnostic_matches_fixture("c0001_yield_from_inside_function");
 }
 
+// Issue #738 / Part 1 of #543, PEP 765: `return`/`break`/`continue` that
+// would exit a `finally` block are rejected with a dedicated `L0001`
+// context-invalidity diagnostic, distinct from the plain "outside loop"/
+// "outside function" family above -- CPython 3.14 emits a `SyntaxWarning`
+// for the same construct (not yet a hard `SyntaxError`), so this is not
+// byte-for-byte CPython-oracle-diffed either, matching the D-148/D-149
+// precedent's own rationale. Each fixture wraps the offending statement in
+// a valid escape target (an enclosing function for `return`, an enclosing
+// loop for `break`/`continue`) -- verified directly against
+// `python3.14 -W all` to be the scenario where CPython's own fatal error
+// actually becomes the finally-specific one; see the sibling
+// `*_with_no_enclosing_*` and `d0024_return_inside_finally_with_no_enclosing_function`
+// fixtures below for the complementary case where no valid target exists at
+// all and pycc instead defers to its pre-existing diagnostics.
+#[test]
+fn l0001_return_inside_finally() {
+    assert_diagnostic_matches_fixture("l0001_return_inside_finally");
+}
+
+#[test]
+fn l0001_break_inside_finally() {
+    assert_diagnostic_matches_fixture("l0001_break_inside_finally");
+}
+
+#[test]
+fn l0001_continue_inside_finally() {
+    assert_diagnostic_matches_fixture("l0001_continue_inside_finally");
+}
+
+// Companion to the three fixtures above: with NO valid escape target
+// anywhere (no enclosing loop at all), CPython's actual fatal error for a
+// `break`/`continue` directly in a `finally` is the pre-existing "outside
+// loop"/"not properly in loop" `SyntaxError`, not the finally-specific
+// `SyntaxWarning` (verified against `python3.14 -W all`: the finally
+// warning prints too, but does not by itself fail compilation). pycc
+// mirrors that precedence by falling through to its own pre-existing
+// `in_loop`-driven `L0001` handling rather than reporting the
+// finally-specific message.
+#[test]
+fn l0001_break_inside_finally_with_no_enclosing_loop() {
+    assert_diagnostic_matches_fixture("l0001_break_inside_finally_with_no_enclosing_loop");
+}
+
+#[test]
+fn l0001_continue_inside_finally_with_no_enclosing_loop() {
+    assert_diagnostic_matches_fixture("l0001_continue_inside_finally_with_no_enclosing_loop");
+}
+
 #[test]
 fn d0001_missing_public_annotation() {
     assert_diagnostic_matches_fixture("d0001_missing_public_annotation");
@@ -182,6 +230,18 @@ fn d0023_incompatible_assignment() {
 #[test]
 fn d0024_return_outside_function() {
     assert_diagnostic_matches_fixture("d0024_return_outside_function");
+}
+
+// Companion to the `l0001_return_inside_finally`/PEP 765 fixtures above:
+// with NO enclosing function at all, CPython's actual fatal error for a
+// `return` directly in a `finally` is the pre-existing "outside function"
+// `SyntaxError`, not the finally-specific `SyntaxWarning` (verified against
+// `python3.14 -W all`). pycc mirrors that precedence by letting HIR
+// lowering succeed and deferring to this pre-existing `T0024` type-check
+// path rather than reporting the finally-specific `L0001` message.
+#[test]
+fn d0024_return_inside_finally_with_no_enclosing_function() {
+    assert_diagnostic_matches_fixture("d0024_return_inside_finally_with_no_enclosing_function");
 }
 
 #[test]

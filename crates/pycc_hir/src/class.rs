@@ -2150,6 +2150,7 @@ fn lower_method(
             aliases,
             false,
             true,
+            false,
             Some(class_name),
             type_param,
             class_defs,

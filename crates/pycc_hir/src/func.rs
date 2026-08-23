@@ -71,6 +71,7 @@ pub(crate) fn lower_function(
         aliases,
         false,
         true,
+        false,
         None,
         type_param.as_deref(),
         class_defs,
