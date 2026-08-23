@@ -189,6 +189,30 @@ fn check_raise_operand(
     ))
 }
 
+/// Part 2 of #543 (#739): whether `name` counts as an "unshadowed builtin
+/// exception" -- catchable in `except <name>:` and raisable in
+/// `raise <name>("...")` without a `HirClassDef` behind it.
+///
+/// This is `true` for the original flat seven purely by name-table
+/// membership and ordinary shadow checks: `resolve_exception_tag`
+/// (`pycc_mir::exception`) resolves them by name, independent of whether the
+/// class table actually seeded a definition, so an unseeded module (see
+/// `pycc_hir::exception::module_shadows_builtin_exception_name`'s
+/// all-or-nothing gate) still behaves correctly for them.
+///
+/// For the 16-member `OSError` family (Part 2 of #543, #739) this is *not*
+/// enough. Those names have no name-based fallback -- deliberately, so that
+/// `pycc_mir::exception::handler_type_tags`'s MRO-containment scan never
+/// needs special-casing -- so a name outside the flat seven must also be
+/// *actually present* in `env.classes` to count as unshadowed. Without this
+/// conjunct, a module shadowing one family member (e.g. `class OSError:
+/// pass`) at top level withholds seeding for *all* 23 names (the shadow
+/// gate is all-or-nothing), and a separate, unrelated `except
+/// FileNotFoundError:` would then reach `handler_type_tags`'s `.expect()`
+/// and panic instead of producing the `T0021` this function's `false` result
+/// routes to. See the Part 2 of #543 implementation plan's "shadow-gate
+/// crash risk" section for the full trigger and the two rejected
+/// alternatives.
 pub(super) fn is_unshadowed_builtin_exception(
     env: &Environment,
     local_names: &[&str],
@@ -199,6 +223,7 @@ pub(super) fn is_unshadowed_builtin_exception(
         & !local_names.contains(&name)
         & !env.functions.contains_key(name)
         & !is_user_defined_class(env, name)
+        & (pycc_hir::is_flat_builtin_exception_class(name) || env.classes.contains_key(name))
 }
 
 /// Whether `name` is registered as a *user-authored* class (Part 1 of

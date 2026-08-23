@@ -199,7 +199,7 @@ For each newly observed upstream release:
 | [409](https://peps.python.org/pep-0409/) | `raise ... from ...` cause chaining and `from None` suppression (#382, #540) | sem | `pep_0409_raise_from.py` | ◐ |
 | [414](https://peps.python.org/pep-0414/) | `u''` literals | syntax | `pep_0414_u_literal.py` | ✅ |
 | [420](https://peps.python.org/pep-0420/) | Namespace packages | import | `py33/pep_0420_ns_packages.py` | ☐ |
-| [3151](https://peps.python.org/pep-3151/) | `OSError` hierarchy | sem | `py33/pep_3151_oserror.py` | ☐ |
+| [3151](https://peps.python.org/pep-3151/) | `OSError` hierarchy | sem | `pep_3151_oserror.py` (the real 16-class hierarchy now exists as compiler-defined `HirClassDef`s per Part 2 of [#543](https://github.com/rotnov/pycc/issues/543) ([#739](https://github.com/rotnov/pycc/issues/739)); fixture registered as an `#[ignore]`d dual-profile test in `tests/conformance.rs`, awaiting the Tier-1 observation rule 5/9 require before this row can flip) | ☐ |
 
 *n/a for codegen: PEP 393 (flexible str storage — internal; pycc uses its own UTF-8 representation, documented in `docs/semantics.md`).*
 

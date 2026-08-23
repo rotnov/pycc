@@ -292,6 +292,40 @@ fn resolve_exception_tag_maps_all_builtin_types() {
     assert_eq!(resolve_exception_tag("UnknownError"), None);
 }
 
+/// Part 2 of #543 (#739), D-194: `resolve_exception_tag`'s hand-written
+/// `match` is documented as implementing exactly the name set
+/// `pycc_hir::is_flat_builtin_exception_class` recognizes, "kept in sync by
+/// construction, not by a shared constant" (see this function's own doc
+/// comment). That comment is a promise with nothing enforcing it: the two
+/// are independent artifacts in different crates. This test turns the
+/// promise into an assertion, over the full `BUILTIN_EXCEPTION_CLASSES`
+/// array rather than a hardcoded name list, so a future edit that widens or
+/// reorders the flat-name set in one place without the other fails loudly
+/// here instead of silently reopening the `.expect()` panic risk D-194's
+/// shadow-gate fix was written to eliminate (see
+/// `pycc_types::exception::is_unshadowed_builtin_exception`, which trusts
+/// `is_flat_builtin_exception_class` to mean exactly "resolvable by
+/// `resolve_exception_tag`").
+#[test]
+fn resolve_exception_tag_agrees_with_is_flat_builtin_exception_class() {
+    for (index, name) in pycc_hir::BUILTIN_EXCEPTION_CLASSES.iter().enumerate() {
+        let flat = pycc_hir::is_flat_builtin_exception_class(name);
+        let resolved = resolve_exception_tag(name);
+        if flat {
+            assert_eq!(
+                resolved,
+                Some(index as u8),
+                "`{name}` is flat but resolve_exception_tag disagrees on its tag"
+            );
+        } else {
+            assert_eq!(
+                resolved, None,
+                "`{name}` is not flat but resolve_exception_tag still resolves it by name"
+            );
+        }
+    }
+}
+
 #[test]
 fn lowers_raise_with_no_args_uses_fallback_message() {
     // `raise ValueError()` — no args, should use "unknown" fallback.

@@ -33,6 +33,79 @@ never a merge gate.
 
 ---
 
+## 2026-08-23 — A plan instruction asked for two mutually exclusive things on the PYTHON_STANDARDS.md manifest
+
+**What happened (Part 2 of #543, #739).** The published implementation plan
+for #739 instructed, in the same work item, to (a) leave the PEP 3151
+matrix row at `☐` per D-102 (a row only flips after a fixture is observed
+green on a completed Tier-1 CI run, which this task cannot produce locally)
+and (b) add a corresponding entry to
+`conformance-breadth-manifest.json`. Constructing a test manifest entry for
+the row and running `scripts/check_conformance_breadth.py` proved these
+mutually exclusive: `evidence_rows()` only iterates `◐`/`✅` rows, and
+`validate()` rejects any manifest key that matches no evidence row — a
+manifest entry for a `☐` row fails validation, it is not merely unnecessary.
+**Resolution (self-directed per D-127, not escalated):** kept the fixture
+(`tests/fixtures/pep_3151_oserror.py`) and its `tests/conformance.rs`
+registration, left the row at `☐`, and added no manifest entry — confirmed
+`check_conformance_breadth.py` passes cleanly without one. Also updated the
+row's `Test` column with a tracking note (fixture path, issue references,
+what's still required to flip it) rather than leaving the cell as a stale
+`py33/`-prefixed placeholder path, since D-127 self-resolution still owes a
+durable, honest record, not just an unmodified row.
+**Lesson:** when a plan's two instructions for the same work item are
+individually reasonable but jointly contradictory, verify the contradiction
+empirically (construct the smallest input that would trigger it and run the
+actual checker) before picking a side — don't assume the plan author already
+reconciled it, and don't silently drop the doc-touching half of the
+instruction just because the marker-flipping half turned out infeasible.
+
+---
+
+## 2026-08-23 — A coverage gate re-run launched against a source tree that was then edited, and a duplicate-writer scare that wasn't one
+
+**What happened (Part 2 of #543, #739, PEP 3151 `OSError` hierarchy).** Two
+separate process mistakes during the same gate-verification pass.
+
+1. A `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions
+   100 --no-clean` run was launched in the background to re-check coverage.
+   While it was still running, a genuine coverage gap was found in
+   `crates/pycc_hir/src/exception.rs` (an `.unwrap_or_else(|| panic!(...))`
+   test-helper closure whose body was an uncovered region — the TOTAL row
+   displayed `100.00%` for both lines and regions while `Missed Lines` and
+   `Missed Regions` were each `1`, not `0`; the discriminating read is the
+   missed-count columns, not the rounded percentage) and fixed by replacing
+   it with `.expect(...)`. The already-running coverage process was left
+   alone rather than killed immediately, so its result (later reported as
+   exit code 0 after being force-killed, `COV_EXIT:137`) was contaminated —
+   it measured a source tree that no longer matched what was on disk. The
+   run had to be killed and restarted from a clean tree.
+   **Lesson:** a background gate run is invalidated the instant a
+   compilation input it covers is edited, even if the edit is a fix the gate
+   itself motivated — kill and restart, don't let it finish and then decide
+   whether to trust it. `cargo llvm-cov ... --no-clean` also does not
+   protect against this: stale `profraw` data from the pre-edit build can
+   mark a since-removed region as covered, so an authoritative gate re-run
+   after a source edit should drop `--no-clean` as well.
+2. `ListAgents` showed two subagents in the ancestor chain
+   (`ac023d9a00cba57b6` → `a223a60b22bed56ca` → `a74e07f9d13ebc673`, the
+   last being this session's own subagent identity) still marked "running"
+   at the same time this session was actively editing the worktree,
+   triggering the AGENTS.md D-127 one-writer-per-worktree concern. Comparing
+   each ancestor's transcript `mtime` against wall-clock time resolved it in
+   under a minute: the direct parent's transcript had gone silent 33 minutes
+   earlier (it had blocked on the synchronous `Task`/`Agent` dispatch that
+   spawned this session), while this session's own transcript `mtime`
+   matched "now" — i.e. two "running" agents in a chain are almost always
+   one active leaf and its blocked ancestors, not two live writers.
+   **Lesson:** before treating a same-worktree "still running" sibling as a
+   D-127 violation, compare `parentAgentId`/transcript-`mtime` staleness
+   against wall-clock time rather than escalating on the "running" status
+   label alone — nested synchronous dispatch always shows every ancestor as
+   "running" for the leaf's entire lifetime by design.
+
+---
+
 ## 2026-08-23 — A new exceptional case reached the steps it was about, not every step that branched on the rule
 
 **What happened.** The change for #734 added a third `Fixes #N`-exempt

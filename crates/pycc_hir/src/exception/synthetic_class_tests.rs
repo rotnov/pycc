@@ -49,18 +49,82 @@ fn exception_is_the_root_and_owns_the_only_constructor() {
 }
 
 #[test]
-fn every_non_root_builtin_exception_derives_from_exception() {
+fn every_non_root_builtin_exception_inherits_init_from_its_mro() {
     for (name, def) in builtin_exception_class_defs() {
         if name == "Exception" {
             continue;
         }
-        assert_eq!(def.bases, vec!["Exception".to_string()]);
-        assert_eq!(def.mro, vec![name.clone(), "Exception".to_string()]);
         assert!(
             def.methods.is_empty(),
             "`{name}` must inherit `__init__` through its MRO, not redeclare it"
         );
+        // Every non-root's `mro` must end at `Exception`, whatever its depth.
+        assert_eq!(def.mro.last(), Some(&"Exception".to_string()));
     }
+}
+
+/// Part 2 of #543 (#739): every class whose real parent is `Exception`
+/// directly (the original flat six plus `OSError`) still gets the
+/// historical two-entry MRO.
+#[test]
+fn direct_children_of_exception_get_a_two_entry_mro() {
+    let defs = builtin_exception_class_defs();
+    for name in [
+        "ValueError",
+        "TypeError",
+        "KeyError",
+        "IndexError",
+        "ZeroDivisionError",
+        "RuntimeError",
+        "OSError",
+    ] {
+        let (_, def) = defs
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("`{name}` must be synthesized"));
+        assert_eq!(def.bases, vec!["Exception".to_string()]);
+        assert_eq!(def.mro, vec![name.to_string(), "Exception".to_string()]);
+    }
+}
+
+/// Part 2 of #543 (#739): `BrokenPipeError`'s real MRO is 3 ancestor levels
+/// deep (`ConnectionError` -> `OSError` -> `Exception`), the deepest in the
+/// hierarchy -- this is the regression lock for `builtin_exception_class_defs`'s
+/// MRO-walk loop reaching its 2nd and 3rd iterations.
+#[test]
+fn broken_pipe_error_has_the_full_four_entry_mro() {
+    let defs = builtin_exception_class_defs();
+    let (_, def) = defs
+        .iter()
+        .find(|(name, _)| name == "BrokenPipeError")
+        .expect("`BrokenPipeError` must be synthesized");
+    assert_eq!(def.bases, vec!["ConnectionError".to_string()]);
+    assert_eq!(
+        def.mro,
+        vec![
+            "BrokenPipeError".to_string(),
+            "ConnectionError".to_string(),
+            "OSError".to_string(),
+            "Exception".to_string(),
+        ]
+    );
+}
+
+/// `OSError`'s own MRO is the two-entry shape (it derives directly from
+/// `Exception`), spot-checked separately from the loop above since it is the
+/// root of the new subtree.
+#[test]
+fn os_error_has_a_two_entry_mro() {
+    let defs = builtin_exception_class_defs();
+    let (_, def) = defs
+        .iter()
+        .find(|(name, _)| name == "OSError")
+        .expect("`OSError` must be synthesized");
+    assert_eq!(def.bases, vec!["Exception".to_string()]);
+    assert_eq!(
+        def.mro,
+        vec!["OSError".to_string(), "Exception".to_string()]
+    );
 }
 
 #[test]

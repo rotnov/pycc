@@ -42,17 +42,35 @@ unchanged and no native unwinding is used.
 
 Supported builtin exception types: `Exception` (tag 0, catch-all),
 `ValueError` (1), `TypeError` (2), `KeyError` (3), `IndexError` (4),
-`ZeroDivisionError` (5), `RuntimeError` (6). The builtin hierarchy is flat:
-every one of the other six is a direct subclass of `Exception`.
+`ZeroDivisionError` (5), `RuntimeError` (6). That flat seven is not the whole
+builtin surface any more: **Part 2 of #543 (#739, PEP 3151)** adds the real
+`OSError` hierarchy, tags `7..=22` fixed by array index (not name-resolved):
+`OSError` (7), `BlockingIOError` (8), `ChildProcessError` (9),
+`ConnectionError` (10), `FileExistsError` (11), `FileNotFoundError` (12),
+`InterruptedError` (13), `IsADirectoryError` (14), `NotADirectoryError` (15),
+`PermissionError` (16), `ProcessLookupError` (17), `TimeoutError` (18),
+`BrokenPipeError` (19), `ConnectionAbortedError` (20),
+`ConnectionRefusedError` (21), `ConnectionResetError` (22). Unlike the flat
+seven, this is a real tree: `OSError`'s other ten names are its direct
+children, and `ConnectionError`'s four names (`BrokenPipeError`,
+`ConnectionAbortedError`, `ConnectionRefusedError`, `ConnectionResetError`)
+are its own children -- three levels deep from `Exception`. `except OSError:`
+therefore also catches every one of the other fifteen; `except
+ConnectionError:` catches its four children but not a sibling such as
+`TimeoutError`. The 16 new classes carry their tag directly on their
+`HirClassDef` (`pycc_hir::exception::builtin_exception_class_defs`) rather
+than through the original seven's name-based `match`
+(`pycc_mir::exception::resolve_exception_tag`) -- see the class-table
+presence gates below, which now differ between the two groups.
 
 **User-defined exception classes (Part 2 of #541, D-189).** A user-declared
-class whose MRO reaches one of those seven is raisable and catchable. HIR
-lowering assigns it a type tag from `7..=255` in module source order and
-records it on `HirClassDef::exception_type_tag`; the builtins keep `0..=6` and
-carry `None` there, since they are resolved by name rather than assigned per
-module. A module declaring more than 249 such classes is rejected with
-`C0001` -- the tag is a `u8` on `PyExceptionObj` and in every runtime entry
-point that carries one.
+class whose MRO reaches one of those 23 builtins is raisable and catchable.
+HIR lowering assigns it a type tag from `23..=255` in module source order and
+records it on `HirClassDef::exception_type_tag`; the 23 builtins keep
+`0..=22` and either carry `None` there (the original flat seven, resolved by
+name) or their own fixed tag (the 16-member `OSError` family). A module
+declaring more than 233 such classes is rejected with `C0001` -- the tag is a
+`u8` on `PyExceptionObj` and in every runtime entry point that carries one.
 
 Because each class in a user hierarchy carries a *different* tag, a handler
 naming a class accepts a **set** of tags, not one: its own plus every raisable
@@ -84,8 +102,9 @@ shape rather than on the inferred type -- `e` and `MyError("boom")` infer the
 identical `Ty::Instance("MyError")`, so a type-keyed rule could not tell them
 apart and would reinterpret a `PyInstanceObj*` as a `PyExceptionObj*`.
 
-**Class-table presence (Part 1 of #541, D-188).** HIR lowering synthesizes a
-real `HirClassDef` for each of those seven names, seeded before any
+**Class-table presence (Part 1 of #541, D-188; widened to all 23 names by
+Part 2 of #543, #739).** HIR lowering synthesizes a
+real `HirClassDef` for each of those 23 names, seeded before any
 user statement of a module that references one of them is lowered, so they
 participate in the same class table user-defined classes do. `Exception` carries a synthetic
 `__init__(self, message: str)`; the other six inherit it through their MRO.
@@ -126,20 +145,18 @@ supported surface (`raise ValueError("msg")`) is exactly one `str` message.
 
 Two gates decide whether a module is seeded, and both must pass.
 
-*The module must reference one of the seven names somewhere.* Every entry in
+*The module must reference one of the 23 names somewhere.* Every entry in
 the class table costs per-item work in lowering and per-function class binding
-in the type checker, and a module that never spells one of the seven cannot
+in the type checker, and a module that never spells one of the 23 cannot
 observe the difference -- so it is seeded with none of them. The reference
 scan uses the AST crate's generic visitor, so every position a name can be
 spelled in counts: a base class, a `raise` operand, an `except` type, an
 annotation, an `isinstance`/`issubclass` argument, an attribute access, a
 comprehension, an f-string interpolation, a decorator, at any nesting depth.
 A string forward reference (`x: "ValueError"`) does not count, because
-annotation lowering does not resolve string annotations either. Absence is
-*not* shadowing: an unseeded name reads as un-shadowed, which is exactly its
-pre-Part-1 meaning, so `raise`/`except` behave identically either way.
+annotation lowering does not resolve string annotations either.
 
-*The module's own top level must bind none of the seven names.* That gate is
+*The module's own top level must bind none of the 23 names.* That gate is
 all-or-nothing: a module whose top level binds any of them (a `class`, `def`,
 `type` alias, annotated assignment, or assignment target spelling one) is
 seeded with none of them, and that name keeps its ordinary user-defined
@@ -152,6 +169,33 @@ Part 2 of #541 did **not** close it: raisability keys on the MRO reaching a
 builtin exception class, which is orthogonal to a partially shadowed
 hierarchy. It is tracked independently by
 [#704](https://github.com/rotnov/pycc/issues/704).
+
+**Absence is not shadowing -- but that statement now splits by name-set (Part
+2 of #543, #739).** For the original flat seven, absence from the class table
+still reads as un-shadowed, exactly its pre-Part-1 meaning: `raise`/`except`
+name-resolve independent of `env.classes`
+(`pycc_mir::exception::resolve_exception_tag`), so a module that never seeded
+them behaves identically to one that did. For the 16-member `OSError` family
+this is **no longer true**. Those 16 names have no name-based fallback --
+deliberately, so `pycc_mir::exception::handler_type_tags`'s MRO-containment
+scan never needs special-casing for them -- so `raise FileNotFoundError(...)`
+or `except FileNotFoundError:` for a name outside the flat seven now requires
+*actual class-table presence* to count as unshadowed
+(`pycc_types::exception::is_unshadowed_builtin_exception`'s
+`env.classes.contains_key(name)` conjunct). An occurrence of one of the 16
+names in a module where seeding was withheld by the shadow gate above --
+because the module shadows some *other* member of the same 23-name group,
+possibly one it never itself uses -- therefore behaves as *not recognized*
+(`T0021`, or `C0001` at a `raise`-side call expression that also matches
+`KNOWN_CALLABLE_BUILTINS`, since type inference reaches that fallback before
+the raise-statement's own `T0021` path), not as silently unshadowed. Without
+this conjunct such an occurrence would instead reach
+`handler_type_tags`'s `.expect()` and abort the compiler with an internal
+error -- the conjunct exists specifically to turn that crash into a clean
+diagnostic. This narrows the #704 gap's *trigger shape* for the 16 new names
+(a bare `except FileNotFoundError:` with no `.args` access and no binding is
+now enough to surface it) without closing #704 itself, which remains about
+the flat seven's own narrower `.args`-access trigger.
 
 Supported syntax: `try`/`except`/`else`/`finally`, `raise ExceptionType("msg")`,
 bare `raise` (re-raise), `raise ... from ...` (PEP 409 cause chaining),
