@@ -31,9 +31,12 @@ without per-payload confirmation:
    staleness is fully proven, or a narrowing comment without closing when it is only partially
    resolved. When the unit of work handed over is a checklist item inside a standing umbrella
    issue, this item authorizes a comment about **that item** only: the umbrella issue itself is
-   never closed and never narrowed by this triage comment (see step 2's umbrella carve-out; the
-   post-merge tick-off comment in step 4's D-192 branch is a separate authorized write, and that
-   one does narrow the umbrella);
+   never closed by it. Whether that comment also *narrows* the umbrella follows the outcome: a
+   **Still current** or **Partially resolved** triage leaves the checklist untouched, while a
+   **Resolved** one ticks the item off through the same per-item mechanism step 4's D-192 branch
+   defines for its post-merge comment — the two triggers differ (a delivery by someone else versus
+   a merge of this session's own pull request), the write is the same one and both are authorized
+   here (see step 2's umbrella carve-out and step 4's D-192 branch);
 2. the plan comment that `/issue-to-plan` publishes to that issue when this skill invokes it;
 3. pushing the task branch and opening the pull request that names the issue;
 4. replies to review threads on that pull request; resolution of threads opened by a recognized
@@ -505,8 +508,8 @@ gh api graphql -f query='{repository(owner:"<owner>",name:"<repo>"){pullRequest(
 ```
 
 `totalCount` must equal the intended count exactly — `1`, naming the issue, for a
-`Fixes #N` pull request, and `0` for every stage, intermediate-activation, narrowing, and
-umbrella-checklist pull request above. Compare `totalCount` rather than the length of the returned page, so
+`Fixes #N` pull request, and `0` for every stage, narrowing, and umbrella-checklist pull request
+above. Compare `totalCount` rather than the length of the returned page, so
 the answer cannot be truncated by the page size. A body that never meant to close anything can still close something — GitHub scans
 for a closing keyword adjacent to an issue reference and does not parse the English around
 it, so a disclaimer or a quotation containing the pattern closes the issue just as an
