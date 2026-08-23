@@ -966,6 +966,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
                 &aliases,
                 false,
                 false,
+                false,
                 None,
                 None,
                 &class_name_defs,

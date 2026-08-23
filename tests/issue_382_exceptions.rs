@@ -1371,14 +1371,33 @@ fn finally_runs_while_an_unmatched_exception_is_propagating() {
 }
 
 #[test]
-fn return_in_finally_suppresses_a_pending_exception() {
+fn return_in_finally_is_rejected_at_build_time() {
+    // PEP 765 (#738, Part 1 of #543): a `return` in a `finally` block used
+    // to build and run here, silently suppressing the pending
+    // `ValueError` -- this test used to assert exactly that permissive
+    // runtime behavior. It is now rejected outright at build time, so the
+    // build itself fails with `L0001` and the binary never runs. The
+    // underlying runtime mechanism this test used to exercise (a `return`
+    // reached through a `finally` overriding a pending exception) remains
+    // covered at the codegen level by `crates/pycc_codegen/src/tests.rs`
+    // (e.g. `try_finally_body_with_return_does_not_fall_through`), which
+    // constructs the HIR directly rather than going through this compiler's
+    // own AST-lowering front end -- exactly the seam this PEP 765 check
+    // lives at.
     let dir = std::env::temp_dir().join(format!("pycc_382_finally_return_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let (ok, out, err) = build_and_run(
+    let (ok, _out, err) = build_and_run(
         &dir,
         "finally_return.py",
         "def value() -> int:\n    try:\n        raise ValueError(\"suppressed\")\n    finally:\n        return 7\n    return 9\n\nprint(value())\n",
     );
-    assert!(ok, "build/run failed: {err}");
-    assert_eq!(out, b"7\n");
+    assert!(!ok, "build should fail for a `return` in a `finally` block");
+    assert!(
+        err.contains("L0001"),
+        "expected an L0001 diagnostic, got: {err}"
+    );
+    assert!(
+        err.contains("'return' in a 'finally' block"),
+        "expected the PEP 765 finally-return message, got: {err}"
+    );
 }

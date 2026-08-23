@@ -36,6 +36,51 @@
 //! sense that the two flags never share a variable or collapse into one
 //! enum, but is refined by D-149: this module is not left untouched by an
 //! `expr.rs`-side flag the way that framing might suggest.
+//!
+//! `in_finally: bool` (D-193, PEP 765, issue #738 -- Part 1 of #543) is this
+//! module's third piece of threaded context, and it governs `Stmt::Return`,
+//! `Stmt::Break`, and `Stmt::Continue` uniformly. It becomes `true` while
+//! lowering the `finalbody` of a `try`/`finally` (`Stmt::Try`'s own `body`,
+//! `handlers`, and `orelse` inherit whatever value was already in scope --
+//! entering a `finally` clause is the only thing that sets it), propagates
+//! unchanged through `if`/`elif`/`else`, nested `try`'s non-`finally` parts,
+//! and `match`/`case`, and is reset to `false` while lowering the body of a
+//! `while`/`for` loop reached from inside that `finally` (mirroring
+//! `in_loop`'s own reset on loop entry) -- entering a function body via
+//! `lower_function` resets it to `false` too, exactly like `in_loop`.
+//!
+//! The finally-specific diagnostic only fires when a valid escape target
+//! also exists: `in_finally && in_function` for `Stmt::Return`, `in_finally
+//! && in_loop` for `Stmt::Break`/`Stmt::Continue`. Verified directly against
+//! `python3.14 -W all`: a `return`/`break`/`continue` directly in a
+//! `finally` with NO valid target anywhere (e.g. a bare `break` at module
+//! scope) makes CPython raise the pre-existing `SyntaxError` for that
+//! missing target (`'break' outside loop`, `'continue' not properly in
+//! loop`, `'return' outside function`) as the actual fatal error --
+//! CPython's finally-specific `SyntaxWarning` prints alongside it, but is
+//! not itself fatal and does not override the missing-target error. Only
+//! once a real target exists outside the `finally` does CPython's fatal
+//! failure become the finally-specific one (with exit code 0, since a
+//! `SyntaxWarning` alone does not fail compilation). pycc mirrors that
+//! precedence: without a valid target, this module keeps deferring to its
+//! own pre-existing `in_loop`/`T0024` handling instead of reporting the
+//! finally-specific message.
+//!
+//! This exact shape -- one flag shared by all three statement kinds, reset
+//! by the nearest enclosing loop but not by a plain conditional or a nested
+//! non-`finally` `try` part -- was verified empirically against CPython
+//! 3.14's actual `SyntaxWarning` behavior (not assumed from the PEP text
+//! alone): `return`, `break`, and `continue` are equally suppressed by an
+//! intervening loop inside the `finally`, even though a `return` inside that
+//! inner loop still exits the function exactly as it would without the
+//! loop. A naive reading of PEP 765 predicts `return` should NOT be shielded
+//! by an intervening loop the way `break`/`continue` are (a `return` always
+//! escapes the `finally` regardless of loop nesting) -- CPython's compiler
+//! does not implement it that way, so a two-flag design mirroring that naive
+//! reading would silently diverge from upstream's own diagnostic surface.
+//! `while`/`for`'s own `else:` clause is untested here because both are
+//! unsupported syntax in this compiler today (`while/else`/`for/else` reject
+//! with `C0001` before either loop kind's body is lowered).
 
 mod exception;
 
@@ -51,11 +96,13 @@ use exception::lower_except_handler;
 use pycc_ast::{ElifElseClause, Expr, Pattern, Singleton, Stmt, StmtMatch};
 use pycc_diag::Diagnostic;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_stmt(
     stmt: &Stmt,
     aliases: &[(String, Ty)],
     in_loop: bool,
     in_function: bool,
+    in_finally: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
@@ -231,6 +278,7 @@ pub(crate) fn lower_stmt(
                 aliases,
                 in_loop,
                 in_function,
+                in_finally,
                 class_name,
                 type_param,
                 class_defs,
@@ -240,6 +288,7 @@ pub(crate) fn lower_stmt(
                 aliases,
                 in_loop,
                 in_function,
+                in_finally,
                 class_name,
                 type_param,
                 class_defs,
@@ -259,6 +308,11 @@ pub(crate) fn lower_stmt(
                     aliases,
                     true,
                     in_function,
+                    // A loop entered from inside a `finally` shields its own
+                    // body from the outer `finally`'s PEP 765 restriction --
+                    // verified against CPython 3.14 (see this module's own
+                    // doc comment above).
+                    false,
                     class_name,
                     type_param,
                     class_defs,
@@ -310,6 +364,10 @@ pub(crate) fn lower_stmt(
                         aliases,
                         true,
                         in_function,
+                        // See the `Stmt::While` arm above -- the same
+                        // CPython-verified shielding rule applies to a
+                        // `for` loop's body.
+                        false,
                         class_name,
                         type_param,
                         class_defs,
@@ -360,19 +418,73 @@ pub(crate) fn lower_stmt(
                     aliases,
                     true,
                     in_function,
+                    // See the `Stmt::While` arm above -- the same
+                    // CPython-verified shielding rule applies here too.
+                    false,
                     class_name,
                     type_param,
                     class_defs,
                 )?,
             }
         }
-        Stmt::Return(ret) => HirStmt::Return(
-            ret.value
-                .as_deref()
-                .map(|e| lower_expr(e, in_function, class_name))
-                .transpose()?,
-        ),
+        Stmt::Return(ret) => {
+            if in_finally && in_function {
+                // PEP 765 (issue #738, Part 1 of #543): a `return` that
+                // would exit a `finally` block is rejected outright, not
+                // merely a lint -- CPython treats it as valid syntax up
+                // through 3.13 (a `SyntaxWarning` in 3.14) but this compiler
+                // never accepted the permissive reading. `L0001` is reused
+                // (not a new code) for exactly this class of post-parse
+                // context violation, matching the sibling `break`/`continue`
+                // checks below.
+                //
+                // The `in_function` guard matches CPython's own precedence,
+                // verified directly against `python3.14 -W all`: a `return`
+                // in a `finally` with NO enclosing function at all (e.g. at
+                // module scope) makes CPython raise the pre-existing
+                // `SyntaxError: 'return' outside function` as the actual
+                // fatal error -- the finally-specific `SyntaxWarning` prints
+                // too, but does not by itself block compilation, and CPython
+                // still fails the module on the "outside function" error
+                // regardless of the finally warning's wording. Without this
+                // guard, pycc would report the wrong diagnostic (the
+                // finally-specific message) instead of deferring to the
+                // pre-existing `T0024` ("`return` outside a function") path
+                // this module already relies on for every other top-level
+                // `return`.
+                return Err(context_invalid(
+                    "'return' in a 'finally' block",
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
+            HirStmt::Return(
+                ret.value
+                    .as_deref()
+                    .map(|e| lower_expr(e, in_function, class_name))
+                    .transpose()?,
+            )
+        }
         Stmt::Break(_) => {
+            if in_finally && in_loop {
+                // See the `Stmt::Return` arm above for the general PEP 765
+                // rationale. The `in_loop` guard matches CPython's own
+                // precedence, verified directly against `python3.14 -W all`:
+                // a `break` in a `finally` with NO enclosing loop at all
+                // makes CPython raise the pre-existing `SyntaxError: 'break'
+                // outside loop` as the actual fatal error (the
+                // finally-specific `SyntaxWarning` prints too, but is not by
+                // itself fatal) -- so this diagnostic only applies once a
+                // valid loop target genuinely exists for the `break` to
+                // escape to (the classic `while: try: finally: break` case).
+                // When that loop is instead defined *inside* the `finally`
+                // (shielding it), `in_finally` is already reset to `false`
+                // by the time this arm runs, so this branch is not reached
+                // and the classic `in_loop` handling below applies as usual.
+                return Err(context_invalid(
+                    "'break' in a 'finally' block",
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
             return Err(if in_loop {
                 // A real enclosing loop -- valid Python, break/continue
                 // control-flow codegen is just not implemented yet.
@@ -382,11 +494,22 @@ pub(crate) fn lower_stmt(
                 )
             } else {
                 // No enclosing loop -- CPython rejects this as a
-                // `SyntaxError`, not "valid but unimplemented" (D-148).
+                // `SyntaxError`, not "valid but unimplemented" (D-148). This
+                // is also the fatal error CPython reports for a `break`
+                // directly in a `finally` with no loop anywhere (see above).
                 context_invalid("'break' outside loop", pycc_ast::stmt_range(stmt))
             });
         }
         Stmt::Continue(_) => {
+            if in_finally && in_loop {
+                // See the `Stmt::Break` arm above -- identical rationale and
+                // CPython precedence (`SyntaxError: 'continue' not properly
+                // in loop` is the fatal error when no loop target exists).
+                return Err(context_invalid(
+                    "'continue' in a 'finally' block",
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
             return Err(if in_loop {
                 unsupported(
                     "statement kind not supported yet",
@@ -404,6 +527,7 @@ pub(crate) fn lower_stmt(
             aliases,
             in_loop,
             in_function,
+            in_finally,
             class_name,
             type_param,
             class_defs,
@@ -420,6 +544,7 @@ pub(crate) fn lower_stmt(
                 aliases,
                 in_loop,
                 in_function,
+                in_finally,
                 class_name,
                 type_param,
                 class_defs,
@@ -433,6 +558,7 @@ pub(crate) fn lower_stmt(
                         aliases,
                         in_loop,
                         in_function,
+                        in_finally,
                         class_name,
                         type_param,
                         class_defs,
@@ -444,15 +570,22 @@ pub(crate) fn lower_stmt(
                 aliases,
                 in_loop,
                 in_function,
+                in_finally,
                 class_name,
                 type_param,
                 class_defs,
             )?;
+            // Entering a `finally` clause always sets `in_finally` to `true`
+            // for its own body -- unconditionally, regardless of the
+            // incoming value -- since a `return`/`break`/`continue` directly
+            // inside it always escapes this `finally` (a nested `finally`
+            // inside an outer `finally` is still a violation of its own).
             let finalbody = lower_body(
                 &try_stmt.finalbody,
                 aliases,
                 in_loop,
                 in_function,
+                true,
                 class_name,
                 type_param,
                 class_defs,
@@ -497,11 +630,13 @@ pub(crate) fn lower_stmt(
     Ok(lowered)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_body(
     body: &[Stmt],
     aliases: &[(String, Ty)],
     in_loop: bool,
     in_function: bool,
+    in_finally: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
@@ -519,6 +654,7 @@ pub(crate) fn lower_body(
                 aliases,
                 in_loop,
                 in_function,
+                in_finally,
                 class_name,
                 type_param,
                 class_defs,
@@ -527,11 +663,13 @@ pub(crate) fn lower_body(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_elif_else_clauses(
     clauses: &[ElifElseClause],
     aliases: &[(String, Ty)],
     in_loop: bool,
     in_function: bool,
+    in_finally: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
@@ -547,6 +685,7 @@ pub(crate) fn lower_elif_else_clauses(
                 aliases,
                 in_loop,
                 in_function,
+                in_finally,
                 class_name,
                 type_param,
                 class_defs,
@@ -556,6 +695,7 @@ pub(crate) fn lower_elif_else_clauses(
                 aliases,
                 in_loop,
                 in_function,
+                in_finally,
                 class_name,
                 type_param,
                 class_defs,
@@ -571,6 +711,7 @@ pub(crate) fn lower_elif_else_clauses(
                 aliases,
                 in_loop,
                 in_function,
+                in_finally,
                 class_name,
                 type_param,
                 class_defs,
@@ -583,11 +724,13 @@ pub(crate) fn lower_elif_else_clauses(
 /// The subject is lowered once via `lower_expr`; each case's pattern is
 /// lowered via `lower_pattern`, its guard via `lower_expr`, and its body via
 /// `lower_body` (which filters `Stmt::Pass`).
+#[allow(clippy::too_many_arguments)]
 fn lower_match(
     match_stmt: &StmtMatch,
     aliases: &[(String, Ty)],
     in_loop: bool,
     in_function: bool,
+    in_finally: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
@@ -606,6 +749,7 @@ fn lower_match(
             aliases,
             in_loop,
             in_function,
+            in_finally,
             class_name,
             type_param,
             class_defs,

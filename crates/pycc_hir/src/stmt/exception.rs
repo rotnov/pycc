@@ -6,11 +6,13 @@ use crate::{HirExceptHandler, Ty, unsupported};
 use pycc_ast::{ExceptHandler, Expr};
 use pycc_diag::Diagnostic;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn lower_except_handler(
     handler: &ExceptHandler,
     aliases: &[(String, Ty)],
     in_loop: bool,
     in_function: bool,
+    in_finally: bool,
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
@@ -38,6 +40,7 @@ pub(super) fn lower_except_handler(
         aliases,
         in_loop,
         in_function,
+        in_finally,
         class_name,
         type_param,
         class_defs,
