@@ -346,9 +346,13 @@ never over commits this session did not create — and rerun the local gates. Pu
 pull request: `Fixes #N` in the body, a summary of what was built, any plan deviations with
 their reasons, and the test evidence. Write the PR body to a temporary file and use
 `gh pr create --body-file <path>` — never inline a heredoc in `--body`, which fails on
-bodies containing apostrophes or backticks. For significant work, add a new dated file under
-`docs/sessions/` within the pull request per D-066/D-130, re-fetching immediately before
-that commit so every referenced remote state is current.
+bodies containing apostrophes or backticks. Add **at most one** new dated file under
+`docs/sessions/` within this pull request — D-066/D-130 as narrowed by
+[D-192](../../../docs/decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md) allow one
+session file per merged pull request, not one per checkpoint, so it is written here (landing with
+the merge) and never supplemented by a second file for a later fix round; a fix round, an
+intermediate CI result, or a lesson learned goes to `docs/AGENT_RETROSPECTIVE.md` instead.
+Re-fetch immediately before that commit so every referenced remote state is current.
 
 ### 7. Monitor (D-078)
 

@@ -151,16 +151,20 @@ For each finding the reviewer reports, in severity order (`blocker` first):
   regardless of severity.
 - **Milestone:** read `docs/ROADMAP.md`'s ordered `## vX.Y` sections the same way
   `next-milestone` does, to find the currently active milestone, then apply
-  `AGENTS.md`'s D-021 step 9 milestone-at-filing convention unchanged: assign that
-  milestone unless the finding is clearly cross-cutting (CI governance, website/SEO,
-  agent-tooling infrastructure) or genuinely not `vX.Y`-scoped work. Leaving a
-  candidate unassigned is the exception, not the default.
+  `AGENTS.md`'s D-021 step 9 milestone-at-filing rule unchanged: assign that milestone.
+  Under [D-192](../../../docs/decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md)
+  a milestone is required at filing and the former "no milestone — cross-cutting" escape
+  hatch is closed — a finding that fits no milestone is not filed as its own issue. A
+  cross-cutting finding (CI governance, website/SEO, agent-tooling infrastructure) becomes
+  a checklist item on that area's one standing umbrella issue instead, and a finding about
+  the project's own apparatus must first clear D-192's filing bar: it becomes tracked work
+  only if it can cause an incorrect merge decision or hide a compiler defect. Everything
+  else is a `docs/AGENT_RETROSPECTIVE.md` line, not an issue.
 - **Title:** `<P-prefix>: <one-line summary>`.
 - **Body:** the finding's file:line, the concrete issue description, the reviewer's own
-  suggestion, the diff range reviewed (`<checkpoint-sha>..<default-branch-tip>`), a
-  one-line `no milestone — cross-cutting` reasoning note whenever the milestone was
-  left unassigned (D-021 step 9 requires that omission to be deliberate and visible
-  rather than accidental), and a fixed footer:
+  suggestion, the diff range reviewed (`<checkpoint-sha>..<default-branch-tip>`), the
+  umbrella issue this finding was added to whenever it was routed there instead of filed
+  on its own (D-192 permits no other milestone-less destination), and a fixed footer:
   `Filed by the ultra-review skill from range <checkpoint-sha>..<tip>.` — so a human
   or a later `issue-select` run can trace which review pass produced it.
 - **Label:** every candidate issue gets `ultra-review`.

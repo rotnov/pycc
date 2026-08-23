@@ -6,8 +6,11 @@ narrowed by [D-130](../decisions/D-130-decompose-the-session-handoff-log-into-pe
 Distinct from `docs/AGENT_RETROSPECTIVE.md`: this directory is "what state
 is the work in and what's next," not "what went wrong."
 
-Each file is one dated checkpoint snapshot — a PR opened or merged, a
-milestone reached, or a session handoff — named `YYYY-MM-DD-NN-<slug>.md`,
+Each file is one dated snapshot of the work a **pull request** delivers,
+written inside that pull request so it lands with the merge — at most one per
+merged pull request, narrowed from D-066/D-130's original per-checkpoint trigger by
+[D-192](../decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md) —
+named `YYYY-MM-DD-NN-<slug>.md`,
 extending the dated-slug convention already used for
 `docs/superpowers/specs/` and `docs/superpowers/plans/` with a two-digit
 `NN` sequence number. `NN` disambiguates same-day entries by true creation
@@ -18,6 +21,10 @@ distinguish their order. When adding a new entry, use the next unused `NN`
 for that date (or `01` if it is the first entry of the day). A snapshot
 identifies the exact commit and repository state actually inspected, and
 distinguishes uncommitted or unmerged work from delivered work.
+
+A task that merges nothing writes no file here; a fix round, an intermediate
+CI result, or a lesson learned belongs in `docs/AGENT_RETROSPECTIVE.md`
+instead.
 
 This file is the only static document in the directory — a purpose
 statement, not an index. It is never appended to. To resume: list only the

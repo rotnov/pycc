@@ -96,6 +96,25 @@ fresh inventory re-examines them. This is a low-risk metadata write (unlike the 
 screen's closures), so it applies regardless of whether a standing autopilot directive is in
 effect. Note assignments made in the step 8 report alongside the selection.
 
+**The ceiling on non-milestone issues.** [D-192](../../../docs/decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md) caps the open non-milestone backlog at
+**20**: while more than 20 open issues carry no milestone, a new non-milestone issue may be filed
+only in place of one that closes, so the count can only shrink or hold. This is the one pass that
+sees the whole open list, so enforce it here, arithmetically, from the same inventory:
+
+```bash
+gh issue list --repo <owner>/<repo> --state open --limit 300 \
+  --json number,milestone --jq '[.[] | select(.milestone == null)] | length'
+```
+
+Read the number, do not estimate it. The count is gross — it includes the standing umbrella issues and the D-185 per-oversized-file trackers that D-192 permits to carry no milestone, which consume the cap deliberately, so no exclusion list has to be reconstructed here. At or above the ceiling this run files no new non-milestone
+issue of its own and proposes none to any other skill; a genuine observation that cannot be filed
+goes to `docs/AGENT_RETROSPECTIVE.md` or onto the standing umbrella issue for its cross-cutting
+area (AGENTS.md's D-021 step 9). The milestone triage above is what actually drains the count —
+every assignment made there moves an issue out of the non-milestone set — so run the count *after*
+this pass's assignments, not before. Report the count and whether the ceiling is in force in the
+step 8 hand-off, since a selection made under a full ceiling is a different decision from one made
+with room to spare.
+
 ### 3. Staleness screen
 
 Cheap pass over the inventory before any scoring: read newest comments first — this tracker
@@ -178,6 +197,42 @@ With **no milestone scope in effect**, the ordering is fixed: **the repository's
 markers rank first** (P1 before P2 before P3 before unmarked), and only then does **smaller
 win** — least effort, smallest blast radius, cleanest scope. Fast merges of the most important
 work beat both "biggest first" and "easiest first".
+
+**The 4:1 non-milestone merge quota.** Ordering decides what is reached first; the quota decides
+whether a non-milestone candidate may be proposed at all. [D-192](../../../docs/decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md) allows **at most one
+non-milestone merge in every five**. Before proposing a candidate that carries no milestone, count
+the last five issue-closing merges on the default branch — never estimate from memory, and never
+count merge commits alone, since this repository mixes squash subjects (`... (#731)`) with real
+merge commits (`Merge pull request #730 from ...`) and also carries commits pushed straight to the
+branch that close nothing:
+
+```bash
+git log origin/main --first-parent -n 40 --pretty=%s \
+  | grep -oE '(#[0-9]+\)$|Merge pull request #[0-9]+)' | grep -oE '[0-9]+'
+```
+
+Walk that list newest-first. For each pull-request number, resolve what it closed:
+
+```bash
+gh pr view <n> --repo <owner>/<repo> --json closingIssuesReferences \
+  --jq '[.closingIssuesReferences[].number] | join(" ")'
+```
+
+A pull request that closes no issue is not selection output — skip it and keep walking. For the
+first five that do close an issue, resolve each closed issue's milestone:
+
+```bash
+gh issue view <i> --repo <owner>/<repo> --json milestone --jq '.milestone.title // "none"'
+```
+
+A merge counts as **non-milestone** when every issue it closed reports `none`. If the 40-commit window yields fewer than five issue-closing merges, widen it (`-n 100`) rather than judging on a short sample; if the branch genuinely holds fewer than five, the quota is not yet spent and the count says so in the report. If one or more of
+those five already counts as non-milestone, the quota is spent: decline the non-milestone candidate
+and fall through to the next-ranked survivor, exactly as the blocker screen's exclusions already
+work. Declining is reportable — step 8 must name the quota as the reason and give the count that
+produced it, so a starved apparatus backlog is as visible as a starved milestone. The quota never
+blocks a milestone-assigned candidate, and it composes with the ordering above rather than
+replacing it: under a scope, in-scope survivors are reached first anyway, and the quota only ever
+fires once the ordering has already reached outside.
 
 In either case, use as further tie-breakers and modifiers:
 
