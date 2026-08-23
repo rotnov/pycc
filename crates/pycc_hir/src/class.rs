@@ -194,24 +194,33 @@ pub struct HirClassDef {
     /// (rejected with `C0001`). The `ABC` base is consumed as a marker
     /// (like `Enum`/`Protocol`), not recorded as a real base.
     pub is_abstract: bool,
-    /// Part 2 of #541 (D-189): the runtime exception type tag this class is
-    /// raised and caught under, or `None` when the class is **not raisable**.
+    /// Part 2 of #541 (D-189), widened by Part 2 of #543 (#739, D-194): the
+    /// runtime exception type tag this class is raised and caught under, or
+    /// `None` when the class is **not raisable**.
     ///
     /// `None` never means "synthetic". D-188 makes
     /// `HirModule::seeded_builtin_exception_classes` the sole provenance
     /// signal for syntheticness, and this field carries no provenance
-    /// information whatsoever: the seven synthetic builtin exception classes
-    /// carry `None` here even though they are the most raisable classes in
-    /// the language, because their tags are fixed constants resolved by name
-    /// (`resolve_exception_tag`) rather than assigned per module. Reading
-    /// `None` as "user-defined" or `Some` as "user-defined" is equally wrong.
+    /// information whatsoever. There are two families of synthetic builtin
+    /// exception classes, and only one of them carries `None` here: the
+    /// original flat seven (`Exception`, `ValueError`, `TypeError`,
+    /// `KeyError`, `IndexError`, `ZeroDivisionError`, `RuntimeError`) carry
+    /// `None` even though they are among the most raisable classes in the
+    /// language, because their tags are fixed constants resolved by name
+    /// (`pycc_mir::exception::resolve_exception_tag`) rather than assigned
+    /// per module. The 16-member PEP 3151 `OSError` family added by D-194
+    /// has no such name-based fallback and instead carries a fixed `Some`
+    /// tag directly on this field, assigned by array index in
+    /// `pycc_hir::exception::builtin_exception_class_defs`. Reading `None`
+    /// as "user-defined" or `Some` as "user-defined" is equally wrong.
     ///
     /// A tag is assigned by `lower_checked` to every user-declared class whose
     /// MRO reaches a builtin exception class, in a deterministic order, from
-    /// the range `7..=255` — `0..=6` are reserved for the builtin hierarchy.
-    /// A module declaring more than 249 such classes is rejected with `C0001`.
-    /// Every other class — including a user class that never touches the
-    /// exception hierarchy — keeps `None`.
+    /// the range `23..=255` — `0..=22` are reserved for the 23-member builtin
+    /// hierarchy (the flat seven plus the `OSError` family). A module
+    /// declaring more than 233 such classes is rejected with `C0001`. Every
+    /// other class — including a user class that never touches the exception
+    /// hierarchy — keeps `None`.
     pub exception_type_tag: Option<u8>,
 }
 
