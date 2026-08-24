@@ -37,8 +37,11 @@
 //! **Class-body statement execution** follows PR #358's redefinition-is-
 //! rebind pattern, extended to class methods via mangled-name namespacing
 //! (#386): a class body statement must be a `def` (a nested class, a bare
-//! `pass`, a class-level attribute declaration, or any other statement kind
-//! is `C0001`); redefining a non-`__init__` method name within one class
+//! `pass`, a bare string-literal expression statement -- a docstring, #744,
+//! accepted anywhere in the body, matching `validate_init_subclass_body`'s
+//! own precedent -- a class-level attribute declaration, or any other
+//! statement kind is `C0001`); redefining a non-`__init__` method name within
+//! one class
 //! body **rebinds** -- the second `def` replaces the method table entry, and
 //! the latest definition is the one dispatched to at runtime (both
 //! definitions share the same mangled `<ClassName>.<method>` name, so PR
@@ -2889,7 +2892,7 @@ mod tests {
     }
 
     #[test]
-    fn an_ordinary_class_with_a_leading_docstring_lowers_successfully() {
+    fn an_ordinary_class_with_a_docstring_lowers_successfully() {
         // #744: a class docstring (a bare string-literal expression
         // statement) is a no-op in an ordinary (non-dataclass) class body.
         let hir = lower_ok(
@@ -2900,9 +2903,10 @@ mod tests {
 
     #[test]
     fn a_non_string_expression_statement_in_a_class_body_is_still_rejected() {
-        // #744's docstring exemption is narrow: a bare non-string expression
-        // statement in a class body remains C0001, distinguishing it from
-        // the docstring no-op added alongside it.
+        // #744's docstring exemption covers only a bare string-literal
+        // expression statement: a bare non-string expression statement in a
+        // class body remains C0001, distinguishing it from the docstring
+        // no-op added alongside it.
         assert_c0001("class C:\n    42\n    def __init__(self) -> None:\n        return\n");
     }
 
@@ -4374,7 +4378,7 @@ mod tests {
     }
 
     #[test]
-    fn enum_class_with_leading_docstring_is_accepted() {
+    fn enum_class_with_docstring_is_accepted() {
         // #744: a class docstring (a bare string-literal expression
         // statement) is a no-op in an enum body, not a member assignment.
         let hir = lower_ok("class Color(Enum):\n    \"A color.\"\n    RED = 1\n    GREEN = 2\n");
@@ -4385,10 +4389,11 @@ mod tests {
 
     #[test]
     fn a_non_string_expression_statement_in_an_enum_body_is_still_rejected() {
-        // #744's docstring exemption is narrow: a bare non-string
-        // expression statement in an enum body remains C0001, exercising
-        // the guard's false branch distinctly from a non-`Stmt::Expr`
-        // statement (which already short-circuits before the guard).
+        // #744's docstring exemption covers only a bare string-literal
+        // expression statement: a bare non-string expression statement in
+        // an enum body remains C0001, exercising the guard's false branch
+        // distinctly from a non-`Stmt::Expr` statement (which already
+        // short-circuits before the guard).
         assert_c0001("class Color(Enum):\n    42\n    RED = 1\n");
     }
 
@@ -4444,7 +4449,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dataclass_with_leading_docstring_lowers_successfully() {
+    fn a_dataclass_with_docstring_lowers_successfully() {
         // #744: a class docstring (a bare string-literal expression
         // statement) is a no-op in a dataclass body, not a field or method.
         let hir = lower_ok("@dataclass\nclass Point:\n    \"A point.\"\n    x: int\n    y: int\n");
@@ -4730,7 +4735,7 @@ mod tests {
     }
 
     #[test]
-    fn a_protocol_class_with_a_leading_docstring_lowers_successfully() {
+    fn a_protocol_class_with_a_docstring_lowers_successfully() {
         // #744: a class docstring (a bare string-literal expression
         // statement) is a no-op in a protocol body.
         let hir = lower_ok(
@@ -4743,10 +4748,11 @@ mod tests {
 
     #[test]
     fn a_non_string_expression_statement_in_a_protocol_body_is_still_rejected() {
-        // #744's docstring exemption is narrow: a bare non-string
-        // expression statement in a protocol body remains C0001, exercising
-        // the guard's false branch distinctly from a non-`Stmt::Expr`
-        // statement (`a_protocol_class_with_an_unsupported_statement_is_rejected`
+        // #744's docstring exemption covers only a bare string-literal
+        // expression statement: a bare non-string expression statement in a
+        // protocol body remains C0001, exercising the guard's false branch
+        // distinctly from a non-`Stmt::Expr` statement
+        // (`a_protocol_class_with_an_unsupported_statement_is_rejected`
         // above uses `Stmt::Assign`, which never reaches this guard at all).
         let module = crate::pycc_parser_test_helper::parse(
             "from typing import Protocol\nclass P(Protocol):\n    42\n    def foo(self) -> int: ...\n",
