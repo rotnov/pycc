@@ -54,6 +54,14 @@ number, an unnumbered cell (`-`/`—`) counts zero, and a PEP number repeated
 across two rows (PEP 695's two rows) counts once across both. `docs/ROADMAP.md`'s
 headline states this figure too, and the checker cross-checks it the same
 fail-closed way as the row counts.
+
+Issue #732 also binds the headline's `required`/`pep_required` totals to the
+milestone's own `**Accept:** conformance ≥ N ... matrix rows ... encompassing
+M distinct PEP numbers` bullet, so lowering the headline's stated targets
+without also changing the Accept clause -- or vice versa -- is a failure
+rather than a silent pass. That bullet lookup is fail-closed the same way:
+missing or ambiguous (more than one bullet matching that exact phrasing) is a
+failure, not a guess.
 """
 
 from __future__ import annotations
@@ -458,7 +466,10 @@ def check_roadmap_counts(
     `--roadmap` is reported as itself.
 
     Raises `BreadthError` when the headline is missing, ambiguous, unparseable,
-    internally inconsistent, or disagrees with `rows`.
+    internally inconsistent, or disagrees with `rows`; also when the
+    milestone's own `**Accept:**` bullet is missing or ambiguous, or when the
+    headline's stated `required`/`pep_required` totals drift from that
+    bullet's own figures (#732).
     """
 
     headlines = ROADMAP_HEADLINE.findall(roadmap)

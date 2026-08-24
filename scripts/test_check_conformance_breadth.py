@@ -610,6 +610,22 @@ class RoadmapCountTests(unittest.TestCase):
     def test_a_duplicated_headline_is_a_failure(self) -> None:
         self.assert_rejected(ROADMAP + ROADMAP, "found 2")
 
+    def test_a_duplicated_accept_clause_is_a_failure(self) -> None:
+        # A second `**Accept:** conformance ≥ ...` bullet elsewhere in the
+        # document (e.g. a future milestone reusing this exact phrasing)
+        # must fail closed rather than silently binding to whichever bullet
+        # happens to match first -- see ACCEPT_CLAUSE_FIGURES's own comment.
+        extra_accept_clause = (
+            "\n## v0.4\n\n"
+            "**Accept:** conformance ≥ 9 `PYTHON_STANDARDS.md` matrix rows at "
+            "`◐` or better — that is, rows whose fixtures pass — encompassing "
+            "10 distinct PEP numbers.\n"
+        )
+        self.assert_rejected(
+            ROADMAP + extra_accept_clause,
+            "expected exactly one `**Accept:**` bullet stating",
+        )
+
     def test_an_unparseable_headline_is_a_failure(self) -> None:
         self.assert_rejected(
             ROADMAP.replace(
