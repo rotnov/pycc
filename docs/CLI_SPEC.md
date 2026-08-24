@@ -38,10 +38,12 @@ from the manifest's `rust-version` MSRV contract, which can diverge from it
 (#247); the LLVM field states D-015's pinned contract version.
 `tests/slice0.rs`'s two version snapshot tests enforce the output shape —
 the manifest-sourced `pycc` field, the build-time `rustc` field (checked
-against a live `rustc --version` at test run time, independent of the
-implementation's own capture), the LLVM pin, and the exact target set and
-order; the version numbers in the transcript below are illustrative and
-track the manifest/toolchain at build time:
+against `OUT_DIR/rustc_version.txt`, a second build-time artifact `build.rs`
+writes alongside the `rustc`-env var it injects into `src/main.rs`, read
+through `env!("OUT_DIR")` rather than re-invoking `rustc` at test run time,
+since Cargo only sets `RUSTC` for the build script itself), the LLVM pin,
+and the exact target set and order; the version numbers in the transcript
+below are illustrative and track the manifest/toolchain at build time:
 
 ```text
 $ pycc version --verbose
