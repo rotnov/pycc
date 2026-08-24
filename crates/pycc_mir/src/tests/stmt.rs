@@ -382,6 +382,110 @@ fn a_value_less_annotated_assignment_does_not_bind_the_name() {
     build(&hir);
 }
 
+#[test]
+fn a_value_less_optional_annotation_binds_the_declared_type() {
+    // `x: int | None` alone (#763/#770 review): unlike a plain-typed
+    // value-less `AnnAssign` (asserted immediately above to bind
+    // nothing), an `Optional[inner]` declaration must bind its target to
+    // the declared `Ty::Optional(inner)` even with no initializer, so a
+    // later plain reassignment's own `HirStmt::Assign` arm can see it.
+    // This alone should still lower to `MirStmt::NoOp` -- only the scope
+    // entry, not any codegen action, changes here.
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+            is_final: false,
+            target: "x".to_string(),
+            annotation: Ty::Optional(Box::new(Ty::Int)),
+            value: None,
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(mir.items, vec![MirItem::TopLevelStmt(MirStmt::NoOp)]);
+}
+
+#[test]
+fn a_plain_reassignment_of_a_value_less_optional_declaration_rewraps_into_optional() {
+    // The exact #770 review repro: `x: int | None` (no initializer)
+    // followed by a plain `x = 5` must still lower `x`'s slot type as
+    // `Ty::Optional(Int)`, not the bare `Ty::Int` `5` would otherwise
+    // report. Before this fix, `collect_stmt_bindings` (`pycc_codegen`)
+    // derived `x`'s storage-slot type from this very `MirStmt::Assign`'s
+    // own `value.ty()` -- had it stayed bare `Ty::Int`, a later `x is
+    // None` panicked in codegen because its non-`Optional` operand could
+    // never satisfy the `is`/`is not` lowering's own `Optional` shape
+    // assumption.
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                is_final: false,
+                target: "x".to_string(),
+                annotation: Ty::Optional(Box::new(Ty::Int)),
+                value: None,
+            }),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(5),
+            }),
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![
+            MirItem::TopLevelStmt(MirStmt::NoOp),
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::OptionalWrap(Box::new(MirExpr::IntLiteral(5)), Box::new(Ty::Int)),
+            }),
+        ]
+    );
+}
+
+#[test]
+fn a_plain_reassignment_with_a_bare_none_value_after_a_value_less_optional_declaration_rewraps() {
+    // `x: int | None` then `x = None`: the plain-`Assign` rewrap path
+    // must also fire for a bare `None` value, not only a bare `inner`
+    // value -- `None`'s own lowered `.ty()` is not `Ty::Optional(Int)`
+    // either, so it needs the same `OptionalWrap` treatment as `5` above.
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                is_final: false,
+                target: "x".to_string(),
+                annotation: Ty::Optional(Box::new(Ty::Int)),
+                value: None,
+            }),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::NoneLiteral,
+            }),
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![
+            MirItem::TopLevelStmt(MirStmt::NoOp),
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::OptionalWrap(Box::new(MirExpr::NoneLiteral), Box::new(Ty::Int)),
+            }),
+        ]
+    );
+}
+
 // -- #627: `obj.attr = <bool>` into an `int`-declared slot ------------------
 
 /// Builds a module whose `Holder` class declares `n` with `slot_ty` and

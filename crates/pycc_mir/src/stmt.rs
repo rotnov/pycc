@@ -22,6 +22,39 @@ pub(super) fn lower_stmt(
         }
         HirStmt::Assign { target, value } => {
             let value = lower_expr(value, scopes, classes, current_class);
+            // D-197 follow-up (#763/#770 review): if `target` is already
+            // scoped as `Optional[inner]` -- from an earlier `AnnAssign`,
+            // valued or not -- and this plain reassignment's own value
+            // does not already report that same `Ty::Optional`, widen it
+            // via `MirExpr::OptionalWrap`, mirroring `AnnAssign`'s own
+            // `Some(value)` arm below exactly. Without this, `x: int |
+            // None; x = 5` would lower `x = 5` as a bare `Ty::Int` value
+            // with nothing to say `x` was ever declared `Optional[int]`,
+            // and the very next line below (`bind_variable`'s `or_insert`
+            // is a no-op once a scope entry exists, but `pycc_codegen`'s
+            // own `collect_stmt_bindings` derives a target's *storage
+            // slot* type from the first `MirStmt::Assign` value it sees,
+            // entirely independently of this lowering pass's `scopes`)
+            // would predeclare `x`'s slot as plain `Ty::Int` -- confirmed
+            // empirically as the root cause of a codegen panic on `x is
+            // None` (a non-`Optional` operand reaching an `is`/`is not`
+            // comparison that `pycc_types::check`'s T0021 is supposed to
+            // have ruled out, but here the source is entirely valid PEP
+            // 604 code; only this lowering pass was dropping the
+            // annotation). `lookup`'s own panic-on-miss behavior is
+            // deliberately not used here: a target with no prior scope
+            // entry at all (the ordinary, non-`Optional` first-assignment
+            // case) must fall through unchanged.
+            let value = match scopes
+                .iter()
+                .rev()
+                .find_map(|scope| scope.get(target).cloned())
+            {
+                Some(Ty::Optional(inner)) if value.ty() != Ty::Optional(inner.clone()) => {
+                    MirExpr::OptionalWrap(Box::new(value), inner)
+                }
+                _ => value,
+            };
             // The first assignment fixes a binding's representation.
             // In particular, assigning `bool` to an existing `int` is
             // accepted by the type checker but must not silently change the
@@ -98,6 +131,47 @@ pub(super) fn lower_stmt(
                 target: target.clone(),
                 value,
             }
+        }
+        HirStmt::AnnAssign {
+            target,
+            annotation: annotation @ Ty::Optional(_),
+            value: None,
+            is_final: _,
+        } => {
+            // D-197 follow-up (#763/#770 review): unlike every other
+            // value-less `AnnAssign` (the catch-all arm immediately below,
+            // which deliberately binds nothing at all -- see
+            // `a_value_less_annotated_assignment_does_not_bind_the_name`),
+            // an `Optional[inner]` declaration's type must be recorded in
+            // `scopes` even with no initializer. `pycc_types::check_
+            // assignment` already tracks this in its own separate
+            // `Environment::declared` map and treats the *declared* type,
+            // not a later plain reassignment's own bare value type, as the
+            // sticky representation from that point on (its own comment
+            // cites the same invariant). MIR lowering must agree: without
+            // this, a later plain `x = 5` lowers via the `HirStmt::Assign`
+            // arm above with no record that `x` was ever declared
+            // `Optional[int]`, so that arm's own `Optional`-rewrap check
+            // finds nothing in scope and leaves the value as bare `Ty::
+            // Int` -- reproducing the exact defect this arm exists to fix:
+            // `x: int | None; x = 5; print(x is None)` panicked in codegen
+            // because `collect_stmt_bindings` had predeclared `x`'s slot as
+            // plain `Ty::Int` from that first real `MirStmt::Assign`, and a
+            // non-`Optional` operand then reached the `is`/`is not`
+            // lowering that assumes one.
+            //
+            // This does not weaken definite-assignment checking: recording
+            // a declared type here is not the same as putting `target` in
+            // a "has a value" state anywhere upstream. `pycc_types::check`
+            // runs its own separate, complete definite-assignment pass
+            // *before* `pycc_mir::build` ever sees this HIR (see `src/
+            // main.rs`), so a program that reads `x` before any real
+            // assignment is already rejected there and never reaches this
+            // lowering pass at all. This binding is consulted only by the
+            // plain `HirStmt::Assign` arm's own later-reassignment check
+            // above.
+            bind_variable(scopes, target.clone(), annotation.clone());
+            MirStmt::NoOp
         }
         HirStmt::AnnAssign { value: None, .. } => MirStmt::NoOp,
         HirStmt::If { test, body, orelse } => MirStmt::If {
