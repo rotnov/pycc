@@ -1601,7 +1601,7 @@ fn reading_a_none_typed_parameter_slot_emits_its_unit_carrier() {
     // coverage gate. The carrier's actual D-075 zero-value contract is
     // instead verified end-to-end (source -> ... -> execution) by #167's
     // `a_none_call_result_crossing_the_abi_carries_a_falsy_unit_value` in
-    // `tests/slice1_codegen_depth.rs`, which observes the carrier's
+    // `tests/issue_167_none_carrier_abi.rs`, which observes the carrier's
     // truthiness rather than relying on `Ty::None`'s always-"None" print
     // rendering.
     let _ = value;
