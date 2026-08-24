@@ -299,6 +299,7 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         | MirExpr::BoolLiteral(_)
         | MirExpr::IntBoundary(_)
         | MirExpr::StringLiteral(_)
+        | MirExpr::NoneLiteral
         | MirExpr::Call { .. }
         | MirExpr::BinOp { .. }
         | MirExpr::Compare { .. }
@@ -314,7 +315,13 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         | MirExpr::DictGetOrDefault { .. }
         | MirExpr::SetAdd { .. }
         | MirExpr::Instantiate(_)
-        | MirExpr::NullInstance { .. } => false,
+        | MirExpr::NullInstance { .. }
+        // `OptionalWrap`'s own `.ty()` is always `Ty::Optional(_)`, never
+        // `Ty::Int` (D-197, #763), so like every other non-`Ty::Int`
+        // variant grouped in this arm it can never reach this function as
+        // the `Ty::Int`-classified expression `int_temporary_word` passes
+        // in; it joins the combined "owning" answer for the same reason.
+        | MirExpr::OptionalWrap(_, _) => false,
     }
 }
 

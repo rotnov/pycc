@@ -171,6 +171,15 @@ fn ty_name_describes_nested_container_types() {
 }
 
 #[test]
+fn ty_optional_name_is_inner_pipe_none() {
+    // `Ty::Optional`'s own `.name()` (D-197, #763, Part 1 of #747) spells
+    // itself the same way PEP 604 source does (`int | None`), not the
+    // `typing.Optional[int]` form, matching this compiler's own
+    // parse-side entry point.
+    assert_eq!(Ty::Optional(Box::new(Ty::Int)).name(), "int | None");
+}
+
+#[test]
 fn ty_instance_name_is_the_bare_class_name() {
     // Unlike every other dataful variant, `Ty::Instance`'s `.name()`
     // is not wrapped in a `<kind>[...]` shape -- a class instance's
@@ -754,6 +763,127 @@ fn a_chained_comparison_is_not_supported_yet() {
 #[test]
 fn an_is_comparison_is_not_supported_yet() {
     assert_capability_error_message("x = 1 is 2\n", "comparison operator not supported yet");
+}
+
+#[test]
+fn an_is_not_comparison_between_two_non_none_operands_is_not_supported_yet() {
+    // Sibling of `an_is_comparison_is_not_supported_yet` for `is not`
+    // (D-197, #763, Part 1 of #747): `is_none_operand_shape` is `false`
+    // here too, since neither side is `Expr::NoneLiteral`, so this still
+    // falls through to the pre-existing `C0001` rejection unchanged.
+    assert_capability_error_message("x = 1 is not 2\n", "comparison operator not supported yet");
+}
+
+#[test]
+fn none_literal_lowers_to_a_bare_hir_none_literal() {
+    let module = pycc_parser_test_helper::parse("x = None\n");
+    let hir = lower_checked(&module).unwrap();
+    assert_eq!(
+        hir.items,
+        vec![HirItem::TopLevelStmt(HirStmt::Assign {
+            target: "x".to_string(),
+            value: HirExpr::NoneLiteral,
+        })]
+    );
+}
+
+#[test]
+fn x_is_none_lowers_to_a_cmp_is_comparison() {
+    // `None` on the right (D-197, #763, Part 1 of #747): exercises
+    // `is_none_operand_shape`'s `cmp.comparators[0]` check.
+    let module = pycc_parser_test_helper::parse("x = 1\ny = x is None\n");
+    let hir = lower_checked(&module).unwrap();
+    assert_eq!(
+        hir.items[1],
+        HirItem::TopLevelStmt(HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::Compare {
+                op: CmpOpKind::Is,
+                left: Box::new(HirExpr::Name("x".to_string())),
+                right: Box::new(HirExpr::NoneLiteral),
+            },
+        })
+    );
+}
+
+#[test]
+fn none_is_not_x_lowers_to_a_cmp_is_not_comparison() {
+    // `None` on the left this time (D-197, #763, Part 1 of #747):
+    // exercises `is_none_operand_shape`'s `cmp.left` check, the other half
+    // of the `||` this test's sibling above does not reach.
+    let module = pycc_parser_test_helper::parse("x = 1\ny = None is not x\n");
+    let hir = lower_checked(&module).unwrap();
+    assert_eq!(
+        hir.items[1],
+        HirItem::TopLevelStmt(HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::Compare {
+                op: CmpOpKind::IsNot,
+                left: Box::new(HirExpr::NoneLiteral),
+                right: Box::new(HirExpr::Name("x".to_string())),
+            },
+        })
+    );
+}
+
+#[test]
+fn int_or_none_annotation_produces_ty_optional_int() {
+    let module = pycc_parser_test_helper::parse("def f(x: int | None) -> None:\n    pass\n");
+    let hir = lower_checked(&module).unwrap();
+    let HirItem::Function { params, .. } = &hir.items[0] else {
+        panic!("expected a function item");
+    };
+    assert_eq!(params[0].1, Ty::Optional(Box::new(Ty::Int)));
+}
+
+#[test]
+fn none_or_int_annotation_also_produces_ty_optional_int() {
+    // The other operand order (D-197, #763, Part 1 of #747): exercises
+    // `annotation_to_ty`'s `(Expr::NoneLiteral(_), other)` match arm rather
+    // than its `(other, Expr::NoneLiteral(_))` sibling.
+    let module = pycc_parser_test_helper::parse("def f(x: None | int) -> None:\n    pass\n");
+    let hir = lower_checked(&module).unwrap();
+    let HirItem::Function { params, .. } = &hir.items[0] else {
+        panic!("expected a function item");
+    };
+    assert_eq!(params[0].1, Ty::Optional(Box::new(Ty::Int)));
+}
+
+#[test]
+fn an_int_or_none_return_annotation_produces_ty_optional_int() {
+    let module = pycc_parser_test_helper::parse("def f() -> int | None:\n    return None\n");
+    let hir = lower_checked(&module).unwrap();
+    let HirItem::Function { return_ty, .. } = &hir.items[0] else {
+        panic!("expected a function item");
+    };
+    assert_eq!(*return_ty, Ty::Optional(Box::new(Ty::Int)));
+}
+
+#[test]
+fn a_general_union_annotation_with_neither_side_none_produces_t0048() {
+    let module = pycc_parser_test_helper::parse("def f(x: int | str) -> None:\n    pass\n");
+    let diag = lower_checked(&module).unwrap_err();
+    assert_eq!(diag.code, "T0048");
+}
+
+#[test]
+fn a_three_way_union_chain_also_produces_t0048() {
+    // `A | B | None` (D-197, #763, Part 1 of #747): confirms the scope cut
+    // is on the syntactic 2-operand shape, not merely on whether `None`
+    // appears anywhere in the chain -- `ast::BinOp` associates `|` left,
+    // so the outer node's `left` is itself a `BinOp`, never
+    // `Expr::NoneLiteral`, landing in the same `_ =>` T0048 arm as
+    // `int | str`.
+    let module = pycc_parser_test_helper::parse("def f(x: int | str | None) -> None:\n    pass\n");
+    let diag = lower_checked(&module).unwrap_err();
+    assert_eq!(diag.code, "T0048");
+}
+
+#[test]
+fn an_optional_of_a_non_int_type_produces_t0049() {
+    let module = pycc_parser_test_helper::parse("def f(x: str | None) -> None:\n    pass\n");
+    let diag = lower_checked(&module).unwrap_err();
+    assert_eq!(diag.code, "T0049");
 }
 
 #[test]
@@ -3177,6 +3307,12 @@ fn rename_name_in_expr_rewrites_every_hir_expr_variant() {
     assert_eq!(
         rename_name_in_expr(HirExpr::StringLiteral("s".to_string()), "old", "new"),
         HirExpr::StringLiteral("s".to_string())
+    );
+    // `NoneLiteral` (D-197, #763, Part 1 of #747) joined this same
+    // returned-unchanged group.
+    assert_eq!(
+        rename_name_in_expr(HirExpr::NoneLiteral, "old", "new"),
+        HirExpr::NoneLiteral
     );
 
     // Call: renames every argument.

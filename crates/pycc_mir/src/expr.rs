@@ -24,6 +24,7 @@ pub(super) fn lower_expr(
         HirExpr::FloatLiteral(f) => MirExpr::FloatLiteral(*f),
         HirExpr::BoolLiteral(b) => MirExpr::BoolLiteral(*b),
         HirExpr::StringLiteral(s) => MirExpr::StringLiteral(s.clone()),
+        HirExpr::NoneLiteral => MirExpr::NoneLiteral,
         // D-136: `math.pi` (a `pycc_hir`-qualified stdlib constant name --
         // real Python identifiers never contain `.`, see
         // `pycc_types::std_qualified_symbol`'s own doc comment for the

@@ -684,6 +684,38 @@ fn collect_block_constraints_propagates_an_error_from_the_initializer_expression
 }
 
 #[test]
+fn constraint_collection_carries_none_literal_as_ty_none() {
+    // D-197 (#763, Part 1 of #747): the constraint solver's own
+    // `collect_expr_constraints` mirrors `infer_expr_in`'s identical
+    // `NoneLiteral` arm -- both return `Ty::None` directly, with no
+    // unification variable and no interaction with the generic-function
+    // solver's own machinery.
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut binops = Vec::new();
+    let env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &[],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+    };
+    let expr = HirExpr::NoneLiteral;
+
+    let term = collect_expr_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut binops,
+        &env,
+        &expr,
+    )
+    .unwrap();
+
+    assert_eq!(term, Some(Ok(Ty::None)));
+}
+
+#[test]
 fn constraint_collection_carries_a_homogeneous_scalar_list_literal_as_an_element_type_carrier() {
     // D-146 (#239): a homogeneous scalar-element list literal now produces
     // `Some(Ok(Ty::List(...)))` as a destructured element-type carrier --
@@ -25570,5 +25602,111 @@ fn a_deferred_unary_constraint_still_rejects_a_non_numeric_operand() {
     assert!(
         result.is_err(),
         "a deferred unary constraint over `str` must be rejected: {result:?}"
+    );
+}
+
+// -- D-197 (#763, Part 1 of #747): `Ty::Optional`, `T | None` assignability,
+// and `is`/`is not` on `None` ------------------------------------------
+
+#[test]
+fn a_bare_int_value_widens_to_an_optional_int_annotation() {
+    // `is_assignable`'s one-way `Ty::Optional` widening rule: a bare `int`
+    // value is assignable to an `int | None` annotation.
+    let result = check_source("x: int | None = 5\nprint(x is None)\n");
+    assert!(
+        result.is_ok(),
+        "a bare int must widen to `int | None`: {result:?}"
+    );
+}
+
+#[test]
+fn a_none_literal_widens_to_an_optional_int_annotation() {
+    let result = check_source("x: int | None = None\nprint(x is not None)\n");
+    assert!(
+        result.is_ok(),
+        "`None` must widen to `int | None`: {result:?}"
+    );
+}
+
+#[test]
+fn reversed_operand_order_none_or_int_is_equivalent_to_int_or_none() {
+    let result = check_source("x: None | int = None\nprint(x is None)\n");
+    assert!(
+        result.is_ok(),
+        "`None | int` must accept the same values as `int | None`: {result:?}"
+    );
+}
+
+#[test]
+fn an_optional_int_value_does_not_narrow_back_to_a_bare_int_annotation() {
+    // The reverse direction is deliberately NOT handled by `is_assignable`:
+    // no flow-sensitive narrowing exists anywhere in this crate yet (D-197),
+    // so an `Optional[int]` stays `Optional[int]` even directly inside an
+    // `is not None` branch.
+    let result =
+        check_source("x: int | None = 5\nif x is not None:\n    y: int = x\n    print(y)\n");
+    assert!(
+        result.is_err(),
+        "an un-narrowed `Optional[int]` must not be assignable to plain `int`: {result:?}"
+    );
+    // `y: int = x` is an *annotated* assignment, so the incompatible
+    // initializer is `T0025`, not the plain-assignment `T0023`.
+    assert_eq!(result.unwrap_err().code, "T0025");
+}
+
+#[test]
+fn is_none_on_an_optional_int_type_checks_as_bool() {
+    let result = check_source(
+        "def f(flag: bool) -> int | None:\n    if flag:\n        return 5\n    return None\n\n\nprint(f(True) is None)\n",
+    );
+    assert!(
+        result.is_ok(),
+        "`is None` against an `Optional[int]` expression must type-check: {result:?}"
+    );
+}
+
+#[test]
+fn is_not_none_on_a_plain_none_typed_expression_type_checks_as_bool() {
+    let result = check_source("x = None\nprint(x is not None)\n");
+    assert!(
+        result.is_ok(),
+        "`is not None` against a `None`-typed expression must type-check: {result:?}"
+    );
+}
+
+#[test]
+fn is_none_against_a_non_optional_operand_is_rejected_with_t0021() {
+    // HIR lowering already guarantees one operand of an `is`/`is not`
+    // comparison is syntactically `None` (`Expr::Compare`'s `is_none_operand_shape`
+    // check); the *other* operand's static type must be `Ty::Optional(_)` or
+    // `Ty::None` for `infer_expr_in`'s `Compare` arm to accept it here.
+    let result = check_source("x: int = 5\nprint(x is None)\n");
+    let err = result.expect_err("`is None` against a plain `int` must be rejected");
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("is") && err.message.to_lowercase().contains("none"),
+        "unexpected message: {}",
+        err.message
+    );
+}
+
+#[test]
+fn is_not_none_against_a_str_operand_is_rejected_with_t0021() {
+    let result = check_source("x: str = \"a\"\nprint(x is not None)\n");
+    let err = result.expect_err("`is not None` against a plain `str` must be rejected");
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn none_on_the_left_of_is_still_reads_the_other_operands_type() {
+    // Mirrors `is_none_on_an_optional_int_type_checks_as_bool` but with the
+    // `None` literal as the *left* operand (`None is x`) instead of the
+    // right (`x is None`). `infer_expr_in`'s `Compare` arm picks the "other"
+    // operand's type from whichever side is *not* the `NoneLiteral`, so this
+    // exercises the `left` branch of that selection specifically.
+    let result = check_source("x: int | None = 5\nprint(None is x)\n");
+    assert!(
+        result.is_ok(),
+        "`None is x` against an `Optional[int]` must type-check as bool: {result:?}"
     );
 }

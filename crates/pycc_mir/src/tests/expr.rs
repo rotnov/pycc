@@ -10,6 +10,31 @@ use pycc_hir::{
 };
 
 #[test]
+fn lowers_a_bare_none_literal_unchanged() {
+    // `HirExpr::NoneLiteral -> MirExpr::NoneLiteral` (D-197, #763, Part 1
+    // of #747): a bare `Assign` (not `AnnAssign`), so `stmt::lower_stmt`'s
+    // own `OptionalWrap`-introducing branch below is not involved here.
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+            target: "x".to_string(),
+            value: HirExpr::NoneLiteral,
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![MirItem::TopLevelStmt(MirStmt::Assign {
+            target: "x".to_string(),
+            value: MirExpr::NoneLiteral,
+        })]
+    );
+}
+
+#[test]
 fn builds_a_compare_expression_with_bool_type() {
     let hir = HirModule {
         seeded_builtin_exception_classes: false,

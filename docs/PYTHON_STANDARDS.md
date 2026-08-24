@@ -307,7 +307,7 @@ For each newly observed upstream release:
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [604](https://peps.python.org/pep-0604/) | Union syntax `int \| str` | typing | `py310/pep_0604_union.py` | ☐ |
+| [604](https://peps.python.org/pep-0604/) | Union syntax, e.g. `int` or `str`. `Optional[int]` (`T` or `None`, either operand order) type-checks and codegens end-to-end -- declared, assigned, returned from a function, module-global and function-local, tested for presence with `is`/`is not None` (D-197, [#763](https://github.com/rotnov/pycc/issues/763), Part 1 of [#747](https://github.com/rotnov/pycc/issues/747)). Not proven: a general union with neither side `None` or a 3+-operand chain (`T0048`); `Optional[T]` for any inner type other than `int` (`T0049`); flow-sensitive narrowing of an `Optional[int]` back to plain `int` inside an `is not None` branch (Part 2, tracked separately) | typing | `pep_0604_union.py` | ◐ |
 | [612](https://peps.python.org/pep-0612/) | `ParamSpec` | typing | `py310/pep_0612_paramspec.py` | ☐ |
 | [613](https://peps.python.org/pep-0613/) | `TypeAlias` | typing | `pep_0613_typealias.py` | ◐ |
 | [626](https://peps.python.org/pep-0626/) | Precise line numbers (debug info) | rt | `py310/pep_0626_lineno.py` | ☐ |

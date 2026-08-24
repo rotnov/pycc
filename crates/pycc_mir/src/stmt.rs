@@ -67,6 +67,17 @@ pub(super) fn lower_stmt(
                 // to `int` via `IntBoundary` (D-141), preserving the
                 // runtime `bool` identity while reporting `Ty::Int`.
                 MirExpr::IntBoundary(Box::new(value))
+            } else if let Ty::Optional(inner) = annotation {
+                // `T | None` (PEP 604, D-197, #763, Part 1 of #747): a bare
+                // `None` initializer, or a bare `inner`-typed (or
+                // `inner`-assignable, e.g. `bool` under `Optional[int]`)
+                // initializer, under an `Optional[inner]` annotation widens
+                // via `OptionalWrap` -- mirroring `IntBoundary`'s identical
+                // "fix `.ty()` so `collect_stmt_bindings` derives the right
+                // slot representation" reason immediately above; see
+                // `OptionalWrap`'s own doc comment for why a wrapper node
+                // is needed here but not for a later plain reassignment.
+                MirExpr::OptionalWrap(Box::new(value), inner.clone())
             } else {
                 value
             };
