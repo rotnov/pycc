@@ -76,6 +76,29 @@ consistent with that scoping.
    (`git show origin/main:crates/pycc_codegen/src/tests.rs | grep -n
    'raised tag {raised_tag}'` finds the identical unformatted text), so it
    predates this branch entirely and is not addressed here.
+9. Ran the pinned local `ievo:deep-reviewer` over the full merge-base→HEAD
+   range. It reported two findings on the extraction commit:
+   - [warning] the panic-unwind regression test captured its
+     `TempTestDir` guard by reference (`&dir`) inside the `catch_unwind`'d
+     closure, so the destructor never actually ran during the unwind — it
+     dropped only afterward via ordinary end-of-block exit, identical to
+     the normal-drop test, so the test would not have caught a real
+     regression such as a `Drop` impl gated on `!thread::panicking()`.
+   - [note] the `tests.rs` wiring comment said "the ~260 unqualified
+     `tempfile_dir(...)` calls below" when most call sites are actually
+     above that line.
+   Both were verified directly against the source before fixing (not
+   taken on faith): fixed by moving the guard into the closure by value
+   (`move || { let _dir = dir; panic!(...); }`) so the destructor
+   genuinely runs mid-unwind, and rewording the comment to
+   "throughout this file". Re-ran `cargo test -p pycc_codegen --lib`
+   (320 passed), `cargo clippy -p pycc_codegen --lib --tests -- -D
+   warnings` (clean), and `cargo llvm-cov -p pycc_codegen --lib`
+   (100% region/line/function coverage on `tests_support.rs` again).
+   Because the panic-unwind test's actual runtime behavior changed (not
+   just wording), reran the pinned reviewer once more over the same full
+   range per AGENTS.md's conditional-rerun convention; it reported zero
+   findings, confirming both fixes were genuine rather than superficial.
 
 ## Docs impact
 
@@ -86,15 +109,13 @@ needed updating.
 ## Where to resume
 
 At the time this entry was written, PR #758's CI (on final head
-`0d2950ea`) was still completing; the remaining steps before merge were:
-run the pinned local `ievo:deep-reviewer` over the merge-base→HEAD range
-(the two P1s that drove this PR's fix round came from the GitHub bot, not
-yet from the local pinned reviewer), re-verify PR state directly via
-`gh`/GraphQL once CI reports green (`mergeStateStatus: CLEAN`, required
-checks green, `closingIssuesReferences.totalCount` still `0`, both review
-threads still resolved), then merge with a merge commit
-(`gh pr merge 758 --repo rotnov/pycc --merge --delete-branch`) and confirm
-branch deletion.
+`a2a8d1a3`, after the reviewer-driven fix round in step 9) was still
+completing. The remaining steps before merge: re-verify PR state directly
+via `gh`/GraphQL once CI reports green (`mergeStateStatus: CLEAN`,
+required checks green, `closingIssuesReferences.totalCount` still `0`,
+both original review threads still resolved), then merge with a merge
+commit (`gh pr merge 758 --repo rotnov/pycc --merge --delete-branch`) and
+confirm branch deletion.
 
 Issue #585 (PEP 487) remains open and untouched, pending a future work
 cycle. Per this task's own scope ("stop after this one issue cycle and
