@@ -1897,7 +1897,6 @@ fn a_statically_unreachable_match_tail_terminates_its_function() {
     let obj_path = dir.join("statically_unreachable_match_tail.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("a statically unreachable match tail must produce valid LLVM IR");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -10491,11 +10490,36 @@ fn set_add_grows_the_set_and_a_repeated_value_still_dedups_codegens_and_runs() {
     assert_eq!(output.stdout, b"3\n3\n");
 }
 
-pub(crate) fn tempfile_dir(label: &str) -> std::path::PathBuf {
+/// RAII handle for a per-test scratch directory under the OS temp dir.
+/// Derefs to `Path` so existing call sites (`dir.join(...)`, `&dir` passed
+/// where `&Path` is expected) keep working unchanged; `Drop` removes the
+/// directory tree when the handle goes out of scope, including on an early
+/// return via a failed `assert!`/`.expect()` panic, which a plain
+/// `PathBuf` return plus a manual `std::fs::remove_dir_all` call at the end
+/// of each test could not guarantee -- a panicking assertion partway
+/// through a test skipped that manual cleanup and left the directory behind
+/// in `$TMPDIR`.
+pub(crate) struct TempTestDir(std::path::PathBuf);
+
+impl std::ops::Deref for TempTestDir {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempTestDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+pub(crate) fn tempfile_dir(label: &str) -> TempTestDir {
     let dir =
         std::env::temp_dir().join(format!("pycc_codegen_test_{label}_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    TempTestDir(dir)
 }
 
 /// Test-only linking helper. `pycc`'s real CLI (Task 8) does this via
@@ -10787,7 +10811,6 @@ fn abstract_method_body_with_non_none_return_emits_default_value() {
     compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     // The binary is never run — the abstract method is never called.
     // We only need to verify that codegen produces valid LLVM IR.
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // -- #381: MirStmt::Seq error propagation in emit_stmt ---------------
@@ -10808,7 +10831,6 @@ fn calling_an_undefined_function_inside_a_seq_is_rejected() {
         err.contains("does_not_exist_in_seq"),
         "error should name the offending function: {err}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -10827,7 +10849,6 @@ fn seq_with_valid_statements_compiles_and_runs() {
     link_object_with_runtime(&obj_path, &bin_path);
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"10\n20\n");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // -- #381: None singleton pattern comparison in emit_expr ---------------
@@ -10875,7 +10896,6 @@ fn none_singleton_comparison_emits_zero_carrier() {
     link_object_with_runtime(&obj_path, &bin_path);
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"1\n");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // -- #382 exception handling codegen tests --
@@ -10961,7 +10981,6 @@ fn bare_except_codegen_builds_and_runs() {
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"caught\n");
     assert!(output.status.success());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -10984,7 +11003,6 @@ fn raise_with_non_string_message_is_a_codegen_error() {
         result.is_err(),
         "codegen should fail for non-string raise message"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11000,7 +11018,6 @@ fn raising_a_non_instance_existing_value_is_a_codegen_error() {
     let err = compile_to_object(&mir, &obj_path, None, false)
         .expect_err("a non-instance cannot be an existing exception");
     assert!(err.contains("must be an exception instance"), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11035,7 +11052,6 @@ fn raising_a_bound_existing_exception_builds_successfully() {
     let obj_path = dir.join("raise_existing_instance.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("a bound exception instance can be raised again");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11063,7 +11079,6 @@ fn raise_from_with_non_string_message_is_a_codegen_error() {
         result.is_err(),
         "codegen should fail for non-string raise message"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11091,7 +11106,6 @@ fn raise_from_with_non_string_cause_is_a_codegen_error() {
         result.is_err(),
         "codegen should fail for non-string cause message"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // -- #382: try/except/finally `?` error propagation and fall-through --
@@ -11123,7 +11137,6 @@ fn try_body_emit_error_propagates() {
         err.contains("nonexistent_in_try_body"),
         "error should name the offending function: {err}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11153,7 +11166,6 @@ fn try_handler_body_emit_error_propagates() {
         err.contains("nonexistent_in_handler"),
         "error should name the offending function: {err}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11183,7 +11195,6 @@ fn try_else_body_emit_error_propagates() {
         err.contains("nonexistent_in_else"),
         "error should name the offending function: {err}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11213,7 +11224,6 @@ fn try_finally_body_emit_error_propagates() {
         err.contains("nonexistent_in_finally"),
         "error should name the offending function: {err}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Helper: a `MirStmt::Return(Some(MirExpr::IntLiteral(n)))` — used in
@@ -11252,7 +11262,6 @@ fn try_body_with_return_does_not_fall_through() {
     let obj_path = dir.join("try_body_return.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("codegen should succeed for try body with return");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11283,7 +11292,6 @@ fn try_handler_body_with_return_does_not_fall_through() {
     let obj_path = dir.join("try_handler_return.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("codegen should succeed for handler body with return");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11314,7 +11322,6 @@ fn try_else_body_with_return_does_not_fall_through() {
     let obj_path = dir.join("try_else_return.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("codegen should succeed for else body with return");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11345,7 +11352,6 @@ fn try_finally_body_with_return_does_not_fall_through() {
     let obj_path = dir.join("try_finally_return.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("codegen should succeed for finally body with return");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11372,7 +11378,6 @@ fn a_bare_non_none_return_routes_through_finally_with_a_default_value() {
     let obj_path = dir.join("bare_non_none_return_finally.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("the defensive default return must remain valid through finally");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11416,7 +11421,6 @@ fn nested_finally_return_routing_covers_value_and_none_abis() {
         let obj_path = dir.join(format!("nested_finally_{name}.o"));
         compile_to_object(&mir, &obj_path, None, false)
             .expect("nested finally return routing must produce valid object code");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     let mir = MirModule {
@@ -11437,7 +11441,6 @@ fn nested_finally_return_routing_covers_value_and_none_abis() {
     let obj_path = dir.join("direct_none_finally.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("a None return routed through finally must produce valid object code");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // -- #382: RaiseFrom, Reraise, and remaining Try codegen paths --
@@ -11484,7 +11487,6 @@ fn raise_from_codegen_builds_and_runs() {
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"caught\n");
     assert!(output.status.success());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11521,7 +11523,6 @@ fn reraise_codegen_builds() {
         !output.status.success(),
         "reraise should propagate as non-zero exit"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11559,7 +11560,6 @@ fn try_with_no_handlers_branches_to_finally() {
         !output.status.success(),
         "uncaught exception should exit non-zero"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11613,7 +11613,6 @@ fn try_with_multiple_handlers_dispatches_to_next() {
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"key\n");
     assert!(output.status.success());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11668,7 +11667,6 @@ fn a_multi_tag_handler_ors_every_tag_it_accepts() {
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"app\n");
     assert!(output.status.success());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11719,7 +11717,6 @@ fn a_multi_tag_handler_declines_a_tag_outside_its_set() {
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"bare\n");
     assert!(output.status.success());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -11775,7 +11772,6 @@ fn a_pep_758_multi_type_handler_ors_every_named_types_tag_independently() {
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"multi\n", "raised tag {raised_tag} ({class_name})");
         assert!(output.status.success());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -11822,5 +11818,4 @@ fn try_else_body_falls_through_to_finally() {
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"try\nelse\nfinally\n");
     assert!(output.status.success());
-    let _ = std::fs::remove_dir_all(&dir);
 }
