@@ -338,22 +338,11 @@ for value in range(0, 2, false_int()):
     );
 }
 
-#[test]
-fn none_typed_parameters_cross_the_user_function_abi() {
-    let source = "\
-def source() -> None:
-    return
-
-def sink(value: None) -> None:
-    print(value)
-    return value
-
-sink(source())
-";
-    let output = build_and_run("none_parameter_abi", source);
-    assert!(output.status.success());
-    assert_eq!(output.stdout, b"None\n");
-}
+// `none_typed_parameters_cross_the_user_function_abi` and #167's
+// `a_none_call_result_crossing_the_abi_carries_a_falsy_unit_value` moved to
+// `tests/issue_167_none_carrier_abi.rs` (AGENTS.md "Keep source files
+// decomposable": this file is past the ~1,000-line threshold and #167's own
+// work touched this None-carrier ABI cluster).
 
 #[test]
 fn a_floor_division_quotient_outside_the_tagged_range_promotes() {

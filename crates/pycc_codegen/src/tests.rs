@@ -1595,11 +1595,15 @@ fn reading_a_none_typed_parameter_slot_emits_its_unit_carrier() {
             ty: Ty::None,
         },
     );
-    // Reaching this point proves the typed load was emitted. Its exact
-    // LLVM `i8` representation is verified by the module-level ABI and
-    // runtime tests; matching the private wrapper here would add an
+    // Reaching this point proves the typed load was emitted; matching the
+    // private wrapper's exact bits here would add an
     // intentionally-unreachable assertion branch under the hard region
-    // coverage gate.
+    // coverage gate. The carrier's actual D-075 zero-value contract is
+    // instead verified end-to-end (source -> ... -> execution) by #167's
+    // `a_none_call_result_crossing_the_abi_carries_a_falsy_unit_value` in
+    // `tests/issue_167_none_carrier_abi.rs`, which observes the carrier's
+    // truthiness rather than relying on `Ty::None`'s always-"None" print
+    // rendering.
     let _ = value;
 }
 
