@@ -685,7 +685,7 @@ fn collect_block_constraints_propagates_an_error_from_the_initializer_expression
 
 #[test]
 fn constraint_collection_carries_none_literal_as_ty_none() {
-    // D-198 (#763, Part 1 of #747): the constraint solver's own
+    // D-197 (#763, Part 1 of #747): the constraint solver's own
     // `collect_expr_constraints` mirrors `infer_expr_in`'s identical
     // `NoneLiteral` arm -- both return `Ty::None` directly, with no
     // unification variable and no interaction with the generic-function
@@ -26120,7 +26120,7 @@ fn a_deferred_unary_constraint_still_rejects_a_non_numeric_operand() {
     );
 }
 
-// -- D-198 (#763, Part 1 of #747): `Ty::Optional`, `T | None` assignability,
+// -- D-197 (#763, Part 1 of #747): `Ty::Optional`, `T | None` assignability,
 // and `is`/`is not` on `None` ------------------------------------------
 
 #[test]
@@ -26155,7 +26155,7 @@ fn reversed_operand_order_none_or_int_is_equivalent_to_int_or_none() {
 #[test]
 fn an_optional_int_value_does_not_narrow_back_to_a_bare_int_annotation() {
     // The reverse direction is deliberately NOT handled by `is_assignable`:
-    // no flow-sensitive narrowing exists anywhere in this crate yet (D-198),
+    // no flow-sensitive narrowing exists anywhere in this crate yet (D-197),
     // so an `Optional[int]` stays `Optional[int]` even directly inside an
     // `is not None` branch.
     let result =

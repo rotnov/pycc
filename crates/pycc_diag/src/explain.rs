@@ -665,7 +665,7 @@ class Car(Vehicle):
         severity: Severity::Error,
         summary: "general union type annotation is not supported yet (PEP 604)",
         explanation: "\
-T0048 fires when a `X | Y` annotation (PEP 604, D-198, issue #763, Part 1 of \
+T0048 fires when a `X | Y` annotation (PEP 604, D-197, issue #763, Part 1 of \
 #747) does not match the one shape this compiler version accepts: exactly \
 two operands where one side is literally `None` (`T | None` or \
 `None | T`). Any other shape is rejected here -- a 2-operand union where \
@@ -691,7 +691,7 @@ def h(x: int | None) -> None:  # OK -- T | None
         summary: "`Optional[T]` is not supported yet for this `T` (PEP 604)",
         explanation: "\
 T0049 fires when a `T | None` annotation matches the recognized 2-operand \
-`Optional` shape (see `T0048`) but its inner type `T` is not `int` (D-198, \
+`Optional` shape (see `T0048`) but its inner type `T` is not `int` (D-197, \
 issue #763, Part 1 of #747). This compiler version's `Optional`/`T | None` \
 codegen -- the `{ inner: i64, present: i8 }` runtime representation -- is \
 exercised and tested only for `Optional[int]`, mirroring the same v0.2 \
