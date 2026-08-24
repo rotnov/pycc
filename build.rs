@@ -6,8 +6,19 @@
 //! diverge. See #247. This runs the same `rustc` Cargo itself is about to
 //! invoke (`RUSTC`, falling back to `rustc` on `PATH` for tooling that doesn't
 //! set it) and exposes its reported version through `PYCC_BUILD_RUSTC_VERSION`.
+//!
+//! Cargo only sets `RUSTC` for build script invocations, not for the test
+//! binaries that later run in the same package -- so a version test can't
+//! reliably re-resolve `RUSTC` itself at runtime and expect the same
+//! compiler this script saw (e.g. when it's pinned via `.cargo/config.toml`
+//! rather than the environment). This also writes the captured version to
+//! `OUT_DIR/rustc_version.txt`, which `env!("OUT_DIR")` resolves to the same
+//! directory in every target of this package, including integration tests --
+//! giving them build-time evidence to check against without re-invoking
+//! `rustc` themselves.
 
 use std::env;
+use std::fs;
 use std::process::Command;
 
 fn main() {
@@ -34,4 +45,10 @@ fn main() {
         panic!("unexpected `{rustc} --version` output: {stdout:?}");
     });
     println!("cargo::rustc-env=PYCC_BUILD_RUSTC_VERSION={version}");
+
+    let out_dir = env::var("OUT_DIR").unwrap_or_else(|err| panic!("OUT_DIR not set: {err}"));
+    let evidence_path = std::path::Path::new(&out_dir).join("rustc_version.txt");
+    fs::write(&evidence_path, version).unwrap_or_else(|err| {
+        panic!("failed to write {}: {err}", evidence_path.display());
+    });
 }
