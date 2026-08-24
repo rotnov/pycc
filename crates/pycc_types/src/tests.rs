@@ -22211,6 +22211,29 @@ fn qualified_decorator_marker_as_value_in_private_helper_is_t0021() {
 }
 
 #[test]
+fn qualified_annotation_marker_used_as_value_is_t0021() {
+    // #762: exercises the `AnnotationMarker` arm folded into the marker
+    // arm of infer_expr_in's Name handler (expr.rs) by using the
+    // qualified form `typing.Final` as a value (not an annotation
+    // subscript).
+    let err = check_source("import typing\nx = typing.Final\n").unwrap_err();
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn qualified_annotation_marker_as_value_in_private_helper_is_t0021() {
+    // #762: exercises the `AnnotationMarker` arm folded into the marker
+    // arm of collect_expr_constraints' Name handler (constraints.rs,
+    // the solver path) by using the qualified form `typing.Annotated`
+    // as a value in a private helper.
+    let err = check_source(
+        "import typing\ndef _helper() -> int:\n    x = typing.Annotated\n    return 1\n_helper()\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
 fn protocol_argument_mismatch_emits_t0046() {
     // This exercises the assignable_error call (line 2894) when
     // a non-conforming class is passed to a protocol-typed parameter.

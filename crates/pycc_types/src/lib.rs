@@ -180,8 +180,9 @@ fn marker_is_not_a_value(name: &str) -> Diagnostic {
 }
 
 /// Returns `true` if `kind` is any marker symbol kind (Enum, Protocol, ABC,
-/// or Decorator). Used by call-site and value-reference guards to reject
-/// marker symbols used as first-class values with a consistent diagnostic.
+/// Decorator, or Annotation). Used by call-site and value-reference guards
+/// to reject marker symbols used as first-class values with a consistent
+/// diagnostic.
 fn is_marker_kind(kind: pycc_std::StdSymbolKind) -> bool {
     matches!(
         kind,
@@ -189,6 +190,7 @@ fn is_marker_kind(kind: pycc_std::StdSymbolKind) -> bool {
             | pycc_std::StdSymbolKind::ProtocolMarker
             | pycc_std::StdSymbolKind::AbcMarker
             | pycc_std::StdSymbolKind::DecoratorMarker
+            | pycc_std::StdSymbolKind::AnnotationMarker
     )
 }
 

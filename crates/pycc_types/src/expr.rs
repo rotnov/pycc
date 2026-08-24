@@ -70,7 +70,8 @@ pub(crate) fn infer_expr_in(
                     }
                     pycc_std::StdSymbolKind::ProtocolMarker
                     | pycc_std::StdSymbolKind::AbcMarker
-                    | pycc_std::StdSymbolKind::DecoratorMarker => {
+                    | pycc_std::StdSymbolKind::DecoratorMarker
+                    | pycc_std::StdSymbolKind::AnnotationMarker => {
                         Err(marker_is_not_a_value(name))
                     }
                 };
