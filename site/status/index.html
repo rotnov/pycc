@@ -59,7 +59,7 @@
             "name": "pycc status — what the Python AOT compiler can do today",
             "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete for v0.1 and what's planned next, and the CI evidence behind each claim.",
             "inLanguage": "en",
-            "dateModified": "2026-08-22",
+            "dateModified": "2026-08-24",
             "additionalProperty": [
               {
                 "@type": "PropertyValue",
@@ -386,7 +386,12 @@
               (557 dataclasses, 698 <code>@override</code>, 3129 class
               decorators) are now registered and run against the pinned
               CPython oracle, and their rows flip once a completed green
-              <code>main</code> run records the evidence.
+              <code>main</code> run records the evidence. Separately,
+              <code>typing.Final</code> and <code>typing.Annotated</code>
+              (PEP 591/593) are now registered stdlib imports too, so
+              <code>from typing import Final, Annotated</code> no longer
+              fails to compile — pycc already handled both as bare-name
+              annotation subscripts.
             </p>
             <p>
               The 100% line/region coverage gate and the required
