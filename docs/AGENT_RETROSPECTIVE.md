@@ -33,6 +33,68 @@ never a merge gate.
 
 ---
 
+## 2026-08-24 — Planning #747 (PEP 604 unions) assumed representation-only was mergeable, then assumed `is`/`is not` already existed; both were false
+
+**What happened.** While running `issue-to-plan` for GitHub issue #747
+("Support PEP 604 union type annotations"), the first plan draft scoped
+Part 1 as `Ty::Optional` representation and parsing only, deferring all
+codegen to a separate Part 2. A later pass checking that draft against
+`docs/TESTING.md` and this repository's own merge history found it was not
+actually mergeable: the D-014 100%-coverage gate has no exemption
+mechanism for a single unreachable codegen arm (`docs/TESTING.md`'s
+exemption table is whole-file-only and currently empty), and the new
+`Ty::Optional` match arms in `pycc_mir`/`pycc_codegen` would be
+unreachable-by-construction under a representation-only slice. Separately,
+`docs/DELIVERY_PLAN.md` rows 10-11 (PR #236, PR #305) show this repository's
+own precedent always lands a new `Ty` shape together with at least one
+concrete codegen path in the *same* PR, never representation alone. The
+plan was corrected to include real `Optional[int]` codegen in Part 1.
+
+A second, independent gap surfaced one revision later: Part 1's narrowing
+work item ("minimal `is None` narrowing") silently assumed `is`/`is not`
+comparisons already lowered to *something* narrowing could hook onto.
+Direct source verification (`crates/pycc_hir/src/lib.rs`'s `CmpOpKind` enum
+has exactly six variants — `Eq, NotEq, Lt, LtE, Gt, GtE` — with no
+`Is`/`IsNot`/`In` variant at all) showed this compiler has **zero**
+`is`/`is not` support today; both are rejected at HIR-lowering with the
+generic `C0001` capability-gap diagnostic (confirmed independently by
+`docs/DELIVERY_PLAN.md` row 11's own prose). The plan had to add "this
+compiler's first `is`/`is not` support of any kind" as its own explicit,
+separately-precedent-setting work item before the narrowing item could be
+attempted at all.
+
+**Root cause.** Both gaps share one root cause: the plan reasoned from a
+document's *aspirational* description of the target design
+(`docs/TYPE_SYSTEM.md`'s "flow-sensitive narrowing checker... handles `is
+None`") and from the issue's own framing, rather than from source-level
+verification of whether the depended-on machinery actually exists yet.
+Neither the D-014 coverage-gate interaction nor the absence of `is`/`is
+not` support is stated anywhere as a single fact — both had to be derived
+by cross-checking prose claims against the actual enum definitions, gate
+scripts, and merge history.
+
+**What fixed it.** `issue-to-plan`'s own step 2 ("read the issue, then
+refute it") and step 3 ("read what governs the change, not what merely
+mentions it") were applied a second and third time, specifically to a
+work item the first two passes had treated as settled rather than as a
+new claim needing its own verification. `grep -rn "CmpOp::Is\|CmpOp::IsNot"
+crates/pycc_hir/src/ crates/pycc_mir/src/` returning nothing was the
+concrete, minutes-cheap check that would have caught this on the first
+pass.
+
+**Lesson.** When a plan's own work item depends on prior machinery
+("narrow on top of the existing `is None` check", "extend the existing
+X"), verify that the depended-on machinery exists via source grep before
+treating it as a given — even, and especially, when a specification
+document (here `docs/TYPE_SYSTEM.md`) describes it as already present. A
+document's target-state prose is not evidence of current-state behavior;
+only the source (or, for gates, the actual checker script) is. Apply the
+refutation step to every individual claim a plan makes, not only to the
+issue's own top-level premises — a plan's *own* later work items make new
+claims too, and those need the same treatment as the issue text itself.
+
+---
+
 ## 2026-08-24 — A full review-fix round was spent on a PR whose issue a concurrent actor had already closed
 
 **What happened.** While fixing four `chatgpt-codex-connector[bot]` review
