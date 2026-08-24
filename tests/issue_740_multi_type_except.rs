@@ -247,3 +247,23 @@ fn user_defined_class_alongside_builtin_with_as_binding_is_rejected() {
         "expected the offending class to be named, got: {combined}"
     );
 }
+
+// The C0001 rejection above is conditioned on the handler having an `as`
+// binding -- a multi-type handler mixing a user-defined class and a
+// builtin with *no* `as` binding must still compile and catch normally
+// (deep-reviewer finding on #740: confirms the `as`-conditioned rejection
+// doesn't over-reject the no-binding case).
+
+#[test]
+fn user_defined_class_alongside_builtin_without_as_binding_still_compiles_and_catches() {
+    let (ok, stdout, stderr) = build_and_run(
+        "user_class_no_as",
+        "class MyUserError(ValueError):\n    pass\n\n\n\
+         def main() -> None:\n\
+         \x20   try:\n        raise MyUserError(\"boom\")\n\
+         \x20   except (ValueError, MyUserError):\n        print(\"caught\")\n\n\n\
+         main()\n",
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "caught\n");
+}

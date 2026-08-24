@@ -528,6 +528,46 @@ fn a_pep_758_multi_type_handlers_tag_set_is_the_union_deduped() {
 }
 
 #[test]
+fn a_pep_758_multi_type_handler_lowers_through_build_with_deduped_sorted_tags() {
+    // Unlike the test above (which hand-computes the union/dedup in
+    // isolation), this drives the real `HirStmt::Try` -> MIR lowering path
+    // in `crate::stmt` end to end, so deleting either `.sort_unstable()` or
+    // `.dedup()` at that call site would fail *this* test even though
+    // codegen's OR-chain dispatch is itself idempotent under a duplicate or
+    // unsorted tag (deep-reviewer finding on #740).
+    let classes = exception_hierarchy();
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::Try {
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::StringLiteral("body".to_string())],
+            })],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                // `AppError`'s own tag set ([7, 8, 9]) already contains
+                // `ConfigError`'s tag (8), so a naive union would produce
+                // [7, 8, 9, 8] before sort+dedup.
+                exc_type: Some(vec!["AppError".to_string(), "ConfigError".to_string()]),
+                name: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::StringLiteral("caught".to_string())],
+                })],
+            }],
+            orelse: Vec::new(),
+            finalbody: Vec::new(),
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: classes.into_iter().collect(),
+    };
+    let mir = build(&hir);
+    let (_, handlers, _, _) = expect_top_level_try(&mir.items[0]);
+    assert_eq!(handlers.len(), 1);
+    assert_eq!(handlers[0].exc_type_tag, Some(vec![7, 8, 9]));
+}
+
+#[test]
 fn calling_an_untagged_class_is_not_an_exception_construction() {
     let classes = exception_hierarchy();
     let mut scopes = vec![HashMap::new()];

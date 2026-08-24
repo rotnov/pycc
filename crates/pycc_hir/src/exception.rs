@@ -550,6 +550,33 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn except_handler_binding_type_name_picks_the_first_listed_name() {
+        assert_eq!(
+            except_handler_binding_type_name(&[
+                "ValueError".to_string(),
+                "TypeError".to_string(),
+            ]),
+            "ValueError"
+        );
+        assert_eq!(
+            except_handler_binding_type_name(&["ValueError".to_string()]),
+            "ValueError"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "except handler type list must not be empty")]
+    fn except_handler_binding_type_name_panics_on_empty_slice() {
+        // `HirExceptHandler::exc_type` is documented as never `Some(vec![])`
+        // (enforced at `lower_except_handler`, the one production site), so
+        // this panic is unreachable through normal lowering -- but the
+        // invariant is pinned here, at the point it is actually consumed,
+        // independent of whichever HIR lowering path currently happens to
+        // prevent it from firing (deep-reviewer finding on #740).
+        except_handler_binding_type_name(&[]);
+    }
 }
 
 #[cfg(test)]
