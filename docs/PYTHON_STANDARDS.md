@@ -188,14 +188,17 @@ For each newly observed upstream release:
     `native-build-test` matrix legs plus `build-test-coverage`'s `macos-14`
     run (the fifth Tier-1 target) each ran their fixture in both profiles
     rather than skipping it. Neither row is `✅`: PEP 3151's fixture exercises
-    the 16-class hierarchy's catch-by-ancestor dispatch only, not
-    errno-based construction or the `errno`/`filename`/`strerror`/`winerror`
-    attributes, which [#703](https://github.com/rotnov/pycc/issues/703)
-    tracks as a `core` gap; PEP 758's fixture combines an `as` binding only
-    with the parenthesized form, never with the bare-comma form itself, and
-    does not exercise `except*`'s own parentheses-omission (PEP 654's
-    `except*`/`ExceptionGroup` is entirely unimplemented — see that row
-    below), both recorded as `core` gaps. Either `core` gap forces `◐` under
+    only 5 of the 16-class hierarchy's members (OSError, FileNotFoundError,
+    BrokenPipeError, TimeoutError, and catch-by-ancestor dispatch through
+    ConnectionError), and proves neither errno-based construction nor the
+    `errno`/`filename`/`strerror`/`winerror` attributes, which
+    [#703](https://github.com/rotnov/pycc/issues/703) tracks as a `core`
+    gap; PEP 758's fixture does not exercise `except*`'s own
+    parentheses-omission (PEP 654's `except*`/`ExceptionGroup` is entirely
+    unimplemented — see that row below), recorded as a `core` gap. (`except
+    A, B as e:`, bare comma combined with an `as` binding, is a genuine
+    CPython syntax error regardless of parentheses — pycc's parser rejects
+    it too, so this is not a gap.) Either `core` gap forces `◐` under
     [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
 
 ## Python 3.0–3.2 (foundations)
