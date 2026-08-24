@@ -10490,37 +10490,16 @@ fn set_add_grows_the_set_and_a_repeated_value_still_dedups_codegens_and_runs() {
     assert_eq!(output.stdout, b"3\n3\n");
 }
 
-/// RAII handle for a per-test scratch directory under the OS temp dir.
-/// Derefs to `Path` so existing call sites (`dir.join(...)`, `&dir` passed
-/// where `&Path` is expected) keep working unchanged; `Drop` removes the
-/// directory tree when the handle goes out of scope, including on an early
-/// return via a failed `assert!`/`.expect()` panic, which a plain
-/// `PathBuf` return plus a manual `std::fs::remove_dir_all` call at the end
-/// of each test could not guarantee -- a panicking assertion partway
-/// through a test skipped that manual cleanup and left the directory behind
-/// in `$TMPDIR`.
-pub(crate) struct TempTestDir(std::path::PathBuf);
-
-impl std::ops::Deref for TempTestDir {
-    type Target = std::path::Path;
-
-    fn deref(&self) -> &std::path::Path {
-        &self.0
-    }
-}
-
-impl Drop for TempTestDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-pub(crate) fn tempfile_dir(label: &str) -> TempTestDir {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_codegen_test_{label}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    TempTestDir(dir)
-}
+// `tests.rs` is well over AGENTS.md's ~1,000-line "Keep source files
+// decomposable" threshold, so the scratch-directory helper this file's own
+// work touches lives in its own submodule (`tests_support.rs`) rather than
+// growing this file further. Re-exported under its original name so every
+// existing call site -- the ~260 unqualified `tempfile_dir(...)` calls
+// below, and `bigint_rc.rs`'s own `use crate::tests::tempfile_dir;` -- keeps
+// resolving unchanged.
+#[path = "tests_support.rs"]
+mod support;
+pub(crate) use support::tempfile_dir;
 
 /// Test-only linking helper. `pycc`'s real CLI (Task 8) does this via
 /// `cc`/clang (see `src/main.rs`'s `linker_command`/`effective_link_target`/
