@@ -33,6 +33,40 @@ never a merge gate.
 
 ---
 
+## 2026-08-24 — A blanket `sed` decision-renumber over-matched unrelated citations to the same old number
+
+While rebasing `feat/typing-cast-767` onto `origin/main` after PR #772 merged,
+a decision-number collision surfaced: this branch's own cast-erasure decision
+had been drafted as D-197, but PR #772 had already claimed D-197 for its own
+`Optional[T]`/PEP 604 decision (issue #763). The fix renamed this branch's
+decision to D-198 and ran a single blanket
+`sed -i '' 's/D-197/D-198/g'` across the branch's changed files to update
+every cross-reference to match. That command matched more than the branch's
+own cast-related citations: `crates/pycc_types/src/tests.rs` (x3),
+`docs/DIAGNOSTICS.md` (x2), and `crates/pycc_diag/src/explain.rs` (x2), plus
+`docs/ROADMAP.md` (x2), each already carried pre-existing, unrelated D-197
+citations belonging to #763's own Optional[T]/PEP 604 work — inherited from
+the rebase itself, not authored by this branch — and the sweep silently
+rewrote all nine into D-198, mislabeling them as this branch's decision.
+Root cause: a bare string substitution on a decision number cannot
+distinguish "this branch's own citations to the number being renamed" from
+"pre-existing citations to a different decision that happens to reuse the
+same surrounding prose" — a file that discusses two decisions with similar
+context (both are type-system decisions citing issue numbers and diagnostic
+codes) gives a blind `sed` sweep nothing to key on. The defect was caught
+only by the pinned local reviewer's final pre-merge pass on the branch, not
+by build, tests, or `check-site.sh` (all comment/doc-text only, so none of
+those gates cover citation correctness) — costing a full extra fix, verify,
+and commit cycle (`f710f0db`) after the sweep had already been treated as
+done. Lesson: when renumbering a decision across a diff, never blanket-`sed`
+the old number to the new one. Instead scope the substitution to lines whose
+surrounding citation context actually names the decision being renamed (the
+issue number, the decision's own topic keywords) — or, more reliably, grep
+the old number across the full diff first, manually classify every hit as
+"this branch's own" vs. "pre-existing and unrelated," and edit only the
+former set line-by-line. A file that cites several decisions in similar
+prose is the common case here, not the exception.
+
 ## 2026-08-24 — A dispatched subagent cannot satisfy D-068's local-reviewer dispatch requirement
 
 **What happened.** While finishing #763, the working session was itself a

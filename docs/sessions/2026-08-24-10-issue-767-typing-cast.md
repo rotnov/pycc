@@ -215,6 +215,12 @@ A user-defined `def cast(...)` takes priority in all three passes.
   `crates/pycc_types/src/tests.rs`, `docs/DIAGNOSTICS.md`, `docs/ROADMAP.md`,
   `docs/STDLIB_PLAN.md`, `tests/issue_767_typing_cast.rs`, this file) was
   swept to match, while issue #763's own D-197 mentions were left untouched.
+  (The sweep as first run was over-broad and also rewrote nine pre-existing,
+  unrelated #763-owned D-197 citations into D-198; the pinned local
+  reviewer's final pre-merge pass caught this and it was repaired in a
+  follow-up commit -- see the 2026-08-24 retrospective entry in
+  `docs/AGENT_RETROSPECTIVE.md` and commit `f710f0db`. The text above
+  describes the sweep's intended and now-actual end state.)
   `docs/decisions/README.md` carries both rows. All five of this branch's
   commits replayed cleanly across the rebase; the only conflicts were
   `docs/AGENT_RETROSPECTIVE.md` (both sides purely appending new dated
