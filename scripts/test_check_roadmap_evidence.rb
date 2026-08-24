@@ -208,6 +208,36 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  # Writes `docs/roadmap/<name>.md` for each entry in `roadmap_files` (a
+  # Hash of relative filename => content) instead of a single
+  # `docs/ROADMAP.md`, exercising the dual-layout `docs/roadmap/**/*.md`
+  # resolution path.
+  def run_checker_with_roadmap_dir(roadmap_files:, workflow:)
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      FileUtils.mkdir_p(root / "docs/roadmap")
+      FileUtils.mkdir_p(root / ".github/workflows")
+      roadmap_files.each do |relative_name, content|
+        path = root / "docs/roadmap" / relative_name
+        FileUtils.mkdir_p(path.dirname)
+        path.write(content)
+      end
+      (root / ".github/workflows/ci.yml").write(workflow)
+      return Open3.capture3(RbConfig.ruby, CHECKER.to_s, root.to_s)
+    end
+  end
+
+  # Neither `docs/ROADMAP.md` nor `docs/roadmap/` exists at all.
+  def run_checker_with_neither_layout(workflow:)
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      FileUtils.mkdir_p(root / "docs")
+      FileUtils.mkdir_p(root / ".github/workflows")
+      (root / ".github/workflows/ci.yml").write(workflow)
+      return Open3.capture3(RbConfig.ruby, CHECKER.to_s, root.to_s)
+    end
+  end
+
   def paired_perf_workflow
     jobs = {
       "frontend-perf-measure" =>
@@ -4153,5 +4183,112 @@ class RoadmapEvidenceCliTest < Minitest::Test
       "case-variant checkout",
       expected_context: "checkout pin"
     )
+  end
+
+  # --- docs/roadmap/**/*.md dual-layout resolution (Part 1 of #756) ---
+
+  def test_accepts_evidence_split_across_a_docs_roadmap_directory_tree
+    workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read
+    file_a = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile -->
+    MARKDOWN
+    file_b = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] `fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets. <!-- roadmap-evidence: conformance-fib-mandelbrot-tier1 -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker_with_roadmap_dir(
+      roadmap_files: { "a.md" => file_a, "nested/b.md" => file_b },
+      workflow: workflow
+    )
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_missing_both_roadmap_file_and_roadmap_directory
+    _stdout, stderr, status = run_checker_with_neither_layout(workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "ROADMAP.md"
+  end
+
+  def test_rejects_an_empty_docs_roadmap_directory_the_same_as_a_missing_one
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      FileUtils.mkdir_p(root / "docs/roadmap")
+      FileUtils.mkdir_p(root / ".github/workflows")
+      (root / ".github/workflows/ci.yml").write(coverage_workflow)
+
+      stdout, stderr, status = Open3.capture3(RbConfig.ruby, CHECKER.to_s, root.to_s)
+
+      refute status.success?, stdout
+      assert_includes stderr, "ROADMAP.md"
+    end
+  end
+
+  def test_rejects_the_same_evidence_id_claimed_by_two_roadmap_files
+    workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read
+    claim =
+      "The five-target native CI matrix and one cross-host compilation " \
+      "path are live on `main`."
+    duplicate_file = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] #{claim} <!-- roadmap-evidence: ci-tier1-cross-compile -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker_with_roadmap_dir(
+      roadmap_files: { "a.md" => duplicate_file, "b.md" => duplicate_file },
+      workflow: workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, "is already claimed by"
+  end
+
+  def test_prefers_docs_roadmap_md_over_a_docs_roadmap_directory_when_both_exist
+    workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile -->
+    MARKDOWN
+    # An invalid docs/roadmap/ tree that would fail validation if it were
+    # ever read, proving docs/ROADMAP.md alone was consulted.
+    invalid_directory_file = "# pycc Roadmap\n\n- [x] unmarked item\n"
+
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      FileUtils.mkdir_p(root / "docs/roadmap")
+      FileUtils.mkdir_p(root / ".github/workflows")
+      (root / "docs/ROADMAP.md").write(roadmap)
+      (root / "docs/roadmap/a.md").write(invalid_directory_file)
+      (root / ".github/workflows/ci.yml").write(workflow)
+
+      stdout, stderr, status = Open3.capture3(RbConfig.ruby, CHECKER.to_s, root.to_s)
+
+      assert status.success?, stderr
+      assert_includes stdout, "Roadmap evidence policy passed."
+    end
   end
 end
