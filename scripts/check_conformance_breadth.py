@@ -139,7 +139,9 @@ def pep_numbers(cell: str) -> set[int]:
     """The distinct PEP numbers a matrix row's PEP cell names, per D-153.
 
     * An unnumbered cell (`-` or `—`) names none -- it describes a language
-      guarantee with no PEP of its own.
+      guarantee with no PEP of its own. `PEP_LINK` finds no match in such a
+      cell, so this falls out of the general case below with no special
+      casing needed.
     * A cell citing two PEP links (e.g. `649/749`) names both; `PEP_LINK`
       already finds every link in the cell, so no special casing is needed.
     * A cell whose last link is immediately followed by a bare range suffix
@@ -147,8 +149,6 @@ def pep_numbers(cell: str) -> set[int]:
       the smallest linked number through the suffix, inclusive.
     """
     cell = cell.strip()
-    if cell in ("-", "—"):
-        return set()
     numbers = {int(match) for match in PEP_LINK.findall(cell)}
     if not numbers:
         return numbers
