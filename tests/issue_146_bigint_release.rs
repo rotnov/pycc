@@ -499,6 +499,54 @@ fn a_bigint_tuple_rebuilt_in_a_loop_survives_its_supplier_being_rebound() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// `Optional[int]` wrapping (D-197, #763, Part 1 of #747; #770 review round).
+//
+// `MirExpr::OptionalWrap`'s codegen arm (`emit_expr` in `pycc_codegen::lib`)
+// called `coerce_scalar_to_type` directly on a borrowed `int` payload with no
+// retain anywhere in the pipeline: `MirStmt::Assign`'s own
+// `retain_if_int_duplicate` call runs against the *already-wrapped*
+// `Scalar::Optional` result and can never match its `Scalar::Int` guard, and
+// `int_value_is_a_duplicate_reference` classifies `OptionalWrap` itself as
+// unconditionally owning by design (see its own doc comment), so nothing in
+// the pre-fix pipeline ever looked inside the wrapper. Confirmed directly at
+// the emitted-IR level (`bigint_rc::tests::
+// an_optional_wrap_of_a_borrowed_int_name_retains_the_duplicate_reference`
+// and its release-side sibling immediately below it in `bigint_rc.rs`): the
+// pre-fix fixture emitted zero `pycc_rt_bigint_retain` calls for `x: int |
+// None = n`, while `n`'s own later reassignment still emitted its
+// unconditional `pycc_rt_bigint_release` -- an unretained second owner whose
+// supplier's release can free the object out from under it. `truthy`'s own
+// `Scalar::Optional` arm (`lib.rs`) then unconditionally calls
+// `pycc_rt_int_truthy` on the payload word for `if x:`/`while x:`, which
+// dereferences a heap-bigint payload via `bigint_ref` -- so the freed object
+// is genuinely read back, not merely retained-but-unread.
+//
+// The value-correctness test below cannot *prove* the absence of a
+// use-after-free on every allocator (a freed-then-reused block can still
+// look like a plausible bigint), which is exactly why the IR-level tests in
+// `bigint_rc.rs` are the authoritative regression coverage for this fix, per
+// this module's own established convention (see its file-level doc comment:
+// "these are in-crate rather than in `tests/` on purpose"). The peak-RSS
+// test after it proves the fix's other, directly observable half: without a
+// matching release, the retain this fix adds would leak once per
+// reassignment of an `Optional[int]` slot.
+
+#[test]
+fn an_optional_int_wrapping_a_borrowed_bigint_survives_its_supplier_being_reassigned() {
+    // The exact #770 review repro: `n` supplies `x`'s payload by reference:
+    // reassigning `n` afterwards must not affect `x`'s own reference. CPython
+    // oracle: `n`'s value (nonzero) is still what `x` reflects, so `if x:`
+    // takes the truthy branch regardless of what `n` is reassigned to.
+    assert_runs_and_prints(
+        "optional_wrap_borrowed_bigint",
+        &format!(
+            "n = {PROMOTED}\nx: int | None = n\nn = 0\nif x:\n    print(1)\nelse:\n    print(0)\n"
+        ),
+        "1\n",
+    );
+}
+
 #[cfg(unix)]
 mod peak_rss {
     use super::{PROMOTED, pycc_bin, write_case};
@@ -732,6 +780,40 @@ mod peak_rss {
     fn a_bigint_literal_operand_does_not_grow_with_the_iteration_count() {
         let single = built_program_peak_rss("rss_lit_1x", &literal_operand_repro(500_000));
         let double = built_program_peak_rss("rss_lit_2x", &literal_operand_repro(1_000_000));
+        let ratio = double as f64 / single as f64;
+        assert!(
+            ratio < 1.35,
+            "peak RSS must not scale with the loop trip count: \
+             500k iterations={single} 1M iterations={double} ratio={ratio:.4} \
+             (a per-iteration `BigIntObj` leak reads as ratio ~2.0)"
+        );
+    }
+
+    /// #770 review round (D-197 follow-up): the release-side half of the
+    /// `Optional[int]`-wrapping fix, proved the same way Part 1's own
+    /// `repro` above proves its release. Before this fix, `emit_assign`
+    /// released a previous slot payload only for a `Ty::Int` slot -- never
+    /// for `Ty::Optional(Int)` -- so a bigint retained into `x` (by the
+    /// fix directly above this module) on one trip through the loop was
+    /// never released on the next trip's overwrite, leaking one `BigIntObj`
+    /// per iteration exactly like Part 1's original named-storage leak.
+    fn optional_wrap_reassignment_repro(iterations: u32) -> String {
+        format!(
+            "y: int = {PROMOTED}\nx: int | None = None\nfor i in range({iterations}):\n    \
+             y = y + 1\n    x = y\nif x:\n    print(1)\nelse:\n    print(0)\n"
+        )
+    }
+
+    #[test]
+    fn reassigning_an_optional_int_local_in_a_loop_does_not_grow_with_the_iteration_count() {
+        let single = built_program_peak_rss(
+            "rss_optional_wrap_1x",
+            &optional_wrap_reassignment_repro(500_000),
+        );
+        let double = built_program_peak_rss(
+            "rss_optional_wrap_2x",
+            &optional_wrap_reassignment_repro(1_000_000),
+        );
         let ratio = double as f64 / single as f64;
         assert!(
             ratio < 1.35,

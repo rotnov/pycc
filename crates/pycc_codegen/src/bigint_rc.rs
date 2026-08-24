@@ -137,6 +137,54 @@ pub(super) fn release_int_slot_before_store<'ctx>(
     emit_bigint_refcount_call(context, builder, rt, old, BigIntRefcount::Release);
 }
 
+/// `release_int_slot_before_store`'s counterpart for an `Optional[int]`
+/// slot (D-197 follow-up, #763/#770 review): loads the slot's current
+/// `{ i64, i8 }` struct and releases field 0 (the payload word)
+/// unconditionally, ignoring the present/absent flag in field 1.
+///
+/// Ignoring the flag is deliberately safe rather than merely convenient:
+/// both producers of an `Optional[int]` struct value guarantee field 0 is
+/// always a syntactically valid D-141-encoded `int` regardless of
+/// presence -- `coerce_scalar_to_type`'s absent-payload placeholder arm and
+/// `default_value_for_type`'s own `Ty::Optional(_)` arm both explicitly
+/// encode a smallint `0` there rather than a raw zero word, for exactly
+/// this reason (see either's doc comment). `emit_bigint_refcount_call`'s
+/// own inline guard then does the rest: a smallint or bool-identity marker
+/// takes the not-taken branch, and only an actual owned heap-bigint
+/// reference ever reaches the runtime call.
+///
+/// `storage_slot_at_entry` gives every `Optional[int]` slot this same valid
+/// placeholder at function entry (mirroring `Ty::Int`'s own zero-init
+/// immediately above), which is what makes calling this at the very first
+/// store into a slot safe rather than a read of uninitialized alloca
+/// memory.
+///
+/// This is `emit_assign`'s release-side half of the retain
+/// `MirExpr::OptionalWrap`'s codegen arm now performs on a borrowed `int`
+/// payload (see `emit_expr`'s `OptionalWrap` arm in `lib.rs`) -- without
+/// it, that retain would be a permanent per-reassignment leak instead of a
+/// balanced reference.
+pub(super) fn release_optional_int_slot_before_store<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    slot: &StorageSlot<'ctx>,
+) {
+    let struct_ty = context.struct_type(
+        &[context.i64_type().into(), context.i8_type().into()],
+        false,
+    );
+    let old = builder
+        .build_load(struct_ty, slot.ptr, "old_optional")
+        .expect("build_load should not fail for this function's own alloca")
+        .into_struct_value();
+    let payload = builder
+        .build_extract_value(old, 0, "old_optional_payload")
+        .expect("build_extract_value should not fail reading field 0 of a well-formed struct")
+        .into_int_value();
+    emit_bigint_refcount_call(context, builder, rt, payload, BigIntRefcount::Release);
+}
+
 /// `int`'s counterpart to [`incref_if_str_duplicate`], deliberately kept as
 /// a separate function applied at a strictly smaller set of call sites.
 ///
@@ -643,6 +691,102 @@ mod tests {
         // release (the store's). Every one of them was proved guarded, on
         // its own operand, by `guarded_bigint_refcount_calls`.
         assert_eq!((retains, releases), (2, 1), "got {calls:?}");
+    }
+
+    /// #770 review (D-197 follow-up): `x: int | None = n` for a borrowed
+    /// `int` name `n` must retain `n`'s word the moment it is wrapped into
+    /// the `Optional[int]` struct, exactly like a plain `x = n` retains it
+    /// for a `Ty::Int` slot (`an_int_slot_store_emits_a_guarded_release_of_
+    /// the_word_it_overwrites` above). Before this fix,
+    /// `MirExpr::OptionalWrap`'s codegen arm called `coerce_scalar_to_type`
+    /// directly on the raw `emit_expr` result with no retain anywhere in
+    /// the pipeline -- confirmed by inspecting this exact fixture's emitted
+    /// IR prior to the fix, which contained zero `pycc_rt_bigint_retain`
+    /// calls at all.
+    #[test]
+    fn an_optional_wrap_of_a_borrowed_int_name_retains_the_duplicate_reference() {
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "wrap".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::None,
+                body: vec![
+                    MirStmt::Assign {
+                        target: "x".to_string(),
+                        value: MirExpr::OptionalWrap(Box::new(int_name("n")), Box::new(Ty::Int)),
+                    },
+                    MirStmt::Return(None),
+                ],
+            }],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_optional_wrap_retain", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        // One retain: `x`'s own store of the `OptionalWrap`'d word. One
+        // release too -- `emit_assign` structurally emits
+        // `release_optional_int_slot_before_store` before *every* store
+        // into an `Optional[int]` slot, including the first, exactly like
+        // `Ty::Int`'s own unconditional release-before-store. It is proved
+        // guarded here, and at runtime is a no-op for this first store: the
+        // slot's entry placeholder (`storage_slot_at_entry`'s own
+        // `Ty::Optional` arm) is a valid encoded smallint `0`, which the
+        // guard's `(word & 0b11) == 0 && word != 0` test rejects.
+        assert_eq!((retains, releases), (1, 1), "got {calls:?}");
+    }
+
+    /// #770 review: the release-side half of the fix above. Once an
+    /// `Optional[int]` slot holds a retained heap-bigint reference (the
+    /// previous test), overwriting that slot with a second assignment must
+    /// release the first one -- exactly mirroring `Ty::Int`'s own
+    /// release-before-store invariant -- or the retain the previous test
+    /// proves becomes a permanent per-reassignment leak instead of a
+    /// balanced reference.
+    #[test]
+    fn reassigning_an_optional_int_slot_releases_its_previous_payload() {
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "rewrap".to_string(),
+                params: vec![("n".to_string(), Ty::Int), ("m".to_string(), Ty::Int)],
+                return_ty: Ty::None,
+                body: vec![
+                    MirStmt::Assign {
+                        target: "x".to_string(),
+                        value: MirExpr::OptionalWrap(Box::new(int_name("n")), Box::new(Ty::Int)),
+                    },
+                    MirStmt::Assign {
+                        target: "x".to_string(),
+                        value: MirExpr::OptionalWrap(Box::new(int_name("m")), Box::new(Ty::Int)),
+                    },
+                    MirStmt::Return(None),
+                ],
+            }],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_optional_wrap_release", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        // Two retains: one per `OptionalWrap`. Two releases, each a
+        // guarded, proven-safe `release_optional_int_slot_before_store`
+        // call -- the first store's is a runtime no-op on the slot's entry
+        // placeholder (see the previous test), but the *second* store's is
+        // the one that matters: it retires `x`'s first (retained) payload
+        // before overwriting it with the second, which is exactly the
+        // release this fix adds to keep the preceding test's retain
+        // balanced instead of leaking on every reassignment.
+        assert_eq!((retains, releases), (2, 2), "got {calls:?}");
     }
 
     #[test]

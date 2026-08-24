@@ -21,7 +21,8 @@ use exception::{
 mod bigint_rc;
 use bigint_rc::{
     BigIntRefcount, emit_bigint_refcount_call, int_temporary_word, release_if_int_temporary,
-    release_int_slot_before_store, release_scalar_if_int_temporary, retain_if_int_duplicate,
+    release_int_slot_before_store, release_optional_int_slot_before_store,
+    release_scalar_if_int_temporary, retain_if_int_duplicate,
 };
 mod int_const;
 use int_const::{emit_int_constant, tag_smallint_const};
@@ -1594,6 +1595,29 @@ fn emit_expr_unchecked<'ctx>(
         // placeholder.
         MirExpr::OptionalWrap(value, inner) => {
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
+            // #770 review: `value`'s classification must be checked here,
+            // against the raw `Scalar` it just produced, *before*
+            // `coerce_scalar_to_type` below wraps it into a
+            // `Scalar::Optional` struct. `MirStmt::Assign`'s own
+            // `retain_if_int_duplicate` call runs on the *outer*
+            // `OptionalWrap` expression and its already-wrapped
+            // `Scalar::Optional` result, which can never retain anything
+            // (`retain_if_int_duplicate`'s `if let Scalar::Int(word) =
+            // scalar` guard never matches a struct) and
+            // `int_value_is_a_duplicate_reference` classifies
+            // `OptionalWrap` itself as owning for exactly that reason --
+            // by design, it never looks inside the wrapper. So a borrowed
+            // `int` payload (e.g. `x: int | None = n` for a heap-bigint
+            // `n`) reached this arm with no retain anywhere in the
+            // pipeline before this fix, letting `x` hold a second,
+            // unretained reference to `n`'s bigint: `n`'s later
+            // reassignment/death still fires `release_int_slot_before_store`
+            // unconditionally, freeing the object out from under `x`'s
+            // stored payload despite `x` still being live. Reusing the
+            // same classification here (rather than duplicating it) keeps
+            // both the direct-assignment and the `OptionalWrap` paths
+            // agreeing on which shapes are borrowed.
+            let scalar = retain_if_int_duplicate(context, builder, rt, value, scalar);
             coerce_scalar_to_type(
                 context,
                 builder,
@@ -3760,6 +3784,20 @@ fn storage_slot_at_entry<'ctx>(
         builder
             .build_store(ptr, context.i64_type().const_zero())
             .expect("build_store should not fail immediately after this function's own alloca");
+    } else if matches!(&ty, pycc_mir::Ty::Optional(inner) if **inner == pycc_mir::Ty::Int) {
+        // #770 review: mirrors the `Ty::Int` zero-init immediately above,
+        // but with the same valid-payload placeholder
+        // `default_value_for_type`'s own `Ty::Optional(_)` arm builds
+        // (`{ tag_smallint_const(0), 0 }`, never a raw `{0, 0}` struct) --
+        // required so `release_optional_int_slot_before_store` can release
+        // this slot's payload unconditionally, including at the very first
+        // store, without ever reading uninitialized alloca memory or
+        // tripping `classify_encoded_int`'s fail-closed panic on a raw
+        // zero word.
+        let placeholder = default_value_for_type(context, ty.clone());
+        builder
+            .build_store(ptr, placeholder)
+            .expect("build_store should not fail immediately after this function's own alloca");
     }
     let initialized = if guard_reads {
         let initialized_ptr = builder
@@ -3813,6 +3851,15 @@ fn emit_assign<'ctx>(
         .expect("every assignment target must have a predeclared storage slot");
     if slot.ty == pycc_mir::Ty::Int {
         release_int_slot_before_store(context, builder, rt, &slot);
+    } else if matches!(&slot.ty, pycc_mir::Ty::Optional(inner) if **inner == pycc_mir::Ty::Int) {
+        // #770 review: the release-side half of the retain
+        // `MirExpr::OptionalWrap`'s codegen now performs on a borrowed
+        // `int` payload -- without this, that retain would be a permanent
+        // per-reassignment leak of the slot's previous payload instead of
+        // a balanced reference (D-197's only supported `Optional[T]`
+        // payload is `int`, so this is the only `Optional` shape that can
+        // ever hold a bigint word to release).
+        release_optional_int_slot_before_store(context, builder, rt, &slot);
     }
     let value = coerce_scalar_to_type(context, builder, value, slot.ty);
     let basic_value: inkwell::values::BasicValueEnum = match value {
