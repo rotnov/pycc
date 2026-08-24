@@ -1028,7 +1028,7 @@
         {
           "category": "the `=` debug specifier (`f\"{expr=}\"`)",
           "kind": "core",
-          "reason": "pycc diverges from CPython on `=` debug interpolations, tracked by https://github.com/rotnov/pycc/issues/720; the fixture deliberately omits the form so this row's evidence stays byte-for-byte against the oracle."
+          "reason": "pycc rejects `=` debug interpolations outright with C0001, tracked by https://github.com/rotnov/pycc/issues/720; the fixture deliberately omits the form so this row's evidence stays byte-for-byte against the oracle."
         },
         {
           "category": "non-scalar interpolation operands (`list`/`dict`/`set`/`tuple` values)",
