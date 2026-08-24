@@ -156,6 +156,140 @@ available once the depended-on machinery actually exists and can be run.
 
 ---
 
+## 2026-08-24 — The #767 representation fix, once corrected, still accepted every class-to-class `cast` including unsound down-casts
+
+**What happened.** After the fix described in the entry below replaced
+`is_assignable_env` with a dedicated `cast_shares_representation` predicate,
+that predicate still accepted every `Ty::Instance` -> `Ty::Instance` pair
+unconditionally — same class, ancestor, descendant, or unrelated class alike —
+reasoning only that every class instance is one heap-object pointer regardless
+of class, so representation is always preserved. That reasoning is correct for
+representation and wrong for *layout*: `cast` is implemented by erasure, so
+`pycc_mir` never learns the checker-verified target type and keeps resolving
+attribute access against the value's *real*, narrower class. A checker-accepted
+down-cast (`cast(Derived, base)` where `Derived` adds attributes `Base` lacks)
+therefore reaches either a `pycc_mir` panic (an unannotated binding or inline
+access never finds the attribute in the real class's MRO) or an out-of-bounds
+`pycc_rt` instance-slot abort at runtime (an `AnnAssign` re-anchors the MIR
+type to the wider class without the object ever being allocated with its extra
+slots) — a second, independent soundness hole in the same feature, found by a
+second independent review pass of the corrected diff rather than by the first
+review that had already flagged the representation issue.
+
+**Root cause.** The fix in the entry below correctly renamed the question from
+"is this assignable" to "does this preserve representation", but stopped one
+question short: preserving representation is necessary but not sufficient once
+erasure also discards the checker's own type information. The predicate's test
+suite (`cast_between_two_class_types_checks`) asserted an *unrelated*-class
+cast succeeded, which pins the unsound behavior as a pass rather than exercising
+the down-cast case that actually motivates `cast` in ordinary Python (a
+narrowing cast paired with an `isinstance` check) — so the test suite could not
+have caught this even if read carefully.
+
+**What fixed it.** `cast_shares_representation` was narrowed to require MRO
+ancestry-or-identity for the `Instance` -> `Instance` case: the target must be
+the value's own class or one of its class's MRO ancestors (an up-cast), never
+a descendant. The unrelated-class test was replaced with three tests derived
+directly from the accept/reject table: up-cast accepted, down-cast rejected
+(`C0001`, asserting the message names attribute-layout narrowing), unrelated
+classes rejected. D-198 gained a "second review pass" paragraph recording the
+mechanism, and every doc site claiming "down-casts remain available" (D-198
+itself, `docs/DIAGNOSTICS.md`, `docs/ROADMAP.md`, `docs/STDLIB_PLAN.md`, this
+session's own log) was corrected in the same pass.
+
+**Lesson.** When a construct is implemented by *erasure* — the checker verifies
+something the generated code then has no record of — a representation-only
+safety argument is incomplete by construction: ask separately whether anything
+downstream re-derives or re-trusts the erased information (here, MIR's
+attribute lookup against the value's real, not asserted, type) and whether the
+erasure could make that re-derivation land on a *narrower* answer than what the
+checker validated. A predicate fixed once under review is not exempt from the
+same scrutiny that found the first bug — re-derive the accept/reject table from
+the requirement again after any correction to a soundness-relevant predicate,
+rather than treating "already reviewed once" as evidence the second pass will
+be clean.
+
+---
+
+## 2026-08-24 — A #767 review fix reached for the nearest existing predicate, and shipped a `cast` that worked only where it was useless
+
+**What happened.** The pinned reviewer found a real hazard in #767: `cast` is
+erased to its value argument with no conversion emitted, so a target type whose
+runtime representation differs from the value's (`cast(str, 5)`) leaves the
+checker and the emitted code disagreeing. The fix reached for
+`is_assignable_env`, the existing predicate that looked closest, and documented
+it as "the representation-compatibility test". It is not — it is a *subtyping*
+test. It admits `bool` -> `int`, which is a real representation change (`i8`
+vs `i64` per `TYPE_SYSTEM.md`), and it rejects `Instance` -> `Instance`
+entirely, because `is_assignable` has no inheritance rule at all. The result
+accepted one unsound case and rejected the down-cast, which is `cast`'s single
+most common legitimate use. Four tests were written and passed against that
+predicate, including one asserting the unsound `bool` -> `int` acceptance as
+correct. It was caught only by a second independent review of the staged diff.
+
+**Root cause.** The question was "do these two types share a runtime
+representation", and the answer was taken from a function that answers "is this
+assignable to that". The two agree often enough that spot-checks pass. Writing
+the doc comment should have caught it — the comment enumerated what the
+predicate encodes ("identity, `bool` widening to `int`, `Instance` ->
+`Protocol`") and that list visibly omitted `Instance` -> `Instance`, the case
+the feature exists to serve. The enumeration was written and not read back
+against the feature's own use cases. The tests then encoded the predicate's
+behavior rather than the requirement's, so they confirmed rather than checked.
+
+**What fixed it.** An explicit `cast_shares_representation` predicate answering
+only the representation question, the rejection re-coded from `T0021` to
+`C0001` (pycc's erasure limit, not ill-typed Python), a new ADR (D-198), and
+tests rewritten around the requirement: a class-to-class cast accepted, every
+cross-representation pair rejected — including the `bool` -> `int` case the
+earlier test had asserted was fine.
+
+**Lesson.** When a fix reuses an existing predicate for a *new* question, state
+the new question in one sentence and check the predicate against it directly,
+rather than trusting that a near-neighbour semantics is the same semantics. The
+tell is available for free: if the doc comment has to enumerate what the reused
+predicate happens to encode, read that enumeration back against the feature's
+own primary use cases before writing any test — a use case missing from the
+list is the bug. And a test written after the implementation tends to assert
+what the code does; for a fix of this shape, derive the accept/reject table from
+the requirement first.
+
+## 2026-08-24 — A coverage re-run after an interrupted one reported a false 98%, and nearly sent the #767 session hunting a nonexistent coverage hole
+
+**What happened.** A `cargo llvm-cov --workspace --fail-under-lines 100
+--fail-under-regions 100` run for #767 was killed part-way through. The
+immediate re-run on the same tree came back `98.05%` regions / `98.07%` lines
+with 524 missed lines and exit 1, against a `100.00%` / 0-missed result from an
+earlier run of the same command with one test *fewer*. Time went into reading
+the per-file table and theorizing about a regression the branch could not have
+caused.
+
+**Root cause.** The re-run measured an incomplete profile. The exact mechanism
+was not confirmed --- 195 `.profraw` files were present in
+`target/llvm-cov-target` afterwards, but whether the tool's own pre-run cleanup
+skipped leftovers from the killed run, or the run simply failed to collect some,
+was not established. Either way the report was arithmetically valid and
+factually wrong. The tell was the shape of the loss, not its size: total region count was
+byte-identical (`41736`) across both runs, and the missing coverage was
+concentrated in exactly the code exercised through spawned `pycc` subprocesses
+--- `src/main.rs` (80.36%), `crates/pycc_ast` (11.48%),
+`crates/pycc_artifact_layout` (14.76%) --- while every in-process crate stayed
+at or near 100%. Identical instrumentation with one extra passing test cannot
+lose 814 regions; only lost profile data can.
+
+**What fixed it.** `cargo llvm-cov clean --workspace`, then re-running the gate:
+`100.00%` lines and regions, 0 missed of either, 3403 passed, exit 0.
+
+**Lesson.** After any interrupted coverage run, `cargo llvm-cov clean
+--workspace` before believing the next one --- a partial profile under-reports
+silently and never warns. When a coverage number moves by more than a change
+could explain, check whether the total region count moved with it before
+investigating the code: unchanged totals plus a large coverage drop is a
+profile-data problem, not a code problem. Subprocess-exercised crates are where
+it shows first.
+
+---
+
 ## 2026-08-24 — The #767 PR body and session snapshot claimed the coverage gate passed before it had ever produced a verdict
 
 

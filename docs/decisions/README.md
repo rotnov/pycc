@@ -204,3 +204,4 @@ current.
 | [D-195](./D-195-pep-758-multi-type-except-representation.md) | PEP 758 multi-type except handler representation and binding choice | accepted |
 | [D-196](./D-196-pep-681-is-a-second-itemized-row-permanently.md) | PEP 681 is a second itemized row permanently blocked from flipping, alongside PEP 487 | accepted |
 | [D-197](./D-197-optional-t-representation-and-is-none-part1.md) | Optional[T] representation, T | None parsing, and is/is not on None (Part 1 of #747) | accepted |
+| [D-198](./D-198-cast-erasure-limits-cast-to-representation.md) | `cast` erasure limits `cast` to representation-preserving targets | accepted |

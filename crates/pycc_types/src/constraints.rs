@@ -539,6 +539,17 @@ pub(crate) fn collect_expr_constraints(
             // comparison first and reported `T0022` ("conflicting inferred
             // types `int` and `Nope`") in place of `check_cast`'s accurate
             // `T0001` ("`Nope` is not a known class or builtin type").
+            //
+            // #767 review fix (D-197): unlike `check_cast`, this arm does
+            // not reject a representation-changing target (`cast(str, 5)`,
+            // `cast(int, flag)`) — the
+            // solver has no resolved `Ty` for `value` to compare against at
+            // this point, only an unsolved term. This is the same asymmetry
+            // `check_isinstance`'s own doc comment already accepts between
+            // the two passes: full validation runs on the validation-pass
+            // route (an annotated function's body, module level,
+            // `AnnAssign`) and is absent for a return-type-inferred private
+            // helper, which only ever reaches this solver arm.
             if callee == "cast" && !signatures.contains_key(callee) {
                 let target = crate::class::cast_target_name(args)?;
                 if pycc_hir::is_builtin_type_name(target) {

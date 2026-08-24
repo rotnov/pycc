@@ -90,8 +90,12 @@ classified as `C0001`. The same classification applies in both the final
 validation pass and the private-helper inference path (issue #142). It is
 also used for an *implemented* special-cased builtin called with an argument
 shape this version does not support -- `isinstance(f(), int)` (a call as the
-inspected operand) and `cast(list[int], x)` (a subscripted generic as the
-target type, issue #767) are the current instances -- for the same reason:
+inspected operand), `cast(list[int], x)` (a subscripted generic as the
+target type, issue #767), and a `cast` whose target type would change the
+value's runtime representation or narrow its attribute layout
+(`cast(str, 5)`, `cast(int, some_bool)`, a down-cast such as
+`cast(Derived, base)`; D-197, issue #767) are the current instances -- for
+the same reason:
 the construct is valid Python that a later slice can implement, not a
 by-design rejection.
 

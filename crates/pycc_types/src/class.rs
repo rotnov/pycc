@@ -855,6 +855,57 @@ pub(crate) fn cast_target_name(args: &[HirExpr]) -> Result<&str, Diagnostic> {
     Ok(target)
 }
 
+/// #767 (D-197): Whether erasing a `cast(T, value)` to `value` alone leaves
+/// the emitted code's representation *and* attribute layout agreeing with
+/// the static type the rest of the program is then checked against.
+///
+/// True for a cast to the value's own type. For two distinct classes, true
+/// only when `to` is `from` or one of `from`'s ancestors in its MRO — an
+/// up-cast or an identity cast. False for every other pair, including a
+/// genuine down-cast (`to` is a strict descendant of `from`) and every
+/// scalar-representation change such as `bool` -> `int`.
+///
+/// The class case looks like a pure representation question at first —
+/// every class instance is one heap-object pointer regardless of class
+/// (`ty_to_basic_type` in `pycc_codegen`), so a pointer reinterpretation
+/// alone would never crash. But representation is not the whole story here:
+/// `pycc_mir` erases `cast(...)` to `value` alone with no wrapper node (see
+/// `check_cast`'s doc comment), so nothing downstream ever learns the
+/// checker-verified target type `to` — MIR keeps tracking the expression's
+/// *runtime* class, `from`. A down-cast the checker accepted as `to` would
+/// then have the type checker validate `.attr`/`.method()` access against
+/// `to`'s (larger) attribute set while MIR/codegen still resolve the access
+/// against `from`'s (smaller) instance-slot layout: a `pycc_mir` panic for
+/// an unannotated binding or inline access (`class_def_of` can't find the
+/// attribute in `from`'s MRO), or, if an `AnnAssign` re-anchors the MIR
+/// type to `to`, an out-of-bounds `pycc_rt` instance-slot abort at runtime,
+/// since the object was never actually allocated with `to`'s extra slots.
+/// An up-cast or identity cast has the opposite shape and stays sound:
+/// `to`'s attribute set is a subset of (or equal to) `from`'s, so whatever
+/// slot layout MIR keeps tracking already has every attribute the checker
+/// will let code reach through the cast result.
+///
+/// There is no `Ty::Protocol` case. A protocol name is not reachable as a
+/// `cast` target (`cast_target_ty` maps every non-builtin bare name to
+/// `Ty::Instance`), and a protocol-typed parameter is monomorphized to its
+/// concrete class before its function body is checked.
+///
+/// Deliberately not `is_assignable_env`: that is a *subtyping* test, and it
+/// admits `bool` -> `int` (a representation change) while restricting
+/// `Instance` -> `Instance` to protocol conformance rather than MRO
+/// ancestry.
+fn cast_shares_representation(env: &Environment, from: &Ty, to: &Ty) -> bool {
+    if from == to {
+        return true;
+    }
+    if let (Ty::Instance(from_name), Ty::Instance(to_name)) = (from, to)
+        && let Some(from_def) = env.lookup_class(from_name)
+    {
+        return from_def.mro.iter().any(|m| m.as_str() == to_name.as_str());
+    }
+    false
+}
+
 /// #767: Type-checks `cast(T, value)` — `typing.cast` is a runtime no-op in
 /// CPython whose only effect is to declare `value`'s static type as `T`, so
 /// the call's type is `T` and `pycc_mir` lowers the whole expression to
@@ -867,9 +918,46 @@ pub(crate) fn cast_target_name(args: &[HirExpr]) -> Result<&str, Diagnostic> {
 /// by-design rejection — the same classification `check_isinstance` uses for
 /// in-scope-but-unimplemented call shapes.
 ///
-/// `value` is inferred normally so its own errors are still reported; the
-/// inferred type is deliberately discarded, since not agreeing with `T` is
-/// the entire point of a cast.
+/// `value` is inferred normally so its own errors are still reported.
+///
+/// Unlike CPython's `typing.cast`, a target whose *runtime representation*
+/// differs from the value's own is rejected (D-197). `pycc_mir` elides the
+/// whole `cast(...)` call to `value` alone (see the module doc above), so
+/// nothing at MIR/codegen time ever applies a representation conversion. If
+/// the two representations differed — `cast(str, 5)`, `cast(int, flag)` —
+/// the checker would validate the rest of the program against `T` while the
+/// emitted code still carried the value's real representation: a codegen
+/// panic in a debug build (the `pycc_codegen` local-type-drift guard is a
+/// `debug_assert_eq!`) or silently misinterpreted bits in a release one.
+/// Per `docs/TYPE_SYSTEM.md`'s representation table each of `int` (`i64`),
+/// `float` (`f64`), `bool` (`i8`), `str` (heap pointer) has its own
+/// distinct representation, so `bool` -> `int` is a representation change
+/// like any other despite `bool` being an `int` subtype in the static type
+/// system.
+///
+/// What remains permitted is a cast to the value's own type, and an
+/// up-cast between two class instances (`to` is `from` or one of `from`'s
+/// MRO ancestors). A genuine down-cast (`to` is a strict descendant of
+/// `from`) is rejected: unlike a representation change, an unsound
+/// down-cast cannot be caught by any runtime guard, because MIR erasure
+/// (see `cast_shares_representation`'s doc comment) never threads `to`'s
+/// verified attribute layout through to the object `value` actually names,
+/// so `cast`'s single most common legitimate use — narrowing after an
+/// `isinstance` check — is deferred to a version that either keeps a
+/// runtime class tag or otherwise verifies layout compatibility instead of
+/// relying on pure erasure. `cast` does not otherwise verify the nominal
+/// relationship between the two — CPython's and mypy's `cast` are
+/// deliberately unchecked assertions, and pycc preserves that for the
+/// up-cast/identity subset it does erase; the representation-and-layout
+/// check above is a codegen-soundness limit, not a re-introduction of
+/// static checking on the assertion itself.
+///
+/// This check runs only on the validation-pass route (`infer_expr_in`,
+/// reached for an annotated function's body and for module-level/`AnnAssign`
+/// statements). `constraints.rs`'s solver mirror — reached only for a
+/// return-type-inferred private helper — has no resolved `Ty` for the value
+/// at that point and does not perform it, mirroring `check_isinstance`'s own
+/// documented asymmetry between the two passes.
 ///
 /// Two guards `check_isinstance` carries are deliberately absent here.
 /// There is no side-effect guard on the value operand: `isinstance` needs
@@ -888,11 +976,27 @@ pub(crate) fn check_cast(
 ) -> Result<Ty, Diagnostic> {
     let target = cast_target_name(args)?;
     validate_class_name(env, target)?;
-    // Infer the value operand so its own type errors are still reported.
-    // The result is intentionally unused: a cast asserts a type that the
-    // operand's inferred type need not match.
-    let _ = infer_expr_in(env, local_names, &args[1])?;
-    Ok(cast_target_ty(target))
+    let target_ty = cast_target_ty(target);
+    let value_ty = infer_expr_in(env, local_names, &args[1])?;
+    if !cast_shares_representation(env, &value_ty, &target_ty) {
+        return Err(Diagnostic::error(
+            "C0001",
+            format!(
+                "`cast({target}, ...)` would change the value's runtime representation or \
+                 narrow its attribute layout (`{}` to `{}`), which this pycc version does \
+                 not support",
+                value_ty.name(),
+                target_ty.name()
+            ),
+            Span::new(0, 0),
+        )
+        .with_help(
+            "pycc erases `cast` at compile time and emits no conversion, so the target type \
+             must already share the value's runtime representation and attribute layout: \
+             cast to the value's own type, or to one of its base classes",
+        ));
+    }
+    Ok(target_ty)
 }
 
 /// #435: Type-checks `isinstance(obj, class_arg)` — validates the argument

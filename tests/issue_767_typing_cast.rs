@@ -143,3 +143,38 @@ fn a_user_defined_cast_function_takes_priority_end_to_end() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #767 review fix (second pass, D-197): a genuine down-cast to a subclass
+/// with an attribute the source class lacks is rejected by `pycc check`
+/// itself, before `pycc build` ever lowers it to MIR. This is the CLI-level
+/// counterpart to `cast_down_to_a_derived_class_is_c0001` in
+/// `pycc_types::tests` -- proving the rejection actually happens on the
+/// public `check` path, not only inside the crate's own unit-test harness.
+/// Without the `check_cast` fix this program used to type-check and then
+/// either panic in `pycc_mir` (an unannotated binding never reaches
+/// `Derived`'s slot layout at all) or abort at runtime with an
+/// out-of-bounds `pycc_rt` instance-slot read.
+#[test]
+fn a_down_cast_to_a_derived_class_is_rejected_before_build() {
+    let dir = std::env::temp_dir().join(format!("pycc_767_downcast_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "down_cast.py",
+        "from typing import cast\n\nclass Base:\n    def __init__(self, a: int) -> None:\n        self.a = a\n\nclass Derived(Base):\n    def __init__(self, a: int, b: int) -> None:\n        self.a = a\n        self.b = b\n\ndef f(base: Base) -> int:\n    return cast(Derived, base).b\n\nprint(f(Base(1)))\n",
+    );
+    let check = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !check.status.success(),
+        "pycc check should reject a down-cast to a class with extra attributes"
+    );
+    let stdout = String::from_utf8_lossy(&check.stdout);
+    assert!(
+        stdout.contains("C0001") && stdout.contains("narrow its attribute layout"),
+        "expected a C0001 layout-narrowing diagnostic, got: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

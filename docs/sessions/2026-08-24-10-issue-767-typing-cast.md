@@ -52,6 +52,30 @@ A user-defined `def cast(...)` takes priority in all three passes.
   `cast(Nope, x)` report `T0022` ("conflicting inferred types") ahead of
   `check_cast`'s accurate `T0001`. An unrecognized name yields `Ok(None)` and
   leaves the decision to `check_cast`.
+- **`cast` is representation-preserving, not unchecked (new ADR
+  [D-197](../decisions/D-197-cast-erasure-limits-cast-to-representation.md)).**
+  The pinned local reviewer found that eliding `cast(str, 5)` to the integer
+  `5` leaves the checker validating the program against `str` while the code
+  still carries an `i64` -- a codegen `debug_assert_eq!` panic in a debug
+  build, misinterpreted bits in a release one. `check_cast` now requires the
+  target to preserve the value's runtime representation *and* attribute
+  layout: the value's own type, or an up-cast to one of its class's MRO
+  ancestors (the nominal relationship is deliberately unverified for that
+  subset, matching CPython's and mypy's unchecked `cast`). A genuine
+  down-cast is rejected, not merely unverified -- see the third-pass entry
+  below. Three follow-on calls made across two further reviewer passes: the
+  first attempt reused `is_assignable_env` as the gate, which is a
+  *subtyping* test -- it admits `bool` -> `int` (a real representation
+  change, `i8` vs `i64` per `TYPE_SYSTEM.md`) and restricted
+  `Instance` -> `Instance` to protocol conformance, so it accepted the
+  unsound case and rejected the useful one; it was replaced with an explicit
+  `cast_shares_representation` predicate that (in its first version)
+  accepted every `Instance` -> `Instance` pair unconditionally, which a
+  second review pass then found unsound for down-casts specifically (see
+  below) and narrowed to MRO ancestry. And the rejection reports `C0001`,
+  not `T0021`: the program is not ill-typed Python, the limit is pycc's own
+  erasure, and `C0001`'s prose already covers "an implemented special-cased
+  builtin called with an argument shape this version does not support".
 - **The missing import gate is filed as #768, not fixed here.** The pinned
   local reviewer's one finding (severity `warning`) was that bare `cast(...)`
   is intercepted without checking that the module wrote
@@ -78,11 +102,14 @@ A user-defined `def cast(...)` takes priority in all three passes.
 
 ## Test evidence
 
-- `crates/pycc_types/src/tests.rs` -- 17 new unit tests: every builtin scalar
+- `crates/pycc_types/src/tests.rs` -- 22 new unit tests: every builtin scalar
   target, a user-defined class target, wrong arity, subscripted target, unknown
   target, errors inside the value operand, user-defined `cast` priority in both
   passes, the qualified-marker-as-value / qualified-marker-called paths in both
-  passes, and `cast_without_its_import_is_currently_accepted` (the #768 pin).
+  passes, `cast_without_its_import_is_currently_accepted` (the #768 pin), and
+  five for D-197's representation rule (class-to-class accepted;
+  `cast(str, 5)` bare and inside an `AnnAssign`, `bool` -> `int`, and
+  `int` -> `bool` all `C0001`).
 - `crates/pycc_mir/src/tests/builtin.rs` -- 2 new tests: the call is elided to
   its value argument; a user-defined `cast` still lowers to a real call.
 - `tests/issue_767_typing_cast.rs` (new) -- 3 CLI end-to-end tests, including a
@@ -90,8 +117,14 @@ A user-defined `def cast(...)` takes priority in all three passes.
   every `cast(T, v)` replaced by `v` alone, and a runtime check that a
   user-defined `def cast(...)` is really called. All three pass under coverage
   instrumentation.
-- Full workspace suite green; `cargo llvm-cov --workspace --fail-under-lines 100
-  --fail-under-regions 100` run locally.
+- `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
+  run locally on this exact tree: 3403 tests passed, 0 failed, and the gate
+  exited 0 with `27111` lines and `41736` regions at `100.00%`, 0 missed of
+  either. Run it from a clean profile (`cargo llvm-cov clean --workspace`) if a
+  previous coverage run was interrupted -- a partial profile from a killed run
+  silently under-reports (it produced a spurious 98.05%/98.07% here, with the
+  losses concentrated in the code exercised through `pycc` subprocesses:
+  `src/main.rs`, `pycc_ast`, `pycc_artifact_layout`).
 - `bash scripts/check-site.sh`, `ruby scripts/check_status_page_freshness.rb`,
   `ruby scripts/check_roadmap_evidence.rb`, `ruby scripts/check_ci_permissions.rb`,
   and `python3 scripts/generate_decisions_index.py ... --check` all pass.
@@ -115,6 +148,14 @@ A user-defined `def cast(...)` takes priority in all three passes.
 ## Known follow-ups / non-actions
 
 - No conformance-matrix row moves: no PEP fixture covers `typing.cast`.
+- `cast(C, p)` inside a function with a protocol-typed parameter reports
+  `T0021 name `C` is not defined`: the protocol-monomorphization rewrite path
+  re-infers the body without the `cast` interception, so the target name is
+  treated as a value. Found while writing a D-197 test for a protocol-typed
+  value; the test was dropped rather than pinning a confusing message. Not a
+  regression from this PR (the same path predates it), and not reachable in
+  the accepted subset any other way. Worth an issue in v0.3 if `cast` use
+  spreads.
 - [#768](https://github.com/rotnov/pycc/issues/768) (v0.3) -- bare-name stdlib
   symbols accepted without their import; see the decision above.
 - `main` at `5be4a055` is not `cargo fmt` clean -- `crates/pycc_codegen/src/tests.rs`,

@@ -22352,6 +22352,113 @@ fn cast_to_a_user_defined_class_type_checks() {
 }
 
 #[test]
+fn cast_up_to_a_base_class_checks() {
+    // #767 review fix (second pass, D-197): a cast from a class to one of
+    // its own MRO ancestors changes no representation and narrows no
+    // attribute layout -- `Derived`'s slots are a superset of `Base`'s, so
+    // whatever MIR keeps tracking after erasure already supports every
+    // attribute the checker lets code reach through the cast result.
+    check_source(
+        "from typing import cast\nclass Base:\n    def __init__(self, a: int) -> None:\n        self.a = a\nclass Derived(Base):\n    def __init__(self, a: int, b: int) -> None:\n        self.a = a\n        self.b = b\ndef f(d: Derived) -> Base:\n    return cast(Base, d)\nprint(f(Derived(1, 2)).a)\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn cast_down_to_a_derived_class_is_c0001() {
+    // #767 review fix (second pass, D-197): a genuine down-cast (the
+    // rejected direction the first review pass's `cast_shares_representation`
+    // wrongly admitted) is unsound under erasure -- `pycc_mir` never learns
+    // the checker-verified target `Derived`, so it keeps resolving attribute
+    // access against the value's real MIR type `Base`, which lacks `Derived`'s
+    // extra slot. Accepting this at the type level, as the first pass did,
+    // reaches either a `pycc_mir` panic (unannotated binding/inline access)
+    // or an out-of-bounds `pycc_rt` instance-slot abort at runtime
+    // (`AnnAssign`, which re-anchors the MIR type to `Derived` without the
+    // object ever having been allocated with `Derived`'s slots). Rejecting it
+    // here, at `check_cast`, closes the hole before either path is reached.
+    let err = check_source(
+        "from typing import cast\nclass Base:\n    def __init__(self, a: int) -> None:\n        self.a = a\nclass Derived(Base):\n    def __init__(self, a: int, b: int) -> None:\n        self.a = a\n        self.b = b\ndef f(base: Base) -> int:\n    return cast(Derived, base).b\nprint(f(Base(1)))\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message.contains("narrow its attribute layout"),
+        "expected the layout message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn cast_between_two_unrelated_class_types_is_c0001() {
+    // #767 review fix (second pass, D-197): two classes with no MRO
+    // relationship are neither an up-cast nor an identity cast, so this is
+    // rejected on the same layout-soundness grounds as a genuine down-cast --
+    // neither class's slot layout is guaranteed to be a superset of the
+    // other's.
+    let err = check_source("from typing import cast\nclass A:\n    def __init__(self, v: int) -> None:\n        self.v = v\nclass B:\n    def __init__(self, v: int) -> None:\n        self.v = v\ndef f(a: A) -> B:\n    return cast(B, a)\nprint(f(A(1)).v)\n")
+        .unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
+fn cast_changing_representation_is_c0001() {
+    // #767 review fix (blocker, D-197): a `cast` whose target type's runtime
+    // representation differs from the value's own inferred type used to
+    // type-check unconditionally, then reach either a codegen-internal-error
+    // panic (debug build, via the local-type-drift `debug_assert_eq!`) or
+    // silently misinterpreted bits (release build) once `pycc_mir` elided
+    // the whole call to the value alone. `check_cast` now rejects it with
+    // `C0001`, the versioned capability code -- the rejection is pycc's own
+    // erasure limit, not a claim that the program is ill-typed Python.
+    let err = check_source("from typing import cast\ny = cast(str, 5)\nprint(y)\n").unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message
+            .contains("would change the value's runtime representation"),
+        "expected the representation message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn cast_changing_representation_in_an_annassign_is_c0001() {
+    // #767 review fix (blocker): the exact repro the review found -- an
+    // `AnnAssign` masks the representation mismatch from a casual read
+    // (`x: str = cast(str, 5)` looks consistent), but the value's real
+    // inferred type is still `int`.
+    let err =
+        check_source("from typing import cast\nx: str = cast(str, 5)\nprint(x)\n").unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
+fn cast_widening_bool_to_int_is_c0001() {
+    // #767 review fix (D-197): `bool` is a *static* subtype of `int`, but
+    // `TYPE_SYSTEM.md`'s representation table gives it a standalone `i8`
+    // against `int`'s `i64`-compatible word. Because pycc emits no
+    // conversion for an erased `cast`, this widening is a representation
+    // change like any other and is rejected -- the one case where the
+    // representation rule is deliberately stricter than assignability.
+    let err = check_source(
+        "from typing import cast\ndef f(b: bool) -> int:\n    return cast(int, b)\nprint(f(True))\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
+fn cast_narrowing_int_to_bool_is_c0001() {
+    // #767 review fix: the reverse direction of the case above, rejected
+    // for the same reason.
+    let err = check_source(
+        "from typing import cast\ndef f(x: int) -> bool:\n    return cast(bool, x)\nprint(f(1))\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
 fn cast_with_the_wrong_argument_count_is_t0021() {
     // #767: `cast` takes exactly two arguments; every other arity is an
     // ordinary call-shape error, the same `T0021` `isinstance` uses.
@@ -22466,6 +22573,22 @@ fn cast_without_its_import_is_currently_accepted() {
     // import visibility threaded through both `Environment` and the solver's
     // `ConstraintEnvironment`; #768 owns that work and must invert this test.
     check_source("def f(x: int) -> int:\n    return cast(int, x)\nprint(f(1))\n").unwrap();
+}
+
+#[test]
+fn cast_without_its_import_is_currently_accepted_through_the_solver_mirror() {
+    // #768, solver-mirror half of the pin above: `cast_without_its_import_is_currently_accepted`
+    // only exercises `expr.rs`'s validation-pass interception (an annotated
+    // function's body). `constraints.rs`'s solver mirror is a separate,
+    // hand-written arm with its own `signatures.contains_key(callee)` guard
+    // and no import check of its own, reached only for a return-type-inferred
+    // private helper -- so a #768 fix that inverts only the validation-pass
+    // gate would leave this route accepting unimported `cast` unnoticed.
+    // Pinning both routes now means #768 must invert both.
+    check_source(
+        "def _helper():\n    return cast(int, 1)\nprint(_helper())\n",
+    )
+    .unwrap();
 }
 
 #[test]
