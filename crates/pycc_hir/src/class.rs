@@ -2902,6 +2902,19 @@ mod tests {
     }
 
     #[test]
+    fn an_ordinary_class_with_a_non_leading_docstring_lowers_successfully() {
+        // #744's guard has no position check: a bare string-literal
+        // expression statement is a no-op anywhere in the body, not only
+        // when it appears first. Place it after `__init__` to exercise
+        // that non-leading position directly, rather than only inferring
+        // it from the loop structure.
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        return\n    \"A class.\"\n",
+        );
+        assert_eq!(hir.class_defs.len(), 1);
+    }
+
+    #[test]
     fn a_non_string_expression_statement_in_a_class_body_is_still_rejected() {
         // #744's docstring exemption covers only a bare string-literal
         // expression statement: a bare non-string expression statement in a
@@ -4388,6 +4401,17 @@ mod tests {
     }
 
     #[test]
+    fn an_enum_class_with_a_non_leading_docstring_is_accepted() {
+        // #744's guard has no position check: place the docstring after a
+        // member assignment to exercise the non-leading case directly.
+        let hir = lower_ok("class Color(Enum):\n    RED = 1\n    \"A color.\"\n    GREEN = 2\n");
+        let (_, class_def) = &hir.class_defs[0];
+        assert_eq!(class_def.enum_members.len(), 2);
+        assert_eq!(class_def.enum_members[0].0, "RED");
+        assert_eq!(class_def.enum_members[1].0, "GREEN");
+    }
+
+    #[test]
     fn a_non_string_expression_statement_in_an_enum_body_is_still_rejected() {
         // #744's docstring exemption covers only a bare string-literal
         // expression statement: a bare non-string expression statement in
@@ -4453,6 +4477,19 @@ mod tests {
         // #744: a class docstring (a bare string-literal expression
         // statement) is a no-op in a dataclass body, not a field or method.
         let hir = lower_ok("@dataclass\nclass Point:\n    \"A point.\"\n    x: int\n    y: int\n");
+        let (_, class_def) = &hir.class_defs[0];
+        assert!(class_def.is_dataclass);
+        assert_eq!(
+            class_def.dataclass_fields,
+            vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int),]
+        );
+    }
+
+    #[test]
+    fn a_dataclass_with_a_non_leading_docstring_lowers_successfully() {
+        // #744's guard has no position check: place the docstring after a
+        // field to exercise the non-leading case directly.
+        let hir = lower_ok("@dataclass\nclass Point:\n    x: int\n    \"A point.\"\n    y: int\n");
         let (_, class_def) = &hir.class_defs[0];
         assert!(class_def.is_dataclass);
         assert_eq!(
@@ -4740,6 +4777,18 @@ mod tests {
         // statement) is a no-op in a protocol body.
         let hir = lower_ok(
             "from typing import Protocol\nclass P(Protocol):\n    \"A protocol.\"\n    def foo(self) -> int: ...\n",
+        );
+        let def = &hir.class_defs[0].1;
+        assert!(def.is_protocol);
+        assert_eq!(def.protocol_members.len(), 1);
+    }
+
+    #[test]
+    fn a_protocol_class_with_a_non_leading_docstring_lowers_successfully() {
+        // #744's guard has no position check: place the docstring after a
+        // method to exercise the non-leading case directly.
+        let hir = lower_ok(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\n    \"A protocol.\"\n",
         );
         let def = &hir.class_defs[0].1;
         assert!(def.is_protocol);
