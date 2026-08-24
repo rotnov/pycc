@@ -338,50 +338,11 @@ for value in range(0, 2, false_int()):
     );
 }
 
-#[test]
-fn none_typed_parameters_cross_the_user_function_abi() {
-    let source = "\
-def source() -> None:
-    return
-
-def sink(value: None) -> None:
-    print(value)
-    return value
-
-sink(source())
-";
-    let output = build_and_run("none_parameter_abi", source);
-    assert!(output.status.success());
-    assert_eq!(output.stdout, b"None\n");
-}
-
-/// #167: D-075 promises the canonical `None` unit carrier crossing the user
-/// function ABI is LLVM `i8 0`, but `none_typed_parameters_cross_the_user_function_abi`
-/// only prints the statically-known `Ty::None`, which renders "None" for
-/// *any* carrier bit pattern and so cannot observe the carrier value at all.
-/// This branches on the parameter's truthiness instead, which pycc lowers
-/// through the same `truthy` path as any other typed value -- a `1` carrier
-/// would flip the printed branch, so this fails under the mutation that
-/// motivated the issue (`Scalar::Bool(const_int(0, ...))` ->
-/// `Scalar::Bool(const_int(1, ...))` in the `None` call-result carrier).
-#[test]
-fn a_none_call_result_crossing_the_abi_carries_a_falsy_unit_value() {
-    let source = "\
-def source() -> None:
-    return
-
-def sink(value: None) -> None:
-    if value:
-        print(1)
-    else:
-        print(0)
-
-sink(source())
-";
-    let output = build_and_run("none_carrier_truthiness", source);
-    assert!(output.status.success());
-    assert_eq!(output.stdout, b"0\n");
-}
+// `none_typed_parameters_cross_the_user_function_abi` and #167's
+// `a_none_call_result_crossing_the_abi_carries_a_falsy_unit_value` moved to
+// `tests/issue_167_none_carrier_abi.rs` (AGENTS.md "Keep source files
+// decomposable": this file is past the ~1,000-line threshold and #167's own
+// work touched this None-carrier ABI cluster).
 
 #[test]
 fn a_floor_division_quotient_outside_the_tagged_range_promotes() {
