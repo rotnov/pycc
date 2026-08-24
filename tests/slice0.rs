@@ -240,19 +240,41 @@ fn build_rejects_a_module_value_binding_that_shadows_a_function_call() {
     );
 }
 
-/// The summary line both `pycc version` forms print, built from the same
-/// manifest macros as the implementation (this integration test compiles
-/// inside the `pycc` package, so `CARGO_PKG_VERSION`/`CARGO_PKG_RUST_VERSION`
-/// resolve to identical values in both binaries and the snapshot tracks a
-/// version bump instead of rotting). "LLVM 22.1.1" is D-015's pinned contract
-/// literal on both sides -- see the version arm's own comment in
-/// `src/main.rs` for why the *installed* LLVM's truthfulness is #75's scope,
-/// not this test's.
+/// The summary line both `pycc version` forms print.
+///
+/// `pycc {version}` is built from the same manifest macro as the
+/// implementation (`CARGO_PKG_VERSION`, identical in both binaries since this
+/// integration test compiles inside the `pycc` package), so the snapshot
+/// tracks a version bump instead of rotting.
+///
+/// `rustc {version}` is deliberately **not** derived from
+/// `env!("PYCC_BUILD_RUSTC_VERSION")`, the same source `src/main.rs` uses:
+/// reusing it would only prove the binary's output matches its own build
+/// script, not that the build script captured the real compiler (#247 -- the
+/// original bug reused `CARGO_PKG_RUST_VERSION` on both sides and stayed
+/// green while reporting the wrong field). An earlier version of this test
+/// re-invoked `rustc --version` itself at test run time, but Cargo only sets
+/// `RUSTC` for build script invocations, not for the test binary -- so when
+/// the compiler is pinned via `.cargo/config.toml` rather than the `RUSTC`
+/// environment variable, the test's own fallback to `rustc` on `PATH` could
+/// silently check a different compiler than the one `build.rs` actually
+/// captured. Instead this reads `OUT_DIR/rustc_version.txt`, a second
+/// artifact `build.rs` writes alongside the `PYCC_BUILD_RUSTC_VERSION`
+/// compile-time env var from the exact same build-time resolution --
+/// `env!("OUT_DIR")` resolves to that same directory for every target in
+/// this package, including integration tests, so this reads build-time
+/// evidence through a different channel than `src/main.rs`'s macro without
+/// re-resolving the compiler itself.
+///
+/// "LLVM 22.1.1" is D-015's pinned contract literal on both sides -- see the
+/// version arm's own comment in `src/main.rs` for why the *installed* LLVM's
+/// truthfulness is #75's scope, not this test's.
 fn expected_version_summary_line() -> String {
+    let captured_rustc_version = include_str!(concat!(env!("OUT_DIR"), "/rustc_version.txt"));
     format!(
         "pycc {} (rustc {}, LLVM 22.1.1)\n",
         env!("CARGO_PKG_VERSION"),
-        env!("CARGO_PKG_RUST_VERSION"),
+        captured_rustc_version,
     )
 }
 

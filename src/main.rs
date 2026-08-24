@@ -47,17 +47,22 @@ fn main() -> ExitCode {
         }
         Command::Run { path } => run(&path),
         Command::Version { verbose } => {
-            // `pycc {version}` and `rustc {rust-version}` come from the
-            // manifest (`CARGO_PKG_VERSION`, `CARGO_PKG_RUST_VERSION`) so the
-            // line can't silently rot when either bumps; the repository keeps
-            // `rust-version` in lockstep with `rust-toolchain.toml`. "LLVM
-            // 22.1.1" stays a literal deliberately: it states D-015's pinned
-            // contract value, and whether the *installed* LLVM actually
-            // matches that pin is #75's open scope, not this line's job.
+            // `pycc {version}` comes from the manifest (`CARGO_PKG_VERSION`),
+            // so it can't silently rot when the crate bumps. `rustc
+            // {version}` used to come from `CARGO_PKG_RUST_VERSION`, but
+            // that's the manifest's `rust-version` (MSRV) contract, not the
+            // compiler that actually produced this binary -- a newer
+            // installed rustc than the declared minimum builds cleanly and
+            // silently makes the two diverge (#247). `build.rs` captures the
+            // real build-time `rustc --version` into
+            // `PYCC_BUILD_RUSTC_VERSION` instead. "LLVM 22.1.1" stays a
+            // literal deliberately: it states D-015's pinned contract value,
+            // and whether the *installed* LLVM actually matches that pin is
+            // #75's open scope, not this line's job.
             println!(
                 "pycc {} (rustc {}, LLVM 22.1.1)",
                 env!("CARGO_PKG_VERSION"),
-                env!("CARGO_PKG_RUST_VERSION"),
+                env!("PYCC_BUILD_RUSTC_VERSION"),
             );
             if verbose {
                 // CLI_SPEC.md's `pycc version --verbose` row promises the
