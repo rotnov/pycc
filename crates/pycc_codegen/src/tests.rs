@@ -8069,10 +8069,10 @@ fn compiles_an_f_string_interpolating_a_none_returning_call_as_none() {
         ],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("fstring_none_call");
-    let obj_path = dir.join("fstring_none_call.o");
+    let dir = tempfile_dir("fstring_none_call_as_none");
+    let obj_path = dir.join("fstring_none_call_as_none.o");
     compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
-    let bin_path = dir.join("fstring_none_call");
+    let bin_path = dir.join("fstring_none_call_as_none");
     link_object_with_runtime(&obj_path, &bin_path);
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"None\n");
@@ -8168,10 +8168,10 @@ fn interpolating_a_none_returning_call_in_an_f_string_renders_none_not_false() {
         ],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("fstring_none_call");
-    let obj_path = dir.join("fstring_none_call.o");
+    let dir = tempfile_dir("fstring_none_call_renders_none");
+    let obj_path = dir.join("fstring_none_call_renders_none.o");
     compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
-    let bin_path = dir.join("fstring_none_call");
+    let bin_path = dir.join("fstring_none_call_renders_none");
     link_object_with_runtime(&obj_path, &bin_path);
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"got: None\n");
