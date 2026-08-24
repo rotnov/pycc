@@ -131,11 +131,12 @@ const UNREGISTERED_FIXTURE_ALLOWLIST: &[(&str, &str)] = &[
     ),
     (
         "pep_0681_dc_transform.py",
-        "Blocked on the deliberate @dataclass_transform()-as-@dataclass divergence tracked by \
-         issue #248: pycc synthesizes __init__/__eq__/__repr__ where CPython's own \
-         typing.dataclass_transform synthesizes nothing, so this fixture cannot match the \
-         oracle byte-for-byte at all. #579 registered the other three decorator fixtures; this \
-         one is not merely awaiting the stdlib surface.",
+        "Blocked on the deliberate @dataclass_transform()-as-@dataclass divergence, recorded in \
+         D-196 and tracked by issue #749: pycc synthesizes __init__/__eq__/__repr__ where \
+         CPython's own typing.dataclass_transform synthesizes nothing, so this fixture cannot \
+         match the oracle byte-for-byte at all. #579 registered the other three decorator \
+         fixtures; this one is not merely awaiting the stdlib surface. (The prior citation here, \
+         issue #248, is closed and never mentions PEP 681 -- it was stale.)",
     ),
 ];
 
