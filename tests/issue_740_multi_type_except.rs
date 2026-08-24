@@ -267,3 +267,57 @@ fn user_defined_class_alongside_builtin_without_as_binding_still_compiles_and_ca
     assert!(ok, "program failed: {stderr}");
     assert_eq!(stdout, "caught\n");
 }
+
+// -- isinstance() soundness on a multi-type handler's `as` binding --------
+//
+// `chatgpt-codex-connector[bot]` finding on #740, PR #743: `isinstance()` in
+// pycc folds entirely at compile time from the object's *static*
+// `Ty::Instance` type's MRO (`pycc_mir::class::lower_isinstance`,
+// `pycc_hir::typecheck::eval_isinstance_single`) -- there is no runtime type
+// check. Binding a multi-type handler's `as` name to the first-listed type
+// (`names[0]`) made `isinstance(e, names[0])` fold to a compile-time
+// constant `True` even when the handler actually caught a *different* named
+// type -- a false positive, not merely an imprecision. D-195 was revised so
+// a genuinely multi-type handler (more than one named type) binds to
+// `"Exception"`, the universal root, instead. `"Exception"`'s own MRO
+// contains no descendant name, so a specific-type `isinstance()` query on
+// such a binding now folds to `False` (a conservative false negative, in
+// the same already-accepted-imprecision class as the pre-existing
+// single-type-handler limitation), and `isinstance(e, Exception)` still
+// folds to `True`. This test pins that corrected behavior end to end.
+
+#[test]
+fn isinstance_on_a_multi_type_handler_binding_never_produces_a_false_positive() {
+    let (ok, stdout, stderr) = build_and_run(
+        "isinstance_multi_type_binding",
+        "def main() -> None:\n\
+         \x20   try:\n        raise TypeError(\"boom\")\n\
+         \x20   except (ValueError, TypeError) as e:\n\
+         \x20       print(isinstance(e, TypeError))\n\
+         \x20       print(isinstance(e, ValueError))\n\
+         \x20       print(isinstance(e, Exception))\n\n\n\
+         main()\n",
+    );
+    assert!(ok, "program failed: {stderr}");
+    // Both specific-type queries fold to `False` (conservative, no false
+    // positive) even though `TypeError` was the actual runtime exception;
+    // the universal-root query still folds to `True`.
+    assert_eq!(stdout, "False\nFalse\nTrue\n");
+}
+
+// A single-name handler is unaffected by the multi-type fix: it still binds
+// to its own exact type, so `isinstance(e, <that type>)` still folds to the
+// pre-existing, already-accepted `True`.
+
+#[test]
+fn isinstance_on_a_single_type_handler_binding_still_folds_true_for_its_own_type() {
+    let (ok, stdout, stderr) = build_and_run(
+        "isinstance_single_type_binding",
+        "def main() -> None:\n\
+         \x20   try:\n        raise ValueError(\"boom\")\n\
+         \x20   except ValueError as e:\n        print(isinstance(e, ValueError))\n\n\n\
+         main()\n",
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "True\n");
+}

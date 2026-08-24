@@ -1424,10 +1424,8 @@ pub(crate) fn collect_block_constraints(
                         && let Some(name) = &handler.name
                     {
                         let binding_type = pycc_hir::except_handler_binding_type_name(exc_types);
-                        henv.bindings.insert(
-                            name.clone(),
-                            Ok(Ty::Instance(Box::new(binding_type.clone()))),
-                        );
+                        henv.bindings
+                            .insert(name.clone(), Ok(Ty::Instance(Box::new(binding_type))));
                     }
                     collect_block_constraints(
                         signatures,

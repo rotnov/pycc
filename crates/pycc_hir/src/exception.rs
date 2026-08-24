@@ -397,20 +397,52 @@ pub struct HirExceptHandler {
     pub body: Vec<HirStmt>,
 }
 
-/// The representative exception type name for a multi-type `except`
-/// handler's `as` binding, generic-call rewriting, and constraint
+/// The representative exception type name for a single- or multi-type
+/// `except` handler's `as` binding, generic-call rewriting, and constraint
 /// collection. All four binding sites (MIR lowering, type checking,
 /// monomorphization, constraint collection) must agree on the same name,
-/// so they all call this one helper rather than inlining `names[0]`
-/// independently. Binds to the first-listed type in source order (see the
-/// D-195 decision entry for the two rejected alternatives).
+/// so they all call this one helper rather than inlining a name choice
+/// independently.
+///
+/// A single-name handler (`names.len() == 1`, including `except (A,):` and
+/// bare-comma `except A,:`) binds to that exact name, matching `except A:`.
+///
+/// A genuinely multi-type handler (`names.len() > 1`) binds to
+/// `"Exception"`, the universal builtin root, rather than to the
+/// first-listed name. An earlier version of this helper always picked
+/// `names[0]` (see the D-195 decision entry's now-superseded rationale);
+/// that choice was unsound for `isinstance()`, not just imprecise.
+/// `isinstance()` in this compiler folds entirely at compile time from the
+/// object's *static* `Ty::Instance` type's MRO
+/// (`pycc_mir::class::lower_isinstance`,
+/// `pycc_hir::typecheck::eval_isinstance_single`) -- there is no runtime
+/// type check. Binding `except (ValueError, TypeError) as e:` to
+/// `"ValueError"` made `isinstance(e, ValueError)` fold to a constant
+/// `True` even when the handler actually caught a `TypeError`: a false
+/// *positive*, worse than the pre-existing, already-accepted imprecision
+/// for single-type handlers (which can only produce false *negatives* on
+/// subclass-narrowing queries, since a single declared type is always a
+/// genuine ancestor of anything that handler can catch). Binding to
+/// `"Exception"` instead means `"Exception"`'s own MRO contains no
+/// descendant name, so `isinstance(e, AnySpecificType)` on a multi-type
+/// handler's binding folds to `False` -- a conservative false negative, in
+/// the same already-accepted-imprecision class as the single-type case,
+/// never a false positive. `raise e` (bare-name re-raise) is unaffected by
+/// this choice either way: it lowers to `MirExceptionValue::Existing`,
+/// which preserves the actual runtime exception object and tag rather than
+/// reconstructing from this static binding type
+/// (`pycc_mir::exception::lower_exception_value`).
 ///
 /// # Panics
 /// Panics if `names` is empty. `HirExceptHandler::exc_type` is documented
 /// as never containing an empty `Vec`, so callers passing that field's
 /// contents never trigger this.
-pub fn except_handler_binding_type_name(names: &[String]) -> &String {
-    names.first().expect("except handler type list must not be empty")
+pub fn except_handler_binding_type_name(names: &[String]) -> String {
+    match names {
+        [] => panic!("except handler type list must not be empty"),
+        [only] => only.clone(),
+        _ => "Exception".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -557,14 +589,34 @@ mod tests {
     }
 
     #[test]
-    fn except_handler_binding_type_name_picks_the_first_listed_name() {
+    fn except_handler_binding_type_name_uses_exception_for_multiple_names() {
+        // A genuinely multi-type handler binds to the universal root, not
+        // the first-listed name -- binding to `names[0]` made
+        // `isinstance(e, names[0])` fold to a compile-time-constant `True`
+        // even when the handler actually caught a different named type, a
+        // false positive (chatgpt-codex-connector[bot] finding on #740).
         assert_eq!(
             except_handler_binding_type_name(&[
                 "ValueError".to_string(),
                 "TypeError".to_string(),
             ]),
-            "ValueError"
+            "Exception"
         );
+        assert_eq!(
+            except_handler_binding_type_name(&[
+                "ValueError".to_string(),
+                "TypeError".to_string(),
+                "KeyError".to_string(),
+            ]),
+            "Exception"
+        );
+    }
+
+    #[test]
+    fn except_handler_binding_type_name_keeps_the_exact_name_for_a_single_type() {
+        // A single-name handler -- including `except (A,):` and bare-comma
+        // `except A,:`, both of which lower to a one-element `names` -- binds
+        // to that exact name, matching plain `except A:` exactly.
         assert_eq!(
             except_handler_binding_type_name(&["ValueError".to_string()]),
             "ValueError"

@@ -75,7 +75,7 @@ pub(super) fn check_try_stmt(
             }
             if let Some(name) = &handler.name {
                 let binding_type = except_handler_binding_type_name(exc_types);
-                handler_env.bind(name.clone(), Ty::Instance(Box::new(binding_type.clone())));
+                handler_env.bind(name.clone(), Ty::Instance(Box::new(binding_type)));
             }
         }
         for stmt in &handler.body {

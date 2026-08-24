@@ -397,7 +397,7 @@ pub(super) fn lower_stmt(
                     let binding_type = h
                         .exc_type
                         .as_ref()
-                        .map(|names| pycc_hir::except_handler_binding_type_name(names).clone());
+                        .map(|names| pycc_hir::except_handler_binding_type_name(names));
                     if let (Some(binding_type), Some(name)) = (&binding_type, &h.name) {
                         // The type checker binds `except T as name` only in
                         // the handler's cloned environment. MIR maintains

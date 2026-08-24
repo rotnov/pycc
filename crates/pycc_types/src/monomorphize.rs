@@ -921,7 +921,7 @@ fn rewrite_generic_calls_in_stmt(
                 let mut handler_env = env.clone();
                 if let (Some(exc_types), Some(name)) = (&handler.exc_type, &handler.name) {
                     let binding_type = pycc_hir::except_handler_binding_type_name(exc_types);
-                    handler_env.bind(name.clone(), Ty::Instance(Box::new(binding_type.clone())));
+                    handler_env.bind(name.clone(), Ty::Instance(Box::new(binding_type)));
                 }
                 for s in handler.body.iter_mut() {
                     rewrite_generic_calls_in_stmt(
