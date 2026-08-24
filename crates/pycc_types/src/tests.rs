@@ -22383,7 +22383,7 @@ fn cast_down_to_a_derived_class_is_c0001() {
     .unwrap_err();
     assert_eq!(err.code, "C0001");
     assert!(
-        err.message.contains("narrow its attribute layout"),
+        err.message.contains("narrow the value's attribute layout"),
         "expected the layout message, got: {}",
         err.message
     );
@@ -22399,6 +22399,46 @@ fn cast_between_two_unrelated_class_types_is_c0001() {
     let err = check_source("from typing import cast\nclass A:\n    def __init__(self, v: int) -> None:\n        self.v = v\nclass B:\n    def __init__(self, v: int) -> None:\n        self.v = v\ndef f(a: A) -> B:\n    return cast(B, a)\nprint(f(A(1)).v)\n")
         .unwrap_err();
     assert_eq!(err.code, "C0001");
+    assert!(
+        err.message.contains("narrow the value's attribute layout"),
+        "expected the layout message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn cast_up_across_an_overridden_method_is_c0001() {
+    // #767 review fix (third pass, D-197): the deep-reviewer's remaining
+    // blocker on the up-cast subset -- `pycc_mir` resolves method calls
+    // statically from the cast result's declared type
+    // (`crates/pycc_mir/src/expr.rs`, no vtable), so `cast(Base, d)` followed
+    // by a call to a method `Derived` overrides would silently run `Base`'s
+    // implementation instead of CPython's dynamically-dispatched override.
+    // `check_cast` rejects the up-cast itself rather than let that dispatch
+    // divergence reach codegen undiagnosed.
+    let err = check_source(
+        "from typing import cast\nclass Base:\n    def __init__(self, a: int) -> None:\n        self.a = a\n    def describe(self) -> int:\n        return self.a\nclass Derived(Base):\n    def __init__(self, a: int, b: int) -> None:\n        self.a = a\n        self.b = b\n    def describe(self) -> int:\n        return self.a + self.b\ndef f(d: Derived) -> int:\n    return cast(Base, d).describe()\nprint(f(Derived(1, 2)))\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message.contains("`describe`") && err.message.contains("statically resolve"),
+        "expected the method-dispatch message naming `describe`, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn cast_up_to_a_base_class_with_no_overridden_methods_still_checks() {
+    // #767 review fix (third pass, D-197): the method-override check must
+    // not reject an up-cast merely because the subclass defines its own
+    // `__init__` (the ordinary case for any real class hierarchy) or its own
+    // non-overriding methods -- only an up-cast that crosses an actual
+    // override boundary is unsound.
+    check_source(
+        "from typing import cast\nclass Base:\n    def __init__(self, a: int) -> None:\n        self.a = a\n    def describe(self) -> int:\n        return self.a\nclass Derived(Base):\n    def __init__(self, a: int, b: int) -> None:\n        self.a = a\n        self.b = b\n    def extra(self) -> int:\n        return self.b\ndef f(d: Derived) -> int:\n    b = cast(Base, d)\n    return b.describe()\nprint(f(Derived(1, 2)))\n",
+    )
+    .unwrap();
 }
 
 #[test]

@@ -173,8 +173,69 @@ fn a_down_cast_to_a_derived_class_is_rejected_before_build() {
     );
     let stdout = String::from_utf8_lossy(&check.stdout);
     assert!(
-        stdout.contains("C0001") && stdout.contains("narrow its attribute layout"),
+        stdout.contains("C0001") && stdout.contains("narrow the value's attribute layout"),
         "expected a C0001 layout-narrowing diagnostic, got: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #767 review fix (third pass, D-197): an up-cast that crosses no
+/// method-override boundary builds and runs, and calling an inherited
+/// (non-overridden) method through the cast result produces exactly the
+/// output calling it on the original value would -- the CLI-level positive
+/// counterpart to the down-cast rejection above, and the empirical check the
+/// reviewer's own `note` finding asked for: this is the up-cast build+run
+/// path no earlier test exercised end-to-end.
+#[test]
+fn an_up_cast_with_no_overridden_methods_builds_and_runs() {
+    let dir = std::env::temp_dir().join(format!("pycc_767_upcast_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let with_cast = build_and_run(
+        &dir,
+        "with_upcast",
+        "from typing import cast\n\nclass Base:\n    def __init__(self, a: int) -> None:\n        self.a = a\n    def describe(self) -> int:\n        return self.a\n\nclass Derived(Base):\n    def __init__(self, a: int, b: int) -> None:\n        self.a = a\n        self.b = b\n\ndef f(d: Derived) -> int:\n    return cast(Base, d).describe()\n\nprint(f(Derived(3, 4)))\n",
+    );
+    let without_cast = build_and_run(
+        &dir,
+        "without_upcast",
+        "class Base:\n    def __init__(self, a: int) -> None:\n        self.a = a\n    def describe(self) -> int:\n        return self.a\n\nclass Derived(Base):\n    def __init__(self, a: int, b: int) -> None:\n        self.a = a\n        self.b = b\n\ndef f(d: Derived) -> int:\n    return d.describe()\n\nprint(f(Derived(3, 4)))\n",
+    );
+    assert_eq!(
+        with_cast, without_cast,
+        "an up-cast across no override must produce exactly the output calling the method \
+         directly on the value would"
+    );
+    assert_eq!(with_cast, "3\n", "unexpected program output");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #767 review fix (third pass, D-197): the CLI-level counterpart to
+/// `cast_up_across_an_overridden_method_is_c0001` in `pycc_types::tests` --
+/// proving the method-dispatch rejection actually happens on the public
+/// `check` path, before `pycc build` could ever reach `pycc_mir`'s static
+/// dispatch and silently call `Base`'s implementation instead of
+/// `Derived`'s override.
+#[test]
+fn an_up_cast_across_an_overridden_method_is_rejected_before_build() {
+    let dir = std::env::temp_dir().join(format!("pycc_767_override_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "override_cast.py",
+        "from typing import cast\n\nclass Base:\n    def __init__(self, a: int) -> None:\n        self.a = a\n    def describe(self) -> int:\n        return self.a\n\nclass Derived(Base):\n    def __init__(self, a: int, b: int) -> None:\n        self.a = a\n        self.b = b\n    def describe(self) -> int:\n        return self.a + self.b\n\ndef f(d: Derived) -> int:\n    return cast(Base, d).describe()\n\nprint(f(Derived(3, 4)))\n",
+    );
+    let check = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !check.status.success(),
+        "pycc check should reject an up-cast across an overridden method"
+    );
+    let stdout = String::from_utf8_lossy(&check.stdout);
+    assert!(
+        stdout.contains("C0001") && stdout.contains("`describe`") && stdout.contains("statically resolve"),
+        "expected a C0001 method-dispatch diagnostic naming `describe`, got: {stdout}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

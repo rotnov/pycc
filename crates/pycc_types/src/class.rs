@@ -859,11 +859,13 @@ pub(crate) fn cast_target_name(args: &[HirExpr]) -> Result<&str, Diagnostic> {
 /// the emitted code's representation *and* attribute layout agreeing with
 /// the static type the rest of the program is then checked against.
 ///
-/// True for a cast to the value's own type. For two distinct classes, true
-/// only when `to` is `from` or one of `from`'s ancestors in its MRO — an
-/// up-cast or an identity cast. False for every other pair, including a
-/// genuine down-cast (`to` is a strict descendant of `from`) and every
-/// scalar-representation change such as `bool` -> `int`.
+/// `Ok(())` for a cast to the value's own type. For two distinct classes,
+/// `Ok(())` only when `to` is one of `from`'s ancestors in its MRO — an
+/// up-cast — and no class from `from` up to (but excluding) `to` overrides a
+/// method `to` also defines or inherits (see the method-dispatch paragraph
+/// below). Rejected for every other pair, including a genuine down-cast
+/// (`to` is a strict descendant of `from`) and every scalar-representation
+/// change such as `bool` -> `int`.
 ///
 /// The class case looks like a pure representation question at first —
 /// every class instance is one heap-object pointer regardless of class
@@ -880,10 +882,34 @@ pub(crate) fn cast_target_name(args: &[HirExpr]) -> Result<&str, Diagnostic> {
 /// attribute in `from`'s MRO), or, if an `AnnAssign` re-anchors the MIR
 /// type to `to`, an out-of-bounds `pycc_rt` instance-slot abort at runtime,
 /// since the object was never actually allocated with `to`'s extra slots.
-/// An up-cast or identity cast has the opposite shape and stays sound:
-/// `to`'s attribute set is a subset of (or equal to) `from`'s, so whatever
-/// slot layout MIR keeps tracking already has every attribute the checker
-/// will let code reach through the cast result.
+/// An up-cast or identity cast has the opposite shape and stays sound on
+/// *attribute layout*: `to`'s attribute set is a subset of (or equal to)
+/// `from`'s, so whatever slot layout MIR keeps tracking already has every
+/// attribute the checker will let code reach through the cast result.
+///
+/// Attribute layout is not the only thing erasure puts at risk, though.
+/// `pycc_mir` also resolves *method calls* statically from the same
+/// MIR-tracked runtime type `from` (no vtable -- see the comment at
+/// `crates/pycc_mir/src/expr.rs:608`), walking `from`'s own MRO to find the
+/// implementation. An `AnnAssign` re-anchors that MIR-tracked type to the
+/// declared annotation for any non-protocol annotation
+/// (`crates/pycc_mir/src/stmt.rs`'s `bind_ty` computation), so
+/// `b: Base = cast(Base, d)` makes every later `b.m()` dispatch through
+/// `Base`'s MRO even though the allocated object is `d`'s real class. If some
+/// class between `from` and `to` (inclusive of `from`, exclusive of `to`)
+/// overrides a method that `to` itself already defines or inherits, that
+/// static resolution silently returns `to`'s (or an intermediate ancestor's)
+/// implementation instead of the override CPython's dynamic dispatch would
+/// have called -- a wrong answer with no diagnostic and no crash, which is
+/// strictly worse than the attribute-layout failures above. So an up-cast is
+/// sound only when no class strictly more derived than `to` (down to and
+/// including `from`) overrides a method reachable from `to`'s own MRO.
+/// `__init__` is excluded from this check on both sides: it runs once at
+/// construction, before any `cast` of the resulting object could apply, so
+/// every subclass defining its own `__init__` -- the ordinary case, not an
+/// exception -- would otherwise make nearly every up-cast of a real class
+/// hierarchy unsound by this rule for a call that can never actually be
+/// re-dispatched through the cast result.
 ///
 /// There is no `Ty::Protocol` case. A protocol name is not reachable as a
 /// `cast` target (`cast_target_ty` maps every non-builtin bare name to
@@ -894,16 +920,58 @@ pub(crate) fn cast_target_name(args: &[HirExpr]) -> Result<&str, Diagnostic> {
 /// admits `bool` -> `int` (a representation change) while restricting
 /// `Instance` -> `Instance` to protocol conformance rather than MRO
 /// ancestry.
-fn cast_shares_representation(env: &Environment, from: &Ty, to: &Ty) -> bool {
+///
+/// Returns `Ok(())` when `to` is sound, or a [`CastMismatch`] describing
+/// which of the three distinct failure shapes applies -- `check_cast` uses
+/// the variant to report a message specific to the actual cause instead of
+/// one fused string that would be true (and therefore uninformative) for
+/// any of the three.
+fn cast_compatibility(env: &Environment, from: &Ty, to: &Ty) -> Result<(), CastMismatch> {
     if from == to {
-        return true;
+        return Ok(());
     }
-    if let (Ty::Instance(from_name), Ty::Instance(to_name)) = (from, to)
-        && let Some(from_def) = env.lookup_class(from_name)
-    {
-        return from_def.mro.iter().any(|m| m.as_str() == to_name.as_str());
+    let (Ty::Instance(from_name), Ty::Instance(to_name)) = (from, to) else {
+        return Err(CastMismatch::Representation);
+    };
+    let Some(from_def) = env.lookup_class(from_name) else {
+        return Err(CastMismatch::Representation);
+    };
+    let Some(to_pos) = from_def.mro.iter().position(|m| m.as_str() == to_name.as_str()) else {
+        return Err(CastMismatch::Layout);
+    };
+    let Some(to_def) = env.lookup_class(to_name) else {
+        return Err(CastMismatch::Layout);
+    };
+    let target_methods: std::collections::HashSet<&str> = to_def
+        .mro
+        .iter()
+        .filter_map(|name| env.lookup_class(name))
+        .flat_map(|def| def.methods.iter().map(|(name, _)| name.as_str()))
+        .filter(|name| *name != "__init__")
+        .collect();
+    for def in from_def.mro[..to_pos].iter().filter_map(|name| env.lookup_class(name)) {
+        if let Some((name, _)) = def
+            .methods
+            .iter()
+            .filter(|(name, _)| name != "__init__")
+            .find(|(name, _)| target_methods.contains(name.as_str()))
+        {
+            return Err(CastMismatch::OverriddenMethod(name.clone()));
+        }
     }
-    false
+    Ok(())
+}
+
+/// The three distinct ways `cast_compatibility` rejects a target, each
+/// reported with its own message by `check_cast`: a scalar or unrelated-type
+/// representation change, a genuine down-cast or unrelated-class layout
+/// narrowing, and an up-cast that crosses a method-override boundary (see
+/// `cast_compatibility`'s doc comment for why the third is unsound too).
+#[derive(Debug, PartialEq)]
+enum CastMismatch {
+    Representation,
+    Layout,
+    OverriddenMethod(String),
 }
 
 /// #767: Type-checks `cast(T, value)` — `typing.cast` is a runtime no-op in
@@ -937,20 +1005,22 @@ fn cast_shares_representation(env: &Environment, from: &Ty, to: &Ty) -> bool {
 ///
 /// What remains permitted is a cast to the value's own type, and an
 /// up-cast between two class instances (`to` is `from` or one of `from`'s
-/// MRO ancestors). A genuine down-cast (`to` is a strict descendant of
-/// `from`) is rejected: unlike a representation change, an unsound
-/// down-cast cannot be caught by any runtime guard, because MIR erasure
-/// (see `cast_shares_representation`'s doc comment) never threads `to`'s
-/// verified attribute layout through to the object `value` actually names,
-/// so `cast`'s single most common legitimate use — narrowing after an
-/// `isinstance` check — is deferred to a version that either keeps a
-/// runtime class tag or otherwise verifies layout compatibility instead of
-/// relying on pure erasure. `cast` does not otherwise verify the nominal
-/// relationship between the two — CPython's and mypy's `cast` are
-/// deliberately unchecked assertions, and pycc preserves that for the
-/// up-cast/identity subset it does erase; the representation-and-layout
-/// check above is a codegen-soundness limit, not a re-introduction of
-/// static checking on the assertion itself.
+/// MRO ancestors) that crosses no method-override boundary. A genuine
+/// down-cast (`to` is a strict descendant of `from`) is rejected: unlike a
+/// representation change, an unsound down-cast cannot be caught by any
+/// runtime guard, because MIR erasure (see `cast_compatibility`'s doc
+/// comment) never threads `to`'s verified attribute layout through to the
+/// object `value` actually names, so `cast`'s single most common legitimate
+/// use — narrowing after an `isinstance` check — is deferred to a version
+/// that either keeps a runtime class tag or otherwise verifies layout
+/// compatibility instead of relying on pure erasure. An up-cast that
+/// overrides a method along the way is rejected for the same erasure
+/// reason, on the *dispatch* axis rather than the layout axis (see
+/// `cast_compatibility`'s doc comment). `cast` does not otherwise verify
+/// the nominal relationship between the two — CPython's and mypy's `cast`
+/// are deliberately unchecked assertions, and pycc preserves that for the
+/// subset it does erase; the checks above are codegen-soundness limits, not
+/// a re-introduction of static checking on the assertion itself.
 ///
 /// This check runs only on the validation-pass route (`infer_expr_in`,
 /// reached for an annotated function's body and for module-level/`AnnAssign`
@@ -978,23 +1048,45 @@ pub(crate) fn check_cast(
     validate_class_name(env, target)?;
     let target_ty = cast_target_ty(target);
     let value_ty = infer_expr_in(env, local_names, &args[1])?;
-    if !cast_shares_representation(env, &value_ty, &target_ty) {
-        return Err(Diagnostic::error(
-            "C0001",
-            format!(
-                "`cast({target}, ...)` would change the value's runtime representation or \
-                 narrow its attribute layout (`{}` to `{}`), which this pycc version does \
-                 not support",
-                value_ty.name(),
-                target_ty.name()
+    if let Err(mismatch) = cast_compatibility(env, &value_ty, &target_ty) {
+        let (message, help) = match mismatch {
+            CastMismatch::Representation => (
+                format!(
+                    "`cast({target}, ...)` would change the value's runtime representation \
+                     (`{}` to `{}`), which this pycc version does not support",
+                    value_ty.name(),
+                    target_ty.name()
+                ),
+                "pycc erases `cast` at compile time and emits no conversion, so the target \
+                 type must already share the value's runtime representation: cast to the \
+                 value's own type, or to one of its base classes",
             ),
-            Span::new(0, 0),
-        )
-        .with_help(
-            "pycc erases `cast` at compile time and emits no conversion, so the target type \
-             must already share the value's runtime representation and attribute layout: \
-             cast to the value's own type, or to one of its base classes",
-        ));
+            CastMismatch::Layout => (
+                format!(
+                    "`cast({target}, ...)` would narrow the value's attribute layout (`{}` \
+                     to `{}`), which this pycc version does not support",
+                    value_ty.name(),
+                    target_ty.name()
+                ),
+                "pycc erases `cast` at compile time and never re-derives the target's \
+                 attribute layout, so the target type must already be a subset of the \
+                 value's own: cast to the value's own type, or to one of its base classes",
+            ),
+            CastMismatch::OverriddenMethod(method) => (
+                format!(
+                    "`cast({target}, ...)` would let a later call to `{method}` on the \
+                     result statically resolve to `{}`'s implementation instead of `{}`'s \
+                     override, which this pycc version does not support",
+                    target_ty.name(),
+                    value_ty.name()
+                ),
+                "pycc resolves method calls statically from the cast result's declared type, \
+                 so casting across a class that overrides a base method is unsound: cast to \
+                 the value's own type, or to a base class that overrides none of the value's \
+                 class's methods",
+            ),
+        };
+        return Err(Diagnostic::error("C0001", message, Span::new(0, 0)).with_help(help));
     }
     Ok(target_ty)
 }
@@ -2241,6 +2333,68 @@ mod tests {
             "x",
             &HirExpr::IntLiteral(42),
         );
+    }
+
+    #[test]
+    fn cast_compatibility_treats_an_unregistered_from_class_as_a_representation_mismatch() {
+        // #767 (D-197, third pass): every `Ty::Instance` `cast_compatibility`
+        // sees from a real `check`-validated program names a class the
+        // `Environment` was told about -- either an ordinary user class or
+        // one of the 23 seeded builtin exception classes (see
+        // `crate::exception::is_user_defined_class`'s doc comment). This
+        // directly exercises the function's own defensive fallback for the
+        // "declared shape and Environment disagree" state that scenario
+        // rules out from any real caller, matching the internal-consistency
+        // convention above.
+        let env = crate::Environment::new();
+        let mismatch = super::cast_compatibility(
+            &env,
+            &Ty::Instance(Box::new("Ghost".to_string())),
+            &Ty::Instance(Box::new("AlsoGhost".to_string())),
+        )
+        .unwrap_err();
+        assert_eq!(mismatch, super::CastMismatch::Representation);
+    }
+
+    #[test]
+    fn cast_compatibility_treats_an_mro_entry_missing_its_own_class_def_as_a_layout_mismatch() {
+        // Same "declared shape and Environment disagree" scenario as above,
+        // but for the ancestor lookup instead of the value's own class:
+        // `from`'s own MRO names a class that isn't registered. Normal class
+        // registration (`validate_bases` in `pycc_hir::class::mro`) only
+        // ever admits an already-defined class into a base's MRO, so this
+        // state cannot arise from any real `check`-validated program either.
+        let mut env = crate::Environment::new();
+        env.bind_class(
+            "Derived".to_string(),
+            HirClassDef {
+                exception_type_tag: None,
+                name: "Derived".to_string(),
+                bases: vec!["GhostBase".to_string()],
+                mro: vec!["Derived".to_string(), "GhostBase".to_string()],
+                attrs: vec![],
+                methods: vec![],
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        );
+        let mismatch = super::cast_compatibility(
+            &env,
+            &Ty::Instance(Box::new("Derived".to_string())),
+            &Ty::Instance(Box::new("GhostBase".to_string())),
+        )
+        .unwrap_err();
+        assert_eq!(mismatch, super::CastMismatch::Layout);
     }
 
     // -- #433: super() type-checking tests ----------------------------------

@@ -58,24 +58,29 @@ A user-defined `def cast(...)` takes priority in all three passes.
   `5` leaves the checker validating the program against `str` while the code
   still carries an `i64` -- a codegen `debug_assert_eq!` panic in a debug
   build, misinterpreted bits in a release one. `check_cast` now requires the
-  target to preserve the value's runtime representation *and* attribute
-  layout: the value's own type, or an up-cast to one of its class's MRO
-  ancestors (the nominal relationship is deliberately unverified for that
-  subset, matching CPython's and mypy's unchecked `cast`). A genuine
-  down-cast is rejected, not merely unverified -- see the third-pass entry
-  below. Three follow-on calls made across two further reviewer passes: the
-  first attempt reused `is_assignable_env` as the gate, which is a
-  *subtyping* test -- it admits `bool` -> `int` (a real representation
-  change, `i8` vs `i64` per `TYPE_SYSTEM.md`) and restricted
+  target to preserve the value's runtime representation, attribute layout,
+  *and* method-dispatch behavior: the value's own type, or an up-cast to one
+  of its class's MRO ancestors that crosses no method-override boundary (the
+  nominal relationship is deliberately unverified for that subset, matching
+  CPython's and mypy's unchecked `cast`). A genuine down-cast is rejected,
+  not merely unverified -- see the third-pass entry below, which also covers
+  the method-override restriction. Four follow-on calls made across three
+  further reviewer passes: the first attempt reused `is_assignable_env` as
+  the gate, which is a *subtyping* test -- it admits `bool` -> `int` (a real
+  representation change, `i8` vs `i64` per `TYPE_SYSTEM.md`) and restricted
   `Instance` -> `Instance` to protocol conformance, so it accepted the
   unsound case and rejected the useful one; it was replaced with an explicit
-  `cast_shares_representation` predicate that (in its first version)
-  accepted every `Instance` -> `Instance` pair unconditionally, which a
-  second review pass then found unsound for down-casts specifically (see
-  below) and narrowed to MRO ancestry. And the rejection reports `C0001`,
-  not `T0021`: the program is not ill-typed Python, the limit is pycc's own
-  erasure, and `C0001`'s prose already covers "an implemented special-cased
-  builtin called with an argument shape this version does not support".
+  representation predicate that (in its first version) accepted every
+  `Instance` -> `Instance` pair unconditionally, which a second review pass
+  then found unsound for down-casts specifically (see below) and narrowed to
+  MRO ancestry; a third review pass then found the MRO-ancestry-narrowed
+  version still unsound for a distinct, dispatch-related reason (see below),
+  and the predicate was renamed `cast_compatibility` and split to also
+  reject an up-cast crossing a method-override boundary. And the rejection
+  reports `C0001`, not `T0021`: the program is not ill-typed Python, the
+  limit is pycc's own erasure, and `C0001`'s prose already covers "an
+  implemented special-cased builtin called with an argument shape this
+  version does not support".
 - **The missing import gate is filed as #768, not fixed here.** The pinned
   local reviewer's one finding (severity `warning`) was that bare `cast(...)`
   is intercepted without checking that the module wrote
@@ -99,32 +104,167 @@ A user-defined `def cast(...)` takes priority in all three passes.
   `cast` *is* its value operand after lowering, so a call there is evaluated
   exactly once, as in CPython), and no `@runtime_checkable` gate on a protocol
   target (`cast` performs no runtime class test and emits no code).
+- **Third review pass: the accepted up-cast subset still diverged silently
+  from CPython through method dispatch (new blocker, closed here).** After
+  the second pass narrowed the class-to-class predicate to MRO
+  ancestry-or-identity, a third pinned-reviewer pass (run after that fix was
+  committed) found the accepted up-cast subset still unsound for a reason
+  orthogonal to representation and layout: `pycc_mir` resolves method calls
+  *statically* from the MIR-tracked type of the receiver (no vtable), and an
+  `AnnAssign` re-anchors that tracked type to the declared annotation, so
+  `b: Base = cast(Base, d)` makes every later `b.m()` dispatch through
+  `Base`'s MRO even when `d`'s real class is `Derived`. If `Derived`
+  overrides a method `Base` defines or inherits, that static resolution
+  silently returns `Base`'s implementation instead of the override CPython's
+  dynamic dispatch would call -- a wrong answer with no diagnostic and no
+  crash, worse than every other failure mode this issue's `cast` handles.
+  Before this pass no other construct in the accepted language subset could
+  produce a variable whose MIR-tracked type differs from its actual
+  allocated class (plain assignment and call-argument checking both require
+  exact `Ty::Instance` equality), so `cast`'s up-cast was the first construct
+  able to expose this latent gap in pycc's static-dispatch model.
+  `cast_compatibility` (renamed from `cast_shares_representation`, since it
+  now answers a broader question than pure representation) additionally
+  rejects an up-cast when any class strictly more derived than the target,
+  down to and including the value's own class, overrides a method reachable
+  from the target's own MRO. `__init__` is excluded from that check on both
+  sides: it runs once at construction, before any `cast` of the resulting
+  object could apply, so every subclass defining its own `__init__` -- the
+  ordinary case for a real class hierarchy, not an exception -- would
+  otherwise make nearly every up-cast unsound by this rule for a call that
+  can never be re-dispatched through the cast result. Two options considered
+  and rejected in favor of this targeted check: rejecting every class-to-class
+  `cast` (deletes the already-tested up-cast path to close a hole a cheap
+  check closes just as soundly), and documenting the gap as a known
+  limitation parallel to #768's import-gate deferral (rejected because #768
+  defers over-acceptance of an *invalid* program, while this gap would have
+  made a *correct* program compile to a silently wrong answer -- see
+  D-197's "Third review pass" paragraph and its Alternatives entries for the
+  full reasoning). The rejection reports `C0001` with a message naming the
+  specific overridden method, distinct from the representation and layout
+  messages (see the next bullet).
+- **The fused `C0001` message was split into one string per rejection
+  reason** (reviewer `note`, closed here). The representation, layout, and
+  method-override rejections previously shared one message containing both
+  "runtime representation" and "attribute layout" phrasing regardless of the
+  actual cause, so a test asserting either substring passed no matter which
+  branch fired -- the assertions looked discriminating but were not.
+  `cast_compatibility` now returns a `CastMismatch` enum (`Representation` /
+  `Layout` / `OverriddenMethod(method_name)`) and `check_cast` matches on it
+  to build a message and help text specific to the actual failure, so
+  `cast_changing_representation_is_c0001`,
+  `cast_down_to_a_derived_class_is_c0001`, and the new
+  `cast_up_across_an_overridden_method_is_c0001` each assert a substring only
+  their own branch produces.
+- **Added CLI-level (build+run) coverage for the up-cast acceptance path**
+  (reviewer `note`, closed here). `tests/issue_767_typing_cast.rs` previously
+  exercised only the identity-cast case end-to-end; a new test builds and
+  runs a program that up-casts and calls a *non*-overridden inherited
+  method through the result, asserting the compiled program's output matches
+  calling the method directly on the original value -- exactly the kind of
+  test that would have caught the method-dispatch gap empirically before a
+  human review pass had to find it by inspection.
+- **A pre-existing, unrelated diagnostic-quality bug was found and filed
+  separately, not fixed here.** A `cast` rejection reports a misleading
+  `T0021` "local name not bound" instead of its real diagnostic when the
+  cast expression is bound to a plain (non-annotated) local variable before
+  use, rather than used inline -- e.g. `d = cast(Derived, base); return d.b`
+  reports `T0021` where the equivalent `return cast(Derived, base).b`
+  correctly reports `C0001`. Confirmed pre-existing (reproduces on the
+  already-merged down-cast rejection from the second pass, not only on the
+  new method-override rejection), and confirmed cosmetic: the program is
+  still correctly rejected, just under a confusing code. Root cause is
+  outside `pycc_types/src/class.rs`'s `cast`-specific logic -- most likely
+  the definite-assignment tracking added for issue #118 (D-147) evaluating
+  the assignment's RHS independently of (or ahead of) the ordinary
+  type-check pass. Filed as
+  [#771](https://github.com/rotnov/pycc/issues/771) (milestone v0.3) rather
+  than investigated further here, since it is a distinct defect in a
+  different subsystem, not a soundness issue, and not `cast`-specific in its
+  likely cause. The new `cast_up_across_an_overridden_method_is_c0001` test
+  works around it by keeping the rejected `cast` expression inline rather
+  than assigned to a variable first.
 
 ## Test evidence
 
-- `crates/pycc_types/src/tests.rs` -- 22 new unit tests: every builtin scalar
-  target, a user-defined class target, wrong arity, subscripted target, unknown
-  target, errors inside the value operand, user-defined `cast` priority in both
-  passes, the qualified-marker-as-value / qualified-marker-called paths in both
-  passes, `cast_without_its_import_is_currently_accepted` (the #768 pin), and
-  five for D-197's representation rule (class-to-class accepted;
-  `cast(str, 5)` bare and inside an `AnnAssign`, `bool` -> `int`, and
-  `int` -> `bool` all `C0001`).
+- `crates/pycc_types/src/tests.rs` -- 27 `cast`-named unit tests (through the
+  public `check_source` entry point): every builtin
+  scalar target, a user-defined class target, wrong arity, subscripted target,
+  unknown target, errors inside the value operand, user-defined `cast`
+  priority in both passes, the qualified-marker-as-value /
+  qualified-marker-called paths in both passes,
+  `cast_without_its_import_is_currently_accepted` (the #768 pin), and nine for
+  D-197's representation/layout/dispatch rule across its three review passes:
+  `cast_up_to_a_base_class_checks` and
+  `cast_up_to_a_base_class_with_no_overridden_methods_still_checks` (up-cast
+  accepted, the second not defeated by an `__init__` override),
+  `cast_down_to_a_derived_class_is_c0001` and
+  `cast_between_two_unrelated_class_types_is_c0001` (layout rejections),
+  `cast_up_across_an_overridden_method_is_c0001` (the third-pass
+  method-dispatch rejection, asserting the message names the specific
+  overridden method), `cast_changing_representation_is_c0001` /
+  `cast_changing_representation_in_an_annassign_is_c0001` /
+  `cast_widening_bool_to_int_is_c0001` / `cast_narrowing_int_to_bool_is_c0001`
+  (representation rejections). Each rejection test asserts a message substring
+  specific to its own `CastMismatch` variant, not a fused string that would be
+  true regardless of cause (see the "fused message was split" bullet above).
+- `crates/pycc_types/src/class.rs`'s own inline `#[cfg(test)] mod tests`
+  (white-box, direct calls into private helpers, alongside this file's
+  existing "internal-consistency panics" section) -- 2 new tests closing the
+  coverage gate the D-197 rename to `cast_compatibility` opened:
+  `cast_compatibility_treats_an_unregistered_from_class_as_a_representation_mismatch`
+  and
+  `cast_compatibility_treats_an_mro_entry_missing_its_own_class_def_as_a_layout_mismatch`.
+  The original `cast_shares_representation(...) -> bool` folded its
+  `env.lookup_class(from_name).is_none()` case into the same trailing `false`
+  another, already-tested path also returned; splitting the function into
+  three named `CastMismatch` outcomes gave each `let-else`'s failure arm its
+  own source region, and neither region is reachable through `check_cast`
+  from any real `check`-validated program -- every `Ty::Instance` name it can
+  see is either a user class or one of the 23 HIR-seeded builtin exception
+  classes (`crate::exception::is_user_defined_class`), and `validate_bases`
+  only ever admits an already-defined class into a base's MRO. These two
+  tests hand-build the same kind of "declared shape and `Environment`
+  disagree" state the file's pre-existing internal-consistency tests already
+  exercise for `resolve_attr_get`/`resolve_method_call`/`check_attr_set`, and
+  assert `cast_compatibility` degrades to the correct `CastMismatch` variant
+  instead of panicking -- consistent with the fact that `cast_compatibility`
+  is public-diagnostic-facing (unlike those panicking helpers) and must never
+  crash the compiler even if the invariant it depends on is ever violated
+  elsewhere. `CastMismatch` picked up `#[derive(Debug, PartialEq)]` so the
+  two tests could assert with `assert_eq!` instead of `assert!(matches!(...))`
+  -- the latter's `_ => false` arm is dead in a passing test and cost another
+  region point under the same 100%-regions gate.
 - `crates/pycc_mir/src/tests/builtin.rs` -- 2 new tests: the call is elided to
   its value argument; a user-defined `cast` still lowers to a real call.
-- `tests/issue_767_typing_cast.rs` (new) -- 3 CLI end-to-end tests, including a
+- `tests/issue_767_typing_cast.rs` -- 6 CLI end-to-end tests, including a
   `build`+`run` whose stdout is asserted byte-identical to the same program with
-  every `cast(T, v)` replaced by `v` alone, and a runtime check that a
-  user-defined `def cast(...)` is really called. All three pass under coverage
+  every `cast(T, v)` replaced by `v` alone, a runtime check that a
+  user-defined `def cast(...)` is really called, the down-cast and
+  method-override rejections reproduced through `pycc check` (not only the
+  unit-test harness), and a `build`+`run` up-cast test calling a
+  non-overridden inherited method through the cast result (the third-pass
+  `note` finding's empirical gap, now closed). All six pass under coverage
   instrumentation.
+- `cargo test --workspace`: 0 failures, re-run twice on this tree after the
+  third-pass fix (once before, once after the two new internal-consistency
+  tests and the `CastMismatch` derive above).
 - `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
-  run locally on this exact tree: 3403 tests passed, 0 failed, and the gate
-  exited 0 with `27111` lines and `41736` regions at `100.00%`, 0 missed of
-  either. Run it from a clean profile (`cargo llvm-cov clean --workspace`) if a
-  previous coverage run was interrupted -- a partial profile from a killed run
-  silently under-reports (it produced a spurious 98.05%/98.07% here, with the
-  losses concentrated in the code exercised through `pycc` subprocesses:
-  `src/main.rs`, `pycc_ast`, `pycc_artifact_layout`).
+  re-run locally on this tree after the third-pass fix: 41874 regions / 27228
+  lines, `0` missed of either, `100.00%`/`100.00%`, 0 test failures. The first
+  attempt at this re-run (before the two new internal-consistency tests
+  above) surfaced the real gap this bullet's sibling above describes: 2
+  missed lines/regions in `crates/pycc_types/src/class.rs` (the two
+  now-separately-tracked `let-else` failure arms in `cast_compatibility`),
+  located precisely via `cargo llvm-cov --workspace --no-run --show-missing-lines`
+  and `cargo llvm-cov --workspace --no-run --json --output-path ...` (the
+  latter needed to disambiguate a region miss from a line miss once the line
+  count alone reached 100%). Run it from a clean profile
+  (`cargo llvm-cov clean --workspace`) if a previous coverage run was
+  interrupted -- a partial profile from a killed run silently under-reports
+  (it produced a spurious 98.05%/98.07% here, with the losses concentrated in
+  the code exercised through `pycc` subprocesses: `src/main.rs`, `pycc_ast`,
+  `pycc_artifact_layout`).
 - `bash scripts/check-site.sh`, `ruby scripts/check_status_page_freshness.rb`,
   `ruby scripts/check_roadmap_evidence.rb`, `ruby scripts/check_ci_permissions.rb`,
   and `python3 scripts/generate_decisions_index.py ... --check` all pass.

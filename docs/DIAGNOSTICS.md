@@ -92,10 +92,13 @@ also used for an *implemented* special-cased builtin called with an argument
 shape this version does not support -- `isinstance(f(), int)` (a call as the
 inspected operand), `cast(list[int], x)` (a subscripted generic as the
 target type, issue #767), and a `cast` whose target type would change the
-value's runtime representation or narrow its attribute layout
+value's runtime representation, narrow its attribute layout, or cross a
+method-override boundary that pycc's static (non-virtual) method dispatch
+cannot see through
 (`cast(str, 5)`, `cast(int, some_bool)`, a down-cast such as
-`cast(Derived, base)`; D-197, issue #767) are the current instances -- for
-the same reason:
+`cast(Derived, base)`, or an up-cast such as `cast(Base, derived)` where
+`Derived` overrides a method `Base` defines; D-197, issue #767) are the
+current instances -- for the same reason:
 the construct is valid Python that a later slice can implement, not a
 by-design rejection.
 
