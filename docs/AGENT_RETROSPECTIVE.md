@@ -39,16 +39,34 @@ never a merge gate.
 ("Support PEP 604 union type annotations"), the first plan draft scoped
 Part 1 as `Ty::Optional` representation and parsing only, deferring all
 codegen to a separate Part 2. A later pass checking that draft against
-`docs/TESTING.md` and this repository's own merge history found it was not
-actually mergeable: the D-014 100%-coverage gate has no exemption
-mechanism for a single unreachable codegen arm (`docs/TESTING.md`'s
-exemption table is whole-file-only and currently empty), and the new
-`Ty::Optional` match arms in `pycc_mir`/`pycc_codegen` would be
-unreachable-by-construction under a representation-only slice. Separately,
-`docs/DELIVERY_PLAN.md` rows 10-11 (PR #236, PR #305) show this repository's
-own precedent always lands a new `Ty` shape together with at least one
-concrete codegen path in the *same* PR, never representation alone. The
-plan was corrected to include real `Optional[int]` codegen in Part 1.
+`docs/TESTING.md` and this repository's own merge history concluded it was
+not mergeable, reasoning that the D-014 100%-coverage gate has no
+exemption mechanism for a single unreachable codegen arm and that any new
+`Ty::Optional` match arm in `pycc_mir`/`pycc_codegen` would be
+unreachable-by-construction under a representation-only slice. **That
+coverage argument, as stated, was itself wrong** — an external review of
+the published plan comment (`chatgpt-codex-connector` on PR #764) pointed
+out that `crates/pycc_hir/src/lib.rs:62-77`'s own doc comments show PR #236
+landed `Ty::Dict`/`Ty::Set`/`Ty::Tuple` representation-only, with "no v0.2
+code path constructs this yet," ahead of PR #305's actual codegen; a
+representation-only variant with no consuming match arm anywhere has
+nothing to be unreachable, and even a variant that does need new match
+arms can be covered by a unit test that constructs the `Ty` value directly
+and calls the arm, without an end-to-end running program. The real,
+narrower constraint is only that *if* a slice adds a codegen match arm
+that genuinely cannot be reached except by an executable program (as
+opposed to a direct-construction unit test), that arm needs an executable
+test — not a blanket "representation-only can never be mergeable." The
+plan's conclusion to ship real `Optional[int]` codegen in Part 1 still
+holds, but for a different, sufficient reason that was independently
+already in the plan: `scripts/check_conformance_breadth.py` only counts a
+row once a fixture actually compiles and runs, byte-for-byte against
+CPython — a clean-diagnostic-only fixture proves nothing, so real codegen
+is required to move the conformance counters regardless of the coverage
+question. `docs/DELIVERY_PLAN.md` rows 10-11 (PR #236, PR #305) still
+correctly show this repository's own precedent of eventually landing
+codegen close to a new `Ty` shape, just not always in the same PR as the
+representation change.
 
 A second, independent gap surfaced one revision later: Part 1's narrowing
 work item ("minimal `is None` narrowing") silently assumed `is`/`is not`
@@ -92,6 +110,18 @@ only the source (or, for gates, the actual checker script) is. Apply the
 refutation step to every individual claim a plan makes, not only to the
 issue's own top-level premises — a plan's *own* later work items make new
 claims too, and those need the same treatment as the issue text itself.
+A third, matching lesson from the coverage-argument correction above:
+a categorical claim about a gate ("this can never be mergeable") is
+itself a claim needing the same source-level check as any other —
+`docs/TESTING.md`'s empty exemption table proves an exemption isn't
+available, it does not prove no test can reach the code, and this
+repository's own git history (PR #236) already contained the
+counter-example. An external, asynchronous review caught this after
+publication rather than before, which is the exact gap D-127's own
+`issue-to-plan` review loop step exists to close before publishing —
+run the loop against the repository's actual git history for the
+precedent being cited, not only against the files the plan already
+happened to read.
 
 ---
 
