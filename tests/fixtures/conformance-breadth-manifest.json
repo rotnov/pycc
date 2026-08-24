@@ -1132,11 +1132,11 @@
       ],
       "proven": [
         {
-          "category": "catching a leaf OSError subclass (FileNotFoundError, BrokenPipeError, TimeoutError) by its exact type",
+          "category": "catching a leaf OSError subclass (FileNotFoundError, TimeoutError) by its exact type",
           "evidence": "pep_3151_oserror.py"
         },
         {
-          "category": "catching a leaf subclass through an intermediate ancestor (ConnectionError) or the OSError root",
+          "category": "catching a leaf subclass (BrokenPipeError, FileNotFoundError) through an intermediate ancestor (ConnectionError) or the OSError root",
           "evidence": "pep_3151_oserror.py"
         },
         {
@@ -1170,7 +1170,7 @@
           "evidence": "pep_0758_except_noparens.py"
         },
         {
-          "category": "a three-type bare handler and a non-matching raise propagating past a bare-comma handler to an outer handler",
+          "category": "a three-type parenthesized handler and a non-matching raise propagating past a parenthesized handler to an outer handler",
           "evidence": "pep_0758_except_noparens.py"
         },
         {
