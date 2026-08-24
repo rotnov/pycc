@@ -1304,7 +1304,7 @@ fn pep_0701_fstring_grammar_matches_cpython_3_14_7_byte_for_byte() {
 }
 
 // Part 2 of #543 (#739, PEP 3151): the real `OSError` hierarchy -- `OSError`
-// itself, its 10 other direct subclasses, and `ConnectionError`'s 4 further
+// itself, its 11 other direct subclasses, and `ConnectionError`'s 4 further
 // subclasses. Covers raising and catching at every tree depth (a direct
 // `OSError` child, a `ConnectionError` grandchild caught via `ConnectionError`
 // and via the `OSError` root, a sibling handler that does not catch an
