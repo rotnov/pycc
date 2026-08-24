@@ -33,6 +33,98 @@ never a merge gate.
 
 ---
 
+## 2026-08-24 — Planning #747 (PEP 604 unions) assumed representation-only was mergeable, then assumed `is`/`is not` already existed; both were false
+
+**What happened.** While running `issue-to-plan` for GitHub issue #747
+("Support PEP 604 union type annotations"), the first plan draft scoped
+Part 1 as `Ty::Optional` representation and parsing only, deferring all
+codegen to a separate Part 2. A later pass checking that draft against
+`docs/TESTING.md` and this repository's own merge history concluded it was
+not mergeable, reasoning that the D-014 100%-coverage gate has no
+exemption mechanism for a single unreachable codegen arm and that any new
+`Ty::Optional` match arm in `pycc_mir`/`pycc_codegen` would be
+unreachable-by-construction under a representation-only slice. **That
+coverage argument, as stated, was itself wrong** — an external review of
+the published plan comment (`chatgpt-codex-connector` on PR #764) pointed
+out that `crates/pycc_hir/src/lib.rs:62-77`'s own doc comments show PR #236
+landed `Ty::Dict`/`Ty::Set`/`Ty::Tuple` representation-only, with "no v0.2
+code path constructs this yet," ahead of PR #305's actual codegen; a
+representation-only variant with no consuming match arm anywhere has
+nothing to be unreachable, and even a variant that does need new match
+arms can be covered by a unit test that constructs the `Ty` value directly
+and calls the arm, without an end-to-end running program. The real,
+narrower constraint is only that *if* a slice adds a codegen match arm
+that genuinely cannot be reached except by an executable program (as
+opposed to a direct-construction unit test), that arm needs an executable
+test — not a blanket "representation-only can never be mergeable." The
+plan's conclusion to ship real `Optional[int]` codegen in Part 1 still
+holds, but for a different, sufficient reason that was independently
+already in the plan: `scripts/check_conformance_breadth.py` only counts a
+row once a fixture actually compiles and runs, byte-for-byte against
+CPython — a clean-diagnostic-only fixture proves nothing, so real codegen
+is required to move the conformance counters regardless of the coverage
+question. `docs/DELIVERY_PLAN.md` rows 10-11 (PR #236, PR #305) still
+correctly show this repository's own precedent of eventually landing
+codegen close to a new `Ty` shape, just not always in the same PR as the
+representation change.
+
+A second, independent gap surfaced one revision later: Part 1's narrowing
+work item ("minimal `is None` narrowing") silently assumed `is`/`is not`
+comparisons already lowered to *something* narrowing could hook onto.
+Direct source verification (`crates/pycc_hir/src/lib.rs`'s `CmpOpKind` enum
+has exactly six variants — `Eq, NotEq, Lt, LtE, Gt, GtE` — with no
+`Is`/`IsNot`/`In` variant at all) showed this compiler has **zero**
+`is`/`is not` support today; both are rejected at HIR-lowering with the
+generic `C0001` capability-gap diagnostic (confirmed independently by
+`docs/DELIVERY_PLAN.md` row 11's own prose). The plan had to add "this
+compiler's first `is`/`is not` support of any kind" as its own explicit,
+separately-precedent-setting work item before the narrowing item could be
+attempted at all.
+
+**Root cause.** Both gaps share one root cause: the plan reasoned from a
+document's *aspirational* description of the target design
+(`docs/TYPE_SYSTEM.md`'s "flow-sensitive narrowing checker... handles `is
+None`") and from the issue's own framing, rather than from source-level
+verification of whether the depended-on machinery actually exists yet.
+Neither the D-014 coverage-gate interaction nor the absence of `is`/`is
+not` support is stated anywhere as a single fact — both had to be derived
+by cross-checking prose claims against the actual enum definitions, gate
+scripts, and merge history.
+
+**What fixed it.** `issue-to-plan`'s own step 2 ("read the issue, then
+refute it") and step 3 ("read what governs the change, not what merely
+mentions it") were applied a second and third time, specifically to a
+work item the first two passes had treated as settled rather than as a
+new claim needing its own verification. `grep -rn "CmpOp::Is\|CmpOp::IsNot"
+crates/pycc_hir/src/ crates/pycc_mir/src/` returning nothing was the
+concrete, minutes-cheap check that would have caught this on the first
+pass.
+
+**Lesson.** When a plan's own work item depends on prior machinery
+("narrow on top of the existing `is None` check", "extend the existing
+X"), verify that the depended-on machinery exists via source grep before
+treating it as a given — even, and especially, when a specification
+document (here `docs/TYPE_SYSTEM.md`) describes it as already present. A
+document's target-state prose is not evidence of current-state behavior;
+only the source (or, for gates, the actual checker script) is. Apply the
+refutation step to every individual claim a plan makes, not only to the
+issue's own top-level premises — a plan's *own* later work items make new
+claims too, and those need the same treatment as the issue text itself.
+A third, matching lesson from the coverage-argument correction above:
+a categorical claim about a gate ("this can never be mergeable") is
+itself a claim needing the same source-level check as any other —
+`docs/TESTING.md`'s empty exemption table proves an exemption isn't
+available, it does not prove no test can reach the code, and this
+repository's own git history (PR #236) already contained the
+counter-example. An external, asynchronous review caught this after
+publication rather than before, which is the exact gap D-127's own
+`issue-to-plan` review loop step exists to close before publishing —
+run the loop against the repository's actual git history for the
+precedent being cited, not only against the files the plan already
+happened to read.
+
+---
+
 ## 2026-08-24 — A full review-fix round was spent on a PR whose issue a concurrent actor had already closed
 
 **What happened.** While fixing four `chatgpt-codex-connector[bot]` review
