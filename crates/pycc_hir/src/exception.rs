@@ -382,9 +382,14 @@ fn expr_binds_builtin_exception_name(expr: &Expr) -> bool {
 /// `Some(names)` names one or more exception types (PEP 758 `except A, B:`
 /// and `except (A, B):` both lower to the same shape, `names` always in
 /// source order); `names` is never empty -- an empty list (`except ():`) is
-/// rejected with `C0001` at the one production site
-/// (`lower_except_handler`), so every downstream consumer may assume
-/// non-emptiness without re-checking. `name` is the optional `as` binding.
+/// rejected with `C0001` at the one site that constructs a fresh handler
+/// from source (`lower_except_handler`), so every downstream consumer may
+/// assume non-emptiness without re-checking. HIR-to-HIR rewrite passes
+/// (e.g. `pycc_types::unroll_enum_loops_in_stmts`) only clone this field
+/// through unchanged and introduce no second construction site; a future
+/// pass that builds a `HirExceptHandler` with new logic rather than a pure
+/// clone would need to uphold the same non-empty invariant itself.
+/// `name` is the optional `as` binding.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirExceptHandler {
     pub exc_type: Option<Vec<String>>,
