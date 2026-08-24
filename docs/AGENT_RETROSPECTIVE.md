@@ -33,6 +33,79 @@ never a merge gate.
 
 ---
 
+## 2026-08-24 — Ending a turn to "wait for a notification" recurred inside the very session investigating that pattern
+
+**What happened.** The 2026-08-14 entry below already shipped a fix for the
+recurring failure where a session dispatches a background agent and then
+ends its own turn passively "waiting" instead of continuing productive work
+— that fix was pure `AGENTS.md` prose (the "bound waits on dispatched
+subagents" bullet). It recurred twice in the same later session, in two
+shapes: (1) a dispatched grandchild agent sent roughly six or seven
+near-identical "still waiting" notifications before the parent finally took
+over polling directly, well past the three-strike bound the existing rule
+states; (2) immediately after dispatching a fresh subagent — the root-cause
+tracer for investigating shape (1) — the session ended its own turn with a
+message to the effect of "dispatched the tracer, waiting for its report,"
+with zero live background children of its own and nothing forcing the stop.
+The user caught (2) in real time mid-session with direct correction.
+
+**Root cause.** The rule text was correct, unambiguous, and present in every
+turn's loaded context, but nothing mechanically re-surfaced or re-checked it
+at the actual decision fork — the moment right after issuing a dispatch call
+and about to close the turn. Recall depended entirely on the model
+spontaneously retrieving one bullet from a large governance document, with
+no harness-level trigger at that fork. This is a **trigger** gap: the rule
+existed and did not fire, not a case of missing or wrong rule content.
+Escalating a rung — from prose to something mechanical bound to the fact of
+the tool call itself — is the correct response to a same-topic recurrence,
+per this project's own `/harden` skill's recurrence rule.
+
+**What fixed it.** Added `.claude/hooks/check-reflexive-stop.py`, a Claude
+Code `Stop`-hook script wired locally (`.claude/settings.local.json`,
+gitignored, machine-local per this project's "Keep machine-local hooks
+local" rule — not a shared repository gate). It inspects the transcript of
+the turn that just ended: if that turn called a dispatch-shaped tool, called
+no verification-shaped tool *after* that dispatch, and its final text
+matches a "waiting for the notification" pattern, it blocks the stop and
+re-injects the rule text at exactly the fork where it was being silently
+skipped. A `stop_hook_active` guard prevents infinite re-blocking. The
+pinned local reviewer caught a real bug in the first draft: a naive
+backward walk over the transcript to find "the current turn" breaks on the
+very first `tool_result` entry it meets, because a tool result is *also*
+recorded with `role: "user"` in the on-disk JSONL — so the walk never
+reached the dispatch call it was supposed to detect, and it independently
+scored "did the turn verify anything" over the whole turn rather than only
+after the dispatch, letting an earlier unrelated `Read`/`Grep` silently
+excuse skipping verification after the actual dispatch. Both are fixed by
+keying the turn boundary on whether a `role: "user"` entry actually carries
+tool-result content (`toolUseResult` field / `tool_result` content blocks)
+rather than on any `role: "user"`, and by scoping the verification check to
+calls strictly after the last dispatch call. A committed regression suite
+(`.claude/hooks/tests/test_check_reflexive_stop.py`, 11 cases including
+malformed-input fail-open paths, an invalid-UTF-8 transcript, and a
+mid-turn `isMeta` system-reminder that must not be mistaken for the turn
+boundary) now exercises the real transcript shape; not run through the
+project's multi-model arena harness since it is a deterministic script with
+a binary decision over structured input, not a natural-language artefact
+whose effect needs cross-model measurement. The suite is deliberately not
+wired into `.github/workflows/ci.yml`: the artefact it protects is itself
+machine-local (per "Keep machine-local hooks local," only the script is
+committed — wiring lives in gitignored `.claude/settings.local.json`), so a
+shared CI job would test code that most checkouts never actually run as a
+hook; run it by hand (`python3 .claude/hooks/tests/test_check_reflexive_stop.py`)
+after touching the script.
+
+**Lesson.** A textual rule that has already failed once is not corrected by
+rewording it a second time — a second occurrence of the identical failure
+class is the same "the mechanism is too weak for this class" signal a
+harden-style artefact ladder would eventually force anyway, just bought
+early. When a process rule's failure mode is "the model didn't recall it at
+the fork," the fix is a mechanical trigger bound to that fork (a hook, a
+check), not a stronger sentence in the same governance file the model
+already wasn't consulting at the right moment.
+
+---
+
 ## 2026-08-23 — A plan instruction asked for two mutually exclusive things on the PYTHON_STANDARDS.md manifest
 
 **What happened (Part 2 of #543, #739).** The published implementation plan
