@@ -728,6 +728,10 @@ fn lower_protocol_class(
             Stmt::Pass(_) => {
                 // `pass` is a no-op in a protocol body.
             }
+            // #744: a docstring (a bare string-literal expression statement)
+            // is a no-op, matching `validate_init_subclass_body`'s existing
+            // precedent for the same construct.
+            Stmt::Expr(expr_stmt) if matches!(*expr_stmt.value, Expr::StringLiteral(_)) => {}
             _ => {
                 return Err(unsupported(
                     format!(
@@ -784,6 +788,14 @@ fn lower_enum_class(
     ];
     let mut enum_members: Vec<(String, i64)> = Vec::new();
     for stmt in &def.body {
+        // #744: a docstring (a bare string-literal expression statement) is
+        // a no-op, matching `validate_init_subclass_body`'s existing
+        // precedent for the same construct.
+        if let Stmt::Expr(expr_stmt) = stmt
+            && matches!(*expr_stmt.value, Expr::StringLiteral(_))
+        {
+            continue;
+        }
         let Stmt::Assign(assign) = stmt else {
             return Err(unsupported(
                 "an enum class body must contain only member assignments (`RED = 1`) -- \
@@ -1240,6 +1252,14 @@ pub(crate) fn lower_class(
             // zero-field dataclass (`@dataclass\nclass Empty:\n    pass`)
             // relies on this to have a valid body with no fields and no
             // methods.
+            continue;
+        }
+        // #744: a docstring (a bare string-literal expression statement) is
+        // a no-op, matching `validate_init_subclass_body`'s existing
+        // precedent for the same construct.
+        if let Stmt::Expr(expr_stmt) = stmt
+            && matches!(*expr_stmt.value, Expr::StringLiteral(_))
+        {
             continue;
         }
         if let Stmt::AnnAssign(ann) = stmt {
@@ -2869,6 +2889,24 @@ mod tests {
     }
 
     #[test]
+    fn an_ordinary_class_with_a_leading_docstring_lowers_successfully() {
+        // #744: a class docstring (a bare string-literal expression
+        // statement) is a no-op in an ordinary (non-dataclass) class body.
+        let hir = lower_ok(
+            "class C:\n    \"A class.\"\n    def __init__(self) -> None:\n        return\n",
+        );
+        assert_eq!(hir.class_defs.len(), 1);
+    }
+
+    #[test]
+    fn a_non_string_expression_statement_in_a_class_body_is_still_rejected() {
+        // #744's docstring exemption is narrow: a bare non-string expression
+        // statement in a class body remains C0001, distinguishing it from
+        // the docstring no-op added alongside it.
+        assert_c0001("class C:\n    42\n    def __init__(self) -> None:\n        return\n");
+    }
+
+    #[test]
     fn a_method_named_get_collides_with_the_container_method_syntax() {
         // D-068 review finding on #385: without `CONTAINER_METHOD_NAMES`'s
         // own rejection, `buf.get(5)` below would hit `expr.rs`'s
@@ -4336,6 +4374,25 @@ mod tests {
     }
 
     #[test]
+    fn enum_class_with_leading_docstring_is_accepted() {
+        // #744: a class docstring (a bare string-literal expression
+        // statement) is a no-op in an enum body, not a member assignment.
+        let hir = lower_ok("class Color(Enum):\n    \"A color.\"\n    RED = 1\n    GREEN = 2\n");
+        let (_, class_def) = &hir.class_defs[0];
+        assert_eq!(class_def.enum_members.len(), 2);
+        assert_eq!(class_def.enum_members[0].0, "RED");
+    }
+
+    #[test]
+    fn a_non_string_expression_statement_in_an_enum_body_is_still_rejected() {
+        // #744's docstring exemption is narrow: a bare non-string
+        // expression statement in an enum body remains C0001, exercising
+        // the guard's false branch distinctly from a non-`Stmt::Expr`
+        // statement (which already short-circuits before the guard).
+        assert_c0001("class Color(Enum):\n    42\n    RED = 1\n");
+    }
+
+    #[test]
     fn valid_enum_class_lowers_via_unit_test() {
         // Covers `lower_enum_class`'s `Ok` return path (lines 911-932)
         // inside this crate's own unit-test binary, working around
@@ -4384,6 +4441,19 @@ mod tests {
         assert!(class_def.methods.iter().any(|(mn, _)| mn == "__init__"));
         assert!(class_def.methods.iter().any(|(mn, _)| mn == "__eq__"));
         assert!(class_def.methods.iter().any(|(mn, _)| mn == "__repr__"));
+    }
+
+    #[test]
+    fn a_dataclass_with_leading_docstring_lowers_successfully() {
+        // #744: a class docstring (a bare string-literal expression
+        // statement) is a no-op in a dataclass body, not a field or method.
+        let hir = lower_ok("@dataclass\nclass Point:\n    \"A point.\"\n    x: int\n    y: int\n");
+        let (_, class_def) = &hir.class_defs[0];
+        assert!(class_def.is_dataclass);
+        assert_eq!(
+            class_def.dataclass_fields,
+            vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int),]
+        );
     }
 
     #[test]
@@ -4657,6 +4727,32 @@ mod tests {
         assert_eq!(hir.class_defs.len(), 1);
         assert!(hir.class_defs[0].1.is_protocol);
         assert!(hir.class_defs[0].1.protocol_members.is_empty());
+    }
+
+    #[test]
+    fn a_protocol_class_with_a_leading_docstring_lowers_successfully() {
+        // #744: a class docstring (a bare string-literal expression
+        // statement) is a no-op in a protocol body.
+        let hir = lower_ok(
+            "from typing import Protocol\nclass P(Protocol):\n    \"A protocol.\"\n    def foo(self) -> int: ...\n",
+        );
+        let def = &hir.class_defs[0].1;
+        assert!(def.is_protocol);
+        assert_eq!(def.protocol_members.len(), 1);
+    }
+
+    #[test]
+    fn a_non_string_expression_statement_in_a_protocol_body_is_still_rejected() {
+        // #744's docstring exemption is narrow: a bare non-string
+        // expression statement in a protocol body remains C0001, exercising
+        // the guard's false branch distinctly from a non-`Stmt::Expr`
+        // statement (`a_protocol_class_with_an_unsupported_statement_is_rejected`
+        // above uses `Stmt::Assign`, which never reaches this guard at all).
+        let module = crate::pycc_parser_test_helper::parse(
+            "from typing import Protocol\nclass P(Protocol):\n    42\n    def foo(self) -> int: ...\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
     }
 
     #[test]
