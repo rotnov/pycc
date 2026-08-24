@@ -11719,6 +11719,63 @@ fn a_multi_tag_handler_declines_a_tag_outside_its_set() {
 }
 
 #[test]
+fn a_pep_758_multi_type_handler_ors_every_named_types_tag_independently() {
+    // PEP 758 (#740): `except (ValueError, KeyError, IndexError):` unions
+    // three *independently named* types' tags (as MIR lowering computes,
+    // via union + dedup, from `HirExceptHandler.exc_type`'s `Vec<String>`)
+    // rather than one name's subclass expansion. Each named type must be
+    // independently catchable through the resulting OR-chain -- run three
+    // separate raises against the same tag set.
+    for (raised_tag, class_name) in [(1u8, "ValueError"), (3, "KeyError"), (4, "IndexError")] {
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Try {
+                body: vec![MirStmt::Raise {
+                    exception: MirExceptionValue::Constructed {
+                        type_tag: raised_tag,
+                        class_name: class_name.to_string(),
+                        message: MirExpr::StringLiteral("boom".to_string()),
+                    },
+                }],
+                handlers: vec![
+                    MirExceptHandler {
+                        exc_type_tag: Some(vec![1, 3, 4]),
+                        binding_name: None,
+                        binding_ty: None,
+                        body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                            callee: "print".to_string(),
+                            args: vec![MirExpr::StringLiteral("multi".to_string())],
+                            ty: Ty::None,
+                        })],
+                    },
+                    MirExceptHandler {
+                        exc_type_tag: None,
+                        binding_name: None,
+                        binding_ty: None,
+                        body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                            callee: "print".to_string(),
+                            args: vec![MirExpr::StringLiteral("bare".to_string())],
+                            ty: Ty::None,
+                        })],
+                    },
+                ],
+                orelse: Vec::new(),
+                finalbody: Vec::new(),
+            })],
+            class_defs: Vec::new(),
+        };
+        let dir = tempfile_dir(&format!("try_pep758_multi_{class_name}"));
+        let obj_path = dir.join("try_pep758_multi.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("try_pep758_multi");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"multi\n", "raised tag {raised_tag} ({class_name})");
+        assert!(output.status.success());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
 fn try_else_body_falls_through_to_finally() {
     // Exercises the `else_falls_through` branch (lines 7569-7571):
     // a non-empty else body that completes normally (no return/raise)

@@ -1420,11 +1420,12 @@ pub(crate) fn collect_block_constraints(
                     let mut henv = env.clone();
                     // Bind the `as` name in the handler environment.
                     // Inside the handler body, the binding is definite.
-                    if let Some(exc_type) = &handler.exc_type
+                    if let Some(exc_types) = &handler.exc_type
                         && let Some(name) = &handler.name
                     {
+                        let binding_type = pycc_hir::except_handler_binding_type_name(exc_types);
                         henv.bindings
-                            .insert(name.clone(), Ok(Ty::Instance(Box::new(exc_type.clone()))));
+                            .insert(name.clone(), Ok(Ty::Instance(Box::new(binding_type))));
                     }
                     collect_block_constraints(
                         signatures,

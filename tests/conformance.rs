@@ -1334,3 +1334,32 @@ fn pep_3151_oserror_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_3151_oserror.py"
     );
 }
+
+// Part 3 of #543 (#740, PEP 758): `except A, B:` (bare comma, no
+// parentheses) alongside the pre-existing `except (A, B):` parenthesized
+// form. Covers both spellings catching each of their named types, an `as`
+// binding whose bound value is re-raised and recaught by an outer handler,
+// a 3+-type handler, and a non-matching raise propagating out through an
+// inner handler to an outer one. Left off the matrix's row
+// (docs/PYTHON_STANDARDS.md, still `☐`) until a green Tier-1 run of this
+// test is actually observed, per D-102 -- this fixture and its
+// registration exist so that observation can happen in a follow-up, not to
+// claim it here.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn pep_0758_except_noparens_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0758_except_noparens.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0758_except_noparens_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/pep_0758_except_noparens.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0758_except_noparens_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0758_except_noparens.py"
+    );
+}

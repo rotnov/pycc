@@ -140,7 +140,7 @@ fn lowers_try_with_value_error_handler_to_mir() {
             args: vec![HirExpr::StringLiteral("hello".to_string())],
         })],
         vec![pycc_hir::HirExceptHandler {
-            exc_type: Some("ValueError".to_string()),
+            exc_type: Some(vec!["ValueError".to_string()]),
             name: None,
             body: vec![HirStmt::ExprStmt(HirExpr::Call {
                 callee: "print".to_string(),
@@ -191,7 +191,7 @@ fn lowers_try_with_else_and_finally_to_mir() {
             args: vec![HirExpr::StringLiteral("body".to_string())],
         })],
         vec![pycc_hir::HirExceptHandler {
-            exc_type: Some("Exception".to_string()),
+            exc_type: Some(vec!["Exception".to_string()]),
             name: None,
             body: vec![HirStmt::ExprStmt(HirExpr::Call {
                 callee: "print".to_string(),
@@ -374,7 +374,7 @@ fn an_unknown_exception_handler_cannot_silently_become_a_bare_handler() {
     let hir = try_module(
         vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
         vec![pycc_hir::HirExceptHandler {
-            exc_type: Some("TypoError".to_string()),
+            exc_type: Some(vec!["TypoError".to_string()]),
             name: None,
             body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
         }],
@@ -502,6 +502,69 @@ fn raising_a_user_exception_class_lowers_to_a_constructed_value_with_its_name() 
             message: MirExpr::StringLiteral(ref message),
         } if class_name == "DatabaseError" && message == "boom"
     ));
+}
+
+#[test]
+fn a_pep_758_multi_type_handlers_tag_set_is_the_union_deduped() {
+    // PEP 758 (#740): `except (AppError, ConfigError):` unions each named
+    // type's own `handler_type_tags` result. `AppError`'s set ([7, 8, 9])
+    // already contains `ConfigError`'s own tag (8), since `ConfigError` is
+    // one of `AppError`'s subclasses -- so a naive concatenation would
+    // double-count tag 8, and the combined set must be deduped back down
+    // to `AppError`'s own set (a hand-computed overlapping-family case,
+    // matching the real `OSError`/`ConnectionError` overlap this change
+    // exists to handle correctly).
+    let classes = exception_hierarchy();
+    let mut combined: Vec<u8> = handler_type_tags("AppError", &classes);
+    combined.extend(handler_type_tags("ConfigError", &classes));
+    assert_eq!(
+        combined,
+        vec![7, 8, 9, 8],
+        "sanity: naive concatenation duplicates tag 8 before dedup"
+    );
+    combined.sort_unstable();
+    combined.dedup();
+    assert_eq!(combined, vec![7, 8, 9]);
+}
+
+#[test]
+fn a_pep_758_multi_type_handler_lowers_through_build_with_deduped_sorted_tags() {
+    // Unlike the test above (which hand-computes the union/dedup in
+    // isolation), this drives the real `HirStmt::Try` -> MIR lowering path
+    // in `crate::stmt` end to end, so deleting either `.sort_unstable()` or
+    // `.dedup()` at that call site would fail *this* test even though
+    // codegen's OR-chain dispatch is itself idempotent under a duplicate or
+    // unsorted tag (deep-reviewer finding on #740).
+    let classes = exception_hierarchy();
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::Try {
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::StringLiteral("body".to_string())],
+            })],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                // `AppError`'s own tag set ([7, 8, 9]) already contains
+                // `ConfigError`'s tag (8), so a naive union would produce
+                // [7, 8, 9, 8] before sort+dedup.
+                exc_type: Some(vec!["AppError".to_string(), "ConfigError".to_string()]),
+                name: None,
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::StringLiteral("caught".to_string())],
+                })],
+            }],
+            orelse: Vec::new(),
+            finalbody: Vec::new(),
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: classes.into_iter().collect(),
+    };
+    let mir = build(&hir);
+    let (_, handlers, _, _) = expect_top_level_try(&mir.items[0]);
+    assert_eq!(handlers.len(), 1);
+    assert_eq!(handlers[0].exc_type_tag, Some(vec![7, 8, 9]));
 }
 
 #[test]

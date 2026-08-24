@@ -201,3 +201,4 @@ current.
 | [D-192](./D-192-bound-the-tracker-with-milestone-at-filing-a.md) | Bound the tracker: milestone at filing, a 4:1 merge quota, a ceiling on non-milestone issues, and one session file per merged pull request | accepted |
 | [D-193](./D-193-reuse-l0001-for-context-invalid-finally-exit.md) | Reuse `L0001` for `return`/`break`/`continue` that exit a `finally` block, gated on a valid escape target (PEP 765, #738) | accepted |
 | [D-194](./D-194-fix-a-tree-shaped-builtin-exception-family-tags.md) | Fix a tree-shaped builtin exception family's tags to its class table's array index | accepted |
+| [D-195](./D-195-pep-758-multi-type-except-representation.md) | PEP 758 multi-type except handler representation and binding choice | accepted |

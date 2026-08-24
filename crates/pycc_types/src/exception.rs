@@ -5,7 +5,9 @@ use super::{
     join_if_branches, join_loop_body,
 };
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{EXCEPTION_INIT_MANGLED_NAME, HirClassDef, HirExceptHandler};
+use pycc_hir::{
+    EXCEPTION_INIT_MANGLED_NAME, HirClassDef, HirExceptHandler, except_handler_binding_type_name,
+};
 
 pub(super) fn check_try_stmt(
     env: &mut Environment,
@@ -25,44 +27,55 @@ pub(super) fn check_try_stmt(
     for handler in handlers {
         let mut handler_env = env.clone();
         handler_env.in_except_handler = true;
-        if let Some(exc_type) = &handler.exc_type {
-            let builtin = is_unshadowed_builtin_exception(&body_env, local_names, exc_type);
-            if !builtin {
-                // Part 2 of #541 (D-189): a user-declared class whose MRO
-                // reaches a builtin exception is catchable too.
-                let Some(def) = user_exception_class(&body_env, local_names, exc_type) else {
-                    return Err(Diagnostic::error(
-                        "T0021",
-                        format!(
-                            "`{exc_type}` is not a recognized exception class — only builtin exception classes and classes derived from them are supported in `except` handlers"
-                        ),
-                        Span::new(0, 0),
-                    ));
-                };
-                reject_own_constructor(&body_env, def)?;
-                if handler.name.is_some() {
-                    // Deliberately *not* supported in Part 2, and not merely
-                    // for want of the feature: binding the caught value would
-                    // give it a `Ty::Instance(exc_type)`, and every consumer
-                    // of that type reads an instance as a `PyInstanceObj`.
-                    // The value the runtime actually holds is a
-                    // `PyExceptionObj` — a different layout entirely — so the
-                    // binding would be a type confusion, not a missing
-                    // capability. Part 3 of #541 (#703) materializes a real
-                    // instance; until then this must stay rejected.
-                    return Err(Diagnostic::error(
-                        "C0001",
-                        format!(
-                            "binding a caught `{exc_type}` with `as` is not supported \
-                             yet; pycc does not materialize an exception instance \
-                             for a user-defined exception class (Part 3 of #541)"
-                        ),
-                        Span::new(0, 0),
-                    ));
+        if let Some(exc_types) = &handler.exc_type {
+            // PEP 758 (#740): a handler may name more than one exception
+            // type (`except A, B:` / `except (A, B):`). Every named type is
+            // validated independently, in source order, failing on the
+            // *first* invalid name -- no diagnostic in this codebase
+            // batches multiple errors together.
+            for exc_type in exc_types {
+                let builtin = is_unshadowed_builtin_exception(&body_env, local_names, exc_type);
+                if !builtin {
+                    // Part 2 of #541 (D-189): a user-declared class whose MRO
+                    // reaches a builtin exception is catchable too.
+                    let Some(def) = user_exception_class(&body_env, local_names, exc_type) else {
+                        return Err(Diagnostic::error(
+                            "T0021",
+                            format!(
+                                "`{exc_type}` is not a recognized exception class — only builtin exception classes and classes derived from them are supported in `except` handlers"
+                            ),
+                            Span::new(0, 0),
+                        ));
+                    };
+                    reject_own_constructor(&body_env, def)?;
+                    if handler.name.is_some() {
+                        // Deliberately *not* supported in Part 2, and not merely
+                        // for want of the feature: binding the caught value would
+                        // give it a `Ty::Instance(exc_type)`, and every consumer
+                        // of that type reads an instance as a `PyInstanceObj`.
+                        // The value the runtime actually holds is a
+                        // `PyExceptionObj` — a different layout entirely — so the
+                        // binding would be a type confusion, not a missing
+                        // capability. Part 3 of #541 (#703) materializes a real
+                        // instance; until then this must stay rejected. This
+                        // applies per-name: any user-defined class among a
+                        // multi-type handler's names with an `as` binding is
+                        // rejected, naming the specific offending class.
+                        return Err(Diagnostic::error(
+                            "C0001",
+                            format!(
+                                "binding a caught `{exc_type}` with `as` is not supported \
+                                 yet; pycc does not materialize an exception instance \
+                                 for a user-defined exception class (Part 3 of #541)"
+                            ),
+                            Span::new(0, 0),
+                        ));
+                    }
                 }
             }
             if let Some(name) = &handler.name {
-                handler_env.bind(name.clone(), Ty::Instance(Box::new(exc_type.clone())));
+                let binding_type = except_handler_binding_type_name(exc_types);
+                handler_env.bind(name.clone(), Ty::Instance(Box::new(binding_type)));
             }
         }
         for stmt in &handler.body {

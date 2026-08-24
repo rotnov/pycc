@@ -93,6 +93,25 @@ fn l0001_break_outside_loop() {
     assert_diagnostic_matches_fixture("l0001_break_outside_loop");
 }
 
+// PEP 758 (Part 3 of #543, #740): `except A, B as e:` (bare comma, no
+// parens, with an `as` binding) is rejected by the *parser*, not by HIR/
+// types/MIR -- CPython requires parentheses around a multi-type handler's
+// exception list whenever it also binds a name. This is existing,
+// already-correct parser behavior; the fixture is a regression guard.
+#[test]
+fn l0001_except_multi_type_as_binding_requires_parens() {
+    assert_diagnostic_matches_fixture("l0001_except_multi_type_as_binding_requires_parens");
+}
+
+// PEP 758 (Part 3 of #543, #740): `except ():` parses successfully as an
+// empty-tuple exception type, but names zero exception types -- rejected
+// at HIR lowering rather than reaching MIR/codegen's non-empty
+// handler-tag-set invariant unchecked.
+#[test]
+fn c0001_except_empty_tuple_type() {
+    assert_diagnostic_matches_fixture("c0001_except_empty_tuple_type");
+}
+
 #[test]
 fn l0001_continue_outside_loop() {
     assert_diagnostic_matches_fixture("l0001_continue_outside_loop");
