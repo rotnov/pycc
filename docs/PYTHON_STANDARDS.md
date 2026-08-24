@@ -172,6 +172,43 @@ For each newly observed upstream release:
     ([#720](https://github.com/rotnov/pycc/issues/720)) outright. Those are
     recorded `core` gaps, and a `core` gap forces `◐` under
     [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
+11. PEP 3151 (`OSError` hierarchy) and PEP 758 (`except A, B:` without
+    parentheses) were flipped to `◐` on the same rule 5/9 basis, closing
+    [#543](https://github.com/rotnov/pycc/issues/543)'s last two rows and
+    tracked to this specific flip by
+    [#753](https://github.com/rotnov/pycc/issues/753). Both fixtures were
+    registered as `#[ignore]`d dual-profile tests ahead of their own row's
+    flip, per rule 9's pattern, by [#739](https://github.com/rotnov/pycc/issues/739)
+    (D-194) and [#740](https://github.com/rotnov/pycc/issues/740) (D-195)
+    respectively. PEP 3151's fixture was observed green on run
+    [32648360162](https://github.com/rotnov/pycc/actions/runs/32648360162),
+    the completed `main` push run for `479082124ac8`
+    ([#742](https://github.com/rotnov/pycc/pull/742)'s merge); PEP 758's on run
+    [32713320099](https://github.com/rotnov/pycc/actions/runs/32713320099),
+    the completed `main` push run for `8c14b7b4640c`
+    ([#743](https://github.com/rotnov/pycc/pull/743)'s merge). Both runs
+    executed all four `native-build-test` matrix targets plus
+    `build-test-coverage`'s `macos-14` job (the fifth Tier-1 target), and both
+    jobs' logs show the fixture's `#[ignore]`d test observed `ok` under
+    `--include-ignored`. Neither row is `✅`: PEP 3151's fixture does not
+    exercise errno-based construction/dispatch or the
+    `errno`/`filename`/`strerror`/`winerror` instance attributes (deferred to
+    [#703](https://github.com/rotnov/pycc/issues/703)), nor does it exercise
+    every one of the hierarchy's 16 classes being raised and caught
+    individually; PEP 758's fixture exercises its 3+-type handler only
+    through the parenthesized spelling, and pycc has no `except*`/
+    `ExceptionGroup` support at all yet, so the `except*`-without-parentheses
+    half of PEP 758's own scope has no implementation to exercise. Those are
+    recorded `core` gaps in `tests/fixtures/conformance-breadth-manifest.json`,
+    and a `core` gap forces `◐` under
+    [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
+    `except A, B as e:` (bare comma with `as`) is rejected outright with a
+    parser-level `L0001`, unchanged by D-195 -- but this is not a gap: CPython
+    itself requires parentheses around a multi-type handler whenever it also
+    binds a name (`tests/diagnostics_test.rs:96-100`,
+    `l0001_except_multi_type_as_binding_requires_parens`), so pycc's
+    rejection matches the oracle and the manifest records this as
+    `out-of-scope` rather than `core`.
 
 ## Python 3.0–3.2 (foundations)
 
@@ -199,7 +236,7 @@ For each newly observed upstream release:
 | [409](https://peps.python.org/pep-0409/) | `raise ... from ...` cause chaining and `from None` suppression (#382, #540) | sem | `pep_0409_raise_from.py` | ◐ |
 | [414](https://peps.python.org/pep-0414/) | `u''` literals | syntax | `pep_0414_u_literal.py` | ✅ |
 | [420](https://peps.python.org/pep-0420/) | Namespace packages | import | `py33/pep_0420_ns_packages.py` | ☐ |
-| [3151](https://peps.python.org/pep-3151/) | `OSError` hierarchy | sem | `pep_3151_oserror.py` (the real 16-class hierarchy now exists as compiler-defined `HirClassDef`s per Part 2 of [#543](https://github.com/rotnov/pycc/issues/543) ([#739](https://github.com/rotnov/pycc/issues/739)); fixture registered as an `#[ignore]`d dual-profile test in `tests/conformance.rs`, awaiting the Tier-1 observation rule 5/9 require before this row can flip) | ☐ |
+| [3151](https://peps.python.org/pep-3151/) | `OSError` hierarchy | sem | `pep_3151_oserror.py` (the real 16-class hierarchy now exists as compiler-defined `HirClassDef`s per Part 2 of [#543](https://github.com/rotnov/pycc/issues/543) ([#739](https://github.com/rotnov/pycc/issues/739)); observed green across all 5 Tier-1 targets in both profiles on run [32648360162](https://github.com/rotnov/pycc/actions/runs/32648360162), the completed `main` push run for `479082124ac8`, the merge of [#742](https://github.com/rotnov/pycc/pull/742)) | ◐ |
 
 *n/a for codegen: PEP 393 (flexible str storage — internal; pycc uses its own UTF-8 representation, documented in `docs/semantics.md`).*
 
@@ -325,7 +362,7 @@ the pinned interpreter's own GIL only for CPython-backed operations (D-128).*
 | [649](https://peps.python.org/pep-0649/)/[749](https://peps.python.org/pep-0749/) | **Deferred annotations** — pycc reads annotations exactly per 3.14 semantics; self-referential class-name annotations in own methods work (#387 Part 2) | typing | `pep_0649_deferred_ann.py` | ◐ |
 | [734](https://peps.python.org/pep-0734/) | Subinterpreters in stdlib | rt | `py314/pep_0734_interpreters.py` | ☐ |
 | [750](https://peps.python.org/pep-0750/) | **Template strings (t-strings)** | syntax | `py314/pep_0750_tstrings.py` | ☐ |
-| [758](https://peps.python.org/pep-0758/) | `except A, B:` without parentheses | syntax | `pep_0758_except_noparens.py` (multi-type `except` handlers now lower and dispatch identically for the bare-comma and parenthesized forms per Part 3 of [#543](https://github.com/rotnov/pycc/issues/543) ([#740](https://github.com/rotnov/pycc/issues/740)); fixture registered as an `#[ignore]`d dual-profile test in `tests/conformance.rs`, awaiting the Tier-1 observation rule 5/9 require before this row can flip) | ☐ |
+| [758](https://peps.python.org/pep-0758/) | `except A, B:` without parentheses | syntax | `pep_0758_except_noparens.py` (multi-type `except` handlers now lower and dispatch identically for the bare-comma and parenthesized forms per Part 3 of [#543](https://github.com/rotnov/pycc/issues/543) ([#740](https://github.com/rotnov/pycc/issues/740)); observed green across all 5 Tier-1 targets in both profiles on run [32713320099](https://github.com/rotnov/pycc/actions/runs/32713320099), the completed `main` push run for `8c14b7b4640c`, the merge of [#743](https://github.com/rotnov/pycc/pull/743)) | ◐ |
 | [765](https://peps.python.org/pep-0765/) | No `return`/`break`/`continue` in `finally` | sem | `py314/pep_0765_finally.py` | ☐ |
 | [779](https://peps.python.org/pep-0779/) | Free-threading officially supported → pycc: GIL-free native threads | rt | `py314/pep_0779_threads.py` | ☐ |
 
