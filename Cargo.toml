@@ -34,6 +34,7 @@ homepage = "https://rotnov.github.io/pycc/"
 readme = "README.md"
 keywords = ["python", "compiler", "aot", "llvm", "static-typing"]
 categories = ["compilers", "command-line-utilities", "development-tools"]
+build = "build.rs"
 
 [[bin]]
 name = "pycc"

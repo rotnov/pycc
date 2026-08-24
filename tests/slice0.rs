@@ -240,19 +240,43 @@ fn build_rejects_a_module_value_binding_that_shadows_a_function_call() {
     );
 }
 
-/// The summary line both `pycc version` forms print, built from the same
-/// manifest macros as the implementation (this integration test compiles
-/// inside the `pycc` package, so `CARGO_PKG_VERSION`/`CARGO_PKG_RUST_VERSION`
-/// resolve to identical values in both binaries and the snapshot tracks a
-/// version bump instead of rotting). "LLVM 22.1.1" is D-015's pinned contract
-/// literal on both sides -- see the version arm's own comment in
-/// `src/main.rs` for why the *installed* LLVM's truthfulness is #75's scope,
-/// not this test's.
+/// The summary line both `pycc version` forms print.
+///
+/// `pycc {version}` is built from the same manifest macro as the
+/// implementation (`CARGO_PKG_VERSION`, identical in both binaries since this
+/// integration test compiles inside the `pycc` package), so the snapshot
+/// tracks a version bump instead of rotting.
+///
+/// `rustc {version}` is deliberately **not** derived from
+/// `env!("PYCC_BUILD_RUSTC_VERSION")`, the same source `src/main.rs` uses:
+/// reusing it would only prove the binary's output matches its own build
+/// script, not that the build script captured the real compiler (#247 -- the
+/// original bug reused `CARGO_PKG_RUST_VERSION` on both sides and stayed
+/// green while reporting the wrong field). Instead this shells out to
+/// `rustc --version` itself, at test run time, and parses it the same way
+/// `build.rs` does, giving an independent live check against the actual
+/// installed compiler.
+///
+/// "LLVM 22.1.1" is D-015's pinned contract literal on both sides -- see the
+/// version arm's own comment in `src/main.rs` for why the *installed* LLVM's
+/// truthfulness is #75's scope, not this test's.
 fn expected_version_summary_line() -> String {
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    let output = Command::new(&rustc)
+        .arg("--version")
+        .output()
+        .unwrap_or_else(|err| panic!("failed to run `{rustc} --version`: {err}"));
+    assert!(output.status.success(), "`{rustc} --version` failed");
+    let stdout = String::from_utf8(output.stdout)
+        .unwrap_or_else(|err| panic!("`{rustc} --version` printed non-UTF-8 output: {err}"));
+    let installed_rustc_version = stdout
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_else(|| panic!("unexpected `{rustc} --version` output: {stdout:?}"));
     format!(
         "pycc {} (rustc {}, LLVM 22.1.1)\n",
         env!("CARGO_PKG_VERSION"),
-        env!("CARGO_PKG_RUST_VERSION"),
+        installed_rustc_version,
     )
 }
 

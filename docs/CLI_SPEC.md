@@ -31,12 +31,17 @@ injections). An existing `src/` directory is not itself a conflict — only its 
 
 `pycc version` prints one summary line; `--verbose` appends the Tier-1 target
 list, in the exact set and order of ARCHITECTURE.md's "Cross-platform (hard
-requirement)" table. The compiler and rustc fields come from the crate
-manifest; the LLVM field states D-015's pinned contract version.
+requirement)" table. The `pycc` field comes from the crate manifest
+(`CARGO_PKG_VERSION`); the `rustc` field is the actual compiler that built
+this binary, captured by the root `build.rs` at build time rather than read
+from the manifest's `rust-version` MSRV contract, which can diverge from it
+(#247); the LLVM field states D-015's pinned contract version.
 `tests/slice0.rs`'s two version snapshot tests enforce the output shape —
-manifest-sourced fields, the LLVM pin, and the exact target set and order;
-the version numbers in the transcript below are illustrative and track the
-manifest at build time:
+the manifest-sourced `pycc` field, the build-time `rustc` field (checked
+against a live `rustc --version` at test run time, independent of the
+implementation's own capture), the LLVM pin, and the exact target set and
+order; the version numbers in the transcript below are illustrative and
+track the manifest/toolchain at build time:
 
 ```text
 $ pycc version --verbose
