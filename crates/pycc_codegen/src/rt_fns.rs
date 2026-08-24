@@ -163,6 +163,11 @@ pub(super) struct RtFns<'ctx> {
     pub(super) exception_raise_with_cause: FunctionValue<'ctx>,
     /// `exception_type_matches(obj: *mut PyExceptionObj, type_tag: u8) -> i8`.
     pub(super) exception_type_matches: FunctionValue<'ctx>,
+    /// `exception_message(obj: *mut PyExceptionObj) -> *mut PyStrObj` (Part 3A
+    /// of #541, #736): the exception's own message alone (`str(e)`
+    /// semantics), never `exception_print_and_exit`'s `"{type}: {message}"`
+    /// uncaught-exception format.
+    pub(super) exception_message: FunctionValue<'ctx>,
     /// `exception_print_and_exit(obj: *mut PyExceptionObj) -> !` (noreturn).
     pub(super) exception_print_and_exit: FunctionValue<'ctx>,
     /// Lexically enclosing `except` handler values used by bare `raise`.
@@ -449,6 +454,10 @@ pub(super) fn declare_rt_functions<'ctx>(
             context
                 .i8_type()
                 .fn_type(&[ptr_type.into(), context.i8_type().into()], false),
+        ),
+        exception_message: declare(
+            "pycc_rt_exception_message",
+            ptr_type.fn_type(&[ptr_type.into()], false),
         ),
         exception_print_and_exit: declare(
             "pycc_rt_exception_print_and_exit",

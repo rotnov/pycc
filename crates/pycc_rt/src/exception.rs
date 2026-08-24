@@ -130,6 +130,27 @@ pub unsafe extern "C" fn pycc_rt_exception_type_matches(
     i8::from(type_tag == EXCEPTION_TYPE_EXCEPTION || obj_tag == type_tag)
 }
 
+/// Returns the exception's own message string, borrowed and unretained
+/// (Part 3A of #541, #736): `print(e)`/f-string interpolation of a caught
+/// exception binding must render CPython's `str(e)` semantics -- the message
+/// alone, e.g. `boom` -- never `exception_print_and_exit`'s own uncaught-
+/// exception `"{type}: {message}"` format, which this function does not
+/// touch. No refcount/retain work is needed here: like
+/// `pycc_rt_print_write_str`/`pycc_rt_str_concat`, this only borrows an
+/// existing `PyStrObj` pointer rather than producing a new owned reference.
+///
+/// # Safety
+///
+/// A non-null `obj` must point to a live `PyExceptionObj` whose `message`
+/// field is a live `PyStrObj` pointer -- true of every `PyExceptionObj` this
+/// compiler's own codegen ever constructs (`pycc_rt_exception_alloc` always
+/// receives a message, defaulting to `"unknown"` when the source `raise` has
+/// no argument -- see `pycc_mir::lower_exception_value`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_exception_message(obj: *mut PyExceptionObj) -> *mut PyStrObj {
+    unsafe { (*obj).message }
+}
+
 /// The exception class's name, or `Exception` when the object carries none.
 ///
 /// # Safety
@@ -242,6 +263,19 @@ mod tests {
             alloc_exception_message("boom"),
         );
         assert_eq!(exception_type_name(unsafe { &*obj }), "Exception");
+    }
+
+    #[test]
+    fn exception_message_returns_the_borrowed_message_pointer_unretained() {
+        // Part 3A of #541 (#736): `pycc_rt_exception_message` returns the
+        // exact `message` field, borrowed and unretained, matching this
+        // module's own `bytes()`-comparison convention used elsewhere in
+        // this file (e.g. `class_name_round_trips_through_the_exception_object`
+        // sibling tests).
+        let obj = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "boom");
+        let message = unsafe { pycc_rt_exception_message(obj) };
+        assert_eq!(unsafe { (*message).bytes() }, b"boom");
+        assert_eq!(message, unsafe { (*obj).message });
     }
 
     #[test]

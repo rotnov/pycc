@@ -251,6 +251,22 @@ pub enum MirExpr {
     NullInstance {
         ty: Ty,
     },
+    /// Reads a caught exception's own message string (Part 3A of #541,
+    /// #736): `str(e)` semantics -- the message alone, never
+    /// `exception_print_and_exit`'s own uncaught-exception `"{type}:
+    /// {message}"` format, which this node has nothing to do with. The
+    /// boxed inner expression is the exception-typed value (typically a
+    /// `MirExpr::Name` reference to an `except ... as e:` handler binding);
+    /// `pycc_mir::class::rewrite_exception_to_message` is the sole
+    /// constructor, applied at the same two lowering sites
+    /// `rewrite_instance_to_repr` is (a `print` argument and an f-string
+    /// interpolation) whenever the expression's static type names a
+    /// registered exception class, so codegen's `to_str` always receives a
+    /// `str` scalar for a caught exception rather than reaching its
+    /// `Scalar::Instance` panic arm. `.ty()` below always reports
+    /// `Ty::Str`, exactly like `rewrite_instance_to_repr`'s own
+    /// `MirExpr::Call` rewrite.
+    ExceptionMessage(Box<MirExpr>),
 }
 
 /// `MirExpr::Instantiate`'s payload, boxed (not inlined into that variant
@@ -397,6 +413,7 @@ impl MirExpr {
             MirExpr::Instantiate(inst) => inst.ty.clone(),
             MirExpr::AttrGet { ty, .. } => ty.clone(),
             MirExpr::NullInstance { ty } => ty.clone(),
+            MirExpr::ExceptionMessage(_) => Ty::Str,
         }
     }
 }

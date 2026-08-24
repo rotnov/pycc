@@ -12409,3 +12409,89 @@ fn try_else_body_falls_through_to_finally() {
     assert_eq!(output.stdout, b"try\nelse\nfinally\n");
     assert!(output.status.success());
 }
+
+// -- Part 3A of #541 (#736): render a caught exception binding ----------
+
+#[test]
+fn print_of_a_caught_exception_binding_prints_its_message() {
+    // `except ValueError as e: print(e)` -- resolves the #705 reproducer.
+    // `MirExpr::ExceptionMessage` is hand-built here exactly as
+    // `pycc_mir::class::rewrite_exception_to_message` would produce it,
+    // matching how `raising_a_bound_existing_exception_builds_successfully`
+    // above hand-builds its own handler binding.
+    let exception_ty = Ty::Instance(Box::new("ValueError".to_string()));
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::Try {
+            body: vec![MirStmt::Raise {
+                exception: MirExceptionValue::Constructed {
+                    type_tag: 1,
+                    class_name: "ValueError".to_string(),
+                    message: MirExpr::StringLiteral("boom".to_string()),
+                },
+            }],
+            handlers: vec![MirExceptHandler {
+                exc_type_tag: Some(vec![1]),
+                binding_name: Some("e".to_string()),
+                binding_ty: Some(exception_ty.clone()),
+                body: vec![print_expr(MirExpr::ExceptionMessage(Box::new(
+                    MirExpr::Name {
+                        name: "e".to_string(),
+                        ty: exception_ty,
+                    },
+                )))],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        })],
+        class_defs: vec![],
+    };
+    let dir = tempfile_dir("exception_message_print");
+    let obj_path = dir.join("exception_message_print.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("exception_message_print");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"boom\n");
+}
+
+#[test]
+fn fstring_interpolation_of_a_caught_exception_binding_renders_its_message() {
+    // `except ValueError as e: print(f"{e}")` -- a single interpolation
+    // and no other text produces just the message, exactly like
+    // `str(e)`.
+    let exception_ty = Ty::Instance(Box::new("ValueError".to_string()));
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::Try {
+            body: vec![MirStmt::Raise {
+                exception: MirExceptionValue::Constructed {
+                    type_tag: 1,
+                    class_name: "ValueError".to_string(),
+                    message: MirExpr::StringLiteral("boom".to_string()),
+                },
+            }],
+            handlers: vec![MirExceptHandler {
+                exc_type_tag: Some(vec![1]),
+                binding_name: Some("e".to_string()),
+                binding_ty: Some(exception_ty.clone()),
+                body: vec![print_expr(MirExpr::FString(vec![
+                    MirFStringPart::Interpolation(Box::new(MirExpr::ExceptionMessage(Box::new(
+                        MirExpr::Name {
+                            name: "e".to_string(),
+                            ty: exception_ty,
+                        },
+                    )))),
+                ]))],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        })],
+        class_defs: vec![],
+    };
+    let dir = tempfile_dir("exception_message_fstring");
+    let obj_path = dir.join("exception_message_fstring.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("exception_message_fstring");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"boom\n");
+}

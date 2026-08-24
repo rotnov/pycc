@@ -2,6 +2,7 @@
 //! the attribute-slot layout walk, `super()`/`__repr__` resolution helpers,
 //! and the constant-folding of both class-predicate builtins.
 
+use super::exception::exception_type_tag;
 use super::{HirClassDef, MirExpr, lookup, lower_expr, mro_class_def};
 use pycc_hir::{
     HirExpr, Ty, eval_isinstance_single, eval_issubclass_single, extract_class_names,
@@ -45,9 +46,11 @@ pub(super) fn rewrite_instance_to_repr(
     // `(self) -> str`. A user-defined `__repr__` on a non-dataclass class
     // may have a different arity or return type, which would cause a
     // codegen panic if rewritten to a call here. Non-dataclass instances
-    // pass through unchanged (the type checker rejects `print(instance)` /
-    // f-string interpolation of a non-dataclass instance with `T0021`
-    // before codegen).
+    // pass through unchanged (the type checker rejects a plain class
+    // without a `__repr__` or an explicit `__init__` with `C0001` before
+    // codegen -- a class with an `__init__` but no `__repr__` type-checks
+    // fine and still reaches `to_str`'s own `Scalar::Instance` panic, see
+    // that function's doc comment).
     if !class_def.is_dataclass {
         return expr.clone();
     }
@@ -79,6 +82,38 @@ pub(super) fn rewrite_instance_to_repr(
         args: vec![expr.clone()],
         ty: Ty::Str,
     }
+}
+
+/// Part 3A of #541 (#736): if `expr` is typed as a registered exception
+/// class (a builtin like `ValueError`, one of the `OSError` family, or a
+/// user-defined exception class -- anything [`exception_type_tag`] resolves,
+/// which is exactly the discriminator `pycc_mir::exception`'s own handler-
+/// matching logic uses), rewrites it to a `MirExpr::ExceptionMessage`
+/// wrapping the original expression. The result type is `Ty::Str`. If the
+/// expression is not an instance, or names a class that isn't a registered
+/// exception, returns the original expression unchanged -- exactly mirroring
+/// [`rewrite_instance_to_repr`]'s own three early-return shapes (non-
+/// instance, unregistered class name, and here, "registered but not an
+/// exception").
+///
+/// This sibling of `rewrite_instance_to_repr` is applied at the identical
+/// two call sites (`HirExpr::FString` interpolation and a `print` call
+/// argument in `expr.rs`), and BEFORE that function is tried at each site,
+/// so an exception-typed value is rendered as its message rather than
+/// falling through to (and being rejected by, or mis-rewritten by) the
+/// dataclass `__repr__` path -- a caught exception's `Ty::Instance` payload
+/// is never itself a dataclass.
+pub(super) fn rewrite_exception_to_message(
+    expr: &MirExpr,
+    classes: &HashMap<String, HirClassDef>,
+) -> MirExpr {
+    let Ty::Instance(class_name) = expr.ty() else {
+        return expr.clone();
+    };
+    if exception_type_tag(class_name.as_str(), classes).is_none() {
+        return expr.clone();
+    }
+    MirExpr::ExceptionMessage(Box::new(expr.clone()))
 }
 
 pub(super) fn class_def_of<'c>(
