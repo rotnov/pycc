@@ -561,6 +561,17 @@ pub(crate) fn lower_expr(
                             FStringPart::Literal(lit.value.to_string())
                         }
                         pycc_ast::InterpolatedStringElement::Interpolation(interp) => {
+                            if interp.debug_text.is_some() {
+                                // #720: the `=` debug specifier (`f"{n=}"`) renders the
+                                // source text plus `repr(value)`, which this crate does
+                                // not implement. Silently discarding `debug_text` would
+                                // compile cleanly and print the wrong value, so reject
+                                // it explicitly instead.
+                                return Err(unsupported(
+                                    "f-string debug specifier (=) is not supported yet",
+                                    interp.range,
+                                ));
+                            }
                             if interp.conversion != pycc_ast::ConversionFlag::None {
                                 return Err(unsupported(
                                     "f-string conversion flags (!r/!s/!a) are not supported yet",
@@ -1126,7 +1137,7 @@ pub(crate) fn lower_dict_comp_assign(
 
 #[cfg(test)]
 mod tests {
-    use crate::{BinOpKind, HirExpr, HirItem, HirStmt, UnaryOpKind};
+    use crate::{BinOpKind, FStringPart, HirExpr, HirItem, HirStmt, UnaryOpKind};
 
     /// Lowers `source` and asserts that the value expression of its first
     /// top-level assignment is `expected`, so each case below states the
@@ -1308,6 +1319,45 @@ mod tests {
                 op: UnaryOpKind::USub,
                 operand: Box::new(HirExpr::Name("$comp0".to_string())),
             }
+        );
+    }
+
+    #[test]
+    fn an_ordinary_fstring_interpolation_lowers_successfully() {
+        // Baseline: an interpolation with no `=` debug specifier, no
+        // conversion flag, and no format spec still lowers, distinguishing
+        // this from the three rejection branches exercised below.
+        assert_first_assign(
+            "x = f\"{1}\"\n",
+            HirExpr::FString(vec![FStringPart::Interpolation(Box::new(
+                HirExpr::IntLiteral(1),
+            ))]),
+        );
+    }
+
+    #[test]
+    fn fstring_debug_specifier_is_rejected() {
+        // #720: `f"{n=}"` silently dropped the `=` debug specifier and
+        // printed the bare value instead of `n=5`. Reject it explicitly
+        // rather than compiling clean with wrong output.
+        assert_eq!(lower_err_code("n = 5\nx = f\"{n=}\"\n"), "C0001");
+        let message = lower_err_message("n = 5\nx = f\"{n=}\"\n");
+        assert!(
+            message.contains("f-string debug specifier (=) is not supported yet"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn fstring_debug_specifier_is_rejected_even_with_a_format_spec() {
+        // The debug-specifier check must fire before the format-spec check
+        // reaches its own arm, since `f"{n=:.2f}"` carries both a debug
+        // specifier and a format spec -- this exercises that ordering
+        // rather than only the debug-specifier-alone case above.
+        let message = lower_err_message("n = 5\nx = f\"{n=:.2f}\"\n");
+        assert!(
+            message.contains("f-string debug specifier (=) is not supported yet"),
+            "unexpected message: {message}"
         );
     }
 }
