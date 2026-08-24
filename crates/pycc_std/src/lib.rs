@@ -98,6 +98,18 @@ pub enum StdSymbolKind {
     /// decorator. It is not a first-class value — referencing it as a
     /// value or calling it is rejected by the type checker (#380, PR-20).
     DecoratorMarker,
+    /// An annotation-only marker symbol (`typing.Final`, `typing.Annotated`)
+    /// that is only valid as a bare-name annotation subscript
+    /// (`Final[X]`, `Annotated[X, ...]`, PEP 591/593). Unlike the other
+    /// marker kinds it is not a base-class or decorator marker either — it
+    /// has no role outside annotation position. `pycc_hir::func::
+    /// annotation_to_ty` already recognizes `Final`/`Annotated` by bare
+    /// name regardless of whether this registry entry exists; registering
+    /// the symbol here only makes `from typing import Final`/`Annotated`
+    /// itself resolve instead of failing with `C0002` (#762). It is not a
+    /// first-class value — referencing it as a value or calling it is
+    /// rejected by the type checker, the same as every other marker kind.
+    AnnotationMarker,
 }
 
 /// A single registered stdlib symbol: which module it lives in, its source
@@ -169,6 +181,16 @@ const REGISTRY: &[StdSymbol] = &[
         module: StdModule::Dataclasses,
         name: "dataclass",
         kind: StdSymbolKind::DecoratorMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "Final",
+        kind: StdSymbolKind::AnnotationMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "Annotated",
+        kind: StdSymbolKind::AnnotationMarker,
     },
 ];
 
@@ -348,6 +370,23 @@ mod tests {
     }
 
     #[test]
+    fn resolve_symbol_finds_typing_final() {
+        let sym = resolve_symbol(StdModule::Typing, "Final").expect("typing.Final is registered");
+        assert_eq!(sym.module, StdModule::Typing);
+        assert_eq!(sym.name, "Final");
+        assert_eq!(sym.kind, StdSymbolKind::AnnotationMarker);
+    }
+
+    #[test]
+    fn resolve_symbol_finds_typing_annotated() {
+        let sym = resolve_symbol(StdModule::Typing, "Annotated")
+            .expect("typing.Annotated is registered");
+        assert_eq!(sym.module, StdModule::Typing);
+        assert_eq!(sym.name, "Annotated");
+        assert_eq!(sym.kind, StdSymbolKind::AnnotationMarker);
+    }
+
+    #[test]
     fn resolve_symbol_finds_abc_abc() {
         let sym = resolve_symbol(StdModule::Abc, "ABC").expect("abc.ABC is registered");
         assert_eq!(sym.module, StdModule::Abc);
@@ -453,5 +492,14 @@ mod tests {
         let decorator_sym2 = decorator_sym;
         assert_eq!(decorator_sym, decorator_sym2);
         assert!(format!("{decorator_sym:?}").contains("DecoratorMarker"));
+
+        let annotation_sym = StdSymbol {
+            module: StdModule::Typing,
+            name: "Final",
+            kind: StdSymbolKind::AnnotationMarker,
+        };
+        let annotation_sym2 = annotation_sym;
+        assert_eq!(annotation_sym, annotation_sym2);
+        assert!(format!("{annotation_sym:?}").contains("AnnotationMarker"));
     }
 }
