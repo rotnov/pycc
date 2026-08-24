@@ -5,8 +5,8 @@
 #
 # Conversion flags (`!r`/`!s`/`!a`), format specs (`{x:...}`) and the `=`
 # debug specifier are deliberately absent: they are recorded core gaps in
-# pycc's f-string lowering, not PEP 701 grammar points, and #720 tracks the
-# `=` divergence.
+# pycc's f-string lowering, not PEP 701 grammar points. All three are
+# rejected outright; #720 tracks the `=` debug specifier.
 
 
 def nested_same_quote(x: int) -> str:

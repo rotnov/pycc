@@ -167,10 +167,10 @@ For each newly observed upstream release:
     only — nested same-quote and multi-line interpolations, comments and
     backslash escapes inside interpolations, adjacent interpolations, escaped
     braces, raw and implicitly concatenated f-strings — while pycc's f-string
-    lowering still rejects conversion flags (`!r`/`!s`/`!a`) and format specs
-    (`{x:...}`) outright, and diverges from CPython on the `=` debug specifier
-    ([#720](https://github.com/rotnov/pycc/issues/720)). Those are recorded
-    `core` gaps, and a `core` gap forces `◐` under
+    lowering still rejects conversion flags (`!r`/`!s`/`!a`), format specs
+    (`{x:...}`), and the `=` debug specifier
+    ([#720](https://github.com/rotnov/pycc/issues/720)) outright. Those are
+    recorded `core` gaps, and a `core` gap forces `◐` under
     [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
 
 ## Python 3.0–3.2 (foundations)
