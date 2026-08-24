@@ -685,7 +685,7 @@ fn collect_block_constraints_propagates_an_error_from_the_initializer_expression
 
 #[test]
 fn constraint_collection_carries_none_literal_as_ty_none() {
-    // D-197 (#763, Part 1 of #747): the constraint solver's own
+    // D-198 (#763, Part 1 of #747): the constraint solver's own
     // `collect_expr_constraints` mirrors `infer_expr_in`'s identical
     // `NoneLiteral` arm -- both return `Ty::None` directly, with no
     // unification variable and no interaction with the generic-function
@@ -22353,7 +22353,7 @@ fn cast_to_a_user_defined_class_type_checks() {
 
 #[test]
 fn cast_up_to_a_base_class_checks() {
-    // #767 review fix (second pass, D-197): a cast from a class to one of
+    // #767 review fix (second pass, D-198): a cast from a class to one of
     // its own MRO ancestors changes no representation and narrows no
     // attribute layout -- `Derived`'s slots are a superset of `Base`'s, so
     // whatever MIR keeps tracking after erasure already supports every
@@ -22366,7 +22366,7 @@ fn cast_up_to_a_base_class_checks() {
 
 #[test]
 fn cast_down_to_a_derived_class_is_c0001() {
-    // #767 review fix (second pass, D-197): a genuine down-cast (the
+    // #767 review fix (second pass, D-198): a genuine down-cast (the
     // rejected direction the first review pass's `cast_shares_representation`
     // wrongly admitted) is unsound under erasure -- `pycc_mir` never learns
     // the checker-verified target `Derived`, so it keeps resolving attribute
@@ -22391,7 +22391,7 @@ fn cast_down_to_a_derived_class_is_c0001() {
 
 #[test]
 fn cast_between_two_unrelated_class_types_is_c0001() {
-    // #767 review fix (second pass, D-197): two classes with no MRO
+    // #767 review fix (second pass, D-198): two classes with no MRO
     // relationship are neither an up-cast nor an identity cast, so this is
     // rejected on the same layout-soundness grounds as a genuine down-cast --
     // neither class's slot layout is guaranteed to be a superset of the
@@ -22408,7 +22408,7 @@ fn cast_between_two_unrelated_class_types_is_c0001() {
 
 #[test]
 fn cast_up_across_an_overridden_method_is_c0001() {
-    // #767 review fix (third pass, D-197): the deep-reviewer's remaining
+    // #767 review fix (third pass, D-198): the deep-reviewer's remaining
     // blocker on the up-cast subset -- `pycc_mir` resolves method calls
     // statically from the cast result's declared type
     // (`crates/pycc_mir/src/expr.rs`, no vtable), so `cast(Base, d)` followed
@@ -22430,7 +22430,7 @@ fn cast_up_across_an_overridden_method_is_c0001() {
 
 #[test]
 fn cast_up_to_a_base_class_with_no_overridden_methods_still_checks() {
-    // #767 review fix (third pass, D-197): the method-override check must
+    // #767 review fix (third pass, D-198): the method-override check must
     // not reject an up-cast merely because the subclass defines its own
     // `__init__` (the ordinary case for any real class hierarchy) or its own
     // non-overriding methods -- only an up-cast that crosses an actual
@@ -22443,7 +22443,7 @@ fn cast_up_to_a_base_class_with_no_overridden_methods_still_checks() {
 
 #[test]
 fn cast_up_across_an_override_in_an_intermediate_ancestor_is_c0001() {
-    // #767 review fix (4th pass, D-197): every existing `OverriddenMethod`
+    // #767 review fix (4th pass, D-198): every existing `OverriddenMethod`
     // test puts the override on the value's own class (position 0 of
     // `from_def.mro[..to_pos]`). This pins the 3-level case where the
     // override instead lives in an ancestor strictly between the value's
@@ -22464,7 +22464,7 @@ fn cast_up_across_an_override_in_an_intermediate_ancestor_is_c0001() {
 
 #[test]
 fn cast_changing_representation_is_c0001() {
-    // #767 review fix (blocker, D-197): a `cast` whose target type's runtime
+    // #767 review fix (blocker, D-198): a `cast` whose target type's runtime
     // representation differs from the value's own inferred type used to
     // type-check unconditionally, then reach either a codegen-internal-error
     // panic (debug build, via the local-type-drift `debug_assert_eq!`) or
@@ -22495,7 +22495,7 @@ fn cast_changing_representation_in_an_annassign_is_c0001() {
 
 #[test]
 fn cast_widening_bool_to_int_is_c0001() {
-    // #767 review fix (D-197): `bool` is a *static* subtype of `int`, but
+    // #767 review fix (D-198): `bool` is a *static* subtype of `int`, but
     // `TYPE_SYSTEM.md`'s representation table gives it a standalone `i8`
     // against `int`'s `i64`-compatible word. Because pycc emits no
     // conversion for an erased `cast`, this widening is a representation
@@ -26120,7 +26120,7 @@ fn a_deferred_unary_constraint_still_rejects_a_non_numeric_operand() {
     );
 }
 
-// -- D-197 (#763, Part 1 of #747): `Ty::Optional`, `T | None` assignability,
+// -- D-198 (#763, Part 1 of #747): `Ty::Optional`, `T | None` assignability,
 // and `is`/`is not` on `None` ------------------------------------------
 
 #[test]
@@ -26155,7 +26155,7 @@ fn reversed_operand_order_none_or_int_is_equivalent_to_int_or_none() {
 #[test]
 fn an_optional_int_value_does_not_narrow_back_to_a_bare_int_annotation() {
     // The reverse direction is deliberately NOT handled by `is_assignable`:
-    // no flow-sensitive narrowing exists anywhere in this crate yet (D-197),
+    // no flow-sensitive narrowing exists anywhere in this crate yet (D-198),
     // so an `Optional[int]` stays `Optional[int]` even directly inside an
     // `is not None` branch.
     let result =

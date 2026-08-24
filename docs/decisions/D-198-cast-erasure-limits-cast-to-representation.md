@@ -116,7 +116,7 @@ status: accepted
     real virtual dispatch.* Considered for the third-review-pass fix instead
     of the method-override check actually adopted. Rejected as
     disproportionate: it would delete the already-tested, already-documented
-    up-cast path (`env.lookup_class`, the MRO-ancestry walk, D-197's own
+    up-cast path (`env.lookup_class`, the MRO-ancestry walk, D-198's own
     up-cast examples throughout `docs/ROADMAP.md`/`docs/STDLIB_PLAN.md`) to
     close a hole that a cheap, targeted check closes just as soundly — an
     up-cast that crosses no method-override boundary is unaffected by
@@ -128,7 +128,7 @@ status: accepted
     `NameError`, so no correct program compiles wrong). The method-dispatch
     gap is different in kind — it would have made a *correct* Python program
     compile to a silently wrong answer, which is exactly the class of defect
-    D-197 exists to keep out of the erasure implementation.
+    D-198 exists to keep out of the erasure implementation.
   - *Report the rejection as `T0021` (type mismatch).* Rejected: the program
     is not ill-typed Python, and the wording would have to say "in this pycc
     version" under a code that does not mean that. `C0001` is the versioned

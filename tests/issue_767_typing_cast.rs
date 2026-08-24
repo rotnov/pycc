@@ -144,7 +144,7 @@ fn a_user_defined_cast_function_takes_priority_end_to_end() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// #767 review fix (second pass, D-197): a genuine down-cast to a subclass
+/// #767 review fix (second pass, D-198): a genuine down-cast to a subclass
 /// with an attribute the source class lacks is rejected by `pycc check`
 /// itself, before `pycc build` ever lowers it to MIR. This is the CLI-level
 /// counterpart to `cast_down_to_a_derived_class_is_c0001` in
@@ -179,7 +179,7 @@ fn a_down_cast_to_a_derived_class_is_rejected_before_build() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// #767 review fix (third pass, D-197): an up-cast that crosses no
+/// #767 review fix (third pass, D-198): an up-cast that crosses no
 /// method-override boundary builds and runs, and calling an inherited
 /// (non-overridden) method through the cast result produces exactly the
 /// output calling it on the original value would -- the CLI-level positive
@@ -209,7 +209,7 @@ fn an_up_cast_with_no_overridden_methods_builds_and_runs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// #767 review fix (third pass, D-197): the CLI-level counterpart to
+/// #767 review fix (third pass, D-198): the CLI-level counterpart to
 /// `cast_up_across_an_overridden_method_is_c0001` in `pycc_types::tests` --
 /// proving the method-dispatch rejection actually happens on the public
 /// `check` path, before `pycc build` could ever reach `pycc_mir`'s static

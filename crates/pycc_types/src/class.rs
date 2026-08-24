@@ -855,7 +855,7 @@ pub(crate) fn cast_target_name(args: &[HirExpr]) -> Result<&str, Diagnostic> {
     Ok(target)
 }
 
-/// #767 (D-197): Whether erasing a `cast(T, value)` to `value` alone leaves
+/// #767 (D-198): Whether erasing a `cast(T, value)` to `value` alone leaves
 /// the emitted code's representation *and* attribute layout agreeing with
 /// the static type the rest of the program is then checked against.
 ///
@@ -989,7 +989,7 @@ enum CastMismatch {
 /// `value` is inferred normally so its own errors are still reported.
 ///
 /// Unlike CPython's `typing.cast`, a target whose *runtime representation*
-/// differs from the value's own is rejected (D-197). `pycc_mir` elides the
+/// differs from the value's own is rejected (D-198). `pycc_mir` elides the
 /// whole `cast(...)` call to `value` alone (see the module doc above), so
 /// nothing at MIR/codegen time ever applies a representation conversion. If
 /// the two representations differed — `cast(str, 5)`, `cast(int, flag)` —
@@ -2337,7 +2337,7 @@ mod tests {
 
     #[test]
     fn cast_compatibility_treats_an_unregistered_from_class_as_a_representation_mismatch() {
-        // #767 (D-197, third pass): every `Ty::Instance` `cast_compatibility`
+        // #767 (D-198, third pass): every `Ty::Instance` `cast_compatibility`
         // sees from a real `check`-validated program names a class the
         // `Environment` was told about -- either an ordinary user class or
         // one of the 23 seeded builtin exception classes (see

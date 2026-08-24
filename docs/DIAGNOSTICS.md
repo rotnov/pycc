@@ -49,8 +49,8 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0045` | error | cannot reassign a `Final` name (PEP 591, #383) — variable-level annotations only (module-level and function-local); `Final` on parameters or class-body attributes is out of scope |
 | `T0046` | error | class does not conform to a protocol (PEP 544 structural typing, #380, D-166) — a concrete class is missing one or more of a protocol's required methods or attributes, or a method/attribute has an incompatible signature/type |
 | `T0047` | error | `super()` does not proxy instance attributes (#587) — an attribute established by `self.<attr> = ...` is reachable only through `self`, matching CPython's `super` object, which proxies class-level attributes and descriptors along the MRO but not the instance's own attributes |
-| `T0048` | error | general union type annotation is not supported yet (PEP 604, D-197, #763, Part 1 of #747) — a `X \| Y` annotation is accepted only in the exact `T \| None`/`None \| T` shape (a 2-operand union where one side is literally `None`); any other shape, including a longer `A \| B \| None` chain or a 2-operand union where neither side is `None`, is rejected |
-| `T0049` | error | `Optional[T]` annotation is not supported yet for this `T` (PEP 604, D-197, #763, Part 1 of #747) — `T \| None` type-checks only for `T == int` in this PR; every other inner type is a recognized but out-of-scope shape, distinct from `T0048`'s rejection of the general-union shape itself |
+| `T0048` | error | general union type annotation is not supported yet (PEP 604, D-198, #763, Part 1 of #747) — a `X \| Y` annotation is accepted only in the exact `T \| None`/`None \| T` shape (a 2-operand union where one side is literally `None`); any other shape, including a longer `A \| B \| None` chain or a 2-operand union where neither side is `None`, is rejected |
+| `T0049` | error | `Optional[T]` annotation is not supported yet for this `T` (PEP 604, D-198, #763, Part 1 of #747) — `T \| None` type-checks only for `T == int` in this PR; every other inner type is a recognized but out-of-scope shape, distinct from `T0048`'s rejection of the general-union shape itself |
 | `O0201` | error | value used after move across scope boundary *(internal-only: never fires on legal Python — see note)* |
 | `O0301` | error | non-Shareable value crosses thread boundary without move |
 | `O0302` | error | lock-guarded field accessed without holding lock |
@@ -97,7 +97,7 @@ method-override boundary that pycc's static (non-virtual) method dispatch
 cannot see through
 (`cast(str, 5)`, `cast(int, some_bool)`, a down-cast such as
 `cast(Derived, base)`, or an up-cast such as `cast(Base, derived)` where
-`Derived` overrides a method `Base` defines; D-197, issue #767) are the
+`Derived` overrides a method `Base` defines; D-198, issue #767) are the
 current instances -- for the same reason:
 the construct is valid Python that a later slice can implement, not a
 by-design rejection.

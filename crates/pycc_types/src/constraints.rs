@@ -540,7 +540,7 @@ pub(crate) fn collect_expr_constraints(
             // types `int` and `Nope`") in place of `check_cast`'s accurate
             // `T0001` ("`Nope` is not a known class or builtin type").
             //
-            // #767 review fix (D-197): unlike `check_cast`, this arm does
+            // #767 review fix (D-198): unlike `check_cast`, this arm does
             // not reject a representation-changing target (`cast(str, 5)`,
             // `cast(int, flag)`) — the
             // solver has no resolved `Ty` for `value` to compare against at

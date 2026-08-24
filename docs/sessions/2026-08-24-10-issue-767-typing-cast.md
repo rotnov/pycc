@@ -2,7 +2,9 @@
 
 ## Status: delivered by the pull request that carries this file
 
-Branch `feat/typing-cast-767`, based on `origin/main` at `5be4a055`. The pull
+Branch `feat/typing-cast-767`, originally based on `origin/main` at `5be4a055`
+and rebased onto `origin/main` at `68ee4eda` (the merge of PR #772, issue
+#763's PEP 604/`Optional[T]` work) after that commit landed mid-task. The pull
 request opened from that branch carries `Fixes #767`. This snapshot is written
 inside that pull request, so it records the branch rather than a PR number.
 
@@ -53,7 +55,7 @@ A user-defined `def cast(...)` takes priority in all three passes.
   `check_cast`'s accurate `T0001`. An unrecognized name yields `Ok(None)` and
   leaves the decision to `check_cast`.
 - **`cast` is representation-preserving, not unchecked (new ADR
-  [D-197](../decisions/D-197-cast-erasure-limits-cast-to-representation.md)).**
+  [D-198](../decisions/D-198-cast-erasure-limits-cast-to-representation.md)).**
   The pinned local reviewer found that eliding `cast(str, 5)` to the integer
   `5` leaves the checker validating the program against `str` while the code
   still carries an `i64` -- a codegen `debug_assert_eq!` panic in a debug
@@ -139,7 +141,7 @@ A user-defined `def cast(...)` takes priority in all three passes.
   limitation parallel to #768's import-gate deferral (rejected because #768
   defers over-acceptance of an *invalid* program, while this gap would have
   made a *correct* program compile to a silently wrong answer -- see
-  D-197's "Third review pass" paragraph and its Alternatives entries for the
+  D-198's "Third review pass" paragraph and its Alternatives entries for the
   full reasoning). The rejection reports `C0001` with a message naming the
   specific overridden method, distinct from the representation and layout
   messages (see the next bullet).
@@ -171,7 +173,7 @@ A user-defined `def cast(...)` takes priority in all three passes.
   MRO, confirmed the two new white-box tests genuinely exercise their claimed
   branches, and found: (1) `docs/ROADMAP.md`'s #767 paragraph still described
   the pre-third-pass rule, omitting the method-override rejection entirely --
-  reworded to state the boundary and its `__init__` exclusion, citing D-197's
+  reworded to state the boundary and its `__init__` exclusion, citing D-198's
   third review pass; (2) `CastMismatch::OverriddenMethod`'s help string was
   phrased backwards -- it told the reader to cast "to a base class that
   overrides none of the value's class's methods", the wrong direction (the
@@ -190,6 +192,34 @@ A user-defined `def cast(...)` takes priority in all three passes.
   pass's own literal suggestions, two are prose-only and the third is a test
   whose correctness was independently confirmed by running it, so the fourth
   pass's analysis still describes the code after applying them.
+- **Rebased onto `origin/main` after PR #772 merged, and resolved a
+  decision-number collision by renumbering.** While the fourth review pass's
+  fixes were being finalized, `origin/main` advanced past this branch's
+  original merge base (`5be4a055`) with the merge of PR #772 (issue #763's
+  PEP 604/`Optional[T]` work), which had independently claimed decision
+  number D-197 for its own `docs/decisions/D-197-optional-t-representation-and-is-none-part1.md`.
+  This branch had also filed its cast-soundness decision as D-197. Per AGENTS.md
+  D-021 preflight ("start every new task from the exact latest commit of that
+  remote default branch"; "prefer a fast-forward update ... never merge,
+  rebase, reset, switch branches, or pull over uncommitted or user-owned
+  changes" -- read here as governing how to *integrate* new upstream commits
+  while preserving this branch's own work, which a rebase does) and the
+  `issue-to-plan` skill's own numbering guidance ("resolve the next free
+  entry number at pull-request-open time, not at planning time, because open
+  pull requests may claim numbers first"), the branch not yet on `main`
+  renumbers: this branch's decision was renamed to
+  `docs/decisions/D-198-cast-erasure-limits-cast-to-representation.md` (via
+  `git mv` plus an in-file `s/D-197/D-198/g`), and every cast-specific
+  cross-reference in the diff (`crates/pycc_diag/src/explain.rs`,
+  `crates/pycc_types/src/class.rs`, `crates/pycc_types/src/constraints.rs`,
+  `crates/pycc_types/src/tests.rs`, `docs/DIAGNOSTICS.md`, `docs/ROADMAP.md`,
+  `docs/STDLIB_PLAN.md`, `tests/issue_767_typing_cast.rs`, this file) was
+  swept to match, while issue #763's own D-197 mentions were left untouched.
+  `docs/decisions/README.md` carries both rows. All five of this branch's
+  commits replayed cleanly across the rebase; the only conflicts were
+  `docs/AGENT_RETROSPECTIVE.md` (both sides purely appending new dated
+  entries -- resolved by keeping both) and the D-197/D-198 collision itself
+  in `docs/decisions/README.md`.
 - **A pre-existing, unrelated diagnostic-quality bug was found and filed
   separately, not fixed here.** A `cast` rejection reports a misleading
   `T0021` "local name not bound" instead of its real diagnostic when the
@@ -220,7 +250,7 @@ A user-defined `def cast(...)` takes priority in all three passes.
   priority in both passes, the qualified-marker-as-value /
   qualified-marker-called paths in both passes,
   `cast_without_its_import_is_currently_accepted` (the #768 pin), and ten for
-  D-197's representation/layout/dispatch rule across its four review passes:
+  D-198's representation/layout/dispatch rule across its four review passes:
   `cast_up_across_an_override_in_an_intermediate_ancestor_is_c0001` (the
   fourth-pass test above, pinning a 3-level chain where the override lives
   strictly between the value's class and the cast target rather than on the
@@ -240,7 +270,7 @@ A user-defined `def cast(...)` takes priority in all three passes.
 - `crates/pycc_types/src/class.rs`'s own inline `#[cfg(test)] mod tests`
   (white-box, direct calls into private helpers, alongside this file's
   existing "internal-consistency panics" section) -- 2 new tests closing the
-  coverage gate the D-197 rename to `cast_compatibility` opened:
+  coverage gate the D-198 rename to `cast_compatibility` opened:
   `cast_compatibility_treats_an_unregistered_from_class_as_a_representation_mismatch`
   and
   `cast_compatibility_treats_an_mro_entry_missing_its_own_class_def_as_a_layout_mismatch`.
@@ -334,7 +364,7 @@ A user-defined `def cast(...)` takes priority in all three passes.
 - `cast(C, p)` inside a function with a protocol-typed parameter reports
   `T0021 name `C` is not defined`: the protocol-monomorphization rewrite path
   re-infers the body without the `cast` interception, so the target name is
-  treated as a value. Found while writing a D-197 test for a protocol-typed
+  treated as a value. Found while writing a D-198 test for a protocol-typed
   value; the test was dropped rather than pinning a confusing message. Not a
   regression from this PR (the same path predates it), and not reachable in
   the accepted subset any other way. Worth an issue in v0.3 if `cast` use
