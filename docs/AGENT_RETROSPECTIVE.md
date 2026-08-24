@@ -33,6 +33,49 @@ never a merge gate.
 
 ---
 
+## 2026-08-24 — A full review-fix round was spent on a PR whose issue a concurrent actor had already closed
+
+**What happened.** While fixing four `chatgpt-codex-connector[bot]` review
+findings on PR #755 (targeting issue #753), a concurrent background actor
+opened, reviewed, and merged PR #754 for the exact same issue — same title,
+same two conformance-matrix rows, an equivalent (in fact more thoroughly
+reviewed, three fix rounds vs. two) resolution of every finding the bot
+raised on #755. Issue #753 closed via #754's merge partway through the
+second fix round on #755. The #755 branch's own local checker fixes,
+commit, push, and a full CI run (all Tier-1 targets, ~15+ minutes) all
+completed against a target that no longer needed the work; `gh pr view 755`
+only surfaced the conflict (`mergeStateStatus: DIRTY`, `mergeable:
+CONFLICTING`) after CI had already gone green, at the point of checking
+review-thread state before merge.
+
+**Root cause.** [[concurrent_background_actor_pycc]] already documents that
+another automated process pushes to this repo's main/branches mid-session,
+with a general "fetch-and-diff before trusting remembered state" rule. That
+rule was applied to file *content* (branch currency, CI state) but not to
+issue *state* — nothing in the PR #755 workflow re-checked whether issue
+#753 itself was still open before investing a second review-fix round and
+a full CI cycle in it. The GitHub review-thread findings (all legitimate,
+independently re-derived and verified) created a strong signal to keep
+fixing forward without pausing to ask "is the underlying issue still
+mine to close."
+
+**What fixed it.** Discovered the duplicate only when `mergeStateStatus`
+came back `DIRTY`/`CONFLICTING` after CI passed; `git log --oneline
+origin/main` immediately showed #754's merge commit for the same issue.
+Closed #755 without merging (`gh pr close --comment`), deleted its branch
+both locally and on the remote, confirmed via diff that `origin/main`'s
+version already covered every finding #755's own fix round addressed.
+
+**Lesson.** When a repository is known to have a concurrent background
+actor, check the *target issue's* open/closed state — not just file
+content and CI — before starting or continuing any non-trivial fix round,
+and re-check it immediately before every CI-consuming push, not only
+before merge. A cheap `gh issue view <N> --json state` costs nothing next
+to a wasted Tier-1 CI cycle plus a review-thread-resolution round on
+already-superseded work.
+
+---
+
 ## 2026-08-24 — Ending a turn to "wait for a notification" recurred inside the very session investigating that pattern
 
 **What happened.** The 2026-08-14 entry below already shipped a fix for the
