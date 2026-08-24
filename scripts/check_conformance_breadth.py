@@ -414,6 +414,23 @@ ROADMAP_PEP_FIGURES = re.compile(
     r"distinct PEP numbers, leaving a (?P<pep_gap>\d+)-PEP gap"
 )
 
+#: The milestone's own `**Accept:**` bullet -- the normative source for both
+#: `required` figures the progress headline restates. Binding the headline's
+#: `required`/`pep_required` to this clause (rather than only checking their
+#: own internal gap arithmetic) closes the gap a reviewer flagged on #732:
+#: without it, lowering the headline's stated targets (e.g. 39 -> 38) passes
+#: `check_roadmap_counts` cleanly while silently relaxing the tracked
+#: milestone target. The inter-group gap is deliberately scoped to a single
+#: line (`[^\n]*?`, no `re.DOTALL`) rather than spanning the whole document:
+#: an unbounded span risks silently crossing into the checker-summary
+#: sentence two lines below, which also contains an "encompassing N distinct
+#: PEP numbers" phrase but names the *achieved* figure, not the target --
+#: binding to that instead would defeat this guard's fail-closed intent.
+ACCEPT_CLAUSE_FIGURES = re.compile(
+    r"\*\*Accept:\*\* conformance ≥ (?P<required>\d+) `PYTHON_STANDARDS\.md` "
+    r"matrix rows [^\n]*? encompassing (?P<pep_required>\d+) distinct PEP numbers"
+)
+
 
 def summary_body(rows: list[MatrixRow]) -> str:
     """Render the totals sentence shared by the printed summary and the roadmap.
@@ -469,6 +486,17 @@ def check_roadmap_counts(
             "the required M distinct PEP numbers, leaving a G-PEP gap`)"
         )
 
+    accept_matches = list(ACCEPT_CLAUSE_FIGURES.finditer(roadmap))
+    if len(accept_matches) != 1:
+        raise BreadthError(
+            f"{label}: expected exactly one `**Accept:**` bullet stating "
+            "`conformance ≥ N ... matrix rows ... encompassing M distinct PEP "
+            f"numbers` to bind the progress headline's required totals to, "
+            f"found {len(accept_matches)} -- this guard is fail-closed, so "
+            "restore that bullet's wording rather than rewording it away"
+        )
+    accept_figures = accept_matches[0]
+
     total = int(figures["total"])
     required = int(figures["required"])
     gap = int(figures["gap"])
@@ -478,6 +506,9 @@ def check_roadmap_counts(
     pep_total = int(pep_figures["pep_total"])
     pep_required = int(pep_figures["pep_required"])
     pep_gap = int(pep_figures["pep_gap"])
+
+    accept_required = int(accept_figures["required"])
+    accept_pep_required = int(accept_figures["pep_required"])
 
     computed_total = len(rows)
     computed_accepted = sum(1 for row in rows if row.status == ACCEPTED)
@@ -513,6 +544,20 @@ def check_roadmap_counts(
         failures.append(
             f"{label} states a {pep_gap}-PEP gap, but {pep_required} required "
             f"minus {pep_total} distinct PEP numbers is {pep_required - pep_total}"
+        )
+    if required != accept_required:
+        failures.append(
+            f"{label}'s progress headline states {required} required matrix "
+            f"rows, but the milestone's own `**Accept:**` bullet states "
+            f"{accept_required} -- the headline's required figure must track "
+            "the normative Accept clause, not drift from it"
+        )
+    if pep_required != accept_pep_required:
+        failures.append(
+            f"{label}'s progress headline states {pep_required} required "
+            f"distinct PEP numbers, but the milestone's own `**Accept:**` "
+            f"bullet states {accept_pep_required} -- the headline's required "
+            "figure must track the normative Accept clause, not drift from it"
         )
 
     expected = summary_body(rows)

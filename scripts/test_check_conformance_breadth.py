@@ -130,6 +130,8 @@ def manifest() -> dict:
 ROADMAP = """
 ## v0.3
 
+**Accept:** conformance ≥ 5 `PYTHON_STANDARDS.md` matrix rows at `◐` or better — that is, rows whose fixtures pass — encompassing 6 distinct PEP numbers.
+
 **Conformance progress (2026-01-01): 2 of the required 5 matrix rows are at `◐` or better, leaving a 3-row gap; 1 of those 2 are `✅` (whole-PEP acceptance), which is reported but not gated before v1.0; those rows encompass 2 of the required 6 distinct PEP numbers, leaving a 4-PEP gap.** This figure is derived mechanically — `python3 scripts/check_conformance_breadth.py` reports "2 evidence-backed rows, all declared (1 accepted as whole-PEP, 1 subset), encompassing 2 distinct PEP numbers" — and supersedes the earlier figure of 1, which took the count from 0 to 1 and left a 4-row gap.
 """.lstrip()
 
@@ -558,6 +560,39 @@ class RoadmapCountTests(unittest.TestCase):
                 "",
             ),
             "no longer states its distinct-PEP totals in the form this guard parses",
+        )
+
+    def test_a_required_total_that_drifts_from_the_accept_clause_is_rejected(
+        self,
+    ) -> None:
+        self.assert_rejected(
+            ROADMAP.replace("2 of the required 5", "2 of the required 4").replace(
+                "leaving a 3-row gap", "leaving a 2-row gap"
+            ),
+            "progress headline states 4 required matrix rows, but the "
+            "milestone's own `**Accept:**` bullet states 5",
+        )
+
+    def test_a_pep_required_total_that_drifts_from_the_accept_clause_is_rejected(
+        self,
+    ) -> None:
+        self.assert_rejected(
+            ROADMAP.replace(
+                "encompass 2 of the required 6", "encompass 2 of the required 7"
+            ).replace("leaving a 4-PEP gap", "leaving a 5-PEP gap"),
+            "progress headline states 7 required distinct PEP numbers, but the "
+            "milestone's own `**Accept:**` bullet states 6",
+        )
+
+    def test_a_missing_accept_clause_is_a_failure_not_a_silent_pass(self) -> None:
+        self.assert_rejected(
+            ROADMAP.replace(
+                "**Accept:** conformance ≥ 5 `PYTHON_STANDARDS.md` matrix rows "
+                "at `◐` or better — that is, rows whose fixtures pass — "
+                "encompassing 6 distinct PEP numbers.\n\n",
+                "",
+            ),
+            "expected exactly one `**Accept:**` bullet stating",
         )
 
     def test_a_quoted_summary_that_no_longer_matches_is_rejected(self) -> None:
