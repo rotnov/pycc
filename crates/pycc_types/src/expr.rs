@@ -17,9 +17,10 @@ use crate::binop::numeric_result_type;
 use crate::class;
 use crate::unop::unary_result_type;
 use crate::{
-    BindingState, Environment, enum_marker_is_not_a_value, enum_member_attr_type,
-    instantiate_generic_call, is_assignable, is_known_callable_builtin, is_local, is_marker_kind,
-    lookup_bound_name, marker_is_not_a_value, non_callable_binding, numeric_or_bool_compatible,
+    BindingState, Environment, annotation_marker_is_not_a_value, enum_marker_is_not_a_value,
+    enum_member_attr_type, instantiate_generic_call, is_assignable, is_known_callable_builtin,
+    is_local, is_marker_kind, lookup_bound_name, marker_is_not_a_value, non_callable_binding,
+    numeric_or_bool_compatible,
     possibly_unbound, std_constant_is_not_callable, std_function_used_as_a_value,
     std_qualified_symbol, std_receiver_name, std_receiver_shadowed, std_scalar_to_ty,
     unbound_local, unsupported_callable_builtin,
@@ -68,6 +69,9 @@ pub(crate) fn infer_expr_in(
                     }
                     pycc_std::StdSymbolKind::EnumMarker => {
                         Err(enum_marker_is_not_a_value(name))
+                    }
+                    pycc_std::StdSymbolKind::AnnotationMarker => {
+                        Err(annotation_marker_is_not_a_value(name))
                     }
                     pycc_std::StdSymbolKind::ProtocolMarker
                     | pycc_std::StdSymbolKind::AbcMarker
@@ -288,6 +292,9 @@ pub(crate) fn infer_expr_in(
                     return Err(if is_marker_kind(symbol.kind) {
                         if matches!(symbol.kind, pycc_std::StdSymbolKind::EnumMarker) {
                             enum_marker_is_not_a_value(callee)
+                        } else if matches!(symbol.kind, pycc_std::StdSymbolKind::AnnotationMarker)
+                        {
+                            annotation_marker_is_not_a_value(callee)
                         } else {
                             marker_is_not_a_value(callee)
                         }

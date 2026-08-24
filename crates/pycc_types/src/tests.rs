@@ -22243,6 +22243,75 @@ fn qualified_decorator_marker_as_value_in_private_helper_is_t0021() {
 }
 
 #[test]
+fn qualified_annotation_marker_used_as_value_is_t0021() {
+    // #762: exercises the dedicated `AnnotationMarker` arm (routed to
+    // `annotation_marker_is_not_a_value`, not the generic
+    // `marker_is_not_a_value`, per PR #766 review) folded into the marker
+    // arm of infer_expr_in's Name handler (expr.rs) by using the
+    // qualified form `typing.Final` as a value (not an annotation
+    // subscript).
+    let err = check_source("import typing\nx = typing.Final\n").unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("annotation marker")
+            && err.message.contains("typing.Final[int]"),
+        "expected an annotation-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn qualified_annotation_marker_as_value_in_private_helper_is_t0021() {
+    // #762: exercises the dedicated `AnnotationMarker` arm folded into the
+    // marker arm of collect_expr_constraints' Name handler (constraints.rs,
+    // the solver path) by using the qualified form `typing.Annotated`
+    // as a value in a private helper.
+    let err = check_source(
+        "import typing\ndef _helper() -> int:\n    x = typing.Annotated\n    return 1\n_helper()\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("annotation marker"),
+        "expected an annotation-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn qualified_annotation_marker_called_is_t0021() {
+    // #762 / PR #766 review: exercises the AnnotationMarker branch of the
+    // call-site marker guard in expr.rs's infer_expr_in (the `Function`
+    // let-else fallthrough), by calling `typing.Final` directly instead of
+    // using it as a bare-name value or an annotation subscript.
+    let err = check_source("import typing\nx = typing.Final()\n").unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("annotation marker"),
+        "expected an annotation-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn qualified_annotation_marker_called_in_private_helper_is_t0021() {
+    // #762 / PR #766 review: exercises the same call-site AnnotationMarker
+    // branch in constraints.rs's collect_expr_constraints (the solver
+    // path), by calling `typing.Annotated` directly inside a private
+    // helper.
+    let err = check_source(
+        "import typing\ndef _helper() -> int:\n    x = typing.Annotated()\n    return 1\n_helper()\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("annotation marker"),
+        "expected an annotation-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
 fn protocol_argument_mismatch_emits_t0046() {
     // This exercises the assignable_error call (line 2894) when
     // a non-conforming class is passed to a protocol-typed parameter.
