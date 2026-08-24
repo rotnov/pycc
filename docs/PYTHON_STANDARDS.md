@@ -195,13 +195,20 @@ For each newly observed upstream release:
     `errno`/`filename`/`strerror`/`winerror` instance attributes (deferred to
     [#703](https://github.com/rotnov/pycc/issues/703)), nor does it exercise
     every one of the hierarchy's 16 classes being raised and caught
-    individually; PEP 758's fixture exercises its 3+-type handler and its
-    `as`-binding case only through the parenthesized spelling, and
-    `except A, B as e:` (bare comma with `as`) is rejected outright with a
-    parser-level `L0001`, unchanged by D-195. Those are recorded `core` gaps
-    in `tests/fixtures/conformance-breadth-manifest.json`, and a `core` gap
-    forces `◐` under
+    individually; PEP 758's fixture exercises its 3+-type handler only
+    through the parenthesized spelling, and pycc has no `except*`/
+    `ExceptionGroup` support at all yet, so the `except*`-without-parentheses
+    half of PEP 758's own scope has no implementation to exercise. Those are
+    recorded `core` gaps in `tests/fixtures/conformance-breadth-manifest.json`,
+    and a `core` gap forces `◐` under
     [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
+    `except A, B as e:` (bare comma with `as`) is rejected outright with a
+    parser-level `L0001`, unchanged by D-195 -- but this is not a gap: CPython
+    itself requires parentheses around a multi-type handler whenever it also
+    binds a name (`tests/diagnostics_test.rs:96-100`,
+    `l0001_except_multi_type_as_binding_requires_parens`), so pycc's
+    rejection matches the oracle and the manifest records this as
+    `out-of-scope` rather than `core`.
 
 ## Python 3.0–3.2 (foundations)
 
