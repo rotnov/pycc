@@ -55,7 +55,7 @@ fn direct_type_api_rejects_an_unknown_exception_handler() {
         items: vec![pycc_hir::HirItem::TopLevelStmt(pycc_hir::HirStmt::Try {
             body: vec![],
             handlers: vec![pycc_hir::HirExceptHandler {
-                exc_type: Some("UnknownError".to_string()),
+                exc_type: Some(vec!["UnknownError".to_string()]),
                 name: None,
                 body: vec![],
             }],
@@ -96,7 +96,7 @@ fn direct_type_api_rewrites_every_try_and_raise_operand_path() {
                     cause: None,
                 }],
                 handlers: vec![HirExceptHandler {
-                    exc_type: Some("ValueError".to_string()),
+                    exc_type: Some(vec!["ValueError".to_string()]),
                     name: Some("error".to_string()),
                     body: vec![HirStmt::Raise {
                         exc: Some(HirExpr::Name("error".to_string())),
@@ -197,7 +197,7 @@ fn direct_type_api_propagates_generic_rewrite_errors_from_structured_suites() {
         HirStmt::Try {
             body: vec![harmless()],
             handlers: vec![HirExceptHandler {
-                exc_type: Some("ValueError".to_string()),
+                exc_type: Some(vec!["ValueError".to_string()]),
                 name: None,
                 body: vec![invalid()],
             }],
@@ -284,7 +284,7 @@ fn direct_type_api_propagates_generic_rewrite_errors_from_raise_operands() {
                     cause: None,
                 }],
                 handlers: vec![HirExceptHandler {
-                    exc_type: Some("ValueError".to_string()),
+                    exc_type: Some(vec!["ValueError".to_string()]),
                     name: Some("error".to_string()),
                     body: vec![HirStmt::Raise {
                         exc: Some(raised),

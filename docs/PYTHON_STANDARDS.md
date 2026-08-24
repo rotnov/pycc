@@ -325,7 +325,7 @@ the pinned interpreter's own GIL only for CPython-backed operations (D-128).*
 | [649](https://peps.python.org/pep-0649/)/[749](https://peps.python.org/pep-0749/) | **Deferred annotations** — pycc reads annotations exactly per 3.14 semantics; self-referential class-name annotations in own methods work (#387 Part 2) | typing | `pep_0649_deferred_ann.py` | ◐ |
 | [734](https://peps.python.org/pep-0734/) | Subinterpreters in stdlib | rt | `py314/pep_0734_interpreters.py` | ☐ |
 | [750](https://peps.python.org/pep-0750/) | **Template strings (t-strings)** | syntax | `py314/pep_0750_tstrings.py` | ☐ |
-| [758](https://peps.python.org/pep-0758/) | `except A, B:` without parentheses | syntax | `py314/pep_0758_except_noparens.py` | ☐ |
+| [758](https://peps.python.org/pep-0758/) | `except A, B:` without parentheses | syntax | `pep_0758_except_noparens.py` (multi-type `except` handlers now lower and dispatch identically for the bare-comma and parenthesized forms per Part 3 of [#543](https://github.com/rotnov/pycc/issues/543) ([#740](https://github.com/rotnov/pycc/issues/740)); fixture registered as an `#[ignore]`d dual-profile test in `tests/conformance.rs`, awaiting the Tier-1 observation rule 5/9 require before this row can flip) | ☐ |
 | [765](https://peps.python.org/pep-0765/) | No `return`/`break`/`continue` in `finally` | sem | `py314/pep_0765_finally.py` | ☐ |
 | [779](https://peps.python.org/pep-0779/) | Free-threading officially supported → pycc: GIL-free native threads | rt | `py314/pep_0779_threads.py` | ☐ |
 

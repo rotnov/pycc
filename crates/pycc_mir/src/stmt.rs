@@ -380,11 +380,25 @@ pub(super) fn lower_stmt(
             let handlers = handlers
                 .iter()
                 .map(|h| {
-                    let exc_type_tag = h
+                    // PEP 758 (#740): a handler may name more than one
+                    // exception type. Union each named type's own tag set,
+                    // then dedup -- overlapping families (e.g. `OSError`
+                    // and `ConnectionError` both include tags 10, 19-22)
+                    // would otherwise double-count.
+                    let exc_type_tag = h.exc_type.as_ref().map(|names| {
+                        let mut tags: Vec<u8> = names
+                            .iter()
+                            .flat_map(|name| handler_type_tags(name, classes))
+                            .collect();
+                        tags.sort_unstable();
+                        tags.dedup();
+                        tags
+                    });
+                    let binding_type = h
                         .exc_type
-                        .as_deref()
-                        .map(|name| handler_type_tags(name, classes));
-                    if let (Some(exc_type), Some(name)) = (&h.exc_type, &h.name) {
+                        .as_ref()
+                        .map(|names| pycc_hir::except_handler_binding_type_name(names).clone());
+                    if let (Some(binding_type), Some(name)) = (&binding_type, &h.name) {
                         // The type checker binds `except T as name` only in
                         // the handler's cloned environment. MIR maintains
                         // its own type scopes, so record the same binding
@@ -393,7 +407,7 @@ pub(super) fn lower_stmt(
                         bind(
                             scopes,
                             name.clone(),
-                            Ty::Instance(Box::new(exc_type.clone())),
+                            Ty::Instance(Box::new(binding_type.clone())),
                         );
                     }
                     let handler_body = h
@@ -407,8 +421,8 @@ pub(super) fn lower_stmt(
                         binding_ty: h
                             .name
                             .as_ref()
-                            .zip(h.exc_type.as_ref())
-                            .map(|_| Ty::Instance(Box::new(h.exc_type.clone().unwrap()))),
+                            .zip(binding_type.as_ref())
+                            .map(|(_, ty)| Ty::Instance(Box::new(ty.clone()))),
                         body: handler_body,
                     }
                 })

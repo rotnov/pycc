@@ -21,14 +21,37 @@ pub(super) fn lower_except_handler(
     let exc_type = handler
         .type_
         .as_deref()
-        .map(|exception_type| {
-            let Expr::Name(name) = exception_type else {
-                return Err(unsupported(
-                    "only a bare-name exception type is supported so far in except handlers",
-                    pycc_ast::expr_range(exception_type),
-                ));
-            };
-            Ok(name.id.as_str().to_string())
+        .map(|exception_type| match exception_type {
+            Expr::Name(name) => Ok(vec![name.id.as_str().to_string()]),
+            // PEP 758: `except A, B:` (bare comma) and `except (A, B):`
+            // (parenthesized) both lower to `Expr::Tuple` -- only the
+            // `parenthesized` flag differs, which HIR discards. Every
+            // element must be a bare name, and the list must be non-empty
+            // (`except ():` is otherwise syntactically valid and would
+            // reach MIR/codegen's non-empty-tag-set invariant unchecked).
+            Expr::Tuple(tuple) => {
+                if tuple.elts.is_empty() {
+                    return Err(unsupported(
+                        "an `except` handler must name at least one exception type",
+                        pycc_ast::expr_range(exception_type),
+                    ));
+                }
+                tuple
+                    .elts
+                    .iter()
+                    .map(|elt| match elt {
+                        Expr::Name(name) => Ok(name.id.as_str().to_string()),
+                        _ => Err(unsupported(
+                            "each element of a multi-type except handler must be a bare name",
+                            pycc_ast::expr_range(elt),
+                        )),
+                    })
+                    .collect()
+            }
+            _ => Err(unsupported(
+                "only a bare-name exception type is supported so far in except handlers",
+                pycc_ast::expr_range(exception_type),
+            )),
         })
         .transpose()?;
     let name = handler
@@ -132,7 +155,10 @@ mod tests {
         let (body, handlers, orelse, finalbody) = expect_top_level_try(&items[0]);
         assert_eq!(body.len(), 1);
         assert_eq!(handlers.len(), 1);
-        assert_eq!(handlers[0].exc_type.as_deref(), Some("ValueError"));
+        assert_eq!(
+            handlers[0].exc_type,
+            Some(vec!["ValueError".to_string()])
+        );
         assert!(handlers[0].name.is_none());
         assert_eq!(handlers[0].body.len(), 1);
         assert!(orelse.is_empty());
@@ -145,7 +171,10 @@ mod tests {
             .expect("test fixture must parse");
         let hir = crate::lower_checked(&module).expect("lowering must succeed");
         let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
-        assert_eq!(handlers[0].exc_type.as_deref(), Some("ValueError"));
+        assert_eq!(
+            handlers[0].exc_type,
+            Some(vec!["ValueError".to_string()])
+        );
         assert_eq!(handlers[0].name.as_deref(), Some("e"));
     }
 
@@ -168,8 +197,14 @@ mod tests {
         let hir = crate::lower_checked(&module).expect("lowering must succeed");
         let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
         assert_eq!(handlers.len(), 2);
-        assert_eq!(handlers[0].exc_type.as_deref(), Some("ValueError"));
-        assert_eq!(handlers[1].exc_type.as_deref(), Some("KeyError"));
+        assert_eq!(
+            handlers[0].exc_type,
+            Some(vec!["ValueError".to_string()])
+        );
+        assert_eq!(
+            handlers[1].exc_type,
+            Some(vec!["KeyError".to_string()])
+        );
     }
 
     #[test]
@@ -238,15 +273,141 @@ mod tests {
     }
 
     #[test]
-    fn lower_except_with_tuple_type_rejects_with_c0001() {
-        // `except (ValueError, TypeError):` — a tuple exception type is
-        // not a bare name, so it should be rejected with C0001.
+    fn lower_except_with_parenthesized_multi_type_accepts_all_names_in_order() {
+        // PEP 758: `except (ValueError, TypeError):` names two exception
+        // types in a single handler -- it must be accepted, and the names
+        // preserved in source order.
         let module =
             pycc_parser::parse("try:\n    x = 1\nexcept (ValueError, TypeError):\n    y = 2\n")
                 .expect("test fixture must parse");
+        let hir = crate::lower_checked(&module).expect("lowering must succeed");
+        let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
+        assert_eq!(
+            handlers[0].exc_type,
+            Some(vec!["ValueError".to_string(), "TypeError".to_string()])
+        );
+    }
+
+    #[test]
+    fn lower_except_with_bare_comma_multi_type_matches_parenthesized_form() {
+        // PEP 758: `except ValueError, TypeError:` (no parentheses) lowers
+        // to the same `exc_type` as the parenthesized form -- only the
+        // (HIR-discarded) `parenthesized` flag differs at the AST level.
+        let module =
+            pycc_parser::parse("try:\n    x = 1\nexcept ValueError, TypeError:\n    y = 2\n")
+                .expect("test fixture must parse");
+        let hir = crate::lower_checked(&module).expect("lowering must succeed");
+        let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
+        assert_eq!(
+            handlers[0].exc_type,
+            Some(vec!["ValueError".to_string(), "TypeError".to_string()])
+        );
+    }
+
+    #[test]
+    fn lower_except_with_mixed_bare_and_parenthesized_handlers() {
+        // A bare-comma handler and a parenthesized handler in the same
+        // `try` must not branch on the discarded `parenthesized` flag.
+        let module = pycc_parser::parse(
+            "try:\n    x = 1\nexcept ValueError, TypeError:\n    y = 2\nexcept (KeyError, IndexError):\n    z = 3\n",
+        )
+        .expect("test fixture must parse");
+        let hir = crate::lower_checked(&module).expect("lowering must succeed");
+        let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
+        assert_eq!(
+            handlers[0].exc_type,
+            Some(vec!["ValueError".to_string(), "TypeError".to_string()])
+        );
+        assert_eq!(
+            handlers[1].exc_type,
+            Some(vec!["KeyError".to_string(), "IndexError".to_string()])
+        );
+    }
+
+    #[test]
+    fn lower_except_with_three_or_more_types_accepts_all() {
+        let module = pycc_parser::parse(
+            "try:\n    x = 1\nexcept (ValueError, TypeError, KeyError):\n    y = 2\n",
+        )
+        .expect("test fixture must parse");
+        let hir = crate::lower_checked(&module).expect("lowering must succeed");
+        let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
+        assert_eq!(
+            handlers[0].exc_type,
+            Some(vec![
+                "ValueError".to_string(),
+                "TypeError".to_string(),
+                "KeyError".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn lower_except_single_element_tuple_matches_bare_name_form_all_spellings() {
+        // `except (A,):` and `except A,:` (single-element tuple, both
+        // spellings) must behave exactly like `except A:`.
+        for source in [
+            "try:\n    x = 1\nexcept ValueError:\n    y = 2\n",
+            "try:\n    x = 1\nexcept (ValueError,):\n    y = 2\n",
+            "try:\n    x = 1\nexcept ValueError,:\n    y = 2\n",
+        ] {
+            let module = pycc_parser::parse(source).expect("test fixture must parse");
+            let hir = crate::lower_checked(&module).expect("lowering must succeed");
+            let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
+            assert_eq!(
+                handlers[0].exc_type,
+                Some(vec!["ValueError".to_string()]),
+                "source {source:?} must lower to a single-element type list"
+            );
+        }
+    }
+
+    #[test]
+    fn lower_except_with_empty_tuple_type_rejects_with_c0001() {
+        // `except ():` parses successfully as an empty tuple type, but
+        // must be rejected -- otherwise MIR/codegen's non-empty
+        // handler-tag-set invariant would be violated.
+        let module = pycc_parser::parse("try:\n    x = 1\nexcept ():\n    y = 2\n")
+            .expect("test fixture must parse");
         let err = crate::lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
-        assert!(err.message.contains("bare-name exception type"));
+        assert!(err.message.contains("at least one exception type"));
+    }
+
+    #[test]
+    fn lower_except_with_non_name_tuple_element_rejects_with_c0001() {
+        for source in [
+            "try:\n    x = 1\nexcept (ValueError, \"not a name\"):\n    y = 2\n",
+            "try:\n    x = 1\nexcept (ValueError, some_call()):\n    y = 2\n",
+            "try:\n    x = 1\nexcept (ValueError, *rest):\n    y = 2\n",
+        ] {
+            let module = pycc_parser::parse(source).expect("test fixture must parse");
+            let err = crate::lower_checked(&module).unwrap_err();
+            assert_eq!(err.code, "C0001", "source {source:?} must be rejected");
+            assert!(
+                err.message.contains("bare name"),
+                "source {source:?}: unexpected message {:?}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn lower_except_with_non_name_non_tuple_type_rejects_with_c0001() {
+        for source in [
+            "try:\n    x = 1\nexcept some.Attribute:\n    y = 2\n",
+            "try:\n    x = 1\nexcept some_call():\n    y = 2\n",
+        ] {
+            let module = pycc_parser::parse(source).expect("test fixture must parse");
+            let err = crate::lower_checked(&module).unwrap_err();
+            assert_eq!(err.code, "C0001", "source {source:?} must be rejected");
+            assert!(
+                err.message
+                    .contains("only a bare-name exception type is supported"),
+                "source {source:?}: unexpected message {:?}",
+                err.message
+            );
+        }
     }
 
     #[test]

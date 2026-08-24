@@ -140,7 +140,7 @@ fn lowers_try_with_value_error_handler_to_mir() {
             args: vec![HirExpr::StringLiteral("hello".to_string())],
         })],
         vec![pycc_hir::HirExceptHandler {
-            exc_type: Some("ValueError".to_string()),
+            exc_type: Some(vec!["ValueError".to_string()]),
             name: None,
             body: vec![HirStmt::ExprStmt(HirExpr::Call {
                 callee: "print".to_string(),
@@ -191,7 +191,7 @@ fn lowers_try_with_else_and_finally_to_mir() {
             args: vec![HirExpr::StringLiteral("body".to_string())],
         })],
         vec![pycc_hir::HirExceptHandler {
-            exc_type: Some("Exception".to_string()),
+            exc_type: Some(vec!["Exception".to_string()]),
             name: None,
             body: vec![HirStmt::ExprStmt(HirExpr::Call {
                 callee: "print".to_string(),
@@ -374,7 +374,7 @@ fn an_unknown_exception_handler_cannot_silently_become_a_bare_handler() {
     let hir = try_module(
         vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
         vec![pycc_hir::HirExceptHandler {
-            exc_type: Some("TypoError".to_string()),
+            exc_type: Some(vec!["TypoError".to_string()]),
             name: None,
             body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
         }],
@@ -502,6 +502,29 @@ fn raising_a_user_exception_class_lowers_to_a_constructed_value_with_its_name() 
             message: MirExpr::StringLiteral(ref message),
         } if class_name == "DatabaseError" && message == "boom"
     ));
+}
+
+#[test]
+fn a_pep_758_multi_type_handlers_tag_set_is_the_union_deduped() {
+    // PEP 758 (#740): `except (AppError, ConfigError):` unions each named
+    // type's own `handler_type_tags` result. `AppError`'s set ([7, 8, 9])
+    // already contains `ConfigError`'s own tag (8), since `ConfigError` is
+    // one of `AppError`'s subclasses -- so a naive concatenation would
+    // double-count tag 8, and the combined set must be deduped back down
+    // to `AppError`'s own set (a hand-computed overlapping-family case,
+    // matching the real `OSError`/`ConnectionError` overlap this change
+    // exists to handle correctly).
+    let classes = exception_hierarchy();
+    let mut combined: Vec<u8> = handler_type_tags("AppError", &classes);
+    combined.extend(handler_type_tags("ConfigError", &classes));
+    assert_eq!(
+        combined,
+        vec![7, 8, 9, 8],
+        "sanity: naive concatenation duplicates tag 8 before dedup"
+    );
+    combined.sort_unstable();
+    combined.dedup();
+    assert_eq!(combined, vec![7, 8, 9]);
 }
 
 #[test]

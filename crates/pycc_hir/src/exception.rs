@@ -378,13 +378,34 @@ fn expr_binds_builtin_exception_name(expr: &Expr) -> bool {
     }
 }
 
-/// A single `except` handler. `exc_type` is `None` for bare `except:` and
-/// `name` is the optional `as` binding.
+/// A single `except` handler. `exc_type` is `None` for bare `except:`.
+/// `Some(names)` names one or more exception types (PEP 758 `except A, B:`
+/// and `except (A, B):` both lower to the same shape, `names` always in
+/// source order); `names` is never empty -- an empty list (`except ():`) is
+/// rejected with `C0001` at the one production site
+/// (`lower_except_handler`), so every downstream consumer may assume
+/// non-emptiness without re-checking. `name` is the optional `as` binding.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirExceptHandler {
-    pub exc_type: Option<String>,
+    pub exc_type: Option<Vec<String>>,
     pub name: Option<String>,
     pub body: Vec<HirStmt>,
+}
+
+/// The representative exception type name for a multi-type `except`
+/// handler's `as` binding, generic-call rewriting, and constraint
+/// collection. All four binding sites (MIR lowering, type checking,
+/// monomorphization, constraint collection) must agree on the same name,
+/// so they all call this one helper rather than inlining `names[0]`
+/// independently. Binds to the first-listed type in source order (see the
+/// D-195 decision entry for the two rejected alternatives).
+///
+/// # Panics
+/// Panics if `names` is empty. `HirExceptHandler::exc_type` is documented
+/// as never containing an empty `Vec`, so callers passing that field's
+/// contents never trigger this.
+pub fn except_handler_binding_type_name(names: &[String]) -> &String {
+    names.first().expect("except handler type list must not be empty")
 }
 
 #[cfg(test)]

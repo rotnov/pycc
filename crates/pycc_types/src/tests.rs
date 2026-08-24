@@ -16343,7 +16343,7 @@ fn rewrite_generic_calls_in_stmt_propagates_errors_from_every_recursive_position
     assert_monomorphize_propagates_error(vec![HirStmt::Try {
         body: vec![],
         handlers: vec![pycc_hir::HirExceptHandler {
-            exc_type: Some("ValueError".to_string()),
+            exc_type: Some(vec!["ValueError".to_string()]),
             name: None,
             body: vec![HirStmt::ExprStmt(bad_generic_call())],
         }],
@@ -24447,7 +24447,7 @@ fn contains_return_finds_a_return_inside_a_try_handler() {
     let body = vec![HirStmt::Try {
         body: vec![],
         handlers: vec![pycc_hir::HirExceptHandler {
-            exc_type: Some("ValueError".to_string()),
+            exc_type: Some(vec!["ValueError".to_string()]),
             name: None,
             body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
         }],
@@ -24484,7 +24484,7 @@ fn contains_return_does_not_find_a_return_in_a_try_without_one() {
     let body = vec![HirStmt::Try {
         body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
         handlers: vec![pycc_hir::HirExceptHandler {
-            exc_type: Some("ValueError".to_string()),
+            exc_type: Some(vec!["ValueError".to_string()]),
             name: None,
             body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
         }],
@@ -24513,7 +24513,7 @@ fn introduces_bindings_finds_bindings_inside_a_try_handler() {
     let body = vec![HirStmt::Try {
         body: vec![],
         handlers: vec![pycc_hir::HirExceptHandler {
-            exc_type: Some("ValueError".to_string()),
+            exc_type: Some(vec!["ValueError".to_string()]),
             name: None,
             body: vec![HirStmt::Assign {
                 target: "z".to_string(),
@@ -24559,7 +24559,7 @@ fn introduces_bindings_does_not_find_bindings_in_a_try_without_any() {
     let body = vec![HirStmt::Try {
         body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
         handlers: vec![pycc_hir::HirExceptHandler {
-            exc_type: Some("ValueError".to_string()),
+            exc_type: Some(vec!["ValueError".to_string()]),
             name: None,
             body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
         }],
@@ -25055,7 +25055,7 @@ fn reject_generic_calls_processes_try_and_raise_arms() {
         HirStmt::Try {
             body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
             handlers: vec![pycc_hir::HirExceptHandler {
-                exc_type: Some("ValueError".to_string()),
+                exc_type: Some(vec!["ValueError".to_string()]),
                 name: None,
                 body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
             }],
