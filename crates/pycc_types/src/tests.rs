@@ -22455,6 +22455,20 @@ fn cast_in_a_private_helper_resolves_through_the_solver() {
 }
 
 #[test]
+fn cast_without_its_import_is_currently_accepted() {
+    // #768 pins present behavior, deliberately: `pycc_types` never reads
+    // `HirModule::imports`, so the bare-`cast` interception cannot tell an
+    // imported `cast` from an unimported one and accepts a program CPython
+    // rejects with `NameError`. Every other bare-name stdlib symbol this
+    // compiler special-cases (`Final`, `Annotated`, the `Enum`/`Protocol`/
+    // `ABC` markers) has the same gap, so gating `cast` alone would make the
+    // compiler inconsistent rather than correct. Closing it uniformly needs
+    // import visibility threaded through both `Environment` and the solver's
+    // `ConstraintEnvironment`; #768 owns that work and must invert this test.
+    check_source("def f(x: int) -> int:\n    return cast(int, x)\nprint(f(1))\n").unwrap();
+}
+
+#[test]
 fn a_malformed_cast_in_a_private_helper_still_reports_the_cast_diagnostic() {
     // #767: the solver mirror reports a malformed call shape itself,
     // through the same `cast_target_name` helper `check_cast` uses. Left
@@ -22512,6 +22526,29 @@ fn qualified_cast_marker_called_is_t0021() {
     // fallthrough) -- `typing.cast(int, 1)` is rejected with guidance to
     // import and call the bare name instead.
     let err = check_source("import typing\nx = typing.cast(int, 1)\n").unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("compile-time cast marker"),
+        "expected a cast-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn qualified_cast_marker_called_inside_an_annotated_function_is_t0021() {
+    // #767: the module-level and private-helper forms above both reach
+    // `check` through the solver, so they exercise `constraints.rs`'s own
+    // `CastMarker` arm rather than `expr.rs`'s. A call inside a fully
+    // annotated public function takes the validation pass instead, which is
+    // the only route to `infer_expr_in`'s own `CastMarker` branch. The
+    // arguments must both be ordinary values: `infer_expr_in` infers every
+    // argument *before* it inspects the callee, so a type name in argument
+    // position (`typing.cast(int, 1)`) fails as an undefined value first and
+    // never reaches the marker guard.
+    let err = check_source(
+        "import typing\ndef f() -> int:\n    x = typing.cast(1, 2)\n    return x\nprint(f())\n",
+    )
+    .unwrap_err();
     assert_eq!(err.code, "T0021");
     assert!(
         err.message.contains("compile-time cast marker"),

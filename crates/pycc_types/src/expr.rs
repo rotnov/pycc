@@ -231,6 +231,15 @@ pub(crate) fn infer_expr_in(
             // ordinary inference would reject as an undefined name. A
             // user-defined function named `cast` takes priority over the
             // special case, exactly as for `isinstance`/`issubclass`.
+            //
+            // The interception does not verify that the module actually wrote
+            // `from typing import cast`: `pycc_types` has no access to
+            // `HirModule::imports` at all, so no bare-name stdlib symbol is
+            // import-gated today (the `Final`/`Annotated`/`Enum` markers behave
+            // the same way). Closing that gap uniformly is tracked by #768;
+            // `cast_without_its_import_is_currently_accepted` in `tests.rs`
+            // pins the present behavior so that fix has to invert it
+            // deliberately.
             if callee == "cast" && !env.lookup_function(callee).is_some() {
                 return class::check_cast(env, local_names, args);
             }

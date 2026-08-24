@@ -156,6 +156,76 @@ available once the depended-on machinery actually exists and can be run.
 
 ---
 
+## 2026-08-24 — The #767 PR body and session snapshot claimed the coverage gate passed before it had ever produced a verdict
+
+
+**What happened.** While drafting the #767 pull-request body and its
+`docs/sessions/` snapshot, both were written to state that
+`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
+passes. At that point every local coverage run had aborted on an unrelated
+environmental failure (`build_and_run_cross_compiled_to_a_different_tier_1_target`
+against a stale `x86_64-apple-darwin` `libpycc_rt.a`), so cargo exited 101 and
+`llvm-cov` never emitted a report at all — there was no line/region percentage
+and no fail-under verdict to report either way. The claim was drafted from the
+*intent* to run the gate, not from its output.
+
+**Root cause.** Evidence prose was written ahead of the evidence, and a run
+that aborted was mentally filed as "ran" rather than "produced no verdict". A
+failing test that is genuinely unrelated to the change still invalidates the
+gate result, because `--fail-under-*` is only evaluated after a full run.
+
+**What fixed it.** Fixing the environmental failure itself and re-running.
+`--no-fail-fast` alone was not enough: it runs every remaining test, but
+`cargo llvm-cov` still aborts without emitting a report when the underlying
+`cargo test` exits non-zero, so the run again ended with no verdict. The stale
+archive was `target/x86_64-apple-darwin/debug/libpycc_rt.a` -- the *root* target
+directory the `pycc` binary under test resolves its runtime from -- while the
+earlier rebuild had been aimed at `target/llvm-cov-target/`, which is why it
+appeared not to survive.
+
+**Lesson.** Never write a test, coverage, or CI result into a PR body, session
+snapshot, or commit message before reading that exact run's output; when a gate
+run aborts, record "no verdict" rather than the verdict that was expected.
+There is no flag that buys a coverage verdict past a failing test -- an
+environmental failure has to be actually fixed before the gate can speak. When
+a rebuild "does not survive", check that it landed in the directory the process
+under test actually reads before repeating it.
+
+---
+
+## 2026-08-24 — A blanket `cargo fmt --all` while implementing #767 silently pulled eight unrelated files into the diff
+
+**What happened.** During the #767 (`typing.cast`) implementation, a routine
+`cargo fmt --all` reformatted eight files this task never touched —
+`crates/pycc_codegen/src/tests.rs`, `crates/pycc_hir/src/exception.rs`,
+`crates/pycc_hir/src/exception/tag_tests.rs`,
+`crates/pycc_hir/src/stmt/exception.rs`,
+`crates/pycc_types/src/exception/synthetic_class_tests.rs`,
+`tests/issue_739_oserror_hierarchy.rs`, `tests/issue_740_multi_type_except.rs`,
+and `tests/issue_762_typing_final_annotated.rs`. The churn was only noticed
+later, when the pre-commit `git status` listed far more modified files than
+the change had seams. It would otherwise have shipped inside a PR whose stated
+scope is one issue, making the review diff harder to read and the blame history
+misleading.
+
+**Root cause.** `main` at `5be4a055` is not `cargo fmt` clean, because
+`.github/workflows/` has no `cargo fmt --check` gate, so formatting drift
+accumulates from any contributor who does not run it. `--all` therefore does
+not mean "format my work"; it means "format the whole tree, including everyone
+else's drift".
+
+**What fixed it.** `git checkout --` on exactly those eight paths, then
+`cargo fmt --all -- --check` re-run to confirm none of the files this task
+actually touched appear in its output.
+
+**Lesson.** In this repository, format the files the task touched
+(`cargo fmt -- <paths>`), not the workspace. If `cargo fmt --all` is run
+anyway, diff `git status --short` against the task's own list of intended
+files *before* staging, and revert anything not on it. A modified file the
+task cannot explain is churn, not a bonus fix.
+
+---
+
 ## 2026-08-24 — Planning #747 (PEP 604 unions) assumed representation-only was mergeable, then assumed `is`/`is not` already existed; both were false
 
 **What happened.** While running `issue-to-plan` for GitHub issue #747
