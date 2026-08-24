@@ -87,7 +87,13 @@ standalone call) -- these are valid Python, not name-resolution failures
 (`T0021`), so they are classified as capability gaps. User-defined functions
 always take priority: a `def ValueError(...)` is called correctly, not
 classified as `C0001`. The same classification applies in both the final
-validation pass and the private-helper inference path (issue #142).
+validation pass and the private-helper inference path (issue #142). It is
+also used for an *implemented* special-cased builtin called with an argument
+shape this version does not support -- `isinstance(f(), int)` (a call as the
+inspected operand) and `cast(list[int], x)` (a subscripted generic as the
+target type, issue #767) are the current instances -- for the same reason:
+the construct is valid Python that a later slice can implement, not a
+by-design rejection.
 
 ## Quality bar
 

@@ -17,13 +17,13 @@ use crate::binop::numeric_result_type;
 use crate::class;
 use crate::unop::unary_result_type;
 use crate::{
-    BindingState, Environment, annotation_marker_is_not_a_value, enum_marker_is_not_a_value,
-    enum_member_attr_type, instantiate_generic_call, is_assignable, is_known_callable_builtin,
-    is_local, is_marker_kind, lookup_bound_name, marker_is_not_a_value, non_callable_binding,
-    numeric_or_bool_compatible,
-    possibly_unbound, std_constant_is_not_callable, std_function_used_as_a_value,
-    std_qualified_symbol, std_receiver_name, std_receiver_shadowed, std_scalar_to_ty,
-    unbound_local, unsupported_callable_builtin,
+    BindingState, Environment, annotation_marker_is_not_a_value, cast_marker_is_not_a_value,
+    enum_marker_is_not_a_value, enum_member_attr_type, instantiate_generic_call, is_assignable,
+    is_known_callable_builtin, is_local, is_marker_kind, lookup_bound_name, marker_is_not_a_value,
+    non_callable_binding, numeric_or_bool_compatible, possibly_unbound,
+    std_constant_is_not_callable, std_function_used_as_a_value, std_qualified_symbol,
+    std_receiver_name, std_receiver_shadowed, std_scalar_to_ty, unbound_local,
+    unsupported_callable_builtin,
 };
 
 use pycc_diag::{Diagnostic, Span};
@@ -73,6 +73,7 @@ pub(crate) fn infer_expr_in(
                     pycc_std::StdSymbolKind::AnnotationMarker => {
                         Err(annotation_marker_is_not_a_value(name))
                     }
+                    pycc_std::StdSymbolKind::CastMarker => Err(cast_marker_is_not_a_value(name)),
                     pycc_std::StdSymbolKind::ProtocolMarker
                     | pycc_std::StdSymbolKind::AbcMarker
                     | pycc_std::StdSymbolKind::DecoratorMarker => {
@@ -221,6 +222,18 @@ pub(crate) fn infer_expr_in(
             if callee == "issubclass" && !env.lookup_function(callee).is_some() {
                 return class::check_issubclass(env, args);
             }
+            // #767: `typing.cast(T, value)` is a compile-time-only construct
+            // — a runtime no-op in CPython whose sole effect is to declare
+            // `value`'s static type as `T`. Like `isinstance`/`issubclass`
+            // above it must be intercepted BEFORE the generic argument
+            // inference loop, because `args[0]` is a *type* expression (a
+            // bare class or builtin-scalar name, not a value binding) that
+            // ordinary inference would reject as an undefined name. A
+            // user-defined function named `cast` takes priority over the
+            // special case, exactly as for `isinstance`/`issubclass`.
+            if callee == "cast" && !env.lookup_function(callee).is_some() {
+                return class::check_cast(env, local_names, args);
+            }
             // For a callee that survives D-110's binding gate above, preserve
             // the established diagnostic order by inferring every
             // argument before validating arity or compatibility. Most Python
@@ -295,6 +308,8 @@ pub(crate) fn infer_expr_in(
                         } else if matches!(symbol.kind, pycc_std::StdSymbolKind::AnnotationMarker)
                         {
                             annotation_marker_is_not_a_value(callee)
+                        } else if matches!(symbol.kind, pycc_std::StdSymbolKind::CastMarker) {
+                            cast_marker_is_not_a_value(callee)
                         } else {
                             marker_is_not_a_value(callee)
                         }

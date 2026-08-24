@@ -807,6 +807,94 @@ fn validate_class_name(env: &Environment, name: &str) -> Result<(), Diagnostic> 
     }
 }
 
+/// #767: Maps a validated `cast` target name to the `Ty` the call
+/// expression has. The four builtin scalar names map to their scalar `Ty`;
+/// every other name is a user-defined class name and maps to
+/// `Ty::Instance`. Shared by `check_cast` (validation pass) and the
+/// constraint solver's own `cast` mirror, so the two passes cannot drift.
+/// The caller is responsible for having validated that a non-builtin name
+/// really names a known class — this function only performs the mapping.
+pub(crate) fn cast_target_ty(name: &str) -> Ty {
+    match name {
+        "int" => Ty::Int,
+        "float" => Ty::Float,
+        "bool" => Ty::Bool,
+        "str" => Ty::Str,
+        other => Ty::Instance(Box::new(other.to_string())),
+    }
+}
+
+/// #767: Validates the environment-independent half of a `cast(T, value)`
+/// call shape — exactly two arguments, the first of them a bare name — and
+/// returns that target name. Shared by `check_cast` (validation pass) and
+/// the constraint solver's own `cast` mirror, which has no class table but
+/// can and should report these two malformed-shape diagnostics itself:
+/// returning "no type term" for them instead would surface the solver's
+/// generic "cannot infer return type of private helper" in place of the
+/// accurate message whenever the call is in a return-type-inferred helper.
+pub(crate) fn cast_target_name(args: &[HirExpr]) -> Result<&str, Diagnostic> {
+    if args.len() != 2 {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!("`cast` expects exactly 2 arguments, got {}", args.len()),
+            Span::new(0, 0),
+        )
+        .with_help("pass exactly 2 arguments: the target type and the value"));
+    }
+    let HirExpr::Name(target) = &args[0] else {
+        return Err(Diagnostic::error(
+            "C0001",
+            "`cast`'s first argument must be a bare type name in this pycc version -- \
+             subscripted generics and other type expressions are not supported yet",
+            Span::new(0, 0),
+        )
+        .with_help(
+            "pass `int`, `float`, `bool`, `str`, or the name of a class defined in this module",
+        ));
+    };
+    Ok(target)
+}
+
+/// #767: Type-checks `cast(T, value)` — `typing.cast` is a runtime no-op in
+/// CPython whose only effect is to declare `value`'s static type as `T`, so
+/// the call's type is `T` and `pycc_mir` lowers the whole expression to
+/// `value` alone (no call is emitted, and codegen never sees `cast`).
+///
+/// `T` must be a bare name: one of the four builtin scalar type names or a
+/// class defined in this module. Subscripted generics (`cast(list[int], x)`)
+/// and every other type expression are outside the current subset and are
+/// rejected with `C0001`, the versioned capability code, rather than a
+/// by-design rejection — the same classification `check_isinstance` uses for
+/// in-scope-but-unimplemented call shapes.
+///
+/// `value` is inferred normally so its own errors are still reported; the
+/// inferred type is deliberately discarded, since not agreeing with `T` is
+/// the entire point of a cast.
+///
+/// Two guards `check_isinstance` carries are deliberately absent here.
+/// There is no side-effect guard on the value operand: `isinstance` needs
+/// one because it discards its operand and evaluates to a compile-time
+/// constant, whereas `cast` *is* its value operand after lowering, so a
+/// call expression there is evaluated exactly once, as CPython does. And
+/// there is no `@runtime_checkable` gate on a protocol target: `isinstance`
+/// needs one because it performs a runtime class test, whereas `cast`
+/// performs none — `cast(P, x)` only renames the static type and emits no
+/// code, which is exactly what `typing.cast` means for a protocol in
+/// CPython too.
+pub(crate) fn check_cast(
+    env: &Environment,
+    local_names: &[&str],
+    args: &[HirExpr],
+) -> Result<Ty, Diagnostic> {
+    let target = cast_target_name(args)?;
+    validate_class_name(env, target)?;
+    // Infer the value operand so its own type errors are still reported.
+    // The result is intentionally unused: a cast asserts a type that the
+    // operand's inferred type need not match.
+    let _ = infer_expr_in(env, local_names, &args[1])?;
+    Ok(cast_target_ty(target))
+}
+
 /// #435: Type-checks `isinstance(obj, class_arg)` — validates the argument
 /// count, infers the object's type, extracts and validates the class
 /// argument(s), and returns `Ok(Ty::Bool)`. The compile-time boolean result

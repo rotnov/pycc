@@ -61,13 +61,12 @@ use std::sync::Arc;
 use crate::binop::numeric_result_type;
 use crate::unop::unary_result_type;
 use crate::{
-    Environment, annotation_marker_is_not_a_value, check_incompatible_redefinitions,
-    check_with_signatures, enum_marker_is_not_a_value, is_assignable, is_generic_signature,
-    is_known_callable_builtin, is_local, is_marker_kind, marker_is_not_a_value,
-    non_callable_binding, solver,
-    std_constant_is_not_callable, std_function_used_as_a_value, std_qualified_symbol,
-    std_receiver_name, std_receiver_shadowed, std_scalar_to_ty, t0042, ty_contains_param,
-    unbound_local, unsupported_callable_builtin,
+    Environment, annotation_marker_is_not_a_value, cast_marker_is_not_a_value,
+    check_incompatible_redefinitions, check_with_signatures, enum_marker_is_not_a_value,
+    is_assignable, is_generic_signature, is_known_callable_builtin, is_local, is_marker_kind,
+    marker_is_not_a_value, non_callable_binding, solver, std_constant_is_not_callable,
+    std_function_used_as_a_value, std_qualified_symbol, std_receiver_name, std_receiver_shadowed,
+    std_scalar_to_ty, t0042, ty_contains_param, unbound_local, unsupported_callable_builtin,
 };
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
@@ -348,6 +347,7 @@ pub(crate) fn collect_expr_constraints(
                     pycc_std::StdSymbolKind::AnnotationMarker => {
                         Err(annotation_marker_is_not_a_value(name))
                     }
+                    pycc_std::StdSymbolKind::CastMarker => Err(cast_marker_is_not_a_value(name)),
                     pycc_std::StdSymbolKind::ProtocolMarker
                     | pycc_std::StdSymbolKind::AbcMarker
                     | pycc_std::StdSymbolKind::DecoratorMarker => Err(marker_is_not_a_value(name)),
@@ -515,6 +515,37 @@ pub(crate) fn collect_expr_constraints(
             {
                 return Ok(Some(Ok(Ty::Bool)));
             }
+            // #767: `cast(T, value)` is a compile-time-only construct whose
+            // type is exactly `T`. Mirrors `infer_expr_in`'s own `cast`
+            // interception; without this mirror the callee misses
+            // `signatures`, the call stays unresolved, and the solver
+            // dead-ends in "cannot infer return type" before the validation
+            // pass ever reports the real diagnostic. `args[0]` is a bare
+            // type name, which the `Name` arm above already resolved to a
+            // harmless `Ok(None)` term (a type name is not a value
+            // binding), exactly as for `isinstance`'s class argument.
+            //
+            // A malformed call shape (wrong arity, or a first argument that
+            // is not a bare name) is reported here, from the same shared
+            // helper `check_cast` uses, so the two passes cannot drift.
+            //
+            // The solver has no class table (`ConstraintEnvironment` carries
+            // only value bindings), so it produces a *term* only for the
+            // four builtin scalar target names it can recognize on its own;
+            // an unverified class name yields `Ok(None)` and leaves the
+            // decision to `check_cast`. Producing an unverified
+            // `Ty::Instance(name)` here instead was measurably worse: for
+            // `cast(Nope, x)` the solver's term reached the return-type
+            // comparison first and reported `T0022` ("conflicting inferred
+            // types `int` and `Nope`") in place of `check_cast`'s accurate
+            // `T0001` ("`Nope` is not a known class or builtin type").
+            if callee == "cast" && !signatures.contains_key(callee) {
+                let target = crate::class::cast_target_name(args)?;
+                if pycc_hir::is_builtin_type_name(target) {
+                    return Ok(Some(Ok(crate::class::cast_target_ty(target))));
+                }
+                return Ok(None);
+            }
             if let Some(symbol) = std_qualified_symbol(callee) {
                 // Post-review finding: see `std_receiver_shadowed`'s own
                 // doc comment -- a real local/parameter named `math`
@@ -531,9 +562,10 @@ pub(crate) fn collect_expr_constraints(
                     return Err(if is_marker_kind(symbol.kind) {
                         if matches!(symbol.kind, pycc_std::StdSymbolKind::EnumMarker) {
                             enum_marker_is_not_a_value(callee)
-                        } else if matches!(symbol.kind, pycc_std::StdSymbolKind::AnnotationMarker)
-                        {
+                        } else if matches!(symbol.kind, pycc_std::StdSymbolKind::AnnotationMarker) {
                             annotation_marker_is_not_a_value(callee)
+                        } else if matches!(symbol.kind, pycc_std::StdSymbolKind::CastMarker) {
+                            cast_marker_is_not_a_value(callee)
                         } else {
                             marker_is_not_a_value(callee)
                         }

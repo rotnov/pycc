@@ -22253,8 +22253,7 @@ fn qualified_annotation_marker_used_as_value_is_t0021() {
     let err = check_source("import typing\nx = typing.Final\n").unwrap_err();
     assert_eq!(err.code, "T0021");
     assert!(
-        err.message.contains("annotation marker")
-            && err.message.contains("typing.Final[int]"),
+        err.message.contains("annotation marker") && err.message.contains("typing.Final[int]"),
         "expected an annotation-specific message, got: {}",
         err.message
     );
@@ -22307,6 +22306,232 @@ fn qualified_annotation_marker_called_in_private_helper_is_t0021() {
     assert!(
         err.message.contains("annotation marker"),
         "expected an annotation-specific message, got: {}",
+        err.message
+    );
+}
+
+// -- #767: `typing.cast(T, value)` as a special-cased builtin call ------
+
+#[test]
+fn cast_to_a_builtin_scalar_type_checks_and_infers_that_type() {
+    // #767: the core case -- `from typing import cast` resolves (the
+    // registry entry) and `cast(int, x)` type-checks with type `int`, so
+    // it satisfies an `-> int` return annotation.
+    check_source(
+        "from typing import cast\ndef f(x: int) -> int:\n    return cast(int, x)\nprint(f(1))\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn cast_to_each_builtin_scalar_type_infers_that_scalar() {
+    // #767: `cast_target_ty`'s four builtin-scalar arms, each exercised
+    // through a return annotation that only the correct `Ty` satisfies.
+    for (target, annotation, value) in [
+        ("int", "int", "1"),
+        ("float", "float", "1.5"),
+        ("bool", "bool", "True"),
+        ("str", "str", "\"s\""),
+    ] {
+        check_source(&format!(
+            "from typing import cast\ndef f() -> {annotation}:\n    return cast({target}, {value})\nprint(f())\n"
+        ))
+        .unwrap_or_else(|e| panic!("cast({target}, ...) should infer `{annotation}`, got: {e:?}"));
+    }
+}
+
+#[test]
+fn cast_to_a_user_defined_class_type_checks() {
+    // #767: `cast_target_ty`'s fallthrough arm -- a non-builtin bare name
+    // that `validate_class_name` accepts maps to `Ty::Instance`, so the
+    // cast result supports the class's own attributes.
+    check_source(
+        "from typing import cast\nclass C:\n    def __init__(self, v: int) -> None:\n        self.v = v\ndef f(c: C) -> int:\n    d = cast(C, c)\n    return d.v\nprint(f(C(7)))\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn cast_with_the_wrong_argument_count_is_t0021() {
+    // #767: `cast` takes exactly two arguments; every other arity is an
+    // ordinary call-shape error, the same `T0021` `isinstance` uses.
+    let err = check_source("from typing import cast\ndef f(x: int) -> int:\n    return cast(x)\n")
+        .unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message
+            .contains("`cast` expects exactly 2 arguments, got 1"),
+        "expected an arity message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn cast_with_a_subscripted_first_argument_is_c0001() {
+    // #767: the target type must be a bare name in this subset.
+    // `cast(list[int], x)` is valid Python that pycc does not implement
+    // yet, so it is a versioned capability gap (`C0001`), not a
+    // by-design rejection -- the same classification `check_isinstance`
+    // uses for its own in-scope-but-unimplemented call shapes.
+    let err = check_source(
+        "from typing import cast\ndef f(x: int) -> int:\n    return cast(list[int], x)\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message.contains("must be a bare type name"),
+        "expected a bare-type-name message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn cast_to_an_unknown_class_name_is_t0001() {
+    // #767: an unknown target name is rejected by `validate_class_name`,
+    // shared with `isinstance`/`issubclass`. This also pins the solver
+    // mirror's deliberate `Ok(None)` for non-builtin targets: producing an
+    // unverified `Ty::Instance("Nope")` there instead made the solver
+    // report `T0022` ("conflicting inferred types `int` and `Nope`")
+    // before this accurate diagnostic could run.
+    let err =
+        check_source("from typing import cast\ndef f(x: int) -> int:\n    return cast(Nope, x)\n")
+            .unwrap_err();
+    assert_eq!(err.code, "T0001");
+    assert!(
+        err.message
+            .contains("`Nope` is not a known class or builtin type"),
+        "expected an unknown-class message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn cast_reports_errors_in_its_value_argument() {
+    // #767: `check_cast` infers the value operand so its own errors are
+    // still reported, even though the inferred type is discarded.
+    let err = check_source(
+        "from typing import cast\ndef f() -> int:\n    return cast(int, undefined_name)\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn a_user_defined_cast_function_takes_priority_over_the_builtin() {
+    // #767: a program defining its own `def cast(...)` calls that function
+    // -- the same user-definition-takes-priority rule `float`,
+    // `isinstance`, and `issubclass` follow, in both the validation pass
+    // (`env.lookup_function`) and the solver (`signatures.contains_key`).
+    // A two-`int` signature would be a type error under the builtin's own
+    // rules (`1` is not a bare type name), so this only checks if the
+    // user's function really won.
+    check_source("def cast(a: int, b: int) -> int:\n    return a + b\nprint(cast(1, 2))\n")
+        .unwrap();
+}
+
+#[test]
+fn a_user_defined_cast_function_is_resolved_by_the_solver_in_a_private_helper() {
+    // #767: the solver-path half of the priority rule -- a private helper
+    // with an inferred return type calls the user's own `cast`, so
+    // `collect_expr_constraints` must resolve it through `signatures`
+    // rather than short-circuiting to the builtin's target-type mapping.
+    check_source(
+        "def cast(a: int, b: int) -> int:\n    return a + b\ndef _helper():\n    return cast(1, 2)\nprint(_helper())\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn cast_in_a_private_helper_resolves_through_the_solver() {
+    // #767: the solver mirror's builtin-scalar arm -- a private helper
+    // with an inferred return type returning `cast(str, ...)` must resolve
+    // to `Ty::Str` in `collect_expr_constraints`. Without the mirror the
+    // callee misses `signatures`, the call stays unresolved, and the
+    // solver dead-ends in "cannot infer return type".
+    check_source(
+        "from typing import cast\ndef _helper():\n    return cast(str, \"v\")\nprint(_helper())\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_malformed_cast_in_a_private_helper_still_reports_the_cast_diagnostic() {
+    // #767: the solver mirror reports a malformed call shape itself,
+    // through the same `cast_target_name` helper `check_cast` uses. Left
+    // to produce "no type term" instead, the solver would surface its
+    // generic "cannot infer return type of private helper `_helper`" here
+    // and hide the accurate message.
+    let err = check_source(
+        "from typing import cast\ndef _helper():\n    return cast(1, 2)\nprint(_helper())\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message.contains("must be a bare type name"),
+        "expected a bare-type-name message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn qualified_cast_marker_used_as_value_is_t0021() {
+    // #767: exercises the dedicated `CastMarker` arm folded into the
+    // marker arm of infer_expr_in's Name handler (expr.rs). `cast` is
+    // recognized by bare callee name, so the qualified `typing.cast` form
+    // never reaches the special case.
+    let err = check_source("import typing\nx = typing.cast\n").unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("compile-time cast marker")
+            && err.message.contains("from typing import cast"),
+        "expected a cast-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn qualified_cast_marker_as_value_in_private_helper_is_t0021() {
+    // #767: the same `CastMarker` arm in collect_expr_constraints' Name
+    // handler (constraints.rs, the solver path).
+    let err = check_source(
+        "import typing\ndef _helper() -> int:\n    x = typing.cast\n    return 1\n_helper()\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("compile-time cast marker"),
+        "expected a cast-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn qualified_cast_marker_called_is_t0021() {
+    // #767: exercises the `CastMarker` branch of the call-site marker
+    // guard in expr.rs's infer_expr_in (the `Function` let-else
+    // fallthrough) -- `typing.cast(int, 1)` is rejected with guidance to
+    // import and call the bare name instead.
+    let err = check_source("import typing\nx = typing.cast(int, 1)\n").unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("compile-time cast marker"),
+        "expected a cast-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn qualified_cast_marker_called_in_private_helper_is_t0021() {
+    // #767: the same call-site `CastMarker` branch in constraints.rs's
+    // collect_expr_constraints (the solver path).
+    let err = check_source(
+        "import typing\ndef _helper() -> int:\n    x = typing.cast(int, 1)\n    return 1\n_helper()\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("compile-time cast marker"),
+        "expected a cast-specific message, got: {}",
         err.message
     );
 }

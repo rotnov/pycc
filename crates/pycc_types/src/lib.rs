@@ -195,10 +195,26 @@ fn annotation_marker_is_not_a_value(name: &str) -> Diagnostic {
     )
 }
 
+/// The `typing.cast` marker (#767) referenced as a first-class value, or
+/// called through its qualified name (`typing.cast(int, x)`) instead of the
+/// bare name imported with `from typing import cast`. `cast` is recognized
+/// by bare callee name in `infer_expr_in`/`collect_expr_constraints` (like
+/// `isinstance`/`issubclass`), so neither the qualified call form nor a
+/// value reference resolves to the special case; both land here.
+fn cast_marker_is_not_a_value(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0021",
+        format!(
+            "`{name}` is a compile-time cast marker, not a first-class value — import it with `from typing import cast` and call the bare name (e.g. `cast(int, value)`)"
+        ),
+        Span::new(0, 0),
+    )
+}
+
 /// Returns `true` if `kind` is any marker symbol kind (Enum, Protocol, ABC,
-/// Decorator, or Annotation). Used by call-site and value-reference guards
-/// to reject marker symbols used as first-class values with a consistent
-/// diagnostic.
+/// Decorator, Annotation, or Cast). Used by call-site and value-reference
+/// guards to reject marker symbols used as first-class values with a
+/// consistent diagnostic.
 fn is_marker_kind(kind: pycc_std::StdSymbolKind) -> bool {
     matches!(
         kind,
@@ -207,6 +223,7 @@ fn is_marker_kind(kind: pycc_std::StdSymbolKind) -> bool {
             | pycc_std::StdSymbolKind::AbcMarker
             | pycc_std::StdSymbolKind::DecoratorMarker
             | pycc_std::StdSymbolKind::AnnotationMarker
+            | pycc_std::StdSymbolKind::CastMarker
     )
 }
 
