@@ -37,6 +37,7 @@ is_registered = CHECKER.is_registered
 parse_matrix = CHECKER.parse_matrix
 validate = CHECKER.validate
 check_roadmap_counts = CHECKER.check_roadmap_counts
+resolve_roadmap_text = CHECKER.resolve_roadmap_text
 summary_body = CHECKER.summary_body
 pep_numbers = CHECKER.pep_numbers
 distinct_pep_count = CHECKER.distinct_pep_count
@@ -643,6 +644,92 @@ class RoadmapCountTests(unittest.TestCase):
         )
 
 
+class ResolveRoadmapTextTests(unittest.TestCase):
+    """Part 1 of #756: `docs/ROADMAP.md` vs. a `docs/roadmap/**/*.md` tree.
+
+    `resolve_roadmap_text` is the Python side of the dual-layout resolution
+    also added to `scripts/check_roadmap_evidence.rb`. Unlike the Ruby
+    checker, plain concatenation is safe here: `check_roadmap_counts` only
+    searches the result with whole-text regexes that carry no state across
+    file boundaries, so re-joining a split file reproduces the exact original
+    string and therefore the exact original parse.
+    """
+
+    ROWS = evidence_rows(MATRIX)
+
+    def test_reads_the_file_directly_when_it_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ROADMAP.md"
+            path.write_text(ROADMAP, encoding="utf-8")
+            self.assertEqual(resolve_roadmap_text(path), ROADMAP)
+
+    def test_concatenates_a_sibling_roadmap_directory_when_the_file_is_absent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            docs_dir = Path(directory)
+            roadmap_dir = docs_dir / "roadmap"
+            roadmap_dir.mkdir()
+            midpoint = len(ROADMAP) // 2
+            (roadmap_dir / "a.md").write_text(ROADMAP[:midpoint], encoding="utf-8")
+            (roadmap_dir / "b.md").write_text(ROADMAP[midpoint:], encoding="utf-8")
+
+            resolved = resolve_roadmap_text(docs_dir / "ROADMAP.md")
+
+            self.assertEqual(resolved, ROADMAP)
+            check_roadmap_counts(resolved, self.ROWS)
+
+    def test_concatenates_nested_files_sorted_by_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            docs_dir = Path(directory)
+            roadmap_dir = docs_dir / "roadmap"
+            (roadmap_dir / "nested").mkdir(parents=True)
+            midpoint = len(ROADMAP) // 2
+            # Named so lexical sort still reconstructs the original order
+            # even though "nested/b.md" sorts as a whole path, not by
+            # basename alone.
+            (roadmap_dir / "a.md").write_text(ROADMAP[:midpoint], encoding="utf-8")
+            (roadmap_dir / "nested/b.md").write_text(
+                ROADMAP[midpoint:], encoding="utf-8"
+            )
+
+            self.assertEqual(resolve_roadmap_text(docs_dir / "ROADMAP.md"), ROADMAP)
+
+    def test_raises_file_not_found_when_neither_layout_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "docs" / "ROADMAP.md"
+            path.parent.mkdir()
+            with self.assertRaises(FileNotFoundError):
+                resolve_roadmap_text(path)
+
+    def test_an_empty_roadmap_directory_is_treated_as_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            docs_dir = Path(directory)
+            (docs_dir / "roadmap").mkdir()
+            with self.assertRaises(FileNotFoundError):
+                resolve_roadmap_text(docs_dir / "ROADMAP.md")
+
+    def test_prefers_roadmap_md_over_a_sibling_roadmap_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            docs_dir = Path(directory)
+            path = docs_dir / "ROADMAP.md"
+            path.write_text(ROADMAP, encoding="utf-8")
+            roadmap_dir = docs_dir / "roadmap"
+            roadmap_dir.mkdir()
+            # Deliberately invalid: if the resolver ever fell through to the
+            # directory despite ROADMAP.md existing, check_roadmap_counts
+            # would raise on this content, making the wrong choice loud
+            # rather than silently coincidentally passing.
+            (roadmap_dir / "a.md").write_text(
+                "this is not a valid roadmap document", encoding="utf-8"
+            )
+
+            resolved = resolve_roadmap_text(path)
+
+            self.assertEqual(resolved, ROADMAP)
+            check_roadmap_counts(resolved, self.ROWS)
+
+
 class CiWiringTest(unittest.TestCase):
     """The checker is only a merge gate while required CI actually runs it.
 
@@ -730,6 +817,28 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(stdout, "")
         self.assertIn(f"but the matrix has {total}", stderr)
+
+    def test_a_docs_roadmap_directory_tree_is_accepted_by_the_command(self) -> None:
+        # Splits the real docs/ROADMAP.md content across two files under a
+        # roadmap/ directory sibling to a --roadmap path that does not
+        # itself exist, proving main's own resolve_roadmap_text wiring (not
+        # just the unit function) accepts the dual-layout tree end to end.
+        roadmap = (REPOSITORY_ROOT / "docs/ROADMAP.md").read_text(encoding="utf-8")
+        midpoint = len(roadmap) // 2
+        with tempfile.TemporaryDirectory() as directory:
+            docs_dir = Path(directory) / "docs"
+            roadmap_dir = docs_dir / "roadmap"
+            roadmap_dir.mkdir(parents=True)
+            (roadmap_dir / "a.md").write_text(roadmap[:midpoint], encoding="utf-8")
+            (roadmap_dir / "b.md").write_text(roadmap[midpoint:], encoding="utf-8")
+            status, stdout, stderr = self._run(
+                ["--roadmap", str(docs_dir / "ROADMAP.md")]
+            )
+        self.assertEqual(status, 0, stderr)
+        matrix = (REPOSITORY_ROOT / "docs/PYTHON_STANDARDS.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(summary_body(evidence_rows(matrix)), stdout)
 
     def test_an_out_of_tree_roadmap_is_named_as_itself(self) -> None:
         # The relative-label shortening in `main` applies to files inside the

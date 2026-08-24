@@ -455,6 +455,38 @@ def summary_body(rows: list[MatrixRow]) -> str:
     )
 
 
+def resolve_roadmap_text(path: Path) -> str:
+    """Resolve roadmap content from either a single file or a directory tree.
+
+    Mirrors `scripts/check_roadmap_evidence.rb`'s dual-layout support: if
+    `path` (the `--roadmap` default, `docs/ROADMAP.md`) exists, read it
+    directly -- today's single-file behavior, unchanged. Otherwise, if a
+    sibling `roadmap/` directory exists next to `path` and holds at least one
+    Markdown file, read and concatenate every `**/*.md` file under it, sorted
+    by path. Unlike the Ruby checker's per-file heading-path parse, this is
+    safe as plain concatenation: `check_roadmap_counts` only searches the
+    result with whole-text regexes (`ROADMAP_HEADLINE`, `ROADMAP_FIGURES`,
+    `ROADMAP_PEP_FIGURES`, `ACCEPT_CLAUSE_FIGURES`) that do not track any
+    running state across file boundaries the way the Ruby checker's
+    heading-path stack does.
+
+    Fails closed when neither the file nor a non-empty directory exists, by
+    falling through to `path.read_text()` so the caller still sees the
+    ordinary `FileNotFoundError` rather than a bespoke one.
+    """
+
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+
+    roadmap_dir = path.parent / "roadmap"
+    if roadmap_dir.is_dir():
+        files = sorted(roadmap_dir.glob("**/*.md"))
+        if files:
+            return "".join(file.read_text(encoding="utf-8") for file in files)
+
+    return path.read_text(encoding="utf-8")
+
+
 def check_roadmap_counts(
     roadmap: str, rows: list[MatrixRow], label: str = "docs/ROADMAP.md"
 ) -> None:
@@ -618,7 +650,7 @@ def main(argv: list[str] | None = None) -> int:
             label = str(args.roadmap.resolve().relative_to(root))
         except ValueError:
             label = str(args.roadmap)
-        check_roadmap_counts(args.roadmap.read_text(encoding="utf-8"), rows, label)
+        check_roadmap_counts(resolve_roadmap_text(args.roadmap), rows, label)
     except BreadthError as error:
         print(str(error), file=sys.stderr)
         return 1

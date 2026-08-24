@@ -2543,6 +2543,35 @@ def validate_roadmap(text)
   evidence_ids
 end
 
+def resolve_evidence_ids(root)
+  roadmap = root / "docs/ROADMAP.md"
+  return validate_roadmap(roadmap.read) if roadmap.file?
+
+  roadmap_dir = root / "docs/roadmap"
+  return validate_roadmap(roadmap.read) unless roadmap_dir.directory?
+
+  files = roadmap_dir.glob("**/*.md").sort
+  # Neither docs/ROADMAP.md nor a non-empty docs/roadmap/ tree exists: fall
+  # back to the single-file read so the caller still fails closed with the
+  # existing Errno::ENOENT-derived message rather than a bespoke one.
+  return validate_roadmap(roadmap.read) if files.empty?
+
+  claimed_by = {}
+  evidence_ids = []
+  files.each do |file|
+    validate_roadmap(file.read).each do |evidence_id|
+      if claimed_by.key?(evidence_id)
+        raise RoadmapEvidenceError,
+              "#{file}: evidence #{evidence_id.inspect} is already claimed by " \
+              "#{claimed_by[evidence_id]}"
+      end
+      claimed_by[evidence_id] = file.to_s
+      evidence_ids << evidence_id
+    end
+  end
+  evidence_ids
+end
+
 def validate_evidence(root, _evidence_ids)
   workflow = root / ".github/workflows/ci.yml"
   workflow_text = workflow.read
@@ -2567,8 +2596,7 @@ def main(arguments)
   raise RoadmapEvidenceError, "usage: check_roadmap_evidence.rb [repository-root]" if arguments.length > 1
 
   root = Pathname(arguments.first || ".")
-  roadmap = root / "docs/ROADMAP.md"
-  evidence_ids = validate_roadmap(roadmap.read)
+  evidence_ids = resolve_evidence_ids(root)
   validate_evidence(root, evidence_ids)
   puts "Roadmap evidence policy passed."
   0
