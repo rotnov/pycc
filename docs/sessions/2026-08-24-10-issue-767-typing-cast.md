@@ -240,6 +240,19 @@ A user-defined `def cast(...)` takes priority in all three passes.
   likely cause. The new `cast_up_across_an_overridden_method_is_c0001` test
   works around it by keeping the rejected `cast` expression inline rather
   than assigned to a variable first.
+- **The D-197-to-D-198 renumbering commit pushed `docs/ROADMAP.md`'s
+  non-optional `llms.txt` expansion over budget; fixed by trimming, not by
+  relaxing the gate.** `scripts/check-site.sh` enforces a 256 KiB aggregate
+  ceiling (issue #207) on the sum of the non-optional documents
+  `site/llms-txt-context-manifest.json` lists, `docs/ROADMAP.md` among them.
+  Confirmed at `origin/main`'s tip (`68ee4eda`, via a scratch `git worktree
+  add --detach`) the aggregate had only ~3.6 KiB of headroom; this branch's
+  own `docs/ROADMAP.md` growth across four review passes plus the D-198
+  rename exceeded it by 548 bytes. Condensed the #767 changelog paragraph's
+  wording (no fact removed -- same scope, same soundness rule, same test and
+  diagnostic-code references) rather than trimming any other document or
+  touching the manifest/budget itself; `scripts/check-site.sh` now passes
+  with margin to spare.
 
 ## Test evidence
 
