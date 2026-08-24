@@ -655,6 +655,47 @@ fn fstring_interpolation_of_a_caught_exception_binding_lowers_to_exception_messa
 }
 
 #[test]
+fn print_of_a_caught_user_defined_exception_binding_lowers_to_exception_message() {
+    // The rewrite must also fire for a user-defined exception subclass, not
+    // just a builtin like `ValueError` -- the stated scope for #736 covers
+    // "a user-defined exception class inheriting `Exception`'s constructor".
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::Try {
+            body: Vec::new(),
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some(vec!["AppError".to_string()]),
+                name: Some("e".to_string()),
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Name("e".to_string())],
+                })],
+            }],
+            orelse: Vec::new(),
+            finalbody: Vec::new(),
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: exception_hierarchy().into_iter().collect(),
+    };
+    let mir = build(&hir);
+    let (_, handlers, _, _) = expect_top_level_try(&mir.items[0]);
+    assert_eq!(handlers.len(), 1);
+    assert_eq!(handlers[0].body.len(), 1);
+    assert!(matches!(
+        &handlers[0].body[0],
+        MirStmt::ExprStmt(MirExpr::Call { callee, args, .. })
+            if callee == "print"
+                && args.len() == 1
+                && matches!(
+                    &args[0],
+                    MirExpr::ExceptionMessage(inner)
+                        if matches!(inner.as_ref(), MirExpr::Name { name, .. } if name == "e")
+                )
+    ));
+}
+
+#[test]
 fn print_of_a_non_exception_class_instance_is_not_rewritten_to_exception_message() {
     // `rewrite_exception_to_message` must be a no-op for an ordinary,
     // non-exception class instance -- covers the `exception_type_tag`
