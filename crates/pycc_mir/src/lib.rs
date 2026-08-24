@@ -44,6 +44,38 @@ pub enum MirExpr {
     /// arithmetic integer `0` or `1`.
     IntBoundary(Box<MirExpr>),
     StringLiteral(String),
+    /// The bare literal `None` (D-197, #763, Part 1 of #747). Statically
+    /// `Ty::None` on its own (mirroring `HirExpr::NoneLiteral`) -- when it
+    /// (or a bare `inner`-typed value) flows into an `Optional[inner]`-typed
+    /// slot, `pycc_codegen`'s `coerce_scalar_to_type` builds that slot's
+    /// `{ inner, i8 }` present/absent representation, driven by the target
+    /// type it is asked to coerce to. `OptionalWrap` below is the one place
+    /// that target type is *not* simply "the slot's already-established
+    /// type" -- see its own doc comment.
+    NoneLiteral,
+    /// Wraps a bare `inner`-typed value or a `NoneLiteral` so `.ty()`
+    /// reports `Ty::Optional(inner)` regardless of the wrapped value's own
+    /// static type (D-197, #763, Part 1 of #747). Exactly mirroring
+    /// `IntBoundary`'s own "first assignment fixes a binding's
+    /// representation" reason: `pycc_codegen::collect_stmt_bindings`
+    /// derives a `MirStmt::Assign`'s slot type from `value.ty()` alone, with
+    /// no memory of the HIR annotation that produced it, so an
+    /// `AnnAssign`'s initializer under an `Optional[inner]` annotation must
+    /// itself statically report `Ty::Optional(inner)` for the slot to be
+    /// declared with the right representation at all -- unlike `IntBoundary`,
+    /// the actual `{ inner, i8 }` struct-building work still happens at
+    /// codegen (`pycc_codegen::coerce_scalar_to_type`, called with
+    /// `Ty::Optional(inner)` as the target), not here; this node exists
+    /// purely to fix `.ty()`. Only `pycc_mir::stmt::lower_stmt`'s
+    /// `AnnAssign` arm introduces it, for the identical reason `IntBoundary`
+    /// is introduced only there and not by a bare `Assign`: a later plain
+    /// reassignment to an already-`Optional`-typed name (`x = None` after
+    /// `x: int | None = 5`) needs no wrapper at all, because
+    /// `pycc_mir::bind_variable`'s `or_insert` never overwrites the slot
+    /// type the `AnnAssign` already fixed (D-074), and
+    /// `coerce_scalar_to_type` is driven by that already-correct slot type
+    /// directly at the assignment site either way.
+    OptionalWrap(Box<MirExpr>, Box<Ty>),
     Name {
         name: String,
         ty: Ty,
@@ -251,6 +283,8 @@ impl MirExpr {
             MirExpr::FloatLiteral(_) => Ty::Float,
             MirExpr::BoolLiteral(_) => Ty::Bool,
             MirExpr::StringLiteral(_) | MirExpr::FString(_) => Ty::Str,
+            MirExpr::NoneLiteral => Ty::None,
+            MirExpr::OptionalWrap(_, inner) => Ty::Optional(inner.clone()),
             MirExpr::Name { ty, .. }
             | MirExpr::Call { ty, .. }
             | MirExpr::BinOp { ty, .. }

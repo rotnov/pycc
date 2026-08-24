@@ -44,6 +44,7 @@ pub(crate) fn infer_expr_in(
         HirExpr::FloatLiteral(_) => Ok(Ty::Float),
         HirExpr::BoolLiteral(_) => Ok(Ty::Bool),
         HirExpr::StringLiteral(_) => Ok(Ty::Str),
+        HirExpr::NoneLiteral => Ok(Ty::None),
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(expr) = part {
@@ -111,6 +112,33 @@ pub(crate) fn infer_expr_in(
         HirExpr::Compare { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;
+            // `is`/`is not` (D-197, #763, Part 1 of #747): HIR lowering
+            // (`crates/pycc_hir/src/expr.rs`'s `Expr::Compare` arm) already
+            // guarantees one operand is syntactically `HirExpr::NoneLiteral`
+            // whenever `op` is `Is`/`IsNot` -- this is the type-level half
+            // of that scoping: the *other* operand's static type must be
+            // `Ty::Optional(_)` or `Ty::None` itself. Every other `is`/`is
+            // not` shape never reaches this arm at all (still `C0001` at
+            // HIR-lowering), so this deliberately does not implement
+            // general object-identity comparison.
+            if matches!(op, CmpOp::Is | CmpOp::IsNot) {
+                let other_ty = if matches!(left.as_ref(), HirExpr::NoneLiteral) {
+                    &right_ty
+                } else {
+                    &left_ty
+                };
+                return match other_ty {
+                    Ty::Optional(_) | Ty::None => Ok(Ty::Bool),
+                    other => Err(Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "cannot compare `{}` and `None` with `is`/`is not` -- only an `Optional[T]` (or `None`) operand is supported",
+                            other.name()
+                        ),
+                        Span::new(0, 0),
+                    )),
+                };
+            }
             // #378 (PR-18): `==`/`!=` between same-class dataclass instances
             // is accepted -- the compiler-synthesized `__eq__` method has a
             // known-correct signature `(self, other: SameClass) -> bool`.

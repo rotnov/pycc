@@ -121,6 +121,18 @@ pub enum Ty {
     /// `Box<String>`, mirroring `Ty::Instance`'s own documented reasoning
     /// exactly — maintains the D-109 16-byte `size_of::<Ty>()` ceiling.
     Protocol(Box<String>),
+    /// `T | None` (PEP 604, D-197), scoped in this PR to `Optional[Ty::Int]`
+    /// for codegen (see `crates/pycc_codegen`'s niche-optimized `int | None`
+    /// representation) -- every other inner type type-checks but is
+    /// rejected pre-lowering by a dedicated diagnostic. A general
+    /// `Ty::Union(Vec<Ty>)` was considered and rejected for this PR: Python's
+    /// `X | Y | None` general union has no agreed-on runtime representation
+    /// here yet, while `Optional[T]` alone has a well-known niche-filling
+    /// encoding (mirroring `Option<Box<T>>` in Rust itself). Boxed as
+    /// `Box<Ty>`, the same thin-pointer shape as `List`/`Set`, so this
+    /// variant does not move `size_of::<Ty>()` past the D-109 16-byte
+    /// ceiling.
+    Optional(Box<Ty>),
 }
 
 impl Ty {
@@ -142,6 +154,7 @@ impl Ty {
             ),
             Ty::Instance(class_name) => class_name.to_string(),
             Ty::Protocol(name) => name.to_string(),
+            Ty::Optional(inner) => format!("{} | None", inner.name()),
         }
     }
 }
@@ -165,6 +178,17 @@ pub enum CmpOpKind {
     LtE,
     Gt,
     GtE,
+    /// `is` (D-197, #763, Part 1 of #747). This compiler's first `is`/`is
+    /// not` support of any kind -- deliberately scoped at HIR-lowering to
+    /// exactly the case #763 needs: one operand is syntactically
+    /// `Expr::NoneLiteral`, the other anything. General object-identity
+    /// `is`/`is not` between two arbitrary non-`None` operands still falls
+    /// through to the pre-existing `C0001` "comparison operator not
+    /// supported yet" rejection unchanged -- see
+    /// `crates/pycc_hir/src/expr.rs`'s `Expr::Compare` arm.
+    Is,
+    /// `is not`. Same scoping as `Is` above.
+    IsNot,
 }
 
 /// The unary operators this compiler supports (#603, Part 2 of #573).
@@ -199,6 +223,14 @@ pub enum HirExpr {
     FloatLiteral(f64),
     BoolLiteral(bool),
     StringLiteral(String),
+    /// The bare literal `None` used as a value expression (D-197, #763,
+    /// Part 1 of #747), e.g. `x = None`, `return None`, `x is None`. Before
+    /// this PR, `Expr::NoneLiteral` had no `lower_expr` arm at all and fell
+    /// through to the generic `C0001` "expression kind not supported yet"
+    /// rejection -- distinct from `ret.value.as_deref().is_none()`'s
+    /// existing `HirStmt::Return(None)` encoding for a bare `return`
+    /// (no expression at all), which this variant does not replace.
+    NoneLiteral,
     Name(String),
     Call {
         callee: String,

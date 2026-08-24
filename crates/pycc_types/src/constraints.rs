@@ -323,6 +323,7 @@ pub(crate) fn collect_expr_constraints(
         HirExpr::FloatLiteral(_) => Ok(Some(Ok(Ty::Float))),
         HirExpr::BoolLiteral(_) => Ok(Some(Ok(Ty::Bool))),
         HirExpr::StringLiteral(_) => Ok(Some(Ok(Ty::Str))),
+        HirExpr::NoneLiteral => Ok(Some(Ok(Ty::None))),
         HirExpr::Name(name) => {
             // D-136: a `pycc_hir`-qualified stdlib name (`"math.pi"`) is
             // checked before ordinary binding lookup. Post-review finding:

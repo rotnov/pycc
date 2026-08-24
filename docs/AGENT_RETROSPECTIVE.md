@@ -33,6 +33,129 @@ never a merge gate.
 
 ---
 
+## 2026-08-24 — A dispatched subagent cannot satisfy D-068's local-reviewer dispatch requirement
+
+**What happened.** While finishing #763, the working session was itself a
+dispatched subagent (no `Task`/`Agent`-style tool in its own toolset — only
+a top-level orchestrator session can dispatch subagents). D-068 requires
+dispatching the iEvo `deep-reviewer` before merge, normally via
+`Skill(skill: "ievo:deep-review", ...)`. That call was refused outright:
+the skill's frontmatter carries `disable-model-invocation: true`, and the
+tool's own error text states *"Ask the user to run /ievo:deep-review
+themselves ... Do not replicate this skill's workflow by other means — it
+is reserved for explicit user invocation."* `ToolSearch(query: "Task agent
+dispatch subagent")` confirmed no other tool in this session's toolset can
+dispatch the `deep-reviewer` agent directly, and
+`check_claude_reviewer_binding.py` confirmed the binding itself (iEvo
+0.78.8) is structurally intact — the block is a capability gap in this
+specific dispatched-subagent execution context, not a broken install.
+
+**Root cause.** D-068's documented workflow in `docs/AGENT_TOOLING.md`
+implicitly assumes the session running it can invoke `/ievo:deep-review`
+(true for a top-level/interactive session) but does not account for a
+dispatched-subagent context where the `Skill` tool itself enforces
+`disable-model-invocation` and no generic subagent-dispatch tool is
+available to route around it.
+
+**What fixed it.** Consulted the advisor tool (per D-127, this was a
+genuine fork in judgment, not a clarifying question to the user). The
+advice, followed as-is: do not hand-roll the review checklist as
+self-review (defeats the independence D-068 exists for), do not substitute
+an unpinned marketplace reviewer, do not relay the blocked action to a
+peer session via `SendMessage` (same block, and a laundering pattern).
+Instead: land every other completion step (tests, coverage, docs, PR),
+open the PR non-draft with the outstanding D-068 gate stated at the top of
+its body, and stop — leaving `/ievo:deep-review` and the merge itself for
+a session that can actually dispatch it (a human, or a top-level
+orchestrator session). Per AGENTS.md's own documented fallback: "if it
+cannot bind a structurally intact install, report the local review as
+unavailable instead of silently weakening the gate" — extended here to a
+dispatch-capability gap rather than a binding gap, since the effect (an
+unautomatable gate) is the same.
+
+**Lesson.** A dispatched subagent implementing a D-068-gated task cannot
+complete the merge step itself when the only completion path requires
+`/ievo:deep-review`; plan for a human or a top-level session to run that
+step and merge, and say so explicitly in the PR body and the final report
+rather than silently skipping the gate or blocking indefinitely on it.
+Whether this capability gap belongs on the agent-tooling umbrella issue as
+a permanent tracked item (so `docs/AGENT_TOOLING.md` documents the
+subagent case explicitly) is left to whoever next touches that umbrella.
+
+---
+
+## 2026-08-24 — Implementing #763: a compacted summary's claim about saved file state was false, and the plan's "fixture cannot exist without narrowing" premise did not survive an empirical check
+
+**What happened.** Two separate false claims surfaced while implementing
+#763 (D-197, `Optional[int]`/`T | None`), each caught by re-verifying
+against the actual repository state rather than trusting a prior claim.
+
+First: a context-compaction summary from earlier in the same session
+asserted that a specific unit test
+(`constraint_collection_carries_none_literal_as_ty_none` in
+`crates/pycc_types/src/tests.rs`) had already been written and verified
+passing. Running `cargo fmt` directly on that file (itself a mistake — see
+below) and then reverting with `git checkout --` revealed the test had
+never actually been persisted to disk; the summary described work that
+was planned/described in conversation but never saved. Had this gone
+unnoticed, the PR would have shipped `collect_expr_constraints`'s new
+`HirExpr::NoneLiteral` arm (`crates/pycc_types/src/constraints.rs:325`)
+with no direct test, a silent coverage gap the 100%-line/region gate would
+likely have caught later at CI, but only after burning a full CI round
+tracking it down with much less context than catching it here.
+
+Second: the published plan for #763 stated that work item 5b (minimal
+`is None`/`is not None` narrowing) was required, in-PR work because "the
+[conformance] fixture cannot exist without" it — an `Optional[int]` has no
+printable representation of its own, so the fixture must narrow to read a
+payload. Taken at face value this would have added a whole new
+architectural seam (flow-sensitive type narrowing through `if`/`else`
+branches) to an already five-seam PR. Instead of implementing narrowing to
+satisfy the stated premise, the premise itself was tested: a five-rung
+manual ladder (`pycc build --debug`/`--release` against
+module-global/function-local `int | None` values, both operand orders,
+and a function returning `int | None` from both branches, every rung
+reading only `is`/`is not None` presence booleans, never an unwrapped
+payload) built, ran, and matched the local `python3.14` (3.14.6, close to
+but not the exact pinned 3.14.7) oracle byte-for-byte on every rung, in
+under ten minutes. The premise was false — narrowing was deferred to a
+follow-up issue (#769) instead of implemented, and D-197 records the
+empirical evidence in its "Alternatives" section rather than asserting the
+deferral on authority alone.
+
+**Root cause.** Both are instances of the same failure mode already named
+in the entry below this one (planning-phase, same issue): treating a
+claim — whether a compacted summary's description of prior work, or an
+issue plan's stated necessity for a work item — as settled fact instead of
+as a claim needing its own source-level or empirical check, specifically
+when re-verifying it is cheap relative to acting on it unchecked. A
+compacted summary is model-generated text describing what *should* have
+happened in the prior segment, not a transcript of verified tool results;
+a plan's "cannot exist without X" is asserted reasoning, not itself
+evidence.
+
+**What fixed it.** For the first: `git status --short <file>` before
+trusting a summary's claim about a specific file's contents, and
+`git diff`/direct `Read` of the actual file rather than re-deriving from
+memory. For the second: building and running the actual empirical case
+the premise depended on (five real `pycc build` + oracle-diff rounds)
+before spending implementation effort on the larger seam the premise
+was used to justify.
+
+**Lesson.** (1) Never trust a context-compaction summary's claims about
+what was *saved* to disk — re-verify with `git status`/`git diff`/`Read`
+before building further work on top of a file the summary says already
+contains something. A summary can accurately describe *intent* while
+being wrong about *persistence*. (2) When a plan states a work item is
+required because some *other* thing "cannot" happen without it, and the
+claimed impossibility is cheap to test directly (here: ten minutes of
+`pycc build` + oracle diffs), test it before implementing the larger,
+harder-to-decompose work item the claim is used to justify. A plan's own
+scoping decisions are hypotheses arrived at with less information than is
+available once the depended-on machinery actually exists and can be run.
+
+---
+
 ## 2026-08-24 — Planning #747 (PEP 604 unions) assumed representation-only was mergeable, then assumed `is`/`is not` already existed; both were false
 
 **What happened.** While running `issue-to-plan` for GitHub issue #747

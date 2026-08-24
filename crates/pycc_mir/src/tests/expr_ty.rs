@@ -161,4 +161,17 @@ fn mir_expr_ty_covers_every_variant() {
         .ty(),
         Ty::Int
     );
+    // `NoneLiteral`/`OptionalWrap` (D-197, #763, Part 1 of #747).
+    assert_eq!(MirExpr::NoneLiteral.ty(), Ty::None);
+    assert_eq!(
+        MirExpr::OptionalWrap(Box::new(MirExpr::IntLiteral(1)), Box::new(Ty::Int)).ty(),
+        Ty::Optional(Box::new(Ty::Int))
+    );
+    // `OptionalWrap`'s `.ty()` reports the wrapper's own declared `inner`,
+    // not the wrapped value's own static type -- exercised by wrapping a
+    // `NoneLiteral` (statically `Ty::None`) rather than an `IntLiteral`.
+    assert_eq!(
+        MirExpr::OptionalWrap(Box::new(MirExpr::NoneLiteral), Box::new(Ty::Int)).ty(),
+        Ty::Optional(Box::new(Ty::Int))
+    );
 }

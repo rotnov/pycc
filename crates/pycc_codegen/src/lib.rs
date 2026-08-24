@@ -21,7 +21,8 @@ use exception::{
 mod bigint_rc;
 use bigint_rc::{
     BigIntRefcount, emit_bigint_refcount_call, int_temporary_word, release_if_int_temporary,
-    release_int_slot_before_store, release_scalar_if_int_temporary, retain_if_int_duplicate,
+    release_int_slot_before_store, release_optional_int_slot_before_store,
+    release_scalar_if_int_temporary, retain_if_int_duplicate,
 };
 mod int_const;
 use int_const::{emit_int_constant, tag_smallint_const};
@@ -168,6 +169,28 @@ enum Scalar<'ctx> {
     /// including a bool-identity marker. A tuple still crosses no runtime
     /// boundary and needs no ingress validation call.
     Tuple(inkwell::values::StructValue<'ctx>),
+    /// `T | None` (PEP 604, D-197, #763, Part 1 of #747). An LLVM `struct`
+    /// held **by value** -- an SSA aggregate register, exactly like `Tuple`
+    /// immediately above and for the identical reason (D-115's reasoning,
+    /// extended): `{ inner, i8 }` (payload, present-flag), the explicit
+    /// present/absent tag `ty_to_basic_type`'s own `Ty::Optional` arm
+    /// documents (not a niche sentinel -- see that arm's doc comment for
+    /// why). Only `Optional[int]` is ever constructed by real,
+    /// type-checked source in this PR (`pycc_types`' `T0049` gate rejects
+    /// every other inner type pre-MIR-lowering, mirroring `list[int]`'s own
+    /// `T0034` gate), but this variant's own shape does not assume that --
+    /// matching `Tuple`'s own not-narrowed-to-what's-reachable-today
+    /// precedent immediately above.
+    ///
+    /// Every exhaustive `Scalar` match this variant did not already need to
+    /// answer for (`truthy`/`to_str`/`to_numeric_encoded_int`/`to_float`) is
+    /// a defensive, provably-unreachable-by-real-source panic, for the same
+    /// reason `Tuple`'s own arms in those functions are: `pycc_types`
+    /// accepts neither printing, truthiness-testing, nor arithmetic on an
+    /// `Optional`-typed value in this PR (only construction, `is`/`is not`,
+    /// and narrowed-and-then-unwrapped use, which produces a *different*,
+    /// non-`Optional` `Ty` once narrowed) -- see this PR's ADR.
+    Optional(inkwell::values::StructValue<'ctx>),
     /// A pointer to a heap-allocated `pycc_rt::PyInstanceObj` (D-154, Part 1
     /// of #375) -- like `List`/`Dict`/`Set`, opaque to this crate, which
     /// only ever stores it, passes it to a `pycc_rt_instance_*` call, or
@@ -330,6 +353,32 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
                 .collect();
             context.struct_type(&field_types, false).into()
         }
+        // `T | None` (PEP 604, D-197, #763, Part 1 of #747). Only
+        // `Optional[int]` reaches this arm from real, codegen-eligible
+        // source today (`pycc_types`' `T0049` gate rejects every other
+        // inner type before MIR-lowering, mirroring `list[int]`'s own
+        // `T0034` gate) -- but this representation function is deliberately
+        // element-type-agnostic here too, matching `Tuple`'s own recursive,
+        // not-narrowed-to-what's-reachable-today shape immediately above.
+        //
+        // Representation: `{ inner, i8 }` (payload, present-flag) -- an
+        // *explicit* present/absent tag, not a niche sentinel bit pattern.
+        // A sentinel scheme was the original hypothesis (see this PR's ADR),
+        // but `Ty::Int`'s own representation just above is a plain LLVM
+        // `i64` occupying its full 64-bit range (this crate's separate
+        // tagged smallint/bool-marker/bigint-pointer encoding in
+        // `bigint_rc.rs` is a *different* representation, used only for
+        // polymorphic container storage, not for a scalar `int`-typed local
+        // or parameter) -- there is no bit pattern of a plain `i64` that is
+        // guaranteed to never be a legitimate `int` value, so no sentinel is
+        // safe. An explicit flag is therefore correct where `Optional[int]`
+        // would otherwise be described as "niche-optimized."
+        pycc_mir::Ty::Optional(inner) => {
+            let payload_ty = ty_to_basic_type(context, (*inner).clone());
+            context
+                .struct_type(&[payload_ty, context.i8_type().into()], false)
+                .into()
+        }
         // Deviation from the task brief: the brief's own version of this
         // catch-all's message read "(only int/float/bool/str/list[int] do)"
         // -- but that parenthetical is inaccurate twice over. This function
@@ -375,6 +424,36 @@ fn default_value_for_type<'ctx>(
                 .collect();
             let struct_ty = context.struct_type(&field_types, false);
             struct_ty.const_zero().into()
+        }
+        // `Optional[_]` (D-197, #763): an absent (`present == 0`) `{ inner,
+        // i8 }` struct, matching every other container arm above for the
+        // `present`/tag field -- but field 0 (the payload) deliberately
+        // is NOT a raw zero word the way `struct_ty.const_zero()` would
+        // give it. This function's two call sites are not both the
+        // "never executed" case its neighbours are: the abstract-method
+        // `Return(None)` site truly never runs the returned value, but the
+        // *other* call site (this function's exceptional-exit default,
+        // `emit_function`'s own `if *return_ty == pycc_mir::Ty::None`
+        // sibling) IS reached by a real, executing `int | None`-returning
+        // function that raises mid-body -- the same invariant
+        // `coerce_scalar_to_type`'s own placeholder-building arm documents
+        // (an `Optional`'s payload field must always be a *valid*
+        // D-141-encoded int regardless of the present flag, because
+        // `truthy`'s branch-free AND reads it unconditionally) applies
+        // here too, so a raw `0` word would trip `classify_encoded_int`'s
+        // fail-closed panic the moment any caller's own branch-free code
+        // touches this exceptional return value's payload field before
+        // ever consulting the exception flag. `tag_smallint_const` encodes
+        // `0` the same way `to_encoded_int` would, exactly mirroring that
+        // other arm's fix.
+        pycc_mir::Ty::Optional(_) => {
+            let struct_ty = ty_to_basic_type(context, ty.clone()).into_struct_type();
+            struct_ty
+                .const_named_struct(&[
+                    tag_smallint_const(context, 0).into(),
+                    context.i8_type().const_zero().into(),
+                ])
+                .into()
         }
         // `Infer`, `Param`, and `None` never produce a real value at
         // runtime — `Infer` and `Param` are resolved away before MIR,
@@ -462,6 +541,17 @@ fn to_numeric_encoded_int<'ctx>(
         // type-checked source.
         Scalar::Instance(_) => {
             panic!("pycc_codegen: internal error: expected an int-or-bool operand, got instance")
+        }
+        // Defensive for the identical `numeric_result_type` reason as the
+        // arms above, extended to `Optional[int]` (D-197, #763, Part 1 of
+        // #747, extending D-107/D-124's reasoning): `as_numeric` maps no
+        // `Ty::Optional` to a numeric type either, so any arithmetic with
+        // an `Optional[int]` operand is already rejected as `T0021` before
+        // codegen runs -- unwrapping an `Optional[int]` to use its payload
+        // numerically requires narrowing (Part 2+ of #747), which produces
+        // a plain `Ty::Int` value, not this type.
+        Scalar::Optional(_) => {
+            panic!("pycc_codegen: internal error: expected an int-or-bool operand, got optional")
         }
     }
 }
@@ -640,7 +730,14 @@ fn scalar_to_slot_word<'ctx>(
         | Scalar::Dict(_)
         | Scalar::Set(_)
         | Scalar::Tuple(_)
-        | Scalar::Instance(_) => panic!(
+        | Scalar::Instance(_)
+        // D-197, #763, Part 1 of #747: an `Optional[int]`-typed instance
+        // attribute joins the same defensive arm as every other
+        // multi-word/aggregate `Scalar` above -- this raw-`i64`-word slot
+        // encoding has no room for the `{ i64, i8 }` struct's extra
+        // present/absent byte, and this PR ships no class-attribute use of
+        // `Optional[int]` for `slot_ty_from_init_rhs` to have exercised.
+        | Scalar::Optional(_) => panic!(
             "pycc_codegen: internal error: cannot store this value into an instance \
              attribute slot -- pycc_hir::class::slot_ty_from_init_rhs should have rejected \
              this before codegen"
@@ -962,9 +1059,21 @@ fn build_int_set_get<'ctx>(
         .into_int_value()
 }
 
-/// Applies the one representation-changing assignment conversion accepted by
-/// the v0.1 type system: standalone `i8` bool to D-141's identity-preserving
-/// int-compatible `i64`. All other assignable pairs already share a representation.
+/// Applies the representation-changing assignment conversions accepted by
+/// this type system: standalone `i8` bool to D-141's identity-preserving
+/// int-compatible `i64`, and (D-197, #763, Part 1 of #747) a bare
+/// `inner`-typed value or `None` widening into an `Optional[inner]` slot's
+/// `{ inner, i8 }` present/absent struct. All other assignable pairs already
+/// share a representation.
+///
+/// This is the *only* place `Optional[inner]`'s representation is built --
+/// driven entirely by the target slot's own declared type, not by anything
+/// MIR-lowering-time. That single-site design (rather than an `IntBoundary`-
+/// style MIR wrapper node) is deliberate: it uniformly covers both the
+/// first, `AnnAssign`-introduced binding (`x: int | None = 5`) and every
+/// later plain reassignment to the same name (`x = None`), which
+/// `pycc_mir::stmt::lower_stmt`'s `Assign` arm never wraps -- see that
+/// arm's own doc comment on why a wrapper node is unnecessary.
 fn coerce_scalar_to_type<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -974,6 +1083,97 @@ fn coerce_scalar_to_type<'ctx>(
     match (target_ty, scalar) {
         (pycc_mir::Ty::Int, Scalar::Bool(value)) => {
             Scalar::Int(to_encoded_int(context, builder, Scalar::Bool(value)))
+        }
+        // A `Scalar::Optional` arriving here is either a *real*
+        // `Optional[inner]` value (e.g. `w: int | None = y` where `y` is
+        // itself `Optional[int]`, read back out via `MirExpr::Name`'s own
+        // `Ty::Optional` arm), or `MirExpr::NoneLiteral`'s own `{ i8, i8 }`
+        // all-zero placeholder standing in for the bare `None` literal
+        // (`emit_expr_unchecked`'s `MirExpr::NoneLiteral` arm has no target
+        // `inner` type to build a real struct against). Distinguished by
+        // LLVM struct type, not by any Rust-level tag: an anonymous struct
+        // type is uniqued per-`Context` by its field types, so the real
+        // `{ i64, i8 }` (or whatever `inner` actually is) and the
+        // placeholder's fixed `{ i8, i8 }` compare unequal whenever they
+        // are not the exact same shape, and equal (and therefore pass
+        // through unchanged) whenever the source already has the target's
+        // exact representation.
+        (pycc_mir::Ty::Optional(inner), Scalar::Optional(v)) => {
+            let struct_ty =
+                ty_to_basic_type(context, pycc_mir::Ty::Optional(inner)).into_struct_type();
+            if v.get_type() == struct_ty {
+                Scalar::Optional(v)
+            } else {
+                // The placeholder's field 0 must still be a *valid*
+                // D-141-encoded int, not a raw zero word: `truthy`'s own
+                // `Scalar::Optional` arm unconditionally calls
+                // `pycc_rt_int_truthy` on field 0 and ANDs the result with
+                // the present flag rather than branching around it, so an
+                // absent-but-invalid payload would trip
+                // `classify_encoded_int`'s fail-closed panic even though
+                // the AND makes the payload's truth value irrelevant.
+                // `tag_smallint_const(context, 0)` encodes `0` the same
+                // way `to_encoded_int` would, so the placeholder is
+                // indistinguishable from a real (never-observed) `int` `0`.
+                let with_payload = builder
+                    .build_insert_value(
+                        struct_ty.get_undef(),
+                        tag_smallint_const(context, 0),
+                        0,
+                        "opt_none_payload",
+                    )
+                    .expect(
+                        "build_insert_value should not fail inserting field 0 of a fresh struct",
+                    )
+                    .into_struct_value();
+                let with_flag = builder
+                    .build_insert_value(
+                        with_payload,
+                        context.i8_type().const_zero(),
+                        1,
+                        "opt_none_flag",
+                    )
+                    .expect(
+                        "build_insert_value should not fail inserting field 1 of a fresh struct",
+                    )
+                    .into_struct_value();
+                Scalar::Optional(with_flag)
+            }
+        }
+        // A bare `inner`-typed (or `inner`-assignable, e.g. `bool` under
+        // `Optional[int]`) value widening into an `Optional[inner]` slot:
+        // recurse to apply any further representation change the payload
+        // itself needs (e.g. `bool -> int`, the arm above), then wrap the
+        // result as the struct's present (`i8 = 1`) payload field.
+        (pycc_mir::Ty::Optional(inner), bare) => {
+            let coerced = coerce_scalar_to_type(context, builder, bare, (*inner).clone());
+            let payload: inkwell::values::BasicValueEnum = match coerced {
+                Scalar::Int(v) => v.into(),
+                // `T0049` (`crates/pycc_hir/src/func.rs`) rejects every
+                // `Optional[T]` annotation for `T != int` before this value
+                // could ever be constructed, so a non-`Int` payload here
+                // means `pycc_types::check` accepted an assignment this
+                // gate should have rejected.
+                _ => panic!(
+                    "pycc_codegen: internal error: an Optional[int] assignment's payload did not evaluate to int -- pycc_types::check (T0049) should have rejected this before codegen"
+                ),
+            };
+            let struct_ty =
+                ty_to_basic_type(context, pycc_mir::Ty::Optional(inner)).into_struct_type();
+            let with_payload = builder
+                .build_insert_value(struct_ty.get_undef(), payload, 0, "opt_payload")
+                .expect("build_insert_value should not fail inserting field 0 of a fresh struct")
+                .into_struct_value();
+            let with_flag = builder
+                .build_insert_value(
+                    with_payload,
+                    context.i8_type().const_int(1, false),
+                    1,
+                    "opt_present",
+                )
+                .expect("build_insert_value should not fail inserting field 1 of a fresh struct")
+                .into_struct_value();
+            Scalar::Optional(with_flag)
         }
         (_, scalar) => scalar,
     }
@@ -1028,7 +1228,12 @@ fn range_operand_to_normalized_int<'ctx>(
         // D-154 (Part 1 of #375): a class instance joins this same
         // or-pattern for the identical reason `List`/`Dict`/`Set`/`Tuple`
         // already do -- no new instrumented region.
-        | Scalar::Instance(_) => {
+        | Scalar::Instance(_)
+        // D-197, #763, Part 1 of #747: `Optional[int]` joins this same
+        // or-pattern for the identical `numeric_result_type`/`as_numeric`
+        // reason -- `range()` operands are type-checked as plain numeric
+        // types before codegen, and an `Optional[int]` is never one.
+        | Scalar::Optional(_) => {
             panic!("pycc_codegen: internal error: range() {position} did not evaluate to int")
         }
     }
@@ -1088,6 +1293,12 @@ fn to_float<'ctx>(
         // instance (D-154, Part 1 of #375).
         Scalar::Instance(_) => {
             panic!("pycc_codegen: internal error: expected a numeric operand, got instance")
+        }
+        // Defensive for the identical `numeric_result_type` reason as the
+        // arms above, extended to `Optional[int]` (D-197, #763, Part 1 of
+        // #747).
+        Scalar::Optional(_) => {
+            panic!("pycc_codegen: internal error: expected a numeric operand, got optional")
         }
     }
 }
@@ -1233,6 +1444,21 @@ fn to_str<'ctx>(
                 "pycc_codegen: string conversion of a class instance without `__repr__` is not supported yet"
             )
         }
+        // A real, reachable feature gap, identical in kind to the `List`/
+        // `Dict`/`Set` arms above (D-197, #763, Part 1 of #747):
+        // `pycc_types` places no type restriction on `print`'s argument or
+        // an f-string interpolation, so `print(x)`/`f"{x}"` for an
+        // `Optional[int]` local type-checks today and lands here. This PR
+        // ships no `str(Optional[int])`/`Optional`-printing semantics (CPython's
+        // own `str(None)` is `"None"` and `str(5)` is `"5"`, which this
+        // representation *could* support, but doing so is out of this PR's
+        // scope -- see this PR's ADR), and there is no
+        // `pycc_rt_optional_int_to_str` to call -- so this panics honestly
+        // instead of reinterpreting the struct's first field as an `i64` or
+        // `PyStrObj` pointer.
+        Scalar::Optional(_) => {
+            panic!("pycc_codegen: string conversion of an Optional[int] value is not supported yet")
+        }
     };
     builder
         .build_call(rt_fn, &[arg], "to_str")
@@ -1338,6 +1564,66 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::IntBoundary(value) => {
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
             Scalar::Int(to_encoded_int(context, builder, scalar))
+        }
+        // The bare literal `None` (D-197, #763, Part 1 of #747), standing
+        // alone rather than already known to be flowing into a
+        // predeclared `Optional[inner]` slot -- that context-sensitive
+        // wrapping happens at the assignment site
+        // (`coerce_scalar_to_type`, driven by the target slot's own
+        // declared type), not here, so this arm has no target `inner` type
+        // to build a real `{ inner, i8 }` struct against. A minimal `{ i8,
+        // i8 }` all-zero placeholder is emitted instead: `pycc_types`
+        // accepts a bare `None` expression only as an `Optional[_]`
+        // initializer or an `is`/`is not` operand in this PR (never
+        // printed, compared for equality, or used arithmetically), and
+        // both of those consumers rebuild the correctly-typed struct
+        // themselves (`coerce_scalar_to_type` for assignment,
+        // `MirExpr::Compare`'s `Is`/`IsNot` codegen below reads the
+        // struct's `i8` flag field only, which is at the same offset
+        // regardless of the payload's own width) -- see this PR's ADR.
+        MirExpr::NoneLiteral => {
+            let placeholder_ty = context.struct_type(&[context.i8_type().into(); 2], false);
+            Scalar::Optional(placeholder_ty.const_zero())
+        }
+        // `OptionalWrap` (D-197, #763, Part 1 of #747) exists purely to fix
+        // `.ty()` for `collect_stmt_bindings`'s slot-type derivation (see
+        // its own doc comment in `pycc_mir`) -- the actual `{ inner, i8 }`
+        // struct-building work is `coerce_scalar_to_type`'s, called here
+        // with the wrapper's own declared `Ty::Optional(inner)` as the
+        // target so it applies uniformly whether the wrapped value is a
+        // bare `inner`-typed payload or `MirExpr::NoneLiteral`'s
+        // placeholder.
+        MirExpr::OptionalWrap(value, inner) => {
+            let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
+            // #770 review: `value`'s classification must be checked here,
+            // against the raw `Scalar` it just produced, *before*
+            // `coerce_scalar_to_type` below wraps it into a
+            // `Scalar::Optional` struct. `MirStmt::Assign`'s own
+            // `retain_if_int_duplicate` call runs on the *outer*
+            // `OptionalWrap` expression and its already-wrapped
+            // `Scalar::Optional` result, which can never retain anything
+            // (`retain_if_int_duplicate`'s `if let Scalar::Int(word) =
+            // scalar` guard never matches a struct) and
+            // `int_value_is_a_duplicate_reference` classifies
+            // `OptionalWrap` itself as owning for exactly that reason --
+            // by design, it never looks inside the wrapper. So a borrowed
+            // `int` payload (e.g. `x: int | None = n` for a heap-bigint
+            // `n`) reached this arm with no retain anywhere in the
+            // pipeline before this fix, letting `x` hold a second,
+            // unretained reference to `n`'s bigint: `n`'s later
+            // reassignment/death still fires `release_int_slot_before_store`
+            // unconditionally, freeing the object out from under `x`'s
+            // stored payload despite `x` still being live. Reusing the
+            // same classification here (rather than duplicating it) keeps
+            // both the direct-assignment and the `OptionalWrap` paths
+            // agreeing on which shapes are borrowed.
+            let scalar = retain_if_int_duplicate(context, builder, rt, value, scalar);
+            coerce_scalar_to_type(
+                context,
+                builder,
+                scalar,
+                pycc_mir::Ty::Optional(inner.clone()),
+            )
         }
         MirExpr::StringLiteral(s) => {
             Scalar::Str(emit_string_literal(context, builder, module, rt, s))
@@ -1592,6 +1878,28 @@ fn emit_expr_unchecked<'ctx>(
                         );
                     Scalar::Instance(loaded.into_pointer_value())
                 }
+                // NOT a pointer read, identical in kind to `Ty::Tuple(_)`
+                // above (D-197, #763, Part 1 of #747): an `Optional[int]`
+                // slot holds the `{ int, i8 }` struct itself, so this loads
+                // the whole aggregate back out as an SSA value. Every real
+                // read of an `Optional[int]` local -- `x is None`,
+                // `if x:`, passing `x` as an argument, `return x` -- lowers
+                // to exactly this `MirExpr::Name`, so without it every one
+                // of those would fall through to the catch-all below and
+                // panic on a real, type-checked program instead of reading
+                // the value.
+                Ty::Optional(_) => {
+                    let loaded = builder
+                        .build_load(
+                            ty_to_basic_type(context, ty.clone()).into_struct_type(),
+                            slot.ptr,
+                            "load",
+                        )
+                        .expect(
+                            "build_load should not fail for a slot this function itself allocated",
+                        );
+                    Scalar::Optional(loaded.into_struct_value())
+                }
                 other => {
                     panic!(
                         "pycc_codegen: reading a `{}`-typed local is not supported yet",
@@ -1796,11 +2104,104 @@ fn emit_expr_unchecked<'ctx>(
             let right_ty = right.ty();
             let l = emit_expr(context, builder, module, rt, user_functions, locals, left);
             let r = emit_expr(context, builder, module, rt, user_functions, locals, right);
+            // `is`/`is not` (D-197, #763, Part 1 of #747). HIR lowering
+            // (`crates/pycc_hir/src/expr.rs`'s `Expr::Compare` arm)
+            // guarantees one operand is syntactically `Expr::NoneLiteral`
+            // whenever `op` is `Is`/`IsNot`, and `pycc_types`' own
+            // `Is`/`IsNot` typing arm (`crates/pycc_types/src/expr.rs`)
+            // guarantees the *other* operand's type is `Ty::Optional(_)` or
+            // `Ty::None` -- never anything else. Handled as its own
+            // early-computed branch, before the float/str/numeric branches
+            // below (none of which know what to do with a struct-valued
+            // `Scalar::Optional`), by testing the *other* operand's
+            // present/absent flag directly rather than doing any real
+            // comparison: `None`/`Ty::None` is always absent (`is` is
+            // always `False`, `is not` always `True`, independent of the
+            // operand's own emitted value, so neither `l` nor `r` needs
+            // inspecting for that shape).
+            // Narrows `op`'s 8 `CmpOpKind` variants down to the 6 ordinary
+            // ordering comparators in exactly one place (D-197, #763, Part 1
+            // of #747): `Is`/`IsNot` are handled and returned right here,
+            // inline, so the three type-dispatched matches below (float/
+            // str/int) only ever see `OrderedCmpOp`'s 6 variants and need no
+            // `Is`/`IsNot` arm of their own at all. The project's own
+            // established convention (see `emit_string_literal`'s doc
+            // comment) is to eliminate a provably-dead branch structurally
+            // rather than leave an `unreachable!()` arm as a permanently
+            // uncovered region under this crate's 100%-region gate (D-014)
+            // -- the three-way duplication this replaces (one `unreachable!`
+            // per type-dispatched match) was exactly that anti-pattern.
+            enum OrderedCmpOp {
+                Eq,
+                NotEq,
+                Lt,
+                LtE,
+                Gt,
+                GtE,
+            }
+            let op = match op {
+                pycc_mir::CmpOpKind::Is | pycc_mir::CmpOpKind::IsNot => {
+                    let (other_scalar, other_ty) = if matches!(left.as_ref(), MirExpr::NoneLiteral)
+                    {
+                        (r, right_ty)
+                    } else {
+                        (l, left_ty)
+                    };
+                    // Dispatches on `other_scalar`'s own runtime variant,
+                    // not on `other_ty`, so there is no separate "statically
+                    // `Optional[_]` but did not evaluate to `Scalar::
+                    // Optional`" arm to keep alive: every `Ty::Optional`-
+                    // typed `MirExpr` this crate can emit -- `Name` (guarded
+                    // by its own `debug_assert_eq!` on `slot.ty`),
+                    // `OptionalWrap`, and `Call`'s `Ty::Optional` result
+                    // extraction -- always produces a matching `Scalar::
+                    // Optional`, so that combination is unreachable by
+                    // construction, not merely untested; matching on the
+                    // scalar directly removes the branch instead of leaving
+                    // it as a dead, permanently-uncoverable region.
+                    let present = match other_scalar {
+                        Scalar::Optional(v) => builder
+                            .build_extract_value(v, 1, "opt_present")
+                            .expect("build_extract_value should not fail reading field 1 of a 2-field struct")
+                            .into_int_value(),
+                        _ if other_ty == Ty::None => context.i8_type().const_zero(),
+                        _ => panic!(
+                            "pycc_codegen: internal error: an `is`/`is not` operand's non-`None` side must be `Optional[_]` -- pycc_types::check (T0021) should have rejected this before codegen"
+                        ),
+                    };
+                    let is_absent = builder
+                        .build_int_compare(
+                            IntPredicate::EQ,
+                            present,
+                            context.i8_type().const_zero(),
+                            "is_none",
+                        )
+                        .expect("build_int_compare should not fail comparing two i8 operands");
+                    let as_bool = if matches!(op, pycc_mir::CmpOpKind::Is) {
+                        is_absent
+                    } else {
+                        builder
+                            .build_not(is_absent, "is_not_none")
+                            .expect("build_not should not fail negating an i1 value")
+                    };
+                    return Scalar::Bool(
+                        builder
+                            .build_int_z_extend(as_bool, context.i8_type(), "bool_from_is")
+                            .expect("build_int_z_extend should not fail widening i1 to i8"),
+                    );
+                }
+                pycc_mir::CmpOpKind::Eq => OrderedCmpOp::Eq,
+                pycc_mir::CmpOpKind::NotEq => OrderedCmpOp::NotEq,
+                pycc_mir::CmpOpKind::Lt => OrderedCmpOp::Lt,
+                pycc_mir::CmpOpKind::LtE => OrderedCmpOp::LtE,
+                pycc_mir::CmpOpKind::Gt => OrderedCmpOp::Gt,
+                pycc_mir::CmpOpKind::GtE => OrderedCmpOp::GtE,
+            };
             let as_bool = if left_ty == Ty::Float || right_ty == Ty::Float {
                 let l = to_float(context, builder, rt, l);
                 let r = to_float(context, builder, rt, r);
                 let predicate = match op {
-                    pycc_mir::CmpOpKind::Eq => FloatPredicate::OEQ,
+                    OrderedCmpOp::Eq => FloatPredicate::OEQ,
                     // `UNE` ("unordered or not equal"), not `ONE` --
                     // CPython's `float('nan') != float('nan')` is `True`,
                     // and `NaN` involves an *unordered* comparison, not an
@@ -1809,11 +2210,11 @@ fn emit_expr_unchecked<'ctx>(
                     // `<`/`<=`/`>`/`>=`/`==` on `float` are all `False`
                     // whenever `NaN` is involved, which is exactly what the
                     // ordered forms give.
-                    pycc_mir::CmpOpKind::NotEq => FloatPredicate::UNE,
-                    pycc_mir::CmpOpKind::Lt => FloatPredicate::OLT,
-                    pycc_mir::CmpOpKind::LtE => FloatPredicate::OLE,
-                    pycc_mir::CmpOpKind::Gt => FloatPredicate::OGT,
-                    pycc_mir::CmpOpKind::GtE => FloatPredicate::OGE,
+                    OrderedCmpOp::NotEq => FloatPredicate::UNE,
+                    OrderedCmpOp::Lt => FloatPredicate::OLT,
+                    OrderedCmpOp::LtE => FloatPredicate::OLE,
+                    OrderedCmpOp::Gt => FloatPredicate::OGT,
+                    OrderedCmpOp::GtE => FloatPredicate::OGE,
                 };
                 let cond = builder
                     .build_float_compare(predicate, l, r, "fcmp")
@@ -1840,12 +2241,12 @@ fn emit_expr_unchecked<'ctx>(
                     .into_int_value();
                 let zero = context.i32_type().const_int(0, false);
                 let predicate = match op {
-                    pycc_mir::CmpOpKind::Eq => IntPredicate::EQ,
-                    pycc_mir::CmpOpKind::NotEq => IntPredicate::NE,
-                    pycc_mir::CmpOpKind::Lt => IntPredicate::SLT,
-                    pycc_mir::CmpOpKind::LtE => IntPredicate::SLE,
-                    pycc_mir::CmpOpKind::Gt => IntPredicate::SGT,
-                    pycc_mir::CmpOpKind::GtE => IntPredicate::SGE,
+                    OrderedCmpOp::Eq => IntPredicate::EQ,
+                    OrderedCmpOp::NotEq => IntPredicate::NE,
+                    OrderedCmpOp::Lt => IntPredicate::SLT,
+                    OrderedCmpOp::LtE => IntPredicate::SLE,
+                    OrderedCmpOp::Gt => IntPredicate::SGT,
+                    OrderedCmpOp::GtE => IntPredicate::SGE,
                 };
                 let cond = builder
                     .build_int_compare(predicate, ordering, zero, "str_cmp_pred")
@@ -1864,12 +2265,12 @@ fn emit_expr_unchecked<'ctx>(
                     .into_int_value();
                 let zero = context.i32_type().const_int(0, false);
                 let predicate = match op {
-                    pycc_mir::CmpOpKind::Eq => IntPredicate::EQ,
-                    pycc_mir::CmpOpKind::NotEq => IntPredicate::NE,
-                    pycc_mir::CmpOpKind::Lt => IntPredicate::SLT,
-                    pycc_mir::CmpOpKind::LtE => IntPredicate::SLE,
-                    pycc_mir::CmpOpKind::Gt => IntPredicate::SGT,
-                    pycc_mir::CmpOpKind::GtE => IntPredicate::SGE,
+                    OrderedCmpOp::Eq => IntPredicate::EQ,
+                    OrderedCmpOp::NotEq => IntPredicate::NE,
+                    OrderedCmpOp::Lt => IntPredicate::SLT,
+                    OrderedCmpOp::LtE => IntPredicate::SLE,
+                    OrderedCmpOp::Gt => IntPredicate::SGT,
+                    OrderedCmpOp::GtE => IntPredicate::SGE,
                 };
                 let cond = builder
                     .build_int_compare(predicate, ordering, zero, "cmp")
@@ -2096,6 +2497,25 @@ fn emit_expr_unchecked<'ctx>(
                         .try_as_basic_value()
                         .expect_basic("this function is declared to return an instance")
                         .into_pointer_value(),
+                ),
+                // `Optional[int]` (D-197, #763, Part 1 of #747): unlike
+                // `List`/`Dict`/`Set`/`Tuple` below, an `Optional`-returning
+                // function IS reachable from real, type-checked source --
+                // `pycc_hir::func::annotation_to_ty`'s own `T | None` arm
+                // accepts `-> int | None` as a return annotation, so a call
+                // to such a function (`y = g(x)`, or `g(x)` used directly
+                // as a narrowing condition's operand) must extract its
+                // struct-by-value result rather than falling through to the
+                // generic panic below. `ty_to_basic_type`'s own
+                // `Ty::Optional` arm already gave this function's LLVM
+                // signature the matching `{ inner, i8 }` struct return
+                // type, mirroring `Tuple`'s own by-value extraction one
+                // arm up in kind (D-115).
+                Ty::Optional(_) => Scalar::Optional(
+                    call_site
+                        .try_as_basic_value()
+                        .expect_basic("this function is declared to return Optional[int]")
+                        .into_struct_value(),
                 ),
                 // No dedicated arm for `List`/`Dict`/`Set`/`Tuple`: a
                 // container-typed call result gets the same treatment as
@@ -3084,6 +3504,14 @@ fn build_call_to_with_leading_args<'ctx>(
                 // might add) is an opaque pointer at the ABI level exactly
                 // like a `str`/`list[T]`/`dict[K, V]`/`set[T]` one.
                 Scalar::Instance(v) => v.into(),
+                // Pass-through by VALUE, identical in kind to `Tuple`'s arm
+                // above (D-197, #763, Part 1 of #747): an `Optional[int]`
+                // argument is an LLVM `{ i64, i8 }` struct at the ABI level
+                // -- `coerce_scalar_to_type` immediately above already
+                // built it against `param_ty`, so this arm needs no
+                // further conversion, only the same `Into` `BasicMetadataValueEnum`
+                // has for any `StructValue`.
+                Scalar::Optional(v) => v.into(),
             }
         })
         .collect();
@@ -3255,6 +3683,36 @@ fn truthy<'ctx>(
         // `False`. A plain constant `1` correctly implements that rule
         // rather than deferring it.
         Scalar::Instance(_) => context.i8_type().const_int(1, false),
+        // `Optional[int]` (D-197, #763, Part 1 of #747): unlike every
+        // container/instance arm above, this one is real rather than a
+        // deferred panic -- CPython's `bool(x)` for `x: int | None` is
+        // `False` for `None` and otherwise `bool(<the int>)` (so `0` is
+        // still falsy even when present), and both halves are directly
+        // readable from this representation: field 1 is the present/absent
+        // flag, and field 0 (when present) is the same D-141-encoded `int`
+        // `Scalar::Int`'s own arm above already knows how to test via
+        // `pycc_rt_int_truthy`. Combines both with a plain `i8` AND (both
+        // operands are always exactly `0`/`1`), rather than a branch, so
+        // this stays branch-free like every other arm here.
+        Scalar::Optional(v) => {
+            let present = builder
+                .build_extract_value(v, 1, "opt_present")
+                .expect("build_extract_value should not fail reading field 1 of a 2-field struct")
+                .into_int_value();
+            let payload = builder
+                .build_extract_value(v, 0, "opt_payload")
+                .expect("build_extract_value should not fail reading field 0 of a 2-field struct")
+                .into_int_value();
+            let payload_truthy = builder
+                .build_call(rt.int_truthy, &[payload.into()], "opt_payload_truthy")
+                .expect("build_call should not fail for a well-formed truthiness check")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_int_truthy returns a non-void i8")
+                .into_int_value();
+            builder
+                .build_and(present, payload_truthy, "opt_truthy")
+                .expect("build_and should not fail for two i8 operands")
+        }
     };
     builder
         .build_int_compare(
@@ -3326,6 +3784,20 @@ fn storage_slot_at_entry<'ctx>(
         builder
             .build_store(ptr, context.i64_type().const_zero())
             .expect("build_store should not fail immediately after this function's own alloca");
+    } else if matches!(&ty, pycc_mir::Ty::Optional(inner) if **inner == pycc_mir::Ty::Int) {
+        // #770 review: mirrors the `Ty::Int` zero-init immediately above,
+        // but with the same valid-payload placeholder
+        // `default_value_for_type`'s own `Ty::Optional(_)` arm builds
+        // (`{ tag_smallint_const(0), 0 }`, never a raw `{0, 0}` struct) --
+        // required so `release_optional_int_slot_before_store` can release
+        // this slot's payload unconditionally, including at the very first
+        // store, without ever reading uninitialized alloca memory or
+        // tripping `classify_encoded_int`'s fail-closed panic on a raw
+        // zero word.
+        let placeholder = default_value_for_type(context, ty.clone());
+        builder
+            .build_store(ptr, placeholder)
+            .expect("build_store should not fail immediately after this function's own alloca");
     }
     let initialized = if guard_reads {
         let initialized_ptr = builder
@@ -3379,6 +3851,15 @@ fn emit_assign<'ctx>(
         .expect("every assignment target must have a predeclared storage slot");
     if slot.ty == pycc_mir::Ty::Int {
         release_int_slot_before_store(context, builder, rt, &slot);
+    } else if matches!(&slot.ty, pycc_mir::Ty::Optional(inner) if **inner == pycc_mir::Ty::Int) {
+        // #770 review: the release-side half of the retain
+        // `MirExpr::OptionalWrap`'s codegen now performs on a borrowed
+        // `int` payload -- without this, that retain would be a permanent
+        // per-reassignment leak of the slot's previous payload instead of
+        // a balanced reference (D-197's only supported `Optional[T]`
+        // payload is `int`, so this is the only `Optional` shape that can
+        // ever hold a bigint word to release).
+        release_optional_int_slot_before_store(context, builder, rt, &slot);
     }
     let value = coerce_scalar_to_type(context, builder, value, slot.ty);
     let basic_value: inkwell::values::BasicValueEnum = match value {
@@ -3429,6 +3910,14 @@ fn emit_assign<'ctx>(
         // it -- `pycc_rt::instance` is leak-only, mirroring `List`/`Dict`/
         // `Set` (see that module's own doc comment).
         Scalar::Instance(v) => v.into(),
+        // Pass-through by VALUE, identical in kind to `Tuple`'s arm above
+        // (D-197, #763, Part 1 of #747): `coerce_scalar_to_type` above
+        // already built the correctly-typed `{ int, i8 }` struct against
+        // `slot.ty`, so this arm needs only the store, exactly like
+        // `Tuple`'s own struct-by-value store above -- no refcount traffic
+        // accompanies it either, for the identical D-182-acknowledged
+        // reason `Tuple`'s own comment already gives.
+        Scalar::Optional(v) => v.into(),
     };
     builder
         .build_store(slot.ptr, basic_value)
@@ -3772,6 +4261,16 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                     // own predeclared storage slot exactly like every other
                     // heap-object-typed binding above.
                     | pycc_mir::Ty::Instance(_)
+                    // `Optional[int]` (D-197, #763, Part 1 of #747): an
+                    // `x: int | None = ...` binding is exactly the case
+                    // `OptionalWrap`'s own doc comment describes -- its
+                    // lowered `value.ty()` now correctly reports
+                    // `Ty::Optional(_)` rather than the bare inner type,
+                    // so this allow-list must recognize it or the slot
+                    // this function exists to predeclare is silently
+                    // skipped, surfacing here as a missing-slot panic
+                    // rather than at the type-checking boundary.
+                    | pycc_mir::Ty::Optional(_)
             ) {
                 bindings.entry(target.clone()).or_insert(ty);
             }
@@ -4163,6 +4662,39 @@ fn declare_module_globals<'ctx>(
                         .const_null()
                         .into(),
                 ),
+                // `int | None` (D-197, #763, Part 1 of #747): stored inline
+                // like `Tuple`'s own struct arm immediately above, not as a
+                // nullable pointer -- an `Optional[inner]` value is an LLVM
+                // aggregate, exactly like a tuple, not a heap object. `x:
+                // int | None = 5` at module scope is exactly the shape this
+                // PR's own conformance fixture uses, so omitting this arm
+                // would turn that supported form into an internal compiler
+                // panic, the same reasoning `Tuple`'s own arm gives.
+                //
+                // Unlike `Tuple`'s plain `const_zero()`, the initializer's
+                // payload field is built as a valid D-141-encoded smallint
+                // `0` (`tag_smallint_const`), not a raw zero word -- for the
+                // identical branch-free-masked-read reason
+                // `default_value_for_type`'s own `Ty::Optional` arm and
+                // `coerce_scalar_to_type`'s placeholder-normalization arm
+                // are: `truthy`'s `Scalar::Optional` arm ANDs the payload's
+                // truthiness with the present flag unconditionally rather
+                // than branching around it, and a global read before its
+                // first real assignment (guarded only by the separate
+                // `initialized` flag below, not by never reaching this
+                // value at all) must not hand that AND a raw zero word that
+                // trips `classify_encoded_int`'s fail-closed panic. The
+                // present flag itself is `0` either way, matching every
+                // "unassigned" global's own zero-flag/null-pointer pattern
+                // above.
+                pycc_mir::Ty::Optional(_) => {
+                    let struct_ty = ty_to_basic_type(context, ty.clone()).into_struct_type();
+                    let zeroed = struct_ty.const_named_struct(&[
+                        tag_smallint_const(context, 0).into(),
+                        context.i8_type().const_zero().into(),
+                    ]);
+                    (struct_ty.into(), zeroed.into())
+                }
                 other => panic!(
                     "pycc_codegen: a `{}`-typed module binding is not supported yet",
                     other.name()
@@ -5602,6 +6134,14 @@ fn emit_stmt<'ctx>(
                         // type it gives a `str`/`list[T]`/`dict[K, V]`/
                         // `set[T]`-returning one.
                         Scalar::Instance(v) => v.into(),
+                        // Pass-through by VALUE, identical in kind to
+                        // `Tuple`'s arm above (D-197, #763, Part 1 of
+                        // #747): `coerce_scalar_to_type` above already
+                        // built the correctly-typed struct against
+                        // `expected_return_ty`, and `ty_to_basic_type`
+                        // already gave the function's LLVM signature that
+                        // same struct return type.
+                        Scalar::Optional(v) => v.into(),
                     };
                     if let Some(ft) = finally_target {
                         // Route through finally: store the return value,

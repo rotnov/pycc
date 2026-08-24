@@ -652,6 +652,52 @@ class Car(Vehicle):
 ",
     },
     DiagnosticExplanation {
+        code: "T0048",
+        severity: Severity::Error,
+        summary: "general union type annotation is not supported yet (PEP 604)",
+        explanation: "\
+T0048 fires when a `X | Y` annotation (PEP 604, D-197, issue #763, Part 1 of \
+#747) does not match the one shape this compiler version accepts: exactly \
+two operands where one side is literally `None` (`T | None` or \
+`None | T`). Any other shape is rejected here -- a 2-operand union where \
+neither side is `None` (`int | str`), or a longer chain (`A | B | None`). \
+This is a versioned capability gap, not a rejected-by-design language rule: \
+CPython accepts every one of these shapes at runtime. A recognized \
+`T | None` shape whose inner type `T` this compiler does not yet support is \
+`T0049` instead, a distinct, narrower gap.",
+        example: "\
+def f(x: int | str) -> None:  # T0048 -- neither side is None
+    pass
+
+def g(x: int | float | None) -> None:  # T0048 -- 3-operand chain
+    pass
+
+def h(x: int | None) -> None:  # OK -- T | None
+    pass
+",
+    },
+    DiagnosticExplanation {
+        code: "T0049",
+        severity: Severity::Error,
+        summary: "`Optional[T]` is not supported yet for this `T` (PEP 604)",
+        explanation: "\
+T0049 fires when a `T | None` annotation matches the recognized 2-operand \
+`Optional` shape (see `T0048`) but its inner type `T` is not `int` (D-197, \
+issue #763, Part 1 of #747). This compiler version's `Optional`/`T | None` \
+codegen -- the `{ inner: i64, present: i8 }` runtime representation -- is \
+exercised and tested only for `Optional[int]`, mirroring the same v0.2 \
+scope cut `list[int]`-only (`T0034`) and `dict[str, int]`-only (`T0036`) \
+already make. This is a versioned capability gap: a future compiler version \
+extends `Optional`/`T | None` to more inner types.",
+        example: "\
+def f(x: str | None) -> None:  # T0049 -- only Optional[int] is supported
+    pass
+
+def g(x: int | None) -> None:  # OK -- Optional[int]
+    pass
+",
+    },
+    DiagnosticExplanation {
         code: "O0201",
         severity: Severity::Error,
         summary: "value used after move across scope boundary",

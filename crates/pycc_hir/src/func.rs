@@ -16,7 +16,7 @@
 
 use crate::class::ClassAnnotationInfo;
 use crate::{HirItem, Ty, stmt, unsupported};
-use pycc_ast::Expr;
+use pycc_ast::{Expr, Operator};
 use pycc_diag::{Diagnostic, Span};
 
 pub(crate) fn lower_function(
@@ -447,6 +447,54 @@ pub(crate) fn annotation_to_ty(
                     )
                 }
             }
+        }
+        // `T | None` / `None | T` (PEP 604, D-197, #763, Part 1 of #747):
+        // accept exactly the 2-operand shape where one side is
+        // `Expr::NoneLiteral`, recursing into the other side so
+        // `list[int] | None`, `SomeClass | None`, and `T | None` (a generic
+        // param) all parse for free through their own existing arms above.
+        // A 2-operand union where *neither* side is `None` (`int | str`), or
+        // any chain (`ops.len() != 1`, e.g. `A | B | None`), is a general
+        // union: explicitly out of scope for this PR (Part 2+), rejected
+        // with `T0048` rather than silently misparsed or falling through to
+        // the generic catch-all below.
+        Expr::BinOp(bin_op) if bin_op.op == Operator::BitOr => {
+            let other_side = match (bin_op.left.as_ref(), bin_op.right.as_ref()) {
+                (Expr::NoneLiteral(_), other) => other,
+                (other, Expr::NoneLiteral(_)) => other,
+                _ => {
+                    let range = std::ops::Range::<u32>::from(bin_op.range);
+                    return Err(Diagnostic::error(
+                        "T0048",
+                        "general union annotations (`X | Y` where neither side is `None`) are not supported yet -- only `T | None` (PEP 604 Optional) is",
+                        Span::new(range.start, range.end),
+                    ));
+                }
+            };
+            let inner = annotation_to_ty(other_side, type_param, class_name, aliases, class_defs)?;
+            // `Optional[T]` is only supported for `T == int` in this PR
+            // (D-197, #763, Part 1 of #747): codegen's `{ inner, i8 }`
+            // representation (`crates/pycc_codegen/src/lib.rs`'s
+            // `ty_to_basic_type`) and every downstream `Scalar`/emit site
+            // are exercised and tested for `Optional[int]` only, mirroring
+            // `list[int]`'s own `T0034` scope cut (D-105/D-122). Gated here,
+            // pre-lowering, at the one place a `Ty::Optional` is ever
+            // constructed from source, so nothing else in the pipeline
+            // needs to re-derive this check: a `Ty::Optional` reaching
+            // `pycc_types`/`pycc_mir`/`pycc_codegen` is *always* wrapping
+            // `Ty::Int` starting from this return.
+            if inner != Ty::Int {
+                let range = std::ops::Range::<u32>::from(bin_op.range);
+                return Err(Diagnostic::error(
+                    "T0049",
+                    format!(
+                        "`Optional[{}]` is not supported yet -- only `Optional[int]` (`int | None`) is",
+                        inner.name()
+                    ),
+                    Span::new(range.start, range.end),
+                ));
+            }
+            Ok(Ty::Optional(Box::new(inner)))
         }
         other => Err(unsupported(
             format!("only a bare name type annotation is supported so far: {other:?}"),

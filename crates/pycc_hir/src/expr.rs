@@ -551,6 +551,7 @@ pub(crate) fn lower_expr(
         }
         Expr::BooleanLiteral(lit) => HirExpr::BoolLiteral(lit.value),
         Expr::StringLiteral(lit) => HirExpr::StringLiteral(lit.value.to_str().to_string()),
+        Expr::NoneLiteral(_) => HirExpr::NoneLiteral,
         Expr::FString(fstring) => {
             let parts = fstring
                 .value
@@ -602,6 +603,23 @@ pub(crate) fn lower_expr(
                     cmp.range,
                 ));
             }
+            // `is`/`is not` (D-197, #763, Part 1 of #747): this compiler's
+            // first support of any kind for either operator, deliberately
+            // scoped at this syntactic gate to exactly the case #763 needs
+            // -- one operand is literally `Expr::NoneLiteral`. Every other
+            // `is`/`is not` use (`x is y` for two arbitrary non-`None`
+            // operands, or `x is None` where the check below finds neither
+            // side is `NoneLiteral` -- unreachable today since `None` is
+            // the only way to spell that side, kept as a real check rather
+            // than an `assert!` so a future second `None`-shaped literal
+            // does not silently widen acceptance) keeps falling through to
+            // the pre-existing `other =>` rejection below unchanged. The
+            // *type* of the non-`None` operand (must be `Ty::Optional(_)`
+            // or `Ty::None`) is `pycc_types`' job, not this lowering step's
+            // -- HIR only records the syntactic shape, matching every other
+            // shape-vs-type division of labor in this module (D-105).
+            let is_none_operand_shape = matches!(cmp.left.as_ref(), Expr::NoneLiteral(_))
+                || matches!(cmp.comparators[0], Expr::NoneLiteral(_));
             let op = match cmp.ops[0] {
                 CmpOp::Eq => CmpOpKind::Eq,
                 CmpOp::NotEq => CmpOpKind::NotEq,
@@ -609,6 +627,8 @@ pub(crate) fn lower_expr(
                 CmpOp::LtE => CmpOpKind::LtE,
                 CmpOp::Gt => CmpOpKind::Gt,
                 CmpOp::GtE => CmpOpKind::GtE,
+                CmpOp::Is if is_none_operand_shape => CmpOpKind::Is,
+                CmpOp::IsNot if is_none_operand_shape => CmpOpKind::IsNot,
                 other => {
                     return Err(unsupported(
                         format!("comparison operator not supported yet: {other:?}"),
@@ -731,7 +751,8 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         HirExpr::IntLiteral(_)
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
-        | HirExpr::StringLiteral(_) => expr,
+        | HirExpr::StringLiteral(_)
+        | HirExpr::NoneLiteral => expr,
         // `callee` (a bare `String`, never an `HirExpr::Name`) is
         // deliberately left untouched even if it equals `from`: this HIR
         // subset has no first-class functions, so `callee` always names a

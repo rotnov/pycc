@@ -721,6 +721,7 @@ pub(crate) fn rewrite_generic_calls_in_expr(
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
+        | HirExpr::NoneLiteral
         | HirExpr::Name(_)
         | HirExpr::ListPop { .. }
         | HirExpr::Super => infer_expr_in(env, local_names, expr),
@@ -1128,6 +1129,7 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
+        | HirExpr::NoneLiteral
         | HirExpr::Name(_)
         | HirExpr::ListPop { .. }
         | HirExpr::Super => {}

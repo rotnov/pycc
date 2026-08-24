@@ -435,7 +435,7 @@ fn lookup_bound_name(
 fn ty_contains_param(ty: &Ty) -> bool {
     match ty {
         Ty::Param(_) => true,
-        Ty::List(inner) | Ty::Set(inner) => ty_contains_param(inner),
+        Ty::List(inner) | Ty::Set(inner) | Ty::Optional(inner) => ty_contains_param(inner),
         Ty::Dict(kv) => ty_contains_param(&kv.0) || ty_contains_param(&kv.1),
         Ty::Tuple(elems) => elems.iter().any(ty_contains_param),
         // D-154: an instance's payload is only its class's name, never a
@@ -713,6 +713,21 @@ fn is_assignable(from: Ty, to: Ty) -> bool {
     // function-owned one.
     || matches!(to, Ty::Param(_)) && matches!(from, Ty::Int | Ty::Float | Ty::Bool | Ty::Str)
     || matches!(from, Ty::Param(_)) && matches!(to, Ty::Int | Ty::Float | Ty::Bool | Ty::Str)
+    // `T | None` (PEP 604, D-197, #763, Part 1 of #747): both a bare `inner`
+    // value and a bare `None` widen to `Ty::Optional(inner)` -- matching
+    // D-086's "no implicit widening OR narrowing" stance means this is the
+    // *only* direction: `Ty::Optional(inner)` is deliberately NOT assignable
+    // back to a bare `inner` here. No flow-sensitive narrowing exists yet
+    // anywhere in this crate (`is None`/`is not None` only ever produces a
+    // `Ty::Bool` presence result, see `expr.rs`'s `Compare` arm) -- an
+    // `Optional[int]` stays `Optional[int]` on every path, including inside
+    // an `if x is not None:` branch. Narrowing is tracked as Part 2 follow-up
+    // work (issue #747), deliberately deferred out of this PR: the
+    // `Optional[int]` representation and `is`/`is not` presence test are
+    // independently useful and verifiable (see the conformance fixture at
+    // `tests/fixtures/pep_0604_union.py`, which reads the presence result
+    // directly rather than an unwrapped payload) without it.
+    || matches!(&to, Ty::Optional(inner) if from == Ty::None || is_assignable(from.clone(), (**inner).clone()))
 }
 
 fn numeric_or_bool_compatible(a: Ty, b: Ty) -> bool {
@@ -2437,7 +2452,9 @@ fn scan_signature_ty_for_param(
             }
             Ok(())
         }
-        Ty::List(elem) | Ty::Set(elem) => scan_signature_ty_for_param(elem, false, found),
+        Ty::List(elem) | Ty::Set(elem) | Ty::Optional(elem) => {
+            scan_signature_ty_for_param(elem, false, found)
+        }
         Ty::Dict(kv) => {
             scan_signature_ty_for_param(&kv.0, false, found)?;
             scan_signature_ty_for_param(&kv.1, false, found)
@@ -2779,6 +2796,7 @@ fn reject_generic_calls_in_expr(
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
+        | HirExpr::NoneLiteral
         | HirExpr::Name(_)
         | HirExpr::ListPop { .. }
         | HirExpr::Super => Ok(()),

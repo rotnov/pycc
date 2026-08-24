@@ -35,6 +35,7 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         | MirExpr::BoolLiteral(_)
         | MirExpr::IntBoundary(_)
         | MirExpr::StringLiteral(_)
+        | MirExpr::NoneLiteral
         | MirExpr::Name { .. }
         | MirExpr::Compare { .. }
         | MirExpr::FString(_)
@@ -48,7 +49,16 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         | MirExpr::DictGetOrDefault { .. }
         | MirExpr::SetAdd { .. }
         | MirExpr::AttrGet { .. }
-        | MirExpr::NullInstance { .. } => false,
+        | MirExpr::NullInstance { .. }
+        // `OptionalWrap` (D-197, #763) only re-tags a value that has
+        // already been evaluated for `.ty()`'s benefit; like
+        // `IntBoundary` immediately above, the struct-building work in
+        // `coerce_scalar_to_type` it drives is infallible, so it cannot
+        // itself set D-173's pending-exception state. The wrapped
+        // sub-expression is not re-inspected here, mirroring every other
+        // arm in this match, which classifies only the node's own
+        // operation and relies on child expressions to guard themselves.
+        | MirExpr::OptionalWrap(_, _) => false,
     }
 }
 
