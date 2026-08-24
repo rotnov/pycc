@@ -10495,8 +10495,8 @@ fn set_add_grows_the_set_and_a_repeated_value_still_dedups_codegens_and_runs() {
 // work touches lives in its own submodule (`tests_support.rs`) rather than
 // growing this file further. Re-exported under its original name so every
 // existing call site -- the ~260 unqualified `tempfile_dir(...)` calls
-// below, and `bigint_rc.rs`'s own `use crate::tests::tempfile_dir;` -- keeps
-// resolving unchanged.
+// throughout this file, and `bigint_rc.rs`'s own
+// `use crate::tests::tempfile_dir;` -- keeps resolving unchanged.
 #[path = "tests_support.rs"]
 mod support;
 pub(crate) use support::tempfile_dir;

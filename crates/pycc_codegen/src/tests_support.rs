@@ -60,17 +60,21 @@ mod tests {
 
     #[test]
     fn the_directory_is_removed_even_when_a_panic_unwinds_through_the_handle() {
-        let path = {
-            let dir = tempfile_dir("support_panic_unwind");
-            let path = dir.to_path_buf();
-            assert!(path.is_dir(), "tempfile_dir must create the directory");
-            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                let _keep_dir_alive = &dir;
-                panic!("simulated test failure while the scratch directory is still live");
-            }));
-            assert!(result.is_err(), "the inner closure must have panicked");
-            path
-        };
+        let dir = tempfile_dir("support_panic_unwind");
+        let path = dir.to_path_buf();
+        assert!(path.is_dir(), "tempfile_dir must create the directory");
+        // `dir` is moved into the closure by value (not merely referenced),
+        // so its `Drop` genuinely runs while the panic is unwinding through
+        // this stack frame -- proving cleanup happens on the unwind path
+        // itself, not just via ordinary end-of-scope drop after
+        // `catch_unwind` returns. A regression such as a `Drop` impl gated
+        // on `!thread::panicking()` would leave the directory behind and
+        // fail the assertion below.
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(move || {
+            let _dir = dir;
+            panic!("simulated test failure while the scratch directory is still live");
+        }));
+        assert!(result.is_err(), "the inner closure must have panicked");
         assert!(
             !path.exists(),
             "Drop must remove the scratch directory even when unwinding through a panic"
