@@ -364,6 +364,12 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         | MirExpr::SetAdd { .. }
         | MirExpr::Instantiate(_)
         | MirExpr::NullInstance { .. }
+        // `ExceptionMessage`'s own `.ty()` is always `Ty::Str` (Part 3A of
+        // #541, #736), never `Ty::Int`, so like `OptionalWrap` immediately
+        // below it can never reach this function as the `Ty::Int`-classified
+        // expression `int_temporary_word` passes in; it joins the combined
+        // "owning" answer for the same reason.
+        | MirExpr::ExceptionMessage(_)
         // `OptionalWrap`'s own `.ty()` is always `Ty::Optional(_)`, never
         // `Ty::Int` (D-197, #763), so like every other non-`Ty::Int`
         // variant grouped in this arm it can never reach this function as

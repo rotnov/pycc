@@ -582,3 +582,133 @@ fn calling_an_untagged_class_is_not_an_exception_construction() {
     );
     assert!(matches!(value, MirExceptionValue::Existing(_)));
 }
+
+// -- Part 3A of #541 (#736): render a caught exception binding ----------
+
+#[test]
+fn print_of_a_caught_exception_binding_lowers_to_exception_message() {
+    let hir = try_module(
+        Vec::new(),
+        vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: Some("e".to_string()),
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Name("e".to_string())],
+            })],
+        }],
+        Vec::new(),
+        Vec::new(),
+    );
+    let mir = build(&hir);
+    let (_, handlers, _, _) = expect_top_level_try(&mir.items[0]);
+    assert_eq!(handlers.len(), 1);
+    assert_eq!(handlers[0].body.len(), 1);
+    // `print`'s argument should be rewritten from a bare `Name` read of
+    // `e` to `MirExpr::ExceptionMessage(Name(e))`, matching
+    // `rewrite_instance_to_repr`'s own dataclass `print` rewrite tests.
+    assert!(matches!(
+        &handlers[0].body[0],
+        MirStmt::ExprStmt(MirExpr::Call { callee, args, .. })
+            if callee == "print"
+                && args.len() == 1
+                && matches!(
+                    &args[0],
+                    MirExpr::ExceptionMessage(inner)
+                        if matches!(inner.as_ref(), MirExpr::Name { name, .. } if name == "e")
+                )
+    ));
+}
+
+#[test]
+fn fstring_interpolation_of_a_caught_exception_binding_lowers_to_exception_message() {
+    let hir = try_module(
+        Vec::new(),
+        vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: Some("e".to_string()),
+            body: vec![HirStmt::Assign {
+                target: "s".to_string(),
+                value: HirExpr::FString(vec![pycc_hir::FStringPart::Interpolation(Box::new(
+                    HirExpr::Name("e".to_string()),
+                ))]),
+            }],
+        }],
+        Vec::new(),
+        Vec::new(),
+    );
+    let mir = build(&hir);
+    let (_, handlers, _, _) = expect_top_level_try(&mir.items[0]);
+    assert_eq!(handlers.len(), 1);
+    assert!(matches!(
+        &handlers[0].body[0],
+        MirStmt::Assign {
+            value: MirExpr::FString(parts),
+            ..
+        } if parts.len() == 1
+            && matches!(
+                &parts[0],
+                MirFStringPart::Interpolation(inner)
+                    if matches!(inner.as_ref(), MirExpr::ExceptionMessage(_))
+            )
+    ));
+}
+
+#[test]
+fn print_of_a_non_exception_class_instance_is_not_rewritten_to_exception_message() {
+    // `rewrite_exception_to_message` must be a no-op for an ordinary,
+    // non-exception class instance -- covers the `exception_type_tag`
+    // `None` branch for a *registered* but non-exception class (distinct
+    // from an unregistered class name, already covered by
+    // `print_of_an_instance_with_an_unregistered_class_passes_through` in
+    // `class_dunder.rs`).
+    let point_ty = Ty::Instance(Box::new("Point".to_string()));
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "test".to_string(),
+            params: vec![("p".to_string(), point_ty.clone())],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Name("p".to_string())],
+            })],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: vec![(
+            "Point".to_string(),
+            pycc_hir::HirClassDef {
+                exception_type_tag: None,
+                name: "Point".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Point".to_string()],
+                attrs: Vec::new(),
+                methods: Vec::new(),
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        )],
+    };
+    let mir = build(&hir);
+    assert!(matches!(
+        &mir.items[0],
+        MirItem::Function { body, .. }
+            if body.len() == 1
+                && matches!(
+                    &body[0],
+                    MirStmt::ExprStmt(MirExpr::Call { args, .. })
+                        if args.len() == 1 && args[0].ty() == point_ty
+                )
+    ));
+}

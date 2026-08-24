@@ -55,8 +55,8 @@ pub use exception::{
     EXCEPTION_TYPE_EXCEPTION, EXCEPTION_TYPE_INDEX_ERROR, EXCEPTION_TYPE_KEY_ERROR,
     EXCEPTION_TYPE_RUNTIME_ERROR, EXCEPTION_TYPE_TYPE_ERROR, EXCEPTION_TYPE_VALUE_ERROR,
     EXCEPTION_TYPE_ZERO_DIV_ERROR, PyExceptionObj, pycc_rt_exception_active,
-    pycc_rt_exception_alloc, pycc_rt_exception_clear, pycc_rt_exception_raise,
-    pycc_rt_exception_raise_with_cause, pycc_rt_exception_type_matches,
+    pycc_rt_exception_alloc, pycc_rt_exception_clear, pycc_rt_exception_message,
+    pycc_rt_exception_raise, pycc_rt_exception_raise_with_cause, pycc_rt_exception_type_matches,
 };
 // D-061/D-141's one-word `int` encoding and its heap bigint representation.
 // Glob-imported so the operations below -- and their `#[cfg(test)]` tests,

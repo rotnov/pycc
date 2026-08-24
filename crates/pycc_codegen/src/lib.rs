@@ -26,6 +26,8 @@ use bigint_rc::{
 };
 mod int_const;
 use int_const::{emit_int_constant, tag_smallint_const};
+mod exception_render;
+use exception_render::emit_exception_message;
 mod rt_fns;
 use rt_fns::{RtFns, declare_rt_functions};
 #[cfg(test)]
@@ -3255,6 +3257,14 @@ fn emit_expr_unchecked<'ctx>(
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
             let null_ptr = ptr_type.const_null();
             Scalar::Instance(null_ptr)
+        }
+        // Part 3A of #541 (#736): `pycc_mir::class::rewrite_exception_to_message`
+        // is this node's sole constructor, applied only to an exception-typed
+        // expression -- `base` therefore always evaluates to a
+        // `Scalar::Instance` pointer to a live `PyExceptionObj`.
+        MirExpr::ExceptionMessage(base) => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            emit_exception_message(builder, rt, base_scalar)
         }
     }
 }

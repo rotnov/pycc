@@ -4,7 +4,7 @@
 
 use super::class::{
     class_def_of, lower_isinstance, lower_issubclass, mro_attr_count, mro_attrs,
-    rewrite_instance_to_repr, self_expr,
+    rewrite_exception_to_message, rewrite_instance_to_repr, self_expr,
 };
 use super::{
     HirClassDef, InstantiateExpr, MirExpr, MirFStringPart, binop_result_ty, lookup, mro_class_def,
@@ -72,6 +72,15 @@ pub(super) fn lower_expr(
                     // the `FString` arm); other calls pass instance
                     // arguments directly as opaque pointers.
                     if callee == "print" {
+                        // Part 3A of #541 (#736): try the exception-message
+                        // rewrite before the dataclass `__repr__` one, so a
+                        // caught exception binding is rendered as its
+                        // message rather than falling through to
+                        // `rewrite_instance_to_repr` (a no-op for it anyway,
+                        // since an exception class is never a dataclass, but
+                        // ordering this rewrite first keeps the exception
+                        // path independent of that fact).
+                        let lowered = rewrite_exception_to_message(&lowered, classes);
                         rewrite_instance_to_repr(&lowered, classes)
                     } else {
                         lowered
@@ -307,6 +316,10 @@ pub(super) fn lower_expr(
                         // `str` scalar, not an Instance scalar (which would
                         // panic). This mirrors how `==`/`!=` on instances is
                         // rewritten to `__eq__` calls in the Compare arm.
+                        // Part 3A of #541 (#736): try the exception-message
+                        // rewrite first -- see the identical `print`-argument
+                        // ordering comment above for why.
+                        let lowered = rewrite_exception_to_message(&lowered, classes);
                         let rewritten = rewrite_instance_to_repr(&lowered, classes);
                         MirFStringPart::Interpolation(Box::new(rewritten))
                     }
