@@ -1309,11 +1309,11 @@ fn pep_0701_fstring_grammar_matches_cpython_3_14_7_byte_for_byte() {
 // `OSError` child, a `ConnectionError` grandchild caught via `ConnectionError`
 // and via the `OSError` root, a sibling handler that does not catch an
 // unrelated family member), handler ordering across several `except` clauses
-// on one `try`, and `finally` running on the exceptional path. Left off the
-// matrix's row (docs/PYTHON_STANDARDS.md line 202, still `☐`) until a green
-// Tier-1 run of this test is actually observed, per D-102 -- this fixture and
-// its registration exist so that observation can happen in a follow-up, not
-// to claim it here. errno-based construction/dispatch and the
+// on one `try`, and `finally` running on the exceptional path. The matrix's
+// row (docs/PYTHON_STANDARDS.md line 232) was flipped to `◐` in #753, once
+// this fixture's registration was observed passing on a completed green
+// Tier-1 run per D-102 (see PYTHON_STANDARDS.md's policy rule 11).
+// errno-based construction/dispatch and the
 // `errno`/`filename`/`strerror`/`winerror` instance attributes are out of
 // scope for this issue (blocked on Part 3 of #541, #703) and are not
 // exercised here.
@@ -1340,11 +1340,10 @@ fn pep_3151_oserror_matches_cpython_3_14_7_byte_for_byte() {
 // form. Covers both spellings catching each of their named types, an `as`
 // binding whose bound value is re-raised and recaught by an outer handler,
 // a 3+-type handler, and a non-matching raise propagating out through an
-// inner handler to an outer one. Left off the matrix's row
-// (docs/PYTHON_STANDARDS.md, still `☐`) until a green Tier-1 run of this
-// test is actually observed, per D-102 -- this fixture and its
-// registration exist so that observation can happen in a follow-up, not to
-// claim it here.
+// inner handler to an outer one. The matrix's row (docs/PYTHON_STANDARDS.md
+// line 358) was flipped to `◐` in #753, once this fixture's registration
+// was observed passing on a completed green Tier-1 run per D-102 (see
+// PYTHON_STANDARDS.md's policy rule 11).
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
 fn pep_0758_except_noparens_matches_cpython_3_14_7_byte_for_byte() {

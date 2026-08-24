@@ -468,11 +468,11 @@
       ],
       "proven": [
         {
-          "category": "raising and catching FileNotFoundError, BrokenPipeError, TimeoutError, ConnectionError, and OSError itself",
+          "category": "raising and catching FileNotFoundError and TimeoutError by their own exact type, and raising OSError directly and catching it by its own exact type",
           "evidence": "pep_3151_oserror.py"
         },
         {
-          "category": "catching a ConnectionError grandchild via its own type and via the OSError root",
+          "category": "raising BrokenPipeError (a ConnectionError grandchild) and catching it via a handler naming ConnectionError, and separately via a handler naming the OSError root, without ever naming BrokenPipeError itself",
           "evidence": "pep_3151_oserror.py"
         },
         {
@@ -488,12 +488,12 @@
         {
           "category": "errno-based construction/dispatch and the errno/filename/strerror/winerror instance attributes",
           "kind": "core",
-          "reason": "Explicitly out of scope for #739 (Part 2 of #543), blocked on Part 3 of #541 and tracked by https://github.com/rotnov/pycc/issues/703; the fixture's own header comment records this and does not exercise any of those attributes."
+          "reason": "Explicitly out of scope for #739 (Part 2 of #543), blocked on Part 3 of #541 and tracked by https://github.com/rotnov/pycc/issues/703; the fixture's registration comment in tests/conformance.rs records this and the fixture itself does not exercise any of those attributes."
         },
         {
-          "category": "the other 10 direct OSError subclasses and 3 further ConnectionError subclasses the fixture does not individually raise and catch (e.g. PermissionError, InterruptedError, ProcessLookupError, ChildProcessError, BlockingIOError, IsADirectoryError, NotADirectoryError, ConnectionAbortedError, ConnectionRefusedError, ConnectionResetError)",
+          "category": "9 of the 11 direct OSError subclasses are never individually raised and caught by their own exact type (BlockingIOError, ChildProcessError, ConnectionError, FileExistsError, InterruptedError, IsADirectoryError, NotADirectoryError, PermissionError, ProcessLookupError), and 3 of ConnectionError's 4 further subclasses are entirely untouched (ConnectionAbortedError, ConnectionRefusedError, ConnectionResetError)",
           "kind": "core",
-          "reason": "pep_3151_oserror.py exercises a representative slice of the 16-class hierarchy (FileNotFoundError, BrokenPipeError, TimeoutError, ConnectionError, OSError) rather than every class byte-for-byte against the CPython oracle; the remaining classes are defined as HirClassDefs (#739) but not individually raised/caught in this fixture."
+          "reason": "pep_3151_oserror.py exercises a representative slice of the 16-class hierarchy -- FileNotFoundError and TimeoutError individually by exact type, BrokenPipeError only as a handler-caught superclass instance, ConnectionError and OSError as handler types -- rather than every class byte-for-byte against the CPython oracle. The remaining classes are defined as HirClassDefs (#739) but not exercised by this fixture at all."
         }
       ]
     },
@@ -1192,6 +1192,11 @@
           "category": "except A, B as e: (bare comma combined with an as binding)",
           "kind": "core",
           "reason": "This shape is rejected outright with a parser-level L0001 syntax error; HIR/types/MIR never see it, per D-195's 2026-08-24 revision note. Only the parenthesized except (A, B) as e: form is supported and exercised."
+        },
+        {
+          "category": "unparenthesized except* A, B: (PEP 758's own title covers both except and except* without parentheses; this row's fixture and D-195's implementation address only plain except)",
+          "kind": "core",
+          "reason": "pycc has no except*/ExceptionGroup (PEP 654) support at all yet -- tracked by #542, gating PEP 654's own separate matrix row -- so the except*-without-parentheses half of PEP 758's own scope has no implementation to exercise, let alone a fixture."
         }
       ]
     }
