@@ -22442,6 +22442,27 @@ fn cast_up_to_a_base_class_with_no_overridden_methods_still_checks() {
 }
 
 #[test]
+fn cast_up_across_an_override_in_an_intermediate_ancestor_is_c0001() {
+    // #767 review fix (4th pass, D-197): every existing `OverriddenMethod`
+    // test puts the override on the value's own class (position 0 of
+    // `from_def.mro[..to_pos]`). This pins the 3-level case where the
+    // override instead lives in an ancestor strictly between the value's
+    // class and the cast target -- `A` declares `describe`, `B(A)` overrides
+    // it, `C(B)` does not -- so `cast(A, c)` must still be rejected even
+    // though `C` itself, the value's own class, overrides nothing.
+    let err = check_source(
+        "from typing import cast\nclass A:\n    def __init__(self, a: int) -> None:\n        self.a = a\n    def describe(self) -> int:\n        return self.a\nclass B(A):\n    def __init__(self, a: int, b: int) -> None:\n        self.a = a\n        self.b = b\n    def describe(self) -> int:\n        return self.a + self.b\nclass C(B):\n    def __init__(self, a: int, b: int, c: int) -> None:\n        self.a = a\n        self.b = b\n        self.c = c\ndef f(v: C) -> int:\n    return cast(A, v).describe()\nprint(f(C(1, 2, 3)))\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message.contains("`describe`") && err.message.contains("statically resolve"),
+        "expected the method-dispatch message naming `describe`, got: {}",
+        err.message
+    );
+}
+
+#[test]
 fn cast_changing_representation_is_c0001() {
     // #767 review fix (blocker, D-197): a `cast` whose target type's runtime
     // representation differs from the value's own inferred type used to

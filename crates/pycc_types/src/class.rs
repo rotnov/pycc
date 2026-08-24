@@ -1082,8 +1082,8 @@ pub(crate) fn check_cast(
                 ),
                 "pycc resolves method calls statically from the cast result's declared type, \
                  so casting across a class that overrides a base method is unsound: cast to \
-                 the value's own type, or to a base class that overrides none of the value's \
-                 class's methods",
+                 the value's own type, or to a base class not separated from the value's class \
+                 by any subclass that overrides one of that base class's methods",
             ),
         };
         return Err(Diagnostic::error("C0001", message, Span::new(0, 0)).with_help(help));

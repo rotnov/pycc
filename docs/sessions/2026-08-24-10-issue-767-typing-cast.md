@@ -164,6 +164,32 @@ A user-defined `def cast(...)` takes priority in all three passes.
   calling the method directly on the original value -- exactly the kind of
   test that would have caught the method-dispatch gap empirically before a
   human review pass had to find it by inspection.
+- **Fourth review pass: two doc-wording defects and one test gap, all closed
+  here.** A fourth pinned-reviewer pass (run after the third pass's fixes and
+  the message-split/CLI-coverage `note`s above were committed) confirmed the
+  override-detection loop sound by hand-tracing 3-level chains and diamond
+  MRO, confirmed the two new white-box tests genuinely exercise their claimed
+  branches, and found: (1) `docs/ROADMAP.md`'s #767 paragraph still described
+  the pre-third-pass rule, omitting the method-override rejection entirely --
+  reworded to state the boundary and its `__init__` exclusion, citing D-197's
+  third review pass; (2) `CastMismatch::OverriddenMethod`'s help string was
+  phrased backwards -- it told the reader to cast "to a base class that
+  overrides none of the value's class's methods", the wrong direction (the
+  unsound case is a *subclass between* the value's class and the target
+  overriding a *base* method, not the base overriding anything) -- reworded to
+  name the actual direction; (3) no test exercised an override living in an
+  *intermediate* ancestor rather than the value's own class directly -- every
+  existing `OverriddenMethod` test put the override at position 0 of
+  `from_def.mro[..to_pos]`. Closed with a new
+  `cast_up_across_an_override_in_an_intermediate_ancestor_is_c0001` test (see
+  Test evidence) using a 3-level `A` / `B(A)` overriding `describe` / `C(B)`
+  not overriding it, asserting `cast(A, c_instance)` is still rejected even
+  though `C`, the value's own class, overrides nothing. No logic change; `check_cast`
+  and `cast_compatibility` are unchanged by this pass. Judged (D-127) not to
+  warrant a fifth reviewer pass before commit: all three fixes are the fourth
+  pass's own literal suggestions, two are prose-only and the third is a test
+  whose correctness was independently confirmed by running it, so the fourth
+  pass's analysis still describes the code after applying them.
 - **A pre-existing, unrelated diagnostic-quality bug was found and filed
   separately, not fixed here.** A `cast` rejection reports a misleading
   `T0021` "local name not bound" instead of its real diagnostic when the
@@ -187,15 +213,18 @@ A user-defined `def cast(...)` takes priority in all three passes.
 
 ## Test evidence
 
-- `crates/pycc_types/src/tests.rs` -- 27 `cast`-named unit tests (through the
+- `crates/pycc_types/src/tests.rs` -- 28 `cast`-named unit tests (through the
   public `check_source` entry point): every builtin
   scalar target, a user-defined class target, wrong arity, subscripted target,
   unknown target, errors inside the value operand, user-defined `cast`
   priority in both passes, the qualified-marker-as-value /
   qualified-marker-called paths in both passes,
-  `cast_without_its_import_is_currently_accepted` (the #768 pin), and nine for
-  D-197's representation/layout/dispatch rule across its three review passes:
-  `cast_up_to_a_base_class_checks` and
+  `cast_without_its_import_is_currently_accepted` (the #768 pin), and ten for
+  D-197's representation/layout/dispatch rule across its four review passes:
+  `cast_up_across_an_override_in_an_intermediate_ancestor_is_c0001` (the
+  fourth-pass test above, pinning a 3-level chain where the override lives
+  strictly between the value's class and the cast target rather than on the
+  value's own class), `cast_up_to_a_base_class_checks` and
   `cast_up_to_a_base_class_with_no_overridden_methods_still_checks` (up-cast
   accepted, the second not defeated by an `__init__` override),
   `cast_down_to_a_derived_class_is_c0001` and
@@ -246,25 +275,39 @@ A user-defined `def cast(...)` takes priority in all three passes.
   non-overridden inherited method through the cast result (the third-pass
   `note` finding's empirical gap, now closed). All six pass under coverage
   instrumentation.
-- `cargo test --workspace`: 0 failures, re-run twice on this tree after the
-  third-pass fix (once before, once after the two new internal-consistency
-  tests and the `CastMismatch` derive above).
+- `cargo test --workspace`: 0 failures, re-run three times on this tree (after
+  the third-pass fix; again after the fourth-pass doc/help-string/test fixes
+  above).
 - `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
-  re-run locally on this tree after the third-pass fix: 41874 regions / 27228
-  lines, `0` missed of either, `100.00%`/`100.00%`, 0 test failures. The first
-  attempt at this re-run (before the two new internal-consistency tests
-  above) surfaced the real gap this bullet's sibling above describes: 2
-  missed lines/regions in `crates/pycc_types/src/class.rs` (the two
+  re-run locally on this tree after the third-pass fix, and again from a clean
+  profile (`cargo llvm-cov clean --workspace`) after the fourth-pass fixes:
+  both runs report 41874 regions / 27228 lines, `0` missed of either,
+  `100.00%`/`100.00%`, 0 test failures. The identical totals across the two
+  runs despite the fourth pass adding one new `#[cfg(test)]` function are
+  expected, not stale data: test-module code itself is not counted in the
+  instrumented totals, only the library code it exercises, which was already
+  at 100%; the clean re-run's log confirms a genuine recompile
+  (`Compiling pycc_types ...`) and that the new test's name appears in the
+  run's own test output, ruling out a stale profile. The first attempt at the
+  third-pass re-run (before the two new internal-consistency tests above)
+  surfaced a real gap this bullet's sibling above describes: 2 missed
+  lines/regions in `crates/pycc_types/src/class.rs` (the two
   now-separately-tracked `let-else` failure arms in `cast_compatibility`),
   located precisely via `cargo llvm-cov --workspace --no-run --show-missing-lines`
   and `cargo llvm-cov --workspace --no-run --json --output-path ...` (the
   latter needed to disambiguate a region miss from a line miss once the line
-  count alone reached 100%). Run it from a clean profile
-  (`cargo llvm-cov clean --workspace`) if a previous coverage run was
-  interrupted -- a partial profile from a killed run silently under-reports
-  (it produced a spurious 98.05%/98.07% here, with the losses concentrated in
-  the code exercised through `pycc` subprocesses: `src/main.rs`, `pycc_ast`,
-  `pycc_artifact_layout`).
+  count alone reached 100%). Run it from a clean profile if a previous
+  coverage run was interrupted -- a partial profile from a killed run silently
+  under-reports (it produced a spurious 98.05%/98.07% here, with the losses
+  concentrated in the code exercised through `pycc` subprocesses:
+  `src/main.rs`, `pycc_ast`, `pycc_artifact_layout`). The fourth-pass
+  remediation hit this same trap once more: a first coverage attempt died with
+  `signal: 9 (SIGKILL)` (OOM from a concurrent peer session's own
+  `cargo test --workspace` in a separate worktree, confirmed via `vm_stat` and
+  `ps aux`) -- a killed run's own reported wrapper exit code is not proof the
+  underlying `cargo llvm-cov` invocation succeeded, only the log's `TOTAL` row
+  and explicit `EXIT:` marker are, so grep for both rather than trusting a
+  background task notification's summary.
 - `bash scripts/check-site.sh`, `ruby scripts/check_status_page_freshness.rb`,
   `ruby scripts/check_roadmap_evidence.rb`, `ruby scripts/check_ci_permissions.rb`,
   and `python3 scripts/generate_decisions_index.py ... --check` all pass.
