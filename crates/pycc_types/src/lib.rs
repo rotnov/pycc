@@ -179,6 +179,22 @@ fn marker_is_not_a_value(name: &str) -> Diagnostic {
     )
 }
 
+/// An annotation-subscript marker (`typing.Final`, `typing.Annotated`,
+/// #762) referenced as a first-class value or called directly, instead of
+/// being used as an annotation subscript (`Final[int]`, `Annotated[int,
+/// ...]`). Unlike the other marker kinds, `Final`/`Annotated` are never
+/// valid as a base class or a decorator, so `marker_is_not_a_value`'s
+/// generic guidance would be misleading here (review finding on PR #766).
+fn annotation_marker_is_not_a_value(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0021",
+        format!(
+            "`{name}` is an annotation marker, not a first-class value — use it only as an annotation subscript (e.g. `{name}[int]`)"
+        ),
+        Span::new(0, 0),
+    )
+}
+
 /// Returns `true` if `kind` is any marker symbol kind (Enum, Protocol, ABC,
 /// Decorator, or Annotation). Used by call-site and value-reference guards
 /// to reject marker symbols used as first-class values with a consistent

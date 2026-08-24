@@ -61,9 +61,10 @@ use std::sync::Arc;
 use crate::binop::numeric_result_type;
 use crate::unop::unary_result_type;
 use crate::{
-    Environment, check_incompatible_redefinitions, check_with_signatures,
-    enum_marker_is_not_a_value, is_assignable, is_generic_signature, is_known_callable_builtin,
-    is_local, is_marker_kind, marker_is_not_a_value, non_callable_binding, solver,
+    Environment, annotation_marker_is_not_a_value, check_incompatible_redefinitions,
+    check_with_signatures, enum_marker_is_not_a_value, is_assignable, is_generic_signature,
+    is_known_callable_builtin, is_local, is_marker_kind, marker_is_not_a_value,
+    non_callable_binding, solver,
     std_constant_is_not_callable, std_function_used_as_a_value, std_qualified_symbol,
     std_receiver_name, std_receiver_shadowed, std_scalar_to_ty, t0042, ty_contains_param,
     unbound_local, unsupported_callable_builtin,
@@ -343,10 +344,12 @@ pub(crate) fn collect_expr_constraints(
                         Err(std_function_used_as_a_value(name))
                     }
                     pycc_std::StdSymbolKind::EnumMarker => Err(enum_marker_is_not_a_value(name)),
+                    pycc_std::StdSymbolKind::AnnotationMarker => {
+                        Err(annotation_marker_is_not_a_value(name))
+                    }
                     pycc_std::StdSymbolKind::ProtocolMarker
                     | pycc_std::StdSymbolKind::AbcMarker
-                    | pycc_std::StdSymbolKind::DecoratorMarker
-                    | pycc_std::StdSymbolKind::AnnotationMarker => Err(marker_is_not_a_value(name)),
+                    | pycc_std::StdSymbolKind::DecoratorMarker => Err(marker_is_not_a_value(name)),
                 };
             }
             // Issue #359 (Part 2 of #118): a maybe-bound name (assigned
@@ -527,6 +530,9 @@ pub(crate) fn collect_expr_constraints(
                     return Err(if is_marker_kind(symbol.kind) {
                         if matches!(symbol.kind, pycc_std::StdSymbolKind::EnumMarker) {
                             enum_marker_is_not_a_value(callee)
+                        } else if matches!(symbol.kind, pycc_std::StdSymbolKind::AnnotationMarker)
+                        {
+                            annotation_marker_is_not_a_value(callee)
                         } else {
                             marker_is_not_a_value(callee)
                         }
