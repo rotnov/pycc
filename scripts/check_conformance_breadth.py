@@ -45,6 +45,15 @@ matrix says, plus the checker's own summary line to appear quoted verbatim in
 the paragraph. The parse is fail-closed: a missing, duplicated, or unparseable
 headline is a failure, so rewording the paragraph cannot quietly disable the
 guard.
+
+Issue #732 adds a second figure alongside the row count: the number of
+*distinct PEP numbers* the evidence-backed rows encompass, counted per
+D-153's "Two ways to count" convention -- a range cell (`634–636`) counts
+every number in the range, a two-link cell (`649/749`) counts each linked
+number, an unnumbered cell (`-`/`—`) counts zero, and a PEP number repeated
+across two rows (PEP 695's two rows) counts once across both. `docs/ROADMAP.md`'s
+headline states this figure too, and the checker cross-checks it the same
+fail-closed way as the row counts.
 """
 
 from __future__ import annotations
@@ -120,6 +129,46 @@ def cited_fixtures(test_cell: str) -> list[str]:
             found.append(span)
         rest = after_open[closing + 1 :]
     return found
+
+
+#: A markdown link to a PEP's canonical page, e.g. `[634](https://peps.python.org/pep-0634/)`.
+PEP_LINK = re.compile(r"\[(\d+)\]\(https://peps\.python\.org/pep-\d+/\)")
+
+
+def pep_numbers(cell: str) -> set[int]:
+    """The distinct PEP numbers a matrix row's PEP cell names, per D-153.
+
+    * An unnumbered cell (`-` or `—`) names none -- it describes a language
+      guarantee with no PEP of its own.
+    * A cell citing two PEP links (e.g. `649/749`) names both; `PEP_LINK`
+      already finds every link in the cell, so no special casing is needed.
+    * A cell whose last link is immediately followed by a bare range suffix
+      (e.g. `634–636`, where only `634` is linked) names every integer from
+      the smallest linked number through the suffix, inclusive.
+    """
+    cell = cell.strip()
+    if cell in ("-", "—"):
+        return set()
+    numbers = {int(match) for match in PEP_LINK.findall(cell)}
+    if not numbers:
+        return numbers
+    range_suffix = re.search(r"\)[–-](\d+)\s*$", cell)
+    if range_suffix:
+        numbers |= set(range(min(numbers), int(range_suffix.group(1)) + 1))
+    return numbers
+
+
+def distinct_pep_count(rows: list[MatrixRow]) -> int:
+    """The number of distinct PEP numbers the given rows encompass.
+
+    A PEP number that appears on two separate rows -- PEP 695 has one row for
+    the `type` statement and generic functions and another for generic
+    classes -- is counted once across both, per D-153's convention.
+    """
+    peps: set[int] = set()
+    for row in rows:
+        peps |= pep_numbers(row.pep)
+    return len(peps)
 
 
 def parse_matrix(markdown: str) -> list[MatrixRow]:
@@ -357,6 +406,14 @@ ROADMAP_FIGURES = re.compile(
     + r"`"
 )
 
+#: The distinct-PEP-count clause of the same headline (issue #732), matched
+#: independently of `ROADMAP_FIGURES` since it can be separated from the row
+#: figures by intervening prose (e.g. the "not gated before v1.0" clause).
+ROADMAP_PEP_FIGURES = re.compile(
+    r"encompass (?P<pep_total>\d+) of the required (?P<pep_required>\d+) "
+    r"distinct PEP numbers, leaving a (?P<pep_gap>\d+)-PEP gap"
+)
+
 
 def summary_body(rows: list[MatrixRow]) -> str:
     """Render the totals sentence shared by the printed summary and the roadmap.
@@ -368,7 +425,8 @@ def summary_body(rows: list[MatrixRow]) -> str:
     accepted = sum(1 for row in rows if row.status == ACCEPTED)
     return (
         f"{len(rows)} evidence-backed rows, all declared "
-        f"({accepted} accepted as whole-PEP, {len(rows) - accepted} subset)"
+        f"({accepted} accepted as whole-PEP, {len(rows) - accepted} subset), "
+        f"encompassing {distinct_pep_count(rows)} distinct PEP numbers"
     )
 
 
@@ -403,14 +461,27 @@ def check_roadmap_counts(
             f"`{ACCEPTED}`)"
         )
 
+    pep_figures = ROADMAP_PEP_FIGURES.search(headlines[0])
+    if pep_figures is None:
+        raise BreadthError(
+            f"{label}: the conformance-progress headline no longer states its "
+            "distinct-PEP totals in the form this guard parses (`encompass N of "
+            "the required M distinct PEP numbers, leaving a G-PEP gap`)"
+        )
+
     total = int(figures["total"])
     required = int(figures["required"])
     gap = int(figures["gap"])
     accepted = int(figures["accepted"])
     restated_total = int(figures["restated_total"])
 
+    pep_total = int(pep_figures["pep_total"])
+    pep_required = int(pep_figures["pep_required"])
+    pep_gap = int(pep_figures["pep_gap"])
+
     computed_total = len(rows)
     computed_accepted = sum(1 for row in rows if row.status == ACCEPTED)
+    computed_pep_total = distinct_pep_count(rows)
 
     failures: list[str] = []
     if total != computed_total:
@@ -432,6 +503,16 @@ def check_roadmap_counts(
         failures.append(
             f"{label} states a {gap}-row gap, but {required} required minus "
             f"{total} evidence-backed is {required - total}"
+        )
+    if pep_total != computed_pep_total:
+        failures.append(
+            f"{label} claims {pep_total} distinct PEP numbers, but the matrix "
+            f"encompasses {computed_pep_total}"
+        )
+    if pep_gap != pep_required - pep_total:
+        failures.append(
+            f"{label} states a {pep_gap}-PEP gap, but {pep_required} required "
+            f"minus {pep_total} distinct PEP numbers is {pep_required - pep_total}"
         )
 
     expected = summary_body(rows)

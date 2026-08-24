@@ -38,6 +38,8 @@ parse_matrix = CHECKER.parse_matrix
 validate = CHECKER.validate
 check_roadmap_counts = CHECKER.check_roadmap_counts
 summary_body = CHECKER.summary_body
+pep_numbers = CHECKER.pep_numbers
+distinct_pep_count = CHECKER.distinct_pep_count
 
 REPOSITORY_ROOT = CHECKER_PATH.resolve().parent.parent
 
@@ -128,7 +130,7 @@ def manifest() -> dict:
 ROADMAP = """
 ## v0.3
 
-**Conformance progress (2026-01-01): 2 of the required 5 matrix rows are at `◐` or better, leaving a 3-row gap; 1 of those 2 are `✅` (whole-PEP acceptance), which is reported but not gated before v1.0.** This figure is derived mechanically — `python3 scripts/check_conformance_breadth.py` reports "2 evidence-backed rows, all declared (1 accepted as whole-PEP, 1 subset)" — and supersedes the earlier figure of 1, which took the count from 0 to 1 and left a 4-row gap.
+**Conformance progress (2026-01-01): 2 of the required 5 matrix rows are at `◐` or better, leaving a 3-row gap; 1 of those 2 are `✅` (whole-PEP acceptance), which is reported but not gated before v1.0; those rows encompass 2 of the required 6 distinct PEP numbers, leaving a 4-PEP gap.** This figure is derived mechanically — `python3 scripts/check_conformance_breadth.py` reports "2 evidence-backed rows, all declared (1 accepted as whole-PEP, 1 subset), encompassing 2 distinct PEP numbers" — and supersedes the earlier figure of 1, which took the count from 0 to 1 and left a 4-row gap.
 """.lstrip()
 
 
@@ -162,6 +164,44 @@ class ParsingTests(unittest.TestCase):
         )
         keys = {row.key for row in evidence_rows(shared)}
         self.assertEqual(len(keys), 3)
+
+
+class PepCountTests(unittest.TestCase):
+    """D-153's counting convention: `pep_numbers` and `distinct_pep_count`."""
+
+    def test_a_range_row_counts_every_number_in_the_range(self) -> None:
+        cell = "[634](https://peps.python.org/pep-0634/)–636"
+        self.assertEqual(pep_numbers(cell), {634, 635, 636})
+
+    def test_a_two_link_row_counts_each_linked_number(self) -> None:
+        cell = (
+            "[649](https://peps.python.org/pep-0649/)/"
+            "[749](https://peps.python.org/pep-0749/)"
+        )
+        self.assertEqual(pep_numbers(cell), {649, 749})
+
+    def test_an_unnumbered_row_counts_zero(self) -> None:
+        self.assertEqual(pep_numbers("—"), set())
+        self.assertEqual(pep_numbers("-"), set())
+
+    def test_a_single_link_row_counts_one(self) -> None:
+        self.assertEqual(
+            pep_numbers("[498](https://peps.python.org/pep-0498/)"), {498}
+        )
+
+    def test_a_pep_repeated_across_two_rows_counts_once(self) -> None:
+        matrix = (
+            "| PEP | Feature | Cat | Test | St |\n"
+            "|---|---|---|---|---|\n"
+            "| [695](https://peps.python.org/pep-0695/) | `type` statement | "
+            "typing | `pep_0695_generics.py` | ◐ |\n"
+            "| [695](https://peps.python.org/pep-0695/) | Generic classes | "
+            "typing | `pep_0695_generic_classes.py` | ◐ |\n"
+        )
+        self.assertEqual(distinct_pep_count(evidence_rows(matrix)), 1)
+
+    def test_distinct_pep_count_unions_across_all_rows(self) -> None:
+        self.assertEqual(distinct_pep_count(evidence_rows(MATRIX)), 2)
 
 
 class ValidationTests(unittest.TestCase):
@@ -456,7 +496,8 @@ class RoadmapCountTests(unittest.TestCase):
     def test_the_summary_body_is_the_string_the_roadmap_quotes(self) -> None:
         self.assertEqual(
             summary_body(self.ROWS),
-            "2 evidence-backed rows, all declared (1 accepted as whole-PEP, 1 subset)",
+            "2 evidence-backed rows, all declared (1 accepted as whole-PEP, 1 subset), "
+            "encompassing 2 distinct PEP numbers",
         )
 
     def test_matching_counts_pass(self) -> None:
@@ -495,6 +536,28 @@ class RoadmapCountTests(unittest.TestCase):
         self.assert_rejected(
             ROADMAP.replace("leaving a 3-row gap", "leaving a 4-row gap"),
             "states a 4-row gap, but 5 required minus 2 evidence-backed is 3",
+        )
+
+    def test_a_divergent_pep_total_is_rejected(self) -> None:
+        self.assert_rejected(
+            ROADMAP.replace("encompass 2 of the required 6", "encompass 3 of the required 6"),
+            "claims 3 distinct PEP numbers, but the matrix encompasses 2",
+        )
+
+    def test_a_divergent_pep_gap_is_rejected(self) -> None:
+        self.assert_rejected(
+            ROADMAP.replace("leaving a 4-PEP gap", "leaving a 5-PEP gap"),
+            "states a 5-PEP gap, but 6 required minus 2 distinct PEP numbers is 4",
+        )
+
+    def test_a_missing_pep_clause_is_a_failure_not_a_silent_pass(self) -> None:
+        self.assert_rejected(
+            ROADMAP.replace(
+                "; those rows encompass 2 of the required 6 distinct PEP numbers, "
+                "leaving a 4-PEP gap",
+                "",
+            ),
+            "no longer states its distinct-PEP totals in the form this guard parses",
         )
 
     def test_a_quoted_summary_that_no_longer_matches_is_rejected(self) -> None:
