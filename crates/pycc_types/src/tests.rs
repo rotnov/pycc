@@ -17873,6 +17873,177 @@ fn solver_if_no_else_does_not_leak_binding_into_orelse() {
 }
 
 #[test]
+fn solver_if_no_else_marks_opaque_body_only_binding_as_maybe() {
+    // Issue #771 join-site follow-up: `if cond: y = d.get("a", 0)` (no
+    // else), where `DictGetOrDefault` is one of the constructs whose
+    // `collect_expr_constraints` arm returns `Ok(None)` (no solver term).
+    // Before `join_if_branches_solver` learned to merge `opaque_bindings`,
+    // `y` was dropped from every tracked set by the join (it never enters
+    // `body_env.bindings`, only `body_env.opaque_bindings`), so a later
+    // read of `y` misfired as an unbound local even though the assignment
+    // is textually right above it. It must now be maybe-bound: present in
+    // `env.opaque_bindings` and `env.maybe_bindings`, absent from
+    // `env.bindings` (the solver still has no term for it).
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::from([
+            ("cond".to_string(), Ok(Ty::Bool)),
+            (
+                "d".to_string(),
+                Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int)))),
+            ),
+        ]),
+        local_names: &["cond", "d", "y"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
+    };
+    let body = vec![HirStmt::If {
+        test: HirExpr::Name("cond".to_string()),
+        body: vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::DictGetOrDefault {
+                dict: "d".to_string(),
+                key: Box::new(HirExpr::StringLiteral("a".to_string())),
+                default: Box::new(HirExpr::IntLiteral(0)),
+            },
+        }],
+        orelse: vec![],
+    }];
+
+    collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap();
+
+    assert!(env.maybe_bindings.contains("y"));
+    assert!(env.opaque_bindings.contains("y"));
+    assert!(!env.bindings.contains_key("y"));
+}
+
+#[test]
+fn solver_if_with_else_marks_both_branch_opaque_binding_as_definite() {
+    // Issue #771 join-site follow-up: `if cond: y = d.get(..) else: y =
+    // d.get(..)` -- both branches opaquely assign `y`, so it is
+    // definitely bound afterward, exactly like the real-term case in
+    // `solver_if_with_else_marks_both_branch_binding_as_definite` above.
+    // Before the join-site fix this was dropped from every tracked set
+    // (not just left "maybe"), which is the case the deep-review pass
+    // flagged as not actually branch-conditional in the definite-
+    // assignment sense: it reproduced the exact #771 misdiagnosis even
+    // though every path through the `if` assigns `y`.
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::from([
+            ("cond".to_string(), Ok(Ty::Bool)),
+            (
+                "d".to_string(),
+                Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int)))),
+            ),
+        ]),
+        local_names: &["cond", "d", "y"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
+    };
+    let opaque_get = || HirStmt::Assign {
+        target: "y".to_string(),
+        value: HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(HirExpr::StringLiteral("a".to_string())),
+            default: Box::new(HirExpr::IntLiteral(0)),
+        },
+    };
+    let body = vec![HirStmt::If {
+        test: HirExpr::Name("cond".to_string()),
+        body: vec![opaque_get()],
+        orelse: vec![opaque_get()],
+    }];
+
+    collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap();
+
+    assert!(!env.maybe_bindings.contains("y"));
+    assert!(env.opaque_bindings.contains("y"));
+    assert!(!env.bindings.contains_key("y"));
+}
+
+#[test]
+fn solver_while_loop_marks_opaque_body_only_binding_as_maybe() {
+    // Issue #771 join-site follow-up: a `while` body may execute zero
+    // times, so `y` assigned only in the body via an opaque initializer
+    // is maybe-bound after the loop, exactly like a real-term binding
+    // introduced there (`solver_while_loop_marks_body_only_binding_as_maybe`
+    // above). Exercises `join_loop_body_solver`'s `opaque_bindings` merge.
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::from([
+            ("cond".to_string(), Ok(Ty::Bool)),
+            (
+                "d".to_string(),
+                Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int)))),
+            ),
+        ]),
+        local_names: &["cond", "d", "y"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
+    };
+    let body = vec![HirStmt::While {
+        test: HirExpr::Name("cond".to_string()),
+        body: vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::DictGetOrDefault {
+                dict: "d".to_string(),
+                key: Box::new(HirExpr::StringLiteral("a".to_string())),
+                default: Box::new(HirExpr::IntLiteral(0)),
+            },
+        }],
+    }];
+
+    collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap();
+
+    assert!(env.maybe_bindings.contains("y"));
+    assert!(env.opaque_bindings.contains("y"));
+    assert!(!env.bindings.contains_key("y"));
+}
+
+#[test]
 fn solver_while_loop_marks_body_only_binding_as_maybe() {
     // A `while` body may execute zero times, so x assigned only in
     // the body is maybe-bound after the loop.

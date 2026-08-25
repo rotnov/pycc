@@ -39,15 +39,36 @@ pub(crate) fn join_if_branches_solver(
     for (name, term) in &orelse_env.bindings {
         env.bindings.entry(name.clone()).or_insert(term.clone());
     }
-    // Update maybe_bindings for names introduced by the branches.
+    // Issue #771 join-site follow-up: merge opaque markers too. A name
+    // assigned in a branch from an initializer the solver can't represent
+    // as a term (e.g. `if c: x = cast(D, b)`) lives only in that branch's
+    // `opaque_bindings`, never in `bindings` -- without this it was
+    // silently dropped by the join above, so a name opaquely assigned in
+    // *both* branches ended up bound nowhere at all post-join and a later
+    // read misfired as an unbound local, exactly the diagnostic this
+    // module exists to avoid. A name with a real term in `env.bindings`
+    // always takes priority over a stale/duplicate opaque marker for the
+    // same name (see `HirExpr::Name`'s lookup order in `constraints.rs`),
+    // so it is harmless for a name to end up in both sets here.
+    for name in body_env
+        .opaque_bindings
+        .iter()
+        .chain(orelse_env.opaque_bindings.iter())
+    {
+        env.opaque_bindings.insert(name.clone());
+    }
+    // Update maybe_bindings for names introduced by the branches, whether
+    // via a real term or an opaque marker.
     let body_new: HashSet<&String> = body_env
         .bindings
         .keys()
+        .chain(body_env.opaque_bindings.iter())
         .filter(|k| !pre_existing.contains(*k))
         .collect();
     let orelse_new: HashSet<&String> = orelse_env
         .bindings
         .keys()
+        .chain(orelse_env.opaque_bindings.iter())
         .filter(|k| !pre_existing.contains(*k))
         .collect();
     for name in body_new.iter().chain(orelse_new.iter()) {
@@ -74,6 +95,19 @@ pub(crate) fn join_loop_body_solver(
     for (name, term) in &body_env.bindings {
         if !pre_existing.contains(name) {
             env.bindings.entry(name.clone()).or_insert(term.clone());
+            env.maybe_bindings.insert(name.clone());
+        }
+    }
+    // Issue #771 join-site follow-up: mirror opaque bindings the same way.
+    // The body may execute zero times, so a name assigned only via a
+    // solver-unrepresentable initializer inside the body (e.g. a `cast` to
+    // a class) is maybe-bound afterward, not definitely bound -- exactly
+    // like a real-term binding introduced there. Without this, such a name
+    // was dropped entirely by this join and a later read outside the loop
+    // misfired as an unbound local.
+    for name in &body_env.opaque_bindings {
+        if !pre_existing.contains(name) {
+            env.opaque_bindings.insert(name.clone());
             env.maybe_bindings.insert(name.clone());
         }
     }

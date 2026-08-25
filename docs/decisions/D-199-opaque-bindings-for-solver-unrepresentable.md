@@ -54,7 +54,18 @@ status: accepted
   membership return `Ok(None)` instead of falling through to `unbound_local` — so a real term always
   takes priority over a stale opaque marker for the same name. `opaque_bindings` is kept semantically
   separate from `maybe_bindings` (not reused or folded in) and mirrors `maybe_bindings`'s own
-  lifecycle exactly at every rebind, scope-clear, and environment-construction/clone site.
+  lifecycle at every rebind, scope-clear, and environment-construction/clone site, *and* at the
+  solver's branch/loop join sites (`crates/pycc_types/src/solver.rs`'s `join_if_branches_solver` and
+  `join_loop_body_solver`): both helpers merge each branch's `opaque_bindings` alongside its
+  `bindings`, so a name opaquely assigned in only one branch of an `if`/`else`, in a loop body, in a
+  `match` arm, or in a `try`/`except` handler is folded into the post-join `maybe_bindings` exactly
+  like a real-term binding introduced there, and a name opaquely assigned in *both* branches of an
+  `if`/`else` is folded into the post-join `opaque_bindings` as definitely bound. This closes a gap an
+  earlier draft of this fix left open: without the join-site changes, an opaquely-assigned name was
+  invisible to `env.bindings`, so the join loops (which only walked `body_env.bindings`/
+  `orelse_env.bindings`) silently dropped it from every post-join set, including a name assigned
+  unconditionally in *both* branches — reproducing the exact misdiagnosis this decision exists to fix
+  for a case that is not "branch-conditional" in the definite-assignment sense at all.
 - Alternatives: Reuse `maybe_bindings` directly instead of adding a new field (rejected —
   `maybe_bindings` has a specific, D-147-tied meaning inspected by the if/loop branch-merge logic
   at two other sites; polluting the same set with "definitely assigned, but the solver has no term
@@ -71,14 +82,16 @@ status: accepted
   analysis, which needs a resolved `Ty` the solver does not have by design; the same is true for
   `AttrGet`/`MethodCall`, so a carrier only works for the D-146 subset, not the general class).
 - Consequences: `crates/pycc_types/src/constraints.rs` gains the `opaque_bindings` field (mirrored
-  at its two production construction sites and every `maybe_bindings` rebind/scope-clear site) and
-  the `HirExpr::Name` lookup change. `crates/pycc_types/src/tests.rs`'s 78 direct
+  at its two production construction sites and every `maybe_bindings` rebind/scope-clear site).
+  `crates/pycc_types/src/solver.rs` gains the join-site mirroring described above. `crates/pycc_types/src/tests.rs`'s 78 direct
   `ConstraintEnvironment { ... }` construction sites each gain `opaque_bindings: HashSet::new()`.
-  `crates/pycc_hir/src/lib.rs`'s `ListPop`/`DictGetOrDefault` doc comments and the affected
-  `constraints.rs` arm comments (`Subscript`/`AttrGet`/`MethodCall`/`TupleLiteral`/`DictLiteral`/
-  `SetLiteral`) are updated to strike only the "later read fails with a misleading diagnostic"
-  clause — the "this construct contributes no solver term" clause is unchanged and remains true;
-  the gap is not closed, only its misleading consequence is. The pre-existing pinned regression test
+  `crates/pycc_hir/src/lib.rs`'s `ListPop`/`DictGetOrDefault` doc comments and the shared `AttrGet`/
+  `MethodCall` arm comment in `constraints.rs` are updated to strike only the "later read fails with
+  a misleading diagnostic" clause — the "this construct contributes no solver term" clause is
+  unchanged and remains true; that underlying gap is not closed, only its misleading consequence is.
+  `Subscript`/`TupleLiteral`/`DictLiteral`/`SetLiteral`'s own arm comments in `constraints.rs` do not
+  restate that clause independently (they only cross-reference the reasoning above them) and were not
+  separately edited. The pre-existing pinned regression test
   `dict_get_or_default_assigned_inside_an_unannotated_private_helper_...` (renamed to drop its now-
   inaccurate "hits the pre-existing solver binding gap today" suffix) is updated in place: it still
   reports `T0021`, but now with the genuine "cannot infer return type of private helper `_h`; add an
@@ -89,9 +102,15 @@ status: accepted
   `ListPop`, `AttrGet`, `MethodCall`, `DictGetOrDefault`, `SetAdd`, `TupleLiteral`, `DictLiteral`,
   `SetLiteral`, non-scalar `ListLiteral`) is fixed by this single shared `HirExpr::Name` change, since
   the bug's mechanism is identical in every case. Branch-conditional variants (e.g.
-  `if cond: d = cast(...)` read later) remain out of scope — a genuinely different case that
-  interacts with `maybe_bindings`/D-147 for real, deferred to a follow-up issue if it is found to
-  also misfire. This extends D-146's own precedent (a construct the solver can't fully model still
+  `if cond: d = cast(...)` read later, whether `d` is assigned in one branch or both, in a loop body,
+  in a `match` arm, or in a `try`/`except` handler) are covered too, via the `solver.rs` join-site
+  mirroring described above — they are not deferred. What remains out of scope is only what D-147's
+  own `maybe_bindings` mechanism itself does not attempt: an opaque binding that is *definitely*
+  assigned in one branch but the other branch of the same `if` returns, raises, or otherwise diverges
+  (D-147-style narrowing of "maybe" to "definite" from control-flow-terminal branches) is tracked no
+  more precisely here than the equivalent real-term case already is — this decision does not change
+  that pre-existing precision boundary, it only extends `opaque_bindings` to track everywhere
+  `maybe_bindings` already does. This extends D-146's own precedent (a construct the solver can't fully model still
   shouldn't cause a spurious `unbound_local`) via a general mechanism instead of a per-construct
   carrier term; it references, and does not supersede, D-146. It also references the existing
   `maybe_bindings`/`BindingState::Maybe` definite-assignment tracking the surrounding source comments
