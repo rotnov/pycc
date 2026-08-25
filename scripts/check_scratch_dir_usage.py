@@ -13,8 +13,10 @@ panic unwind, plus a `pid`/`nanos`/`seq` naming scheme that cannot collide.
 This script is the enforcement mechanism requirement 7 of #779 asks for: it
 scans every tracked `*.rs` file for the literal pattern `temp_dir().join(`
 (tolerant of whitespace/line breaks between the two calls, since some
-existing call sites wrap the expression across lines) and fails if a file
-contains *more* such occurrences than `ALLOWLIST` records for it.
+existing call sites wrap the expression across lines) plus a narrower
+`use ... temp_dir as <name>` import-alias pattern (see `ALIAS_PATTERN`
+below), and fails if a file contains *more* such occurrences than
+`ALLOWLIST` records for it.
 
 Two allowances, both narrow and deliberate:
 
@@ -40,11 +42,21 @@ Two allowances, both narrow and deliberate:
 decision entry, not a silent gap): this is a textual pattern match, not a
 data-flow analysis. A caller that splits the expression across a binding --
 `let dir = std::env::temp_dir(); ... dir.join(...)` -- evades the pattern
-even though it has the same effect as the banned call. A textual check on the
-literal call shape is what requirement 7 asks for; a variable-indirected
-rewrite is a deliberate, conspicuous evasion, not something ordinary
-refactoring produces by accident, and the D-068 pinned reviewer pass on every
-PR is the backstop for a deliberately obfuscated call site.
+even though it has the same effect as the banned call. Similarly, an
+import-alias re-export -- `use std::env::temp_dir as get_scratch_root;`
+followed by `get_scratch_root().join(...)` -- evades the primary
+`temp_dir().join(` pattern entirely, and is ordinary, idiomatic Rust rather
+than a deliberately obfuscated call shape. `ALIAS_PATTERN` below narrows that
+specific gap by flagging the `use ... temp_dir as <name>` import line itself
+as a violation signal (it cannot see whether the aliased name is later
+`.join(...)`-ed, since that is exactly the data-flow question this script
+does not attempt to answer), but does not attempt to catch every possible
+re-export shape (e.g. a re-exported wrapper function, or aliasing through a
+`mod` boundary). A textual check on the literal call shape is what
+requirement 7 asks for; a variable-indirected or wrapper-function rewrite is
+a deliberate, conspicuous evasion, not something ordinary refactoring
+produces by accident, and the D-068 pinned reviewer pass on every PR is the
+backstop for a deliberately obfuscated call site.
 """
 
 from __future__ import annotations
@@ -110,6 +122,16 @@ ALLOWLIST: dict[str, int] = {
 # some existing call sites wrap the expression across lines.
 PATTERN = re.compile(r"temp_dir\s*\(\s*\)\s*\.\s*join\s*\(")
 
+# Narrower second signal: an import that aliases `std::env::temp_dir` (or
+# `env::temp_dir`, for a caller that already has `std::env` or `env` in
+# scope) to a different local name -- e.g.
+# `use std::env::temp_dir as get_scratch_root;`. This evades PATTERN
+# entirely once the aliased name is called instead of the literal
+# `temp_dir()` shape, and is ordinary idiomatic Rust rather than a
+# deliberately obfuscated call site. See the "Known scope limitation"
+# paragraph in the module docstring for what this does and does not catch.
+ALIAS_PATTERN = re.compile(r"use\s+(?:::)?(?:std\s*::\s*)?env\s*::\s*temp_dir\s+as\s+\w+")
+
 
 class ScratchDirUsageError(Exception):
     """A tracked `.rs` file has more banned occurrences than it is allowed."""
@@ -129,7 +151,7 @@ def tracked_rust_files(root: Path = ROOT) -> list[str]:
 
 def occurrence_count(path: Path) -> int:
     text = path.read_text(encoding="utf-8")
-    return len(PATTERN.findall(text))
+    return len(PATTERN.findall(text)) + len(ALIAS_PATTERN.findall(text))
 
 
 def find_violations(

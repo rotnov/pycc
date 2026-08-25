@@ -65,6 +65,22 @@ fn scratch_three() -> std::path::PathBuf {
 }
 """
 
+ALIAS_EVASION_FILE = """
+use std::env::temp_dir as get_scratch_root;
+
+fn scratch() -> std::path::PathBuf {
+    get_scratch_root().join("pycc_example_alias")
+}
+"""
+
+SHORT_ALIAS_EVASION_FILE = """
+use env::temp_dir as get_scratch_root;
+
+fn scratch() -> std::path::PathBuf {
+    get_scratch_root().join("pycc_example_alias")
+}
+"""
+
 
 class CheckScratchDirUsageTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -143,6 +159,65 @@ class CheckScratchDirUsageTest(unittest.TestCase):
             [exempt_relative_path], allowlist={}, root=self.root
         )
         self.assertEqual(violations, {})
+
+    def test_import_alias_evasion_is_detected(self) -> None:
+        # `use std::env::temp_dir as get_scratch_root;` followed by
+        # `get_scratch_root().join(...)` evades PATTERN entirely (the call
+        # site no longer contains the literal `temp_dir().join(` text), but
+        # is ordinary, idiomatic Rust rather than a deliberate evasion.
+        # ALIAS_PATTERN flags the `use ... as` import line itself.
+        self.write("alias.rs", ALIAS_EVASION_FILE)
+        self.assertEqual(occurrence_count(self.root / "alias.rs"), 1)
+        violations = find_violations(["alias.rs"], allowlist={}, root=self.root)
+        self.assertEqual(violations, {"alias.rs": (1, 0)})
+        with self.assertRaises(ScratchDirUsageError):
+            validate(["alias.rs"], allowlist={}, root=self.root)
+
+    def test_import_alias_evasion_via_unqualified_env_path_is_detected(self) -> None:
+        # A caller with `env` already in scope (`use std::env;`) can alias
+        # via the shorter `use env::temp_dir as ...` path -- still an evasion
+        # of PATTERN, still caught by ALIAS_PATTERN.
+        self.write("alias_short.rs", SHORT_ALIAS_EVASION_FILE)
+        self.assertEqual(occurrence_count(self.root / "alias_short.rs"), 1)
+
+    def test_allowlist_values_never_exceed_the_real_tracked_trees_current_count(
+        self,
+    ) -> None:
+        # The allowlist ratchet (module docstring) requires that a listed
+        # file's recorded count only ever go down over time, never up --
+        # migrating occurrences off the banned pattern lowers the real
+        # count, and the checked-in ALLOWLIST value must follow it down.
+        # `find_violations`/`validate` alone cannot catch a future PR that
+        # pads a file's ALLOWLIST number upward without adding any matching
+        # real occurrences, because `found <= allowed` still holds in that
+        # case. This test instead compares each ALLOWLIST value directly
+        # against the real tree's current occurrence count for that file,
+        # so a pad-without-justification shows up as `allowed > found`.
+        offenders = {}
+        for relative_path, allowed in ALLOWLIST.items():
+            found = occurrence_count(REPOSITORY_ROOT / relative_path)
+            if allowed > found:
+                offenders[relative_path] = (allowed, found)
+        self.assertEqual(
+            offenders,
+            {},
+            "ALLOWLIST records more occurrences than the file actually "
+            "contains -- lower the recorded count(s) to match reality: "
+            f"{offenders}",
+        )
+
+    def test_every_allowlisted_file_still_exists_in_the_tracked_tree(self) -> None:
+        # A file that is deleted or renamed without also removing/updating
+        # its ALLOWLIST entry leaves a stale key behind that
+        # `tracked_rust_files()` (which only returns files that still exist)
+        # never re-validates again.
+        tracked = set(tracked_rust_files(REPOSITORY_ROOT))
+        stale = sorted(set(ALLOWLIST) - tracked)
+        self.assertEqual(
+            stale,
+            [],
+            f"ALLOWLIST references file(s) no longer tracked: {stale}",
+        )
 
     def test_the_real_repository_tree_passes_its_own_checked_in_allowlist(
         self,
