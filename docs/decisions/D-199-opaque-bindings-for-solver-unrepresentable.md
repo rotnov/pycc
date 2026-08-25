@@ -66,6 +66,32 @@ status: accepted
   `orelse_env.bindings`) silently dropped it from every post-join set, including a name assigned
   unconditionally in *both* branches — reproducing the exact misdiagnosis this decision exists to fix
   for a case that is not "branch-conditional" in the definite-assignment sense at all.
+
+  A second reviewer pass over the join-site mirroring above found a further, more serious gap: every
+  `pre_existing` snapshot the six `collect_block_constraints` call sites compute (`If`, `While`,
+  `ForRange`, `ForList`, per-`case` `Match`, and the shared `Try` snapshot) was `env.bindings.keys()`
+  alone, blind to `env.opaque_bindings`. A name already opaquely bound *before* the construct (e.g.
+  `y = d.get("a", 0)` two lines above an `if`) was therefore invisible to `pre_existing`, so a branch
+  that reassigned it to a real, solver-representable term looked "newly introduced" by that branch;
+  when only one branch performed the reassignment, the untouched branch's still-opaque entry for the
+  same name *also* looked "newly introduced" (relative to the opaque-blind snapshot), so both branches
+  appeared to introduce the name and it was wrongly classified as *definitely* bound with the
+  one-branch-only term — silently discarding what the other branch's actual (opaque) value was. This
+  is fixed at the source (`crates/pycc_types/src/constraints.rs`'s six `pre_existing` computations now
+  chain in `env.opaque_bindings.iter()`), but that alone was not sufficient: `join_if_branches_solver`'s
+  two `env.bindings` merge loops (one per branch) are unconditional `entry().or_insert()` calls that
+  do not consult `pre_existing` at all. A pre-existing *real* binding is naturally protected because
+  `env.bindings` already holds an entry for it, so `or_insert` is a no-op; a pre-existing *opaque-only*
+  binding has no such protection, since it does not occupy a `bindings` slot, so the unconditional
+  merge would still write the one branch's term into `env.bindings` even after the `pre_existing` fix
+  — the name would correctly stay out of `maybe_bindings`, but `HirExpr::Name`'s lookup checks
+  `maybe_bindings` first and `bindings` second, so an unmasked term there is read as if it applied on
+  every path. Both merge loops now skip the insert when `pre_existing.contains(name) &&
+  !env.bindings.contains_key(name)` — i.e. when the name is pre-existing but only via
+  `opaque_bindings` — leaving it correctly resolvable only through `opaque_bindings` afterward, exactly
+  mirroring the protection a pre-existing real binding already had. `join_loop_body_solver` did not
+  need the equivalent fix: its own real-binding merge loop was already conditioned on
+  `!pre_existing.contains(name)`, so the `pre_existing` fix alone closes the same gap there.
 - Alternatives: Reuse `maybe_bindings` directly instead of adding a new field (rejected —
   `maybe_bindings` has a specific, D-147-tied meaning inspected by the if/loop branch-merge logic
   at two other sites; polluting the same set with "definitely assigned, but the solver has no term
@@ -82,8 +108,16 @@ status: accepted
   analysis, which needs a resolved `Ty` the solver does not have by design; the same is true for
   `AttrGet`/`MethodCall`, so a carrier only works for the D-146 subset, not the general class).
 - Consequences: `crates/pycc_types/src/constraints.rs` gains the `opaque_bindings` field (mirrored
-  at its two production construction sites and every `maybe_bindings` rebind/scope-clear site).
-  `crates/pycc_types/src/solver.rs` gains the join-site mirroring described above. `crates/pycc_types/src/tests.rs`'s 78 direct
+  at its two production construction sites and every `maybe_bindings` rebind/scope-clear site), and
+  its six `pre_existing` snapshots now chain in `env.opaque_bindings.iter()` as described above.
+  `crates/pycc_types/src/solver.rs` gains the join-site mirroring described above, plus the
+  `pre_existing`-guarded skip in `join_if_branches_solver`'s two real-binding merge loops. Two further
+  regression tests (`solver_if_reassigns_pre_existing_opaque_binding_in_one_branch_only` and its
+  orelse-branch mirror, `..._in_orelse_branch_only`) pin the composed pre-existing-opaque-then-
+  one-branch-reassignment scenario directly: a name opaquely bound before an `if`, reassigned to a
+  real term in exactly one branch, must not become newly *maybe* bound (it was already definite) and
+  must remain resolvable only through `opaque_bindings` afterward, not through the one branch's
+  unmasked term. `crates/pycc_types/src/tests.rs`'s 78 direct
   `ConstraintEnvironment { ... }` construction sites each gain `opaque_bindings: HashSet::new()`.
   `crates/pycc_hir/src/lib.rs`'s `ListPop`/`DictGetOrDefault` doc comments and the shared `AttrGet`/
   `MethodCall` arm comment in `constraints.rs` are updated to strike only the "later read fails with

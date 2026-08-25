@@ -17991,6 +17991,118 @@ fn solver_if_with_else_marks_both_branch_opaque_binding_as_definite() {
 }
 
 #[test]
+fn solver_if_reassigns_pre_existing_opaque_binding_in_one_branch_only() {
+    // Issue #771 join-site follow-up, second reviewer pass: `y` is already
+    // opaquely bound *before* the `if` (e.g. from `y = d.get("a", 0)` two
+    // lines above), then reassigned to a real, solver-representable term in
+    // only ONE branch (`if cond: y = 1` / no `else`). Before the
+    // `pre_existing` fix (computed as `env.bindings.keys()` alone, blind to
+    // `env.opaque_bindings`), this name looked "newly introduced" to the
+    // join helper on the body side (its `bindings` entry) and also on the
+    // orelse side (its untouched `opaque_bindings` entry), so both sides
+    // appeared to "introduce" it and it was wrongly folded into
+    // `env.maybe_bindings.remove` (i.e. marked *definitely* bound) --
+    // exposing the body-only term everywhere, including on the path where
+    // `y` was never reassigned. With `pre_existing` now covering
+    // `opaque_bindings`, `y` is correctly recognized as already present
+    // before the `if` on both sides, so the join's introduced/not-introduced
+    // classification leaves its `maybe_bindings` status untouched (it was
+    // not maybe before, and reassignment in only one branch does not by
+    // itself make a previously-definite name newly maybe under this
+    // solver's existing merge semantics for pre-existing names -- the same
+    // conservative "leave alone" treatment a pre-existing real-term entry
+    // already gets, since `join_if_branches_solver`'s unconditional
+    // `entry().or_insert()` merge never overwrites a `bindings` entry that
+    // was already populated before the `if`; this test's assertions confirm
+    // the analogous protection now holds when the pre-existing entry lives
+    // in `opaque_bindings` instead of `bindings`).
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
+        local_names: &["cond", "y"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::from(["y".to_string()]),
+    };
+    let body = vec![HirStmt::If {
+        test: HirExpr::Name("cond".to_string()),
+        body: vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::IntLiteral(1),
+        }],
+        orelse: vec![],
+    }];
+
+    collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap();
+
+    // `y` must never become newly *maybe* bound: it was already definitely
+    // (if opaquely) bound before the `if`, and a one-branch reassignment
+    // does not retroactively make a pre-existing name conditional.
+    assert!(!env.maybe_bindings.contains("y"));
+    // `y` must still be resolvable as opaque afterward -- the whole point
+    // of this test is that the orelse (no-op) path's opaque value for `y`
+    // is not silently discarded in favor of the body-only real term.
+    assert!(env.opaque_bindings.contains("y"));
+}
+
+#[test]
+fn solver_if_reassigns_pre_existing_opaque_binding_in_orelse_branch_only() {
+    // Mirror image of `solver_if_reassigns_pre_existing_opaque_binding_in_one_branch_only`
+    // above, exercising the `orelse_env.bindings` merge loop's `pre_existing`
+    // guard instead of the `body_env.bindings` one -- `join_if_branches_solver`
+    // has two separate, textually near-identical merge loops (one per
+    // branch), and only writing a body-side test left the orelse-side
+    // `continue` unexercised. Here `y` is again pre-existing-opaque before
+    // the `if`, but this time only the `orelse` branch reassigns it to a
+    // real term; `body` is empty.
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
+        local_names: &["cond", "y"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::from(["y".to_string()]),
+    };
+    let body = vec![HirStmt::If {
+        test: HirExpr::Name("cond".to_string()),
+        body: vec![],
+        orelse: vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::IntLiteral(1),
+        }],
+    }];
+
+    collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap();
+
+    assert!(!env.maybe_bindings.contains("y"));
+    assert!(env.opaque_bindings.contains("y"));
+}
+
+#[test]
 fn solver_while_loop_marks_opaque_body_only_binding_as_maybe() {
     // Issue #771 join-site follow-up: a `while` body may execute zero
     // times, so `y` assigned only in the body via an opaque initializer

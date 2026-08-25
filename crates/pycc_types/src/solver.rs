@@ -33,10 +33,33 @@ pub(crate) fn join_if_branches_solver(
     // Merge bindings: first-binding-wins (body first, then orelse).
     // `entry().or_insert()` preserves the existing binding for pre-existing
     // names and takes the body's term for new names introduced by the body.
+    //
+    // Issue #771 join-site follow-up, second reviewer pass: a name that was
+    // pre-existing but only *opaquely* bound (in `pre_existing` via
+    // `env.opaque_bindings`, not yet in `env.bindings`) must be skipped
+    // here, not merged. Without this guard, a branch that reassigns such a
+    // name to a real term has nothing to stop `or_insert` -- unlike a
+    // pre-existing *real* binding, which already blocks the insert because
+    // `env.bindings` already holds an entry for it -- so the one branch's
+    // term would get written into `env.bindings` unconditionally, even
+    // though the other (untouched) branch's actual value is still the old
+    // opaque one. Since this name is not newly introduced by either branch,
+    // it is not added to `maybe_bindings` below either, so an unguarded
+    // insert here would make `HirExpr::Name`'s lookup return that one
+    // branch's term as if it always applied on every path -- a genuine
+    // unmasking, not just an imprecision. A name genuinely new to both
+    // `pre_existing` and `env.bindings` is unaffected by this guard and
+    // still merges normally.
     for (name, term) in &body_env.bindings {
+        if pre_existing.contains(name) && !env.bindings.contains_key(name) {
+            continue;
+        }
         env.bindings.entry(name.clone()).or_insert(term.clone());
     }
     for (name, term) in &orelse_env.bindings {
+        if pre_existing.contains(name) && !env.bindings.contains_key(name) {
+            continue;
+        }
         env.bindings.entry(name.clone()).or_insert(term.clone());
     }
     // Issue #771 join-site follow-up: merge opaque markers too. A name
