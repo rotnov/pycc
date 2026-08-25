@@ -216,6 +216,24 @@ fn cast_marker_is_not_a_value(name: &str) -> Diagnostic {
     )
 }
 
+/// The `typing.TYPE_CHECKING` marker (#790) referenced as a first-class
+/// value, or called, instead of being used exactly as the (possibly
+/// negated-free) test of an `if`/`elif` statement. pycc constant-folds
+/// `if TYPE_CHECKING: ...` in `pycc_hir` before type-checking ever sees the
+/// test expression (see `pycc_std::StdSymbolKind::TypeCheckingMarker`'s own
+/// doc comment) -- this diagnostic only fires for the qualified
+/// `typing.TYPE_CHECKING` spelling used somewhere else, such as `x =
+/// typing.TYPE_CHECKING` or `typing.TYPE_CHECKING()`.
+fn type_checking_marker_is_not_a_value(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0021",
+        format!(
+            "`{name}` is a compile-time marker, not a first-class value — use it only as the test of an `if TYPE_CHECKING:` guard"
+        ),
+        Span::new(0, 0),
+    )
+}
+
 /// Returns `true` if `kind` is any marker symbol kind (Enum, Protocol, ABC,
 /// Decorator, Annotation, or Cast). Used by call-site and value-reference
 /// guards to reject marker symbols used as first-class values with a
@@ -229,6 +247,7 @@ fn is_marker_kind(kind: pycc_std::StdSymbolKind) -> bool {
             | pycc_std::StdSymbolKind::DecoratorMarker
             | pycc_std::StdSymbolKind::AnnotationMarker
             | pycc_std::StdSymbolKind::CastMarker
+            | pycc_std::StdSymbolKind::TypeCheckingMarker
     )
 }
 

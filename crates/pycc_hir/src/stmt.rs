@@ -97,6 +97,35 @@ use exception::lower_except_handler;
 use pycc_ast::{ElifElseClause, Expr, Pattern, Singleton, Stmt, StmtMatch};
 use pycc_diag::Diagnostic;
 
+/// True exactly when `test` is CPython's standard `typing.TYPE_CHECKING`
+/// guard expression, spelled either as the bare name (`from typing import
+/// TYPE_CHECKING`) or the qualified attribute access (`import typing`,
+/// then `typing.TYPE_CHECKING`) (#790). Checked purely syntactically,
+/// matching this module's existing bare-name `Final` precedent above
+/// (`is_final`) and `expr.rs`'s textual, non-import-gated resolution of
+/// `math.sqrt`-shaped attribute access -- `lower_stmt`/`lower_body` have no
+/// access to the module-level import side-table `lower_checked` builds, so
+/// this recognizes the two concrete spellings the real-world idiom uses
+/// rather than resolving a general expression through `pycc_std`.
+/// Deliberately does not recognize a negated or compound test (`if not
+/// TYPE_CHECKING:`, `if TYPE_CHECKING and x:`) -- only the bare guard
+/// itself has the real-world precedent (bodies containing constructs pycc
+/// doesn't support) this fold exists to unblock; a compound test is left
+/// to ordinary lowering, which type-checks both branches exactly as before.
+fn is_type_checking_guard(test: &Expr) -> bool {
+    match test {
+        Expr::Name(name) => name.id.as_str() == "TYPE_CHECKING",
+        Expr::Attribute(attr) => {
+            attr.attr.as_str() == "TYPE_CHECKING"
+                && matches!(
+                    attr.value.as_ref(),
+                    Expr::Name(receiver) if receiver.id.as_str() == "typing"
+                )
+        }
+        _ => false,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_stmt(
     stmt: &Stmt,
@@ -270,6 +299,37 @@ pub(crate) fn lower_stmt(
                 annotation,
                 value,
                 is_final,
+            }
+        }
+        Stmt::If(if_stmt) if is_type_checking_guard(&if_stmt.test) => {
+            // #790: `if TYPE_CHECKING:` is CPython's standard idiom for
+            // guarding imports/statements meant only for static type
+            // checkers -- `typing.TYPE_CHECKING` is always `False` at
+            // runtime, so the guarded body never executes. Constant-fold it
+            // here, before either `lower_expr` or `lower_body` ever sees the
+            // body: the guard commonly wraps constructs this compiler
+            // doesn't support elsewhere (forward-reference-only imports,
+            // typing-only names), and since the body is genuinely dead code
+            // it must never block compilation of the rest of the module.
+            // Only `orelse` (an `elif`/`else` chain, live at runtime
+            // whenever the `TYPE_CHECKING` guard itself is skipped) is
+            // lowered normally. The synthesized `HirExpr::BoolLiteral(false)`
+            // test documents the fold in the HIR itself rather than
+            // silently keeping the original (never evaluated) test
+            // expression around.
+            HirStmt::If {
+                test: HirExpr::BoolLiteral(false),
+                body: vec![],
+                orelse: lower_elif_else_clauses(
+                    &if_stmt.elif_else_clauses,
+                    aliases,
+                    in_loop,
+                    in_function,
+                    in_finally,
+                    class_name,
+                    type_param,
+                    class_defs,
+                )?,
             }
         }
         Stmt::If(if_stmt) => HirStmt::If {
@@ -802,6 +862,25 @@ pub(crate) fn lower_elif_else_clauses(
         return Ok(vec![]);
     };
     match &first.test {
+        // #790: `elif TYPE_CHECKING:` gets the same constant-fold as a
+        // leading `if TYPE_CHECKING:` (see `lower_stmt`'s `Stmt::If` arm's
+        // own doc comment) -- the guarded body is dead at runtime either
+        // way, and CPython's `elif` is just sugar for a nested `if` inside
+        // the enclosing `else`.
+        Some(test) if is_type_checking_guard(test) => Ok(vec![HirStmt::If {
+            test: HirExpr::BoolLiteral(false),
+            body: vec![],
+            orelse: lower_elif_else_clauses(
+                rest,
+                aliases,
+                in_loop,
+                in_function,
+                in_finally,
+                class_name,
+                type_param,
+                class_defs,
+            )?,
+        }]),
         Some(test) => Ok(vec![HirStmt::If {
             test: lower_expr(test, in_function, class_name)?,
             body: lower_body(

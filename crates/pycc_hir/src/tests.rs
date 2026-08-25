@@ -972,6 +972,121 @@ fn lowers_an_elif_as_a_nested_if_in_orelse() {
 }
 
 #[test]
+fn folds_a_bare_type_checking_guard_to_an_empty_dead_body() {
+    // #790: `from typing import TYPE_CHECKING; if TYPE_CHECKING: ...` must
+    // fold to a literal-false test with an empty body -- the guarded body's
+    // `import` (unsupported when nested inside a block) never reaches
+    // `lower_stmt`, so `lower_checked` succeeds instead of failing with
+    // `C0001`.
+    let module = pycc_parser_test_helper::parse(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import some_module_that_does_not_exist_at_runtime_or_compile_time\n",
+    );
+    let hir = lower_checked(&module).unwrap();
+    assert_eq!(
+        hir.items,
+        vec![HirItem::TopLevelStmt(HirStmt::If {
+            test: HirExpr::BoolLiteral(false),
+            body: vec![],
+            orelse: vec![],
+        })]
+    );
+}
+
+#[test]
+fn folds_a_qualified_type_checking_guard_to_an_empty_dead_body() {
+    // #790: the qualified `import typing; if typing.TYPE_CHECKING:` spelling
+    // gets the identical fold as the bare-name form.
+    let module = pycc_parser_test_helper::parse(
+        "import typing\nif typing.TYPE_CHECKING:\n    import some_module_that_does_not_exist_at_runtime_or_compile_time\n",
+    );
+    let hir = lower_checked(&module).unwrap();
+    assert_eq!(
+        hir.items,
+        vec![HirItem::TopLevelStmt(HirStmt::If {
+            test: HirExpr::BoolLiteral(false),
+            body: vec![],
+            orelse: vec![],
+        })]
+    );
+}
+
+#[test]
+fn lowers_the_else_branch_of_a_type_checking_guard_normally() {
+    // #790: only the `TYPE_CHECKING` branch itself is dead code -- an
+    // `else` clause is live at runtime whenever the guard is skipped, so it
+    // must still be lowered exactly like any other `if`/`else`.
+    let module = pycc_parser_test_helper::parse(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import some_module_that_does_not_exist_at_runtime_or_compile_time\nelse:\n    print(1)\n",
+    );
+    let hir = lower_checked(&module).unwrap();
+    assert_eq!(
+        hir.items,
+        vec![HirItem::TopLevelStmt(HirStmt::If {
+            test: HirExpr::BoolLiteral(false),
+            body: vec![],
+            orelse: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            })],
+        })]
+    );
+}
+
+#[test]
+fn folds_an_elif_type_checking_guard_to_an_empty_dead_body() {
+    // #790: `elif TYPE_CHECKING:` gets the same constant-fold as a leading
+    // `if TYPE_CHECKING:`, nested inside the enclosing `else` the same way
+    // `lowers_an_elif_as_a_nested_if_in_orelse` shows for an ordinary `elif`.
+    let module = pycc_parser_test_helper::parse(
+        "from typing import TYPE_CHECKING\nif False:\n    print(1)\nelif TYPE_CHECKING:\n    import some_module_that_does_not_exist_at_runtime_or_compile_time\nelse:\n    print(2)\n",
+    );
+    let hir = lower_checked(&module).unwrap();
+    assert_eq!(
+        hir.items,
+        vec![HirItem::TopLevelStmt(HirStmt::If {
+            test: HirExpr::BoolLiteral(false),
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            })],
+            orelse: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(false),
+                body: vec![],
+                orelse: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::IntLiteral(2)],
+                })],
+            }],
+        })]
+    );
+}
+
+#[test]
+fn a_lowering_error_in_the_else_after_an_if_type_checking_guard_propagates() {
+    // #790: the leading `if TYPE_CHECKING:` arm still lowers its `orelse`
+    // chain normally (only the guard's own body is dead) -- proves the `?`
+    // on that recursive `lower_elif_else_clauses` call actually propagates
+    // a genuine error from a live `else`, not just the empty-`orelse`
+    // success path every other test above exercises.
+    assert_capability_error_message(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    pass\nelse:\n    import some_module_that_does_not_exist_at_runtime_or_compile_time\n",
+        "statement kind not supported yet",
+    );
+}
+
+#[test]
+fn a_lowering_error_after_an_elif_type_checking_guard_propagates() {
+    // #790: same as above, but for the `elif TYPE_CHECKING:` fold's own
+    // recursive `orelse` lowering (a separate `?` in
+    // `lower_elif_else_clauses`, reached only once an earlier ordinary
+    // branch is already live).
+    assert_capability_error_message(
+        "from typing import TYPE_CHECKING\nif False:\n    pass\nelif TYPE_CHECKING:\n    pass\nelse:\n    import some_module_that_does_not_exist_at_runtime_or_compile_time\n",
+        "statement kind not supported yet",
+    );
+}
+
+#[test]
 fn lowers_a_while_loop() {
     let module = pycc_parser_test_helper::parse("while True:\n    print(1)\n");
     let hir = lower_checked(&module).unwrap();

@@ -23802,6 +23802,64 @@ fn qualified_cast_marker_called_in_private_helper_is_t0021() {
 }
 
 #[test]
+fn bare_type_checking_name_used_as_a_value_is_not_defined() {
+    // #790: `TYPE_CHECKING` is recognized *purely syntactically* as the
+    // bare-name test of an `if`/`elif` (`pycc_hir::stmt::is_type_checking_guard`,
+    // matching this module's existing bare-name `Final` precedent) --
+    // `from typing import TYPE_CHECKING` never actually binds the bare
+    // name into the environment for value use, exactly like every other
+    // bare stdlib marker name. Referencing it as a value therefore fails
+    // as an ordinary undefined name (T0021), not the dedicated
+    // `TypeCheckingMarker` diagnostic below -- only the qualified
+    // `typing.TYPE_CHECKING` spelling resolves through the registry for
+    // value use (see `qualified_type_checking_marker_used_as_value_is_t0021`).
+    let err =
+        check_source("from typing import TYPE_CHECKING\nx = TYPE_CHECKING\nprint(x)\n")
+            .unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("is not defined"),
+        "expected an undefined-name message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn qualified_type_checking_marker_used_as_value_is_t0021() {
+    // #790: the qualified `typing.TYPE_CHECKING` spelling used as a value
+    // (as opposed to an `if`/`elif` test) is rejected the same way as the
+    // bare name -- `expr.rs`'s textual `math.sqrt`-shaped attribute
+    // resolution routes it to the same registry entry and the same
+    // `TypeCheckingMarker` arm.
+    let err = check_source("import typing\nx = typing.TYPE_CHECKING\nprint(x)\n").unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("compile-time marker"),
+        "expected a TYPE_CHECKING-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn qualified_type_checking_marker_as_value_in_private_helper_is_t0021() {
+    // #790: the same `TypeCheckingMarker` arm in collect_expr_constraints'
+    // Name handler (constraints.rs, the solver path) -- module-level and
+    // top-level-function references above both resolve through the
+    // validation pass (`expr.rs`), so this exercises the separate solver
+    // path a private helper's body takes instead.
+    let err = check_source(
+        "import typing\ndef _helper() -> int:\n    x = typing.TYPE_CHECKING\n    return 1\nprint(_helper())\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("compile-time marker"),
+        "expected a TYPE_CHECKING-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
 fn protocol_argument_mismatch_emits_t0046() {
     // This exercises the assignable_error call (line 2894) when
     // a non-conforming class is passed to a protocol-typed parameter.

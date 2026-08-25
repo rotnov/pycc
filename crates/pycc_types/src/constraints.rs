@@ -66,7 +66,8 @@ use crate::{
     is_assignable, is_generic_signature, is_known_callable_builtin, is_local, is_marker_kind,
     marker_is_not_a_value, non_callable_binding, solver, std_constant_is_not_callable,
     std_function_used_as_a_value, std_qualified_symbol, std_receiver_name, std_receiver_shadowed,
-    std_scalar_to_ty, t0042, ty_contains_param, unbound_local, unsupported_callable_builtin,
+    std_scalar_to_ty, t0042, ty_contains_param, type_checking_marker_is_not_a_value, unbound_local,
+    unsupported_callable_builtin,
 };
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
@@ -362,6 +363,9 @@ pub(crate) fn collect_expr_constraints(
                         Err(annotation_marker_is_not_a_value(name))
                     }
                     pycc_std::StdSymbolKind::CastMarker => Err(cast_marker_is_not_a_value(name)),
+                    pycc_std::StdSymbolKind::TypeCheckingMarker => {
+                        Err(type_checking_marker_is_not_a_value(name))
+                    }
                     pycc_std::StdSymbolKind::ProtocolMarker
                     | pycc_std::StdSymbolKind::AbcMarker
                     | pycc_std::StdSymbolKind::DecoratorMarker => Err(marker_is_not_a_value(name)),
