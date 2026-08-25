@@ -122,6 +122,53 @@ another in-flight branch may already hold the very number pattern-matching would
 
 ---
 
+## 2026-08-25 — a dispatched sub-agent's task became unrecoverable in place after a context-compaction restart landed it in a different worktree; `git worktree list` + `gh pr view <n>` (not the stale summary) was what actually located the live work
+
+What happened: a sub-agent session was dispatched to fix two D-068 pinned-reviewer blocker
+findings (a walrus target never calling `kill_narrowing` in `pycc_mir::expr::
+pre_bind_named_expr_targets`, and `pycc_hir::collect_killed_names` never scanning an
+`ExprStmt`/`If`/`While` `test` for an embedded `NamedExpr`) in worktree `/private/tmp/
+pr780-fix` on local branch `fix/pr780-conflict-resolve` at commit `c304ae92`. A
+context-compaction restart resumed the session in an entirely different, unrelated sandboxed
+worktree with no access to that path, branch, or any uncommitted state that may have existed
+there. The inherited conversation summary described specific file line numbers and completed
+work, but none of it could be verified or continued from the new location.
+
+Root cause: trusting the inherited summary's *location* claims (worktree path, branch name)
+as if they were still live, reachable state, rather than treating them as a hypothesis to
+re-verify against the actual git/GitHub state visible from the new sandbox. The summary was
+accurate about what a *previous* session had done, but the current session's sandbox is a hard
+boundary the summary cannot see past — a worktree path from an old summary may not even exist
+in the current session, and a locally-named branch (`fix/pr780-conflict-resolve`) may never
+have been pushed, making it invisible to `gh` entirely.
+
+What fixed it: `git worktree list` (no arguments, safe from any worktree) enumerated every
+worktree across the whole local clone, including ones this session could not `cd` into,
+confirming `fix/pr780-conflict-resolve` was still checked out (holding the described
+`c304ae92` fix work) at `/private/tmp/pr780-fix` — just not reachable from this sandbox.
+Separately, `gh pr view 780 --json state,headRefName,mergeable` established the actual GitHub
+ground truth: PR #780's real head branch is `feat/issue-769-optional-narrowing`, not
+`fix/pr780-conflict-resolve` (an unpushed local-only branch that had never itself become a PR).
+Since `c304ae92`'s commit object was still reachable in the shared `.git` object store (all
+worktrees of one clone share one object database), `git checkout -b <new-branch> c304ae92`
+from *this* session's own worktree created a fresh, isolated branch carrying that exact base
+state — without touching the other worktree's checkout at all (branches are refs, not
+worktree-locked; only one worktree may have a given branch *name* checked out at a time, but
+any worktree can start a new branch from any reachable commit).
+
+Lesson: when a dispatched sub-agent's session resumes somewhere unexpected (different
+worktree, different branch, different HEAD) after a compaction restart, do not try to
+reconstruct or continue the prior location from memory. Run `git worktree list` first — it is
+safe from anywhere and shows every checkout across the clone, including ones outside the
+current sandbox. Then confirm the *authoritative* branch/PR identity with `gh pr view` (or
+equivalent) rather than trusting a locally-named branch mentioned in a stale summary — a
+branch name is not evidence it is the PR's actual head, or even pushed at all. If the commit
+the prior work was based on is still reachable in the shared object database, branch fresh
+from it in the current, reachable worktree instead of trying to regain access to the original
+one.
+
+---
+
 ## 2026-08-25 — three consecutive D-068 review rounds against #780 kept finding the same defect class in new constructs, because the fix was reviewed incrementally instead of characterized once, up front, for its full scope
 
 What happened: the `Optional[T]` flow-sensitive narrowing feature (D-201, #769/#747 Part 2)

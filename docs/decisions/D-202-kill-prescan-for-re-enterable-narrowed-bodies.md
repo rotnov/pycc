@@ -65,12 +65,28 @@ status: accepted
   1. **Kill-prescan, applied uniformly before checking or lowering any
      re-enterable body.** `pycc_hir::killed_names(body)` recursively
      collects every bare name `body` reassigns *anywhere* within it --
-     exactly the set of statement kinds that route a bare-name target
-     through `check_assignment` (checker) or the equivalent MIR bind
-     (`Assign`, a valued `AnnAssign`, a `ForRange`/`ForList` loop variable,
-     and both `target`/`var` of `ListCompAssign`/`SetCompAssign`/
+     the set of statement kinds that route a bare-name target through
+     `check_assignment` (checker) or the equivalent MIR bind (`Assign`, a
+     valued `AnnAssign`, a `ForRange`/`ForList` loop variable, and both
+     `target`/`var` of `ListCompAssign`/`SetCompAssign`/
      `DictCompAssign`; `DictSet`/`AttrSet` write through a
-     container/attribute slot, not a name binding, and are excluded).
+     container/attribute slot, not a name binding, and are excluded),
+     plus every `HirExpr::NamedExpr { name, .. }` (PEP 572 walrus, #774)
+     found anywhere inside an `ExprStmt`'s expression or an `If`/`While`
+     statement's own `test` -- the only two expression positions a walrus
+     can appear in (`collect_named_expr_targets_in_expr`, a dedicated
+     recursive expression walker `collect_killed_names` calls from those
+     three statement arms, since a walrus target never has its own
+     `HirStmt` variant to match on the way every other kill kind above
+     does). A D-068 review of #780/#774's interaction (after this same PR
+     merged main, which carries #774, into the branch this ADR already
+     landed on) found the walrus half of this rule missing entirely --
+     `collect_killed_names` put a bare `ExprStmt` in a no-op arm and never
+     inspected `While`'s own `test` -- so a loop body whose only kill of a
+     narrowed name was a bare walrus (`(x := None)`) was invisible to the
+     prescan, corrected in place below per this same append-only
+     exception (this entry is still unmerged into `main`, so it is not
+     yet an "already-accepted" entry that rule protects).
      `pycc_types::narrow::apply_kill_prescan`/`pycc_mir`'s own
      `apply_kill_prescan` (crate-local, since `pycc_mir` cannot depend on
      `pycc_types`) each drop every killed name from the narrowing overlay
@@ -192,3 +208,18 @@ status: accepted
     re-enterable body's execution kill," available to any future
     flow-sensitive analysis that needs the same soundness property this
     entry establishes for `Optional[T]` narrowing.
+  - A second, narrower D-068 finding from the same #780/#774-interaction
+    review round is not a `killed_names`/prescan gap at all, but a direct
+    application of D-199's own original kill-on-assign rule that this PR's
+    walrus merge missed: `pycc_mir::expr::pre_bind_named_expr_targets` (the
+    pre-pass that performs the actual MIR-level `bind_variable` for every
+    walrus target, mirroring `HirStmt::Assign`'s own paired
+    `kill_narrowing`/`bind_variable` calls in `stmt.rs`) called
+    `bind_variable` for a `NamedExpr` target but never `kill_narrowing` --
+    so `(x := None)` inside a narrowed `if` branch left the stale
+    `$narrowed:{name}` sentinel in place, and a read right after it kept
+    unconditionally lowering to `MirExpr::OptionalUnwrap` for a value the
+    walrus had just overwritten with `None`. Fixed by adding the same
+    `kill_narrowing` call `pre_bind_named_expr_targets` was missing, no new
+    decision needed since it is exactly D-199's existing rule applied to a
+    binding shape (#774's walrus) that postdates D-199 itself.

@@ -29316,3 +29316,14 @@ fn a_plain_narrowed_read_inside_the_finally_body_still_type_checks() {
         "a narrowed read inside the `finally` body must still type-check after the sequencing fix: {result:?}"
     );
 }
+
+#[test]
+fn a_narrowed_read_inside_a_while_loop_body_killed_only_by_a_walrus_is_rejected() {
+    let result = check_source(
+        "def f(x: int | None) -> int:\n    if x is not None:\n        i: int = 0\n        while i < 2:\n            print(x + 1)\n            (x := None)\n            i = i + 1\n        return 0\n    return -1\n",
+    );
+    let err = result.expect_err(
+        "a `while` body that reads a narrowed name before a bare-walrus kill must still be rejected, because a later iteration runs the read after the kill",
+    );
+    assert_eq!(err.code, "T0021");
+}

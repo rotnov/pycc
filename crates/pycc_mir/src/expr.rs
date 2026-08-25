@@ -925,6 +925,14 @@ pub(super) fn pre_bind_named_expr_targets(
             pre_bind_named_expr_targets(value, scopes, classes, current_class);
             let lowered_value = lower_expr(value, scopes, classes, current_class);
             let ty = lowered_value.ty();
+            // D-068 review of #780/#774's interaction (blocker finding 1): a
+            // walrus target is a reassignment exactly like `Assign`'s own arm
+            // in `stmt.rs` (see its paired `kill_narrowing`/`bind_variable`
+            // calls), so it must clear any stale narrowing sentinel for
+            // `name` the same way -- otherwise a subsequent read still
+            // lowers to an unconditional `MirExpr::OptionalUnwrap` for a
+            // value the walrus may have just overwritten with `None`.
+            super::kill_narrowing(scopes, name);
             super::bind_variable(scopes, name.clone(), ty);
         }
         HirExpr::IntLiteral(_)

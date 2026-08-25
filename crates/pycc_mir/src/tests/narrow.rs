@@ -223,6 +223,48 @@ fn a_reassignment_inside_the_narrowed_body_kills_the_narrowing() {
     );
 }
 
+/// D-068 review of #780/#774's interaction (blocker finding 1): a walrus
+/// target inside a narrowed `if` branch is a reassignment exactly like a
+/// plain `x = None` (the test directly above this one) and must kill `x`'s
+/// narrowing sentinel the same way. Before this fix,
+/// `expr::pre_bind_named_expr_targets`'s `HirExpr::NamedExpr` arm called
+/// `bind_variable` but never `kill_narrowing`, so the read right after
+/// `(x := 5)` kept unconditionally lowering to `MirExpr::OptionalUnwrap`
+/// wrapping the *original* `Optional[int]`-typed name, exactly as if the
+/// walrus reassignment had never happened.
+#[test]
+fn a_walrus_reassignment_inside_the_narrowed_body_kills_the_narrowing() {
+    let hir = module(vec![
+        HirItem::TopLevelStmt(optional_int_decl("x")),
+        HirItem::TopLevelStmt(HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![
+                HirStmt::ExprStmt(HirExpr::NamedExpr {
+                    name: "x".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(5)),
+                }),
+                print_x("x"),
+            ],
+            orelse: vec![],
+        }),
+    ]);
+    let mir = build(&hir);
+    let MirItem::TopLevelStmt(MirStmt::If { body, .. }) = &mir.items[1] else {
+        panic!("expected the second item to be the lowered `if`");
+    };
+    assert_eq!(
+        body[1],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Optional(Box::new(Ty::Int)),
+            }],
+            ty: Ty::None,
+        })
+    );
+}
+
 /// A test naming a variable that is not currently `Optional`-scoped is
 /// never treated as narrowing-eligible -- `if flag is not None:` where
 /// `flag` is a plain `bool` never reaches `pycc_mir::build` in practice

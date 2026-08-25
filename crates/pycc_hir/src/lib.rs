@@ -870,11 +870,13 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
                 killed.insert(target.clone());
                 killed.insert(var.clone());
             }
-            HirStmt::If { body, orelse, .. } => {
+            HirStmt::If { test, body, orelse } => {
+                collect_named_expr_targets_in_expr(test, killed);
                 collect_killed_names(body, killed);
                 collect_killed_names(orelse, killed);
             }
-            HirStmt::While { body, .. } => {
+            HirStmt::While { test, body } => {
+                collect_named_expr_targets_in_expr(test, killed);
                 collect_killed_names(body, killed);
             }
             HirStmt::Match { cases, .. } => {
@@ -895,11 +897,110 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
                 collect_killed_names(orelse, killed);
                 collect_killed_names(finalbody, killed);
             }
-            HirStmt::ExprStmt(_)
-            | HirStmt::DictSet { .. }
-            | HirStmt::AttrSet { .. }
-            | HirStmt::Return(_)
-            | HirStmt::Raise { .. } => {}
+            HirStmt::ExprStmt(expr) => {
+                collect_named_expr_targets_in_expr(expr, killed);
+            }
+            HirStmt::DictSet { .. } | HirStmt::AttrSet { .. } | HirStmt::Return(_) | HirStmt::Raise { .. } => {}
+        }
+    }
+}
+
+/// D-068 review of #780/#774's interaction (blocker finding 2): walks `expr`
+/// for every `HirExpr::NamedExpr { name, .. }` node at any depth and inserts
+/// each `name` into `killed`. A bare walrus (`(x := None)`) is a reassignment
+/// exactly like `HirStmt::Assign`, but it never appears as its own
+/// `HirStmt` variant -- `lower_stmt`'s placement restriction (PEP 572) only
+/// allows a `NamedExpr` inside a bare `HirStmt::ExprStmt`'s expression or an
+/// `If`/`While` statement's `test`, so [`collect_killed_names`] must inspect
+/// those two expression positions directly instead of relying on a
+/// statement-level match arm the way every other kill kind above does.
+///
+/// Before this fix, `collect_killed_names` put a bare `ExprStmt` in a no-op
+/// arm and never inspected `If`/`While`'s own `test`, so a re-enterable loop
+/// body whose only kill of a narrowed name was a walrus (see
+/// `docs/decisions/D-201-kill-prescan-for-re-enterable-narrowed-bodies.md`)
+/// was invisible to the prescan: a read textually before the walrus within
+/// the loop body was wrongly treated as still narrowed on every iteration
+/// after the first, even though the *previous* iteration's walrus already
+/// killed it. Mirrors `pycc_types::collect_named_expr_names_in_expr`'s own
+/// identical walk (duplicated here rather than shared because `pycc_hir` has
+/// no dependency on `pycc_types`, and this function only needs to collect
+/// names, not also bind their inferred types the way that one does).
+fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<String>) {
+    match expr {
+        HirExpr::NamedExpr { name, value } => {
+            collect_named_expr_targets_in_expr(value, killed);
+            killed.insert(name.clone());
+        }
+        HirExpr::IntLiteral(_)
+        | HirExpr::FloatLiteral(_)
+        | HirExpr::BoolLiteral(_)
+        | HirExpr::StringLiteral(_)
+        | HirExpr::NoneLiteral
+        | HirExpr::Name(_)
+        | HirExpr::ListPop { .. }
+        | HirExpr::Super => {}
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_named_expr_targets_in_expr(arg, killed);
+            }
+        }
+        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+            collect_named_expr_targets_in_expr(left, killed);
+            collect_named_expr_targets_in_expr(right, killed);
+        }
+        HirExpr::UnaryOp { operand, .. } => collect_named_expr_targets_in_expr(operand, killed),
+        HirExpr::FString(parts) => {
+            for part in parts {
+                if let FStringPart::Interpolation(inner) = part {
+                    collect_named_expr_targets_in_expr(inner, killed);
+                }
+            }
+        }
+        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+            for e in es {
+                collect_named_expr_targets_in_expr(e, killed);
+            }
+        }
+        HirExpr::Subscript { base, index } => {
+            collect_named_expr_targets_in_expr(base, killed);
+            collect_named_expr_targets_in_expr(index, killed);
+        }
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
+            collect_named_expr_targets_in_expr(base, killed);
+            for bound in [start, stop, step].into_iter().flatten() {
+                collect_named_expr_targets_in_expr(bound, killed);
+            }
+        }
+        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+            collect_named_expr_targets_in_expr(value, killed);
+        }
+        HirExpr::DictLiteral(pairs) => {
+            for (k, v) in pairs {
+                collect_named_expr_targets_in_expr(k, killed);
+                collect_named_expr_targets_in_expr(v, killed);
+            }
+        }
+        HirExpr::DictGetOrDefault { key, default, .. } => {
+            collect_named_expr_targets_in_expr(key, killed);
+            collect_named_expr_targets_in_expr(default, killed);
+        }
+        HirExpr::AttrGet { base, .. } => collect_named_expr_targets_in_expr(base, killed),
+        HirExpr::MethodCall { base, args, .. } => {
+            collect_named_expr_targets_in_expr(base, killed);
+            for arg in args {
+                collect_named_expr_targets_in_expr(arg, killed);
+            }
+        }
+        HirExpr::GenericClassInstantiate { args, .. } => {
+            for arg in args {
+                collect_named_expr_targets_in_expr(arg, killed);
+            }
         }
     }
 }

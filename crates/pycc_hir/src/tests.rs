@@ -5270,3 +5270,193 @@ fn killed_names_ignores_statement_kinds_that_do_not_rebind_a_bare_name() {
     ];
     assert!(killed_names(&body).is_empty());
 }
+
+// D-068 review of #780/#774's interaction (blocker finding 2): a bare walrus
+// (`(x := ...)`) is a reassignment exactly like `HirStmt::Assign`, but it
+// never appears as its own `HirStmt` variant -- it only ever shows up nested
+// inside a bare `ExprStmt`'s expression or an `If`/`While` statement's
+// `test`. Before this fix, `collect_killed_names` never inspected either of
+// those two expression positions, so a walrus-only kill was invisible to the
+// prescan.
+
+#[test]
+fn killed_names_includes_a_walrus_target_inside_a_bare_expr_stmt() {
+    let body = [HirStmt::ExprStmt(HirExpr::NamedExpr {
+        name: "x".to_string(),
+        value: Box::new(HirExpr::NoneLiteral),
+    })];
+    let killed = killed_names(&body);
+    assert_eq!(killed, HashSet::from(["x".to_string()]));
+}
+
+#[test]
+fn killed_names_includes_a_walrus_target_inside_an_ifs_test() {
+    let body = [HirStmt::If {
+        test: HirExpr::NamedExpr {
+            name: "x".to_string(),
+            value: Box::new(HirExpr::NoneLiteral),
+        },
+        body: vec![],
+        orelse: vec![],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(killed, HashSet::from(["x".to_string()]));
+}
+
+#[test]
+fn killed_names_includes_a_walrus_target_inside_a_whiles_test() {
+    let body = [HirStmt::While {
+        test: HirExpr::NamedExpr {
+            name: "x".to_string(),
+            value: Box::new(HirExpr::NoneLiteral),
+        },
+        body: vec![],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(killed, HashSet::from(["x".to_string()]));
+}
+
+#[test]
+fn killed_names_ignores_an_expr_stmt_with_no_embedded_walrus() {
+    // Regresses the pre-fix behavior for the common case: a bare `ExprStmt`
+    // that contains no `NamedExpr` anywhere still contributes nothing.
+    let body = [HirStmt::ExprStmt(HirExpr::Call {
+        callee: "print".to_string(),
+        args: vec![HirExpr::Name("x".to_string())],
+    })];
+    assert!(killed_names(&body).is_empty());
+}
+
+/// Exercises every remaining arm of `collect_named_expr_targets_in_expr`
+/// (the walrus-in-expression walker `collect_killed_names` now calls for
+/// `ExprStmt`/`If`/`While`) in one deeply nested expression, pinning D-014's
+/// 100% line/region coverage for a function with no wildcard arm. Each
+/// non-walrus arm nests a `NamedExpr` for a distinct name one level inside
+/// it, so every arm both recurses correctly and the walk still terminates
+/// through the plain-literal/`Name`/`ListPop`/`Super` no-op arms at the
+/// leaves.
+#[test]
+fn killed_names_finds_a_walrus_nested_inside_every_expression_kind() {
+    fn walrus(name: &str) -> HirExpr {
+        HirExpr::NamedExpr {
+            name: name.to_string(),
+            value: Box::new(HirExpr::NoneLiteral),
+        }
+    }
+
+    let test = HirExpr::Call {
+        callee: "f".to_string(),
+        args: vec![
+            walrus("call_arg"),
+            HirExpr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(walrus("binop_left")),
+                right: Box::new(walrus("binop_right")),
+            },
+            HirExpr::Compare {
+                op: CmpOpKind::Eq,
+                left: Box::new(walrus("cmp_left")),
+                right: Box::new(walrus("cmp_right")),
+            },
+            HirExpr::UnaryOp {
+                op: UnaryOpKind::USub,
+                operand: Box::new(walrus("unary")),
+            },
+            HirExpr::FString(vec![
+                FStringPart::Literal("lit".to_string()),
+                FStringPart::Interpolation(Box::new(walrus("fstring"))),
+            ]),
+            HirExpr::ListLiteral(vec![walrus("list_elt")]),
+            HirExpr::SetLiteral(vec![walrus("set_elt")]),
+            HirExpr::TupleLiteral(vec![walrus("tuple_elt")]),
+            HirExpr::Subscript {
+                base: Box::new(walrus("subscript_base")),
+                index: Box::new(walrus("subscript_index")),
+            },
+            HirExpr::Slice {
+                base: Box::new(walrus("slice_base")),
+                start: Some(Box::new(walrus("slice_start"))),
+                stop: Some(Box::new(walrus("slice_stop"))),
+                step: Some(Box::new(walrus("slice_step"))),
+            },
+            HirExpr::ListAppend {
+                list: "xs".to_string(),
+                value: Box::new(walrus("list_append")),
+            },
+            HirExpr::SetAdd {
+                set: "s".to_string(),
+                value: Box::new(walrus("set_add")),
+            },
+            HirExpr::DictLiteral(vec![(walrus("dict_key"), walrus("dict_value"))]),
+            HirExpr::DictGetOrDefault {
+                dict: "d".to_string(),
+                key: Box::new(walrus("dict_get_key")),
+                default: Box::new(walrus("dict_get_default")),
+            },
+            HirExpr::AttrGet {
+                base: Box::new(walrus("attr_get_base")),
+                attr: "field".to_string(),
+            },
+            HirExpr::MethodCall {
+                base: Box::new(walrus("method_call_base")),
+                method: "m".to_string(),
+                args: vec![walrus("method_call_arg")],
+            },
+            HirExpr::GenericClassInstantiate {
+                class: "Box".to_string(),
+                type_arg: Ty::Int,
+                args: vec![walrus("generic_instantiate_arg")],
+            },
+            // Leaves that terminate the walk without themselves nesting a
+            // walrus, exercising the no-op arm.
+            HirExpr::IntLiteral(0),
+            HirExpr::FloatLiteral(0.0),
+            HirExpr::BoolLiteral(true),
+            HirExpr::StringLiteral("s".to_string()),
+            HirExpr::NoneLiteral,
+            HirExpr::Name("plain_name".to_string()),
+            HirExpr::ListPop {
+                list: "xs".to_string(),
+            },
+            HirExpr::Super,
+        ],
+    };
+
+    let body = [HirStmt::While {
+        test,
+        body: vec![],
+    }];
+    let killed = killed_names(&body);
+    let expected: HashSet<String> = [
+        "call_arg",
+        "binop_left",
+        "binop_right",
+        "cmp_left",
+        "cmp_right",
+        "unary",
+        "fstring",
+        "list_elt",
+        "set_elt",
+        "tuple_elt",
+        "subscript_base",
+        "subscript_index",
+        "slice_base",
+        "slice_start",
+        "slice_stop",
+        "slice_step",
+        "list_append",
+        "set_add",
+        "dict_key",
+        "dict_value",
+        "dict_get_key",
+        "dict_get_default",
+        "attr_get_base",
+        "method_call_base",
+        "method_call_arg",
+        "generic_instantiate_arg",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    assert_eq!(killed, expected);
+}
