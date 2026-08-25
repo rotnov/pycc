@@ -8085,6 +8085,172 @@ fn collect_block_constraints_recurses_into_every_try_star_block_and_binds_a_name
     .unwrap();
 }
 
+/// A `DictSet` whose target name is declared local but never bound
+/// (`local_names` claims it but `bindings` never seeds it) is the same
+/// unresolved-local-reference shape the two `DictSet`-focused tests above
+/// use to reach `T0021`. Placing it in `TryStar`'s own `body` block reaches
+/// the first of that arm's four `collect_block_constraints(...)?` call
+/// sites and proves the `?` actually propagates the body block's error
+/// instead of only ever seeing `Ok` there.
+#[test]
+fn collect_block_constraints_propagates_an_error_from_a_try_star_body_block() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &["missing"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+    };
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::DictSet {
+            dict: "x".to_string(),
+            key: HirExpr::Name("missing".to_string()),
+            value: HirExpr::IntLiteral(1),
+        }],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+/// Same unresolved-local-reference shape as above, but placed in a
+/// `TryStar` handler's body instead -- reaches the arm's second
+/// `collect_block_constraints(...)?` call site (the per-handler loop).
+#[test]
+fn collect_block_constraints_propagates_an_error_from_a_try_star_handler_block() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &["missing"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+    };
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::Name("missing".to_string()),
+                value: HirExpr::IntLiteral(1),
+            }],
+        }],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+/// Same shape again, placed in `TryStar`'s `else` block -- reaches the
+/// arm's third `collect_block_constraints(...)?` call site.
+#[test]
+fn collect_block_constraints_propagates_an_error_from_a_try_star_else_block() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &["missing"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+    };
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![HirStmt::DictSet {
+            dict: "x".to_string(),
+            key: HirExpr::Name("missing".to_string()),
+            value: HirExpr::IntLiteral(1),
+        }],
+        finalbody: vec![],
+    }];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+/// Same shape again, placed in `TryStar`'s `finally` block -- reaches the
+/// arm's fourth and last `collect_block_constraints(...)?` call site.
+#[test]
+fn collect_block_constraints_propagates_an_error_from_a_try_star_finally_block() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &["missing"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+    };
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![HirStmt::DictSet {
+            dict: "x".to_string(),
+            key: HirExpr::Name("missing".to_string()),
+            value: HirExpr::IntLiteral(1),
+        }],
+    }];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
 #[test]
 fn local_name_collection_ignores_a_dict_set_target() {
     // `d[k] = v` mutates an existing binding's contents, not a name --

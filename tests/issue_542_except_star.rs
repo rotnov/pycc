@@ -731,3 +731,53 @@ fn a_try_star_finally_bare_return_with_no_enclosing_finally_emits_ret_void() {
     assert!(ok, "build/run failed: {err}");
     assert_eq!(out, b"cleanup\ndone\n");
 }
+
+/// All three fixtures above intercept a `return` from the *try*/*handler*
+/// body through an implicitly-falling-through `finally` block (one whose
+/// own body never itself ends in a terminator), so `emit_try_star`'s
+/// `finally_falls_through` flag -- computed from whether the `finally`
+/// block's own generated code already ends with an LLVM terminator -- is
+/// always `true` in each of them. A `finally` clause whose own last
+/// statement is a `raise` gives the `finally` block its own terminator
+/// before `emit_try_star` reaches this check, making `finally_falls_through`
+/// `false` and skipping the whole return/pending-exception-restoration
+/// block entirely -- the only way to exercise that flag's other value.
+#[test]
+fn a_try_star_finally_that_itself_raises_never_falls_through() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_finally_raises_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "finally_raises.py",
+        "def f() -> int:\n    try:\n        raise ValueError(\"bad\")\n    except* ValueError:\n        return 3\n    finally:\n        raise RuntimeError(\"boom\")\n\nprint(f())\n",
+    );
+    assert!(!ok, "the finally's own raise should propagate and abort the program");
+    assert!(out.is_empty(), "no output should be printed: {out:?}");
+    assert!(
+        err.contains("RuntimeError") && err.contains("boom"),
+        "stderr should report the finally's own RuntimeError: {err}"
+    );
+}
+
+/// `check_try_star_stmt`'s per-type validation loop (mirroring
+/// `check_try_stmt`'s own PEP 758 loop) returns early via `?` on the first
+/// invalid name, so every other `except*` fixture that names a *rejected*
+/// type never reaches the loop's natural end-of-iteration fallthrough.
+/// Naming a user-defined class that both is derived from a builtin
+/// exception (so `user_exception_class` resolves it) and inherits only
+/// `Exception`'s own constructor (so `reject_own_constructor` returns `Ok`)
+/// -- with no `as` binding, matching `tests/issue_702_user_exceptions.rs`'s
+/// analogous plain-`except` fixture -- lets the loop body finish normally
+/// instead of diverging, exercising the loop's closing brace.
+#[test]
+fn except_star_catches_a_user_defined_exception_class_without_a_binding() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_user_class_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "user_exc_star.py",
+        "class AppError(Exception):\n    pass\n\n\ndef f() -> None:\n    try:\n        raise AppError(\"bad\")\n    except* AppError:\n        print(\"caught\")\n\nf()\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught\n");
+}
