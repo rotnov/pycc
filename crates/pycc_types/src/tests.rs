@@ -29064,3 +29064,113 @@ fn narrowing_target_is_none_for_a_wholly_unbound_name() {
     };
     assert!(narrow::narrowing_target(&env, &test).is_none());
 }
+
+// D-068 review of #780 (blocker finding 1): a reassignment inside a nested
+// branch killed the narrowing overlay on that branch-local clone, but
+// `join_if_branches` reconciled only `.bindings`, never `.narrowed` -- so
+// the kill was silently discarded the moment the nested `if` closed, and a
+// read immediately afterward (still inside the *outer* narrowed body) saw
+// the stale narrowed (non-`Optional`) type instead of being correctly
+// rejected. `join_loop_body`/`join_match_branches` had the identical
+// defect for a kill nested inside a `while`/`for` body or a `match` case.
+// See `narrow::join_narrowed`'s doc comment for the fix.
+
+#[test]
+fn reassignment_inside_a_nested_if_kills_narrowing_at_module_scope() {
+    let result = check_source(
+        "x: int | None = 5\nflag: bool = True\nif x is not None:\n    if flag:\n        x = None\n    print(x + 1)\n",
+    );
+    let err = result.expect_err(
+        "a reassignment inside a nested `if`'s body must kill the outer narrowing once the nested `if` closes",
+    );
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn reassignment_inside_a_nested_if_kills_narrowing_at_function_scope() {
+    let result = check_source(
+        "def f(x: int | None, flag: bool) -> int:\n    if x is not None:\n        if flag:\n            x = None\n        return x + 1\n    return 0\n",
+    );
+    let err = result.expect_err(
+        "a reassignment inside a nested `if`'s body must kill the outer narrowing once the nested `if` closes (function scope)",
+    );
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn reassignment_inside_a_nested_while_kills_narrowing() {
+    // Structural analog of the nested-`if` repro, via `join_loop_body`
+    // instead of `join_if_branches`: the loop may execute the kill on some
+    // iteration, so the narrowing must not survive the loop closing.
+    let result = check_source(
+        "x: int | None = 5\nflag: bool = True\nif x is not None:\n    while flag:\n        x = None\n    print(x + 1)\n",
+    );
+    let err =
+        result.expect_err("a reassignment inside a nested `while` body must kill the narrowing");
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn reassignment_inside_one_match_case_kills_narrowing() {
+    // Structural analog via `join_match_branches`: only one case reassigns
+    // `x`, so the narrowing must not survive the `match` closing.
+    let result = check_source(
+        "x: int | None = 5\nflag: int = 0\nif x is not None:\n    match flag:\n        case 0:\n            x = None\n        case _:\n            pass\n    print(x + 1)\n",
+    );
+    let err =
+        result.expect_err("a reassignment inside one `match` case must kill the narrowing");
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn narrowing_still_survives_a_join_when_both_arms_agree() {
+    // Companion negative case: the fix must not become so conservative that
+    // it drops narrowing nothing actually killed -- neither arm of the
+    // nested `if` reassigns `x`, so it stays narrowed after the nested
+    // `if` closes, exactly as before this fix.
+    let result = check_source(
+        "x: int | None = 5\nflag: bool = True\nif x is not None:\n    if flag:\n        print(0)\n    print(x + 1)\n",
+    );
+    assert!(
+        result.is_ok(),
+        "narrowing must still survive a nested `if` neither arm of which reassigns the name: {result:?}"
+    );
+}
+
+// D-068 review of #780 (warning finding 2): the checker's fast-path
+// helpers (`check_if_branches_in_place`/`check_while_body_in_place` and
+// their function-scope counterparts) bypassed `narrow::check_stmt_sequence`
+// in favor of a raw per-statement loop, so `apply_post_if_narrowing` never
+// ran on the fast path -- a nested early-return guard's narrowing never
+// propagated to a later statement in the same body whenever the outer
+// construct itself introduced no bindings (the fast-path's own gate).
+
+#[test]
+fn nested_early_return_guard_narrows_inside_an_unrelated_outer_if_in_function_scope() {
+    let result = check_source(
+        "def f(cond: bool, x: int | None) -> int:\n    if cond:\n        if x is None:\n            return 0\n        return x\n    return 0\n",
+    );
+    assert!(
+        result.is_ok(),
+        "a nested early-return guard must narrow the rest of its enclosing body even on the fast (no-new-bindings) `if` path: {result:?}"
+    );
+}
+
+#[test]
+fn nested_early_return_guard_narrows_inside_an_unrelated_outer_while_in_function_scope() {
+    // The `while` counterpart of the same fast-path bypass
+    // (`check_while_body_in_place_in_function`).
+    let result = check_source(
+        "def f(flag: bool, x: int | None) -> int:\n    while flag:\n        if x is None:\n            return 0\n        return x\n    return 0\n",
+    );
+    assert!(
+        result.is_ok(),
+        "a nested early-return guard must narrow the rest of its enclosing body even on the fast `while` path: {result:?}"
+    );
+}
+
+// Module scope has no legal `return` statement (`check_stmt`'s own
+// `HirStmt::Return` arm rejects it outright before `apply_post_if_narrowing`
+// ever runs), so the early-return continuation shape -- and therefore
+// finding 2's specific defect -- cannot occur at module scope at all; there
+// is deliberately no module-scope counterpart to the two tests above.

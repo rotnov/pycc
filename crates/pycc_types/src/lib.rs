@@ -1232,6 +1232,14 @@ fn join_if_branches(
         }
     }
     env.bindings = joined;
+    // Blocker fix (D-068 review of #780): reconcile the `narrowed` overlay
+    // the same way `bindings` is reconciled just above, instead of leaving
+    // it as whatever it was before this `if` ran. See
+    // `narrow::join_narrowed`'s doc comment for the full soundness
+    // rationale -- a name stays narrowed only if both branches still narrow
+    // it to the exact same type; a kill (or a narrowing established in only
+    // one branch) drops out.
+    env.narrowed = narrow::join_narrowed(&body_env.narrowed, &[&orelse_env.narrowed]);
     Ok(())
 }
 
@@ -1262,6 +1270,15 @@ fn join_loop_body(env: &mut Environment, body_env: &Environment) {
             }
         }
     }
+    // Blocker fix (D-068 review of #780): a loop may run zero or more
+    // times, so a name stays narrowed after the loop only if the body
+    // still narrows it to the same type it had going in -- the loop
+    // running zero times is exactly "env's own narrowed map", and the loop
+    // body having run is "body_env's narrowed map after the body executed
+    // once", so intersecting the two covers both cases. A kill inside the
+    // body (e.g. `while flag: x = None`) drops `x` out, matching
+    // `join_if_branches`'s identical fix. See `narrow::join_narrowed`.
+    env.narrowed = narrow::join_narrowed(&env.narrowed, &[&body_env.narrowed]);
 }
 
 /// PEP 634-636 (#381, PR-21): joins N case environments from a `match`
@@ -1291,6 +1308,16 @@ fn join_match_branches(env: &mut Environment, case_envs: &[Environment], exhaust
         }
     }
     env.bindings = joined;
+    // Blocker fix (D-068 review of #780): reconcile `narrowed` the same
+    // conservative way as `join_if_branches`/`join_loop_body`. `env` itself
+    // (pre-match) stands in for the implicit "no case matched" path -- safe
+    // to include unconditionally (exhaustive or not): it never *adds* a
+    // name to the intersection, since it can only narrow the result set
+    // further, so an exhaustive match that never actually needed the
+    // implicit path is unaffected wherever every case agrees anyway.
+    let case_narrowed_maps: Vec<&HashMap<String, Ty>> =
+        case_envs.iter().map(|ce| &ce.narrowed).collect();
+    env.narrowed = narrow::join_narrowed(&env.narrowed, &case_narrowed_maps);
 }
 
 /// PEP 634-636 (#381, PR-21): checks a `match` statement. The subject is
@@ -1689,15 +1716,25 @@ fn check_if_branches_in_place(
     body: &[HirStmt],
     orelse: &[HirStmt],
 ) -> Result<(), Diagnostic> {
-    body.iter().try_for_each(|stmt| check_stmt(env, stmt))?;
-    orelse.iter().try_for_each(|stmt| check_stmt(env, stmt))
+    // Warning fix (D-068 review of #780): route through the
+    // narrowing-aware sequence checker, not a raw per-statement loop.
+    // `introduces_bindings` gates this fast path on "no new bindings", but
+    // says nothing about whether a *nested* statement recognizes an
+    // early-return narrowing guard (`narrow::apply_post_if_narrowing`) that
+    // needs to propagate to later statements in this same body/orelse --
+    // skipping that propagation here silently rejected an otherwise valid
+    // nested guard shape. See `crates/pycc_types/src/narrow.rs`.
+    narrow::check_stmt_sequence(env, body)?;
+    narrow::check_stmt_sequence(env, orelse)
 }
 
 /// Issue #118 Part 1: fast-path helper for module-scope `while` loops
 /// where the body introduces no new bindings. Checks the body in-place
 /// without cloning env.
 fn check_while_body_in_place(env: &mut Environment, body: &[HirStmt]) -> Result<(), Diagnostic> {
-    body.iter().try_for_each(|stmt| check_stmt(env, stmt))
+    // Warning fix (D-068 review of #780): see `check_if_branches_in_place`'s
+    // identical comment.
+    narrow::check_stmt_sequence(env, body)
 }
 
 pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnostic> {
@@ -2325,11 +2362,12 @@ fn check_if_branches_in_place_in_function(
     orelse: &[HirStmt],
     return_ty: Ty,
 ) -> Result<(), Diagnostic> {
-    body.iter()
-        .try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))?;
-    orelse
-        .iter()
-        .try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))
+    // Warning fix (D-068 review of #780): see the module-scope
+    // `check_if_branches_in_place`'s identical comment -- route through the
+    // narrowing-aware sequence checker so a nested early-return guard's
+    // narrowing propagates to later statements even on this fast path.
+    narrow::check_stmt_sequence_in_function(env, local_names, body, return_ty.clone())?;
+    narrow::check_stmt_sequence_in_function(env, local_names, orelse, return_ty)
 }
 
 /// Issue #118 Part 1: fast-path helper for function-scope `while` loops
@@ -2340,8 +2378,9 @@ fn check_while_body_in_place_in_function(
     body: &[HirStmt],
     return_ty: Ty,
 ) -> Result<(), Diagnostic> {
-    body.iter()
-        .try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))
+    // Warning fix (D-068 review of #780): see
+    // `check_if_branches_in_place_in_function`'s identical comment.
+    narrow::check_stmt_sequence_in_function(env, local_names, body, return_ty)
 }
 
 fn check_stmt_in_function(

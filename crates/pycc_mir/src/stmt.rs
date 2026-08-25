@@ -11,6 +11,27 @@ use super::expr::pre_bind_named_expr_targets;
 use pycc_hir::{HirStmt, Ty};
 use std::collections::HashMap;
 
+/// Blocker fix (D-068 review of #780): shared loop-body lowering helper for
+/// `While`/`ForRange`/`ForList`'s three arms below -- lowers `body` via
+/// `lower_scoped_body`, then reconciles the narrowing overlay the same way
+/// `pycc_types::join_loop_body` does: a name stays narrowed after the loop
+/// only if it is narrowed to the same type whether the loop ran zero times
+/// (the pre-loop snapshot) or ran the body at least once (the body's own
+/// ending state). See `lower_scoped_body`'s doc comment for why this needs
+/// a second, explicit `restore_narrowing` call rather than trusting its own
+/// internal one.
+fn lower_loop_body(
+    body: &[HirStmt],
+    scopes: &mut Vec<HashMap<String, Ty>>,
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) -> Vec<MirStmt> {
+    let pre_snapshot = super::narrowing_snapshot(scopes);
+    let (body, body_end) = super::lower_scoped_body(body, scopes, classes, current_class, None);
+    super::restore_narrowing(scopes, super::join_narrowed(&pre_snapshot, &[&body_end]));
+    body
+}
+
 pub(super) fn lower_stmt(
     stmt: &HirStmt,
     scopes: &mut Vec<HashMap<String, Ty>>,
@@ -260,13 +281,31 @@ pub(super) fn lower_stmt(
                 let (name, _, inner) = narrowing.as_ref().expect("narrows_body implies Some");
                 (name.as_str(), inner.clone())
             });
-            let body = super::lower_scoped_body(body, scopes, classes, current_class, body_narrow);
+            let (body, body_end) =
+                super::lower_scoped_body(body, scopes, classes, current_class, body_narrow);
 
             let orelse_narrow = narrows_orelse.then(|| {
                 let (name, _, inner) = narrowing.as_ref().expect("narrows_orelse implies Some");
                 (name.as_str(), inner.clone())
             });
-            let orelse = super::lower_scoped_body(orelse, scopes, classes, current_class, orelse_narrow);
+            let (orelse, orelse_end) =
+                super::lower_scoped_body(orelse, scopes, classes, current_class, orelse_narrow);
+
+            // Blocker fix (D-068 review of #780): an `if` always runs
+            // exactly one of `body`/`orelse`, never neither, so the
+            // narrowing state visible to whatever statement follows this
+            // `if` in the enclosing sequence is the join of both branches'
+            // own ending states -- not whatever `scopes` happened to hold
+            // before this `if` ran (each `lower_scoped_body` call above
+            // already reverted `scopes` back to exactly that pre-`if`
+            // state on its own, so without this call the join would
+            // silently never have happened at all, reverting any kill made
+            // inside just one of the two branches -- e.g. `if flag: x =
+            // None` nested inside an outer `if x is not None:` -- the
+            // moment this `if` closed). Mirrors
+            // `pycc_types::join_if_branches`'s identical fix exactly, one
+            // layer down.
+            super::restore_narrowing(scopes, super::join_narrowed(&body_end, &[&orelse_end]));
 
             MirStmt::If {
                 test: lowered_test,
@@ -291,11 +330,15 @@ pub(super) fn lower_stmt(
             // Issue #769 (Part 2 of #747), D-201 scope cut: narrowing is
             // deliberately `if`-only -- `pycc_types::narrow` never applies
             // `apply_branch_narrowing` to a `while` test (see its own call
-            // sites), so `while`'s body is lowered with no narrow overlay,
-            // mirroring the checker.
+            // sites), so no narrow overlay is pushed for entering the body,
+            // mirroring the checker. `lower_loop_body` (D-068 review fix)
+            // still reconciles any narrowing state established/killed
+            // *inside* the loop body itself against the loop running zero
+            // times, exactly like `ForRange`/`ForList` below.
+            let body = lower_loop_body(body, scopes, classes, current_class);
             MirStmt::While {
                 test: lowered_test,
-                body: super::lower_scoped_body(body, scopes, classes, current_class, None),
+                body,
             }
         }
         HirStmt::ForRange {
@@ -309,7 +352,7 @@ pub(super) fn lower_stmt(
             let stop = lower_expr(stop, scopes, classes, current_class);
             let step = lower_expr(step, scopes, classes, current_class);
             bind_variable(scopes, var.clone(), Ty::Int);
-            let body = super::lower_scoped_body(body, scopes, classes, current_class, None);
+            let body = lower_loop_body(body, scopes, classes, current_class);
             MirStmt::ForRange {
                 var: var.clone(),
                 start,
@@ -347,7 +390,7 @@ pub(super) fn lower_stmt(
             match lookup(scopes, list) {
                 Ty::List(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
-                    let body = super::lower_scoped_body(body, scopes, classes, current_class, None);
+                    let body = lower_loop_body(body, scopes, classes, current_class);
                     MirStmt::ForList {
                         var: var.clone(),
                         list: list.clone(),
@@ -356,7 +399,7 @@ pub(super) fn lower_stmt(
                 }
                 Ty::Dict(kv) => {
                     bind_variable(scopes, var.clone(), kv.0);
-                    let body = super::lower_scoped_body(body, scopes, classes, current_class, None);
+                    let body = lower_loop_body(body, scopes, classes, current_class);
                     MirStmt::ForDict {
                         var: var.clone(),
                         dict: list.clone(),
@@ -371,7 +414,7 @@ pub(super) fn lower_stmt(
                 // Task 7 fix round).
                 Ty::Set(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
-                    let body = super::lower_scoped_body(body, scopes, classes, current_class, None);
+                    let body = lower_loop_body(body, scopes, classes, current_class);
                     MirStmt::ForSet {
                         var: var.clone(),
                         set: list.clone(),
@@ -552,7 +595,14 @@ pub(super) fn lower_stmt(
             orelse,
             finalbody,
         } => {
-            let body = super::lower_scoped_body(body, scopes, classes, current_class, None);
+            // D-068 review of #780: `try`'s body/handlers/orelse/finally are
+            // not this fix's scope -- see `lower_scoped_body`'s doc comment
+            // (same reasoning as `match`'s case bodies in `matching.rs`).
+            // Each remains isolated from its siblings as before; the ending
+            // narrowed state is intentionally discarded at every one of
+            // these four call sites.
+            let (body, _end_narrowed) =
+                super::lower_scoped_body(body, scopes, classes, current_class, None);
             let handlers = handlers
                 .iter()
                 .map(|h| {
@@ -586,7 +636,7 @@ pub(super) fn lower_stmt(
                             Ty::Instance(Box::new(binding_type.clone())),
                         );
                     }
-                    let handler_body =
+                    let (handler_body, _end_narrowed) =
                         super::lower_scoped_body(&h.body, scopes, classes, current_class, None);
                     MirExceptHandler {
                         exc_type_tag,
@@ -600,8 +650,9 @@ pub(super) fn lower_stmt(
                     }
                 })
                 .collect();
-            let orelse = super::lower_scoped_body(orelse, scopes, classes, current_class, None);
-            let finalbody =
+            let (orelse, _end_narrowed) =
+                super::lower_scoped_body(orelse, scopes, classes, current_class, None);
+            let (finalbody, _end_narrowed) =
                 super::lower_scoped_body(finalbody, scopes, classes, current_class, None);
             MirStmt::Try {
                 body,

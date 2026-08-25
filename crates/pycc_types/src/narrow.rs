@@ -75,6 +75,7 @@ use crate::env::Environment;
 use crate::{check_stmt, check_stmt_in_function};
 use pycc_diag::Diagnostic;
 use pycc_hir::{HirStmt, NoneTestPolarity, Ty, optional_none_test};
+use std::collections::HashMap;
 
 /// The result of recognizing an `if` statement's `test` as a
 /// narrowing-eligible shape: the bare name, the `Optional`'s inner type
@@ -175,6 +176,49 @@ pub(crate) fn apply_post_if_narrowing(env: &mut Environment, stmt: &HirStmt) {
     if matches!(target.polarity, NoneTestPolarity::Is) && definitely_terminates(body) {
         env.narrowed.insert(target.name, target.inner);
     }
+}
+
+/// Join step for the `narrowed` overlay (blocker fix, D-068 review of #780,
+/// Part 2 of #747/#769): every branch-joining construct in `lib.rs`
+/// (`join_if_branches`, `join_loop_body`, `join_match_branches`) reconciles
+/// `.bindings` but historically left `.narrowed` completely untouched --
+/// whatever the target `env`'s overlay held *before* the branch/loop/match
+/// ran was simply left in place afterward, regardless of what any branch
+/// actually did to it. That silently reverted a `kill_narrowing`-equivalent
+/// event (an assignment inside exactly one nested branch, via
+/// `check_assignment`'s `env.narrowed.remove(target)`) the moment control
+/// returned to the enclosing block, and a subsequent read of the
+/// "reassigned to `None`" name still saw the stale narrowed (non-`None`)
+/// type.
+///
+/// The fix applies the same sound, conservative rule uniformly everywhere
+/// two or more possible-path `Environment`s are reconciled into one: a name
+/// stays narrowed to `ty` after the join only if *every* supplied map
+/// narrows it to that exact `ty`. A name absent from any one map (killed on
+/// that path, or never narrowed there to begin with -- e.g. a narrowing
+/// newly established inside only one arm) drops out of the intersection
+/// entirely. This is deliberately not "maximally precise" (it does not
+/// attempt to prove two structurally different narrowed types are still
+/// compatible, or to special-case an unconditionally-terminating branch the
+/// way `join_if_branches` does for `.bindings`) -- per this repository's
+/// D-127 judgment call recorded in the #780 review response, a narrower
+/// conservative join that can only ever *drop* a valid narrowing is
+/// preferable to a more precise one that risks keeping an invalid one.
+/// Every call site has at least one map by construction (the branch/loop
+/// body's own end-state, or -- for `join_match_branches` -- `env`'s
+/// pre-match state standing in for the implicit "no case matched" path), so
+/// the signature takes `first` separately from `rest` rather than a
+/// possibly-empty slice: that keeps the join total without an unreachable
+/// empty-input branch.
+pub(crate) fn join_narrowed(
+    first: &HashMap<String, Ty>,
+    rest: &[&HashMap<String, Ty>],
+) -> HashMap<String, Ty> {
+    let mut joined: HashMap<String, Ty> = first.clone();
+    for map in rest {
+        joined.retain(|name, ty| map.get(name) == Some(ty));
+    }
+    joined
 }
 
 /// Checks `stmts` sequentially against `env` (module scope), applying the

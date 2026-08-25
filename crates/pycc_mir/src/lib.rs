@@ -962,7 +962,7 @@ fn narrowed_ty(scopes: &[HashMap<String, Ty>], name: &str) -> Option<Ty> {
 /// `pycc_types::narrow`'s own overlay entry does when applied directly to
 /// (not a clone of) the real `env`. Only [`lower_stmt_sequence`] below
 /// calls this, once per statement, immediately after lowering it.
-fn apply_post_if_narrowing(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) {
+fn apply_post_if_narrowing(stmt: &HirStmt, scopes: &mut [HashMap<String, Ty>]) {
     let HirStmt::If { test, body, .. } = stmt else {
         return;
     };
@@ -1029,12 +1029,41 @@ fn narrowing_snapshot(scopes: &[HashMap<String, Ty>]) -> HashMap<String, Ty> {
 /// mutation made since the snapshot was taken, whether from a direct
 /// `push_narrowing` call or indirectly from a nested
 /// [`apply_post_if_narrowing`] hit deeper in the body being restored from.
-fn restore_narrowing(scopes: &mut Vec<HashMap<String, Ty>>, snapshot: HashMap<String, Ty>) {
+fn restore_narrowing(scopes: &mut [HashMap<String, Ty>], snapshot: HashMap<String, Ty>) {
     let top = scopes
         .last_mut()
         .expect("at least one scope is always present");
     top.retain(|key, _| !key.starts_with("$narrowed:"));
     top.extend(snapshot);
+}
+
+/// Blocker fix (D-068 review of #780): the MIR-side counterpart of
+/// `pycc_types::narrow::join_narrowed`. A name stays narrowed to `ty` after
+/// two or more possible-path narrowing snapshots are reconciled only if
+/// *every* supplied snapshot narrows it to that exact `ty`; a snapshot that
+/// killed it (or never had it) drops it from the intersection entirely.
+/// Operates on [`narrowing_snapshot`]-shaped maps (`$narrowed:{name}` ->
+/// inner type), so the result can be handed directly to
+/// [`restore_narrowing`]. See that Rust doc's checker-side twin for the
+/// full soundness rationale -- this is the identical algorithm, kept as an
+/// independent copy rather than a shared crate dependency because
+/// `pycc_mir` does not (and per the existing `pycc_hir::optional_none_test`
+/// precedent, should not) depend on `pycc_types`.
+///
+/// Every call site has at least one snapshot by construction (an `if`'s
+/// body/orelse end-state, or a loop's pre-body/post-body end-state), so
+/// `first` is taken separately from `rest` rather than a possibly-empty
+/// slice -- that keeps the join total without an unreachable empty-input
+/// branch.
+fn join_narrowed(
+    first: &HashMap<String, Ty>,
+    rest: &[&HashMap<String, Ty>],
+) -> HashMap<String, Ty> {
+    let mut joined: HashMap<String, Ty> = first.clone();
+    for snapshot in rest {
+        joined.retain(|key, ty| snapshot.get(key) == Some(ty));
+    }
+    joined
 }
 
 /// Issue #769 (Part 2 of #747): lowers a *nested* statement body (an
@@ -1060,20 +1089,41 @@ fn restore_narrowing(scopes: &mut Vec<HashMap<String, Ty>>, snapshot: HashMap<St
 /// role `push_narrowing`/`kill_narrowing` played before this wrapper existed)
 /// before lowering `stmts` -- `restore_narrowing` undoes this push too, since
 /// the snapshot is taken before it is applied.
+///
+/// Blocker fix (D-068 review of #780): also returns the narrowing-sentinel
+/// subset as it stood *immediately after* lowering `stmts`, before the
+/// isolating restore -- this branch's "ending" narrowed state. Isolation
+/// during lowering (so a nested body's own narrowing never leaks into a
+/// sibling while both are being lowered) and reporting that branch's own
+/// outcome to the caller are two different concerns: unconditionally
+/// discarding the ending state (the pre-fix behavior) silently reverted a
+/// same-branch `kill_narrowing` the moment this nested body closed, even
+/// when nothing else contradicted it. A caller that needs the
+/// join-reconciled effect of one or more sibling branches (`HirStmt::If`'s
+/// body+orelse pair, a loop's single body joined against "the loop ran zero
+/// times") combines the returned end-states with [`join_narrowed`] and
+/// applies the result back onto `scopes` via a second, deliberate
+/// `restore_narrowing` call of its own -- see `stmt.rs`'s `If`/`While`/
+/// `ForRange`/`ForList` arms. A caller that does not need that (a `match`
+/// case, a `try` handler/`orelse`/`finally` body -- each already isolated
+/// from its siblings by this same wrapper, and not this session's fix
+/// scope) simply ignores the second return value, preserving the prior
+/// "restore to entry state" behavior exactly.
 fn lower_scoped_body(
     stmts: &[HirStmt],
     scopes: &mut Vec<HashMap<String, Ty>>,
     classes: &HashMap<String, HirClassDef>,
     current_class: Option<&str>,
     narrow: Option<(&str, Ty)>,
-) -> Vec<MirStmt> {
+) -> (Vec<MirStmt>, HashMap<String, Ty>) {
     let snapshot = narrowing_snapshot(scopes);
     if let Some((name, inner)) = narrow {
         push_narrowing(scopes, name, inner);
     }
     let out = lower_stmt_sequence(stmts, scopes, classes, current_class);
+    let end_state = narrowing_snapshot(scopes);
     restore_narrowing(scopes, snapshot);
-    out
+    (out, end_state)
 }
 
 /// #436/#432: Looks up a class in the `classes` table by its MRO entry

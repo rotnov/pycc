@@ -534,6 +534,124 @@ fn a_nested_scoped_body_entered_while_already_narrowed_still_sees_the_narrowing(
     );
 }
 
+/// D-068 review of #780, Finding 1 (MIR side): a reassignment to `None`
+/// inside a *nested* `if`'s body must kill the narrowing for every read
+/// after the nested `if` closes, within the same enclosing branch -- `if x
+/// is not None: (if flag: x = None); print(x)`. Before this fix,
+/// `lower_scoped_body`'s snapshot/restore unconditionally reverted
+/// `scopes`' narrowing state back to what it was before the nested `if`,
+/// discarding the kill and leaving `print(x)` lowered to a
+/// `MirExpr::OptionalUnwrap` reading a struct whose `present` field can
+/// actually be `false` -- an out-of-bounds/garbage-payload read, not a
+/// clean rejection. `pycc_types::check` now rejects the source this HIR
+/// models (T0021, via `join_if_branches`'s own analogous fix), so this
+/// hand-built-HIR test is the only way to exercise `pycc_mir::build`'s
+/// independent copy of the same defect directly.
+#[test]
+fn a_reassignment_inside_a_nested_if_kills_narrowing_past_the_nested_ifs_own_close() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![
+            ("x".to_string(), Ty::Optional(Box::new(Ty::Int))),
+            ("flag".to_string(), Ty::Bool),
+        ],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![
+                HirStmt::If {
+                    test: HirExpr::Name("flag".to_string()),
+                    body: vec![HirStmt::Assign {
+                        target: "x".to_string(),
+                        value: HirExpr::NoneLiteral,
+                    }],
+                    orelse: vec![],
+                },
+                print_x("x"),
+            ],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: outer_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered outer `if`");
+    };
+    // The kill inside the nested `if flag: x = None` must survive past the
+    // nested `if`'s own close: `print(x)` here must read plain
+    // `Optional(Int)`, never `OptionalUnwrap`.
+    assert_eq!(
+        outer_body[1],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Optional(Box::new(Ty::Int)),
+            }],
+            ty: Ty::None,
+        })
+    );
+}
+
+/// The same defect as above, one mechanism over: a reassignment to `None`
+/// inside a nested `while` loop's body must also kill the narrowing for
+/// every read after the loop closes, within the same enclosing branch --
+/// `if x is not None: (while flag: x = None); print(x)`. Exercises
+/// `stmt::lower_loop_body`'s own join between the "loop ran zero times"
+/// state (still narrowed) and the "loop ran the body" state (killed),
+/// mirroring `pycc_types::join_loop_body`'s identical fix.
+#[test]
+fn a_reassignment_inside_a_nested_while_kills_narrowing_past_the_loops_own_close() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![
+            ("x".to_string(), Ty::Optional(Box::new(Ty::Int))),
+            ("flag".to_string(), Ty::Bool),
+        ],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![
+                HirStmt::While {
+                    test: HirExpr::Name("flag".to_string()),
+                    body: vec![HirStmt::Assign {
+                        target: "x".to_string(),
+                        value: HirExpr::NoneLiteral,
+                    }],
+                },
+                print_x("x"),
+            ],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: outer_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered outer `if`");
+    };
+    assert_eq!(
+        outer_body[1],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Optional(Box::new(Ty::Int)),
+            }],
+            ty: Ty::None,
+        })
+    );
+}
+
 /// `.ty()` of an `OptionalUnwrap` node reports the inner type, not
 /// `Optional(inner)` -- the read-side mirror of `OptionalWrap`'s own
 /// `.ty()` test.
