@@ -11958,6 +11958,41 @@ fn constructed_group_with_a_non_instance_member_is_a_codegen_error() {
     assert!(err.contains("group member must be an exception instance"), "{err}");
 }
 
+/// Same rationale as `constructed_group_with_non_string_message_is_a_codegen_error`
+/// above, but for the `role == "cause"` branch of the error message: that
+/// test uses a plain `MirStmt::Raise`, which always passes `role ==
+/// "exception"` into `emit_exception_value`, so the group variant's
+/// `"raise cause message must be a string"` wording (as opposed to `"raise
+/// message must be a string"`) has never been exercised. A `RaiseFrom` whose
+/// `cause` (not `exception`) is the non-string-message `ConstructedGroup`
+/// reaches that call with `role == "cause"`, mirroring
+/// `raise_from_with_non_string_cause_is_a_codegen_error`'s coverage of the
+/// same branch for the plain (non-group) `Constructed` variant.
+#[test]
+fn constructed_group_cause_with_non_string_message_is_a_codegen_error() {
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::RaiseFrom {
+            exception: MirExceptionValue::Constructed {
+                type_tag: 1,
+                class_name: "ValueError".to_string(),
+                message: MirExpr::StringLiteral("msg".to_string()),
+            },
+            cause: MirExceptionValue::ConstructedGroup {
+                type_tag: EXCEPTION_GROUP_TYPE_TAG,
+                class_name: "ExceptionGroup".to_string(),
+                message: MirExpr::IntLiteral(42),
+                members: vec![],
+            },
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("constructed_group_cause_non_str_message");
+    let obj_path = dir.join("constructed_group_cause_non_str_message.o");
+    let err = compile_to_object(&mir, &obj_path, None, false)
+        .expect_err("a non-string ExceptionGroup cause message must be a codegen error");
+    assert!(err.contains("raise cause message must be a string"), "{err}");
+}
+
 /// `emit_try_star` calls `emit_body` once for each of its four constituent
 /// blocks (try body, handler body, `else` body, `finally` body), and each
 /// call is immediately propagated with `?`. Every real `except*` fixture

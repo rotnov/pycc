@@ -260,6 +260,27 @@ fn except_star_else_runs_when_no_exception() {
     assert_eq!(out, b"body\nelse\n");
 }
 
+/// `emit_try_star`'s `else` block emits `build_unconditional_branch(finally_bb)`
+/// only when the `else` body itself falls through (`else_falls_through`,
+/// computed from whether the `else` block's own generated code already ends
+/// with an LLVM terminator). `except_star_else_runs_when_no_exception`
+/// above ends its `else` body in a plain `print(...)` statement, so
+/// `else_falls_through` is always `true` there -- the `false` case (an
+/// `else` body whose last statement is itself a `return`, already
+/// terminating the block before this check runs) has never been exercised.
+#[test]
+fn a_try_star_else_that_itself_returns_never_falls_through() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_else_returns_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "else_returns.py",
+        "def f() -> int:\n    try:\n        pass\n    except* ValueError:\n        return 1\n    else:\n        return 2\n    finally:\n        pass\n\nprint(f())\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"2\n");
+}
+
 #[test]
 fn except_star_bare_clause_is_rejected_at_parse_time() {
     let dir = std::env::temp_dir().join(format!("pycc_542_bare_{}", std::process::id()));
@@ -345,6 +366,60 @@ fn exception_group_construction_rejects_a_non_str_message() {
         "try:\n    raise ExceptionGroup(1, [1, 2])\nexcept* ValueError:\n    pass\n",
     );
     assert!(!ok, "a non-str ExceptionGroup message should be rejected");
+    assert!(
+        combined.contains("T0021"),
+        "should mention T0021: {combined}"
+    );
+}
+
+/// Part 3 of #382 (#542, PEP 654, D-202): `check_exception_group_operand`'s
+/// own `infer_expr_in(env, local_names, &args[0])?` call -- distinct from the
+/// `message_ty != Ty::Str` check right below it. `exception_group_construction_rejects_a_non_str_message`
+/// above supplies a message argument (`1`) that infers successfully as `int`
+/// and is then rejected by the type comparison; it never makes `infer_expr_in`
+/// itself return an `Err`. Naming an undefined variable as the message
+/// argument makes inference itself fail (T0021, "not defined"), reaching the
+/// `?` operator's own error-propagation branch instead.
+#[test]
+fn exception_group_construction_rejects_an_unresolved_message_name() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_msgname_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "msgname.py",
+        "try:\n    raise ExceptionGroup(undefined_message, [ValueError(\"v\")])\nexcept* ValueError:\n    pass\n",
+    );
+    assert!(
+        !ok,
+        "an ExceptionGroup message naming an undefined variable should be rejected"
+    );
+    assert!(
+        combined.contains("T0021"),
+        "should mention T0021: {combined}"
+    );
+}
+
+/// Same rationale as `exception_group_construction_rejects_an_unresolved_message_name`
+/// above, but for `check_exception_group_member_operand`'s own
+/// `infer_expr_in(env, local_names, expr)?` call: every other member-rejection
+/// fixture in this file (`exception_group_construction_rejects_a_non_exception_member`,
+/// etc.) supplies a member expression that infers successfully and is then
+/// rejected by the `matches!` check right after it, never by `infer_expr_in`
+/// itself failing. An undefined variable as a member name makes inference
+/// itself fail instead.
+#[test]
+fn exception_group_construction_rejects_an_unresolved_member_name() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_membername_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "membername.py",
+        "try:\n    raise ExceptionGroup(\"multi\", [undefined_member])\nexcept* ValueError:\n    pass\n",
+    );
+    assert!(
+        !ok,
+        "an ExceptionGroup member naming an undefined variable should be rejected"
+    );
     assert!(
         combined.contains("T0021"),
         "should mention T0021: {combined}"
@@ -646,13 +721,18 @@ fn a_type_error_inside_a_try_star_finally_body_is_rejected() {
     );
 }
 
-/// `check_try_star_stmt` joins each handler's resulting environment back
-/// with `join_if_branches`, propagating that join's own error via `?` --
-/// the same join a plain `Try`'s handlers already exercise, but never
-/// before for `TryStar`. Two `except*` clauses that each assign a
-/// pre-existing name to a mutually incompatible, non-assignable type (the
-/// second clause's assignment conflicting with the first, once joined back
-/// against the pre-`try` binding) reaches that error branch.
+/// `check_try_star_stmt`'s handler-body loop type-checks each statement
+/// through `check_stmt_shared`, which itself calls `check_assignment` for an
+/// ordinary `Assign`. `check_assignment` already rejects an incompatible
+/// reassignment of a pre-existing name *before* `check_try_star_stmt` ever
+/// reaches its own `join_if_branches` call -- so despite the superficial
+/// resemblance, this fixture (each `except*` clause reassigning a
+/// pre-existing name to a mutually incompatible type) exercises the
+/// handler-body statement loop's own `?` propagation (already covered by
+/// `a_type_error_inside_a_try_star_handler_body_is_rejected`'s arithmetic
+/// error), not the join. See
+/// `a_handler_as_binding_conflicting_with_a_pre_existing_name_is_rejected_at_the_join`
+/// below for a fixture that reaches `join_if_branches`'s own error branch.
 #[test]
 fn conflicting_types_across_two_try_star_handlers_are_rejected() {
     let dir = std::env::temp_dir().join(format!("pycc_542_join_conflict_{}", std::process::id()));
@@ -665,6 +745,43 @@ fn conflicting_types_across_two_try_star_handlers_are_rejected() {
     assert!(
         !ok,
         "conflicting types joined across two except* handlers should be rejected"
+    );
+    assert!(
+        combined.contains("T0023"),
+        "should mention T0023: {combined}"
+    );
+}
+
+/// `check_try_star_stmt`'s handler-join loop (`for handler_env in
+/// &handler_envs { ... join_if_branches(&mut joined, &previous,
+/// handler_env)?; }`) propagates `join_if_branches`'s own `Err` via `?`.
+/// Reaching that specific error branch (as opposed to
+/// `check_assignment`'s own, exercised by
+/// `conflicting_types_across_two_try_star_handlers_are_rejected` above)
+/// requires the *join itself* to be the first place two `Definitely`-typed,
+/// mutually incompatible types for the same name meet -- which an ordinary
+/// `Assign` inside a handler body can never do, since `check_assignment`
+/// always intercepts an incompatible reassignment before the handler body
+/// finishes. `except* ... as z:` is different: its binding
+/// (`handler_env.bind(name, Ty::Instance("ExceptionGroup"))`) is a raw,
+/// unconditional bind with no compatibility check against `z`'s
+/// pre-existing type, so it slips a `Definitely(ExceptionGroup)` binding
+/// straight into the first handler's own environment. When `z` was already
+/// `Definitely(int)` before the `try` (from the module-level `z = 1`), the
+/// join between that pre-`try` state and the first handler's freshly bound
+/// `ExceptionGroup` type is where the mismatch is first detected.
+#[test]
+fn a_handler_as_binding_conflicting_with_a_pre_existing_name_is_rejected_at_the_join() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_join_as_conflict_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "join_as_conflict.py",
+        "z = 1\ntry:\n    raise ValueError(\"v\")\nexcept* ValueError as z:\n    pass\nexcept* TypeError:\n    pass\n",
+    );
+    assert!(
+        !ok,
+        "an except*-as binding conflicting with a pre-existing name's type should be rejected at the join"
     );
     assert!(
         combined.contains("T0023"),
