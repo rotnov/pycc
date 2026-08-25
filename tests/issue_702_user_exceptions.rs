@@ -288,8 +288,11 @@ fn a_module_with_more_user_exception_classes_than_tags_is_rejected() {
     source.push_str("def main() -> None:\n    raise E0(\"x\")\n");
     let text = check_error("too_many", &source);
     assert!(text.contains("C0001"), "unexpected diagnostic: {text}");
+    // Part 3 of #382 (#542, PEP 654, D-202) added `ExceptionGroup` and
+    // `BaseExceptionGroup` to `BUILTIN_EXCEPTION_CLASSES`, shrinking the
+    // remaining per-module user-exception tag budget from 233 to 231.
     assert!(
-        text.contains("at most 233"),
+        text.contains("at most 231"),
         "unexpected diagnostic: {text}"
     );
 }
