@@ -100,6 +100,9 @@ jobs:
       - name: Check conformance breadth contract (issue #595)
         run: python3 -B scripts/check_conformance_breadth.py
 
+      - name: Check scratch-directory usage (issue #781)
+        run: python3 -B scripts/check_scratch_dir_usage.py
+
       - name: Check README coverage badge binding (issue #211)
         run: |
           ruby scripts/check_readme_coverage_badge.rb

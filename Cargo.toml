@@ -11,6 +11,7 @@ members = [
     "crates/pycc_rt",
     "crates/pycc_artifact_layout",
     "crates/pycc_codegen",
+    "crates/pycc_scratch",
 ]
 
 [workspace.package]
