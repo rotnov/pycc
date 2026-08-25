@@ -96,6 +96,11 @@ fn assert_clean_value_error(case: &str, source: &str, message: &str) {
     );
 }
 
+/// Asserts the documented D-072 exit-`101` boundary carrying `message`.
+/// `pycc run` (rather than `pycc build` plus a direct exec) is deliberate:
+/// `pycc_rt`'s panic unwinds across an `extern "C"` boundary and becomes a
+/// non-unwinding process abort, so the raw child reports no exit code at
+/// all. The `101` is the driver's own mapping of that abort.
 fn assert_runtime_abort(case: &str, source: &str, message: &str) {
     let src = write_case(case, source);
     let run = Command::new(pycc_bin())
