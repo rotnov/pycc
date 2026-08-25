@@ -1,0 +1,114 @@
+---
+id: D-200
+title: "Shared `pycc_scratch` crate and lint gate for scratch-directory lifecycle"
+status: accepted
+---
+
+## D-200: Shared `pycc_scratch` crate and lint gate for scratch-directory lifecycle
+
+- Status: accepted (Part 1 of #779, issue #781)
+- Context: issue #779 found ~384 ad hoc `std::env::temp_dir().join(...)` call
+  sites across 36 tracked test files, plus two unconditional production leaks
+  in `src/main.rs` (`try_build`'s `pycc_obj_*` object file, `run`'s
+  `pycc_run_*` executable) — together responsible for a real disk-fill
+  incident (70,000+ leaked temp directories, 70+ GiB). Two independent
+  defects caused this: no shared `Drop`-based cleanup, so a panic partway
+  through a test (or an early return in production code) skipped a manual
+  `remove_dir_all`; and no collision-safe naming, so two call sites in the
+  same process could pick the same directory name and race. The existing
+  `crates/pycc_codegen/src/tests_support.rs::TempTestDir`/`tempfile_dir`
+  pattern gets the `Drop` half right (normal exit and panic unwind both
+  covered by its own tests) but not the naming half: its
+  `pycc_codegen_test_{label}_{pid}` scheme uses only the process ID and a
+  caller-supplied label, so two call sites in the same test binary sharing a
+  label collide on the same directory today. No workspace crate declares
+  `tempfile` as a direct dependency (only transitively, via `rand` 0.8.7
+  pulled in elsewhere), and no existing repository check scans `.rs` source
+  text for a banned call shape and fails CI on a match.
+- Decision: add a new workspace member crate, `crates/pycc_scratch`, whose
+  only public API is `ScratchDir` — an RAII handle that derefs to `Path` and
+  removes its directory tree on `Drop`, including during panic unwinding.
+  `ScratchDir::new(category: &str) -> io::Result<Self>` creates a directory
+  named `pycc_{category}_{pid}_{nanos}_{seq}` under `std::env::temp_dir()`,
+  where `pid` is `std::process::id()`, `nanos` is the **full epoch
+  nanosecond count** (a `u128`, not just the sub-second remainder, so two
+  process restarts a few seconds apart that reuse the same PID still get
+  distinguishable names), and `seq` is a per-process `AtomicU64` counter
+  that rules out any same-process collision even when two calls land on the
+  same nanosecond tick. All three fields come from `std`; the crate adds no
+  external dependency. `ScratchDir::new` does not retry on collision:
+  `std::fs::create_dir` already fails atomically if the path exists, and
+  with `pid`/`nanos`/`seq` a same-process collision is impossible (the `seq`
+  counter alone rules it out) and a cross-process collision is not a
+  reachable case in any test — a retry loop's exhaustion arm would be an
+  untestable branch under D-014's 100%-region coverage gate. The crate name
+  is deliberately not `pycc_testkit`: that name is reserved for a materially
+  different, deliberately deferred v1.0-scale conformance harness
+  (D-018/D-037/D-085) and reusing it here would misrepresent scope. Part 1
+  registers `pycc_scratch` in the workspace `[members]` list only — it is
+  not yet a dependency of the `pycc` binary package, since `src/main.rs` has
+  no consumer of it until Part 3 (#783) rewrites `try_build`/`run` to use
+  it.
+
+  Alongside the crate, `scripts/check_scratch_dir_usage.py` (self-tested by
+  `scripts/test_check_scratch_dir_usage.py`, wired into the `governance` CI
+  job) rejects new raw `temp_dir().join(...)` call sites. It scans every
+  tracked `.rs` file for that literal pattern (whitespace/line-break
+  tolerant) and fails if a file has more occurrences than a checked-in
+  snapshot allowlist records for it. The allowlist maps each already-violating
+  file to its **exact occurrence count** at Part 1's merge commit, not a
+  bare filename list: a bare filename list would let an already-listed file
+  accumulate brand-new raw calls undetected, which defeats the actual goal
+  of stopping the leak from getting worse. A file not in the allowlist is
+  held to the new rule from day one (any occurrence is a violation); a
+  listed file's count may only stay the same or decrease on any later pull
+  request. The allowlist reaching empty is the completeness signal for
+  closing out #779's Parts 2 (#782) and 3 (#783). `crates/pycc_scratch/src/lib.rs`
+  itself is exempt unconditionally, as the one legitimate implementation
+  site.
+
+  **Known, accepted scope limitation**: the lint is a textual pattern match,
+  not a data-flow analysis. A caller that splits the expression across a
+  binding (`let dir = std::env::temp_dir(); ... dir.join(...)`) evades it
+  even though it has the same effect as the banned call. This is a
+  deliberate, conspicuous evasion, not something ordinary refactoring
+  produces by accident, and is out of proportion to the defect being fixed;
+  the D-068 pinned reviewer pass on every pull request is the backstop for
+  it.
+- Alternatives: add the `tempfile` crate (rejected — it solves a broader
+  problem than this narrow need, and every code path it pulls in would need
+  100% branch coverage from this repository's own tests rather than
+  `tempfile`'s own upstream suite; a ~100-line stdlib-only implementation is
+  easier to review and has no supply-chain surface). Add `rand` as a direct
+  dependency for the uniqueness suffix (rejected for the same reason —
+  `nanos + seq` is already collision-safe without it). Reuse
+  `tests_support.rs`'s `TempTestDir` in place, exported more broadly,
+  instead of a new crate (rejected — it is `pub(crate)`, not a reusable
+  public API, its naming scheme is the exact collision defect being fixed,
+  and it does nothing for the ~26 other test files that don't already
+  depend on `pycc_codegen`). Make `ScratchDir::new` synchronize on a
+  process-wide directory registry or lock file instead of pure name
+  uniqueness (rejected — `create_dir` failing on an existing path is
+  already an atomic OS-level collision check; no additional coordination is
+  needed for uniqueness, as opposed to Part 4's separate concern of
+  detecting *other* processes' stale roots). Ship the lint as
+  warning-only/non-blocking in Part 1 and promote it to a required gate
+  only once Parts 2–4 close out (rejected in favor of the snapshot
+  allowlist — a blocking gate from Part 1's own merge, tolerant of the
+  pre-existing backlog but not of new growth, gives Parts 2/3 immediate,
+  mechanical, per-PR proof of progress and closes the actually load-bearing
+  gap — new code adding to the leak — from day one).
+- Consequences: every future scratch directory in this repository's test
+  code or production code goes through `pycc_scratch::ScratchDir`, enforced
+  mechanically rather than by convention alone. The `pycc_{category}_{pid}_{nanos}_{seq}`
+  field order is a stability commitment: Part 4's (#784's) bounded
+  stale-root cleanup needs to recover the owning `pid` (and use `nanos` to
+  defeat PID reuse) from a directory name alone, without a live handle, so
+  changing this format is a breaking change for that consumer. Part 1
+  itself changes zero existing call sites and zero `src/main.rs` behavior —
+  it only adds the crate and the lint; migrating the ~384 existing sites
+  (Part 2), fixing the two production leaks (Part 3), bounded stale-root
+  cleanup (Part 4), and operational `TMPDIR` guidance (Part 5) are tracked
+  as separate, dependency-ordered follow-up issues under the parent #779.
+  `pycc_testkit` remains reserved and untouched by this decision — see
+  D-085's own consequences note for that.

@@ -1103,6 +1103,53 @@ It is a lexical gate and makes no claim beyond that: it catches the literal
 shape that caused #629, not every conceivable way to reconstruct an
 artifact path.
 
+## Scratch directories (issue #781, Part 1 of #779)
+
+#779 found ~384 ad hoc `std::env::temp_dir().join(...)` call sites across 36
+tracked test files (plus two production call sites in `src/main.rs`), each
+building its own scratch directory by hand: no shared cleanup, so a panic
+partway through a test left the directory behind, and no collision-safe
+naming, so two call sites in the same test binary could pick the same name
+and collide (the exact defect `crates/pycc_codegen/src/tests_support.rs`'s
+`TempTestDir`/`tempfile_dir` had before Part 1 — its `pycc_codegen_test_{label}_{pid}`
+naming used only the process ID, so two call sites sharing a `label` in the
+same test binary raced on the same directory).
+
+`pycc_scratch::ScratchDir` (new workspace crate `crates/pycc_scratch`,
+`crates/pycc_scratch/src/lib.rs`) is the one correct way to obtain a scratch
+directory in this repository going forward: `ScratchDir::new(category:
+&str) -> io::Result<Self>` creates a directory named
+`pycc_{category}_{pid}_{nanos}_{seq}` under `std::env::temp_dir()`
+(process ID, full epoch nanoseconds, and a per-process atomic sequence
+number — collision-safe both within a process and, in practice, across
+process restarts) and derefs to `Path`; `Drop` removes the directory tree
+unconditionally, including while a panic unwinds through the owning stack
+frame. See the crate's own doc comments for the exact naming-format
+stability commitment.
+
+`scripts/check_scratch_dir_usage.py` (self-tested by
+`scripts/test_check_scratch_dir_usage.py`, wired into the `governance` CI
+job) is the enforcement mechanism: it fails on any tracked `.rs` file that
+contains more raw `temp_dir().join(...)` occurrences than a checked-in
+snapshot allowlist records for it, so new test code cannot add a fresh raw
+call site, and an already-listed file cannot grow past what it already had
+when Part 1 merged. It is a textual pattern match, not a data-flow
+analysis — see the script's own docstring for the accepted scope
+limitation.
+
+**This section describes the pattern going forward, not the state of the
+existing tree.** Part 1 (#781) adds `pycc_scratch` and the lint above but
+does not migrate any of the ~384 existing call sites, and does not change
+`src/main.rs`'s two production leaks (`try_build`'s `pycc_obj_*` object
+file, `run`'s `pycc_run_*` executable) at all. Migrating the existing test
+call sites onto `ScratchDir` is Part 2
+([#782](https://github.com/rotnov/pycc/issues/782)); fixing the two
+production leaks is Part 3
+([#783](https://github.com/rotnov/pycc/issues/783)) — both tracked under
+the parent [#779](https://github.com/rotnov/pycc/issues/779). Until those
+land, most of the tree's scratch-directory handling still predates this
+section.
+
 ## Meta
 
 Every bug that reaches `main` gets a permanent regression test named after the issue (`tests/regress/issue_1234.py`). Coverage gate: conformance suite must touch 100% of implemented grammar productions (grammar-coverage instrumentation in the parser).

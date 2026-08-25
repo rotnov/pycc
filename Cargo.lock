@@ -855,6 +855,10 @@ name = "pycc_rt"
 version = "0.1.0"
 
 [[package]]
+name = "pycc_scratch"
+version = "0.1.0"
+
+[[package]]
 name = "pycc_std"
 version = "0.1.0"
 
