@@ -5,8 +5,12 @@
 //! `tests/fixtures/bigint_range.py`'s differential fixture:
 //!
 //! * **Divergences.** A bigint-valued *zero* step is a `ValueError` in
-//!   CPython and D-072's exit-`101` boundary in pycc, so a differential
-//!   fixture containing one would fail by construction.
+//!   CPython, and -- since issue #150 extended D-173's pending-exception
+//!   mechanism to `range` -- a catchable `ValueError` in pycc too. It still
+//!   does not belong in the differential fixture (the fixture's own harness
+//!   does not model catching a Python exception), but it is no longer an
+//!   abort; see `tests/issue_150_zero_step_range.rs` for the broader D-173
+//!   coverage of that mechanism.
 //! * **Positions that still abort.** #147 moves `range` operands off D-141's
 //!   runtime `int` boundary; it does not move container ingress. A
 //!   comprehension whose *element* is the bigint loop variable still aborts,
@@ -57,11 +61,41 @@ fn assert_runs_and_prints(case: &str, source: &str, expected: &str) {
     );
 }
 
-/// Asserts the documented D-072 exit-`101` boundary carrying `message`.
-/// `pycc run` (rather than `pycc build` plus a direct exec) is deliberate:
-/// `pycc_rt`'s panic unwinds across an `extern "C"` boundary and becomes a
-/// non-unwinding process abort, so the raw child reports no exit code at
-/// all. The `101` is the driver's own mapping of that abort.
+/// Asserts an uncaught, top-level `ValueError` (D-173's pending-exception
+/// mechanism, since #150 also covering `range`'s zero-step guard).
+///
+/// `pycc run` maps *every* unsuccessful child termination to CLI_SPEC.md's
+/// stable exit `101` (see `run()` in `src/main.rs`), so this still expects
+/// `101` -- unlike `tests/issue_150_zero_step_range.rs`'s own
+/// `build_and_run` helper, which builds and execs the binary directly and so
+/// observes the underlying process's real exit `1`. What distinguishes this
+/// case from `assert_runtime_abort` below is the *message*, not the exit
+/// code: no panic/backtrace text may leak across the
+/// `pycc_rt_range_continue` `extern "C"` boundary.
+fn assert_clean_value_error(case: &str, source: &str, message: &str) {
+    let src = write_case(case, source);
+    let run = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        run.status.code(),
+        Some(101),
+        "{case} should hit the driver's mapped exit-101 boundary, got {:?}: {}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains(message),
+        "{case} should report {message:?}, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked") && !stderr.contains("stack backtrace"),
+        "{case} must not leak a Rust panic/backtrace: {stderr}"
+    );
+}
+
 fn assert_runtime_abort(case: &str, source: &str, message: &str) {
     let src = write_case(case, source);
     let run = Command::new(pycc_bin())
@@ -141,13 +175,15 @@ fn a_bigint_valued_zero_step_still_reports_the_zero_step_boundary() {
     // guard must therefore compare values, not words -- reading the sign
     // flag first would treat it as a positive step and loop forever.
     //
-    // CPython raises `ValueError: range() arg 3 must not be zero`; pycc
-    // reports the same text through D-072's exit-`101` boundary, which is
-    // why this case is pinned here rather than in the differential fixture.
-    assert_runtime_abort(
+    // CPython raises `ValueError: range() arg 3 must not be zero`; since
+    // #150, pycc reports the same message the same way -- a catchable
+    // `ValueError`, not D-072's exit-`101` abort boundary -- which is why
+    // this case is pinned here (an *uncaught* top-level occurrence) rather
+    // than in the differential fixture (which cannot model catching).
+    assert_clean_value_error(
         "bigint_zero_step",
         &format!("z = {PROMOTED} - {PROMOTED}\nfor i in range(0, 10, z):\n    print(i)\n"),
-        "pycc_rt: range() arg 3 must not be zero",
+        "ValueError: range() arg 3 must not be zero",
     );
 }
 

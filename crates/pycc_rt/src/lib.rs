@@ -405,24 +405,43 @@ pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
 // past a plain `extern "C" fn`'s own boundary is caught right there and
 // turned into a process abort, regardless of who calls it -- including
 // this crate's own same-binary Rust tests. `pycc_rt_range_continue` *can*
-// panic (`classify_encoded_int`'s fail-closed rejection of a malformed
-// encoded word, and the zero-step case below), so it needs the same split
-// every other panicking
+// still panic (`classify_encoded_int`'s fail-closed rejection of a
+// malformed encoded word), so it keeps the same split every other panicking
 // `pycc_rt_int_*` function already gets: a private, ordinary-Rust-ABI
 // `range_continue` holding the real logic (freely panics, unwinds
 // normally, `#[should_panic]`-testable), and a thin `pub extern "C"`
 // wrapper of the exact brief-specified name/signature for pycc-generated
-// code to call. The zero-step test below calls `range_continue` directly,
-// not the public wrapper, for the same reason every other
-// `#[should_panic]` test in this file does.
+// code to call. Since #150 (D-173's pending-exception mechanism), the
+// zero-step case no longer panics -- it raises a `ValueError` and returns
+// the ordinary "stop" sentinel instead -- so the tests for that case below
+// assert the pending exception state rather than `#[should_panic]`.
 //
 // Since #147 the operands are ordered through `encoded_int_cmp` rather than
 // decoded with `require_inline_int`, so a bigint start, stop, step, or
 // mid-loop-promoted induction variable drives the loop normally instead of
 // aborting at D-141's runtime `int` boundary. Note the zero-step check reads
 // the *step's own encoded order against zero*, not the raw word: a bigint
-// zero step (reachable via `a - a` on two promoted values) must still panic,
+// zero step (reachable via `a - a` on two promoted values) is still rejected,
 // and a bigint word is never numerically `0`.
+//
+// D-173 (#382) established a pending-exception mechanism (`raise_builtin`)
+// for exactly this shape of runtime failure boundary: since #150, a zero
+// step sets a `ValueError` (CPython's own `range() arg 3 must not be zero`
+// message) instead of panicking, and returns `0` -- the same sentinel this
+// function already returns for ordinary loop exhaustion. No codegen change
+// was needed for that to surface reliably: a `0` return makes the enclosing
+// `for`/comprehension loop exit exactly as if it had completed normally, and
+// that statement is then subject to the same pre-existing
+// `pycc_rt_exception_active` checkpoints every other D-173 exception already
+// relies on (the top-level statement loop and the `try`-body per-statement
+// check in `pycc_codegen`) -- mirroring `float_div`'s own scope exactly: any
+// context other than the top-level statement loop or a `try` body observes
+// the pending exception only at the next enclosing checkpoint, not
+// immediately, which is an existing, accepted D-173 characteristic rather
+// than a new gap this change introduces (see
+// `uncaught_zero_step_range_inside_a_function_body_is_observed_at_the_next_checkpoint`
+// in `tests/issue_150_zero_step_range.rs`, which pins the exact observed
+// shape).
 fn range_continue(i: i64, stop: i64, step: i64) -> i8 {
     // Fast path: three inline operands -- the shape of every ordinary
     // smallint loop -- are ordered as plain `i64`s. Sending them through
@@ -441,7 +460,14 @@ fn range_continue(i: i64, stop: i64, step: i64) -> i8 {
         return match step.cmp(&0) {
             std::cmp::Ordering::Greater => i8::from(i < stop),
             std::cmp::Ordering::Less => i8::from(i > stop),
-            std::cmp::Ordering::Equal => panic!("pycc_rt: range() arg 3 must not be zero"),
+            std::cmp::Ordering::Equal => {
+                raise_builtin(
+                    EXCEPTION_TYPE_VALUE_ERROR,
+                    "ValueError",
+                    "range() arg 3 must not be zero",
+                );
+                0
+            }
         };
     }
     let zero = tag_smallint(0);
@@ -452,7 +478,14 @@ fn range_continue(i: i64, stop: i64, step: i64) -> i8 {
         std::cmp::Ordering::Less => {
             i8::from(encoded_int_cmp(i, stop) == std::cmp::Ordering::Greater)
         }
-        std::cmp::Ordering::Equal => panic!("pycc_rt: range() arg 3 must not be zero"),
+        std::cmp::Ordering::Equal => {
+            raise_builtin(
+                EXCEPTION_TYPE_VALUE_ERROR,
+                "ValueError",
+                "range() arg 3 must not be zero",
+            );
+            0
+        }
     }
 }
 
@@ -2178,9 +2211,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_rt: range() arg 3 must not be zero")]
     fn false_identity_marker_is_a_zero_range_step() {
-        range_continue(tag_smallint(0), tag_smallint(1), BOOL_FALSE_MARKER);
+        // D-173/#150: `False` decodes to the smallint `0`, so this hits the
+        // same zero-step guard as any other literal zero and now sets a
+        // pending `ValueError` instead of panicking.
+        pycc_rt_exception_clear();
+        let result = range_continue(tag_smallint(0), tag_smallint(1), BOOL_FALSE_MARKER);
+        assert_eq!(pycc_rt_exception_active(), 1);
+        assert_eq!(result, 0); // sentinel value
+        let obj = exception::pycc_rt_exception_value();
+        assert_eq!(unsafe { (*obj).type_tag }, EXCEPTION_TYPE_VALUE_ERROR);
+        pycc_rt_exception_clear();
     }
 
     #[test]
@@ -2242,13 +2283,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "must not be zero")]
-    fn pycc_rt_range_continue_with_a_zero_step_panics() {
-        // Calls the private `range_continue`, not the public
-        // `pycc_rt_range_continue` wrapper -- see the implementation-note
-        // comment above `range_continue`'s definition (same rationale as
-        // `pycc_rt_int_add_panics_...` above).
-        range_continue(tag_smallint(0), tag_smallint(3), tag_smallint(0));
+    fn pycc_rt_range_continue_with_a_zero_step_sets_exception_flag() {
+        // D-173/#150: a zero step (inline fast path) now sets a pending
+        // `ValueError` instead of panicking, and returns the ordinary
+        // "stop" sentinel. Clear the flag first for test isolation, mirroring
+        // `pycc_rt_int_floordiv_by_zero_sets_exception_flag` above.
+        pycc_rt_exception_clear();
+        let result = range_continue(tag_smallint(0), tag_smallint(3), tag_smallint(0));
+        assert_eq!(pycc_rt_exception_active(), 1);
+        assert_eq!(result, 0); // sentinel value
+        let obj = exception::pycc_rt_exception_value();
+        assert_eq!(unsafe { (*obj).type_tag }, EXCEPTION_TYPE_VALUE_ERROR);
+        pycc_rt_exception_clear();
     }
 
     /// A bigint holding exactly `2^62` -- the smallest magnitude that does
@@ -2384,11 +2430,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_rt: range() arg 3 must not be zero")]
     fn range_continue_rejects_a_bigint_zero_step() {
         // A bigint-tagged zero is *numerically* zero even though its word is
         // a non-zero pointer, so the guard must compare values, not words.
-        range_continue(tag_smallint(0), tag_smallint(10), bigint_zero());
+        // D-173/#150: the general (`encoded_int_cmp`) path also sets a
+        // pending `ValueError` instead of panicking now.
+        pycc_rt_exception_clear();
+        let result = range_continue(tag_smallint(0), tag_smallint(10), bigint_zero());
+        assert_eq!(pycc_rt_exception_active(), 1);
+        assert_eq!(result, 0); // sentinel value
+        let obj = exception::pycc_rt_exception_value();
+        assert_eq!(unsafe { (*obj).type_tag }, EXCEPTION_TYPE_VALUE_ERROR);
+        pycc_rt_exception_clear();
     }
 
     #[test]
