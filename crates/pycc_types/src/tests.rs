@@ -28846,3 +28846,198 @@ fn a_walrus_inside_a_tuple_literal_test_in_a_function_body_is_a_local_name() {
     };
     assert!(check(&hir).is_ok(), "{:?}", check(&hir));
 }
+
+// -- #769 (Part 2 of #747, D-199): flow-sensitive `Optional[T]` narrowing --
+
+#[test]
+fn is_not_none_narrows_the_body_to_plain_int() {
+    let result = check_source(
+        "x: int | None = 5\nif x is not None:\n    y: int = x\n    print(y)\n",
+    );
+    assert!(
+        result.is_ok(),
+        "`is not None` must narrow `x` to plain `int` inside the body: {result:?}"
+    );
+}
+
+#[test]
+fn is_none_narrows_the_orelse_to_plain_int() {
+    let result = check_source(
+        "x: int | None = 5\nif x is None:\n    print(0)\nelse:\n    y: int = x\n    print(y)\n",
+    );
+    assert!(
+        result.is_ok(),
+        "`is None` must narrow `x` to plain `int` inside the `orelse` branch: {result:?}"
+    );
+}
+
+#[test]
+fn is_none_does_not_narrow_the_body() {
+    // The body of `if x is None:` is exactly the case where `x` is absent
+    // -- it must stay `Optional[int]` there, never narrow to `int`.
+    let result =
+        check_source("x: int | None = 5\nif x is None:\n    y: int = x\n    print(y)\n");
+    let err = result.expect_err("`x` inside `if x is None:`'s own body must stay Optional");
+    assert_eq!(err.code, "T0025");
+}
+
+#[test]
+fn is_not_none_does_not_narrow_the_orelse() {
+    // The `orelse` of `if x is not None:` is exactly the case where `x` is
+    // absent -- it must stay `Optional[int]` there.
+    let result = check_source(
+        "x: int | None = 5\nif x is not None:\n    print(0)\nelse:\n    y: int = x\n    print(y)\n",
+    );
+    let err = result.expect_err("`x` inside the `orelse` of `if x is not None:` must stay Optional");
+    assert_eq!(err.code, "T0025");
+}
+
+#[test]
+fn narrowing_does_not_leak_past_the_if_from_the_body_side() {
+    // A plain use of `x` *after* the whole `if` statement must still see
+    // `x` as `Optional[int]`, not the narrowed `int` -- the overlay must
+    // not survive `join_if_branches`.
+    let result = check_source(
+        "x: int | None = 5\nif x is not None:\n    y: int = x\n    print(y)\ny2: int = x\nprint(y2)\n",
+    );
+    let err = result.expect_err("narrowing inside the body must not leak past the `if`");
+    assert_eq!(err.code, "T0025");
+}
+
+#[test]
+fn narrowing_does_not_leak_past_the_if_from_the_orelse_side() {
+    let result = check_source(
+        "x: int | None = 5\nif x is None:\n    print(0)\nelse:\n    y: int = x\n    print(y)\ny2: int = x\nprint(y2)\n",
+    );
+    let err = result.expect_err("narrowing inside the `orelse` must not leak past the `if`");
+    assert_eq!(err.code, "T0025");
+}
+
+#[test]
+fn narrowing_does_not_apply_to_a_non_optional_name() {
+    // `is`/`is not None` against a plain (non-`Optional`) name is already
+    // rejected at the `Compare` level (T0021), long before narrowing would
+    // ever apply -- this just pins that the narrowing machinery introduces
+    // no new false positive/negative for that existing rejection.
+    let result = check_source("x: int = 5\nif x is not None:\n    print(x)\n");
+    let err = result.expect_err("`is not None` against a plain `int` must still be rejected");
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn compound_and_test_does_not_narrow() {
+    // Scope cut (D-199): narrowing only recognizes a *top-level* `is`/`is
+    // not None` test -- `pycc_hir::optional_none_test` requires the whole
+    // `if` test to itself be an `HirExpr::Compare { op: Is | IsNot, .. }`
+    // node, never one operand nested inside a compound `and`/`or` test.
+    // This compiler has no `and`/`or` boolean-operator lowering at all yet
+    // (a separate, pre-existing scope cut unrelated to narrowing), so this
+    // source is rejected at HIR-lowering time with `C0001` before
+    // `pycc_types` (and therefore this narrowing machinery) ever sees it --
+    // which still proves the required property: `x` is never narrowed
+    // through a compound test, because the compound test itself never
+    // reaches the checker.
+    let module = pycc_parser::parse(
+        "x: int | None = 5\ny: int = 1\nif x is not None and y > 0:\n    z: int = x\n    print(z)\n",
+    )
+    .expect("test fixture must parse");
+    let result = pycc_hir::lower_checked(&module);
+    assert!(
+        result.is_err(),
+        "a compound `and` test must not reach narrowing (either at HIR lowering or at the checker)"
+    );
+}
+
+#[test]
+fn early_return_in_body_narrows_the_continuation() {
+    // `if x is None: return` -- the code after the whole `if` is only
+    // reachable via the implicit "`x` is not `None`" else path, so `x` is
+    // known to be plain `int` there.
+    let result = check_source(
+        "def f(x: int | None) -> int:\n    if x is None:\n        return 0\n    y: int = x\n    return y\n",
+    );
+    assert!(
+        result.is_ok(),
+        "an early-return `if x is None:` must narrow the continuation to plain `int`: {result:?}"
+    );
+}
+
+#[test]
+fn early_return_only_in_a_nested_inner_if_does_not_narrow() {
+    // The unsound `contains_return`-based design's regression case: a
+    // `return` occurs *inside* the outer `if`'s body, but only on one of
+    // its own inner paths (`if flag: return 0` has no `else`), so the
+    // outer body does not *definitely* terminate. `x` must stay
+    // `Optional[int]` after the outer `if`.
+    let result = check_source(
+        "def f(x: int | None, flag: bool) -> int:\n    if x is None:\n        if flag:\n            return 0\n    y: int = x\n    return y\n",
+    );
+    let err = result.expect_err(
+        "a return nested inside a non-exhaustive inner `if` must not narrow the continuation",
+    );
+    assert_eq!(err.code, "T0025");
+}
+
+#[test]
+fn raise_in_body_does_not_narrow_the_continuation() {
+    // Deliberate scope cut (D-199): `raise` is not a terminator for
+    // `definitely_terminates`, unlike `return`.
+    let result = check_source(
+        "def f(x: int | None) -> int:\n    if x is None:\n        raise ValueError(\"absent\")\n    y: int = x\n    return y\n",
+    );
+    let err = result.expect_err("`raise` in the body must not narrow the continuation");
+    assert_eq!(err.code, "T0025");
+}
+
+#[test]
+fn assignment_inside_a_narrowed_branch_kills_the_overlay() {
+    // `x = None` inside the narrowed `is not None` body re-widens `x` at
+    // runtime; the overlay must be cleared from that point forward so a
+    // later read in the same body is checked against the real (still
+    // `Optional[int]`) type, not the stale narrowed `int`.
+    let result = check_source(
+        "x: int | None = 5\nif x is not None:\n    x = None\n    y: int = x\n    print(y)\n",
+    );
+    let err = result.expect_err("an assignment inside the narrowed branch must kill the overlay");
+    assert_eq!(err.code, "T0025");
+}
+
+#[test]
+fn assignment_target_inside_a_narrowed_branch_checks_against_the_real_type() {
+    // `x = None` itself (the assignment statement, not a later read) must
+    // be checked against `x`'s *real* declared type (`Optional[int]`, which
+    // accepts `None`), not the narrowed `int` overlay type (which would
+    // reject `None` as incompatible). This is the "assignment TARGET
+    // checking never consults the overlay" half of the design.
+    let result = check_source("x: int | None = 5\nif x is not None:\n    x = None\n    print(0)\n");
+    assert!(
+        result.is_ok(),
+        "assigning `None` back to a narrowed `Optional[int]` name must check against its real type: {result:?}"
+    );
+}
+
+#[test]
+fn narrowed_read_composes_with_ordinary_int_operators() {
+    // An end-to-end narrowing-semantics smoke test: the narrowed value is
+    // usable directly as a plain `int` operand, not merely assignable to an
+    // `int`-annotated target.
+    let result = check_source(
+        "x: int | None = 5\nif x is not None:\n    print(x + 1)\n",
+    );
+    assert!(
+        result.is_ok(),
+        "a narrowed `Optional[int]` must be usable as a plain `int` operand: {result:?}"
+    );
+}
+
+#[test]
+fn narrowing_applies_at_module_scope_and_function_scope_alike() {
+    let module_scope = check_source(
+        "x: int | None = 5\nif x is not None:\n    y: int = x\n    print(y)\n",
+    );
+    let function_scope = check_source(
+        "def f(x: int | None) -> int:\n    if x is not None:\n        return x\n    return 0\n",
+    );
+    assert!(module_scope.is_ok(), "module scope: {module_scope:?}");
+    assert!(function_scope.is_ok(), "function scope: {function_scope:?}");
+}
