@@ -4,7 +4,7 @@
 # `is`/`is not` as a presence test against `None`, and both a module-level
 # and a function-local `int | None` variable. Flow-sensitive narrowing
 # (reading the wrapped payload back as a plain `int` inside a `not None`
-# branch) is now in scope too (D-199, #769, Part 2 of #747), restricted to
+# branch) is now in scope too (D-201, #769, Part 2 of #747), restricted to
 # a top-level `if name is None:` / `if name is not None:` test -- the
 # rungs below exercise both polarities, the early-return-narrows-the-
 # continuation shape, kill-on-reassignment inside a narrowed branch, and a
@@ -18,18 +18,18 @@ print(present is not None)
 print(absent is None)
 print(absent is not None)
 
-# D-199, #769: `is not None` narrows the body -- `present + 1` reads
+# D-201, #769: `is not None` narrows the body -- `present + 1` reads
 # `present` as a plain `int`, not `Optional[int]`.
 if present is not None:
     print(present + 1)
 
-# D-199, #769: `is None` narrows the `orelse` -- the mirror polarity.
+# D-201, #769: `is None` narrows the `orelse` -- the mirror polarity.
 if present is None:
     pass
 else:
     print(present * 2)
 
-# D-199, #769: a reassignment inside the narrowed branch kills the
+# D-201, #769: a reassignment inside the narrowed branch kills the
 # narrowing for every read after it, within the same branch -- `present`
 # is written back as a bare `int` here, then the branch's own remaining
 # reads still work (through the ordinary `Optional`-widening `Assign`
@@ -60,7 +60,7 @@ print(skipped is None)
 
 
 def describe(x: int | None) -> None:
-    # D-199, #769: the early-return continuation shape -- a guard clause
+    # D-201, #769: the early-return continuation shape -- a guard clause
     # whose body definitely terminates (ends in a bare `return`) narrows
     # every read after it in the same statement sequence, with no `else`
     # needed at all.
@@ -79,7 +79,7 @@ def local_optional() -> None:
     print(y is not None)
     z: int | None = None
     print(z is not None)
-    # D-199, #769: narrowing works identically inside a function body.
+    # D-201, #769: narrowing works identically inside a function body.
     if y is not None:
         print(y + 1)
 

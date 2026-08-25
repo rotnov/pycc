@@ -791,7 +791,7 @@ pub fn optional_none_test(test: &HirExpr) -> Option<(&str, NoneTestPolarity)> {
 /// identical reason [`optional_none_test`] is shared: `pycc_mir` does not
 /// depend on `pycc_types`, so the one predicate both need lives here, in
 /// their common dependency, rather than as two independently-maintained
-/// copies (D-199).
+/// copies (D-201).
 pub fn definitely_terminates(body: &[HirStmt]) -> bool {
     match body.last() {
         Some(HirStmt::Return(_)) => true,
