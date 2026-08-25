@@ -75,15 +75,29 @@ EXEMPT_FILES = frozenset({"crates/pycc_scratch/src/lib.rs"})
 # One-time snapshot generated mechanically at Part 1's (#781's) own merge
 # commit via `git ls-files '*.rs'` piped through a count of this script's own
 # pattern match per file (see the docstring above). Every entry here is a
-# file Part 2 (#782) or Part 3 (#783) still needs to migrate; `src/main.rs`'s
-# count includes both its two production call sites (Part 3's own scope,
-# `try_build`/`run`) and its five test-only ones (Part 2's scope, inside its
-# `#[cfg(test)] mod tests`).
+# file Part 2 (#782) or Part 3 (#783) still needs to migrate.
+#
+# `src/main.rs`'s count of 3 (down from the original snapshot's 7, after
+# #782's Batch B migrated four of its five test-only sites) is: its two production
+# call sites (Part 3's own scope -- `try_build`/`run`) plus one remaining
+# test site (`try_build_ignores_a_neighboring_release_pycc_toml_when_given_
+# release_false`) that Batch B deliberately left raw because it must resolve
+# to the exact pid-keyed path `try_build`'s own production code hardcodes,
+# not a `ScratchDir`-owned one -- see that test's own comment.
+#
+# `src/project_config.rs`'s count of 2 (down from 26) is the
+# `chmod_containing_dir_readonly_then_fail_write` /
+# `write_new_in_reports_a_cleanup_failure_honestly` pair, which Batch B
+# deliberately left raw because `write_new_in` requires a capture-free `fn`
+# pointer that must recompute the exact directory deterministically from
+# process state alone -- `ScratchDir`'s name embeds a per-call nanosecond
+# timestamp and sequence number that no capture-free callback can
+# reconstruct. See that pair's own comments.
 ALLOWLIST: dict[str, int] = {
     "crates/pycc_codegen/src/tests.rs": 1,
     "crates/pycc_codegen/src/tests_support.rs": 1,
-    "src/main.rs": 7,
-    "src/project_config.rs": 26,
+    "src/main.rs": 3,
+    "src/project_config.rs": 2,
     "tests/conformance.rs": 1,
     "tests/container_methods1_codegen_depth.rs": 1,
     "tests/issue_146_bigint_release.rs": 2,
