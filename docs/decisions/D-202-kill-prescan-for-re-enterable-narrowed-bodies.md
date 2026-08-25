@@ -96,9 +96,19 @@ status: accepted
      order, so the existing sequential pass is already sound, matching
      D-201 decision 2's scope (a `match` case body and a `try`'s `orelse`/
      `finalbody` are likewise not re-enterable in the sense this fix
-     addresses, and need no prescan either -- `finalbody` in particular
-     already ran against the fully `join_if_branches`-reconciled `env`,
-     not a narrowing-sensitive path, both before and after this fix).
+     addresses, and need no prescan either -- `finalbody` in particular is
+     checked (`check_try_stmt`, `crates/pycc_types/src/exception.rs`)
+     against `joined`, an `Environment` built by folding `body_env` (the
+     state after walking the *entire* try body top-to-bottom in source
+     order, including any code after a `raise` -- still walked as dead
+     code) through `join_loop_body`, then intersecting each handler's and
+     the `orelse`'s end-state in turn via `join_if_branches`. Every one of
+     those joins bottoms out in `narrow::join_narrowed`'s strict
+     intersection (see its doc comment above), which already drops a name
+     from the overlay unless *every* input map still narrows it -- so a
+     kill anywhere in the try body, a handler, or the `orelse` already
+     removes that name from `joined` before `finalbody` is ever checked,
+     with no separate prescan needed).
   3. **Identical logic in both `pycc_types` and `pycc_mir`, sharing only
      the pure `killed_names` predicate via `pycc_hir`** -- the same
      cross-crate split D-201 decision 4 established for
