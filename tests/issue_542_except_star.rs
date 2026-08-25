@@ -671,3 +671,63 @@ fn conflicting_types_across_two_try_star_handlers_are_rejected() {
         "should mention T0023: {combined}"
     );
 }
+
+/// `except_star_with_finally_in_a_value_returning_function_returns_correctly`
+/// above exercises a `try`/`except*`/`finally` with a return value but no
+/// *enclosing* finally, so the returned value is emitted directly (`ret_val`
+/// with no outer `finally_stack` entry). Nesting that same construct inside
+/// an outer `try`/`finally` instead reaches `emit_try_star`'s
+/// `finally_stack.last_mut()` propagation branch: the inner `finally`'s
+/// return is redirected into the outer's `ret_slot`/`is_returning` flag and
+/// branched to the outer's `finally_bb`, rather than emitting `ret`
+/// directly.
+#[test]
+fn a_try_star_finally_returning_a_value_propagates_through_an_enclosing_finally() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_nested_ret_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "nested_ret.py",
+        "def f() -> int:\n    try:\n        try:\n            raise ValueError(\"bad\")\n        except* ValueError:\n            return 2\n        finally:\n            print(\"inner\")\n    finally:\n        print(\"outer\")\n\nprint(f())\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"inner\nouter\n2\n");
+}
+
+/// The same enclosing-finally propagation as above, but for a bare `return`
+/// (no value) inside a `None`-returning function's `try_star` `finally`:
+/// `ret_slot` is `None`, so this reaches the sibling `finally_stack`
+/// propagation branch that only forwards the `is_returning` flag, never the
+/// `ret_val` store.
+#[test]
+fn a_try_star_finally_bare_return_propagates_through_an_enclosing_finally() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_nested_void_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "nested_void.py",
+        "def g() -> None:\n    try:\n        try:\n            raise ValueError(\"bad\")\n        except* ValueError:\n            return\n        finally:\n            print(\"inner\")\n    finally:\n        print(\"outer\")\n\ng()\nprint(\"done\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"inner\nouter\ndone\n");
+}
+
+/// A bare `return` inside a `None`-returning function's `try_star`
+/// `finally`, with no enclosing finally at all (`finally_stack` empty),
+/// reaches the plain `ret void` emission branch -- distinct from both
+/// `a_try_star_finally_bare_return_propagates_through_an_enclosing_finally`
+/// (which has an outer finally) and
+/// `except_star_with_finally_in_a_value_returning_function_returns_correctly`
+/// (which has a return value).
+#[test]
+fn a_try_star_finally_bare_return_with_no_enclosing_finally_emits_ret_void() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_bare_void_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "bare_void.py",
+        "def h() -> None:\n    try:\n        raise ValueError(\"bad\")\n    except* ValueError:\n        return\n    finally:\n        print(\"cleanup\")\n\nh()\nprint(\"done\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"cleanup\ndone\n");
+}
