@@ -195,4 +195,4 @@ Rejected (negative-tested, see DIAGNOSTICS.md): runtime class mutation, dynamic 
 
 ## Error philosophy
 
-Rust-grade messages: primary span + labels, expected/found diff, suggestion machine-applicable where safe (`pycc check --fix` for trivial ones), `pycc explain T0021` long-form. Every diagnostic documented + tested. Full registry: [DIAGNOSTICS.md](./DIAGNOSTICS.md).
+Rust-grade messages: primary span + labels, expected/found diff, suggestion machine-applicable where safe (a planned `pycc check --fix` flag would apply trivial ones once implemented; not yet implemented, see `docs/CLI_SPEC.md`), `pycc explain T0021` long-form. Every diagnostic documented + tested. Full registry: [DIAGNOSTICS.md](./DIAGNOSTICS.md).

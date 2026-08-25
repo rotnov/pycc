@@ -106,6 +106,6 @@ by-design rejection.
 ## Quality bar
 
 - Every error: primary span, ≥1 label, expected/found where applicable, help with a suggestion when one is safe. Populated for arity/type-mismatch, missing-annotation, and literal-index-constraint families as of D-152 (`docs/decisions/D-152-populate-diagnostic-help-for-arity-type.md`); still `None`/empty for name-resolution, capability-limitation, and ambiguous-conflict diagnostics, and human-format output never renders it.
-- Suggestions marked machine-applicable are applied by `pycc check --fix` and must be idempotent + tested.
+- Suggestions marked machine-applicable are designed to be applied by a planned `pycc check --fix` flag (not yet implemented, see `docs/CLI_SPEC.md`) and must be idempotent + tested once that flag exists.
 - Message text changes are allowed; codes and JSON structure are not (corpus bot fingerprints on code + span shape).
 - Diagnostics on all Tier-1 platforms byte-identical (paths normalized).
