@@ -33,6 +33,32 @@ never a merge gate.
 
 ---
 
+## 2026-08-24 — `docs/ROADMAP.md` growth on `origin/main` tripped the llms.txt budget after a rebase, even though `check-site.sh` had already passed pre-rebase
+
+What happened: on the `#767` branch, `RUBYOPT="-E UTF-8" bash scripts/check-site.sh` passed
+locally before the branch was rebased onto a newly-advanced `origin/main` (PR #773 had merged,
+adding its own `docs/ROADMAP.md` content). After the rebase, the same check failed on CI's
+`build` job with `llms.txt non-optional expansion is 262772 bytes, exceeding the 262144-byte
+(256 KiB) aggregate budget (issue #207)`. Root cause: the 256 KiB budget is an aggregate over six
+documents (`site/index.html.md`, `README.md`, `docs/SPEC.md`, `docs/ARCHITECTURE.md`,
+`docs/PYTHON_STANDARDS.md`, `docs/ROADMAP.md`), and `docs/ROADMAP.md` is both the largest of the
+six and the one every merged PR tends to grow (each PR appends its own changelog paragraph). A
+`check-site.sh` pass recorded before integrating upstream changes says nothing about the aggregate
+after integration, because the rebase can pull in independent growth to the same shared,
+budget-capped file. Fixed by condensing the branch's own `#767` changelog paragraph (commit
+`db531ef8`) to remove detail already covered by the newly-added D-198 decision document, bringing
+the aggregate back under budget.
+
+Actionable lesson: for any change that touches `docs/ROADMAP.md` (which is most merged PRs), treat
+`check-site.sh` as a **post-integration** gate, not a pre-integration one — run it *after* the
+final `git rebase origin/<default>`, immediately before opening or updating the pull request, not
+only once earlier in the branch's history. Before writing a ROADMAP.md changelog paragraph, check
+remaining headroom (`budget_bytes` for `docs/ROADMAP.md` in
+`site/llms-txt-context-manifest.json` minus the file's current byte count) so the paragraph is
+sized to fit rather than trimmed after a red CI run.
+
+---
+
 ## 2026-08-24 — A blanket `sed` decision-renumber over-matched unrelated citations to the same old number
 
 While rebasing `feat/typing-cast-767` onto `origin/main` after PR #772 merged,
