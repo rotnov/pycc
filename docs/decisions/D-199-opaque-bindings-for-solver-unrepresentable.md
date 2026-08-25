@@ -94,16 +94,22 @@ status: accepted
   !env.bindings.contains_key(name)` as the skip condition in both of `join_if_branches_solver`'s merge
   loops) found it too broad: it also fires when *both* branches reassign the same pre-existing-opaque
   name to a real term (`y = d.get(...)` then `if cond: y = 1 else: y = 2`), because neither loop has
-  inserted into `env.bindings` yet when the other runs — dropping the name from `env.bindings`,
-  `env.opaque_bindings` (neither branch's cleared opaque marker survives a real-term reassignment), and
-  `maybe_bindings` (both `pre_existing`-filtered) all at once, reproducing the exact `unbound_local`
-  misdiagnosis for a name that is not branch-conditional at all: every path assigns it. The guard now
-  consults the *other* branch's own `bindings` map instead of `env.bindings`'s own mutation state —
-  `pre_existing.contains(name) && !orelse_env.bindings.contains_key(name)` in the body loop, and the
-  symmetric check against `body_env.bindings` in the orelse loop — so it only skips when exactly one
-  branch supplies a real term for a pre-existing-opaque name; when both branches supply one, neither
-  loop's guard fires and the merge proceeds via the ordinary first-wins `entry().or_insert()`, identical
-  to how a name genuinely new to both branches is handled.
+  inserted into `env.bindings` yet when the other runs — skipping the name in both loops, so it does
+  not land in `env.bindings` even though every path assigned it a real term. This is not the
+  `unbound_local` misdiagnosis the fix as a whole exists to eliminate: the outer `env.opaque_bindings`
+  already carries the name from before the `if` (it was pre-existing-opaque), and the join's
+  opaque-marker merge loop only ever inserts, never removes, so that stale entry survives untouched.
+  `HirExpr::Name`'s lookup then still resolves the name via the surviving opaque marker — the bug is a
+  silent masking of both branches' concrete terms back down to "opaque, no term available," not a
+  missing-binding diagnostic. A fourth reviewer pass confirmed this correction: the earlier framing in
+  this entry and in the accompanying code comments had mischaracterized the symptom as reproducing
+  `unbound_local`. The guard now consults the *other* branch's own `bindings` map instead of
+  `env.bindings`'s own mutation state — `pre_existing.contains(name) &&
+  !orelse_env.bindings.contains_key(name)` in the body loop, and the symmetric check against
+  `body_env.bindings` in the orelse loop — so it only skips when exactly one branch supplies a real term
+  for a pre-existing-opaque name; when both branches supply one, neither loop's guard fires and the
+  merge proceeds via the ordinary first-wins `entry().or_insert()`, identical to how a name genuinely
+  new to both branches is handled.
 - Alternatives: Reuse `maybe_bindings` directly instead of adding a new field (rejected —
   `maybe_bindings` has a specific, D-147-tied meaning inspected by the if/loop branch-merge logic
   at two other sites; polluting the same set with "definitely assigned, but the solver has no term
@@ -130,7 +136,10 @@ status: accepted
   term in exactly one branch, does not become newly *maybe* bound (it was already definite) and remains
   resolvable only through `opaque_bindings` afterward, not through the one branch's unmasked term;
   `..._in_both_branches_to_real_terms` asserts the complementary case — reassigned in *both* branches —
-  ends up definitely bound with a real term rather than dropped from every tracked set.
+  ends up definitely bound with a real term rather than dropped from every tracked set; a fourth
+  reviewer pass added an explicit assertion there that `env.opaque_bindings` still retains a stale,
+  harmless duplicate marker for the name afterward (the join never removes from that set), pinning the
+  precise post-state instead of leaving it implicit in prose.
   `crates/pycc_types/src/tests.rs`'s 78 direct
   `ConstraintEnvironment { ... }` construction sites each gain `opaque_bindings: HashSet::new()`.
   `crates/pycc_hir/src/lib.rs`'s `ListPop`/`DictGetOrDefault` doc comments and the shared `AttrGet`/

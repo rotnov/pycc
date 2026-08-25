@@ -53,14 +53,17 @@ pub(crate) fn join_if_branches_solver(
     // !env.bindings.contains_key(name)`, independent of what the *other*
     // branch did) is too broad -- it also fires when BOTH branches reassign
     // the same pre-existing-opaque name to a real term (e.g. `y = d.get(...)`
-    // then `if cond: y = 1 else: y = 2`), dropping the name from
-    // `env.bindings` entirely in that case too (both branches' real terms
-    // get skipped, and neither branch's `opaque_bindings` still carries the
-    // name post-reassignment, so it also never rejoins `env.opaque_bindings`
-    // below). That reproduces the exact `unbound_local` misdiagnosis this
-    // whole fix exists to eliminate, for a name that is not
-    // branch-conditional at all -- every path assigns it a real term. The
-    // guard therefore only skips when the *other* branch's environment does
+    // then `if cond: y = 1 else: y = 2`), skipping both branches' real terms
+    // in that case too. Because `env.opaque_bindings` already carries the
+    // name from before the `if` and the opaque-merge loop below only ever
+    // inserts (never removes), the outcome is not an `unbound_local`
+    // misdiagnosis -- `HirExpr::Name` still resolves the name via the
+    // surviving stale opaque marker. The bug is a silent masking: both
+    // branches' concrete terms get dropped and the name is reported as
+    // "opaque, no term available" even though every path through the `if`
+    // actually assigned it a real, solver-representable type -- for a name
+    // that is not branch-conditional at all. The guard therefore only skips
+    // when the *other* branch's environment does
     // not also carry a real term for the same name: that is precisely the
     // "reassigned in exactly one branch" case the comment above describes.
     // When both branches independently reassign a pre-existing-opaque name,

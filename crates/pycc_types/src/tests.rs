@@ -18109,14 +18109,21 @@ fn solver_if_reassigns_pre_existing_opaque_binding_in_both_branches_to_real_term
     // reassign it to a real, solver-representable term (`if cond: y = 1
     // else: y = 2`). Unlike the single-branch siblings above, this is not
     // branch-conditional at all -- every path assigns `y` a concrete type --
-    // so it must end up definitely bound with a real term, not dropped
-    // entirely. The naive form of the `pre_existing` guard added for the
-    // single-branch case (skip whenever the name is pre-existing-opaque,
-    // regardless of what the other branch did) incorrectly fired in BOTH
-    // merge loops here, since neither loop had inserted into `env.bindings`
-    // yet when the other ran; the fix consults the *other* branch's own
-    // `bindings` map instead of `env.bindings`'s own mutation state, so this
-    // case correctly falls through to the ordinary first-wins merge.
+    // so it must end up definitely bound with a real term, not left opaque.
+    // The naive form of the `pre_existing` guard added for the single-branch
+    // case (skip whenever the name is pre-existing-opaque, regardless of
+    // what the other branch did) incorrectly fired in BOTH merge loops here,
+    // since neither loop had inserted into `env.bindings` yet when the other
+    // ran. Because `env.opaque_bindings` was never cleared by the join (the
+    // name was already present there before the `if`, and the opaque-merge
+    // loop only ever inserts), the skipped real terms did not reproduce
+    // `unbound_local` -- `HirExpr::Name` still resolved `y` via the
+    // surviving stale opaque marker, silently masking both branches' actual
+    // concrete terms back down to "opaque, no term available" instead. The
+    // fix consults the *other* branch's own `bindings` map instead of
+    // `env.bindings`'s own mutation state, so this case correctly falls
+    // through to the ordinary first-wins merge and `y` ends up with a real,
+    // solver-representable term as it should.
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
@@ -18155,9 +18162,20 @@ fn solver_if_reassigns_pre_existing_opaque_binding_in_both_branches_to_real_term
     // assigns it, so it stays definitely bound.
     assert!(!env.maybe_bindings.contains("y"));
     // `y` must be resolvable as a real term afterward -- it must not be
-    // dropped from every tracked set, which would reproduce the exact
-    // `unbound_local` misdiagnosis issue #771 is about.
+    // dropped from every tracked set, which would silently mask both
+    // branches' concrete terms back down to "opaque, no term available"
+    // (see the comment above).
     assert!(env.bindings.contains_key("y"));
+    // `env.opaque_bindings` still carries a stale "y" marker here: the join
+    // never removes from that set, only inserts into it, and this name was
+    // already present there before the `if`. This is harmless only because
+    // `HirExpr::Name`'s lookup checks `env.bindings` first and a present
+    // real term always wins over a stale opaque marker for the same name
+    // (see the lookup-order comment on `HirExpr::Name` in constraints.rs and
+    // the merge-loop comment on `join_if_branches_solver` in solver.rs).
+    // Pinned explicitly so a future change to that lookup order would be
+    // caught here rather than silently reintroducing a masking regression.
+    assert!(env.opaque_bindings.contains("y"));
 }
 
 #[test]
