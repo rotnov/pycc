@@ -8085,6 +8085,36 @@ fn collect_block_constraints_recurses_into_every_try_star_block_and_binds_a_name
     .unwrap();
 }
 
+/// `check_try_star_stmt`'s own comment on its `if let Some(exc_types) =
+/// &handler.exc_type` check explains that a bare `except*:` is rejected by
+/// ruff's own parser as a syntax error (PEP 654 requires every `except*`
+/// clause to name a type), so `handler.exc_type` is always `Some` by the
+/// time an `HirStmt::TryStar` reaches type-checking through the public
+/// `check`/`build` CLI -- there is no valid Python source that reaches this
+/// function with `exc_type: None`. `HirExceptHandler.exc_type` is still
+/// `Option<Vec<String>>` at the type level, though, so the `None` arm is a
+/// real branch the compiler must still exhaustively handle; a fixture that
+/// builds a `HirStmt::TryStar` directly (bypassing the parser) and passes a
+/// handler with `exc_type: None` is the only way to prove it once
+/// unconditionally skips the whole type-validation block and falls through
+/// to bind the handler's name (if any) and check its body, exactly like a
+/// handler whose single named type happens to validate cleanly.
+#[test]
+fn check_try_star_stmt_skips_type_validation_for_a_handler_with_no_named_type() {
+    let mut env = Environment::default();
+    let body: Vec<HirStmt> = vec![];
+    let handlers = vec![pycc_hir::HirExceptHandler {
+        exc_type: None,
+        name: Some("e".to_string()),
+        body: vec![],
+    }];
+    let orelse: Vec<HirStmt> = vec![];
+    let finalbody: Vec<HirStmt> = vec![];
+
+    check_try_star_stmt(&mut env, &[], &body, &handlers, &orelse, &finalbody, None)
+        .expect("a handler with no named type should skip validation, not error");
+}
+
 /// A `DictSet` whose target name is declared local but never bound
 /// (`local_names` claims it but `bindings` never seeds it) is the same
 /// unresolved-local-reference shape the two `DictSet`-focused tests above
