@@ -390,6 +390,150 @@ fn a_nested_early_return_narrowing_does_not_leak_past_the_enclosing_if() {
     );
 }
 
+/// `is_none`/`is_not_none` on a name that is *not* currently `Optional`
+/// (e.g. a plain `bool`) never narrows either branch in the in-branch
+/// (`HirStmt::If`'s own `narrows_body`/`narrows_orelse`) mechanism -- the
+/// `_ => None` fail-closed arm of `stmt::lower_stmt`'s own `narrowing`
+/// computation. This never happens via a real, type-checked program (the
+/// checker's own `T0021` already rejects `is`/`is not None` against a
+/// non-`Optional` operand before HIR lowering), but this hand-built-HIR MIR
+/// test bypasses the checker entirely, exactly like
+/// `a_plain_bool_test_reads_normally_with_no_unwrap` above does for a
+/// non-none-test shape -- this one instead pins the fail-closed behavior
+/// for a *recognized* `is`/`is not None` shape whose operand just isn't
+/// `Optional`-scoped.
+#[test]
+fn an_is_none_test_on_a_non_optional_name_narrows_neither_branch() {
+    let hir = module(vec![
+        HirItem::TopLevelStmt(HirStmt::Assign {
+            target: "flag".to_string(),
+            value: HirExpr::BoolLiteral(true),
+        }),
+        HirItem::TopLevelStmt(HirStmt::If {
+            test: is_none("flag"),
+            body: vec![],
+            orelse: vec![print_x("flag")],
+        }),
+    ]);
+    let mir = build(&hir);
+    let MirItem::TopLevelStmt(MirStmt::If { orelse, .. }) = &mir.items[1] else {
+        panic!("expected the second item to be the lowered `if`");
+    };
+    assert_eq!(
+        orelse,
+        &vec![MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "flag".to_string(),
+                ty: Ty::Bool,
+            }],
+            ty: Ty::None,
+        })]
+    );
+}
+
+/// The early-return-continuation mechanism (`apply_post_if_narrowing`) has
+/// its own separate `if let Ty::Optional(inner) = lookup(scopes, name) { .. }`
+/// fail-closed guard, distinct from `stmt::lower_stmt`'s in-branch one
+/// exercised just above: `if flag is None: return` on a non-`Optional`
+/// `flag` recognizes `definitely_terminates` and the none-test shape, but
+/// must still not push a `$narrowed:flag` sentinel, since `flag` is not
+/// `Optional`-scoped. Never reachable via a real type-checked program for
+/// the same reason as the test above; this pins `apply_post_if_narrowing`'s
+/// own identical fail-closed behavior directly.
+#[test]
+fn an_early_return_guard_on_a_non_optional_name_does_not_narrow_the_continuation() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![("flag".to_string(), Ty::Bool)],
+        return_ty: Ty::None,
+        body: vec![
+            HirStmt::If {
+                test: is_none("flag"),
+                body: vec![HirStmt::Return(None)],
+                orelse: vec![],
+            },
+            print_x("flag"),
+        ],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    assert_eq!(
+        body[1],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "flag".to_string(),
+                ty: Ty::Bool,
+            }],
+            ty: Ty::None,
+        })
+    );
+}
+
+/// Entering a *nested* scoped body (a `while` loop here) while an
+/// *enclosing* narrowing sentinel is already present in `scopes`' top frame
+/// exercises `narrowing_snapshot`'s non-empty case: the snapshot must
+/// actually capture the existing `$narrowed:x` entry (not just find none),
+/// so `restore_narrowing` can put it back after the nested body's own
+/// isolated processing closes. `is_not_none_narrows_the_body_read_to_an_optional_unwrap`
+/// and the leak-isolation test above only ever exercise
+/// `narrowing_snapshot` on an *empty* narrowing set (nothing yet narrowed at
+/// the point the nested body is entered) -- this is the complementary case,
+/// proving the read inside the nested `while` body still sees the *outer*
+/// `if`'s narrowing.
+#[test]
+fn a_nested_scoped_body_entered_while_already_narrowed_still_sees_the_narrowing() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![
+            ("cond".to_string(), Ty::Bool),
+            ("x".to_string(), Ty::Optional(Box::new(Ty::Int))),
+        ],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![HirStmt::While {
+                test: HirExpr::Name("cond".to_string()),
+                body: vec![print_x("x")],
+            }],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: if_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered `if`");
+    };
+    let MirStmt::While {
+        body: while_body, ..
+    } = &if_body[0]
+    else {
+        panic!("expected the `if` body's only statement to be the lowered `while`");
+    };
+    assert_eq!(
+        while_body[0],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::OptionalUnwrap(
+                Box::new(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::Optional(Box::new(Ty::Int)),
+                }),
+                Box::new(Ty::Int),
+            )],
+            ty: Ty::None,
+        })
+    );
+}
+
 /// `.ty()` of an `OptionalUnwrap` node reports the inner type, not
 /// `Optional(inner)` -- the read-side mirror of `OptionalWrap`'s own
 /// `.ty()` test.

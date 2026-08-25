@@ -4940,3 +4940,77 @@ fn optional_none_test_rejects_neither_side_a_bare_name() {
     };
     assert_eq!(optional_none_test(&test), None);
 }
+
+// Issue #769 (Part 2 of #747): `definitely_terminates` direct unit tests.
+// `pycc_types::narrow`'s and `pycc_mir`'s own test suites only ever exercise
+// this shared predicate indirectly (through a full `check_source`/`build`
+// call), which happens to reach every *reachable* code path in it but never
+// isolates each one -- these tests pin `definitely_terminates`'s own
+// branches directly, covering every arm of both the outer `match` and the
+// inner `&&`-chain's short-circuit structure.
+
+#[test]
+fn definitely_terminates_is_false_for_an_empty_body() {
+    assert!(!definitely_terminates(&[]));
+}
+
+#[test]
+fn definitely_terminates_is_true_when_the_last_statement_is_a_bare_return() {
+    assert!(definitely_terminates(&[HirStmt::Return(None)]));
+}
+
+#[test]
+fn definitely_terminates_is_false_when_the_last_statement_is_an_unrelated_stmt() {
+    assert!(!definitely_terminates(&[HirStmt::ExprStmt(HirExpr::Name(
+        "x".to_string()
+    ))]));
+}
+
+#[test]
+fn definitely_terminates_is_false_for_a_trailing_if_with_no_else() {
+    // `!orelse.is_empty()` is the first conjunct of the `&&`-chain and is
+    // false here, short-circuiting before either recursive call runs.
+    let body = [HirStmt::If {
+        test: HirExpr::Name("flag".to_string()),
+        body: vec![HirStmt::Return(None)],
+        orelse: vec![],
+    }];
+    assert!(!definitely_terminates(&body));
+}
+
+#[test]
+fn definitely_terminates_is_false_when_the_if_body_does_not_terminate() {
+    // `orelse` is non-empty (first conjunct true), but
+    // `definitely_terminates(body)` (the second conjunct) is false.
+    let body = [HirStmt::If {
+        test: HirExpr::Name("flag".to_string()),
+        body: vec![HirStmt::ExprStmt(HirExpr::Name("x".to_string()))],
+        orelse: vec![HirStmt::Return(None)],
+    }];
+    assert!(!definitely_terminates(&body));
+}
+
+#[test]
+fn definitely_terminates_is_false_when_the_if_orelse_does_not_terminate() {
+    // Both `orelse.is_empty()` is false and `definitely_terminates(body)`
+    // is true, but the third conjunct, `definitely_terminates(orelse)`, is
+    // false.
+    let body = [HirStmt::If {
+        test: HirExpr::Name("flag".to_string()),
+        body: vec![HirStmt::Return(None)],
+        orelse: vec![HirStmt::ExprStmt(HirExpr::Name("x".to_string()))],
+    }];
+    assert!(!definitely_terminates(&body));
+}
+
+#[test]
+fn definitely_terminates_is_true_when_both_if_branches_terminate() {
+    // All three conjuncts true: `orelse` is non-empty, and both the body
+    // and the orelse themselves recursively terminate.
+    let body = [HirStmt::If {
+        test: HirExpr::Name("flag".to_string()),
+        body: vec![HirStmt::Return(None)],
+        orelse: vec![HirStmt::Return(None)],
+    }];
+    assert!(definitely_terminates(&body));
+}

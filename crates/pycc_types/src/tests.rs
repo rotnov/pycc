@@ -29041,3 +29041,26 @@ fn narrowing_applies_at_module_scope_and_function_scope_alike() {
     assert!(module_scope.is_ok(), "module scope: {module_scope:?}");
     assert!(function_scope.is_ok(), "function scope: {function_scope:?}");
 }
+
+/// Direct unit test on `narrow::narrowing_target` itself (bypassing
+/// `infer_expr`'s own `?`-propagated `T0021` rejection of an unbound name,
+/// which is what actually prevents this shape from ever reaching
+/// `narrowing_target` through a real source program -- every real call site
+/// runs `infer_expr(env, test)?` immediately beforehand, and that call would
+/// already have failed for a wholly unbound name before `narrowing_target`
+/// is ever invoked). This proves the fail-closed `_ => None` arm's other
+/// sub-case -- `env.lookup_any(name)` returning `None` entirely, as opposed
+/// to `narrowing_does_not_apply_to_a_non_optional_name`'s `Some(non-Optional)`
+/// sub-case -- still degrades safely rather than panicking, matching
+/// `pycc_mir`'s own identical defense-in-depth guard
+/// (`a_plain_bool_test_reads_normally_with_no_unwrap`).
+#[test]
+fn narrowing_target_is_none_for_a_wholly_unbound_name() {
+    let env = Environment::new();
+    let test = HirExpr::Compare {
+        op: CmpOpKind::Is,
+        left: Box::new(HirExpr::Name("never_bound".to_string())),
+        right: Box::new(HirExpr::NoneLiteral),
+    };
+    assert!(narrow::narrowing_target(&env, &test).is_none());
+}
