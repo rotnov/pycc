@@ -86,11 +86,12 @@ mod exception;
 
 use crate::class::ClassAnnotationInfo;
 use crate::expr::{
-    is_zero_arg_super_call, lower_dict_comp_assign, lower_expr, lower_list_comp_assign,
-    lower_range_call, lower_set_comp_assign,
+    contains_named_expr, is_zero_arg_super_call, lower_dict_comp_assign, lower_expr,
+    lower_list_comp_assign, lower_range_call, lower_set_comp_assign,
 };
 use crate::{
-    HirExpr, HirMatchCase, HirPattern, HirStmt, Ty, annotation_to_ty, context_invalid, unsupported,
+    CompIter, HirExpr, HirMatchCase, HirPattern, HirStmt, Ty, annotation_to_ty, context_invalid,
+    unsupported,
 };
 use exception::lower_except_handler;
 use pycc_ast::{ElifElseClause, Expr, Pattern, Singleton, Stmt, StmtMatch};
@@ -627,7 +628,116 @@ pub(crate) fn lower_stmt(
             ));
         }
     };
+    // PEP 572 (#774): reject a walrus lowered anywhere other than the three
+    // placements the issue permits -- an `if`/`while` test (that arm's own
+    // `HirExpr::NamedExpr` node is left exactly as `lower_expr` produced
+    // it, whatever nesting it carries) or a bare expression statement.
+    // Every other statement kind's own *immediate* expression fields are
+    // walked with `contains_named_expr`; a nested `Vec<HirStmt>` body
+    // (`body`/`orelse`/`handlers`/`finalbody`) is deliberately not
+    // re-walked here, because each of its own statements already ran
+    // through this exact same check via its own recursive `lower_stmt`
+    // call -- re-walking it here would be redundant, and for `Try`'s
+    // `handlers: Vec<HirExceptHandler>` (whose only fields are bare
+    // exception-type-name strings, an optional `as` binding name, and its
+    // own `body`) there is no expression to walk in the first place.
+    //
+    // The three permitted placements are folded into this same exhaustive
+    // match as `false` arms (never a violation there) rather than guarded
+    // by a separate outer `if`, so this stays a single match with no
+    // structurally-unreachable arm left for the 100%-region coverage gate
+    // to demand a test for (an earlier revision guarded the match with
+    // `if !matches!(lowered, If | While | ExprStmt)` and gave those three
+    // variants an `unreachable!()` arm inside it -- correct, but provably
+    // untestable, since the outer guard makes the compiler's own
+    // exhaustiveness requirement the only reason that arm exists).
+    //
+    // `HirStmt::ForList` joins this same never-a-violation group rather than
+    // getting its own arm: unlike every other variant matched below,
+    // `lowered` can never actually be a `ForList` here in the first place --
+    // the `Stmt::For` arm above returns a `ForList` directly (see its own
+    // `return Ok(HirStmt::ForList { .. })`) before this match is ever
+    // reached, so a standalone `HirStmt::ForList { .. } => false` arm is
+    // dead code no test can reach without faking the earlier control flow.
+    // Its own reasoning would still hold if it *were* reachable -- `list` is
+    // a bare variable name (D-105), not an expression, so there would be
+    // nothing here for a walrus to be nested inside -- folding it into this
+    // arm keeps that reasoning on record without leaving an unreachable arm
+    // of its own for the coverage gate to flag.
+    let violates_walrus_placement = match &lowered {
+        HirStmt::If { .. }
+        | HirStmt::While { .. }
+        | HirStmt::ExprStmt(_)
+        | HirStmt::ForList { .. } => false,
+        HirStmt::Assign { value, .. } => contains_named_expr(value),
+        HirStmt::AnnAssign { value, .. } => value.as_ref().is_some_and(contains_named_expr),
+        HirStmt::ForRange {
+            start, stop, step, ..
+        } => contains_named_expr(start) || contains_named_expr(stop) || contains_named_expr(step),
+        HirStmt::DictSet { key, value, .. } => {
+            contains_named_expr(key) || contains_named_expr(value)
+        }
+        HirStmt::ListCompAssign { iter, cond, elt, .. } => {
+            comp_iter_contains_named_expr(iter)
+                || cond.as_deref().is_some_and(contains_named_expr)
+                || contains_named_expr(elt)
+        }
+        HirStmt::DictCompAssign {
+            iter,
+            cond,
+            key,
+            value,
+            ..
+        } => {
+            comp_iter_contains_named_expr(iter)
+                || cond.as_deref().is_some_and(contains_named_expr)
+                || contains_named_expr(key)
+                || contains_named_expr(value)
+        }
+        HirStmt::SetCompAssign { iter, cond, elt, .. } => {
+            comp_iter_contains_named_expr(iter)
+                || cond.as_deref().is_some_and(contains_named_expr)
+                || contains_named_expr(elt)
+        }
+        HirStmt::Return(value) => value.as_ref().is_some_and(contains_named_expr),
+        HirStmt::AttrSet { base, value, .. } => {
+            contains_named_expr(base) || contains_named_expr(value)
+        }
+        HirStmt::Match { subject, .. } => contains_named_expr(subject),
+        // `handlers`' own only expression-shaped content is each handler's
+        // own `body: Vec<HirStmt>`, already independently checked (see this
+        // block's own doc comment above).
+        HirStmt::Try { .. } => false,
+        HirStmt::Raise { exc, cause } => {
+            exc.as_ref().is_some_and(contains_named_expr)
+                || cause.as_ref().is_some_and(contains_named_expr)
+        }
+    };
+    if violates_walrus_placement {
+        return Err(unsupported(
+            "a walrus assignment (`:=`) is only supported in an `if`/`while` \
+             condition or as a bare expression statement (#774)",
+            pycc_ast::stmt_range(stmt),
+        ));
+    }
     Ok(lowered)
+}
+
+/// PEP 572 (#774): `CompIter`'s own `contains_named_expr` counterpart --
+/// `CompIter::Range`'s `start`/`stop`/`step` are ordinary `HirExpr` fields
+/// (e.g. `[x for x in range(n := 5)]`); `CompIter::Name` is a bare variable
+/// name with nothing to walk. A walrus found here is rejected for the same
+/// reason every other comprehension field is: #774's own explicit
+/// permitted-scope-cut leaves comprehension-embedded walrus scoping
+/// unimplemented, so this is a `core` gap recorded in the
+/// conformance-breadth manifest, not a silent one.
+fn comp_iter_contains_named_expr(iter: &CompIter) -> bool {
+    match iter {
+        CompIter::Range { start, stop, step } => {
+            contains_named_expr(start) || contains_named_expr(stop) || contains_named_expr(step)
+        }
+        CompIter::Name(_) => false,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

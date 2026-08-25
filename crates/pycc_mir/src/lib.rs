@@ -267,6 +267,28 @@ pub enum MirExpr {
     /// `Ty::Str`, exactly like `rewrite_instance_to_repr`'s own
     /// `MirExpr::Call` rewrite.
     ExceptionMessage(Box<MirExpr>),
+    /// PEP 572 (#774): `target := value`. Evaluates `value`, stores it into
+    /// `name`'s already-predeclared storage slot (see
+    /// `pycc_codegen::collect_expr_bindings`, this node's own slot-scanning
+    /// counterpart to `collect_stmt_bindings`'s `MirStmt::Assign` handling),
+    /// and yields that same value as the expression's own result -- the
+    /// "evaluate, store, yield" shape the issue's own design calls for,
+    /// distinct from every other `MirExpr` variant (all of which are pure
+    /// reads/computations with no store side effect). `name` is restricted
+    /// (at the `pycc_hir` boundary, before this node is ever constructed) to
+    /// exactly three statement placements -- an `if`/`while` test condition
+    /// or a bare expression statement, at any expression nesting depth
+    /// within those -- so `pycc_types::collect_named_expr_bindings` and this
+    /// crate's own `pycc_mir::stmt::collect_named_expr_bindings` only ever
+    /// need to hoist-and-bind at those three statement sites. `ty` is
+    /// `value`'s own type, exactly mirroring an assignment statement's RHS
+    /// typing rule (see `pycc_types::expr::infer_expr_in`'s own `NamedExpr`
+    /// arm).
+    NamedExpr {
+        name: String,
+        value: Box<MirExpr>,
+        ty: Ty,
+    },
 }
 
 /// `MirExpr::Instantiate`'s payload, boxed (not inlined into that variant
@@ -414,6 +436,108 @@ impl MirExpr {
             MirExpr::AttrGet { ty, .. } => ty.clone(),
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
+            MirExpr::NamedExpr { ty, .. } => ty.clone(),
+        }
+    }
+
+    /// PEP 572 (#774): walks every `MirExpr::NamedExpr` reachable from
+    /// `self`, at any nesting depth, appending `(name, ty)` for each one
+    /// found (evaluation order, left to right/outer to inner as the fields
+    /// are declared -- a walrus target is rebindable, so a later entry for
+    /// the same `name` naturally overrides an earlier one when both are
+    /// later applied via `bind_variable`'s "last write wins" semantics).
+    /// `pycc_hir::stmt::lower_stmt`'s own `contains_named_expr` restriction
+    /// guarantees a `NamedExpr` node only ever exists nested inside exactly
+    /// three statement placements (an `if`/`while` test or a bare
+    /// expression statement) -- this walker itself makes no such
+    /// assumption and is exhaustive over every `MirExpr` variant so that
+    /// adding a new variant without touching this function is a compile
+    /// error, not a silently-skipped binding. Two independent call sites
+    /// need this exact same walk: `pycc_mir::stmt::lower_stmt` (to
+    /// `bind_variable` each name into `scopes` before lowering the
+    /// statement's own body/next statement) and
+    /// `pycc_codegen::collect_expr_bindings` (to predeclare each name's
+    /// storage slot, mirroring `collect_stmt_bindings`'s own
+    /// `MirStmt::Assign` handling) -- defined once, here, rather than
+    /// duplicated in both crates.
+    pub fn collect_named_expr_bindings(&self, out: &mut Vec<(String, Ty)>) {
+        match self {
+            MirExpr::IntLiteral(_)
+            | MirExpr::FloatLiteral(_)
+            | MirExpr::BoolLiteral(_)
+            | MirExpr::StringLiteral(_)
+            | MirExpr::NoneLiteral
+            | MirExpr::Name { .. }
+            | MirExpr::ListPop { .. }
+            | MirExpr::NullInstance { .. } => {}
+            MirExpr::IntBoundary(inner) => inner.collect_named_expr_bindings(out),
+            MirExpr::OptionalWrap(inner, _) => inner.collect_named_expr_bindings(out),
+            MirExpr::Call { args, .. } => {
+                for arg in args {
+                    arg.collect_named_expr_bindings(out);
+                }
+            }
+            MirExpr::BinOp { left, right, .. } | MirExpr::Compare { left, right, .. } => {
+                left.collect_named_expr_bindings(out);
+                right.collect_named_expr_bindings(out);
+            }
+            MirExpr::FString(parts) => {
+                for part in parts {
+                    if let MirFStringPart::Interpolation(inner) = part {
+                        inner.collect_named_expr_bindings(out);
+                    }
+                }
+            }
+            MirExpr::ListLiteral(elements)
+            | MirExpr::SetLiteral(elements)
+            | MirExpr::TupleLiteral(elements) => {
+                for element in elements {
+                    element.collect_named_expr_bindings(out);
+                }
+            }
+            MirExpr::Subscript { base, index } => {
+                base.collect_named_expr_bindings(out);
+                index.collect_named_expr_bindings(out);
+            }
+            MirExpr::ListAppend { value, .. } | MirExpr::SetAdd { value, .. } => {
+                value.collect_named_expr_bindings(out);
+            }
+            MirExpr::DictLiteral(pairs) => {
+                for (key, value) in pairs {
+                    key.collect_named_expr_bindings(out);
+                    value.collect_named_expr_bindings(out);
+                }
+            }
+            MirExpr::DictGet { dict, key } => {
+                dict.collect_named_expr_bindings(out);
+                key.collect_named_expr_bindings(out);
+            }
+            MirExpr::Slice {
+                base,
+                start,
+                stop,
+                step,
+            } => {
+                base.collect_named_expr_bindings(out);
+                for bound in [start, stop, step].into_iter().flatten() {
+                    bound.collect_named_expr_bindings(out);
+                }
+            }
+            MirExpr::DictGetOrDefault { key, default, .. } => {
+                key.collect_named_expr_bindings(out);
+                default.collect_named_expr_bindings(out);
+            }
+            MirExpr::Instantiate(inst) => {
+                for arg in &inst.args {
+                    arg.collect_named_expr_bindings(out);
+                }
+            }
+            MirExpr::AttrGet { base, .. } => base.collect_named_expr_bindings(out),
+            MirExpr::ExceptionMessage(inner) => inner.collect_named_expr_bindings(out),
+            MirExpr::NamedExpr { name, value, ty } => {
+                value.collect_named_expr_bindings(out);
+                out.push((name.clone(), ty.clone()));
+            }
         }
     }
 }

@@ -3545,6 +3545,93 @@ mod tests {
         let _mir = pycc_mir::build(&resolved);
     }
 
+    // PEP 572 (#774): `pycc_mir::expr::pre_bind_named_expr_targets` is a
+    // function private to `pycc_mir` (`pub(super)`), reachable from outside
+    // that crate only indirectly through `pycc_mir::build`. Its `BinOp`/
+    // `Compare`/`UnaryOp`/`FString` arms (a walrus nested inside one of
+    // those, at any depth within an `ExprStmt`) are already exercised
+    // through `pycc_mir`'s own hand-built-HIR test suite (see that crate's
+    // `walrus_in_an_if_test_binds_the_name_for_the_body` and neighbors) and
+    // through `pycc_types::tests::check_source`'s
+    // `a_walrus_nested_inside_every_remaining_container_shape_binds_every_name_at_module_scope`,
+    // but every one of those calls a *different* crate's own compiled copy
+    // of `pycc_mir`: this crate's own `[dev-dependencies]` link on
+    // `pycc_mir` is measured as its own separate coverage instantiation,
+    // independent of `pycc_mir`'s own `cfg(test)` binary. Only this
+    // module's handful of `pycc_mir::build(&resolved)` calls (see the
+    // property/inheritance tests above) exercise *this* crate's copy of the
+    // HIR→MIR pipeline at all, and none of them contain a walrus, so this
+    // test closes that gap directly.
+    #[test]
+    fn a_walrus_nested_inside_binop_compare_unaryop_and_fstring_binds_every_name_via_mir_build()
+     {
+        let hir = HirModule {
+            seeded_builtin_exception_classes: false,
+            items: vec![
+                top_level(HirStmt::ExprStmt(HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::NamedExpr {
+                        name: "bo_l".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(1)),
+                    }),
+                    right: Box::new(HirExpr::NamedExpr {
+                        name: "bo_r".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(2)),
+                    }),
+                })),
+                top_level(HirStmt::ExprStmt(HirExpr::Compare {
+                    op: pycc_hir::CmpOpKind::Lt,
+                    left: Box::new(HirExpr::NamedExpr {
+                        name: "cmp_l".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(1)),
+                    }),
+                    right: Box::new(HirExpr::NamedExpr {
+                        name: "cmp_r".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(2)),
+                    }),
+                })),
+                top_level(HirStmt::ExprStmt(HirExpr::UnaryOp {
+                    op: pycc_hir::UnaryOpKind::USub,
+                    operand: Box::new(HirExpr::NamedExpr {
+                        name: "uop".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(3)),
+                    }),
+                })),
+                top_level(HirStmt::ExprStmt(HirExpr::FString(vec![
+                    pycc_hir::FStringPart::Literal("x=".to_string()),
+                    pycc_hir::FStringPart::Interpolation(Box::new(HirExpr::NamedExpr {
+                        name: "fsp".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(4)),
+                    })),
+                ]))),
+                top_level(HirStmt::Assign {
+                    target: "readback".to_string(),
+                    value: HirExpr::Name("fsp".to_string()),
+                }),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![],
+        };
+        let resolved = check_and_resolve(&hir).expect("check_and_resolve should succeed");
+        let mir = pycc_mir::build(&resolved);
+        // Proof every name was actually bound (not just that lowering
+        // didn't panic): the trailing `Assign` above reads `fsp` back by
+        // name, which would panic looking it up in `scopes` if
+        // `pre_bind_named_expr_targets` had skipped the `FString`
+        // interpolation arm.
+        assert_eq!(
+            mir.items[4],
+            pycc_mir::MirItem::TopLevelStmt(pycc_mir::MirStmt::Assign {
+                target: "readback".to_string(),
+                value: pycc_mir::MirExpr::Name {
+                    name: "fsp".to_string(),
+                    ty: Ty::Int,
+                },
+            })
+        );
+    }
+
     // -- #436: @staticmethod / @classmethod type checking -------------------
 
     /// Builds a module with a class `C` that has `__init__`, a static method

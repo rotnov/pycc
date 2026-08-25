@@ -33,6 +33,66 @@ never a merge gate.
 
 ---
 
+## 2026-08-25 — Editing `site/status/index.html` requires four coordinated updates, discovered one CI failure at a time instead of upfront
+
+What happened: issue #774's `docs/ROADMAP.md` feature-landing paragraph triggered
+`status-page-freshness`'s requirement to also touch `site/status/index.html` (per D-156/#401).
+That edit alone was not sufficient — four separate, independently-gated pieces of state all had
+to move together, and each was only discovered by a fresh red CI job after the previous one was
+fixed and pushed: (1) `docs/ROADMAP.md`'s own paragraph tripped the llms.txt aggregate byte
+budget (`build` job, `scripts/check-site.sh`) and had to be condensed; (2) the `status-page-
+freshness` job itself required the `site/status/index.html` edit; (3) editing that file without
+updating `site/sitemap.xml`'s `<lastmod>` for `/status/` tripped `check_sitemap_lastmod.rb`'s
+git-commit-date-vs-lastmod check (`build` job); (4) the file's own JSON-LD `dateModified` had to
+match both the new sitemap date *and* a value hard-coded separately in `scripts/check-site.sh`'s
+`PAGE_SPECS["status"]["date_modified"]` (`build` job again, a second, independent pin on the same
+fact); (5) the file's byte content is also pinned by a SHA-256 in
+`tests/fixtures/pages-performance-manifest.json`'s `source_artifact_sha256`, checked by the
+`pages-accessibility` and `pages-performance` jobs — any content edit, however small, invalidates
+that hash and both jobs fail until it is recomputed and updated.
+
+Fix: each was found and corrected reactively, one force-push per red job (5 rounds total). All
+five checks were locally reproducible the whole time (`RUBYOPT="-E UTF-8" bash
+scripts/check-site.sh` covers 1/2/3/4; `sha256sum site/status/index.html` plus a substring diff
+against the manifest covers 5) — none required an actual CI round-trip to discover.
+
+Lesson: before pushing any change to `site/status/index.html` (or any file the pages-performance
+manifest pins), run the full local checklist in one pass rather than push-and-see: (a)
+`RUBYOPT="-E UTF-8" bash scripts/check-site.sh` from repo root — catches the llms.txt budget,
+the sitemap-lastmod-vs-git-date mismatch, and both `dateModified` pins; (b) `sha256sum
+site/status/index.html` (or whichever page changed) against
+`tests/fixtures/pages-performance-manifest.json`'s `source_artifact_sha256` for that page's `id`,
+updating it if it differs. Running both before the first push turns five round-trips into one.
+
+---
+
+## 2026-08-25 — Fabricated a decision-log citation ("D-199") in a commit message by pattern-matching adjacent numbers instead of checking
+
+What happened: while committing issue #774's PEP 572 walrus-operator work, the commit subject
+was written as `feat(hir,mir,types): add PEP 572 assignment expressions (D-199, #774)` —
+extrapolating "the next number after the two most recent decision entries I remember, D-197 and
+D-198" without ever checking `docs/decisions/` for a file matching it. Post-commit verification
+(`ls docs/decisions/ | grep -i "D-199"`, plus a grep across `crates/pycc_types/src/*.rs` for any
+D-19x/D-20x reference tied to walrus/572/NamedExpr) found nothing: no such file exists, and no
+source comment forward-references one. Root cause traced further: an unrelated open PR (#780,
+`feat/issue-769-optional-narrowing`) already carries "D-199" in its own PR title for its own
+in-flight, unmerged work — a plausible-looking number was in the air from sibling work, not from
+anything that actually applied to this change.
+
+Fix: `git commit --amend` (safe — the commit was local and unpushed, tree clean, single commit)
+to drop the fabricated citation, since neither this PR's own content nor the plan comment on
+issue #774 called for a new decision entry — the round-5 pinned reviewer's full doc-drift
+checklist did not flag a missing ADR either, which is corroborating evidence T0050's scope cut
+is adequately recorded in `docs/DIAGNOSTICS.md` and the fixture rather than needing one.
+
+Lesson: never cite a `docs/decisions/D-NNN` (or any other numbered, filed artifact — issue
+numbers, PR numbers) in a durable artifact (commit message, PR body, doc prose) without first
+running the check that confirms it exists (`ls docs/decisions/`, `gh issue view`, `gh pr view`).
+A number that looks sequential and plausible from memory is not evidence it was actually filed;
+another in-flight branch may already hold the very number pattern-matching would suggest next.
+
+---
+
 ## 2026-08-24 — `docs/ROADMAP.md` growth on `origin/main` tripped the llms.txt budget after a rebase, even though `check-site.sh` had already passed pre-rebase
 
 What happened: on the `#767` branch, `RUBYOPT="-E UTF-8" bash scripts/check-site.sh` passed

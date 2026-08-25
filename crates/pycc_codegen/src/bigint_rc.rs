@@ -264,6 +264,15 @@ pub(super) fn retain_if_int_duplicate<'ctx>(
             | MirExpr::AttrGet {
                 ty: pycc_mir::Ty::Int,
                 ..
+            }
+            // PEP 572 (#774): mirrors `int_value_is_a_duplicate_reference`'s
+            // own `NamedExpr` arm below -- a walrus yields a borrow of its
+            // target slot's own reference, not a fresh one, so a call
+            // argument that is itself a bare walrus needs the same retain
+            // a plain `Name` read gets here.
+            | MirExpr::NamedExpr {
+                ty: pycc_mir::Ty::Int,
+                ..
             } => true,
             // No `Ty::Int` test alongside the tuple test: the enclosing
             // `if let Scalar::Int` has already established that this
@@ -288,10 +297,11 @@ pub(super) fn retain_if_int_duplicate<'ctx>(
 /// frees a live word), and exhaustiveness makes a future `MirExpr` variant
 /// a compile error here instead of a silent double-free.
 ///
-/// Three borrowed shapes today:
+/// Four borrowed shapes today:
 ///
-/// - `Name { ty: Int }` and `AttrGet { ty: Int }` read a word a storage
-///   slot still owns.
+/// - `Name { ty: Int }`, `AttrGet { ty: Int }`, and `NamedExpr { ty: Int }`
+///   read a word a storage slot still owns (see the `NamedExpr` arm below
+///   for why a walrus is a borrow rather than a fresh reference).
 /// - A `Subscript` on a *tuple* base (already known `Ty::Int`, see below).
 ///   Under D-182 `MirExpr::TupleLiteral` retains a borrowed element at
 ///   ingress, so the field holds a reference; but the tuple branch of
@@ -326,6 +336,21 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
             ..
         }
         | MirExpr::AttrGet {
+            ty: pycc_mir::Ty::Int,
+            ..
+        }
+        // PEP 572 (#774): `target := value`. Codegen for `NamedExpr` stores
+        // `value` into `name`'s slot and then re-reads that same slot to
+        // yield the result -- exactly the "assignment followed by a
+        // name-load" shape the issue's own design calls for (see
+        // `pycc_codegen::emit_expr_unchecked`'s `MirExpr::NamedExpr` arm).
+        // The yielded word is therefore a borrow of the slot's own
+        // reference, precisely like `Name { ty: Int }` immediately above,
+        // not a second owned reference -- classifying it `owning` here
+        // would make the temporary-release logic free a word the slot
+        // still owns, reintroducing the same use-after-free class D-181
+        // closed for plain names.
+        | MirExpr::NamedExpr {
             ty: pycc_mir::Ty::Int,
             ..
         } => true,
@@ -375,7 +400,15 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // variant grouped in this arm it can never reach this function as
         // the `Ty::Int`-classified expression `int_temporary_word` passes
         // in; it joins the combined "owning" answer for the same reason.
-        | MirExpr::OptionalWrap(_, _) => false,
+        | MirExpr::OptionalWrap(_, _)
+        // Non-`Ty::Int` `NamedExpr` joins the combined "owning" answer for
+        // the same reason the non-`Ty::Int` `Name`/`AttrGet` arms do just
+        // above: `int_temporary_word`'s caller has already established
+        // `Ty::Int`, so this arm is reached only when `NamedExpr`'s own
+        // `.ty()` is *not* `Ty::Int` and the specific arm above did not
+        // match -- a permanently-unreachable-for-Int case grouped here
+        // purely so the match stays exhaustive.
+        | MirExpr::NamedExpr { .. } => false,
     }
 }
 
@@ -697,6 +730,81 @@ mod tests {
         // release (the store's). Every one of them was proved guarded, on
         // its own operand, by `guarded_bigint_refcount_calls`.
         assert_eq!((retains, releases), (2, 1), "got {calls:?}");
+    }
+
+    /// PEP 572 (#774), deep-review follow-up: `retain_if_int_duplicate`'s
+    /// `MirExpr::NamedExpr` arm. A walrus's yielded word is a *borrow* of
+    /// its target slot's own reference (see `int_value_is_a_duplicate_
+    /// reference`'s own `NamedExpr` arm, this module's release-side mirror
+    /// for exactly this classification), so passing `y := n` directly as a
+    /// call argument needs the same retain a plain `Name` argument gets --
+    /// without it, the call site and `y`'s slot would share one reference
+    /// between two live readers, and the classifier's own non-exhaustive
+    /// `_ => false` catch-all would have silently skipped it, leaving one
+    /// fewer retain than owners of that reference.
+    #[test]
+    fn a_walrus_wrapped_call_argument_emits_a_guarded_retain() {
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "twice".to_string(),
+                    params: vec![("v".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::BinOp {
+                        op: pycc_mir::BinOpKind::Add,
+                        left: Box::new(int_name("v")),
+                        right: Box::new(int_name("v")),
+                        ty: Ty::Int,
+                    }))],
+                },
+                MirItem::Function {
+                    name: "caller".to_string(),
+                    params: vec![("n".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    // A bare expression statement, exactly one of the three
+                    // placements `violates_walrus_placement`
+                    // (`pycc_hir/src/stmt.rs`) permits a walrus in --
+                    // `collect_stmt_bindings`'s `ExprStmt` arm is what
+                    // predeclares `y`'s storage slot here, by walking into
+                    // the call argument via `collect_expr_bindings`.
+                    body: vec![
+                        MirStmt::ExprStmt(MirExpr::Call {
+                            callee: "twice".to_string(),
+                            args: vec![MirExpr::NamedExpr {
+                                name: "y".to_string(),
+                                value: Box::new(int_name("n")),
+                                ty: Ty::Int,
+                            }],
+                            ty: Ty::Int,
+                        }),
+                        MirStmt::Return(None),
+                    ],
+                },
+            ],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_walrus_call_argument", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        // Two retains: `MirExpr::NamedExpr`'s own codegen arm retains `n`'s
+        // word before storing it into `y`'s slot (the assignment's own
+        // duplicate, exactly like a plain `Assign`), and this fix's new
+        // `retain_if_int_duplicate` arm retains it again when the same
+        // walrus expression is then read as the call argument -- `y`'s
+        // slot and the call both need their own live reference to the one
+        // word. Two releases: `y`'s own release-before-store (a runtime
+        // no-op on the never-written entry placeholder, proved guarded
+        // exactly like the previous test's own release), and the call's
+        // `Ty::Int` result being released as a discarded statement-position
+        // temporary (`int_value_is_a_duplicate_reference` classifies
+        // `Call` as owning, so a discarded call result is released).
+        assert_eq!((retains, releases), (2, 2), "got {calls:?}");
     }
 
     /// #770 review (D-197 follow-up): `x: int | None = n` for a borrowed

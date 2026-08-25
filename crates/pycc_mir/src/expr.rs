@@ -814,6 +814,42 @@ pub(super) fn lower_expr(
                  to an ordinary `HirExpr::Call` before this point"
             )
         }
+        // PEP 572 (#774): `target := value`. Lowers `value` first (bottom-up,
+        // like every other composite arm here), then wraps it in
+        // `MirExpr::NamedExpr` carrying the lowered value's own type -- this
+        // node's own "evaluate, store, yield" codegen (see
+        // `pycc_codegen::emit_expr_unchecked`'s `MirExpr::NamedExpr` arm)
+        // does the actual store. This function only ever holds a read-only
+        // `scopes: &[HashMap<String, Ty>]` slice, so it cannot itself
+        // register `name`'s binding for a later statement to `lookup` --
+        // that happens one level up, in `pycc_mir::stmt::lower_stmt`'s
+        // `ExprStmt`/`If`/`While` arms, via
+        // `pycc_mir::stmt::collect_named_expr_bindings`, which walks the
+        // already-lowered `MirExpr` tree (so it can read `ty()` directly
+        // rather than re-inferring it) and calls `bind_variable` for every
+        // `NamedExpr` node found, before that statement's body/next
+        // statement is lowered. `pycc_hir::stmt::lower_stmt`'s own
+        // `contains_named_expr` restriction guarantees a `NamedExpr` node
+        // only ever appears nested inside exactly those three statement
+        // placements, so no other `lower_stmt` arm needs this treatment.
+        // PEP 572 (#774): by the time this arm runs, `pre_bind_named_expr_targets`
+        // (called by `pycc_mir::stmt::lower_stmt` before it lowers the whole
+        // statement) has already bound `name` into `scopes` -- see that
+        // function's own doc comment for why a pre-pass, not this ordinary
+        // bottom-up lowering, has to be the one doing the actual `scopes`
+        // mutation. This arm's own job is unchanged from a first glance:
+        // lower `value` (again -- cheap, `value` has no side effects beyond
+        // further nested walrus bindings the pre-pass already applied) and
+        // wrap it in `MirExpr::NamedExpr` carrying its type.
+        HirExpr::NamedExpr { name, value } => {
+            let value = lower_expr(value, scopes, classes, current_class);
+            let ty = value.ty();
+            MirExpr::NamedExpr {
+                name: name.clone(),
+                value: Box::new(value),
+                ty,
+            }
+        }
         // #433: a bare `HirExpr::Super` should never reach MIR lowering —
         // HIR lowering rejects a standalone `super()` with C0001, and
         // `super().method()`/`super().attr` are handled by the special-case
@@ -824,6 +860,122 @@ pub(super) fn lower_expr(
                  pycc_hir::lower_expr should have rejected this with C0001, or the \
                  `MethodCall`/`AttrGet` arms should have intercepted it before recursing"
             )
+        }
+    }
+}
+
+/// PEP 572 (#774): walks `expr` for every `HirExpr::NamedExpr { name, value }`
+/// node, in the expression's own left-to-right evaluation order, and binds
+/// each `name` into `scopes` *before* `lower_stmt` calls `lower_expr` on the
+/// whole enclosing statement.
+///
+/// This pre-pass exists because `lower_expr` itself only ever holds a
+/// read-only `scopes: &[HashMap<String, Ty>]` slice -- by design, since it is
+/// a pure bottom-up lowering with no other reason to mutate scope state. That
+/// is fine for every ordinary case, where a `NamedExpr`'s binding only needs
+/// to be visible to a *later statement* (handled by
+/// `pycc_mir::stmt::collect_named_expr_bindings`, which walks the
+/// already-lowered `MirExpr` tree after the fact). It breaks down for a
+/// walrus value that itself references an *earlier walrus in the same
+/// expression* -- `(a := 1) + (b := a + 1)` -- where `b`'s value needs `a`
+/// already bound in `scopes` while `lower_expr` is still partway through
+/// lowering the very same top-level expression that defines `a`. Without
+/// this pre-pass, `lower_expr`'s `HirExpr::Name("a")` arm would call
+/// `lookup(scopes, "a")`, which panics (`pycc_types::check` already proved
+/// the program well-typed, including this exact ordering, by running its own
+/// mirror-image pre-pass -- see `pycc_types::collect_named_expr_bindings`'s
+/// doc comment for the type-checker side of this same fix).
+///
+/// Each `name`'s type is computed by actually lowering its `value` here
+/// (recursing into `value` first, so a nested `NamedExpr` inside it is bound
+/// before `value` itself is lowered) -- cheap and side-effect-free (beyond
+/// the further nested bindings this same pre-pass already applies), and the
+/// simplest way to get a `Ty` without re-deriving one structurally from the
+/// unlowered `HirExpr`. `lower_stmt`'s own subsequent full-statement
+/// `lower_expr` call re-lowers this same subtree, which is redundant but
+/// harmless: `bind_variable`'s `.entry(..).or_insert(..)` semantics make a
+/// repeated bind of the same name a no-op.
+pub(super) fn pre_bind_named_expr_targets(
+    expr: &HirExpr,
+    scopes: &mut Vec<HashMap<String, Ty>>,
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) {
+    match expr {
+        HirExpr::NamedExpr { name, value } => {
+            pre_bind_named_expr_targets(value, scopes, classes, current_class);
+            let lowered_value = lower_expr(value, scopes, classes, current_class);
+            let ty = lowered_value.ty();
+            super::bind_variable(scopes, name.clone(), ty);
+        }
+        HirExpr::IntLiteral(_)
+        | HirExpr::FloatLiteral(_)
+        | HirExpr::BoolLiteral(_)
+        | HirExpr::StringLiteral(_)
+        | HirExpr::NoneLiteral
+        | HirExpr::Name(_)
+        | HirExpr::ListPop { .. }
+        | HirExpr::Super => {}
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                pre_bind_named_expr_targets(arg, scopes, classes, current_class);
+            }
+        }
+        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+            pre_bind_named_expr_targets(left, scopes, classes, current_class);
+            pre_bind_named_expr_targets(right, scopes, classes, current_class);
+        }
+        HirExpr::UnaryOp { operand, .. } => {
+            pre_bind_named_expr_targets(operand, scopes, classes, current_class)
+        }
+        HirExpr::FString(parts) => {
+            for part in parts {
+                if let FStringPart::Interpolation(inner) = part {
+                    pre_bind_named_expr_targets(inner, scopes, classes, current_class);
+                }
+            }
+        }
+        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+            for e in es {
+                pre_bind_named_expr_targets(e, scopes, classes, current_class);
+            }
+        }
+        HirExpr::Subscript { base, index } => {
+            pre_bind_named_expr_targets(base, scopes, classes, current_class);
+            pre_bind_named_expr_targets(index, scopes, classes, current_class);
+        }
+        HirExpr::Slice { base, start, stop, step } => {
+            pre_bind_named_expr_targets(base, scopes, classes, current_class);
+            for bound in [start, stop, step].into_iter().flatten() {
+                pre_bind_named_expr_targets(bound, scopes, classes, current_class);
+            }
+        }
+        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+            pre_bind_named_expr_targets(value, scopes, classes, current_class);
+        }
+        HirExpr::DictLiteral(pairs) => {
+            for (k, v) in pairs {
+                pre_bind_named_expr_targets(k, scopes, classes, current_class);
+                pre_bind_named_expr_targets(v, scopes, classes, current_class);
+            }
+        }
+        HirExpr::DictGetOrDefault { key, default, .. } => {
+            pre_bind_named_expr_targets(key, scopes, classes, current_class);
+            pre_bind_named_expr_targets(default, scopes, classes, current_class);
+        }
+        HirExpr::AttrGet { base, .. } => {
+            pre_bind_named_expr_targets(base, scopes, classes, current_class)
+        }
+        HirExpr::MethodCall { base, args, .. } => {
+            pre_bind_named_expr_targets(base, scopes, classes, current_class);
+            for arg in args {
+                pre_bind_named_expr_targets(arg, scopes, classes, current_class);
+            }
+        }
+        HirExpr::GenericClassInstantiate { args, .. } => {
+            for arg in args {
+                pre_bind_named_expr_targets(arg, scopes, classes, current_class);
+            }
         }
     }
 }

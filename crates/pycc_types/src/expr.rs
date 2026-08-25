@@ -1120,5 +1120,76 @@ pub(crate) fn infer_expr_in(
             "a bare `super()` expression is not supported — use `super().method()` or `super().attr`".to_string(),
             Span::new(0, 0),
         )),
+        // PEP 572 (#774): `target := value`'s own type is simply `value`'s
+        // type -- mirroring an assignment statement's own RHS typing rule.
+        // The persistent binding of `name` into the *enclosing* scope's
+        // `Environment` cannot happen here: this function only ever holds a
+        // shared `&Environment` reference, never a mutable one. That
+        // mutation instead happens one level up, at the statement boundary
+        // that calls into this expression (`crate::collect_named_expr_bindings`,
+        // invoked from `check_stmt`/`check_stmt_in_function` before the
+        // statement's own body/orelse/next-statement checking, so a name
+        // bound by a walrus in an `if`/`while` test or a bare expression
+        // statement is visible to every statement that follows it in the
+        // same scope) -- this arm only ever reports the type, never binds.
+        // #774's own scope note: codegen's `MirExpr::NamedExpr` yields the
+        // stored value by re-reading the slot it was just stored into (the
+        // "assignment followed by a name-load" shape the issue calls for),
+        // exactly mirroring a plain `Name` read's own refcount contract. That
+        // contract is only worked out (`pycc_codegen::bigint_rc`'s
+        // `int_value_is_a_duplicate_reference`) for `Ty::Int`; a
+        // reference-counted `Ty::Str`/`Ty::List`/`Ty::Dict`/`Ty::Set`/
+        // `Ty::Tuple`/`Ty::Instance`/`Ty::Protocol` value would need the same
+        // "yielded value borrows the slot's reference" treatment
+        // `str_value_is_a_duplicate_reference` and its container/instance
+        // counterparts don't yet carry for this new node, and getting that
+        // wrong silently reproduces the exact D-154 Part 1 use-after-free
+        // class already fixed once for plain reads. Rather than widen every
+        // one of those classifiers for a PR whose own fixture never exercises
+        // them, T0050 restricts a walrus's value to the non-reference-counted
+        // scalar types (`int`, `float`, `bool`, `None`, and `Optional` of
+        // those) up front -- a `core` gap recorded in the conformance-breadth
+        // manifest, not a silent one, and revisited only alongside a real
+        // audit of every refcounted `MirExpr` classifier this crate over.
+        // (T0050, not T0048/T0049: those two codes are already registered
+        // for the unrelated PEP 604 general-union-annotation gap -- see
+        // `pycc_diag::explain`'s own registry -- so this diagnostic takes
+        // the next free code instead of colliding with them.)
+        HirExpr::NamedExpr { name: _, value } => {
+            let ty = infer_expr_in(env, local_names, value)?;
+            if !is_walrus_value_ty_supported(&ty) {
+                return Err(Diagnostic::error(
+                    "T0050",
+                    format!(
+                        "a walrus assignment (`:=`) value of type `{}` is not yet supported — \
+                         only `int`, `float`, `bool`, and `None` (including `Optional` of those) \
+                         are currently allowed as a walrus value (#774)",
+                        ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            Ok(ty)
+        }
+    }
+}
+
+/// PEP 572 (#774): the non-reference-counted scalar types a walrus
+/// assignment's value is currently permitted to have (T0050). See
+/// `infer_expr_in`'s own `HirExpr::NamedExpr` arm above for why this is
+/// restricted rather than handled generally for every `Ty`.
+fn is_walrus_value_ty_supported(ty: &Ty) -> bool {
+    match ty {
+        Ty::Int | Ty::Float | Ty::Bool | Ty::None => true,
+        Ty::Optional(inner) => is_walrus_value_ty_supported(inner),
+        Ty::Str
+        | Ty::Infer
+        | Ty::Param(_)
+        | Ty::List(_)
+        | Ty::Dict(_)
+        | Ty::Set(_)
+        | Ty::Tuple(_)
+        | Ty::Instance(_)
+        | Ty::Protocol(_) => false,
     }
 }

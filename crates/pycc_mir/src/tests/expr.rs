@@ -559,3 +559,561 @@ fn unary_plus_on_a_float_operand_lowers_to_a_multiply_by_one() {
         },
     );
 }
+
+// PEP 572 (#774): a walrus inside an `if` test binds the name into `scopes`
+// *before* the body is lowered (`pycc_mir::stmt::lower_stmt`'s `If` arm),
+// exercising both `expr::lower_expr`'s own `HirExpr::NamedExpr` arm and
+// `expr::pre_bind_named_expr_targets`'s `NamedExpr` arm (through the
+// `Compare`'s `left` operand).
+#[test]
+fn walrus_in_an_if_test_binds_the_name_for_the_body() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::If {
+            test: HirExpr::Compare {
+                op: CmpOpKind::Gt,
+                left: Box::new(HirExpr::NamedExpr {
+                    name: "n".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(7)),
+                }),
+                right: Box::new(HirExpr::IntLiteral(5)),
+            },
+            body: vec![HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Name("n".to_string()),
+            }],
+            orelse: vec![],
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![MirItem::TopLevelStmt(MirStmt::If {
+            test: MirExpr::Compare {
+                op: CmpOpKind::Gt,
+                left: Box::new(MirExpr::NamedExpr {
+                    name: "n".to_string(),
+                    value: Box::new(MirExpr::IntLiteral(7)),
+                    ty: Ty::Int,
+                }),
+                right: Box::new(MirExpr::IntLiteral(5)),
+                ty: Ty::Bool,
+            },
+            body: vec![MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::Name {
+                    name: "n".to_string(),
+                    ty: Ty::Int,
+                },
+            }],
+            orelse: vec![],
+        })]
+    );
+}
+
+// Mirrors the `if` test above but for `while` (`pycc_mir::stmt::lower_stmt`'s
+// own separate `While` arm binds independently of `If`'s).
+#[test]
+fn walrus_in_a_while_test_binds_the_name_for_the_body() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::While {
+            test: HirExpr::Compare {
+                op: CmpOpKind::Gt,
+                left: Box::new(HirExpr::NamedExpr {
+                    name: "v".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(3)),
+                }),
+                right: Box::new(HirExpr::IntLiteral(0)),
+            },
+            body: vec![HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Name("v".to_string()),
+            }],
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items,
+        vec![MirItem::TopLevelStmt(MirStmt::While {
+            test: MirExpr::Compare {
+                op: CmpOpKind::Gt,
+                left: Box::new(MirExpr::NamedExpr {
+                    name: "v".to_string(),
+                    value: Box::new(MirExpr::IntLiteral(3)),
+                    ty: Ty::Int,
+                }),
+                right: Box::new(MirExpr::IntLiteral(0)),
+                ty: Ty::Bool,
+            },
+            body: vec![MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::Name {
+                    name: "v".to_string(),
+                    ty: Ty::Int,
+                },
+            }],
+        })]
+    );
+}
+
+// A bare expression statement (the third permitted walrus placement) with a
+// walrus nested inside a tuple/list literal, a slice bound, and a dict-key
+// position -- exercises `expr::pre_bind_named_expr_targets`'s
+// `ListLiteral`/`SetLiteral`/`TupleLiteral`, `Slice`, and `DictLiteral` arms
+// in one pass.
+#[test]
+fn walrus_nested_inside_a_tuple_slice_and_dict_literal_binds_every_name() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "lst".to_string(),
+                value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+            }),
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::TupleLiteral(vec![
+                HirExpr::ListLiteral(vec![HirExpr::NamedExpr {
+                    name: "a".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(1)),
+                }]),
+                HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("lst".to_string())),
+                    start: Some(Box::new(HirExpr::NamedExpr {
+                        name: "b".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(0)),
+                    })),
+                    stop: None,
+                    step: None,
+                },
+                HirExpr::DictLiteral(vec![(
+                    HirExpr::NamedExpr {
+                        name: "c".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(2)),
+                    },
+                    HirExpr::IntLiteral(3),
+                )]),
+            ]))),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "sum".to_string(),
+                value: HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::Name("a".to_string())),
+                    right: Box::new(HirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(HirExpr::Name("b".to_string())),
+                        right: Box::new(HirExpr::Name("c".to_string())),
+                    }),
+                },
+            }),
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    // The point of this test is that `build` does not panic looking up `a`,
+    // `b`, or `c` in the trailing `sum` assignment -- proof every nested
+    // walrus in the tuple/list/slice/dict literal above was actually bound.
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items[2],
+        MirItem::TopLevelStmt(MirStmt::Assign {
+            target: "sum".to_string(),
+            value: MirExpr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(MirExpr::Name {
+                    name: "a".to_string(),
+                    ty: Ty::Int,
+                }),
+                right: Box::new(MirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(MirExpr::Name {
+                        name: "b".to_string(),
+                        ty: Ty::Int,
+                    }),
+                    right: Box::new(MirExpr::Name {
+                        name: "c".to_string(),
+                        ty: Ty::Int,
+                    }),
+                    ty: Ty::Int,
+                }),
+                ty: Ty::Int,
+            },
+        })
+    );
+}
+
+// The test above only ever nests a walrus inside `ListLiteral`
+// (`HirExpr::ListLiteral`, as the outer `TupleLiteral`'s first element)
+// and `TupleLiteral` itself -- never `SetLiteral`. Even though all three
+// share one combined match arm in both `pre_bind_named_expr_targets` and
+// `MirExpr::collect_named_expr_bindings`, each `|`-alternative gets its
+// own source-coverage region, so the `SetLiteral` alternative specifically
+// stays unexercised without a fixture that nests a walrus inside a real
+// set literal.
+#[test]
+fn walrus_nested_inside_a_set_literal_binds_the_name() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::SetLiteral(vec![
+                HirExpr::NamedExpr {
+                    name: "a".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(1)),
+                },
+            ]))),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "sum".to_string(),
+                value: HirExpr::Name("a".to_string()),
+            }),
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    // As with the tuple/slice/dict test above, the point is that `build`
+    // does not panic looking up `a` in the trailing assignment -- proof
+    // the walrus nested inside the set literal was actually bound.
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items[1],
+        MirItem::TopLevelStmt(MirStmt::Assign {
+            target: "sum".to_string(),
+            value: MirExpr::Name {
+                name: "a".to_string(),
+                ty: Ty::Int,
+            },
+        })
+    );
+}
+
+// PEP 572 (#774): `MirExpr::collect_named_expr_bindings` is exhaustive over
+// every `MirExpr` variant (see its own doc comment), including several --
+// `IntBoundary`, `OptionalWrap`, `Slice` -- that a `NamedExpr` can never
+// actually nest inside via the real HIR-to-MIR pipeline (an `IntBoundary`/
+// `OptionalWrap` wrapper is only ever introduced by `AnnAssign`/`Assign`
+// lowering around a whole initializer, never around a walrus's own `value`
+// specifically, and a `Slice` cannot appear inside another `Slice`). These
+// arms exist purely so a future new `MirExpr` variant is a compile error
+// here rather than a silently-skipped binding, so they are exercised
+// directly against the public `collect_named_expr_bindings` method instead
+// of through `build`.
+#[test]
+fn collect_named_expr_bindings_walks_into_int_boundary_and_optional_wrap() {
+    let named = MirExpr::NamedExpr {
+        name: "z".to_string(),
+        value: Box::new(MirExpr::IntLiteral(1)),
+        ty: Ty::Int,
+    };
+
+    let mut out = Vec::new();
+    MirExpr::IntBoundary(Box::new(named.clone())).collect_named_expr_bindings(&mut out);
+    assert_eq!(out, vec![("z".to_string(), Ty::Int)]);
+
+    let mut out = Vec::new();
+    MirExpr::OptionalWrap(Box::new(named), Box::new(Ty::Int)).collect_named_expr_bindings(&mut out);
+    assert_eq!(out, vec![("z".to_string(), Ty::Int)]);
+}
+
+#[test]
+fn collect_named_expr_bindings_walks_into_a_slice_bound() {
+    let mir = MirExpr::Slice {
+        base: Box::new(MirExpr::Name {
+            name: "lst".to_string(),
+            ty: Ty::List(Box::new(Ty::Int)),
+        }),
+        start: Some(Box::new(MirExpr::NamedExpr {
+            name: "s".to_string(),
+            value: Box::new(MirExpr::IntLiteral(0)),
+            ty: Ty::Int,
+        })),
+        stop: None,
+        step: None,
+    };
+    let mut out = Vec::new();
+    mir.collect_named_expr_bindings(&mut out);
+    assert_eq!(out, vec![("s".to_string(), Ty::Int)]);
+}
+
+// PEP 572 (#774): same reasoning as
+// `collect_named_expr_bindings_walks_into_int_boundary_and_optional_wrap`
+// above -- `BinOp`/`Compare` cannot nest a `NamedExpr` in either operand via
+// the real HIR-to-MIR pipeline (a walrus is restricted to an `if`/`while`
+// test or a bare expression statement, so a walrus can be the *whole* test
+// but not an operand of a further binary/comparison expression the way
+// these hand-built fixtures place it), so this arm is exercised directly
+// against the public method instead of through `build`.
+#[test]
+fn collect_named_expr_bindings_walks_into_both_binop_operands() {
+    let mir = MirExpr::BinOp {
+        op: BinOpKind::Add,
+        left: Box::new(MirExpr::NamedExpr {
+            name: "l".to_string(),
+            value: Box::new(MirExpr::IntLiteral(1)),
+            ty: Ty::Int,
+        }),
+        right: Box::new(MirExpr::NamedExpr {
+            name: "r".to_string(),
+            value: Box::new(MirExpr::IntLiteral(2)),
+            ty: Ty::Int,
+        }),
+        ty: Ty::Int,
+    };
+    let mut out = Vec::new();
+    mir.collect_named_expr_bindings(&mut out);
+    assert_eq!(
+        out,
+        vec![("l".to_string(), Ty::Int), ("r".to_string(), Ty::Int)]
+    );
+}
+
+#[test]
+fn collect_named_expr_bindings_walks_into_both_compare_operands() {
+    let mir = MirExpr::Compare {
+        op: CmpOpKind::Lt,
+        left: Box::new(MirExpr::NamedExpr {
+            name: "l".to_string(),
+            value: Box::new(MirExpr::IntLiteral(1)),
+            ty: Ty::Int,
+        }),
+        right: Box::new(MirExpr::NamedExpr {
+            name: "r".to_string(),
+            value: Box::new(MirExpr::IntLiteral(2)),
+            ty: Ty::Int,
+        }),
+        ty: Ty::Bool,
+    };
+    let mut out = Vec::new();
+    mir.collect_named_expr_bindings(&mut out);
+    assert_eq!(
+        out,
+        vec![("l".to_string(), Ty::Int), ("r".to_string(), Ty::Int)]
+    );
+}
+
+#[test]
+fn collect_named_expr_bindings_walks_into_an_fstring_interpolation() {
+    let mir = MirExpr::FString(vec![
+        MirFStringPart::Literal("x=".to_string()),
+        MirFStringPart::Interpolation(Box::new(MirExpr::NamedExpr {
+            name: "n".to_string(),
+            value: Box::new(MirExpr::IntLiteral(3)),
+            ty: Ty::Int,
+        })),
+    ]);
+    let mut out = Vec::new();
+    mir.collect_named_expr_bindings(&mut out);
+    assert_eq!(out, vec![("n".to_string(), Ty::Int)]);
+}
+
+#[test]
+fn collect_named_expr_bindings_walks_into_dict_get_dict_and_key() {
+    let mir = MirExpr::DictGet {
+        dict: Box::new(MirExpr::NamedExpr {
+            name: "d".to_string(),
+            value: Box::new(MirExpr::DictLiteral(vec![(
+                MirExpr::StringLiteral("k".to_string()),
+                MirExpr::IntLiteral(1),
+            )])),
+            ty: Ty::Dict(Box::new((Ty::Str, Ty::Int))),
+        }),
+        key: Box::new(MirExpr::NamedExpr {
+            name: "k".to_string(),
+            value: Box::new(MirExpr::StringLiteral("k".to_string())),
+            ty: Ty::Str,
+        }),
+    };
+    let mut out = Vec::new();
+    mir.collect_named_expr_bindings(&mut out);
+    assert_eq!(
+        out,
+        vec![
+            ("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int)))),
+            ("k".to_string(), Ty::Str),
+        ]
+    );
+}
+
+#[test]
+fn collect_named_expr_bindings_walks_into_dict_get_or_default_key_and_default() {
+    let mir = MirExpr::DictGetOrDefault {
+        dict: "d".to_string(),
+        key: Box::new(MirExpr::NamedExpr {
+            name: "k".to_string(),
+            value: Box::new(MirExpr::StringLiteral("k".to_string())),
+            ty: Ty::Str,
+        }),
+        default: Box::new(MirExpr::NamedExpr {
+            name: "def".to_string(),
+            value: Box::new(MirExpr::IntLiteral(0)),
+            ty: Ty::Int,
+        }),
+        ty: Ty::Int,
+    };
+    let mut out = Vec::new();
+    mir.collect_named_expr_bindings(&mut out);
+    assert_eq!(
+        out,
+        vec![("k".to_string(), Ty::Str), ("def".to_string(), Ty::Int)]
+    );
+}
+
+#[test]
+fn collect_named_expr_bindings_walks_into_every_instantiate_arg() {
+    let mir = MirExpr::Instantiate(Box::new(InstantiateExpr {
+        ctor: "C.__init__".to_string(),
+        attr_count: 1,
+        args: vec![MirExpr::NamedExpr {
+            name: "a".to_string(),
+            value: Box::new(MirExpr::IntLiteral(1)),
+            ty: Ty::Int,
+        }],
+        ty: Ty::Instance(Box::new("C".to_string())),
+    }));
+    let mut out = Vec::new();
+    mir.collect_named_expr_bindings(&mut out);
+    assert_eq!(out, vec![("a".to_string(), Ty::Int)]);
+}
+
+// PEP 572 (#774): `MirExpr::ty()`'s own `NamedExpr` arm -- a walrus's type
+// is its value's type, mirroring `pycc_types::expr::infer_expr_in`'s own
+// `NamedExpr` arm.
+#[test]
+fn a_named_exprs_ty_is_its_values_ty() {
+    let mir = MirExpr::NamedExpr {
+        name: "z".to_string(),
+        value: Box::new(MirExpr::IntLiteral(1)),
+        ty: Ty::Int,
+    };
+    assert_eq!(mir.ty(), Ty::Int);
+}
+
+// PEP 572 (#774): `pre_bind_named_expr_targets`'s `HirExpr::BinOp { .. } |
+// HirExpr::Compare { .. }` arm is one combined match arm over two
+// alternatives, and each `|`-alternative earns its own source-coverage
+// region (see `walrus_nested_inside_a_set_literal_binds_the_name`'s own doc
+// comment for the same phenomenon on a different arm). Every other walrus
+// test above that reaches this arm does so through `Compare` (an `if`/
+// `while` test's own top-level shape), never through a bare top-level
+// `BinOp` -- a walrus can only appear as the *whole* `if`/`while` test or a
+// bare expression statement, so this is the one construction that puts a
+// `BinOp` (not a `Compare`) directly at one of those three placements.
+#[test]
+fn walrus_as_the_left_operand_of_a_top_level_binop_expr_stmt_binds_the_name() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(HirExpr::NamedExpr {
+                    name: "n".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(4)),
+                }),
+                right: Box::new(HirExpr::IntLiteral(1)),
+            })),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Name("n".to_string()),
+            }),
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    // As with the tuple/slice/dict test above, the point is that `build`
+    // does not panic looking up `n` in the trailing assignment -- proof
+    // the walrus was bound even though it sits under a `BinOp`, not a
+    // `Compare`.
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items[1],
+        MirItem::TopLevelStmt(MirStmt::Assign {
+            target: "y".to_string(),
+            value: MirExpr::Name {
+                name: "n".to_string(),
+                ty: Ty::Int,
+            },
+        })
+    );
+}
+
+// PEP 572 (#774): `pre_bind_named_expr_targets`'s `HirExpr::UnaryOp { .. }`
+// arm -- no other walrus test above puts a `UnaryOp` directly at one of the
+// three permitted placements (`if`/`while` test, bare expression
+// statement), so this arm stays unexercised without a dedicated fixture.
+#[test]
+fn walrus_under_a_top_level_unary_op_expr_stmt_binds_the_name() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::UnaryOp {
+                op: UnaryOpKind::USub,
+                operand: Box::new(HirExpr::NamedExpr {
+                    name: "n".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(4)),
+                }),
+            })),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Name("n".to_string()),
+            }),
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items[1],
+        MirItem::TopLevelStmt(MirStmt::Assign {
+            target: "y".to_string(),
+            value: MirExpr::Name {
+                name: "n".to_string(),
+                ty: Ty::Int,
+            },
+        })
+    );
+}
+
+// PEP 572 (#774): `pre_bind_named_expr_targets`'s `HirExpr::FString(parts)`
+// arm -- no other walrus test above puts an f-string directly at one of the
+// three permitted placements, so its `Interpolation` branch stays
+// unexercised without a dedicated fixture.
+#[test]
+fn walrus_inside_a_top_level_fstring_interpolation_expr_stmt_binds_the_name() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::FString(vec![
+                FStringPart::Literal("n=".to_string()),
+                FStringPart::Interpolation(Box::new(HirExpr::NamedExpr {
+                    name: "n".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(4)),
+                })),
+            ]))),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Name("n".to_string()),
+            }),
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items[1],
+        MirItem::TopLevelStmt(MirStmt::Assign {
+            target: "y".to_string(),
+            value: MirExpr::Name {
+                name: "n".to_string(),
+                ty: Ty::Int,
+            },
+        })
+    );
+}

@@ -3266,6 +3266,44 @@ fn emit_expr_unchecked<'ctx>(
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             emit_exception_message(builder, rt, base_scalar)
         }
+        // PEP 572 (#774): `target := value`. `name`'s storage slot is
+        // already predeclared by `collect_expr_bindings` (this node's own
+        // slot-scanning counterpart to `collect_stmt_bindings`'s
+        // `MirStmt::Assign` handling), exactly the way `MirStmt::Assign`'s
+        // own target is predeclared -- so this mirrors that statement's own
+        // codegen (`emit_stmt`'s `MirStmt::Assign` arm) almost exactly:
+        // evaluate `value`, retain it if it is a borrowed bigint duplicate
+        // (T0050 restricts a walrus's value to non-reference-counted scalar
+        // types, so `incref_if_str_duplicate` never applies here -- there is
+        // no `str`/container/instance case to retain), then store via the
+        // same `emit_assign` this statement uses. Unlike a plain assignment
+        // statement, this node must also yield a value -- routed through a
+        // synthetic `MirExpr::Name` read of the slot it just stored into
+        // (mirroring `emit_list_name_read`'s own "round-trip through the
+        // `Name` arm" precedent just below), so the result gets the exact
+        // same load/definite-assignment/refcount-borrow treatment an
+        // ordinary later read of `name` would get -- which is also why
+        // `bigint_rc::int_value_is_a_duplicate_reference` classifies
+        // `NamedExpr { ty: Ty::Int, .. }` as borrowed exactly like `Name`:
+        // the value this arm yields is a second read of the same slot, not
+        // a second owned reference.
+        MirExpr::NamedExpr { name, value, ty } => {
+            let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
+            let scalar = retain_if_int_duplicate(context, builder, rt, value, scalar);
+            emit_assign(context, builder, rt, locals, name, scalar);
+            emit_expr_unchecked(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                &MirExpr::Name {
+                    name: name.clone(),
+                    ty: ty.clone(),
+                },
+            )
+        }
     }
 }
 
@@ -3847,11 +3885,24 @@ fn storage_slot_at_entry<'ctx>(
 /// `x: int = True` reaches here as a `Scalar::Bool` that
 /// `coerce_scalar_to_type` (below) turns into a D-141 encoded word, and
 /// value-type gating would skip the release for exactly that case.
+// PEP 572 (#774): loosened from `&mut HashMap` to `&HashMap`. The body only
+// ever reads the map (`locals.get(target)`), never inserts or removes a key
+// -- the actual mutation this function performs is a `build_store` into the
+// slot's own already-allocated pointer, not a change to the map of slots
+// itself. Every pre-existing call site sits inside `emit_stmt`, which holds
+// `locals: &mut HashMap<...>`; passing that through to a `&HashMap`
+// parameter is an ordinary reborrow coercion, so this loosening is
+// behavior-preserving for all of them. It is required, not merely tidier,
+// for `MirExpr::NamedExpr`'s own codegen (`emit_expr_unchecked`'s new arm
+// below): that function only ever holds a read-only `locals: &HashMap<...>`
+// (expression lowering never needs to declare a *new* slot, only read
+// existing ones), yet the walrus's "evaluate value, store to the bound
+// local" behavior needs exactly this store logic to run mid-expression.
 fn emit_assign<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     rt: &RtFns<'ctx>,
-    locals: &mut HashMap<String, StorageSlot<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
     target: &str,
     value: Scalar<'ctx>,
 ) {
@@ -4241,6 +4292,43 @@ fn emit_body_then_branch<'ctx>(
     Ok(falls_through)
 }
 
+/// PEP 572 (#774): `collect_stmt_bindings`'s own counterpart for a
+/// `MirExpr` rather than a `MirStmt` -- a walrus target's storage slot is
+/// declared by an expression embedded in a statement (an `if`/`while` test,
+/// or a bare expression statement), not by a `MirStmt::Assign` the way
+/// every other binding this file predeclares is. Delegates the actual tree
+/// walk to `MirExpr::collect_named_expr_bindings` (defined once in
+/// `pycc_mir`, shared with that crate's own `pycc_mir::stmt::lower_stmt`
+/// hoist-and-bind logic), then applies the exact same storable-type
+/// allow-list `MirStmt::Assign`'s own arm below applies -- T0050
+/// (`pycc_types::expr::is_walrus_value_ty_supported`) already restricts a
+/// walrus's value to a subset of that allow-list (the non-reference-counted
+/// scalars), so every `ty` reaching this filter is expected to pass it, but
+/// applying the identical check here rather than assuming it keeps this
+/// function correct on its own terms if that restriction ever changes.
+fn collect_expr_bindings(expr: &MirExpr, bindings: &mut BTreeMap<String, pycc_mir::Ty>) {
+    let mut named_bindings = Vec::new();
+    expr.collect_named_expr_bindings(&mut named_bindings);
+    for (name, ty) in named_bindings {
+        if matches!(
+            ty,
+            pycc_mir::Ty::Int
+                | pycc_mir::Ty::Bool
+                | pycc_mir::Ty::Float
+                | pycc_mir::Ty::Str
+                | pycc_mir::Ty::None
+                | pycc_mir::Ty::List(_)
+                | pycc_mir::Ty::Dict(_)
+                | pycc_mir::Ty::Set(_)
+                | pycc_mir::Ty::Tuple(_)
+                | pycc_mir::Ty::Instance(_)
+                | pycc_mir::Ty::Optional(_)
+        ) {
+            bindings.entry(name).or_insert(ty);
+        }
+    }
+}
+
 fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mir::Ty>) {
     match stmt {
         MirStmt::Assign { target, value } => {
@@ -4285,7 +4373,17 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                 bindings.entry(target.clone()).or_insert(ty);
             }
         }
-        MirStmt::If { body, orelse, .. } => {
+        // PEP 572 (#774): `test` also gets `collect_expr_bindings`'d, not
+        // just `body`/`orelse` recursed into -- an `if` test condition is
+        // one of the three placements a walrus is permitted in, and its
+        // bound name needs a predeclared storage slot exactly like any
+        // other local, or `emit_assign`'s own `locals.get(target).expect(..)`
+        // panics the first time `emit_expr_unchecked`'s `MirExpr::NamedExpr`
+        // arm tries to store into it.
+        MirStmt::If {
+            test, body, orelse, ..
+        } => {
+            collect_expr_bindings(test, bindings);
             for stmt in body {
                 collect_stmt_bindings(stmt, bindings);
             }
@@ -4293,7 +4391,10 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                 collect_stmt_bindings(stmt, bindings);
             }
         }
-        MirStmt::While { body, .. } => {
+        // PEP 572 (#774): mirrors `If`'s own `test` handling just above --
+        // a `while` test condition is the other permitted placement.
+        MirStmt::While { test, body } => {
+            collect_expr_bindings(test, bindings);
             for stmt in body {
                 collect_stmt_bindings(stmt, bindings);
             }
@@ -4460,7 +4561,17 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                 .entry(target.clone())
                 .or_insert(pycc_mir::Ty::Set(Box::new(elt.ty())));
         }
-        MirStmt::ExprStmt(_) | MirStmt::Return(_) | MirStmt::NoOp | MirStmt::Unreachable => {}
+        // PEP 572 (#774): the third permitted walrus placement -- a bare
+        // expression statement (`(n := 5)`, or a walrus nested inside a
+        // larger expression statement like `f(n := 5)`). `Return`/`NoOp`/
+        // `Unreachable` are excluded from this arm on purpose, not merely
+        // grouped elsewhere: `pycc_hir::stmt::lower_stmt`'s own
+        // `contains_named_expr` restriction rejects a walrus anywhere but
+        // the three placements this file's `collect_stmt_bindings` now
+        // handles (`ExprStmt` here, `If`/`While`'s own `test` above), so a
+        // `MirStmt::Return` can never carry a `NamedExpr` to begin with.
+        MirStmt::ExprStmt(expr) => collect_expr_bindings(expr, bindings),
+        MirStmt::Return(_) | MirStmt::NoOp | MirStmt::Unreachable => {}
         MirStmt::Seq(stmts) => {
             for stmt in stmts {
                 collect_stmt_bindings(stmt, bindings);

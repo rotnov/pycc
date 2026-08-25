@@ -9,7 +9,8 @@ pub use ruff_python_ast::visitor;
 pub use ruff_python_ast::{
     Arguments, CmpOp, Comprehension, ConversionFlag, Decorator, ElifElseClause, ExceptHandler,
     ExceptHandlerExceptHandler, Expr, ExprBinOp, ExprBooleanLiteral, ExprCall, ExprCompare,
-    ExprContext, ExprDictComp, ExprFString, ExprListComp, ExprName, ExprNumberLiteral, ExprSetComp,
+    ExprContext, ExprDictComp, ExprFString, ExprListComp, ExprName, ExprNamed, ExprNumberLiteral,
+    ExprSetComp,
     ExprSlice, ExprStringLiteral, ExprUnaryOp, Identifier, Int, InterpolatedElement,
     InterpolatedStringElement, InterpolatedStringLiteralElement, MatchCase, ModModule, Number,
     Operator, ParameterWithDefault, Parameters, Pattern, PatternArguments, PatternKeyword,

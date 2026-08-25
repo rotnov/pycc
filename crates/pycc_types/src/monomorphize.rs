@@ -717,6 +717,29 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             };
             infer_expr_in(env, local_names, expr)
         }
+        // PEP 572 (#774): `target := value` — recurse into `value` first
+        // (mirroring `AttrGet`'s own "recurse into the one sub-expression,
+        // then delegate to `infer_expr_in` for the final type" shape), so a
+        // generic call nested inside a walrus's value (`(x := identity(1))`)
+        // is still found and rewritten. Unlike every other leaf-delegating
+        // arm above, `name` must also be bound into `env` here: this pass
+        // starts each statement's rewrite from a *fresh* `Environment`
+        // (see `monomorphize`), not the one the module's ordinary
+        // `check_and_resolve` pass populated, so a walrus target read later
+        // in the same scope (as a plain name, or as another generic call's
+        // argument) would otherwise resolve against a binding that was
+        // never carried over and spuriously fail. `rewrite_generic_calls_in_stmt`
+        // binds an `Assign`/`AnnAssign` target the same way for the same
+        // reason; a walrus can appear inside any expression position, so
+        // its own binding has to happen here rather than only at the
+        // statement level.
+        HirExpr::NamedExpr { name, value } => {
+            let name = name.clone();
+            rewrite_generic_calls_in_expr(env, local_names, value, instantiations, seen)?;
+            let ty = infer_expr_in(env, local_names, expr)?;
+            env.bind(name, ty.clone());
+            Ok(ty)
+        }
         HirExpr::IntLiteral(_)
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
@@ -1124,6 +1147,11 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
             for arg in args {
                 collect_generic_class_instantiations_from_expr(arg, out);
             }
+        }
+        // PEP 572 (#774): `target := value` — recurse into `value` only,
+        // mirroring `AttrGet`'s own single-sub-expression shape just above.
+        HirExpr::NamedExpr { name: _, value } => {
+            collect_generic_class_instantiations_from_expr(value, out);
         }
         HirExpr::IntLiteral(_)
         | HirExpr::FloatLiteral(_)
@@ -2376,6 +2404,27 @@ fn rewrite_protocol_calls_in_expr(
                     seen,
                 );
             }
+        }
+        // PEP 572 (#774), deep-review follow-up: unlike its exhaustive
+        // `rewrite_generic_calls_in_expr` sibling, this function is a
+        // non-exhaustive recursion over only the shapes a protocol-typed
+        // call can appear inside -- the trailing `_ => {}` above is
+        // deliberate for every other `HirExpr` variant. But a walrus's own
+        // value is exactly such a shape (`(x := proto_fn(c))` nests a
+        // protocol call inside `value`), so without a dedicated arm here it
+        // fell into the catch-all: `proto_fn`'s call site was never
+        // rewritten to its specialization, while `monomorphize_protocol_params`
+        // unconditionally drops the original `proto_fn` item regardless,
+        // leaving a dangling call to a function no longer in the module.
+        HirExpr::NamedExpr { value, .. } => {
+            rewrite_protocol_calls_in_expr(
+                value,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
         }
         _ => {}
     }

@@ -179,6 +179,25 @@ fn a_bigint_passed_as_an_argument_survives_the_call() {
 }
 
 #[test]
+fn a_walrus_wrapped_bigint_passed_as_an_argument_survives_the_call() {
+    // PEP 572 (#774): `y := PROMOTED` stores into `y`'s slot and yields a
+    // *borrow* of that same slot's reference, not a fresh one -- so passing
+    // it directly as a call argument needs `retain_if_int_duplicate` to
+    // retain it for the duration of the call, exactly like passing a plain
+    // `Name` (see `a_bigint_passed_as_an_argument_survives_the_call` above).
+    // Without that retain, the call's own argument release would retire the
+    // slot's only reference, and the later `print(y)` would read a freed
+    // `BigIntObj`.
+    assert_runs_and_prints(
+        "walrus_argument_survives_call",
+        &format!(
+            "def twice(v: int) -> int:\n    return v + v\n\ny = 0\nprint(twice(y := {PROMOTED}))\nprint(y)\n"
+        ),
+        "9223372036854775808\n4611686018427387904\n",
+    );
+}
+
+#[test]
 fn a_bigint_returned_from_a_function_survives_the_return() {
     assert_runs_and_prints(
         "return_survives",
