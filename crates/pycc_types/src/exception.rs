@@ -529,3 +529,6 @@ mod synthetic_class_tests;
 
 #[cfg(test)]
 mod user_class_tests;
+
+#[cfg(test)]
+mod except_star_tests;
