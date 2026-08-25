@@ -1878,6 +1878,14 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             }
         }
         HirStmt::While { test, body } => {
+            // Issue #769 follow-up (D-068 re-review round 3): a `while`
+            // body can be re-entered, and `test` itself re-executes on
+            // every iteration too -- prescan and drop any name `body`
+            // kills *before* checking `test`, so both the test and the
+            // body (fast in-place path or slow clone+join path, which
+            // clones `env` after this line and so inherits the pruning)
+            // see it. See `narrow::apply_kill_prescan`'s doc comment.
+            narrow::apply_kill_prescan(env, body);
             // PEP 572 (#774): bind before validating -- see the `ExprStmt`
             // arm's doc comment above for why this order is required.
             collect_named_expr_bindings(env, &[], test)?;
@@ -1912,6 +1920,10 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
             check_assignment(env, var, Ty::Int)?;
             let mut body_env = env.clone();
+            // Issue #769 follow-up (D-068 re-review round 3): the loop
+            // body can re-run, so prescan-drop any name it kills before
+            // checking it. See `narrow::apply_kill_prescan`.
+            narrow::apply_kill_prescan(&mut body_env, body);
             narrow::check_stmt_sequence(&mut body_env, body)?;
             join_loop_body(env, &body_env);
             // Issue #118 Part 1: if the loop variable was not definitely bound
@@ -1976,6 +1988,9 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
             check_assignment(env, var, var_ty)?;
             let mut body_env = env.clone();
+            // Issue #769 follow-up (D-068 re-review round 3): see
+            // `narrow::apply_kill_prescan`.
+            narrow::apply_kill_prescan(&mut body_env, body);
             narrow::check_stmt_sequence(&mut body_env, body)?;
             join_loop_body(env, &body_env);
             // Issue #118 Part 1: if the loop variable was not definitely bound
@@ -2508,6 +2523,10 @@ fn check_stmt_in_function(
             }
         }
         HirStmt::While { test, body } => {
+            // Issue #769 follow-up (D-068 re-review round 3): see the
+            // module-scope `While` arm's identical comment and
+            // `narrow::apply_kill_prescan`'s doc comment.
+            narrow::apply_kill_prescan(env, body);
             // PEP 572 (#774): bind before validating, mirroring the `If`
             // arm just above.
             collect_named_expr_bindings(env, local_names, test)?;
@@ -2544,6 +2563,9 @@ fn check_stmt_in_function(
             let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
             check_assignment(env, var, Ty::Int)?;
             let mut body_env = env.clone();
+            // Issue #769 follow-up (D-068 re-review round 3): see
+            // `narrow::apply_kill_prescan`.
+            narrow::apply_kill_prescan(&mut body_env, body);
             narrow::check_stmt_sequence_in_function(
                 &mut body_env,
                 local_names,
@@ -2600,6 +2622,9 @@ fn check_stmt_in_function(
             let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
             check_assignment(env, var, var_ty)?;
             let mut body_env = env.clone();
+            // Issue #769 follow-up (D-068 re-review round 3): see
+            // `narrow::apply_kill_prescan`.
+            narrow::apply_kill_prescan(&mut body_env, body);
             narrow::check_stmt_sequence_in_function(
                 &mut body_env,
                 local_names,
@@ -3258,6 +3283,10 @@ fn check_enum_loop_body_module(
     let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
     check_assignment(env, var, var_ty)?;
     let mut body_env = env.clone();
+    // Issue #769 follow-up (D-068 re-review round 3): an enum loop with
+    // more than one member re-runs `body` once per member, same
+    // re-entrant shape as any other loop -- see `narrow::apply_kill_prescan`.
+    narrow::apply_kill_prescan(&mut body_env, body);
     narrow::check_stmt_sequence(&mut body_env, body)?;
     join_loop_body(env, &body_env);
     if !was_definite && let Some(ty) = env.lookup_any(var) {
@@ -3281,6 +3310,9 @@ fn check_enum_loop_body_function(
     let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
     check_assignment(env, var, var_ty)?;
     let mut body_env = env.clone();
+    // Issue #769 follow-up (D-068 re-review round 3): see
+    // `check_enum_loop_body_module`'s identical comment.
+    narrow::apply_kill_prescan(&mut body_env, body);
     narrow::check_stmt_sequence_in_function(&mut body_env, local_names, body, return_ty.clone())?;
     join_loop_body(env, &body_env);
     if !was_definite && let Some(ty) = env.lookup_any(var) {

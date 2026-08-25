@@ -666,3 +666,254 @@ fn optional_unwrap_ty_reports_the_inner_type() {
     );
     assert_eq!(expr.ty(), Ty::Int);
 }
+
+/// Issue #769 follow-up (D-068 re-review of #780, third round), soundness
+/// blocker 1 (loop re-entry): `if x is not None: while flag: print(x); x =
+/// None`. A `while` body is lowered once but executes repeatedly at
+/// runtime -- a naive lowering would still see `x` narrowed for the
+/// `print(x)` read (it precedes the kill in source order), emitting an
+/// unconditional `MirExpr::OptionalUnwrap` that is only safe on the
+/// body's first iteration. `pycc_types::check` now rejects the source
+/// this HIR models (T0021, via `narrow::apply_kill_prescan`), so this
+/// hand-built-HIR test is the only way to exercise `pycc_mir::build`'s
+/// independent copy of the same fix (`stmt::lower_loop_body`'s own
+/// `apply_kill_prescan` call) directly -- mirroring
+/// `a_reassignment_inside_a_nested_while_kills_narrowing_past_the_loops_own_close`
+/// above, but proving the fix reaches a read *inside* the loop body
+/// itself, not only reads after the loop closes.
+#[test]
+fn a_while_body_that_reads_then_kills_the_narrowed_name_does_not_unwrap_the_read() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![
+            ("x".to_string(), Ty::Optional(Box::new(Ty::Int))),
+            ("flag".to_string(), Ty::Bool),
+        ],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![HirStmt::While {
+                test: HirExpr::Name("flag".to_string()),
+                body: vec![
+                    print_x("x"),
+                    HirStmt::Assign {
+                        target: "x".to_string(),
+                        value: HirExpr::NoneLiteral,
+                    },
+                ],
+            }],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: outer_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered outer `if`");
+    };
+    let MirStmt::While {
+        body: while_body, ..
+    } = &outer_body[0]
+    else {
+        panic!("expected the outer `if` body's only statement to be the lowered `while`");
+    };
+    assert_eq!(
+        while_body[0],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Optional(Box::new(Ty::Int)),
+            }],
+            ty: Ty::None,
+        })
+    );
+}
+
+/// Same soundness blocker, the `while` *test* variant: `if x is not None:
+/// while x < 10: x = None`. The test re-executes on every iteration too,
+/// so it must not be lowered as an unconditional `OptionalUnwrap` either
+/// -- `stmt::lower_stmt`'s `While` arm applies the kill-prescan before
+/// lowering `test`, not only before `lower_loop_body` lowers `body`.
+#[test]
+fn a_while_test_reading_a_name_the_body_kills_does_not_unwrap_the_test() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![("x".to_string(), Ty::Optional(Box::new(Ty::Int)))],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![HirStmt::While {
+                test: HirExpr::Compare {
+                    op: CmpOpKind::Lt,
+                    left: Box::new(HirExpr::Name("x".to_string())),
+                    right: Box::new(HirExpr::IntLiteral(10)),
+                },
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::NoneLiteral,
+                }],
+            }],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: outer_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered outer `if`");
+    };
+    let MirStmt::While { test, .. } = &outer_body[0] else {
+        panic!("expected the outer `if` body's only statement to be the lowered `while`");
+    };
+    assert_eq!(
+        test,
+        &MirExpr::Compare {
+            op: CmpOpKind::Lt,
+            left: Box::new(MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Optional(Box::new(Ty::Int)),
+            }),
+            right: Box::new(MirExpr::IntLiteral(10)),
+            ty: Ty::Bool,
+        }
+    );
+}
+
+/// Completeness guard, matching the checker's own equivalent
+/// (`crates/pycc_types/src/tests.rs`): the kill-prescan must not
+/// over-drop. A `while` body that reads a narrowed name but never kills
+/// it anywhere within the loop must still see it narrowed -- otherwise
+/// this fix would trade the soundness bug for a spurious rejection
+/// regression (the same "warning" defect class the fast-path-helper fix
+/// and the match/try sequencing fix already exist to avoid).
+#[test]
+fn a_while_body_that_reads_but_never_kills_the_narrowed_name_still_unwraps_the_read() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![
+            ("x".to_string(), Ty::Optional(Box::new(Ty::Int))),
+            ("flag".to_string(), Ty::Bool),
+        ],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![HirStmt::While {
+                test: HirExpr::Name("flag".to_string()),
+                body: vec![print_x("x")],
+            }],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: outer_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered outer `if`");
+    };
+    let MirStmt::While {
+        body: while_body, ..
+    } = &outer_body[0]
+    else {
+        panic!("expected the outer `if` body's only statement to be the lowered `while`");
+    };
+    assert_eq!(
+        while_body[0],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::OptionalUnwrap(
+                Box::new(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::Optional(Box::new(Ty::Int)),
+                }),
+                Box::new(Ty::Int),
+            )],
+            ty: Ty::None,
+        })
+    );
+}
+
+/// Issue #769 follow-up (D-068 re-review of #780, third round), soundness
+/// blocker 2 (except-from-mid-try): `if x is not None: try: x = None;
+/// raise ValueError("boom") except ValueError: print(x)`. The handler is
+/// only ever entered after some prefix of the `try` body already
+/// executed, so it must not see `x` narrowed the same way the pre-try
+/// state saw it -- a naive lowering (starting the handler from the same
+/// unmodified pre-try `scopes` snapshot every other isolated body starts
+/// from) would still emit `MirExpr::OptionalUnwrap` for the handler's
+/// read even though the try body already reassigned `x` to `None` before
+/// raising. `pycc_types::check` now rejects the source this HIR models
+/// (T0021, via `exception::check_try_stmt`'s own `apply_kill_prescan`
+/// call), so this hand-built-HIR test is the only way to exercise
+/// `pycc_mir::build`'s independent copy of the same fix
+/// (`stmt::lower_stmt`'s `Try` arm) directly.
+#[test]
+fn an_except_handler_reached_after_a_try_body_kill_does_not_unwrap_the_read() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![("x".to_string(), Ty::Optional(Box::new(Ty::Int)))],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![HirStmt::Try {
+                body: vec![
+                    HirStmt::Assign {
+                        target: "x".to_string(),
+                        value: HirExpr::NoneLiteral,
+                    },
+                    HirStmt::Raise {
+                        exc: Some(HirExpr::Call {
+                            callee: "ValueError".to_string(),
+                            args: vec![HirExpr::StringLiteral("boom".to_string())],
+                        }),
+                        cause: None,
+                    },
+                ],
+                handlers: vec![pycc_hir::HirExceptHandler {
+                    exc_type: Some(vec!["ValueError".to_string()]),
+                    name: None,
+                    body: vec![print_x("x")],
+                }],
+                orelse: vec![],
+                finalbody: vec![],
+            }],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: outer_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered outer `if`");
+    };
+    let MirStmt::Try { handlers, .. } = &outer_body[0] else {
+        panic!("expected the outer `if` body's only statement to be the lowered `try`");
+    };
+    assert_eq!(
+        handlers[0].body[0],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Optional(Box::new(Ty::Int)),
+            }],
+            ty: Ty::None,
+        })
+    );
+}

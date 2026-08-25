@@ -221,6 +221,53 @@ pub(crate) fn join_narrowed(
     joined
 }
 
+/// Issue #769 follow-up (D-068 re-review of #780, third round): the
+/// kill-prescan. Drops every name `body` reassigns anywhere within it
+/// (per `pycc_hir::killed_names`, which walks `body` recursively) from
+/// `env`'s narrowing overlay, for the entire body -- not just from the
+/// kill's own source position onward.
+///
+/// A single left-to-right source-order pass (what every other narrowing
+/// entry point in this module and `lib.rs` still does) is unsound
+/// whenever the body it checks can be *entered or re-entered* such that a
+/// read earlier in source order than a kill can nonetheless execute
+/// *after* that kill at runtime:
+///
+/// - A `while`/`for` loop body checked/lowered once but executed
+///   repeatedly: a read on line 2 followed by a kill on line 3 is fine on
+///   the first iteration, but the second iteration's read on line 2 runs
+///   after the first iteration's kill on line 3 already fired.
+/// - An `except` handler, entered partway through the `try` body it
+///   guards: a handler read is checked against the *pre-try* narrowing
+///   state, but at runtime the handler only ever runs after some prefix
+///   of the try body already executed -- a kill anywhere in that body may
+///   have already invalidated the narrowing before the handler starts.
+///
+/// The prescan is deliberately whole-body and non-fixpoint: it does not
+/// attempt to determine *which* reads are actually reachable after a
+/// given kill (that would need a real control-flow reachability analysis
+/// per read), it just drops the narrowing for the entire body once, unconditionally,
+/// whenever the body contains any kill of that name at all. This is sound
+/// (it can only under-narrow, never over-narrow) and requires no fixpoint
+/// iteration, at the cost of also dropping narrowing for a read that
+/// (looking only at that one execution) precedes every kill -- a loop
+/// body that reads a narrowed name but never kills it anywhere is
+/// unaffected (its kill set is empty), so this conservative rule only
+/// costs precision on bodies that actually do kill the name somewhere.
+///
+/// Call this before checking/lowering a loop body (`While`/`ForRange`/
+/// `ForList`, both module and function scope, every fast- and slow-path
+/// call site) and before checking each `except` handler body (against the
+/// pre-try `env` clone, with the *try body's* kill set). A straight-line
+/// body or an `if`/`else` with no enclosing loop or `try` needs no
+/// prescan at all: execution order there already equals source order, so
+/// the existing sequential pass is already sound.
+pub(crate) fn apply_kill_prescan(env: &mut Environment, body: &[HirStmt]) {
+    for name in pycc_hir::killed_names(body) {
+        env.narrowed.remove(&name);
+    }
+}
+
 /// Checks `stmts` sequentially against `env` (module scope), applying the
 /// early-return continuation narrowing ([`apply_post_if_narrowing`]) after
 /// each statement -- the narrowing-aware replacement for the raw `for stmt

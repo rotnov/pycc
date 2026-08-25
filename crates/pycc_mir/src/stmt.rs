@@ -26,6 +26,18 @@ fn lower_loop_body(
     classes: &HashMap<String, HirClassDef>,
     current_class: Option<&str>,
 ) -> Vec<MirStmt> {
+    // Issue #769 follow-up (D-068 re-review round 3): a loop body can be
+    // re-entered, so a read inside it can execute after a kill from a
+    // prior iteration even though the kill comes later in source order.
+    // Prescan-drop every name `body` kills before lowering it -- see
+    // `super::apply_kill_prescan`'s doc comment. Applied on top of
+    // `scopes`' current state before `lower_scoped_body` takes its own
+    // isolating snapshot, so the pruning is visible for the lowering
+    // below but the `pre_snapshot` used by the post-loop join already
+    // reflects it too (matching `pycc_types::narrow`'s equivalent fix,
+    // which mutates the same `env` both the pre-loop test and the loop
+    // body itself read from).
+    super::apply_kill_prescan(scopes, body);
     let pre_snapshot = super::narrowing_snapshot(scopes);
     let (body, body_end) = super::lower_scoped_body(body, scopes, classes, current_class, None);
     super::restore_narrowing(scopes, super::join_narrowed(&pre_snapshot, &[&body_end]));
@@ -314,6 +326,13 @@ pub(super) fn lower_stmt(
             }
         }
         HirStmt::While { test, body } => {
+            // Issue #769 follow-up (D-068 re-review round 3): `test`
+            // re-executes on every iteration too, so it needs the same
+            // prescan `lower_loop_body` applies to `body` below, applied
+            // *before* `test` is lowered -- `lower_loop_body` reapplies it
+            // to the same `scopes` before lowering `body` itself, which is
+            // a harmless no-op the second time.
+            super::apply_kill_prescan(scopes, body);
             // PEP 572 (#774): bind before lowering, mirroring `If`'s own
             // ordering just above.
             pre_bind_named_expr_targets(test, scopes, classes, current_class);
@@ -590,7 +609,7 @@ pub(super) fn lower_stmt(
             lower_match(subject, cases, scopes, classes, current_class)
         }
         HirStmt::Try {
-            body,
+            body: hir_body,
             handlers,
             orelse,
             finalbody,
@@ -602,10 +621,26 @@ pub(super) fn lower_stmt(
             // narrowed state is intentionally discarded at every one of
             // these four call sites.
             let (body, _end_narrowed) =
-                super::lower_scoped_body(body, scopes, classes, current_class, None);
+                super::lower_scoped_body(hir_body, scopes, classes, current_class, None);
+            // Issue #769 follow-up (D-068 re-review round 3): a handler
+            // runs only after *some* prefix of `body` already executed at
+            // runtime, so it must not see a narrowing `body` could have
+            // killed anywhere within it -- the MIR counterpart of
+            // `exception::check_try_stmt`'s identical `handler_env` fix
+            // (`crates/pycc_types/src/exception.rs`). Each iteration below
+            // explicitly restores `scopes` to this pre-try snapshot before
+            // its own prescan, since `lower_scoped_body`'s internal
+            // snapshot/restore only round-trips to *its own* entry state
+            // (the just-pruned state, not the shared pre-try one) --
+            // without the explicit restore, a second handler would start
+            // from the first handler's own pruning instead of the true
+            // pre-try state.
+            let pre_handlers_narrowed = super::narrowing_snapshot(scopes);
             let handlers = handlers
                 .iter()
                 .map(|h| {
+                    super::restore_narrowing(scopes, pre_handlers_narrowed.clone());
+                    super::apply_kill_prescan(scopes, hir_body);
                     // PEP 758 (#740): a handler may name more than one
                     // exception type. Union each named type's own tag set,
                     // then dedup -- overlapping families (e.g. `OSError`
@@ -650,6 +685,15 @@ pub(super) fn lower_stmt(
                     }
                 })
                 .collect();
+            // Restore `scopes` to the pre-handlers (pre-try) narrowing
+            // state once more: each handler's own `lower_scoped_body` call
+            // above restores only to *that handler's* pruned entry state
+            // (the `apply_kill_prescan` mutation applied right before it),
+            // not all the way back to `pre_handlers_narrowed` -- without
+            // this, `orelse`/`finalbody` below would see whichever
+            // handler ran last's pruning, not the pre-try state they saw
+            // before this fix.
+            super::restore_narrowing(scopes, pre_handlers_narrowed);
             let (orelse, _end_narrowed) =
                 super::lower_scoped_body(orelse, scopes, classes, current_class, None);
             let (finalbody, _end_narrowed) =

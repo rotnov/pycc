@@ -29174,3 +29174,72 @@ fn nested_early_return_guard_narrows_inside_an_unrelated_outer_while_in_function
 // ever runs), so the early-return continuation shape -- and therefore
 // finding 2's specific defect -- cannot occur at module scope at all; there
 // is deliberately no module-scope counterpart to the two tests above.
+
+// D-068 re-review of #780 (third round): the single left-to-right
+// source-order narrowing pass reconciled overlays only at control-flow
+// *joins*, so it silently assumed a body's execution order always matches
+// its source order. That assumption fails whenever a body can be
+// re-entered such that a statement earlier in *execution* order runs
+// after a kill that appears later in *source* order -- a `while` loop
+// re-running its own body, or an `except` handler that only ever runs
+// after some partial prefix of the `try` body already executed. Both are
+// fixed the same way: `narrow::apply_kill_prescan` scans the re-enterable
+// body for every name it kills anywhere within it, and drops those names'
+// narrowing overlay entries for the *entire* body before the normal
+// left-to-right pass ever starts, so no read inside the body can observe
+// a narrowing that some other execution path through the same body would
+// already have invalidated. See `docs/decisions/` for the entry
+// superseding D-199's now-inaccurate "narrowing never survives a
+// reassignment of the narrowed name" consequence.
+
+#[test]
+fn a_narrowed_read_inside_a_while_loop_body_the_same_body_later_kills_is_rejected() {
+    // Blocker 1 (loop re-entry): `x` is narrowed on `while` entry and the
+    // *first* iteration's `print(x + 1)` would be sound in isolation, but
+    // the loop can run again -- and the second iteration's `print(x + 1)`
+    // actually executes after the first iteration's own `x = None`, so it
+    // must be rejected exactly like any other post-kill read.
+    let result = check_source(
+        "def f(x: int | None) -> int:\n    if x is not None:\n        i: int = 0\n        while i < 2:\n            print(x + 1)\n            x = None\n            i = i + 1\n        return 0\n    return -1\n",
+    );
+    let err = result.expect_err(
+        "a `while` body that reads a narrowed name before killing it must still be rejected, because a later iteration runs the read after the kill",
+    );
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn an_except_handler_reached_after_a_try_body_kill_is_rejected() {
+    // Blocker 2 (except-from-mid-try): the handler can only ever be
+    // entered after the `try` body's own `x = None` already ran (the
+    // `raise` that transfers control to the handler is the very next
+    // statement), so the handler's read must be checked against the
+    // post-kill state, not the narrowed pre-try state.
+    let result = check_source(
+        "def f(x: int | None) -> int:\n    if x is not None:\n        try:\n            x = None\n            raise ValueError(\"boom\")\n        except ValueError:\n            return x + 1\n    return -1\n",
+    );
+    let err = result.expect_err(
+        "an `except` handler reachable only after the `try` body's own kill must not see the pre-try narrowing",
+    );
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn a_while_loop_body_that_reads_but_never_kills_the_narrowed_name_stays_narrowed() {
+    // Completeness guard, matching `pycc_mir`'s own equivalent
+    // (`a_while_body_that_reads_but_never_kills_the_narrowed_name_still_unwraps_the_read`
+    // in `crates/pycc_mir/src/tests/narrow.rs`): the kill-prescan must
+    // scope its pruning to names the body *actually* kills, not
+    // unconditionally drop narrowing for every loop-containing body --
+    // otherwise this fix would trade the soundness bug for a spurious
+    // rejection of `nested_early_return_guard_narrows_inside_an_unrelated_outer_while_in_function_scope`'s
+    // own defect class.
+    let result = check_source(
+        "def f(x: int | None, flag: bool) -> int:\n    if x is not None:\n        while flag:\n            print(x + 1)\n        return 0\n    return -1\n",
+    );
+    assert!(
+        result.is_ok(),
+        "a `while` body that reads a narrowed name but never kills it anywhere must stay narrowed: {result:?}"
+    );
+}
+

@@ -933,6 +933,31 @@ fn kill_narrowing(scopes: &mut [HashMap<String, Ty>], name: &str) {
         .remove(&narrowed_scope_key(name));
 }
 
+/// Issue #769 follow-up (D-068 re-review of #780, third round): the MIR
+/// counterpart of `pycc_types::narrow::apply_kill_prescan` -- drops every
+/// name `body` reassigns anywhere within it (per `pycc_hir::killed_names`)
+/// from `scopes`' top-frame narrowing sentinels, for `body`'s entire
+/// extent rather than only from the kill's own source position onward.
+///
+/// Required for MIR to stay consistent with the checker's identical fix:
+/// without this, `pycc_types::check` would reject a re-entrant read (a
+/// loop body, or an `except` handler reached partway through the `try`
+/// body it guards) that the checker's own `narrow::apply_kill_prescan`
+/// drops the narrowing for, but MIR lowering -- reached only when
+/// `pycc_types::check` already accepted the same HIR for some *other*,
+/// still-narrowable read in the same body -- would still emit an
+/// unconditional `MirExpr::OptionalUnwrap` for a read this checker fix
+/// now no longer allows to be narrowed. Called from the same two site
+/// classes as the checker's: `stmt::lower_loop_body` (every
+/// `While`/`ForRange`/`ForList` lowering path, all funneled through that
+/// one shared helper) and `stmt::lower_stmt`'s `Try` arm (each handler
+/// body, prescanned against the *try body's* kill set before lowering).
+fn apply_kill_prescan(scopes: &mut [HashMap<String, Ty>], body: &[HirStmt]) {
+    for name in pycc_hir::killed_names(body) {
+        kill_narrowing(scopes, &name);
+    }
+}
+
 /// Issue #769 (Part 2 of #747): `Some(inner)` when `name` is currently
 /// narrowed to `inner` (an `Optional`'s inner type), `None` otherwise.
 /// Consulted only by `lower_expr`'s `HirExpr::Name` arm, exactly mirroring

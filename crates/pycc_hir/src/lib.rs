@@ -1,5 +1,6 @@
 use pycc_ast::{ModModule, Stmt};
 use pycc_diag::{Diagnostic, Span};
+use std::collections::HashSet;
 
 mod class;
 mod exception;
@@ -799,6 +800,107 @@ pub fn definitely_terminates(body: &[HirStmt]) -> bool {
             !orelse.is_empty() && definitely_terminates(body) && definitely_terminates(orelse)
         }
         _ => false,
+    }
+}
+
+/// Issue #769 follow-up (D-068 re-review of #780, third round): the set of
+/// bare names `body` reassigns anywhere within it, recursively -- every
+/// name that some execution of `body` could pass to
+/// `pycc_types::check_assignment` (checker) or its MIR lowering
+/// counterpart, which is exactly the set of names whose `Optional`
+/// narrowing overlay entry that assignment kills.
+///
+/// This exists to support a *kill-prescan*: before checking/lowering a
+/// body that can be entered such that a read inside it observes a kill
+/// from an execution earlier than that read's own source position -- a
+/// loop body re-entered on a later iteration, or an `except` handler
+/// reached partway through the `try` body it guards -- the caller drops
+/// every currently-narrowed name this function reports from its working
+/// narrowing state *before* checking/lowering starts, rather than only
+/// from the kill's own source position onward. See
+/// `crates/pycc_types/src/narrow.rs`'s module doc comment for the full
+/// soundness rationale (loop re-entry and except-from-mid-try both
+/// unsound under a single left-to-right source-order pass) and
+/// `docs/decisions/` for the decision record narrowing D-199's
+/// "never survives a reassignment" consequence to this conservative rule.
+///
+/// Mirrors exactly the set of statement kinds that route a bare-name
+/// target through `check_assignment` in `pycc_types::lib`: `Assign`,
+/// a *valued* `AnnAssign` (a value-less `Final` declaration never calls
+/// `check_assignment` -- see that function's own doc comment), a
+/// `ForRange`/`ForList` loop variable, and both names a list/set/dict
+/// comprehension assignment binds (its own loop variable and its result
+/// `target`). `DictSet`/`AttrSet` do not rebind a bare name (they mutate
+/// a container/attribute the name still refers to) and are correctly
+/// excluded. Recurses into every nested body this HIR can hold --
+/// `If`/`While`/`ForRange`/`ForList`/`Match`/`Try` -- so a kill nested
+/// arbitrarily deep (e.g. `while ...: if flag: x = None`) is still
+/// found. This match is intentionally exhaustive over every `HirStmt`
+/// variant (no wildcard arm): adding a new statement kind that can kill a
+/// binding forces this function to be updated rather than silently
+/// under-reporting kills.
+pub fn killed_names(body: &[HirStmt]) -> HashSet<String> {
+    let mut killed = HashSet::new();
+    collect_killed_names(body, &mut killed);
+    killed
+}
+
+fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
+    for stmt in body {
+        match stmt {
+            HirStmt::Assign { target, .. } => {
+                killed.insert(target.clone());
+            }
+            HirStmt::AnnAssign { target, value, .. } => {
+                if value.is_some() {
+                    killed.insert(target.clone());
+                }
+            }
+            HirStmt::ForRange { var, body, .. } => {
+                killed.insert(var.clone());
+                collect_killed_names(body, killed);
+            }
+            HirStmt::ForList { var, body, .. } => {
+                killed.insert(var.clone());
+                collect_killed_names(body, killed);
+            }
+            HirStmt::ListCompAssign { target, var, .. }
+            | HirStmt::SetCompAssign { target, var, .. }
+            | HirStmt::DictCompAssign { target, var, .. } => {
+                killed.insert(target.clone());
+                killed.insert(var.clone());
+            }
+            HirStmt::If { body, orelse, .. } => {
+                collect_killed_names(body, killed);
+                collect_killed_names(orelse, killed);
+            }
+            HirStmt::While { body, .. } => {
+                collect_killed_names(body, killed);
+            }
+            HirStmt::Match { cases, .. } => {
+                for case in cases {
+                    collect_killed_names(&case.body, killed);
+                }
+            }
+            HirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                collect_killed_names(body, killed);
+                for handler in handlers {
+                    collect_killed_names(&handler.body, killed);
+                }
+                collect_killed_names(orelse, killed);
+                collect_killed_names(finalbody, killed);
+            }
+            HirStmt::ExprStmt(_)
+            | HirStmt::DictSet { .. }
+            | HirStmt::AttrSet { .. }
+            | HirStmt::Return(_)
+            | HirStmt::Raise { .. } => {}
+        }
     }
 }
 

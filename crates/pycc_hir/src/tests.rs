@@ -5014,3 +5014,259 @@ fn definitely_terminates_is_true_when_both_if_branches_terminate() {
     }];
     assert!(definitely_terminates(&body));
 }
+
+// Issue #769 follow-up (D-068 re-review of #780, third round): direct unit
+// tests on `killed_names`/`collect_killed_names` itself, pinning every
+// match arm the way `definitely_terminates`'s own tests above pin every
+// arm of that predicate. `pycc_types::narrow`'s and `pycc_mir`'s own test
+// suites only ever exercise this shared function indirectly (through a
+// full `check_source`/`build` call over a real `.py`-shaped program),
+// which happens to reach most but not all of its recursive branches --
+// these tests isolate each `HirStmt` variant's own contribution to the
+// killed-name set directly.
+
+#[test]
+fn killed_names_is_empty_for_an_empty_body() {
+    assert!(killed_names(&[]).is_empty());
+}
+
+#[test]
+fn killed_names_includes_a_plain_assign_target() {
+    let body = [HirStmt::Assign {
+        target: "x".to_string(),
+        value: HirExpr::NoneLiteral,
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(killed, HashSet::from(["x".to_string()]));
+}
+
+#[test]
+fn killed_names_includes_a_valued_ann_assign_target() {
+    let body = [HirStmt::AnnAssign {
+        target: "x".to_string(),
+        annotation: Ty::Int,
+        value: Some(HirExpr::IntLiteral(1)),
+        is_final: false,
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(killed, HashSet::from(["x".to_string()]));
+}
+
+#[test]
+fn killed_names_excludes_a_value_less_ann_assign_target() {
+    // A value-less `AnnAssign` (`x: int` with no `= value`) is a bare
+    // declaration, not an assignment -- `check_assignment` is never
+    // reached for it, so it must not count as a kill.
+    let body = [HirStmt::AnnAssign {
+        target: "x".to_string(),
+        annotation: Ty::Int,
+        value: None,
+        is_final: false,
+    }];
+    assert!(killed_names(&body).is_empty());
+}
+
+#[test]
+fn killed_names_includes_the_for_range_loop_variable_and_recurses_into_its_body() {
+    let body = [HirStmt::ForRange {
+        var: "i".to_string(),
+        start: HirExpr::IntLiteral(0),
+        stop: HirExpr::IntLiteral(3),
+        step: HirExpr::IntLiteral(1),
+        body: vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::NoneLiteral,
+        }],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(
+        killed,
+        HashSet::from(["i".to_string(), "y".to_string()])
+    );
+}
+
+#[test]
+fn killed_names_includes_the_for_list_loop_variable_and_recurses_into_its_body() {
+    let body = [HirStmt::ForList {
+        var: "elt".to_string(),
+        list: "xs".to_string(),
+        body: vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::NoneLiteral,
+        }],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(
+        killed,
+        HashSet::from(["elt".to_string(), "y".to_string()])
+    );
+}
+
+#[test]
+fn killed_names_includes_both_target_and_var_for_a_list_comprehension_assign() {
+    let body = [HirStmt::ListCompAssign {
+        target: "result".to_string(),
+        var: "v".to_string(),
+        iter: CompIter::Name("xs".to_string()),
+        cond: None,
+        elt: Box::new(HirExpr::Name("v".to_string())),
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(
+        killed,
+        HashSet::from(["result".to_string(), "v".to_string()])
+    );
+}
+
+#[test]
+fn killed_names_includes_both_target_and_var_for_a_set_comprehension_assign() {
+    let body = [HirStmt::SetCompAssign {
+        target: "result".to_string(),
+        var: "v".to_string(),
+        iter: CompIter::Name("xs".to_string()),
+        cond: None,
+        elt: Box::new(HirExpr::Name("v".to_string())),
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(
+        killed,
+        HashSet::from(["result".to_string(), "v".to_string()])
+    );
+}
+
+#[test]
+fn killed_names_includes_both_target_and_var_for_a_dict_comprehension_assign() {
+    let body = [HirStmt::DictCompAssign {
+        target: "result".to_string(),
+        var: "v".to_string(),
+        iter: CompIter::Name("xs".to_string()),
+        cond: None,
+        key: Box::new(HirExpr::Name("v".to_string())),
+        value: Box::new(HirExpr::Name("v".to_string())),
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(
+        killed,
+        HashSet::from(["result".to_string(), "v".to_string()])
+    );
+}
+
+#[test]
+fn killed_names_recurses_into_both_an_ifs_body_and_orelse() {
+    let body = [HirStmt::If {
+        test: HirExpr::Name("flag".to_string()),
+        body: vec![HirStmt::Assign {
+            target: "a".to_string(),
+            value: HirExpr::NoneLiteral,
+        }],
+        orelse: vec![HirStmt::Assign {
+            target: "b".to_string(),
+            value: HirExpr::NoneLiteral,
+        }],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(killed, HashSet::from(["a".to_string(), "b".to_string()]));
+}
+
+#[test]
+fn killed_names_recurses_into_a_whiles_body() {
+    let body = [HirStmt::While {
+        test: HirExpr::Name("flag".to_string()),
+        body: vec![HirStmt::Assign {
+            target: "x".to_string(),
+            value: HirExpr::NoneLiteral,
+        }],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(killed, HashSet::from(["x".to_string()]));
+}
+
+#[test]
+fn killed_names_recurses_into_every_match_case_body() {
+    let body = [HirStmt::Match {
+        subject: HirExpr::Name("flag".to_string()),
+        cases: vec![
+            HirMatchCase {
+                pattern: HirPattern::Literal(HirExpr::IntLiteral(0)),
+                guard: None,
+                body: vec![HirStmt::Assign {
+                    target: "a".to_string(),
+                    value: HirExpr::NoneLiteral,
+                }],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Wildcard,
+                guard: None,
+                body: vec![HirStmt::Assign {
+                    target: "b".to_string(),
+                    value: HirExpr::NoneLiteral,
+                }],
+            },
+        ],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(killed, HashSet::from(["a".to_string(), "b".to_string()]));
+}
+
+#[test]
+fn killed_names_recurses_into_every_part_of_a_try_statement() {
+    let body = [HirStmt::Try {
+        body: vec![HirStmt::Assign {
+            target: "a".to_string(),
+            value: HirExpr::NoneLiteral,
+        }],
+        handlers: vec![HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::Assign {
+                target: "b".to_string(),
+                value: HirExpr::NoneLiteral,
+            }],
+        }],
+        orelse: vec![HirStmt::Assign {
+            target: "c".to_string(),
+            value: HirExpr::NoneLiteral,
+        }],
+        finalbody: vec![HirStmt::Assign {
+            target: "d".to_string(),
+            value: HirExpr::NoneLiteral,
+        }],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(
+        killed,
+        HashSet::from([
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn killed_names_ignores_statement_kinds_that_do_not_rebind_a_bare_name() {
+    // `ExprStmt`, `DictSet`, `AttrSet`, `Return`, and `Raise` all route
+    // through the catch-all no-op arm: none of them ever passes a bare
+    // name through `check_assignment` (`DictSet`/`AttrSet` write through
+    // a container/attribute slot, not a name binding).
+    let body = [
+        HirStmt::ExprStmt(HirExpr::Name("x".to_string())),
+        HirStmt::DictSet {
+            dict: "d".to_string(),
+            key: HirExpr::IntLiteral(0),
+            value: HirExpr::NoneLiteral,
+        },
+        HirStmt::AttrSet {
+            base: HirExpr::Name("self".to_string()),
+            attr: "field".to_string(),
+            value: HirExpr::NoneLiteral,
+        },
+        HirStmt::Return(Some(HirExpr::IntLiteral(0))),
+        HirStmt::Raise {
+            exc: Some(HirExpr::Name("err".to_string())),
+            cause: None,
+        },
+    ];
+    assert!(killed_names(&body).is_empty());
+}
