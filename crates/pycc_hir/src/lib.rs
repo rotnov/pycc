@@ -763,6 +763,45 @@ pub fn optional_none_test(test: &HirExpr) -> Option<(&str, NoneTestPolarity)> {
     Some((name_side.as_str(), polarity))
 }
 
+/// Issue #769 (Part 2 of #747): true only when `body`'s control flow
+/// unconditionally terminates the enclosing function on every path through
+/// it -- the strict predicate the early-return-narrows-the-continuation
+/// shape needs (`if name is None: <body>` narrows every read after the
+/// `if` only when `<body>` is provably inescapable).
+///
+/// Deliberately **not** the same thing as "a `return` occurs somewhere in
+/// `body`" (an existing, separately-named unsound check elsewhere in this
+/// codebase treats those as equivalent, which is wrong: `if flag: return
+/// 0` contains a `return` but does not terminate on every path). This
+/// predicate is true only when `body`'s *last* statement is itself
+/// unconditionally terminating -- a bare `return`, or an `if` whose `body`
+/// **and** non-empty `orelse` both recursively terminate. `raise` is
+/// deliberately not a terminator (a program that raises still guarantees
+/// the same soundness a `return` does, but correctly recognizing that
+/// would additionally have to account for an enclosing `try`/`except`
+/// catching it before it propagates out of the function -- out of scope
+/// here), and `match` is not analyzed at all (also out of scope, kept
+/// sound by omission rather than by an exhaustiveness heuristic that could
+/// be wrong). Sound-by-omission for any statement shape not explicitly
+/// handled below: an unhandled last statement makes the whole body report
+/// `false`, never `true`.
+///
+/// Shared between `pycc_types::narrow` (the checker's own narrowing
+/// overlay) and `pycc_mir` (its `OptionalUnwrap` lowering) for the
+/// identical reason [`optional_none_test`] is shared: `pycc_mir` does not
+/// depend on `pycc_types`, so the one predicate both need lives here, in
+/// their common dependency, rather than as two independently-maintained
+/// copies (D-199).
+pub fn definitely_terminates(body: &[HirStmt]) -> bool {
+    match body.last() {
+        Some(HirStmt::Return(_)) => true,
+        Some(HirStmt::If { body, orelse, .. }) => {
+            !orelse.is_empty() && definitely_terminates(body) && definitely_terminates(orelse)
+        }
+        _ => false,
+    }
+}
+
 /// PEP 634-636 (#381, PR-21): a single `match` case's pattern, lowered from
 /// `ruff_python_ast::Pattern`. The type checker verifies each pattern against
 /// the subject's known type and collects capture bindings; the MIR pass

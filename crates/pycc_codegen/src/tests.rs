@@ -6380,6 +6380,193 @@ fn optional_int_truthiness_follows_cpython_for_present_and_absent_values() {
     assert_eq!(output.stdout, b"0\n0\n1\n");
 }
 
+/// Issue #769 (Part 2 of #747): `x: int | None = 5; if x is not None:
+/// print(x)` end to end through `compile_to_object`, exercising
+/// `MirExpr::OptionalUnwrap`'s codegen arm (the `Scalar::Optional` ->
+/// `Scalar::Int` field-extraction path) for a present, smallint-valued
+/// payload. Expected output verified against CPython on the equivalent
+/// source.
+#[test]
+fn optional_int_narrowed_read_of_a_present_smallint_prints_the_payload() {
+    let mir = MirModule {
+        items: vec![
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::OptionalWrap(Box::new(MirExpr::IntLiteral(5)), Box::new(Ty::Int)),
+            }),
+            MirItem::TopLevelStmt(MirStmt::If {
+                test: MirExpr::Compare {
+                    op: pycc_mir::CmpOpKind::IsNot,
+                    left: Box::new(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: optional_int(),
+                    }),
+                    right: Box::new(MirExpr::NoneLiteral),
+                    ty: Ty::Bool,
+                },
+                body: vec![print_expr(MirExpr::OptionalUnwrap(
+                    Box::new(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: optional_int(),
+                    }),
+                    Box::new(Ty::Int),
+                ))],
+                orelse: vec![],
+            }),
+        ],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("optional_int_narrowed_smallint");
+    let obj_path = dir.join("optional_int_narrowed_smallint.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("optional_int_narrowed_smallint");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"5\n");
+}
+
+/// Issue #769 (Part 2 of #747), the mandatory bigint case: `x: int | None
+/// = <a value that does not fit D-061's tagged smallint range>; if x is
+/// not None: print(x)`. `i64::MAX` (per `fits_tagged_smallint`'s own
+/// `(n << 1) | 1` round-trip check) always falls outside that range and is
+/// therefore materialized as a genuine heap `BigIntObj` by
+/// `emit_int_constant`, not merely a large-looking smallint -- so this
+/// exercises `OptionalUnwrap`'s codegen arm on a real heap payload, not
+/// just its `Scalar::Int` shape.
+#[test]
+fn optional_int_narrowed_read_of_a_present_bigint_prints_the_payload() {
+    let mir = MirModule {
+        items: vec![
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::OptionalWrap(
+                    Box::new(MirExpr::IntLiteral(i64::MAX)),
+                    Box::new(Ty::Int),
+                ),
+            }),
+            MirItem::TopLevelStmt(MirStmt::If {
+                test: MirExpr::Compare {
+                    op: pycc_mir::CmpOpKind::IsNot,
+                    left: Box::new(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: optional_int(),
+                    }),
+                    right: Box::new(MirExpr::NoneLiteral),
+                    ty: Ty::Bool,
+                },
+                body: vec![print_expr(MirExpr::OptionalUnwrap(
+                    Box::new(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: optional_int(),
+                    }),
+                    Box::new(Ty::Int),
+                ))],
+                orelse: vec![],
+            }),
+        ],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("optional_int_narrowed_bigint");
+    let obj_path = dir.join("optional_int_narrowed_bigint.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("optional_int_narrowed_bigint");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"9223372036854775807\n");
+}
+
+/// Issue #769 (Part 2 of #747), the retain-in-practice half of the mandatory
+/// bigint case: proves `OptionalUnwrap`'s retain (added to
+/// `retain_if_int_duplicate`'s own inline classification, `bigint_rc.rs`)
+/// is not merely emitted but load-bearing at runtime. `x: int | None =
+/// <heap bigint>` is narrowed and duplicated into `y` inside the `if`, `x`
+/// is then reassigned to `None` (retiring `x`'s own reference via
+/// `release_optional_int_slot_before_store`), and `y` is printed
+/// afterward. Without the retain this test's own fix adds, `x`'s
+/// reassignment would free the bigint out from under `y` while `y` is
+/// still live, and this test would either crash or print a corrupted
+/// value instead of the correct one.
+#[test]
+fn a_narrowed_bigint_duplicated_into_a_second_binding_survives_the_original_slots_death() {
+    let mir = MirModule {
+        items: vec![
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::OptionalWrap(
+                    Box::new(MirExpr::IntLiteral(i64::MAX)),
+                    Box::new(Ty::Int),
+                ),
+            }),
+            MirItem::TopLevelStmt(MirStmt::If {
+                test: MirExpr::Compare {
+                    op: pycc_mir::CmpOpKind::IsNot,
+                    left: Box::new(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: optional_int(),
+                    }),
+                    right: Box::new(MirExpr::NoneLiteral),
+                    ty: Ty::Bool,
+                },
+                body: vec![
+                    MirStmt::Assign {
+                        target: "y".to_string(),
+                        value: MirExpr::OptionalUnwrap(
+                            Box::new(MirExpr::Name {
+                                name: "x".to_string(),
+                                ty: optional_int(),
+                            }),
+                            Box::new(Ty::Int),
+                        ),
+                    },
+                    MirStmt::Assign {
+                        target: "x".to_string(),
+                        value: MirExpr::OptionalWrap(
+                            Box::new(MirExpr::NoneLiteral),
+                            Box::new(Ty::Int),
+                        ),
+                    },
+                    print_expr(MirExpr::Name {
+                        name: "y".to_string(),
+                        ty: Ty::Int,
+                    }),
+                ],
+                orelse: vec![],
+            }),
+        ],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("optional_int_narrowed_bigint_survives_reassign");
+    let obj_path = dir.join("optional_int_narrowed_bigint_survives_reassign.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("optional_int_narrowed_bigint_survives_reassign");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"9223372036854775807\n");
+}
+
+/// Issue #769 (Part 2 of #747): `emit_expr`'s `OptionalUnwrap` arm's own
+/// defensive `panic!` fires when its operand does not evaluate to
+/// `Scalar::Optional` -- structurally impossible from real `pycc_mir`
+/// lowering (only `expr::lower_expr`'s `HirExpr::Name` arm ever constructs
+/// this node, always wrapping a `Ty::Optional`-scoped `Name`), so this test
+/// constructs the malformed shape directly to reach and cover that arm,
+/// mirroring this file's existing `#[should_panic]` conventions for other
+/// "internal error" defensive arms.
+#[test]
+#[should_panic(expected = "OptionalUnwrap's operand did not evaluate to Scalar::Optional")]
+fn optional_unwrap_on_a_non_optional_operand_panics_defensively_in_codegen() {
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(print_expr(MirExpr::OptionalUnwrap(
+            Box::new(MirExpr::IntLiteral(5)),
+            Box::new(Ty::Int),
+        )))],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("optional_unwrap_non_optional_operand");
+    let obj_path = dir.join("optional_unwrap_non_optional_operand.o");
+    let _ = compile_to_object(&mir, &obj_path, None, false);
+}
+
 #[test]
 fn an_optional_int_parameter_and_return_value_round_trip_through_a_function_call() {
     // `def g(x: int | None) -> int | None: return x` called as `g(5)`, with

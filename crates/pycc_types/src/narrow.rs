@@ -136,34 +136,16 @@ pub(crate) fn apply_branch_narrowing(
 /// True only when `body`'s control flow unconditionally terminates the
 /// enclosing function on every path through it -- see this module's own
 /// doc comment for the full rationale and the unsound `contains_return`
-/// example this predicate exists to replace. Sound-by-omission for any
-/// statement shape not explicitly handled below (an unhandled last
-/// statement makes the whole body report `false`, never `true`): a `try`,
-/// a `while`, a `for`, and `match` are all treated as non-terminating here,
-/// even if a human reader could prove some of them exhaustive, because
-/// proving that soundly is out of scope for this predicate (documented
-/// scope cut, D-199).
+/// example this predicate exists to replace.
+///
+/// A thin re-export of `pycc_hir::definitely_terminates`, not an
+/// independent copy: that predicate is shared with `pycc_mir`'s own
+/// `OptionalUnwrap` lowering, for the identical "shared dependency of both,
+/// `pycc_mir` cannot depend on `pycc_types`" reason
+/// `pycc_hir::optional_none_test` is shared -- see its own doc comment for
+/// the full soundness rationale.
 pub(crate) fn definitely_terminates(body: &[HirStmt]) -> bool {
-    match body.last() {
-        Some(HirStmt::Return(_)) => true,
-        // An `if` terminates the body only when *both* branches do, and
-        // only when there is a non-empty `orelse` at all -- an `if` with no
-        // `else` can never be exhaustive (the "no-op" implicit-else path
-        // falls straight through to the statement after the `if`, which is
-        // exactly the case the unsound `contains_return`-based design would
-        // have wrongly accepted).
-        Some(HirStmt::If { body, orelse, .. }) => {
-            !orelse.is_empty() && definitely_terminates(body) && definitely_terminates(orelse)
-        }
-        // `raise` is deliberately not a terminator here (documented scope
-        // cut, D-199): a program that raises out of the narrowed branch
-        // does structurally guarantee the same "narrow the continuation"
-        // soundness a `return` does, but recognizing it correctly would
-        // additionally have to account for `try`/`except` catching it
-        // before it propagates out of the enclosing function -- out of
-        // scope for this PR.
-        _ => false,
-    }
+    pycc_hir::definitely_terminates(body)
 }
 
 /// Issue #769 (Part 2 of #747), the early-return continuation shape: if

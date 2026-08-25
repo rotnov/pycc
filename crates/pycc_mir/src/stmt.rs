@@ -82,6 +82,15 @@ pub(super) fn lower_stmt(
             // accepted by the type checker but must not silently change the
             // later MIR name type from tagged i64 to i8.
             bind_variable(scopes, target.clone(), value.ty());
+            // Issue #769 (Part 2 of #747): a reassignment kills any
+            // narrowing currently recorded for `target` -- mirroring
+            // `pycc_types::lib::check_assignment`'s own unconditional
+            // `env.narrowed.remove(target)` at the checker layer. Without
+            // this, a read of `target` later in the same narrowed branch
+            // (after this assignment overwrote it) would keep emitting a
+            // stale `OptionalUnwrap` for a value the checker never proved
+            // present.
+            super::kill_narrowing(scopes, target);
             MirStmt::Assign {
                 target: target.clone(),
                 value,
@@ -148,6 +157,10 @@ pub(super) fn lower_stmt(
             } else {
                 annotation.clone()
             };
+            // Issue #769 (Part 2 of #747): same kill-on-assignment as the
+            // plain `Assign` arm above -- a re-annotated declaration is
+            // still a reassignment of `target`.
+            super::kill_narrowing(scopes, target);
             bind_variable(scopes, target.clone(), bind_ty);
             MirStmt::Assign {
                 target: target.clone(),
@@ -192,6 +205,7 @@ pub(super) fn lower_stmt(
             // lowering pass at all. This binding is consulted only by the
             // plain `HirStmt::Assign` arm's own later-reassignment check
             // above.
+            super::kill_narrowing(scopes, target);
             bind_variable(scopes, target.clone(), annotation.clone());
             MirStmt::NoOp
         }
@@ -200,7 +214,7 @@ pub(super) fn lower_stmt(
             // PEP 572 (#774): bind before lowering, mirroring `ExprStmt`'s
             // own ordering rationale above.
             pre_bind_named_expr_targets(test, scopes, classes, current_class);
-            let test = lower_expr(test, scopes, classes, current_class);
+            let lowered_test = lower_expr(test, scopes, classes, current_class);
             // PEP 572 (#774): an `if` test condition is one of the three
             // placements a walrus is permitted in. Bound *before* lowering
             // `body`/`orelse` (not after, unlike `ExprStmt`'s own
@@ -208,42 +222,80 @@ pub(super) fn lower_stmt(
             // within this same statement -- the branches -- that can
             // reference the bound name: `if (n := f()) > 0: print(n)`).
             let mut named_bindings = Vec::new();
-            test.collect_named_expr_bindings(&mut named_bindings);
+            lowered_test.collect_named_expr_bindings(&mut named_bindings);
             for (name, ty) in named_bindings {
                 bind_variable(scopes, name, ty);
             }
+            // Issue #769 (Part 2 of #747): recognize the same top-level
+            // `name is None` / `name is not None` shape the checker does
+            // (`pycc_hir::optional_none_test`, the shared recognizer), and
+            // -- only when `name` is *currently* scoped as `Ty::Optional`
+            // -- push a `$narrowed:{name}` sentinel into the top `scopes`
+            // frame before lowering the one branch that is reachable only
+            // when the value is present, exactly mirroring
+            // `pycc_types::narrow::apply_branch_narrowing`'s own polarity
+            // split: `is not None` narrows only `body`; `is None` narrows
+            // only `orelse`. The sentinel is popped again immediately after
+            // that branch's statements are lowered, so it never leaks past
+            // this `if` into a sibling statement (MIR's `scopes` frame is
+            // shared, mutable, and per-function rather than per-branch, so
+            // an unpopped sentinel would otherwise leak across the join the
+            // same way the checker's own module doc comment describes for
+            // its own, separate `narrowed` overlay). `test` here is the
+            // original (pre-lowering) HIR node, matching the checker's own
+            // recognizer, which is also HIR-level.
+            let narrowing = pycc_hir::optional_none_test(test).and_then(|(name, polarity)| {
+                match lookup(scopes, name) {
+                    Ty::Optional(inner) => Some((name.to_string(), polarity, *inner)),
+                    _ => None,
+                }
+            });
+            let narrows_body = matches!(
+                narrowing,
+                Some((_, pycc_hir::NoneTestPolarity::IsNot, _))
+            );
+            let narrows_orelse = matches!(narrowing, Some((_, pycc_hir::NoneTestPolarity::Is, _)));
+
+            let body_narrow = narrows_body.then(|| {
+                let (name, _, inner) = narrowing.as_ref().expect("narrows_body implies Some");
+                (name.as_str(), inner.clone())
+            });
+            let body = super::lower_scoped_body(body, scopes, classes, current_class, body_narrow);
+
+            let orelse_narrow = narrows_orelse.then(|| {
+                let (name, _, inner) = narrowing.as_ref().expect("narrows_orelse implies Some");
+                (name.as_str(), inner.clone())
+            });
+            let orelse = super::lower_scoped_body(orelse, scopes, classes, current_class, orelse_narrow);
+
             MirStmt::If {
-                test,
-                body: body
-                    .iter()
-                    .map(|s| lower_stmt(s, scopes, classes, current_class))
-                    .collect(),
-                orelse: orelse
-                    .iter()
-                    .map(|s| lower_stmt(s, scopes, classes, current_class))
-                    .collect(),
+                test: lowered_test,
+                body,
+                orelse,
             }
         }
         HirStmt::While { test, body } => {
             // PEP 572 (#774): bind before lowering, mirroring `If`'s own
             // ordering just above.
             pre_bind_named_expr_targets(test, scopes, classes, current_class);
-            let test = lower_expr(test, scopes, classes, current_class);
+            let lowered_test = lower_expr(test, scopes, classes, current_class);
             // PEP 572 (#774): mirrors `If`'s own bind-before-body handling
             // just above -- a `while` test condition is the other
             // permitted placement, and a name it binds must be visible to
             // the loop body: `while (chunk := f()) is not None: use(chunk)`.
             let mut named_bindings = Vec::new();
-            test.collect_named_expr_bindings(&mut named_bindings);
+            lowered_test.collect_named_expr_bindings(&mut named_bindings);
             for (name, ty) in named_bindings {
                 bind_variable(scopes, name, ty);
             }
+            // Issue #769 (Part 2 of #747), D-199 scope cut: narrowing is
+            // deliberately `if`-only -- `pycc_types::narrow` never applies
+            // `apply_branch_narrowing` to a `while` test (see its own call
+            // sites), so `while`'s body is lowered with no narrow overlay,
+            // mirroring the checker.
             MirStmt::While {
-                test,
-                body: body
-                    .iter()
-                    .map(|s| lower_stmt(s, scopes, classes, current_class))
-                    .collect(),
+                test: lowered_test,
+                body: super::lower_scoped_body(body, scopes, classes, current_class, None),
             }
         }
         HirStmt::ForRange {
@@ -257,10 +309,7 @@ pub(super) fn lower_stmt(
             let stop = lower_expr(stop, scopes, classes, current_class);
             let step = lower_expr(step, scopes, classes, current_class);
             bind_variable(scopes, var.clone(), Ty::Int);
-            let body = body
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
+            let body = super::lower_scoped_body(body, scopes, classes, current_class, None);
             MirStmt::ForRange {
                 var: var.clone(),
                 start,
@@ -298,10 +347,7 @@ pub(super) fn lower_stmt(
             match lookup(scopes, list) {
                 Ty::List(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
-                    let body = body
-                        .iter()
-                        .map(|s| lower_stmt(s, scopes, classes, current_class))
-                        .collect();
+                    let body = super::lower_scoped_body(body, scopes, classes, current_class, None);
                     MirStmt::ForList {
                         var: var.clone(),
                         list: list.clone(),
@@ -310,10 +356,7 @@ pub(super) fn lower_stmt(
                 }
                 Ty::Dict(kv) => {
                     bind_variable(scopes, var.clone(), kv.0);
-                    let body = body
-                        .iter()
-                        .map(|s| lower_stmt(s, scopes, classes, current_class))
-                        .collect();
+                    let body = super::lower_scoped_body(body, scopes, classes, current_class, None);
                     MirStmt::ForDict {
                         var: var.clone(),
                         dict: list.clone(),
@@ -328,10 +371,7 @@ pub(super) fn lower_stmt(
                 // Task 7 fix round).
                 Ty::Set(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
-                    let body = body
-                        .iter()
-                        .map(|s| lower_stmt(s, scopes, classes, current_class))
-                        .collect();
+                    let body = super::lower_scoped_body(body, scopes, classes, current_class, None);
                     MirStmt::ForSet {
                         var: var.clone(),
                         set: list.clone(),
@@ -512,10 +552,7 @@ pub(super) fn lower_stmt(
             orelse,
             finalbody,
         } => {
-            let body = body
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
+            let body = super::lower_scoped_body(body, scopes, classes, current_class, None);
             let handlers = handlers
                 .iter()
                 .map(|h| {
@@ -549,11 +586,8 @@ pub(super) fn lower_stmt(
                             Ty::Instance(Box::new(binding_type.clone())),
                         );
                     }
-                    let handler_body = h
-                        .body
-                        .iter()
-                        .map(|s| lower_stmt(s, scopes, classes, current_class))
-                        .collect();
+                    let handler_body =
+                        super::lower_scoped_body(&h.body, scopes, classes, current_class, None);
                     MirExceptHandler {
                         exc_type_tag,
                         binding_name: h.name.clone(),
@@ -566,14 +600,9 @@ pub(super) fn lower_stmt(
                     }
                 })
                 .collect();
-            let orelse = orelse
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
-            let finalbody = finalbody
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
+            let orelse = super::lower_scoped_body(orelse, scopes, classes, current_class, None);
+            let finalbody =
+                super::lower_scoped_body(finalbody, scopes, classes, current_class, None);
             MirStmt::Try {
                 body,
                 handlers,

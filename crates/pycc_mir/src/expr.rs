@@ -35,6 +35,25 @@ pub(super) fn lower_expr(
             name: name.clone(),
             ty: Ty::Float,
         },
+        // Issue #769 (Part 2 of #747): a name read inside a narrowing-
+        // eligible branch (`super::narrowed_ty`'s `$narrowed:{name}`
+        // sentinel, pushed by `stmt::lower_stmt`'s `HirStmt::If` arm) is
+        // wrapped in `OptionalUnwrap` so `.ty()` reports the Optional's
+        // inner type for this read alone, without touching the slot's own
+        // still-`Optional` declared representation looked up via `lookup`
+        // just below. Checked before the plain `Name` arm so a narrowed
+        // read never falls through to it.
+        HirExpr::Name(name) if super::narrowed_ty(scopes, name).is_some() => {
+            let inner = super::narrowed_ty(scopes, name)
+                .expect("just matched Some above");
+            MirExpr::OptionalUnwrap(
+                Box::new(MirExpr::Name {
+                    name: name.clone(),
+                    ty: lookup(scopes, name),
+                }),
+                Box::new(inner),
+            )
+        }
         HirExpr::Name(name) => MirExpr::Name {
             name: name.clone(),
             ty: lookup(scopes, name),

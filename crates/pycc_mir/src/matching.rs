@@ -2,8 +2,8 @@
 //! the pattern-condition helpers that desugar a `match` into nested `if`s.
 
 use super::{
-    HirClassDef, MATCH_SUBJECT_COUNTER, MirExpr, MirStmt, bind_variable, lower_expr, lower_stmt,
-    mro_attrs,
+    HirClassDef, MATCH_SUBJECT_COUNTER, MirExpr, MirStmt, bind_variable, lower_expr,
+    lower_scoped_body, mro_attrs,
 };
 use pycc_hir::{CmpOpKind, HirExpr, HirMatchCase, HirPattern, Ty};
 use std::collections::HashMap;
@@ -77,11 +77,7 @@ fn lower_match_chain(
             value: value.clone(),
         })
         .collect();
-    let case_body: Vec<MirStmt> = case
-        .body
-        .iter()
-        .map(|s| lower_stmt(s, scopes, classes, current_class))
-        .collect();
+    let case_body = lower_scoped_body(&case.body, scopes, classes, current_class, None);
     let else_chain = lower_match_chain(subj_var, subj_ty, rest, scopes, classes, current_class);
     let inner_body = if let Some(guard) = &case.guard {
         let guard_cond = lower_expr(guard, scopes, classes, current_class);
