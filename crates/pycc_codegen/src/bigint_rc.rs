@@ -450,7 +450,6 @@ pub(super) fn release_scalar_if_int_temporary<'ctx>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::tempfile_dir;
     use pycc_mir::{MirExpr, MirItem, MirModule, MirStmt, Ty};
 
     // -----------------------------------------------------------------
@@ -643,7 +642,7 @@ mod tests {
     /// the Windows runner uses -- an access violation that kills the whole
     /// test binary rather than failing one test.
     fn refcount_calls_in(label: &str, mir: &MirModule) -> Vec<RefcountCall> {
-        let dir = tempfile_dir(label);
+        let dir = pycc_scratch::ScratchDir::new(label).expect("failed to create scratch dir");
         let obj_path = dir.join(format!("{label}.o"));
         let mut calls = Vec::new();
         // D-029: never let `print_to_string`'s `LLVMString` drop; route it
@@ -1006,7 +1005,8 @@ mod tests {
             }],
             class_defs: Vec::new(),
         };
-        let dir = tempfile_dir("bigint_rc_const_literal");
+        let dir = pycc_scratch::ScratchDir::new("bigint_rc_const_literal")
+            .expect("failed to create scratch dir");
         let obj_path = dir.join("bigint_rc_const_literal.o");
         let mut ir = String::new();
         // D-029: never let `print_to_string`'s `LLVMString` drop; route it

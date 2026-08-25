@@ -61,6 +61,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 [dev-dependencies]
 serde_json = "1"
 criterion = { version = "0.8.2", features = ["html_reports"] }
+pycc_scratch = { path = "crates/pycc_scratch" }
 
 [[bench]]
 name = "check_bench"

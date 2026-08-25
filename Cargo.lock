@@ -788,6 +788,7 @@ dependencies = [
  "pycc_hir",
  "pycc_mir",
  "pycc_parser",
+ "pycc_scratch",
  "pycc_types",
  "serde",
  "serde_json",
@@ -814,6 +815,7 @@ dependencies = [
  "inkwell",
  "pycc_artifact_layout",
  "pycc_mir",
+ "pycc_scratch",
 ]
 
 [[package]]
