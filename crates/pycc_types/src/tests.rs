@@ -28324,6 +28324,7 @@ fn an_optional_int_value_narrows_back_to_a_bare_int_annotation_inside_is_not_non
     );
 }
 
+
 #[test]
 fn is_none_on_an_optional_int_type_checks_as_bool() {
     let result = check_source(

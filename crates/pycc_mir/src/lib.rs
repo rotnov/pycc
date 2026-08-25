@@ -497,6 +497,14 @@ impl MirExpr {
             | MirExpr::NullInstance { .. } => {}
             MirExpr::IntBoundary(inner) => inner.collect_named_expr_bindings(out),
             MirExpr::OptionalWrap(inner, _) => inner.collect_named_expr_bindings(out),
+            // Issue #769 (Part 2 of #747): `OptionalUnwrap` wraps a single
+            // sub-expression (the narrowed name's own read), exactly like
+            // `OptionalWrap`/`IntBoundary` immediately above -- a walrus
+            // nested inside it (e.g. `(x if (n := x) is not None else
+            // 0)`-shaped MIR is not producible by this compiler's own
+            // narrowing lowering today, but the recursive walk still must
+            // not silently skip whatever sub-expression this node wraps).
+            MirExpr::OptionalUnwrap(inner, _) => inner.collect_named_expr_bindings(out),
             MirExpr::Call { args, .. } => {
                 for arg in args {
                     arg.collect_named_expr_bindings(out);
