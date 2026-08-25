@@ -280,13 +280,17 @@
               and <code>set</code> containers and class instances
               (D-107/D-124, extended by D-154) — none of them carries a
               real reference count yet. <code>set[int]</code> has no
-              membership test; <code>in</code>, <code>not in</code>,
-              <code>is</code>, and <code>is not</code> all route through
-              the generic <code>C0001</code> diagnostic.
+              membership test; <code>in</code> and <code>not in</code>
+              route through the generic <code>C0001</code> diagnostic.
               <code>tuple[...]</code> slicing remains deferred (D-118)
               until its result shape can be expressed without a
-              fixed-arity struct's fixed bounds. <code>Optional</code>
-              and narrowing still have no grammar surface, and type
+              fixed-arity struct's fixed bounds. <code>Optional[T]</code>
+              parsing and <code>is</code>/<code>is not None</code>
+              comparisons have landed (D-197), and a top-level
+              <code>is</code>/<code>is not None</code> test now narrows a
+              checked <code>Optional</code> binding back to its scalar type
+              for the branch its polarity implies presence in (D-199);
+              narrowing beyond that top-level shape remains open. Type
               diagnostics still use the documented line-1/column-1
               placeholder span (D-043).
             </p>
