@@ -196,10 +196,10 @@ For each newly observed upstream release:
     [#703](https://github.com/rotnov/pycc/issues/703)), nor does it exercise
     every one of the hierarchy's 16 classes being raised and caught
     individually; PEP 758's fixture exercises its 3+-type handler only
-    through the parenthesized spelling, and pycc has no `except*`/
-    `ExceptionGroup` support at all yet, so the `except*`-without-parentheses
-    half of PEP 758's own scope has no implementation to exercise. Those are
-    recorded `core` gaps in `tests/fixtures/conformance-breadth-manifest.json`,
+    through the parenthesized spelling, and no fixture exercises PEP 758's
+    own `except*`-without-parentheses half against the oracle, even though
+    #542 (PEP 654, D-202) has since added `except*`. Those are recorded
+    `core` gaps in `tests/fixtures/conformance-breadth-manifest.json`,
     and a `core` gap forces `◐` under
     [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
     `except A, B as e:` (bare comma with `as`) is rejected outright with a
@@ -320,7 +320,7 @@ For each newly observed upstream release:
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
 | [646](https://peps.python.org/pep-0646/) | `TypeVarTuple` — variadic generics | typing | `py311/pep_0646_typevartuple.py` | ☐ |
-| [654](https://peps.python.org/pep-0654/) | `except*` + `ExceptionGroup` | syntax | `py311/pep_0654_except_star.py` | ☐ |
+| [654](https://peps.python.org/pep-0654/) | `except*` + `ExceptionGroup` | syntax | `tests/fixtures/pep_0654_except_star.py` | ☐ |
 | [655](https://peps.python.org/pep-0655/) | `Required` / `NotRequired` | typing | `py311/pep_0655_required.py` | ☐ |
 | [657](https://peps.python.org/pep-0657/) | Fine-grained error locations | rt | (drives pycc diagnostics UX) | ☐ |
 | [673](https://peps.python.org/pep-0673/) | `Self` as method return/param annotation (#387 Part 1) — resolves to the class's own instance type at HIR-lowering time | typing | `pep_0673_self.py` | ◐ |

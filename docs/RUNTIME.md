@@ -65,12 +65,16 @@ presence gates below, which now differ between the two groups.
 
 **User-defined exception classes (Part 2 of #541, D-189).** A user-declared
 class whose MRO reaches one of those 23 builtins is raisable and catchable.
-HIR lowering assigns it a type tag from `23..=255` in module source order and
-records it on `HirClassDef::exception_type_tag`; the 23 builtins keep
-`0..=22` and either carry `None` there (the original flat seven, resolved by
-name) or their own fixed tag (the 16-member `OSError` family). A module
-declaring more than 233 such classes is rejected with `C0001` -- the tag is a
-`u8` on `PyExceptionObj` and in every runtime entry point that carries one.
+HIR lowering assigns it a type tag from `25..=255` in module source order and
+records it on `HirClassDef::exception_type_tag`; the 25 builtins (the
+original 23 plus `ExceptionGroup`/`BaseExceptionGroup`, Part 3 of #382, #542,
+PEP 654, D-202) keep `0..=24` and either carry `None` there (the flat seven,
+resolved by name), their own fixed tag (the 16-member `OSError` family), or a
+fixed tag (`ExceptionGroup`/`BaseExceptionGroup`, always reconstructed with
+that fixed tag regardless of the original raised object's dynamic subclass --
+see D-202). A module declaring more than 231 such classes is rejected with
+`C0001` -- the tag is a `u8` on `PyExceptionObj` and in every runtime entry
+point that carries one.
 
 Because each class in a user hierarchy carries a *different* tag, a handler
 naming a class accepts a **set** of tags, not one: its own plus every raisable
@@ -200,7 +204,27 @@ the flat seven's own narrower `.args`-access trigger.
 Supported syntax: `try`/`except`/`else`/`finally`, `raise ExceptionType("msg")`,
 bare `raise` (re-raise), `raise ... from ...` (PEP 409 cause chaining),
 `except ExceptionType as e` (named bindings), bare `except:` (catch-all).
-`except*` (PEP 654 exception groups) is rejected with `C0001`.
+
+**`except*` and `ExceptionGroup`/`BaseExceptionGroup` (Part 3 of #382, #542,
+PEP 654, D-202).** `raise ExceptionGroup("msg", [members...])` /
+`raise BaseExceptionGroup("msg", [members...])` construct a group from a
+literal list of *existing* exception values (an `except ... as e:` binding,
+or another expression that already evaluates to one) -- a fresh
+`SomeError("msg")` constructor call as a member, or a non-literal second
+argument, is `T0021`. `except* T1: ... except* T2: ...` dispatches each
+member of the raised group to its first matching clause in source order via
+`pycc_rt_exception_group_partition`, which repartitions the still-unmatched
+remainder after every clause; any remainder left after the last clause is
+re-raised. A reconstructed subgroup handed to a clause, or re-raised as the
+final remainder, is always tagged and named as plain `ExceptionGroup`,
+never the original raised object's dynamic subclass (D-202). A new exception
+raised inside an `except*` clause's body propagates directly past the
+statement's `finally`, rather than merging into the group's still-unmatched
+remainder the way CPython's derived-exception-group chaining would (D-202).
+A bare, typeless `except*:` is rejected at parse time (`C0001`) rather than
+reaching codegen. `BaseExceptionGroup`'s hierarchy parent is treated as
+`Exception` rather than modeled as a separate `BaseException`-only branch
+(D-202) -- see the decision entry for the full simplification list.
 
 Converted runtime failure paths include integer floor division/modulo by
 zero, float true/floor division and modulo by zero, list index out of range,
@@ -225,12 +249,11 @@ Uncaught exceptions at the top level are printed to stderr
 
 Exception objects are leak-only in this first implementation. Explicit
 `raise ... from cause` records `cause`; implicit `__context__` is reserved but
-not wired. **Planned (post-Part 2):** `except*` groups (PEP 654), a materialized
-exception instance so `except ... as e` can bind a user exception class and so
-a class with its own `__init__` can be raised (Part 3 of #541, #703), full
-traceback with `.py` lines, implicit exception context, exception lifetime
-management, and deletion of an `except ... as name` binding after the
-handler.
+not wired. **Planned (post-Part 2):** a materialized exception instance so
+`except ... as e` can bind a user exception class and so a class with its own
+`__init__` can be raised (Part 3 of #541, #703), full traceback with `.py`
+lines, implicit exception context, exception lifetime management, and
+deletion of an `except ... as name` binding after the handler.
 
 ## Generators & iterators
 
