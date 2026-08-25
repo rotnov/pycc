@@ -91,6 +91,47 @@ pub const FIRST_USER_EXCEPTION_TYPE_TAG: u8 = BUILTIN_EXCEPTION_CLASSES.len() as
 /// Exceeding this is rejected with `C0001` during HIR lowering.
 pub const MAX_USER_EXCEPTION_CLASSES: usize = 256 - BUILTIN_EXCEPTION_CLASSES.len();
 
+const fn const_str_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Part 3 of #382 (#542, PEP 654, D-202): the fixed builtin runtime type tag
+/// for the `ExceptionGroup` class, *derived* from its position in
+/// [`BUILTIN_EXCEPTION_CLASSES`] rather than hand-maintained -- the same
+/// derivation discipline D-194 established for [`FIRST_USER_EXCEPTION_TYPE_TAG`]
+/// and [`MAX_USER_EXCEPTION_CLASSES`] itself, so inserting a new builtin ahead
+/// of `ExceptionGroup` in the array shifts this constant automatically instead
+/// of silently desynchronizing a hand-copied literal. `pycc_codegen::exception::
+/// emit_try_star` uses this tag (and the class name) whenever it needs to
+/// build a fresh reconstructed subgroup, regardless of the original raised
+/// object's own dynamic class (D-202).
+pub const EXCEPTION_GROUP_TYPE_TAG: u8 = {
+    let mut i = 0;
+    let mut tag: Option<u8> = None;
+    while i < BUILTIN_EXCEPTION_CLASSES.len() {
+        if const_str_eq(BUILTIN_EXCEPTION_CLASSES[i], "ExceptionGroup") {
+            tag = Some(i as u8);
+        }
+        i += 1;
+    }
+    match tag {
+        Some(t) => t,
+        None => panic!("ExceptionGroup must be present in BUILTIN_EXCEPTION_CLASSES"),
+    }
+};
+
 pub fn is_builtin_exception_class(name: &str) -> bool {
     BUILTIN_EXCEPTION_CLASSES.contains(&name)
 }

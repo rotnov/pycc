@@ -9,7 +9,9 @@ use inkwell::targets::{
 };
 use inkwell::types::BasicType;
 use inkwell::values::{FloatValue, FunctionValue, IntValue, PointerValue};
-use pycc_mir::{CompSource, MirExceptionValue, MirExpr, MirItem, MirModule, MirStmt};
+use pycc_mir::{
+    CompSource, EXCEPTION_GROUP_TYPE_TAG, MirExceptionValue, MirExpr, MirItem, MirModule, MirStmt,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 

@@ -886,17 +886,19 @@ pub(super) fn emit_try<'ctx>(
     Ok(())
 }
 
-/// The fixed builtin runtime type tag for the `ExceptionGroup` class (Part 3
-/// of #382, #542, PEP 654, D-202) -- `pycc_hir::exception::
-/// BUILTIN_EXCEPTION_CLASSES` pins it to index 24. `emit_try_star` passes
-/// this tag (and the class name below) to `pycc_rt_exception_group_partition`
-/// whenever it needs to build a fresh reconstructed subgroup, regardless of
-/// the original raised object's own dynamic class -- a deliberate D-202
-/// simplification: codegen does not track a raised group's polymorphic
-/// subclass identity through partitioning, so every subgroup an `except*`
-/// clause binds is reported as a plain `ExceptionGroup`, never the original
-/// (possibly user-defined) `BaseExceptionGroup` subclass name.
-const EXCEPTION_GROUP_TYPE_TAG: u8 = 24;
+// The fixed builtin runtime type tag for the `ExceptionGroup` class (Part 3
+// of #382, #542, PEP 654, D-202) is `pycc_hir::exception::
+// EXCEPTION_GROUP_TYPE_TAG`, re-exported here through `pycc_mir` and
+// *derived* from `ExceptionGroup`'s position in `BUILTIN_EXCEPTION_CLASSES`
+// rather than hand-maintained as a separate literal (D-194's derivation
+// discipline). `emit_try_star` passes this tag (and the class name below) to
+// `pycc_rt_exception_group_partition` whenever it needs to build a fresh
+// reconstructed subgroup, regardless of the original raised object's own
+// dynamic class -- a deliberate D-202 simplification: codegen does not track
+// a raised group's polymorphic subclass identity through partitioning, so
+// every subgroup an `except*` clause binds is reported as a plain
+// `ExceptionGroup`, never the original (possibly user-defined)
+// `BaseExceptionGroup` subclass name.
 
 /// Emits `try`/`except*`/`else`/`finally` (Part 3 of #382, #542, PEP 654).
 ///

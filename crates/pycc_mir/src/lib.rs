@@ -26,7 +26,7 @@ use stmt::lower_stmt;
 // `pycc_mir::{Ty, BinOpKind, CmpOpKind}` from any downstream crate, exactly
 // like `pycc_types` already re-exports `Ty` (`pycc_types::Ty`, its own line
 // 4) for the same reason.
-pub use pycc_hir::{BinOpKind, CmpOpKind, Ty};
+pub use pycc_hir::{BinOpKind, CmpOpKind, EXCEPTION_GROUP_TYPE_TAG, Ty};
 
 /// Monotonic counter for synthesized match-subject temporaries. Each
 /// `match` statement gets a unique `__match_subj_N` name, avoiding
