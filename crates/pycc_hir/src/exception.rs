@@ -4,7 +4,7 @@ use super::{HirClassDef, HirItem, HirStmt, Ty};
 use pycc_ast::visitor::{self, Visitor};
 use pycc_ast::{Expr, ModModule, Stmt};
 
-pub const BUILTIN_EXCEPTION_CLASSES: [&str; 23] = [
+pub const BUILTIN_EXCEPTION_CLASSES: [&str; 25] = [
     "Exception",
     "ValueError",
     "TypeError",
@@ -29,6 +29,16 @@ pub const BUILTIN_EXCEPTION_CLASSES: [&str; 23] = [
     "ConnectionAbortedError",
     "ConnectionRefusedError",
     "ConnectionResetError",
+    // Part 3 of #382 (#542): PEP 654 exception groups, tags 23..=24. Both
+    // carry a fixed tag exactly like the `OSError` family above -- they land
+    // past `FIRST_OSERROR_FAMILY_TAG` by construction, so
+    // `builtin_exception_class_defs`'s `(index >= FIRST_OSERROR_FAMILY_TAG)`
+    // test already covers them with no change to that function. `D-202`
+    // records the deliberate simplification of parenting `BaseExceptionGroup`
+    // under `Exception` rather than modeling a second, `BaseException`-only
+    // hierarchy root.
+    "BaseExceptionGroup",
+    "ExceptionGroup",
 ];
 
 /// Part 2 of #541 (D-189): the number of names in [`BUILTIN_EXCEPTION_CLASSES`]
@@ -40,7 +50,7 @@ pub const BUILTIN_EXCEPTION_CLASSES: [&str; 23] = [
 /// entry in that `match`.
 ///
 /// This is deliberately a separate, smaller constant from
-/// [`FIRST_USER_EXCEPTION_TYPE_TAG`] (7 vs. 23) and the two must never be
+/// [`FIRST_USER_EXCEPTION_TYPE_TAG`] (7 vs. 25) and the two must never be
 /// conflated: this one names "the first index in `BUILTIN_EXCEPTION_CLASSES`
 /// that is *not* one of the original flat seven", while
 /// `FIRST_USER_EXCEPTION_TYPE_TAG` names "the first tag available to a user's
@@ -63,19 +73,22 @@ pub fn is_flat_builtin_exception_class(name: &str) -> bool {
 }
 
 /// Part 2 of #541 (D-189): the first runtime exception type tag available to
-/// a user-defined exception class. Tags `0..=22` are permanently reserved for
+/// a user-defined exception class. Tags `0..=24` are permanently reserved for
 /// [`BUILTIN_EXCEPTION_CLASSES`], in that array's order: `0..=6` for the
 /// original flat seven, resolved by name; `7..=22` for the PEP 3151
-/// `OSError` family added by Part 2 of #543 (#739), resolved by a fixed tag
-/// stored on each class's own [`HirClassDef`].
+/// `OSError` family added by Part 2 of #543 (#739); `23..=24` for
+/// `BaseExceptionGroup`/`ExceptionGroup` added by Part 3 of #382 (#542) --
+/// the latter two resolved, like the `OSError` family, by a fixed tag stored
+/// on each class's own [`HirClassDef`].
 pub const FIRST_USER_EXCEPTION_TYPE_TAG: u8 = BUILTIN_EXCEPTION_CLASSES.len() as u8;
 
 /// Part 2 of #541 (D-189): how many user-defined exception classes one module
 /// may declare. The runtime carries the type tag as a `u8`, so the whole
-/// hierarchy is capped at 256 types; the 23 builtins (Part 2 of #543, #739,
-/// added the 16-member `OSError` family to the original flat seven) take the
-/// low tags and the remaining `23..=255` are available to the module's own
-/// classes. Exceeding this is rejected with `C0001` during HIR lowering.
+/// hierarchy is capped at 256 types; the 25 builtins (Part 2 of #543/#739's
+/// 16-member `OSError` family and Part 3 of #382/#542's `BaseExceptionGroup`/
+/// `ExceptionGroup`, added to the original flat seven) take the low tags and
+/// the remaining `25..=255` are available to the module's own classes.
+/// Exceeding this is rejected with `C0001` during HIR lowering.
 pub const MAX_USER_EXCEPTION_CLASSES: usize = 256 - BUILTIN_EXCEPTION_CLASSES.len();
 
 pub fn is_builtin_exception_class(name: &str) -> bool {
@@ -97,8 +110,13 @@ pub fn builtin_exception_parent(name: &str) -> Option<&'static str> {
         "Exception" => None,
         "BrokenPipeError" | "ConnectionAbortedError" | "ConnectionRefusedError"
         | "ConnectionResetError" => Some("ConnectionError"),
+        // Part 3 of #382 (#542, D-202): `BaseExceptionGroup` parents to
+        // `Exception` rather than a separate `BaseException`-only root, and
+        // `ExceptionGroup` parents to `BaseExceptionGroup` -- a deliberate
+        // simplification, not a CPython-accurate hierarchy. See D-202.
         "OSError" | "ValueError" | "TypeError" | "KeyError" | "IndexError"
-        | "ZeroDivisionError" | "RuntimeError" => Some("Exception"),
+        | "ZeroDivisionError" | "RuntimeError" | "BaseExceptionGroup" => Some("Exception"),
+        "ExceptionGroup" => Some("BaseExceptionGroup"),
         "BlockingIOError" | "ChildProcessError" | "ConnectionError" | "FileExistsError"
         | "FileNotFoundError" | "InterruptedError" | "IsADirectoryError"
         | "NotADirectoryError" | "PermissionError" | "ProcessLookupError" | "TimeoutError" => {
@@ -114,10 +132,11 @@ pub fn builtin_exception_parent(name: &str) -> Option<&'static str> {
 /// consumer needs to special-case it.
 pub const EXCEPTION_INIT_MANGLED_NAME: &str = "Exception.__init__";
 
-/// Builds the 23 synthetic [`HirClassDef`]s that give the builtin
+/// Builds the 25 synthetic [`HirClassDef`]s that give the builtin
 /// exception hierarchy a first-class presence in the class table
 /// (Part 1 of #541, extending D-173; widened from 7 to 23 by Part 2 of
-/// #543/#739's PEP 3151 `OSError` family).
+/// #543/#739's PEP 3151 `OSError` family, then to 25 by Part 3 of #382/#542's
+/// `BaseExceptionGroup`/`ExceptionGroup`).
 ///
 /// Before this existed, `Exception`/`ValueError`/... were recognized only
 /// by name, through [`is_builtin_exception_class`], with no `HirClassDef`
@@ -127,7 +146,7 @@ pub const EXCEPTION_INIT_MANGLED_NAME: &str = "Exception.__init__";
 /// frontend never materialized".
 ///
 /// Lowering seeds them only into a module that actually references one of
-/// the 23 names and shadows none of them -- see this module's
+/// the 25 names and shadows none of them -- see this module's
 /// (crate-private) `module_references_builtin_exception_name` and
 /// `module_shadows_builtin_exception_name`.
 ///
@@ -259,12 +278,12 @@ pub fn builtin_exception_init_item() -> HirItem {
 /// resolution (`class MyError(ValueError):`), `class::expect_class` behind a
 /// `Ty::Instance` (`except ValueError as e: e.args`), `annotation_to_ty`
 /// projection (`e: ValueError`), and `isinstance`/`issubclass`. Each of them
-/// requires one of the 23 to be spelled in the module, so *this* gate
+/// requires one of the 25 to be spelled in the module, so *this* gate
 /// never withholds a definition from a module that could have reached one:
 /// a module it refuses to seed cannot name a builtin exception at all.
 ///
 /// That is a property of this gate alone, not of the pair. The
-/// all-or-nothing shadow gate below can still withhold all 23 from a
+/// all-or-nothing shadow gate below can still withhold all 25 from a
 /// module that spells one of them, whenever the module's top level binds a
 /// *different* one -- and `class Exception: ...` plus
 /// `except ValueError as e: print(e.args)` still reaches
@@ -311,7 +330,7 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
     scan.found
 }
 
-/// Whether `module`'s own top level binds any of the 23 names in
+/// Whether `module`'s own top level binds any of the 25 names in
 /// [`BUILTIN_EXCEPTION_CLASSES`] (Part 1 of #541).
 ///
 /// This is the second of lowering's two seeding gates: a module is seeded
@@ -322,7 +341,7 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
 /// shadows nothing at module scope), while a reference counts at any depth.
 ///
 /// The seeding is all-or-nothing: when this returns `true`, *no* synthetic
-/// class is seeded, and the 23 names keep exactly the pre-#541 behavior
+/// class is seeded, and the 25 names keep exactly the pre-#541 behavior
 /// of being recognized by name alone. Two reasons for all-or-nothing rather
 /// than per-name:
 ///
@@ -332,23 +351,23 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
 ///   against the wrong class.
 /// * It makes `HirModule::seeded_builtin_exception_classes` -- the single
 ///   flag `lower_checked` records when it seeds -- an exact provenance
-///   record. Because a module containing a user binding of any of the 23
+///   record. Because a module containing a user binding of any of the 25
 ///   names carries no synthetic definitions at all, "the flag is set and the
-///   name is one of the 23" identifies precisely the compiler-produced
+///   name is one of the 25" identifies precisely the compiler-produced
 ///   entries, with no user class among them. Provenance is never re-derived
 ///   from a definition's shape: a user can author a class structurally
 ///   identical to a synthetic one (see D-188).
 ///
 /// The scan is deliberately conservative: it reports `true` for any
 /// top-level `class`/`def`/`type`-alias/annotated-assignment/assignment
-/// target spelling one of the 23 names, whether or not that particular
+/// target spelling one of the 25 names, whether or not that particular
 /// spelling would go on to collide with a seeded definition. Over-reporting
 /// only costs the module its synthetic classes; under-reporting would let a
 /// user definition collide with a compiler-synthesized one and surface as a
 /// spurious `C0001`.
 ///
 /// `import`/`from ... import ...` are not scanned: D-136/D-137 resolve every
-/// import against `pycc_std`'s registry, which contains none of the 23
+/// import against `pycc_std`'s registry, which contains none of the 25
 /// names, so an `import ValueError` is rejected as an unresolvable module
 /// before any class-table collision could be reached.
 pub(crate) fn module_shadows_builtin_exception_name(module: &ModModule) -> bool {
@@ -362,12 +381,12 @@ pub(crate) fn module_shadows_builtin_exception_name(module: &ModModule) -> bool 
     })
 }
 
-/// Whether `expr`, used as an assignment target, binds one of the 23
+/// Whether `expr`, used as an assignment target, binds one of the 25
 /// builtin exception names. Recurses through the unpacking-target shapes
 /// (`a, b = ...`, `[a, b] = ...`, `*rest`) so a name buried in one is still
 /// seen. Any other target shape (an attribute, a subscript) rebinds
 /// something other than a bare module-level name, so it cannot shadow one
-/// of the 23.
+/// of the 25.
 fn expr_binds_builtin_exception_name(expr: &Expr) -> bool {
     match expr {
         Expr::Name(name) => is_builtin_exception_class(name.id.as_str()),
@@ -562,9 +581,28 @@ mod tests {
             ("ConnectionAbortedError", 20),
             ("ConnectionRefusedError", 21),
             ("ConnectionResetError", 22),
+            ("BaseExceptionGroup", 23),
+            ("ExceptionGroup", 24),
         ] {
             assert_eq!(tag_of(name), Some(tag), "`{name}` must carry tag {tag}");
         }
+    }
+
+    /// Part 3 of #382 (#542, D-202): pins the deliberate simplification that
+    /// `BaseExceptionGroup` parents directly to `Exception` (not a separate
+    /// `BaseException`-only root) and `ExceptionGroup` parents to
+    /// `BaseExceptionGroup`.
+    #[test]
+    fn exception_group_hierarchy_parents_base_exception_group_to_exception() {
+        assert_eq!(builtin_exception_parent("BaseExceptionGroup"), Some("Exception"));
+        assert_eq!(
+            builtin_exception_parent("ExceptionGroup"),
+            Some("BaseExceptionGroup")
+        );
+        assert!(is_builtin_exception_class("BaseExceptionGroup"));
+        assert!(is_builtin_exception_class("ExceptionGroup"));
+        assert!(!is_flat_builtin_exception_class("BaseExceptionGroup"));
+        assert!(!is_flat_builtin_exception_class("ExceptionGroup"));
     }
 
     #[test]

@@ -263,13 +263,56 @@ mod tests {
         assert!(cause.is_none());
     }
 
+    /// Part 3 of #382 (#542, PEP 654): a helper mirroring
+    /// `expect_top_level_try` for the `TryStar` variant.
+    fn expect_top_level_try_star(
+        item: &crate::HirItem,
+    ) -> (
+        &[HirStmt],
+        &[crate::HirExceptHandler],
+        &[HirStmt],
+        &[HirStmt],
+    ) {
+        match item {
+            crate::HirItem::TopLevelStmt(HirStmt::TryStar {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            }) => (body, handlers, orelse, finalbody),
+            _ => panic!("expected TryStar"),
+        }
+    }
+
     #[test]
-    fn lower_try_star_rejects_with_c0001() {
+    fn lower_try_star_lowers_to_try_star_with_named_type() {
         let module = pycc_parser::parse("try:\n    x = 1\nexcept* ValueError:\n    y = 2\n")
             .expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-        assert!(err.message.contains("except*"));
+        let hir = crate::lower_checked(&module).expect("except* with a named type must lower");
+        let (_, handlers, _, _) = expect_top_level_try_star(&hir.items[0]);
+        assert_eq!(handlers[0].exc_type, Some(vec!["ValueError".to_string()]));
+    }
+
+    #[test]
+    fn lower_try_star_with_as_binding_lowers_successfully() {
+        let module =
+            pycc_parser::parse("try:\n    x = 1\nexcept* ValueError as e:\n    y = 2\n")
+                .expect("test fixture must parse");
+        let hir = crate::lower_checked(&module).expect("except* as e must lower");
+        let (_, handlers, _, _) = expect_top_level_try_star(&hir.items[0]);
+        assert_eq!(handlers[0].name, Some("e".to_string()));
+    }
+
+    #[test]
+    fn lower_try_star_bare_except_star_is_rejected_at_parse_time() {
+        // CPython itself rejects a typeless `except*:` as a `SyntaxError`
+        // (PEP 654 requires every `except*` clause to name a type), and
+        // ruff's parser enforces the same grammar rule -- this never
+        // reaches HIR lowering, so pycc reports the same class of error
+        // (a parse failure) that CPython would, rather than a separate
+        // pycc-specific diagnostic.
+        let module = pycc_parser::parse("try:\n    x = 1\nexcept*:\n    y = 2\n");
+        assert!(module.is_err());
     }
 
     #[test]

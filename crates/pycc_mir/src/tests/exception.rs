@@ -72,7 +72,9 @@ fn expect_constructed_exception(value: &MirExceptionValue) -> (&u8, &MirExpr) {
         MirExceptionValue::Constructed {
             type_tag, message, ..
         } => (type_tag, message),
-        MirExceptionValue::Existing(_) => panic!("expected constructed exception"),
+        MirExceptionValue::Existing(_) | MirExceptionValue::ConstructedGroup { .. } => {
+            panic!("expected constructed exception")
+        }
     }
 }
 
@@ -108,6 +110,20 @@ fn expect_top_level_raise_from_panics_on_non_raise_from() {
 #[should_panic(expected = "expected constructed exception")]
 fn expect_constructed_exception_panics_on_an_existing_exception() {
     expect_constructed_exception(&MirExceptionValue::Existing(MirExpr::IntLiteral(0)));
+}
+
+/// Part 3 of #382 (#542, PEP 654, D-202): the same panic arm, reached via
+/// the other non-`Constructed` variant -- a `ConstructedGroup` is not a
+/// single-exception `Constructed` value either.
+#[test]
+#[should_panic(expected = "expected constructed exception")]
+fn expect_constructed_exception_panics_on_a_constructed_group() {
+    expect_constructed_exception(&MirExceptionValue::ConstructedGroup {
+        type_tag: 24,
+        class_name: "ExceptionGroup".to_string(),
+        message: MirExpr::StringLiteral("msg".to_string()),
+        members: Vec::new(),
+    });
 }
 
 #[test]

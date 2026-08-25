@@ -673,6 +673,26 @@ pub enum HirStmt {
         orelse: Vec<HirStmt>,
         finalbody: Vec<HirStmt>,
     },
+    /// `try: ... except* T: ...` (PEP 654, Part 3 of #382, #542). Shares
+    /// `HirExceptHandler`'s shape with plain `Try` -- the grammar node is
+    /// identical, only the `is_star` flag on the AST differs -- but is a
+    /// distinct variant rather than an `is_star: bool` field on `Try`
+    /// because the two forms cannot mix (`except`/`except*` may not appear
+    /// in the same `try`, enforced at parse time) and every downstream
+    /// consumer (MIR lowering, `block_always_terminates`, `pycc_types`)
+    /// needs its own dispatch anyway: `except*` always binds `as e` to an
+    /// `ExceptionGroup`, never to the named type itself, and lowers to a
+    /// partition-based dispatch rather than mutually exclusive `type_matches`
+    /// branches. A bare `except*:` has no `HirExceptHandler` counterpart --
+    /// PEP 654 requires every `except*` clause to name a type -- so
+    /// `handlers[i].exc_type` is never `None` here (`lower_try_star_handler`
+    /// rejects a bare `except*:` with `C0001` before this variant is built).
+    TryStar {
+        body: Vec<HirStmt>,
+        handlers: Vec<HirExceptHandler>,
+        orelse: Vec<HirStmt>,
+        finalbody: Vec<HirStmt>,
+    },
     /// `raise` (PEP 3110, #382). `exc` is the exception expression to raise;
     /// `None` means a bare re-raise (only valid inside an except handler).
     /// `cause` is the optional `raise ... from cause` expression (PEP 409).

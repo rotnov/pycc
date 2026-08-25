@@ -682,6 +682,22 @@ pub enum MirStmt {
         orelse: Vec<MirStmt>,
         finalbody: Vec<MirStmt>,
     },
+    /// `try: ... except* T: ...` (PEP 654, Part 3 of #382, #542). Shares
+    /// `Try`'s shape exactly -- `MirExceptHandler`'s `exc_type_tag` still
+    /// carries the matched-type tag set (always `Some`, since `except*`
+    /// requires a named type; see `pycc_hir::stmt`'s comment on the
+    /// matching lowering site) -- but codegen dispatches each handler with
+    /// a partition (`pycc_rt_exception_group_partition`) against the raised
+    /// group rather than `Try`'s mutually-exclusive `type_matches` checks,
+    /// and every matched subgroup's handler can run (PEP 654 semantics: more
+    /// than one `except*` clause may fire for the same raised group), unlike
+    /// `Try`'s first-match-wins dispatch.
+    TryStar {
+        body: Vec<MirStmt>,
+        handlers: Vec<MirExceptHandler>,
+        orelse: Vec<MirStmt>,
+        finalbody: Vec<MirStmt>,
+    },
     /// `raise <exception>` (PEP 3110, #382).
     Raise {
         exception: MirExceptionValue,

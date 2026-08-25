@@ -581,6 +581,71 @@ pub(super) fn lower_stmt(
                 finalbody,
             }
         }
+        // Part 3 of #382 (#542, PEP 654): `except*` lowers like `Try`
+        // above -- same body/handler/orelse/finalbody structure -- except
+        // an `as` binding always resolves to `ExceptionGroup`, never the
+        // named handler type (see `pycc_types::exception::
+        // check_try_star_stmt`'s identical rule at type-checking time).
+        HirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            let body = body
+                .iter()
+                .map(|s| lower_stmt(s, scopes, classes, current_class))
+                .collect();
+            let handlers = handlers
+                .iter()
+                .map(|h| {
+                    let exc_type_tag = h.exc_type.as_ref().map(|names| {
+                        let mut tags: Vec<u8> = names
+                            .iter()
+                            .flat_map(|name| handler_type_tags(name, classes))
+                            .collect();
+                        tags.sort_unstable();
+                        tags.dedup();
+                        tags
+                    });
+                    if let Some(name) = &h.name {
+                        bind(
+                            scopes,
+                            name.clone(),
+                            Ty::Instance(Box::new("ExceptionGroup".to_string())),
+                        );
+                    }
+                    let handler_body = h
+                        .body
+                        .iter()
+                        .map(|s| lower_stmt(s, scopes, classes, current_class))
+                        .collect();
+                    MirExceptHandler {
+                        exc_type_tag,
+                        binding_name: h.name.clone(),
+                        binding_ty: h
+                            .name
+                            .as_ref()
+                            .map(|_| Ty::Instance(Box::new("ExceptionGroup".to_string()))),
+                        body: handler_body,
+                    }
+                })
+                .collect();
+            let orelse = orelse
+                .iter()
+                .map(|s| lower_stmt(s, scopes, classes, current_class))
+                .collect();
+            let finalbody = finalbody
+                .iter()
+                .map(|s| lower_stmt(s, scopes, classes, current_class))
+                .collect();
+            MirStmt::TryStar {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            }
+        }
         HirStmt::Raise { exc, cause } => lower_raise(exc, cause, scopes, classes, current_class),
     }
 }

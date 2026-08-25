@@ -35,6 +35,17 @@ pub struct PyExceptionObj {
     pub(crate) cause: *mut PyExceptionObj,
     /// Implicit handler context. Reserved but not wired in this part.
     pub(crate) _context: *mut PyExceptionObj,
+    /// Part 3 of #382 (#542, PEP 654): an `ExceptionGroup`/`BaseExceptionGroup`
+    /// instance's member exceptions, as an owned, heap-allocated array of
+    /// `exceptions_len` pointers. Null (with `exceptions_len == 0`) for every
+    /// ordinary, non-group exception -- which is every `PyExceptionObj` this
+    /// runtime constructs outside [`pycc_rt_exception_group_alloc`] and
+    /// [`pycc_rt_exception_group_partition`]. `exceptions_len == 0` doubles
+    /// as "not a group" throughout this module: [`pycc_rt_exception_group_partition`]
+    /// reads it to decide whether to treat `group` itself as an implicit
+    /// single member.
+    pub(crate) exceptions: *mut *mut PyExceptionObj,
+    pub(crate) exceptions_len: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -83,7 +94,178 @@ pub extern "C" fn pycc_rt_exception_alloc(
         message,
         cause: std::ptr::null_mut(),
         _context: std::ptr::null_mut(),
+        exceptions: std::ptr::null_mut(),
+        exceptions_len: 0,
     }))
+}
+
+/// Copies `exceptions_len` member pointers out of the caller-supplied
+/// `exceptions` array into a freshly heap-allocated, owned slice, returning
+/// its thin pointer and length (`(null, 0)` for an empty array). Shared by
+/// [`pycc_rt_exception_group_alloc`] (a source-level `ExceptionGroup(...)`
+/// construction) and [`pycc_rt_exception_group_partition`] (each subgroup it
+/// builds), so both leave the exact same "owned, independently freed later
+/// under this runtime's leak-only model" shape on `PyExceptionObj::exceptions`.
+///
+/// # Safety
+/// `exceptions` must be null (iff `exceptions_len == 0`) or point to
+/// `exceptions_len` valid `*mut PyExceptionObj` values, readable for the
+/// duration of this call.
+unsafe fn copy_member_array(
+    exceptions: *const *mut PyExceptionObj,
+    exceptions_len: usize,
+) -> (*mut *mut PyExceptionObj, usize) {
+    if exceptions_len == 0 {
+        return (std::ptr::null_mut(), 0);
+    }
+    let slice = unsafe { std::slice::from_raw_parts(exceptions, exceptions_len) };
+    let boxed: Box<[*mut PyExceptionObj]> = slice.to_vec().into_boxed_slice();
+    (Box::leak(boxed).as_mut_ptr(), exceptions_len)
+}
+
+/// Builds a fresh `ExceptionGroup`-shaped [`PyExceptionObj`] wrapping
+/// `members`, or returns null when `members` is empty. Used by
+/// [`pycc_rt_exception_group_partition`] for both the matched and remaining
+/// halves of a partition -- an empty half means "this handler caught
+/// nothing" / "nothing is left to reraise", which codegen tests via a null
+/// pointer check exactly like every other D-173 exception-object slot.
+fn build_group_or_null(
+    members: Vec<*mut PyExceptionObj>,
+    group_type_tag: u8,
+    group_name: *const u8,
+    group_name_len: usize,
+    message: *mut PyStrObj,
+) -> *mut PyExceptionObj {
+    if members.is_empty() {
+        return std::ptr::null_mut();
+    }
+    // Safety: `members` was just built from live `*mut PyExceptionObj`
+    // values (either `pycc_rt_exception_group_partition`'s own `group`, its
+    // existing member array, or both), so the pointer and length passed to
+    // `copy_member_array` are valid for the duration of this call.
+    let (exceptions_ptr, exceptions_len) =
+        unsafe { copy_member_array(members.as_ptr(), members.len()) };
+    Box::into_raw(Box::new(PyExceptionObj {
+        type_tag: group_type_tag,
+        name: group_name,
+        name_len: group_name_len,
+        message,
+        cause: std::ptr::null_mut(),
+        _context: std::ptr::null_mut(),
+        exceptions: exceptions_ptr,
+        exceptions_len,
+    }))
+}
+
+/// Constructs a heap-allocated `ExceptionGroup`/`BaseExceptionGroup`
+/// instance carrying `exceptions_len` member exceptions, copied out of
+/// `exceptions` (Part 3 of #382, #542, PEP 654). The one production caller
+/// is codegen's lowering of a literal-list `ExceptionGroup(msg, [e1, e2])`
+/// construction (`pycc_types`/`pycc_mir` restrict the second argument to a
+/// literal list -- see D-202 -- so codegen always has a fixed-size array of
+/// already-evaluated member pointers to hand this in).
+///
+/// # Safety
+/// `exceptions` must be null (iff `exceptions_len == 0`) or point to
+/// `exceptions_len` valid `*mut PyExceptionObj` values, readable for the
+/// duration of this call; the array is copied, not retained by pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_exception_group_alloc(
+    type_tag: u8,
+    name: *const u8,
+    name_len: usize,
+    message: *mut PyStrObj,
+    exceptions: *const *mut PyExceptionObj,
+    exceptions_len: usize,
+) -> *mut PyExceptionObj {
+    // Safety: forwarded from this function's own safety contract.
+    let (exceptions_ptr, exceptions_len) =
+        unsafe { copy_member_array(exceptions, exceptions_len) };
+    Box::into_raw(Box::new(PyExceptionObj {
+        type_tag,
+        name,
+        name_len,
+        message,
+        cause: std::ptr::null_mut(),
+        _context: std::ptr::null_mut(),
+        exceptions: exceptions_ptr,
+        exceptions_len,
+    }))
+}
+
+/// Partitions `group`'s member exceptions by whether they match any tag in
+/// `tags` (Part 3 of #382, #542, PEP 654 `except*` dispatch): an empty
+/// `tags` (`tags_len == 0`) matches every member, mirroring a bare
+/// `except*:`; a nonempty `tags` matches a member whose own `type_tag`
+/// equals [`EXCEPTION_TYPE_EXCEPTION`] (the universal catch-all, consistent
+/// with [`pycc_rt_exception_type_matches`]) or any entry in `tags`
+/// (Part 2 of #541's multi-tag subclass matching, carried over unchanged).
+///
+/// `matched_out` receives a fresh `ExceptionGroup`-shaped group wrapping the
+/// matched members, or null when none matched; `rest_out` receives the same
+/// for the unmatched members, or null when none remain. Both constructed
+/// groups are tagged `group_type_tag`/`group_name`/`group_name_len` --
+/// supplied by codegen (which resolves `ExceptionGroup`'s fixed builtin tag
+/// and name at MIR-lowering time) rather than hardcoded here, so this
+/// runtime module carries no compile-time knowledge of that tag's numeric
+/// value.
+///
+/// A `group` whose own `exceptions_len` is 0 is treated as an implicit
+/// single-member group containing `group` itself: an ordinary exception
+/// raised inside a `try*` body that is not already an `ExceptionGroup`,
+/// which a matching `except*` clause still catches (and still wraps in a
+/// fresh one-member group on the way out, matching CPython's own PEP 654
+/// semantics).
+///
+/// # Safety
+/// `group` must be non-null and point to a live `PyExceptionObj`. `tags`
+/// must be null (iff `tags_len == 0`) or point to `tags_len` readable
+/// bytes. `matched_out`/`rest_out` must be valid, non-null, writable
+/// out-pointers.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_exception_group_partition(
+    group: *mut PyExceptionObj,
+    tags: *const u8,
+    tags_len: usize,
+    group_type_tag: u8,
+    group_name: *const u8,
+    group_name_len: usize,
+    matched_out: *mut *mut PyExceptionObj,
+    rest_out: *mut *mut PyExceptionObj,
+) {
+    let obj = unsafe { &*group };
+    let members: Vec<*mut PyExceptionObj> = if obj.exceptions_len == 0 {
+        vec![group]
+    } else {
+        unsafe { std::slice::from_raw_parts(obj.exceptions, obj.exceptions_len) }.to_vec()
+    };
+    let tag_slice: &[u8] = if tags_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(tags, tags_len) }
+    };
+    let mut matched = Vec::new();
+    let mut rest = Vec::new();
+    for member in members {
+        let member_tag = unsafe { (*member).type_tag };
+        let is_match = tag_slice.is_empty()
+            || tag_slice
+                .iter()
+                .any(|tag| *tag == EXCEPTION_TYPE_EXCEPTION || member_tag == *tag);
+        if is_match {
+            matched.push(member);
+        } else {
+            rest.push(member);
+        }
+    }
+    let message = obj.message;
+    unsafe {
+        *matched_out =
+            build_group_or_null(matched, group_type_tag, group_name, group_name_len, message);
+        *rest_out =
+            build_group_or_null(rest, group_type_tag, group_name, group_name_len, message);
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -365,5 +547,169 @@ mod tests {
         let obj = pycc_rt_exception_value();
         assert_eq!(unsafe { (*obj).type_tag }, EXCEPTION_TYPE_ZERO_DIV_ERROR);
         pycc_rt_exception_clear();
+    }
+
+    // -- Part 3 of #382 (#542, PEP 654): exception-group construction and
+    // -- partition tests, written before `emit_try_star` (TDD, per this
+    // -- issue's implementation plan).
+
+    const GROUP_TAG: u8 = 24; // `ExceptionGroup`'s fixed builtin tag.
+    const GROUP_NAME: &str = "ExceptionGroup";
+
+    fn group_of(members: &[*mut PyExceptionObj]) -> *mut PyExceptionObj {
+        unsafe {
+            pycc_rt_exception_group_alloc(
+                GROUP_TAG,
+                GROUP_NAME.as_ptr(),
+                GROUP_NAME.len(),
+                alloc_exception_message("group"),
+                members.as_ptr(),
+                members.len(),
+            )
+        }
+    }
+
+    fn partition(
+        group: *mut PyExceptionObj,
+        tags: &[u8],
+    ) -> (*mut PyExceptionObj, *mut PyExceptionObj) {
+        let mut matched = std::ptr::null_mut();
+        let mut rest = std::ptr::null_mut();
+        unsafe {
+            pycc_rt_exception_group_partition(
+                group,
+                tags.as_ptr(),
+                tags.len(),
+                GROUP_TAG,
+                GROUP_NAME.as_ptr(),
+                GROUP_NAME.len(),
+                &mut matched,
+                &mut rest,
+            );
+        }
+        (matched, rest)
+    }
+
+    #[test]
+    fn group_alloc_copies_the_member_array_and_reports_its_length() {
+        let a = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "a");
+        let b = alloc_named(EXCEPTION_TYPE_TYPE_ERROR, "TypeError", "b");
+        let group = group_of(&[a, b]);
+        unsafe {
+            assert_eq!((*group).type_tag, GROUP_TAG);
+            assert_eq!((*group).exceptions_len, 2);
+            let members = std::slice::from_raw_parts((*group).exceptions, 2);
+            assert_eq!(members, [a, b]);
+        }
+    }
+
+    #[test]
+    fn group_alloc_with_no_members_leaves_a_null_exceptions_pointer() {
+        let group = group_of(&[]);
+        unsafe {
+            assert_eq!((*group).exceptions_len, 0);
+            assert!((*group).exceptions.is_null());
+        }
+    }
+
+    #[test]
+    fn partition_splits_a_group_into_matched_and_unmatched_subgroups() {
+        let value_err = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "v");
+        let type_err = alloc_named(EXCEPTION_TYPE_TYPE_ERROR, "TypeError", "t");
+        let key_err = alloc_named(EXCEPTION_TYPE_KEY_ERROR, "KeyError", "k");
+        let group = group_of(&[value_err, type_err, key_err]);
+        let (matched, rest) = partition(group, &[EXCEPTION_TYPE_VALUE_ERROR, EXCEPTION_TYPE_KEY_ERROR]);
+        unsafe {
+            assert!(!matched.is_null());
+            assert_eq!((*matched).type_tag, GROUP_TAG);
+            assert_eq!((*matched).exceptions_len, 2);
+            assert_eq!(
+                std::slice::from_raw_parts((*matched).exceptions, 2),
+                [value_err, key_err]
+            );
+            assert!(!rest.is_null());
+            assert_eq!((*rest).exceptions_len, 1);
+            assert_eq!(std::slice::from_raw_parts((*rest).exceptions, 1), [type_err]);
+        }
+    }
+
+    #[test]
+    fn partition_where_every_member_matches_leaves_rest_null() {
+        let value_err = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "v");
+        let group = group_of(&[value_err]);
+        let (matched, rest) = partition(group, &[EXCEPTION_TYPE_VALUE_ERROR]);
+        unsafe {
+            assert!(!matched.is_null());
+            assert_eq!((*matched).exceptions_len, 1);
+        }
+        assert!(rest.is_null());
+    }
+
+    #[test]
+    fn partition_where_no_member_matches_leaves_matched_null() {
+        let value_err = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "v");
+        let group = group_of(&[value_err]);
+        let (matched, rest) = partition(group, &[EXCEPTION_TYPE_KEY_ERROR]);
+        assert!(matched.is_null());
+        unsafe {
+            assert!(!rest.is_null());
+            assert_eq!((*rest).exceptions_len, 1);
+        }
+    }
+
+    #[test]
+    fn partition_with_an_empty_tag_set_matches_every_member_like_bare_except_star() {
+        let value_err = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "v");
+        let type_err = alloc_named(EXCEPTION_TYPE_TYPE_ERROR, "TypeError", "t");
+        let group = group_of(&[value_err, type_err]);
+        let (matched, rest) = partition(group, &[]);
+        unsafe {
+            assert!(!matched.is_null());
+            assert_eq!((*matched).exceptions_len, 2);
+        }
+        assert!(rest.is_null());
+    }
+
+    #[test]
+    fn partition_with_the_exception_root_tag_matches_every_member() {
+        // `EXCEPTION_TYPE_EXCEPTION` is the universal catch-all, consistent
+        // with `pycc_rt_exception_type_matches`: a handler for it catches
+        // every member regardless of that member's own tag.
+        let value_err = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "v");
+        let key_err = alloc_named(EXCEPTION_TYPE_KEY_ERROR, "KeyError", "k");
+        let group = group_of(&[value_err, key_err]);
+        let (matched, rest) = partition(group, &[EXCEPTION_TYPE_EXCEPTION]);
+        unsafe {
+            assert!(!matched.is_null());
+            assert_eq!((*matched).exceptions_len, 2);
+        }
+        assert!(rest.is_null());
+    }
+
+    #[test]
+    fn partition_treats_a_non_group_exception_as_an_implicit_single_member() {
+        // An ordinary exception (`exceptions_len == 0`) raised inside a
+        // `try*` body -- not already an `ExceptionGroup` -- is still caught
+        // by a matching `except*` clause, wrapped as a single-member group.
+        let plain = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "plain");
+        assert_eq!(unsafe { (*plain).exceptions_len }, 0);
+        let (matched, rest) = partition(plain, &[EXCEPTION_TYPE_VALUE_ERROR]);
+        unsafe {
+            assert!(!matched.is_null());
+            assert_eq!((*matched).exceptions_len, 1);
+            assert_eq!(std::slice::from_raw_parts((*matched).exceptions, 1), [plain]);
+        }
+        assert!(rest.is_null());
+    }
+
+    #[test]
+    fn partition_of_a_non_group_exception_that_does_not_match_leaves_it_in_rest() {
+        let plain = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "plain");
+        let (matched, rest) = partition(plain, &[EXCEPTION_TYPE_KEY_ERROR]);
+        assert!(matched.is_null());
+        unsafe {
+            assert!(!rest.is_null());
+            assert_eq!(std::slice::from_raw_parts((*rest).exceptions, 1), [plain]);
+        }
     }
 }
