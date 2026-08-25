@@ -64,7 +64,7 @@ than through the original seven's name-based `match`
 presence gates below, which now differ between the two groups.
 
 **User-defined exception classes (Part 2 of #541, D-189).** A user-declared
-class whose MRO reaches one of those 23 builtins is raisable and catchable.
+class whose MRO reaches one of those 25 builtins is raisable and catchable.
 HIR lowering assigns it a type tag from `25..=255` in module source order and
 records it on `HirClassDef::exception_type_tag`; the 25 builtins (the
 original 23 plus `ExceptionGroup`/`BaseExceptionGroup`, Part 3 of #382, #542,
@@ -107,8 +107,9 @@ identical `Ty::Instance("MyError")`, so a type-keyed rule could not tell them
 apart and would reinterpret a `PyInstanceObj*` as a `PyExceptionObj*`.
 
 **Class-table presence (Part 1 of #541, D-188; widened to all 23 names by
-Part 2 of #543, #739).** HIR lowering synthesizes a
-real `HirClassDef` for each of those 23 names, seeded before any
+Part 2 of #543, #739; to all 25 by Part 3 of #382, #542, D-202).** HIR
+lowering synthesizes a
+real `HirClassDef` for each of those 25 names, seeded before any
 user statement of a module that references one of them is lowered, so they
 participate in the same class table user-defined classes do. `Exception` carries a synthetic
 `__init__(self, message: str)`; the other six inherit it through their MRO.
