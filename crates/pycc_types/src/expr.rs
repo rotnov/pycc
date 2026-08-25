@@ -86,7 +86,15 @@ pub(crate) fn infer_expr_in(
             // defined" (global). The stdlib-qualified check above already
             // handled `math.sqrt`-style names.
             match env.binding_state(name) {
-                Some(BindingState::Definitely(ty)) => Ok(ty.clone()),
+                // Issue #769 (Part 2 of #747): a *read* of a definitely-bound
+                // name inside a narrowed region resolves to the narrowed
+                // (Optional's inner) type instead of the name's real,
+                // still-Optional binding -- consulted here only, never by
+                // `check_assignment`'s target checking (see `env.narrowed`'s
+                // own doc comment).
+                Some(BindingState::Definitely(ty)) => {
+                    Ok(env.narrowed_ty(name).unwrap_or_else(|| ty.clone()))
+                }
                 Some(BindingState::Maybe(_)) => Err(possibly_unbound(name)),
                 None => {
                     if is_local(local_names, name) {

@@ -28308,20 +28308,20 @@ fn reversed_operand_order_none_or_int_is_equivalent_to_int_or_none() {
 }
 
 #[test]
-fn an_optional_int_value_does_not_narrow_back_to_a_bare_int_annotation() {
-    // The reverse direction is deliberately NOT handled by `is_assignable`:
-    // no flow-sensitive narrowing exists anywhere in this crate yet (D-197),
-    // so an `Optional[int]` stays `Optional[int]` even directly inside an
-    // `is not None` branch.
+fn an_optional_int_value_narrows_back_to_a_bare_int_annotation_inside_is_not_none() {
+    // Superseded by issue #769 (Part 2 of #747, D-199): flow-sensitive
+    // narrowing of a top-level `is not None` test now exists, so an
+    // `Optional[int]` read *inside* the `is not None` body resolves to
+    // plain `int` and is assignable to a bare `int`-annotated target. See
+    // `narrowing`'s own test module for the full narrowing test suite;
+    // this one specifically guards the exact shape this test used to
+    // assert was rejected, so a future regression here is caught by name.
     let result =
         check_source("x: int | None = 5\nif x is not None:\n    y: int = x\n    print(y)\n");
     assert!(
-        result.is_err(),
-        "an un-narrowed `Optional[int]` must not be assignable to plain `int`: {result:?}"
+        result.is_ok(),
+        "a narrowed `Optional[int]` read inside `is not None` must be assignable to plain `int`: {result:?}"
     );
-    // `y: int = x` is an *annotated* assignment, so the incompatible
-    // initializer is `T0025`, not the plain-assignment `T0023`.
-    assert_eq!(result.unwrap_err().code, "T0025");
 }
 
 #[test]
