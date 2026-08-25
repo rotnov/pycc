@@ -11907,6 +11907,186 @@ fn raising_a_bound_existing_exception_builds_successfully() {
         .expect("a bound exception instance can be raised again");
 }
 
+/// Part 3 of #382 (#542, PEP 654, D-202): `pycc_types::check` (T0021) rejects
+/// a non-`str` `ExceptionGroup`/`BaseExceptionGroup` message long before HIR
+/// reaches codegen, so this internal-invariant guard in
+/// `pycc_codegen::exception::emit_raise_value`'s `ConstructedGroup` arm is
+/// unreachable through any real Python fixture -- exercise it directly with
+/// hand-built MIR, mirroring `raise_with_non_string_message_is_a_codegen_error`
+/// above for the plain (non-group) `Constructed` variant.
+#[test]
+fn constructed_group_with_non_string_message_is_a_codegen_error() {
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::Raise {
+            exception: MirExceptionValue::ConstructedGroup {
+                type_tag: EXCEPTION_GROUP_TYPE_TAG,
+                class_name: "ExceptionGroup".to_string(),
+                message: MirExpr::IntLiteral(42),
+                members: vec![],
+            },
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("constructed_group_non_str_message");
+    let obj_path = dir.join("constructed_group_non_str_message.o");
+    let err = compile_to_object(&mir, &obj_path, None, false)
+        .expect_err("a non-string ExceptionGroup message must be a codegen error");
+    assert!(err.contains("message must be a string"), "{err}");
+}
+
+/// Same rationale as `constructed_group_with_non_string_message_is_a_codegen_error`
+/// above, but for the member-must-be-an-exception-instance guard: `T0021`
+/// rejects a non-exception `ExceptionGroup` member before codegen ever sees
+/// it, so this branch needs hand-built MIR too.
+#[test]
+fn constructed_group_with_a_non_instance_member_is_a_codegen_error() {
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::Raise {
+            exception: MirExceptionValue::ConstructedGroup {
+                type_tag: EXCEPTION_GROUP_TYPE_TAG,
+                class_name: "ExceptionGroup".to_string(),
+                message: MirExpr::StringLiteral("multi".to_string()),
+                members: vec![MirExpr::IntLiteral(1)],
+            },
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("constructed_group_non_instance_member");
+    let obj_path = dir.join("constructed_group_non_instance_member.o");
+    let err = compile_to_object(&mir, &obj_path, None, false)
+        .expect_err("a non-instance ExceptionGroup member must be a codegen error");
+    assert!(err.contains("group member must be an exception instance"), "{err}");
+}
+
+/// `emit_try_star` calls `emit_body` once for each of its four constituent
+/// blocks (try body, handler body, `else` body, `finally` body), and each
+/// call is immediately propagated with `?`. Every real `except*` fixture
+/// used elsewhere in this workspace only ever produces `Ok` from all four
+/// calls, so the `?` operator's own error-propagation branch on each of
+/// those four call sites is otherwise never taken. These four tests place a
+/// deliberately invalid raise (hand-built MIR bypassing `pycc_types::check`,
+/// exactly like `raise_with_non_string_message_is_a_codegen_error` above) in
+/// each of the four positions in turn, to exercise every one of those
+/// branches once.
+#[test]
+fn a_codegen_error_in_a_try_star_body_propagates_out_of_emit_try_star() {
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::TryStar {
+            body: vec![MirStmt::Raise {
+                exception: MirExceptionValue::Constructed {
+                    type_tag: 1,
+                    class_name: "ValueError".to_string(),
+                    message: MirExpr::IntLiteral(42),
+                },
+            }],
+            handlers: vec![],
+            orelse: vec![],
+            finalbody: vec![],
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("try_star_body_codegen_error");
+    let obj_path = dir.join("try_star_body_codegen_error.o");
+    let err = compile_to_object(&mir, &obj_path, None, false)
+        .expect_err("a codegen error in the try* body must propagate");
+    assert!(err.contains("message must be a string"), "{err}");
+}
+
+#[test]
+fn a_codegen_error_in_a_try_star_handler_body_propagates_out_of_emit_try_star() {
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::TryStar {
+            body: vec![],
+            handlers: vec![MirExceptHandler {
+                exc_type_tag: Some(vec![1]),
+                binding_name: None,
+                binding_ty: None,
+                body: vec![MirStmt::Raise {
+                    exception: MirExceptionValue::Constructed {
+                        type_tag: 1,
+                        class_name: "ValueError".to_string(),
+                        message: MirExpr::IntLiteral(42),
+                    },
+                }],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("try_star_handler_codegen_error");
+    let obj_path = dir.join("try_star_handler_codegen_error.o");
+    let err = compile_to_object(&mir, &obj_path, None, false)
+        .expect_err("a codegen error in a try* handler body must propagate");
+    assert!(err.contains("message must be a string"), "{err}");
+}
+
+#[test]
+fn a_codegen_error_in_a_try_star_else_body_propagates_out_of_emit_try_star() {
+    // `except*` always has at least one clause (a bare `except*:` is a
+    // parse-time rejection under PEP 654, and `emit_try_star` assumes at
+    // least one dispatch block exists), so this fixture -- unlike the body
+    // and handler-body cases above -- needs one ordinary, non-erroring
+    // handler alongside the erroring `else` body.
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::TryStar {
+            body: vec![],
+            handlers: vec![MirExceptHandler {
+                exc_type_tag: Some(vec![1]),
+                binding_name: None,
+                binding_ty: None,
+                body: vec![],
+            }],
+            orelse: vec![MirStmt::Raise {
+                exception: MirExceptionValue::Constructed {
+                    type_tag: 1,
+                    class_name: "ValueError".to_string(),
+                    message: MirExpr::IntLiteral(42),
+                },
+            }],
+            finalbody: vec![],
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("try_star_else_codegen_error");
+    let obj_path = dir.join("try_star_else_codegen_error.o");
+    let err = compile_to_object(&mir, &obj_path, None, false)
+        .expect_err("a codegen error in a try* else body must propagate");
+    assert!(err.contains("message must be a string"), "{err}");
+}
+
+#[test]
+fn a_codegen_error_in_a_try_star_finally_body_propagates_out_of_emit_try_star() {
+    // Same reason as the `else`-body case above: at least one ordinary
+    // handler is required for `emit_try_star`'s own dispatch-block
+    // invariant, alongside the erroring `finally` body.
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::TryStar {
+            body: vec![],
+            handlers: vec![MirExceptHandler {
+                exc_type_tag: Some(vec![1]),
+                binding_name: None,
+                binding_ty: None,
+                body: vec![],
+            }],
+            orelse: vec![],
+            finalbody: vec![MirStmt::Raise {
+                exception: MirExceptionValue::Constructed {
+                    type_tag: 1,
+                    class_name: "ValueError".to_string(),
+                    message: MirExpr::IntLiteral(42),
+                },
+            }],
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("try_star_finally_codegen_error");
+    let obj_path = dir.join("try_star_finally_codegen_error.o");
+    let err = compile_to_object(&mir, &obj_path, None, false)
+        .expect_err("a codegen error in a try* finally body must propagate");
+    assert!(err.contains("message must be a string"), "{err}");
+}
+
 #[test]
 fn raise_from_with_non_string_message_is_a_codegen_error() {
     // Tests the error path for a non-string raise message in RaiseFrom.

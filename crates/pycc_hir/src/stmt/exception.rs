@@ -285,6 +285,18 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "expected TryStar")]
+    fn expect_top_level_try_star_panics_on_a_non_try_star_item() {
+        // Covers the helper's own failure branch: it is never hit by any
+        // lowering-success test above, since those all lower fixtures that
+        // do produce a `TryStar` item, so exercise it directly here.
+        let module = pycc_parser::parse("try:\n    x = 1\nexcept ValueError:\n    y = 2\n")
+            .expect("test fixture must parse");
+        let hir = crate::lower_checked(&module).expect("plain except must lower");
+        expect_top_level_try_star(&hir.items[0]);
+    }
+
+    #[test]
     fn lower_try_star_lowers_to_try_star_with_named_type() {
         let module = pycc_parser::parse("try:\n    x = 1\nexcept* ValueError:\n    y = 2\n")
             .expect("test fixture must parse");

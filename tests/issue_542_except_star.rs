@@ -160,6 +160,45 @@ fn except_star_as_binding_is_accessible() {
     assert_eq!(out, b"got it\n");
 }
 
+/// `pycc_types::function_local_names` (used only for a function body, not a
+/// top-level module body) has its own `collect_local_names` recursion with a
+/// `TryStar` arm shared with `Try` -- `except_star_as_binding_is_accessible`
+/// above exercises the same source shape, but at module level, which never
+/// reaches `function_local_names` at all. Wrap the same shape in a function
+/// to exercise that separate path.
+#[test]
+fn except_star_as_binding_inside_a_function_is_a_local() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_asbind_fn_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "asbind_fn.py",
+        "def f() -> None:\n    try:\n        raise ValueError(\"bad\")\n    except* ValueError as eg:\n        saved = eg\n        print(\"got it in function\")\n\nf()\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"got it in function\n");
+}
+
+/// `reject_generic_calls_in_stmt` (D-133/D-134's PEP 695 self/mutual
+/// generic-recursion check) walks every statement in a *generic* function's
+/// own body looking for a disallowed nested generic call, and shares its
+/// `Try`/`TryStar` arm with `pycc_types::lib`'s other structural walks --
+/// but it only ever runs for a generic function specifically, so no
+/// `except*`-inside-an-ordinary-function fixture reaches it. A generic
+/// function whose `try`/`except*` bodies contain no generic call at all
+/// still walks all four blocks looking for one.
+#[test]
+fn except_star_inside_a_generic_function_body_type_checks() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_generic_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "generic.py",
+        "def identity[T](x: T) -> T:\n    try:\n        return x\n    except* ValueError:\n        return x\n    else:\n        return x\n    finally:\n        pass\n",
+    );
+    assert!(ok, "check failed: {combined}");
+}
+
 #[test]
 fn except_star_unmatched_member_propagates_uncaught() {
     let dir = std::env::temp_dir().join(format!("pycc_542_unmatched_{}", std::process::id()));
@@ -187,6 +226,25 @@ fn except_star_finally_always_runs() {
     );
     assert!(ok, "build/run failed: {err}");
     assert_eq!(out, b"caught\ncleanup\n");
+}
+
+/// Unlike `except_star_finally_always_runs` above (a top-level, `None`-typed
+/// `try`/`except*`/`finally`), a value-returning function whose `try`/
+/// `except*` construct also carries a `finally` needs `emit_try_star` to
+/// allocate a `ret_slot` to stash the return value across the `finally`
+/// block's own codegen -- without a fixture like this one, that allocation
+/// path is only ever exercised for plain `Try`, never `TryStar`.
+#[test]
+fn except_star_with_finally_in_a_value_returning_function_returns_correctly() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_finally_ret_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "finally_ret.py",
+        "def f() -> int:\n    try:\n        raise ValueError(\"bad\")\n    except* ValueError:\n        return 2\n    finally:\n        print(\"cleanup\")\n\nprint(f())\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"cleanup\n2\n");
 }
 
 #[test]
@@ -333,4 +391,72 @@ fn exception_group_construction_rejects_a_non_exception_member() {
         combined.contains("T0021"),
         "should mention T0021: {combined}"
     );
+}
+
+/// `check_try_star_stmt`'s per-clause loop rejects an `except*` type that is
+/// neither a builtin exception nor a user-defined exception class -- the
+/// same T0021 check plain `except` already exercises for a made-up name, but
+/// not yet exercised for `except*`.
+#[test]
+fn except_star_rejects_an_unrecognized_exception_type() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_unrecognized_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "unrecognized.py",
+        "try:\n    raise ValueError(\"bad\")\nexcept* NotARealException:\n    pass\n",
+    );
+    assert!(!ok, "an unrecognized except* type should be rejected");
+    assert!(
+        combined.contains("T0021"),
+        "should mention T0021: {combined}"
+    );
+}
+
+/// Same rationale as `exception_group_construction_rejects_a_fresh_constructor_call_member`
+/// above, but for a *user-defined* exception subclass's constructor call
+/// rather than a builtin's: `check_exception_group_member_operand` rejects
+/// both, but through two different disjuncts of the same `||` -- a builtin
+/// callee short-circuits the check before the user-defined-class lookup
+/// ever runs, so a builtin-only fixture never exercises the second disjunct.
+#[test]
+fn exception_group_construction_rejects_a_fresh_user_defined_constructor_call_member() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_freshuserctor_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "freshuserctor.py",
+        "class MyError(ValueError):\n    pass\n\ntry:\n    raise ExceptionGroup(\"multi\", [MyError(\"v\")])\nexcept* MyError:\n    pass\n",
+    );
+    assert!(
+        !ok,
+        "a fresh user-defined-class constructor-call ExceptionGroup member should be rejected"
+    );
+    assert!(
+        combined.contains("T0021"),
+        "should mention T0021: {combined}"
+    );
+}
+
+/// Mirrors `a_value_returning_function_may_terminate_only_by_raising` and its
+/// siblings in `tests/issue_382_exceptions.rs`, but for `TryStar` instead of
+/// `Try`: a non-`None`-returning function whose entire body is a `try`/
+/// `except*` where every path (the raising try body, and the re-raising
+/// handler) terminates. `pycc_codegen::exception::block_always_terminates`
+/// has a dedicated `MirStmt::TryStar` arm (shared textually with `Try`'s) --
+/// without a fixture like this one, that arm's pattern binding is never
+/// actually matched at runtime, since every other `except*` fixture's outer
+/// function returns `None` and falls through normally instead of relying on
+/// this fallthrough-proof machinery.
+#[test]
+fn a_value_returning_function_whose_entire_body_is_a_terminating_try_star_never_falls_through() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_terminates_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "terminates.py",
+        "def fail() -> int:\n    try:\n        raise ValueError(\"from try star\")\n    except* ValueError:\n        raise ValueError(\"rethrown from handler\")\n\ntry:\n    x = fail()\nexcept* ValueError:\n    print(\"caught value callee via star\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(out, b"caught value callee via star\n");
 }

@@ -533,6 +533,30 @@ mod tests {
     }
 
     #[test]
+    fn const_str_eq_matches_equal_and_rejects_unequal_or_different_length_strs() {
+        // `const_str_eq` is declared `const fn` so `EXCEPTION_GROUP_TYPE_TAG`'s
+        // derivation can call it at compile time, but the derivation's own
+        // `const` block is evaluated entirely during compilation and folded
+        // to a literal -- `cargo-llvm-cov`'s runtime instrumentation cannot
+        // observe that compile-time execution. Calling the same `const fn`
+        // again here, from an ordinary (non-const) test body, exercises its
+        // body at runtime so the success, mismatch, and differing-length
+        // paths are all covered by the D-014 gate.
+        assert!(const_str_eq("ExceptionGroup", "ExceptionGroup"));
+        assert!(!const_str_eq("ExceptionGroup", "BaseExceptionGroup"));
+        assert!(!const_str_eq("ExceptionGroup", "ValueError"));
+    }
+
+    #[test]
+    fn exception_group_type_tag_matches_its_position_in_the_builtin_table() {
+        let position = BUILTIN_EXCEPTION_CLASSES
+            .iter()
+            .position(|&name| name == "ExceptionGroup")
+            .expect("ExceptionGroup must be present in BUILTIN_EXCEPTION_CLASSES");
+        assert_eq!(EXCEPTION_GROUP_TYPE_TAG, position as u8);
+    }
+
+    #[test]
     fn the_original_flat_seven_still_derive_directly_from_exception() {
         for name in ["ValueError", "TypeError", "KeyError", "IndexError", "ZeroDivisionError", "RuntimeError"] {
             assert_eq!(builtin_exception_parent(name), Some("Exception"));

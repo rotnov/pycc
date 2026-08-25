@@ -8042,6 +8042,49 @@ fn collect_block_constraints_propagates_an_error_from_a_dict_set_value() {
     assert_eq!(err.code, "T0021");
 }
 
+/// Part 3 of #382 (#542, PEP 654): `collect_block_constraints`'s `TryStar`
+/// arm collects constraints from all four of its blocks (body, handler
+/// body, `else`, `finally`) and, when a handler names its binding, seeds it
+/// as `ExceptionGroup` -- exactly like `check_try_star_stmt` does at
+/// type-checking time. Nothing else in this file calls
+/// `collect_block_constraints` (directly or via `infer_function_signatures_
+/// with_solver`) with a `TryStar` body, so without this test the entire arm
+/// -- including the named-handler-binding branch -- goes unexercised.
+#[test]
+fn collect_block_constraints_recurses_into_every_try_star_block_and_binds_a_named_handler() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &[],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+    };
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: Some("e".to_string()),
+            body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
+        }],
+        orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(3))],
+        finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(4))],
+    }];
+
+    collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap();
+}
+
 #[test]
 fn local_name_collection_ignores_a_dict_set_target() {
     // `d[k] = v` mutates an existing binding's contents, not a name --
@@ -16160,6 +16203,45 @@ fn assert_monomorphize_propagates_error(body: Vec<HirStmt>) {
     assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
 }
 
+/// `rewrite_generic_calls_in_stmt`'s `TryStar` arm only runs at all when the
+/// module contains a generic function/class/protocol elsewhere (`monomorphize`
+/// short-circuits to a plain clone otherwise, per its own leading gate) --
+/// unlike the `assert_monomorphize_propagates_error` group below, this
+/// exercises the *success* path, including the `handler.name` binding to
+/// `ExceptionGroup` (Part 3 of #382, #542, PEP 654), which no error-only
+/// fixture reaches since every one of those uses `name: None`.
+#[test]
+fn monomorphize_rewrites_a_try_star_handler_binding_when_the_module_has_a_generic_function() {
+    let param = Ty::Param(Box::new("T".to_string()));
+    let identity = generic_identity_fn(param.clone(), param);
+    let f = HirItem::Function {
+        name: "f".to_string(),
+        params: vec![],
+        return_ty: Ty::None,
+        body: vec![HirStmt::TryStar {
+            body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some(vec!["ValueError".to_string()]),
+                name: Some("e".to_string()),
+                body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
+            }],
+            orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(3))],
+            finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(4))],
+        }],
+    };
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![identity, f],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    monomorphize(&hir).expect(
+        "a module with a generic function and an unrelated try*/except* elsewhere \
+         should monomorphize successfully",
+    );
+}
+
 // PR-13 Task 3: every structural recursion position in
 // `rewrite_generic_calls_in_expr`/`rewrite_generic_calls_in_stmt`/
 // `rewrite_comp_iter` needs its own covering error-propagation case for
@@ -16457,6 +16539,38 @@ fn rewrite_generic_calls_in_stmt_propagates_errors_from_every_recursive_position
         finalbody: vec![],
     }]);
     assert_monomorphize_propagates_error(vec![HirStmt::Try {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![HirStmt::ExprStmt(bad_generic_call())],
+    }]);
+    // `TryStar`'s own body, handler body, else body, and finally body (Part
+    // 3 of #382, #542, PEP 654) -- mirrors the four `Try` cases directly
+    // above, since `collect_block_constraints` propagates each of the four
+    // blocks' errors with its own `?` rather than sharing `Try`'s.
+    assert_monomorphize_propagates_error(vec![HirStmt::TryStar {
+        body: vec![HirStmt::ExprStmt(bad_generic_call())],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![],
+    }]);
+    assert_monomorphize_propagates_error(vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::ExprStmt(bad_generic_call())],
+        }],
+        orelse: vec![],
+        finalbody: vec![],
+    }]);
+    assert_monomorphize_propagates_error(vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![HirStmt::ExprStmt(bad_generic_call())],
+        finalbody: vec![],
+    }]);
+    assert_monomorphize_propagates_error(vec![HirStmt::TryStar {
         body: vec![],
         handlers: vec![],
         orelse: vec![],
@@ -25125,6 +25239,151 @@ fn contains_return_does_not_find_a_return_in_a_try_without_one() {
         finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(4))],
     }];
     assert!(!contains_return(&body));
+}
+
+// Part 3 of #382 (#542, PEP 654): `contains_return`/`introduces_bindings`
+// share their `HirStmt::Try` match arm with `HirStmt::TryStar` via an `|`
+// pattern, but the `Try`-only tests above never actually construct a
+// `TryStar` value, so that shared arm's binding pattern is only ever matched
+// through `Try`. Mirror each `Try` case once for `TryStar` so the shared arm
+// is exercised through both variants.
+
+#[test]
+fn contains_return_finds_a_return_inside_a_try_star_body() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+    assert!(contains_return(&body));
+}
+
+#[test]
+fn contains_return_finds_a_return_inside_a_try_star_handler() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
+        }],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+    assert!(contains_return(&body));
+}
+
+#[test]
+fn contains_return_finds_a_return_inside_a_try_star_else() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![HirStmt::Return(Some(HirExpr::IntLiteral(3)))],
+        finalbody: vec![],
+    }];
+    assert!(contains_return(&body));
+}
+
+#[test]
+fn contains_return_finds_a_return_inside_a_try_star_finally() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![HirStmt::Return(Some(HirExpr::IntLiteral(4)))],
+    }];
+    assert!(contains_return(&body));
+}
+
+#[test]
+fn contains_return_does_not_find_a_return_in_a_try_star_without_one() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
+        }],
+        orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(3))],
+        finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(4))],
+    }];
+    assert!(!contains_return(&body));
+}
+
+#[test]
+fn introduces_bindings_finds_bindings_inside_a_try_star_body() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::IntLiteral(1),
+        }],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+    assert!(introduces_bindings(&body));
+}
+
+#[test]
+fn introduces_bindings_finds_bindings_inside_a_try_star_handler() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::Assign {
+                target: "z".to_string(),
+                value: HirExpr::IntLiteral(2),
+            }],
+        }],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+    assert!(introduces_bindings(&body));
+}
+
+#[test]
+fn introduces_bindings_finds_bindings_inside_a_try_star_else() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![HirStmt::Assign {
+            target: "w".to_string(),
+            value: HirExpr::IntLiteral(3),
+        }],
+        finalbody: vec![],
+    }];
+    assert!(introduces_bindings(&body));
+}
+
+#[test]
+fn introduces_bindings_finds_bindings_inside_a_try_star_finally() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![HirStmt::Assign {
+            target: "v".to_string(),
+            value: HirExpr::IntLiteral(4),
+        }],
+    }];
+    assert!(introduces_bindings(&body));
+}
+
+#[test]
+fn introduces_bindings_does_not_find_bindings_in_a_try_star_without_any() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
+        }],
+        orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(3))],
+        finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(4))],
+    }];
+    assert!(!introduces_bindings(&body));
 }
 
 #[test]
