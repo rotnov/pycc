@@ -545,6 +545,12 @@ mod tests {
         assert!(const_str_eq("ExceptionGroup", "ExceptionGroup"));
         assert!(!const_str_eq("ExceptionGroup", "BaseExceptionGroup"));
         assert!(!const_str_eq("ExceptionGroup", "ValueError"));
+        // Same length, differing content: exercises the per-character
+        // mismatch branch inside the loop, distinct from the length-mismatch
+        // early return above -- neither prior assertion has equal-length
+        // operands, so that inner `if a[i] != b[i] { return false; }` branch
+        // was never taken before this case.
+        assert!(!const_str_eq("ExceptionGroup", "ExceptionGrouq"));
     }
 
     #[test]

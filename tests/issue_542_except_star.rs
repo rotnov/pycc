@@ -460,3 +460,214 @@ fn a_value_returning_function_whose_entire_body_is_a_terminating_try_star_never_
     assert!(ok, "build/run failed: {err}");
     assert_eq!(out, b"caught value callee via star\n");
 }
+
+/// `pycc_types::constraints::collect_block_constraints`'s `HirStmt::TryStar`
+/// arm recurses into the try body, each handler body, the `else` body, and
+/// the `finally` body in turn, propagating any error each recursive call
+/// returns via `?`. Every other `except*` fixture in this file type-checks
+/// successfully, so none of those four `?` sites has ever actually taken its
+/// error branch -- each one is only reachable by making the *solver's own*
+/// return-type unification fail (not the ordinary type checker, which is a
+/// separate, later pass) inside exactly one of the four blocks. A
+/// non-generic, non-`None`-returning function's declared return type is a
+/// concrete solver term, so returning a mismatched literal type from within
+/// the `try` body reliably reaches the body block's own recursive call
+/// before any other block is even visited, giving an isolated repro for
+/// this first `?` site.
+#[test]
+fn a_type_conflict_inside_a_try_star_body_is_rejected_by_the_solver() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_solver_body_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "solver_body.py",
+        "def f() -> int:\n    try:\n        return \"wrong\"\n    except* ValueError:\n        return 1\n    else:\n        return 1\n    finally:\n        pass\nf()\n",
+    );
+    assert!(!ok, "a body/declared-return-type conflict should be rejected");
+    assert!(
+        combined.contains("T0022"),
+        "should mention T0022: {combined}"
+    );
+}
+
+/// Same rationale as `a_type_conflict_inside_a_try_star_body_is_rejected_by_the_solver`
+/// above, but isolating the *handler* block's own recursive
+/// `collect_block_constraints` call: the try body itself returns a
+/// solver-compatible `int`, so the conflict is only discovered once the
+/// `except*` handler body's own mismatched return is visited.
+#[test]
+fn a_type_conflict_inside_a_try_star_handler_is_rejected_by_the_solver() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_542_solver_handler_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "solver_handler.py",
+        "def f() -> int:\n    try:\n        return 1\n    except* ValueError:\n        return \"wrong\"\n    else:\n        return 1\n    finally:\n        pass\nf()\n",
+    );
+    assert!(
+        !ok,
+        "a handler/declared-return-type conflict should be rejected"
+    );
+    assert!(
+        combined.contains("T0022"),
+        "should mention T0022: {combined}"
+    );
+}
+
+/// Same rationale again, isolating the `else` block's own recursive call:
+/// both the try body and the handler return a solver-compatible `int`, so
+/// the conflict only surfaces once the `else` body's mismatched return is
+/// visited.
+#[test]
+fn a_type_conflict_inside_a_try_star_else_is_rejected_by_the_solver() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_solver_else_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "solver_else.py",
+        "def f() -> int:\n    try:\n        return 1\n    except* ValueError:\n        return 1\n    else:\n        return \"wrong\"\n    finally:\n        pass\nf()\n",
+    );
+    assert!(!ok, "an else/declared-return-type conflict should be rejected");
+    assert!(
+        combined.contains("T0022"),
+        "should mention T0022: {combined}"
+    );
+}
+
+/// Isolates the `finally` block's own recursive `collect_block_constraints`
+/// call -- the fourth and last `?` site in the `TryStar` arm. Unlike the
+/// three siblings above, a mismatched `return` cannot be placed directly in
+/// `finally` (rejected earlier, and unconditionally, by L0001's "'return' in
+/// a 'finally' block" check, which would mask this arm's own error path
+/// entirely). Instead this drives the conflict through a *private helper*'s
+/// solver-inferred parameter type (D-045): `_h`'s parameter type is inferred
+/// from its call sites rather than declared, so calling it once at module
+/// scope with `int` and once from inside `f`'s `finally` block with `str`
+/// makes the finally block's own recursive call the one that discovers the
+/// conflict -- the try/handler/else bodies above it all type-check cleanly.
+#[test]
+fn a_type_conflict_inside_a_try_star_finally_is_rejected_by_the_solver() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_542_solver_finally_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "solver_finally.py",
+        "def _h(x):\n    return x\n\n_h(1)\n\ndef f() -> int:\n    try:\n        return 1\n    except* ValueError:\n        return 1\n    else:\n        return 1\n    finally:\n        _h(\"s\")\nf()\n",
+    );
+    assert!(
+        !ok,
+        "a finally-block private-helper argument-type conflict should be rejected"
+    );
+    assert!(
+        combined.contains("T0021") || combined.contains("T0022"),
+        "should mention a solver conflict code: {combined}"
+    );
+}
+
+/// `check_try_star_stmt`'s per-clause loop calls `reject_own_constructor`
+/// exactly like `check_try_stmt`'s does -- rejecting an `except*` handler
+/// type that declares its own `__init__` (Part 3 of #541), not just a
+/// `raise` of such a type. Every other `except*`/handler-type fixture in
+/// this file names a type with no custom constructor, so this specific
+/// call's error branch has never been reached for `TryStar`.
+#[test]
+fn except_star_rejects_a_handler_type_with_its_own_constructor() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_own_ctor_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "own_ctor.py",
+        "class AppError(Exception):\n    def __init__(self, code: int) -> None:\n        self.code = code\n\n\ntry:\n    raise ValueError(\"v\")\nexcept* AppError:\n    pass\n",
+    );
+    assert!(
+        !ok,
+        "an except* handler type with its own constructor should be rejected"
+    );
+    assert!(
+        combined.contains("C0001"),
+        "should mention C0001: {combined}"
+    );
+}
+
+/// `check_try_star_stmt` type-checks the handler body, `else` body, and
+/// `finally` body through the same `check_stmt_shared` calls `check_try_stmt`
+/// uses. Every other `except*` fixture's handler/else/finally bodies are
+/// well-typed, so an ordinary type error placed in each of those three
+/// positions has never propagated through `check_try_star_stmt`'s own call
+/// sites specifically (as opposed to the analogous, already-covered `Try`
+/// arm).
+#[test]
+fn a_type_error_inside_a_try_star_handler_body_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_handler_err_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "handler_err.py",
+        "try:\n    raise ValueError(\"v\")\nexcept* ValueError:\n    y = 1 + \"s\"\n",
+    );
+    assert!(!ok, "a handler-body type error should be rejected");
+    assert!(
+        combined.contains("T0021"),
+        "should mention T0021: {combined}"
+    );
+}
+
+#[test]
+fn a_type_error_inside_a_try_star_else_body_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_else_err_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "else_err.py",
+        "try:\n    print(\"body\")\nexcept* ValueError:\n    pass\nelse:\n    y = 1 + \"s\"\n",
+    );
+    assert!(!ok, "an else-body type error should be rejected");
+    assert!(
+        combined.contains("T0021"),
+        "should mention T0021: {combined}"
+    );
+}
+
+#[test]
+fn a_type_error_inside_a_try_star_finally_body_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_finally_err_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "finally_err.py",
+        "try:\n    raise ValueError(\"v\")\nexcept* ValueError:\n    pass\nfinally:\n    y = 1 + \"s\"\n",
+    );
+    assert!(!ok, "a finally-body type error should be rejected");
+    assert!(
+        combined.contains("T0021"),
+        "should mention T0021: {combined}"
+    );
+}
+
+/// `check_try_star_stmt` joins each handler's resulting environment back
+/// with `join_if_branches`, propagating that join's own error via `?` --
+/// the same join a plain `Try`'s handlers already exercise, but never
+/// before for `TryStar`. Two `except*` clauses that each assign a
+/// pre-existing name to a mutually incompatible, non-assignable type (the
+/// second clause's assignment conflicting with the first, once joined back
+/// against the pre-`try` binding) reaches that error branch.
+#[test]
+fn conflicting_types_across_two_try_star_handlers_are_rejected() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_join_conflict_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, combined) = check_only(
+        &dir,
+        "join_conflict.py",
+        "y = 1\ntry:\n    raise ValueError(\"v\")\nexcept* ValueError:\n    y = 2\nexcept* TypeError:\n    y = \"s\"\n",
+    );
+    assert!(
+        !ok,
+        "conflicting types joined across two except* handlers should be rejected"
+    );
+    assert!(
+        combined.contains("T0023"),
+        "should mention T0023: {combined}"
+    );
+}
