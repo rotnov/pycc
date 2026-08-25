@@ -709,6 +709,60 @@ pub enum HirStmt {
     },
 }
 
+/// Issue #769 (Part 2 of #747): the polarity of an `if`'s `name is [not]
+/// None` test, as recognized by [`optional_none_test`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoneTestPolarity {
+    /// `name is None` -- true in the `if` body means `name` is absent, so
+    /// only the `orelse` branch can be narrowed to the Optional's inner
+    /// type.
+    Is,
+    /// `name is not None` -- true in the `if` body means `name` is present,
+    /// so only the `body` branch can be narrowed.
+    IsNot,
+}
+
+/// Issue #769 (Part 2 of #747): recognizes an `HirStmt::If`'s `test` as a
+/// top-level `name is None` / `name is not None` shape and extracts the
+/// bare name and polarity, or `None` for every other test shape --
+/// including a compound `and`/`or` test, a test where neither side is a
+/// bare `HirExpr::Name`, or a test that is not an `is`/`is not` comparison
+/// at all. Deliberately does not inspect the name's *type* -- callers
+/// combine this syntactic recognition with their own scope's current type
+/// for `name` (checker: `Environment`; MIR: the `scopes` stack) to decide
+/// whether narrowing actually applies.
+///
+/// This is the single shared recognizer `pycc_types` (the checker's
+/// narrowing overlay) and `pycc_mir` (the `OptionalUnwrap` lowering) both
+/// call, so the syntactic pattern-match lives in exactly one place instead
+/// of drifting between two independent copies -- `pycc_mir` does not
+/// depend on `pycc_types` (see `crates/pycc_mir/Cargo.toml`), so this
+/// recognizer lives here in `pycc_hir`, which both already depend on.
+///
+/// HIR lowering (`crates/pycc_hir/src/expr.rs`'s `Expr::Compare` arm,
+/// D-197) already guarantees that whenever `op` is `Is`/`IsNot`, exactly
+/// one operand is syntactically `HirExpr::NoneLiteral` -- every other
+/// `is`/`is not` shape is rejected at HIR-lowering time with `C0001` and
+/// never reaches this function at all. This function re-derives which side
+/// is which rather than assuming an operand order, so it stays correct
+/// regardless of that lowering invariant.
+pub fn optional_none_test(test: &HirExpr) -> Option<(&str, NoneTestPolarity)> {
+    let HirExpr::Compare { op, left, right } = test else {
+        return None;
+    };
+    let polarity = match op {
+        CmpOpKind::Is => NoneTestPolarity::Is,
+        CmpOpKind::IsNot => NoneTestPolarity::IsNot,
+        _ => return None,
+    };
+    let name_side = match (left.as_ref(), right.as_ref()) {
+        (HirExpr::Name(name), HirExpr::NoneLiteral) => name,
+        (HirExpr::NoneLiteral, HirExpr::Name(name)) => name,
+        _ => return None,
+    };
+    Some((name_side.as_str(), polarity))
+}
+
 /// PEP 634-636 (#381, PR-21): a single `match` case's pattern, lowered from
 /// `ruff_python_ast::Pattern`. The type checker verifies each pattern against
 /// the subject's known type and collects capture bindings; the MIR pass

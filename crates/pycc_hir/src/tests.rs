@@ -4873,3 +4873,70 @@ fn is_builtin_exception_class_rejects_unknown_names() {
     assert!(!is_builtin_exception_class("NotAnException"));
     assert!(!is_builtin_exception_class(""));
 }
+
+// -- #769 (Part 2 of #747) `optional_none_test` recognizer coverage --
+
+#[test]
+fn optional_none_test_recognizes_name_is_none() {
+    let test = HirExpr::Compare {
+        op: CmpOpKind::Is,
+        left: Box::new(HirExpr::Name("x".to_string())),
+        right: Box::new(HirExpr::NoneLiteral),
+    };
+    assert_eq!(
+        optional_none_test(&test),
+        Some(("x", NoneTestPolarity::Is))
+    );
+}
+
+#[test]
+fn optional_none_test_recognizes_none_is_name_reversed_operand_order() {
+    let test = HirExpr::Compare {
+        op: CmpOpKind::Is,
+        left: Box::new(HirExpr::NoneLiteral),
+        right: Box::new(HirExpr::Name("x".to_string())),
+    };
+    assert_eq!(
+        optional_none_test(&test),
+        Some(("x", NoneTestPolarity::Is))
+    );
+}
+
+#[test]
+fn optional_none_test_recognizes_name_is_not_none() {
+    let test = HirExpr::Compare {
+        op: CmpOpKind::IsNot,
+        left: Box::new(HirExpr::Name("x".to_string())),
+        right: Box::new(HirExpr::NoneLiteral),
+    };
+    assert_eq!(
+        optional_none_test(&test),
+        Some(("x", NoneTestPolarity::IsNot))
+    );
+}
+
+#[test]
+fn optional_none_test_rejects_non_compare_test() {
+    let test = HirExpr::Name("flag".to_string());
+    assert_eq!(optional_none_test(&test), None);
+}
+
+#[test]
+fn optional_none_test_rejects_non_is_compare_op() {
+    let test = HirExpr::Compare {
+        op: CmpOpKind::Eq,
+        left: Box::new(HirExpr::Name("x".to_string())),
+        right: Box::new(HirExpr::NoneLiteral),
+    };
+    assert_eq!(optional_none_test(&test), None);
+}
+
+#[test]
+fn optional_none_test_rejects_neither_side_a_bare_name() {
+    let test = HirExpr::Compare {
+        op: CmpOpKind::Is,
+        left: Box::new(HirExpr::NoneLiteral),
+        right: Box::new(HirExpr::NoneLiteral),
+    };
+    assert_eq!(optional_none_test(&test), None);
+}
