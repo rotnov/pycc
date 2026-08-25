@@ -18103,6 +18103,64 @@ fn solver_if_reassigns_pre_existing_opaque_binding_in_orelse_branch_only() {
 }
 
 #[test]
+fn solver_if_reassigns_pre_existing_opaque_binding_in_both_branches_to_real_terms() {
+    // Issue #771 join-site follow-up, THIRD reviewer pass: `y` is
+    // pre-existing-opaque before the `if`, and this time BOTH branches
+    // reassign it to a real, solver-representable term (`if cond: y = 1
+    // else: y = 2`). Unlike the single-branch siblings above, this is not
+    // branch-conditional at all -- every path assigns `y` a concrete type --
+    // so it must end up definitely bound with a real term, not dropped
+    // entirely. The naive form of the `pre_existing` guard added for the
+    // single-branch case (skip whenever the name is pre-existing-opaque,
+    // regardless of what the other branch did) incorrectly fired in BOTH
+    // merge loops here, since neither loop had inserted into `env.bindings`
+    // yet when the other ran; the fix consults the *other* branch's own
+    // `bindings` map instead of `env.bindings`'s own mutation state, so this
+    // case correctly falls through to the ordinary first-wins merge.
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
+        local_names: &["cond", "y"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::from(["y".to_string()]),
+    };
+    let body = vec![HirStmt::If {
+        test: HirExpr::Name("cond".to_string()),
+        body: vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::IntLiteral(1),
+        }],
+        orelse: vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::IntLiteral(2),
+        }],
+    }];
+
+    collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap();
+
+    // `y` must not become newly maybe-bound: every path through the `if`
+    // assigns it, so it stays definitely bound.
+    assert!(!env.maybe_bindings.contains("y"));
+    // `y` must be resolvable as a real term afterward -- it must not be
+    // dropped from every tracked set, which would reproduce the exact
+    // `unbound_local` misdiagnosis issue #771 is about.
+    assert!(env.bindings.contains_key("y"));
+}
+
+#[test]
 fn solver_while_loop_marks_opaque_body_only_binding_as_maybe() {
     // Issue #771 join-site follow-up: a `while` body may execute zero
     // times, so `y` assigned only in the body via an opaque initializer

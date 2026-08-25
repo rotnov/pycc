@@ -36,28 +36,46 @@ pub(crate) fn join_if_branches_solver(
     //
     // Issue #771 join-site follow-up, second reviewer pass: a name that was
     // pre-existing but only *opaquely* bound (in `pre_existing` via
-    // `env.opaque_bindings`, not yet in `env.bindings`) must be skipped
-    // here, not merged. Without this guard, a branch that reassigns such a
-    // name to a real term has nothing to stop `or_insert` -- unlike a
-    // pre-existing *real* binding, which already blocks the insert because
-    // `env.bindings` already holds an entry for it -- so the one branch's
-    // term would get written into `env.bindings` unconditionally, even
+    // `env.opaque_bindings`, not yet in `env.bindings`) must be skipped here
+    // when only ONE branch reassigns it to a real term -- otherwise a
+    // branch's term would get written into `env.bindings` unconditionally
+    // (unlike a pre-existing *real* binding, which already blocks the
+    // insert because `env.bindings` already holds an entry for it), even
     // though the other (untouched) branch's actual value is still the old
-    // opaque one. Since this name is not newly introduced by either branch,
-    // it is not added to `maybe_bindings` below either, so an unguarded
-    // insert here would make `HirExpr::Name`'s lookup return that one
+    // opaque one; since such a name is not newly introduced by either
+    // branch, it would not land in `maybe_bindings` below either, so the
+    // unguarded insert would make `HirExpr::Name`'s lookup return that one
     // branch's term as if it always applied on every path -- a genuine
-    // unmasking, not just an imprecision. A name genuinely new to both
-    // `pre_existing` and `env.bindings` is unaffected by this guard and
-    // still merges normally.
+    // unmasking, not just an imprecision.
+    //
+    // Issue #771 join-site follow-up, THIRD reviewer pass: the naive form of
+    // this guard (skip whenever `pre_existing.contains(name) &&
+    // !env.bindings.contains_key(name)`, independent of what the *other*
+    // branch did) is too broad -- it also fires when BOTH branches reassign
+    // the same pre-existing-opaque name to a real term (e.g. `y = d.get(...)`
+    // then `if cond: y = 1 else: y = 2`), dropping the name from
+    // `env.bindings` entirely in that case too (both branches' real terms
+    // get skipped, and neither branch's `opaque_bindings` still carries the
+    // name post-reassignment, so it also never rejoins `env.opaque_bindings`
+    // below). That reproduces the exact `unbound_local` misdiagnosis this
+    // whole fix exists to eliminate, for a name that is not
+    // branch-conditional at all -- every path assigns it a real term. The
+    // guard therefore only skips when the *other* branch's environment does
+    // not also carry a real term for the same name: that is precisely the
+    // "reassigned in exactly one branch" case the comment above describes.
+    // When both branches independently reassign a pre-existing-opaque name,
+    // this guard does not fire in either loop, so the merge proceeds via the
+    // ordinary first-body-then-orelse `entry().or_insert()` below --
+    // identical first-wins semantics to a name that is genuinely new to both
+    // branches.
     for (name, term) in &body_env.bindings {
-        if pre_existing.contains(name) && !env.bindings.contains_key(name) {
+        if pre_existing.contains(name) && !orelse_env.bindings.contains_key(name) {
             continue;
         }
         env.bindings.entry(name.clone()).or_insert(term.clone());
     }
     for (name, term) in &orelse_env.bindings {
-        if pre_existing.contains(name) && !env.bindings.contains_key(name) {
+        if pre_existing.contains(name) && !body_env.bindings.contains_key(name) {
             continue;
         }
         env.bindings.entry(name.clone()).or_insert(term.clone());
