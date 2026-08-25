@@ -235,9 +235,9 @@ fn type_checking_marker_is_not_a_value(name: &str) -> Diagnostic {
 }
 
 /// Returns `true` if `kind` is any marker symbol kind (Enum, Protocol, ABC,
-/// Decorator, Annotation, or Cast). Used by call-site and value-reference
-/// guards to reject marker symbols used as first-class values with a
-/// consistent diagnostic.
+/// Decorator, Annotation, Cast, or TypeChecking). Used by call-site and
+/// value-reference guards to reject marker symbols used as first-class
+/// values with a consistent diagnostic.
 fn is_marker_kind(kind: pycc_std::StdSymbolKind) -> bool {
     matches!(
         kind,

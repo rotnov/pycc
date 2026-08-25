@@ -1011,6 +1011,37 @@ fn folds_a_qualified_type_checking_guard_to_an_empty_dead_body() {
 }
 
 #[test]
+fn an_attribute_named_type_checking_on_another_receiver_is_not_folded() {
+    // #790 (D-068 review): `is_type_checking_guard`'s qualified-form arm
+    // requires *both* the attribute name `TYPE_CHECKING` *and* a `typing`
+    // receiver -- an attribute access that happens to be named
+    // `TYPE_CHECKING` on some other object must not be folded, and must
+    // lower as an ordinary `if` whose test is a plain attribute read.
+    let module = pycc_parser_test_helper::parse(
+        "if some_other_module.TYPE_CHECKING:\n    print(1)\n",
+    );
+    let hir = lower_checked(&module).unwrap();
+    let HirItem::TopLevelStmt(HirStmt::If { test, body, orelse }) = &hir.items[0] else {
+        panic!("expected the `if` statement to lower to `HirStmt::If`, got {:?}", hir.items[0]);
+    };
+    assert_eq!(
+        *test,
+        HirExpr::AttrGet {
+            base: Box::new(HirExpr::Name("some_other_module".to_string())),
+            attr: "TYPE_CHECKING".to_string(),
+        }
+    );
+    assert_eq!(
+        *body,
+        vec![HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::IntLiteral(1)],
+        })]
+    );
+    assert_eq!(*orelse, Vec::<HirStmt>::new());
+}
+
+#[test]
 fn lowers_the_else_branch_of_a_type_checking_guard_normally() {
     // #790: only the `TYPE_CHECKING` branch itself is dead code -- an
     // `else` clause is live at runtime whenever the guard is skipped, so it
