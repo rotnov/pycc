@@ -29243,3 +29243,75 @@ fn a_while_loop_body_that_reads_but_never_kills_the_narrowed_name_stays_narrowed
     );
 }
 
+// D-068 re-review of #780 (third round, warning finding): `check_match`'s
+// case-body loop and `check_try_stmt`'s four body loops (`body`, each
+// handler's `body`, `orelse`, `finalbody`) used a raw per-statement loop
+// instead of `narrow::check_stmt_sequence[_in_function]`, so a nested
+// early-return guard's narrowing never propagated to a later statement in
+// the same case/try/handler/else/finally body -- the identical fast-path
+// bypass finding 2 had already fixed for `if`/`while`, just never routed
+// through those two constructs in the first place.
+
+#[test]
+fn nested_early_return_guard_narrows_the_rest_of_the_same_match_case_body() {
+    let result = check_source(
+        "def f(flag: int, x: int | None) -> int:\n    match flag:\n        case 0:\n            if x is None:\n                return 0\n            return x\n        case _:\n            return 0\n",
+    );
+    assert!(
+        result.is_ok(),
+        "a nested early-return guard must narrow the rest of its enclosing `match` case body: {result:?}"
+    );
+}
+
+#[test]
+fn nested_early_return_guard_narrows_the_rest_of_the_try_body() {
+    let result = check_source(
+        "def f(x: int | None) -> int:\n    try:\n        if x is None:\n            return 0\n        return x\n    except ValueError:\n        return -1\n",
+    );
+    assert!(
+        result.is_ok(),
+        "a nested early-return guard must narrow the rest of the `try` body: {result:?}"
+    );
+}
+
+#[test]
+fn nested_early_return_guard_narrows_the_rest_of_an_except_handler_body() {
+    let result = check_source(
+        "def f(x: int | None) -> int:\n    try:\n        raise ValueError(\"boom\")\n    except ValueError:\n        if x is None:\n            return 0\n        return x\n",
+    );
+    assert!(
+        result.is_ok(),
+        "a nested early-return guard must narrow the rest of the `except` handler body: {result:?}"
+    );
+}
+
+#[test]
+fn nested_early_return_guard_narrows_the_rest_of_the_else_body() {
+    let result = check_source(
+        "def f(x: int | None) -> int:\n    try:\n        pass\n    except ValueError:\n        return -1\n    else:\n        if x is None:\n            return 0\n        return x\n",
+    );
+    assert!(
+        result.is_ok(),
+        "a nested early-return guard must narrow the rest of the `else` body: {result:?}"
+    );
+}
+
+#[test]
+fn a_plain_narrowed_read_inside_the_finally_body_still_type_checks() {
+    // `finalbody` also moved from a raw per-statement loop to
+    // `narrow::check_stmt_sequence_in_function`, but `finally` cannot
+    // itself contain a `return` (L0001 rejects that outright) --
+    // `apply_post_if_narrowing`'s own condition (`definitely_terminates`,
+    // which only recognizes a trailing `return`) can therefore never fire
+    // inside a `finally` body, so unlike the four sibling tests above this
+    // is a plain sanity check that the routing change left ordinary
+    // `finally`-body narrowing intact, not a regression test for a
+    // behavior the fix newly enables there.
+    let result = check_source(
+        "def f(x: int | None) -> int:\n    try:\n        pass\n    except ValueError:\n        pass\n    finally:\n        if x is not None:\n            print(x + 1)\n    return 0\n",
+    );
+    assert!(
+        result.is_ok(),
+        "a narrowed read inside the `finally` body must still type-check after the sequencing fix: {result:?}"
+    );
+}

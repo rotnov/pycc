@@ -1350,11 +1350,22 @@ fn check_match(
                 ));
             }
         }
-        for stmt in &case.body {
-            match return_ty {
-                Some(rt) => check_stmt_in_function(&mut case_env, local_names, stmt, rt.clone())?,
-                None => check_stmt(&mut case_env, stmt)?,
-            }
+        // D-068 re-review of #780 (third round, warning finding): route
+        // each case body through `narrow::check_stmt_sequence[_in_function]`
+        // instead of a raw per-statement loop, so a nested early-return
+        // guard inside a `match` case narrows the rest of that same case
+        // body -- the identical fast-path-bypass defect the `if`/`while`
+        // fast-path helpers already had fixed for finding 2, but which
+        // `check_match`'s own always-raw loop had never been routed
+        // through in the first place.
+        match return_ty {
+            Some(rt) => narrow::check_stmt_sequence_in_function(
+                &mut case_env,
+                local_names,
+                &case.body,
+                rt.clone(),
+            )?,
+            None => narrow::check_stmt_sequence(&mut case_env, &case.body)?,
         }
         case_envs.push(case_env);
     }
