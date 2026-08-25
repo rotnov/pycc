@@ -87,7 +87,20 @@ standalone call) -- these are valid Python, not name-resolution failures
 (`T0021`), so they are classified as capability gaps. User-defined functions
 always take priority: a `def ValueError(...)` is called correctly, not
 classified as `C0001`. The same classification applies in both the final
-validation pass and the private-helper inference path (issue #142).
+validation pass and the private-helper inference path (issue #142). It is
+also used for an *implemented* special-cased builtin called with an argument
+shape this version does not support -- `isinstance(f(), int)` (a call as the
+inspected operand), `cast(list[int], x)` (a subscripted generic as the
+target type, issue #767), and a `cast` whose target type would change the
+value's runtime representation, narrow its attribute layout, or cross a
+method-override boundary that pycc's static (non-virtual) method dispatch
+cannot see through
+(`cast(str, 5)`, `cast(int, some_bool)`, a down-cast such as
+`cast(Derived, base)`, or an up-cast such as `cast(Base, derived)` where
+`Derived` overrides a method `Base` defines; D-198, issue #767) are the
+current instances -- for the same reason:
+the construct is valid Python that a later slice can implement, not a
+by-design rejection.
 
 ## Quality bar
 

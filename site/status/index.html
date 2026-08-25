@@ -391,7 +391,13 @@
               (PEP 591/593) are now registered stdlib imports too, so
               <code>from typing import Final, Annotated</code> no longer
               fails to compile — pycc already handled both as bare-name
-              annotation subscripts.
+              annotation subscripts. <code>typing.cast(T, value)</code> is
+              supported as well: it type-checks as <code>T</code> and is
+              elided entirely before code generation, matching CPython, where
+              the call is a runtime no-op. The target must be a bare type name
+              in this version — <code>int</code>, <code>float</code>,
+              <code>bool</code>, <code>str</code>, or a class defined in the
+              same module.
             </p>
             <p>
               The 100% line/region coverage gate and the required

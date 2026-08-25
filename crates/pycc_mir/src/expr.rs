@@ -60,6 +60,24 @@ pub(super) fn lower_expr(
             if callee == "issubclass" && !is_user_defined {
                 return lower_issubclass(args, classes);
             }
+            // #767: `typing.cast(T, value)` is a runtime no-op — it only
+            // changes a static checker's view of `value`'s type — so the
+            // whole call expression lowers to `value` alone. Eliding it here
+            // means no `MirExpr::Call` for `cast` ever reaches codegen, and
+            // codegen needs no `cast` case at all. `args[0]` (the target
+            // type) is a bare type name, not a value expression, and is
+            // deliberately never lowered.
+            //
+            // Indexing `args[1]` is sound because `pycc_types::class::
+            // check_cast` rejects every arity other than 2 with `T0021`, and
+            // both `pycc_mir::build` call sites lower an already-type-checked
+            // HIR module — the same "the type checker guarantees this shape"
+            // invariant the `__init__`-in-MRO panic below relies on. A
+            // user-defined `def cast(...)` takes priority over the special
+            // case, exactly as for `isinstance`/`issubclass`.
+            if callee == "cast" && !is_user_defined {
+                return lower_expr(&args[1], scopes, classes, current_class);
+            }
             let args: Vec<MirExpr> = args
                 .iter()
                 .map(|a| {

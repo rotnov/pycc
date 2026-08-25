@@ -33,6 +33,40 @@ never a merge gate.
 
 ---
 
+## 2026-08-24 — A blanket `sed` decision-renumber over-matched unrelated citations to the same old number
+
+While rebasing `feat/typing-cast-767` onto `origin/main` after PR #772 merged,
+a decision-number collision surfaced: this branch's own cast-erasure decision
+had been drafted as D-197, but PR #772 had already claimed D-197 for its own
+`Optional[T]`/PEP 604 decision (issue #763). The fix renamed this branch's
+decision to D-198 and ran a single blanket
+`sed -i '' 's/D-197/D-198/g'` across the branch's changed files to update
+every cross-reference to match. That command matched more than the branch's
+own cast-related citations: `crates/pycc_types/src/tests.rs` (x3),
+`docs/DIAGNOSTICS.md` (x2), and `crates/pycc_diag/src/explain.rs` (x2), plus
+`docs/ROADMAP.md` (x2), each already carried pre-existing, unrelated D-197
+citations belonging to #763's own Optional[T]/PEP 604 work — inherited from
+the rebase itself, not authored by this branch — and the sweep silently
+rewrote all nine into D-198, mislabeling them as this branch's decision.
+Root cause: a bare string substitution on a decision number cannot
+distinguish "this branch's own citations to the number being renamed" from
+"pre-existing citations to a different decision that happens to reuse the
+same surrounding prose" — a file that discusses two decisions with similar
+context (both are type-system decisions citing issue numbers and diagnostic
+codes) gives a blind `sed` sweep nothing to key on. The defect was caught
+only by the pinned local reviewer's final pre-merge pass on the branch, not
+by build, tests, or `check-site.sh` (all comment/doc-text only, so none of
+those gates cover citation correctness) — costing a full extra fix, verify,
+and commit cycle (`f710f0db`) after the sweep had already been treated as
+done. Lesson: when renumbering a decision across a diff, never blanket-`sed`
+the old number to the new one. Instead scope the substitution to lines whose
+surrounding citation context actually names the decision being renamed (the
+issue number, the decision's own topic keywords) — or, more reliably, grep
+the old number across the full diff first, manually classify every hit as
+"this branch's own" vs. "pre-existing and unrelated," and edit only the
+former set line-by-line. A file that cites several decisions in similar
+prose is the common case here, not the exception.
+
 ## 2026-08-24 — A dispatched subagent cannot satisfy D-068's local-reviewer dispatch requirement
 
 **What happened.** While finishing #763, the working session was itself a
@@ -153,6 +187,347 @@ claimed impossibility is cheap to test directly (here: ten minutes of
 harder-to-decompose work item the claim is used to justify. A plan's own
 scoping decisions are hypotheses arrived at with less information than is
 available once the depended-on machinery actually exists and can be run.
+
+---
+
+## 2026-08-24 — Splitting a bool-returning helper into named error variants opened two untested branches the D-014 gate silently caught, and a `cmd | tee` pipeline hid the gate's own exit code
+
+**What happened.** Fixing the third-pass finding below (the `cast`
+method-dispatch soundness gap) required turning `cast_shares_representation`'s
+`bool` return into a three-variant `CastMismatch` so `check_cast` could report
+a message specific to the actual failure cause. The rename's two
+`env.lookup_class(...)` lookups, each guarded by its own `let-else`, replaced
+a single shared `false` fallback the original boolean version's two failure
+paths both flowed into (and which other, already-tested calls also reached).
+Splitting them into two independent `Err(...)` arms gave each its own
+coverable region — and neither is reachable through `check_cast` from any
+real `check`-validated program, so no existing test, and no test written by
+reasoning about `cast`'s public behavior, could ever reach them.
+`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
+caught this immediately (2 missed lines/regions in `class.rs`), but only
+because the gate was actually re-run — the run before it used
+`cmd | tee log | tail -N` and read `tail`'s exit code (0) off the
+notification, not `cargo llvm-cov`'s own, and would have reported a false
+pass had the log's own numeric summary not been checked by hand afterward.
+
+**Root cause.** Two independent mistakes stacked. First, a boolean-collapsing
+refactor into named variants is a coverage-shape change, not just a
+readability one: every merged "these both mean false" path becomes an
+independently-tracked branch, and a helper whose only callers hand it
+provably-consistent state (as `cast_compatibility`'s callers do, since every
+`Ty::Instance` name it sees is either a registered user class or one of the
+23 HIR-seeded builtin exception classes) will not get that branch exercised
+by any test written from the public contract — it needs a direct, white-box
+"bypass the invariant" test in the same style as this file's existing
+`resolve_attr_get_panics_when_the_class_is_not_registered` family. Second,
+`command | tee file | tail -N` in a shell pipeline reports the *last*
+command's exit status by default, not the first; treating a background
+task's reported "exit code 0" as proof `cargo llvm-cov` passed, instead of
+reading the coverage table's own Missed columns, is exactly the class of
+mistake `set -o pipefail` (or checking the actual numbers, as eventually
+done here) exists to prevent.
+
+**What fixed it.** Two new tests added directly to `class.rs`'s own inline
+`#[cfg(test)] mod tests` (not the crate-root black-box `tests.rs`), each
+hand-building an `Environment` where the invariant is deliberately violated,
+asserting `cast_compatibility` returns the correct `CastMismatch` variant
+rather than panicking. `CastMismatch` picked up `#[derive(Debug, PartialEq)]`
+so the assertions could use `assert_eq!` instead of `assert!(matches!(...))`
+— the latter's own unreachable `_ => false` arm would have cost another
+region point under the same gate. `cargo llvm-cov --workspace --no-run
+--show-missing-lines` located the exact lines, and
+`--no-run --json --output-path ...` (grepped for the target file's segments
+with a `count == 0`) confirmed a region-level miss once the line-level count
+alone had already reached 100% after the first fix, disambiguating "still
+failing" from "actually passing."
+
+**Lesson.** When a refactor turns a shared fallback (a `bool`, an `Option`,
+a merged `_ =>` arm) into several independently-named outcomes, re-run the
+100%-coverage gate specifically for the touched file before assuming existing
+tests still suffice — the refactor itself can manufacture new unreachable-by
+-normal-testing branches even when behavior is otherwise unchanged, and the
+fix is a direct white-box test of the internal invariant, not a public-API
+test that can never reach the branch by construction. And never read a
+background task's own summarized exit code as a gate's pass/fail signal when
+the actual command ran inside a `| tee | tail` pipeline — read the tool's own
+reported numbers (here, the Missed-lines/Missed-regions columns), or rerun it
+without the pipe, before trusting the run.
+
+---
+
+## 2026-08-24 — The #767 layout fix, once corrected, still accepted an up-cast that silently changed which method implementation ran
+
+**What happened.** After the fix described in the entry below narrowed
+`cast`'s class-to-class predicate to MRO ancestry-or-identity, a third pinned
+local reviewer pass — run because AGENTS.md requires re-running the reviewer
+after a fix whose previous findings may no longer describe the current diff —
+found the accepted up-cast subset still unsound, for a reason neither of the
+first two passes' reasoning touched. `pycc_mir` resolves method calls
+*statically* from the MIR-tracked type of the receiver (no vtable — an
+existing, unrelated design decision, not introduced by this issue), and an
+`AnnAssign` re-anchors that tracked type to the declared annotation rather
+than the initializer's real type. So `b: Base = cast(Base, d)` makes every
+later `b.m()` dispatch through `Base`'s MRO even though the allocated object
+is `d`'s real, more-derived class. If `Derived` overrides a method `Base`
+defines or inherits, that static resolution silently returns `Base`'s
+implementation instead of the override CPython's dynamic dispatch would call
+— with no diagnostic and no crash, strictly worse than the panic/abort
+failure modes the layout fix below was written to prevent. Before this pass,
+no other construct in the accepted language subset could produce a variable
+whose MIR-tracked type differs from its actual allocated class (both plain
+assignment and call-argument checking require exact `Ty::Instance`
+equality), so `cast`'s up-cast was the first construct able to expose this
+latent gap in pycc's static-dispatch model at all.
+
+**Root cause.** The layout fix (entry below) asked "does this cast preserve
+attribute layout?" and stopped there once the answer was yes for the
+up-cast/identity subset. But erasure puts two independent things at risk,
+not one: what slots MIR can read (layout) and which code MIR calls when it
+reads them (dispatch). A predicate that only re-derives the first question
+after being corrected once is not automatically safe on the second — fixing
+a soundness bug narrows the *known* failure mode without proving no sibling
+failure mode exists under the same erasure mechanism. The old test
+`cast_up_to_a_base_class_checks` only read a shared attribute through the
+cast result, never called a method — so it could not have caught this even
+on a careful re-read; the gap needed an override actually present in the
+test fixture to surface at all.
+
+**What fixed it.** `cast_shares_representation` was renamed
+`cast_compatibility` and now additionally rejects an up-cast when any class
+strictly more derived than the target (down to and including the value's
+own class) overrides a method reachable from the target's own MRO;
+`__init__` is excluded from the check on both sides because it runs once at
+construction, before any `cast` of the resulting object could apply, and
+every subclass defining its own `__init__` is the ordinary case, not an
+exception. The fused `C0001` message (already flagged separately as
+non-discriminating) was split into one string per `CastMismatch` variant —
+`Representation` / `Layout` / `OverriddenMethod(name)` — so each rejection
+test now asserts a substring only its own branch produces, and D-198 and the
+session log both gained a "third review pass" account. A CLI-level
+`build`+`run` test for the up-cast *acceptance* path was also added — no
+earlier test exercised that path end-to-end, which is exactly the kind of
+gap that would have caught this empirically rather than needing a third
+human-review pass to find it by inspection. While writing the fix's test
+matrix, a genuinely unrelated pre-existing bug surfaced (a rejected `cast`
+bound to a plain local variable reports a misleading `T0021` "not bound"
+instead of its real diagnostic) — confirmed cosmetic and pre-existing, filed
+separately as #771 rather than investigated further, since pulling on it
+would have expanded this fix into an unrelated subsystem (definite-assignment
+tracking, D-147) with no soundness stake in the fix at hand.
+
+**Lesson.** When a soundness predicate over an erasure-implemented construct
+gets corrected once, the correction closes the *specific* failure mode a
+reviewer found — it does not certify the predicate against every failure
+mode the same erasure mechanism can produce. Before treating a fix like this
+as final, ask explicitly what *else* the erased information was doing
+downstream (here: not just "what attributes can be read" but "which
+implementation gets called"), and write at least one test that would fail if
+that other downstream use were still unguarded. A predicate that was wrong
+once earns another adversarial pass, not a pass on trust.
+
+---
+
+## 2026-08-24 — The #767 representation fix, once corrected, still accepted every class-to-class `cast` including unsound down-casts
+
+**What happened.** After the fix described in the entry below replaced
+`is_assignable_env` with a dedicated `cast_shares_representation` predicate,
+that predicate still accepted every `Ty::Instance` -> `Ty::Instance` pair
+unconditionally — same class, ancestor, descendant, or unrelated class alike —
+reasoning only that every class instance is one heap-object pointer regardless
+of class, so representation is always preserved. That reasoning is correct for
+representation and wrong for *layout*: `cast` is implemented by erasure, so
+`pycc_mir` never learns the checker-verified target type and keeps resolving
+attribute access against the value's *real*, narrower class. A checker-accepted
+down-cast (`cast(Derived, base)` where `Derived` adds attributes `Base` lacks)
+therefore reaches either a `pycc_mir` panic (an unannotated binding or inline
+access never finds the attribute in the real class's MRO) or an out-of-bounds
+`pycc_rt` instance-slot abort at runtime (an `AnnAssign` re-anchors the MIR
+type to the wider class without the object ever being allocated with its extra
+slots) — a second, independent soundness hole in the same feature, found by a
+second independent review pass of the corrected diff rather than by the first
+review that had already flagged the representation issue.
+
+**Root cause.** The fix in the entry below correctly renamed the question from
+"is this assignable" to "does this preserve representation", but stopped one
+question short: preserving representation is necessary but not sufficient once
+erasure also discards the checker's own type information. The predicate's test
+suite (`cast_between_two_class_types_checks`) asserted an *unrelated*-class
+cast succeeded, which pins the unsound behavior as a pass rather than exercising
+the down-cast case that actually motivates `cast` in ordinary Python (a
+narrowing cast paired with an `isinstance` check) — so the test suite could not
+have caught this even if read carefully.
+
+**What fixed it.** `cast_shares_representation` was narrowed to require MRO
+ancestry-or-identity for the `Instance` -> `Instance` case: the target must be
+the value's own class or one of its class's MRO ancestors (an up-cast), never
+a descendant. The unrelated-class test was replaced with three tests derived
+directly from the accept/reject table: up-cast accepted, down-cast rejected
+(`C0001`, asserting the message names attribute-layout narrowing), unrelated
+classes rejected. D-198 gained a "second review pass" paragraph recording the
+mechanism, and every doc site claiming "down-casts remain available" (D-198
+itself, `docs/DIAGNOSTICS.md`, `docs/ROADMAP.md`, `docs/STDLIB_PLAN.md`, this
+session's own log) was corrected in the same pass.
+
+**Lesson.** When a construct is implemented by *erasure* — the checker verifies
+something the generated code then has no record of — a representation-only
+safety argument is incomplete by construction: ask separately whether anything
+downstream re-derives or re-trusts the erased information (here, MIR's
+attribute lookup against the value's real, not asserted, type) and whether the
+erasure could make that re-derivation land on a *narrower* answer than what the
+checker validated. A predicate fixed once under review is not exempt from the
+same scrutiny that found the first bug — re-derive the accept/reject table from
+the requirement again after any correction to a soundness-relevant predicate,
+rather than treating "already reviewed once" as evidence the second pass will
+be clean.
+
+---
+
+## 2026-08-24 — A #767 review fix reached for the nearest existing predicate, and shipped a `cast` that worked only where it was useless
+
+**What happened.** The pinned reviewer found a real hazard in #767: `cast` is
+erased to its value argument with no conversion emitted, so a target type whose
+runtime representation differs from the value's (`cast(str, 5)`) leaves the
+checker and the emitted code disagreeing. The fix reached for
+`is_assignable_env`, the existing predicate that looked closest, and documented
+it as "the representation-compatibility test". It is not — it is a *subtyping*
+test. It admits `bool` -> `int`, which is a real representation change (`i8`
+vs `i64` per `TYPE_SYSTEM.md`), and it rejects `Instance` -> `Instance`
+entirely, because `is_assignable` has no inheritance rule at all. The result
+accepted one unsound case and rejected the down-cast, which is `cast`'s single
+most common legitimate use. Four tests were written and passed against that
+predicate, including one asserting the unsound `bool` -> `int` acceptance as
+correct. It was caught only by a second independent review of the staged diff.
+
+**Root cause.** The question was "do these two types share a runtime
+representation", and the answer was taken from a function that answers "is this
+assignable to that". The two agree often enough that spot-checks pass. Writing
+the doc comment should have caught it — the comment enumerated what the
+predicate encodes ("identity, `bool` widening to `int`, `Instance` ->
+`Protocol`") and that list visibly omitted `Instance` -> `Instance`, the case
+the feature exists to serve. The enumeration was written and not read back
+against the feature's own use cases. The tests then encoded the predicate's
+behavior rather than the requirement's, so they confirmed rather than checked.
+
+**What fixed it.** An explicit `cast_shares_representation` predicate answering
+only the representation question, the rejection re-coded from `T0021` to
+`C0001` (pycc's erasure limit, not ill-typed Python), a new ADR (D-198), and
+tests rewritten around the requirement: a class-to-class cast accepted, every
+cross-representation pair rejected — including the `bool` -> `int` case the
+earlier test had asserted was fine.
+
+**Lesson.** When a fix reuses an existing predicate for a *new* question, state
+the new question in one sentence and check the predicate against it directly,
+rather than trusting that a near-neighbour semantics is the same semantics. The
+tell is available for free: if the doc comment has to enumerate what the reused
+predicate happens to encode, read that enumeration back against the feature's
+own primary use cases before writing any test — a use case missing from the
+list is the bug. And a test written after the implementation tends to assert
+what the code does; for a fix of this shape, derive the accept/reject table from
+the requirement first.
+
+## 2026-08-24 — A coverage re-run after an interrupted one reported a false 98%, and nearly sent the #767 session hunting a nonexistent coverage hole
+
+**What happened.** A `cargo llvm-cov --workspace --fail-under-lines 100
+--fail-under-regions 100` run for #767 was killed part-way through. The
+immediate re-run on the same tree came back `98.05%` regions / `98.07%` lines
+with 524 missed lines and exit 1, against a `100.00%` / 0-missed result from an
+earlier run of the same command with one test *fewer*. Time went into reading
+the per-file table and theorizing about a regression the branch could not have
+caused.
+
+**Root cause.** The re-run measured an incomplete profile. The exact mechanism
+was not confirmed --- 195 `.profraw` files were present in
+`target/llvm-cov-target` afterwards, but whether the tool's own pre-run cleanup
+skipped leftovers from the killed run, or the run simply failed to collect some,
+was not established. Either way the report was arithmetically valid and
+factually wrong. The tell was the shape of the loss, not its size: total region count was
+byte-identical (`41736`) across both runs, and the missing coverage was
+concentrated in exactly the code exercised through spawned `pycc` subprocesses
+--- `src/main.rs` (80.36%), `crates/pycc_ast` (11.48%),
+`crates/pycc_artifact_layout` (14.76%) --- while every in-process crate stayed
+at or near 100%. Identical instrumentation with one extra passing test cannot
+lose 814 regions; only lost profile data can.
+
+**What fixed it.** `cargo llvm-cov clean --workspace`, then re-running the gate:
+`100.00%` lines and regions, 0 missed of either, 3403 passed, exit 0.
+
+**Lesson.** After any interrupted coverage run, `cargo llvm-cov clean
+--workspace` before believing the next one --- a partial profile under-reports
+silently and never warns. When a coverage number moves by more than a change
+could explain, check whether the total region count moved with it before
+investigating the code: unchanged totals plus a large coverage drop is a
+profile-data problem, not a code problem. Subprocess-exercised crates are where
+it shows first.
+
+---
+
+## 2026-08-24 — The #767 PR body and session snapshot claimed the coverage gate passed before it had ever produced a verdict
+
+
+**What happened.** While drafting the #767 pull-request body and its
+`docs/sessions/` snapshot, both were written to state that
+`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
+passes. At that point every local coverage run had aborted on an unrelated
+environmental failure (`build_and_run_cross_compiled_to_a_different_tier_1_target`
+against a stale `x86_64-apple-darwin` `libpycc_rt.a`), so cargo exited 101 and
+`llvm-cov` never emitted a report at all — there was no line/region percentage
+and no fail-under verdict to report either way. The claim was drafted from the
+*intent* to run the gate, not from its output.
+
+**Root cause.** Evidence prose was written ahead of the evidence, and a run
+that aborted was mentally filed as "ran" rather than "produced no verdict". A
+failing test that is genuinely unrelated to the change still invalidates the
+gate result, because `--fail-under-*` is only evaluated after a full run.
+
+**What fixed it.** Fixing the environmental failure itself and re-running.
+`--no-fail-fast` alone was not enough: it runs every remaining test, but
+`cargo llvm-cov` still aborts without emitting a report when the underlying
+`cargo test` exits non-zero, so the run again ended with no verdict. The stale
+archive was `target/x86_64-apple-darwin/debug/libpycc_rt.a` -- the *root* target
+directory the `pycc` binary under test resolves its runtime from -- while the
+earlier rebuild had been aimed at `target/llvm-cov-target/`, which is why it
+appeared not to survive.
+
+**Lesson.** Never write a test, coverage, or CI result into a PR body, session
+snapshot, or commit message before reading that exact run's output; when a gate
+run aborts, record "no verdict" rather than the verdict that was expected.
+There is no flag that buys a coverage verdict past a failing test -- an
+environmental failure has to be actually fixed before the gate can speak. When
+a rebuild "does not survive", check that it landed in the directory the process
+under test actually reads before repeating it.
+
+---
+
+## 2026-08-24 — A blanket `cargo fmt --all` while implementing #767 silently pulled eight unrelated files into the diff
+
+**What happened.** During the #767 (`typing.cast`) implementation, a routine
+`cargo fmt --all` reformatted eight files this task never touched —
+`crates/pycc_codegen/src/tests.rs`, `crates/pycc_hir/src/exception.rs`,
+`crates/pycc_hir/src/exception/tag_tests.rs`,
+`crates/pycc_hir/src/stmt/exception.rs`,
+`crates/pycc_types/src/exception/synthetic_class_tests.rs`,
+`tests/issue_739_oserror_hierarchy.rs`, `tests/issue_740_multi_type_except.rs`,
+and `tests/issue_762_typing_final_annotated.rs`. The churn was only noticed
+later, when the pre-commit `git status` listed far more modified files than
+the change had seams. It would otherwise have shipped inside a PR whose stated
+scope is one issue, making the review diff harder to read and the blame history
+misleading.
+
+**Root cause.** `main` at `5be4a055` is not `cargo fmt` clean, because
+`.github/workflows/` has no `cargo fmt --check` gate, so formatting drift
+accumulates from any contributor who does not run it. `--all` therefore does
+not mean "format my work"; it means "format the whole tree, including everyone
+else's drift".
+
+**What fixed it.** `git checkout --` on exactly those eight paths, then
+`cargo fmt --all -- --check` re-run to confirm none of the files this task
+actually touched appear in its output.
+
+**Lesson.** In this repository, format the files the task touched
+(`cargo fmt -- <paths>`), not the workspace. If `cargo fmt --all` is run
+anyway, diff `git status --short` against the task's own list of intended
+files *before* staging, and revert anything not on it. A modified file the
+task cannot explain is churn, not a bonus fix.
 
 ---
 

@@ -110,6 +110,20 @@ pub enum StdSymbolKind {
     /// first-class value — referencing it as a value or calling it is
     /// rejected by the type checker, the same as every other marker kind.
     AnnotationMarker,
+    /// The `typing.cast` marker symbol (#767). Unlike every other marker
+    /// kind, `cast` *is* callable in Python — `cast(T, value)` is a runtime
+    /// no-op that only changes a static checker's view of `value`'s type.
+    /// pycc models it as a compile-time-evaluated builtin call intercepted
+    /// by bare callee name in `pycc_types` (the same way `isinstance` and
+    /// `issubclass` are), because its first argument is a *type* expression
+    /// rather than a value expression and so must not go through ordinary
+    /// argument inference. Registering the symbol here only makes
+    /// `from typing import cast` itself resolve instead of failing with
+    /// `C0002`; the bare name `cast` is never looked up through this
+    /// registry at a call site. Referencing it as a first-class value, or
+    /// calling it through its qualified name (`typing.cast(...)`), is
+    /// rejected by the type checker.
+    CastMarker,
 }
 
 /// A single registered stdlib symbol: which module it lives in, its source
@@ -191,6 +205,11 @@ const REGISTRY: &[StdSymbol] = &[
         module: StdModule::Typing,
         name: "Annotated",
         kind: StdSymbolKind::AnnotationMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "cast",
+        kind: StdSymbolKind::CastMarker,
     },
 ];
 
@@ -379,11 +398,19 @@ mod tests {
 
     #[test]
     fn resolve_symbol_finds_typing_annotated() {
-        let sym = resolve_symbol(StdModule::Typing, "Annotated")
-            .expect("typing.Annotated is registered");
+        let sym =
+            resolve_symbol(StdModule::Typing, "Annotated").expect("typing.Annotated is registered");
         assert_eq!(sym.module, StdModule::Typing);
         assert_eq!(sym.name, "Annotated");
         assert_eq!(sym.kind, StdSymbolKind::AnnotationMarker);
+    }
+
+    #[test]
+    fn resolve_symbol_finds_typing_cast() {
+        let sym = resolve_symbol(StdModule::Typing, "cast").expect("typing.cast is registered");
+        assert_eq!(sym.module, StdModule::Typing);
+        assert_eq!(sym.name, "cast");
+        assert_eq!(sym.kind, StdSymbolKind::CastMarker);
     }
 
     #[test]
@@ -501,5 +528,14 @@ mod tests {
         let annotation_sym2 = annotation_sym;
         assert_eq!(annotation_sym, annotation_sym2);
         assert!(format!("{annotation_sym:?}").contains("AnnotationMarker"));
+
+        let cast_sym = StdSymbol {
+            module: StdModule::Typing,
+            name: "cast",
+            kind: StdSymbolKind::CastMarker,
+        };
+        let cast_sym2 = cast_sym;
+        assert_eq!(cast_sym, cast_sym2);
+        assert!(format!("{cast_sym:?}").contains("CastMarker"));
     }
 }
