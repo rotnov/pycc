@@ -66,7 +66,17 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // sub-expression is not re-inspected here, mirroring every other
         // arm in this match, which classifies only the node's own
         // operation and relies on child expressions to guard themselves.
-        | MirExpr::OptionalWrap(_, _) => false,
+        | MirExpr::OptionalWrap(_, _)
+        // PEP 572 (#774): `target := value`. Storing an already-evaluated
+        // value into a predeclared slot is a plain store, exactly as
+        // infallible as `AttrGet`'s field load or `OptionalWrap`'s re-tag
+        // above -- it cannot itself allocate, divide, index, or otherwise
+        // fail. The wrapped `value` sub-expression is not re-inspected
+        // here either, matching this function's own "classify only this
+        // node's operation, let child expressions guard themselves" rule;
+        // `value`'s own guard (if any) is applied where `value` is itself
+        // evaluated, before this node's store ever runs.
+        | MirExpr::NamedExpr { .. } => false,
     }
 }
 

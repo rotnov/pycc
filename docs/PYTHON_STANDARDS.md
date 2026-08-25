@@ -287,7 +287,7 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [544](https://peps.python.org/pep-0544/) | `Protocol` — structural typing | typing | `pep_0544_protocol.py` | ◐ |
 | [570](https://peps.python.org/pep-0570/) | Positional-only params `/` | syntax | `pep_0570_pos_only.py` | ◐ |
-| [572](https://peps.python.org/pep-0572/) | Walrus `:=` | syntax | `py38/pep_0572_walrus.py` | ☐ |
+| [572](https://peps.python.org/pep-0572/) | Walrus `:=` | syntax | `pep_0572_walrus.py` | ☐ |
 | [586](https://peps.python.org/pep-0586/) | `Literal` | typing | `py38/pep_0586_literal.py` | ☐ |
 | [589](https://peps.python.org/pep-0589/) | `TypedDict` | typing | `py38/pep_0589_typeddict.py` | ☐ |
 | [591](https://peps.python.org/pep-0591/) | `Final` | typing | `pep_0591_final.py` | ◐ |

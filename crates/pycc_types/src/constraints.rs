@@ -914,6 +914,154 @@ pub(crate) fn collect_expr_constraints(
         // solver's own `MethodCall`/`AttrGet` arms already recurse past
         // (both return `Ok(None)` after recursing into `base`).
         HirExpr::Super => Ok(None),
+        // PEP 572 (#774), deep-review follow-up (round 4): `target :=
+        // value`. `name`'s own binding is registered by
+        // `bind_named_expr_targets`, a separate pre-pass `collect_block_
+        // constraints`'s own `If`/`While`/`ExprStmt` arms run over the whole
+        // test/expression *before* reaching this function -- this function
+        // takes `env: &ConstraintEnvironment`, immutable, since nearly every
+        // other arm here only ever recurses for constraints without
+        // touching bindings, so binding here directly is not possible
+        // without widening every call site to `&mut` for this one arm's
+        // sake. `value` is still recursed into here for its own constraint
+        // collection (re-deriving the same constraints `bind_named_expr_
+        // targets` already collected for it, exactly as `crate::
+        // collect_named_expr_bindings`'s own doc comment documents and
+        // accepts for the same reason in the full flow-sensitive checker),
+        // and its term is propagated as this expression's own overall term,
+        // since a walrus's value *is* the expression's value (mirroring
+        // `infer_expr_in`'s own `NamedExpr` arm exactly).
+        HirExpr::NamedExpr { name: _, value } => {
+            collect_expr_constraints(signatures, parents, concrete, binops, env, value)
+        }
+    }
+}
+
+/// PEP 572 (#774), deep-review follow-up (round 4): binds each walrus
+/// target's own inferred type into the solver's environment before the
+/// containing `If`/`While` test or bare `ExprStmt` is walked for
+/// unification by `collect_expr_constraints` above -- mirroring `crate::
+/// collect_named_expr_bindings`'s own pre-pass pattern in the full
+/// flow-sensitive checker exactly, including its documented tradeoff of
+/// recomputing `value`'s constraints rather than threading the term through
+/// from this pre-pass (see that function's own doc comment). Without this,
+/// a walrus target reaches `local_names` (via `collect_named_expr_names_in_
+/// expr`) but never gets a `bindings` entry, so a later read of that name
+/// wrongly fails `collect_expr_constraints`'s own `Name` arm's `unbound_
+/// local` check even though the walrus unconditionally executes whenever
+/// the statement containing it is reached.
+///
+/// Walked in the same left-to-right evaluation order as `collect_expr_
+/// constraints`'s own traversal, so a later sibling sub-expression that
+/// reads an earlier walrus-bound name (`(a := 1) + (b := a + 1)`) resolves
+/// correctly. Each target is bound as a *definite* binding -- not a
+/// maybe-binding -- mirroring the `Assign` arm above exactly (`defs_
+/// rebound.remove`, `maybe_bindings.remove`, `bindings.entry(name).or_
+/// insert(term)`): a walrus nested anywhere in an `if`/`while` test
+/// executes whenever the statement itself is reached, unlike a name
+/// assigned in only one branch of the `if`, which is bound separately by
+/// `collect_block_constraints`'s own branch-join logic, not by this walk.
+fn bind_named_expr_targets(
+    signatures: &HashMap<String, SignatureTerms>,
+    parents: &mut Vec<usize>,
+    concrete: &mut Vec<Option<Ty>>,
+    binops: &mut Vec<BinOpConstraint>,
+    env: &mut ConstraintEnvironment<'_, '_>,
+    expr: &HirExpr,
+) -> Result<(), Diagnostic> {
+    match expr {
+        HirExpr::NamedExpr { name, value } => {
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, value)?;
+            if let Some(term) =
+                collect_expr_constraints(signatures, parents, concrete, binops, env, value)?
+            {
+                env.defs_rebound.remove(name.as_str());
+                env.maybe_bindings.remove(name.as_str());
+                env.bindings.entry(name.clone()).or_insert(term);
+            }
+            Ok(())
+        }
+        HirExpr::IntLiteral(_)
+        | HirExpr::FloatLiteral(_)
+        | HirExpr::BoolLiteral(_)
+        | HirExpr::StringLiteral(_)
+        | HirExpr::NoneLiteral
+        | HirExpr::Name(_)
+        | HirExpr::ListPop { .. }
+        | HirExpr::Super => Ok(()),
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                bind_named_expr_targets(signatures, parents, concrete, binops, env, arg)?;
+            }
+            Ok(())
+        }
+        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, left)?;
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, right)
+        }
+        HirExpr::UnaryOp { operand, .. } => {
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, operand)
+        }
+        HirExpr::FString(parts) => {
+            for part in parts {
+                if let FStringPart::Interpolation(inner) = part {
+                    bind_named_expr_targets(signatures, parents, concrete, binops, env, inner)?;
+                }
+            }
+            Ok(())
+        }
+        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+            for e in es {
+                bind_named_expr_targets(signatures, parents, concrete, binops, env, e)?;
+            }
+            Ok(())
+        }
+        HirExpr::Subscript { base, index } => {
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, base)?;
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, index)
+        }
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, base)?;
+            for bound in [start, stop, step].into_iter().flatten() {
+                bind_named_expr_targets(signatures, parents, concrete, binops, env, bound)?;
+            }
+            Ok(())
+        }
+        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, value)
+        }
+        HirExpr::DictLiteral(pairs) => {
+            for (k, v) in pairs {
+                bind_named_expr_targets(signatures, parents, concrete, binops, env, k)?;
+                bind_named_expr_targets(signatures, parents, concrete, binops, env, v)?;
+            }
+            Ok(())
+        }
+        HirExpr::DictGetOrDefault { key, default, .. } => {
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, key)?;
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, default)
+        }
+        HirExpr::AttrGet { base, .. } => {
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, base)
+        }
+        HirExpr::MethodCall { base, args, .. } => {
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, base)?;
+            for arg in args {
+                bind_named_expr_targets(signatures, parents, concrete, binops, env, arg)?;
+            }
+            Ok(())
+        }
+        HirExpr::GenericClassInstantiate { args, .. } => {
+            for arg in args {
+                bind_named_expr_targets(signatures, parents, concrete, binops, env, arg)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -1068,6 +1216,17 @@ pub(crate) fn collect_block_constraints(
             // coverage of this gap is wanted later.
             HirStmt::AnnAssign { value: None, .. } => {}
             HirStmt::ExprStmt(expr) => {
+                // PEP 572 (#774), deep-review follow-up (round 4): bind
+                // before unifying -- see `bind_named_expr_targets`'s own
+                // doc comment for why this pre-pass is required.
+                bind_named_expr_targets(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    expr,
+                )?;
                 collect_expr_constraints(
                     signatures,
                     parents,
@@ -1078,6 +1237,19 @@ pub(crate) fn collect_block_constraints(
                 )?;
             }
             HirStmt::If { test, body, orelse } => {
+                // PEP 572 (#774), deep-review follow-up (round 4): bind
+                // before unifying -- the test always executes, so this
+                // binding is unconditional relative to the branch join
+                // below (mirroring `crate::collect_named_expr_bindings`'s
+                // own `If` arm ordering rationale in the full checker).
+                bind_named_expr_targets(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    test,
+                )?;
                 collect_expr_constraints(
                     signatures,
                     parents,
@@ -1117,6 +1289,17 @@ pub(crate) fn collect_block_constraints(
                 solver::join_if_branches_solver(env, &body_env, &orelse_env, &pre_existing);
             }
             HirStmt::While { test, body } => {
+                // PEP 572 (#774), deep-review follow-up (round 4): bind
+                // before unifying -- see the `If` arm's own doc comment
+                // just above for why this order is required.
+                bind_named_expr_targets(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    test,
+                )?;
                 collect_expr_constraints(
                     signatures,
                     parents,

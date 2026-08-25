@@ -59,7 +59,7 @@
             "name": "pycc status — what the Python AOT compiler can do today",
             "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete for v0.1 and what's planned next, and the CI evidence behind each claim.",
             "inLanguage": "en",
-            "dateModified": "2026-08-24",
+            "dateModified": "2026-08-25",
             "additionalProperty": [
               {
                 "@type": "PropertyValue",
@@ -397,7 +397,11 @@
               the call is a runtime no-op. The target must be a bare type name
               in this version — <code>int</code>, <code>float</code>,
               <code>bool</code>, <code>str</code>, or a class defined in the
-              same module.
+              same module. PEP 572 assignment expressions
+              (<code>:=</code>, the walrus operator) are also type-checked
+              now, in every position the grammar allows, though the row for
+              PEP 572 in the conformance matrix stays unchecked until CI
+              confirms it on all Tier-1 targets.
             </p>
             <p>
               The 100% line/region coverage gate and the required

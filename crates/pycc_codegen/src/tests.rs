@@ -7,8 +7,8 @@
 
 use super::*;
 use pycc_mir::{
-    BinOpKind, CmpOpKind, MirExceptHandler, MirExceptionValue, MirExpr, MirFStringPart, MirItem,
-    MirModule, MirStmt, Ty,
+    BinOpKind, CmpOpKind, InstantiateExpr, MirExceptHandler, MirExceptionValue, MirExpr,
+    MirFStringPart, MirItem, MirModule, MirStmt, Ty,
 };
 use std::process::Command;
 
@@ -1604,6 +1604,159 @@ fn reading_a_none_typed_parameter_slot_emits_its_unit_carrier() {
     // `tests/issue_167_none_carrier_abi.rs`, which observes the carrier's
     // truthiness rather than relying on `Ty::None`'s always-"None" print
     // rendering.
+    let _ = value;
+}
+
+#[test]
+fn a_walrus_in_an_if_test_predeclares_its_storage_slot_and_runs() {
+    // PEP 572 (#774): `if (n := 5): print(n)` -- exercises
+    // `collect_expr_bindings`'s call sites from `collect_stmt_bindings`'s
+    // `MirStmt::If` arm (`test` predeclaration), including its own
+    // `matches!` allow-list check and `bindings.entry(..).or_insert(..)`
+    // insertion for a supported type (`Ty::Int`). Without this
+    // predeclaration `emit_assign`'s `locals.get(target).expect(..)`
+    // would panic the first time the `MirExpr::NamedExpr` codegen arm
+    // tries to store into "n"'s slot, so a successful `compile_to_object`
+    // plus a correct run both demonstrate the predeclaration happened.
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::If {
+            test: MirExpr::NamedExpr {
+                name: "n".to_string(),
+                value: Box::new(MirExpr::IntLiteral(5)),
+                ty: Ty::Int,
+            },
+            body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::Name {
+                    name: "n".to_string(),
+                    ty: Ty::Int,
+                }],
+                ty: Ty::None,
+            })],
+            orelse: vec![],
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("walrus_in_if_test");
+    let obj_path = dir.join("walrus_in_if_test.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("walrus_in_if_test");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"5\n");
+}
+
+#[test]
+fn a_walrus_with_an_optional_int_value_and_a_repeated_target_name_predeclare_correctly() {
+    // `collect_expr_bindings`'s (#774) two remaining untested branches:
+    // the `Ty::Optional(_)` arm of its `matches!` allow-list (the sibling
+    // test above only ever exercises `Ty::Int`), and the
+    // `bindings.entry(name).or_insert(ty)` "already present" skip path for
+    // a second walrus target reusing an earlier walrus's own name within
+    // the same expression tree (`m`, bound twice below).
+    let mir = MirModule {
+        items: vec![
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::NamedExpr {
+                name: "n".to_string(),
+                value: Box::new(MirExpr::OptionalWrap(
+                    Box::new(MirExpr::IntLiteral(5)),
+                    Box::new(Ty::Int),
+                )),
+                ty: optional_int(),
+            })),
+            MirItem::TopLevelStmt(print_expr(MirExpr::Compare {
+                op: pycc_mir::CmpOpKind::IsNot,
+                left: Box::new(MirExpr::Name {
+                    name: "n".to_string(),
+                    ty: optional_int(),
+                }),
+                right: Box::new(MirExpr::NoneLiteral),
+                ty: Ty::Bool,
+            })),
+            MirItem::TopLevelStmt(print_expr(MirExpr::Compare {
+                op: pycc_mir::CmpOpKind::Lt,
+                left: Box::new(MirExpr::NamedExpr {
+                    name: "m".to_string(),
+                    value: Box::new(MirExpr::IntLiteral(1)),
+                    ty: Ty::Int,
+                }),
+                right: Box::new(MirExpr::NamedExpr {
+                    name: "m".to_string(),
+                    value: Box::new(MirExpr::IntLiteral(2)),
+                    ty: Ty::Int,
+                }),
+                ty: Ty::Bool,
+            })),
+            MirItem::TopLevelStmt(print_expr(MirExpr::Name {
+                name: "m".to_string(),
+                ty: Ty::Int,
+            })),
+        ],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("walrus_optional_and_repeated_name");
+    let obj_path = dir.join("walrus_optional_and_repeated_name.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("walrus_optional_and_repeated_name");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"True\nTrue\n2\n");
+}
+
+#[test]
+fn emit_expr_evaluates_a_named_expr_stores_it_and_reads_it_back() {
+    // PEP 572 (#774): `MirExpr::NamedExpr { name, value, ty }` -- calls
+    // `emit_expr` directly to isolate the walrus arm inside
+    // `emit_expr_unchecked`. `pycc_mir`'s `collect_named_expr_bindings`
+    // (exercised separately in `pycc_mir`'s own tests) is what
+    // predeclares the target's storage slot for real source programs;
+    // here that predeclaration is done by hand, mirroring
+    // `emit_assign`'s own documented contract that the target slot
+    // must already exist in `locals` before it is called.
+    let context = Context::create();
+    let module = context.create_module("test");
+    let builder = context.create_builder();
+    let rt = declare_rt_functions(&context, &module);
+    let fn_type = context.void_type().fn_type(&[], false);
+    let f = module.add_function("f", fn_type, None);
+    let block = context.append_basic_block(f, "entry");
+    let exception_target = context.append_basic_block(f, "exception");
+    builder.position_at_end(block);
+    rt.exceptions.targets.borrow_mut().push(exception_target);
+
+    let user_functions: HashMap<&str, UserFunction> = HashMap::new();
+    let mut locals = HashMap::new();
+    let ptr = builder
+        .build_alloca(context.i64_type(), "n")
+        .expect("build_alloca should not fail for a fresh block");
+    locals.insert(
+        "n".to_string(),
+        StorageSlot {
+            ptr,
+            ty: Ty::Int,
+            initialized: None,
+        },
+    );
+
+    let value = emit_expr(
+        &context,
+        &builder,
+        &module,
+        &rt,
+        &user_functions,
+        &locals,
+        &MirExpr::NamedExpr {
+            name: "n".to_string(),
+            value: Box::new(MirExpr::IntLiteral(5)),
+            ty: Ty::Int,
+        },
+    );
+    // Reaching this point proves both the store into the predeclared
+    // slot and the read-back through the synthetic `Name` round-trip
+    // were emitted without panicking; the walrus's actual value
+    // (5) is verified end-to-end by the source-level conformance
+    // fixtures under `tests/`, which are outside this in-process
+    // coverage measurement.
     let _ = value;
 }
 
@@ -3416,6 +3569,119 @@ fn to_float_rejects_a_dict_operand() {
 }
 
 #[test]
+fn collect_expr_bindings_skips_a_walrus_target_whose_type_is_outside_the_allow_list() {
+    // `collect_expr_bindings`'s `matches!` allow-list (#774) mirrors
+    // `collect_stmt_bindings`'s own `MirStmt::Assign` arm allow-list, and
+    // its doc comment explains that every `ty` reaching it in practice is
+    // expected to already satisfy T0050's stricter upstream restriction
+    // (`pycc_types::expr::is_walrus_value_ty_supported` only ever lets a
+    // walrus value be `Int`/`Float`/`Bool`/`None`, or `Optional` of one of
+    // those) -- so the `false` (skip) branch is not reachable through any
+    // real, `check_source`-accepted program, only defensively present "if
+    // that restriction ever changes." `Ty::Protocol` is one such
+    // currently-unreachable-in-practice type this function's allow-list
+    // does not include; calling `collect_expr_bindings` directly with a
+    // hand-built `MirExpr::NamedExpr` typed `Protocol` (bypassing
+    // `pycc_types`/`pycc_hir` validation entirely, the same pattern this
+    // workspace already uses for `pycc_types`'s own similarly-defensive
+    // `Ty::Optional(Ty::Str)` walrus fixture) reaches this branch directly
+    // and confirms the binding is skipped rather than inserted.
+    let expr = MirExpr::NamedExpr {
+        name: "p".to_string(),
+        value: Box::new(MirExpr::Name {
+            name: "p_src".to_string(),
+            ty: Ty::Protocol(Box::new("Comparable".to_string())),
+        }),
+        ty: Ty::Protocol(Box::new("Comparable".to_string())),
+    };
+    let mut bindings = BTreeMap::new();
+    collect_expr_bindings(&expr, &mut bindings);
+    assert!(
+        bindings.is_empty(),
+        "a walrus target typed outside the allow-list must not be predeclared: {bindings:?}"
+    );
+}
+
+// PEP 572 (#774): `pycc_mir::MirExpr::collect_named_expr_bindings` is a
+// shared function statically linked into both `pycc_mir`'s own test binary
+// and this crate's -- each links its own separate compiled copy, so this
+// crate's test binary needs its own direct exercise of every recursive arm
+// independent of `pycc_mir`'s own tests for the same method (see that
+// crate's `collect_named_expr_bindings_walks_into_*` tests for the
+// counterpart coverage in its own binary). These four tests mirror the
+// `IntBoundary`/`ListLiteral`/`SetLiteral`/`Slice`/`Instantiate` arms this
+// crate's `collect_expr_bindings` recurses through via that shared method.
+#[test]
+fn collect_expr_bindings_walks_into_an_int_boundary() {
+    let expr = MirExpr::IntBoundary(Box::new(MirExpr::NamedExpr {
+        name: "z".to_string(),
+        value: Box::new(MirExpr::IntLiteral(1)),
+        ty: Ty::Int,
+    }));
+    let mut bindings = BTreeMap::new();
+    collect_expr_bindings(&expr, &mut bindings);
+    assert_eq!(bindings.get("z"), Some(&Ty::Int));
+}
+
+#[test]
+fn collect_expr_bindings_walks_into_a_list_and_set_literal_element() {
+    let list_expr = MirExpr::ListLiteral(vec![MirExpr::NamedExpr {
+        name: "l".to_string(),
+        value: Box::new(MirExpr::IntLiteral(1)),
+        ty: Ty::Int,
+    }]);
+    let mut bindings = BTreeMap::new();
+    collect_expr_bindings(&list_expr, &mut bindings);
+    assert_eq!(bindings.get("l"), Some(&Ty::Int));
+
+    let set_expr = MirExpr::SetLiteral(vec![MirExpr::NamedExpr {
+        name: "s".to_string(),
+        value: Box::new(MirExpr::IntLiteral(1)),
+        ty: Ty::Int,
+    }]);
+    let mut bindings = BTreeMap::new();
+    collect_expr_bindings(&set_expr, &mut bindings);
+    assert_eq!(bindings.get("s"), Some(&Ty::Int));
+}
+
+#[test]
+fn collect_expr_bindings_walks_into_a_slice_bound() {
+    let expr = MirExpr::Slice {
+        base: Box::new(MirExpr::Name {
+            name: "lst".to_string(),
+            ty: Ty::List(Box::new(Ty::Int)),
+        }),
+        start: Some(Box::new(MirExpr::NamedExpr {
+            name: "b".to_string(),
+            value: Box::new(MirExpr::IntLiteral(0)),
+            ty: Ty::Int,
+        })),
+        stop: None,
+        step: None,
+    };
+    let mut bindings = BTreeMap::new();
+    collect_expr_bindings(&expr, &mut bindings);
+    assert_eq!(bindings.get("b"), Some(&Ty::Int));
+}
+
+#[test]
+fn collect_expr_bindings_walks_into_an_instantiate_arg() {
+    let expr = MirExpr::Instantiate(Box::new(InstantiateExpr {
+        ctor: "C.__init__".to_string(),
+        attr_count: 1,
+        args: vec![MirExpr::NamedExpr {
+            name: "a".to_string(),
+            value: Box::new(MirExpr::IntLiteral(1)),
+            ty: Ty::Int,
+        }],
+        ty: Ty::Instance(Box::new("C".to_string())),
+    }));
+    let mut bindings = BTreeMap::new();
+    collect_expr_bindings(&expr, &mut bindings);
+    assert_eq!(bindings.get("a"), Some(&Ty::Int));
+}
+
+#[test]
 fn collect_stmt_bindings_includes_a_list_typed_assignment_target() {
     // Task 5 (D-089) added `Ty::List(_)` to this allow-list -- Task 11
     // depends on a `list[int]` local's binding already being collected
@@ -3792,7 +4058,7 @@ fn assigning_a_list_value_stores_the_raw_pointer() {
     let ptr = builder
         .build_alloca(context.ptr_type(inkwell::AddressSpace::default()), "xs")
         .expect("build_alloca should not fail for a fresh block");
-    let mut locals = HashMap::from([(
+    let locals = HashMap::from([(
         "xs".to_string(),
         StorageSlot {
             ptr,
@@ -3808,7 +4074,7 @@ fn assigning_a_list_value_stores_the_raw_pointer() {
         &context,
         &builder,
         &rt,
-        &mut locals,
+        &locals,
         "xs",
         Scalar::List(value),
     );

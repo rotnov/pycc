@@ -26,6 +26,8 @@ use pycc_hir::BinOpKind;
 use pycc_hir::CmpOpKind;
 #[cfg(test)]
 use pycc_hir::PropertyDef;
+#[cfg(test)]
+use pycc_hir::UnaryOpKind;
 pub use pycc_hir::Ty;
 use pycc_hir::{
     CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirMatchCase, HirModule, HirPattern,
@@ -489,6 +491,91 @@ fn function_local_names<'a>(params: &'a [(String, Ty)], body: &'a [HirStmt]) -> 
     names
 }
 
+/// PEP 572 (#774): walks `expr` for every `HirExpr::NamedExpr { name, .. }`
+/// node at any depth and pushes each `name` into `names` (skipping one
+/// already recorded, mirroring every other arm in `collect_local_names`
+/// below). A walrus target binds into the *enclosing function scope*
+/// (`lower_stmt`'s own placement restriction limits where a `NamedExpr` can
+/// appear to an `if`/`while` test or a bare expression statement -- never
+/// inside a nested function/comprehension scope), so this walk does not need
+/// to worry about crossing a scope boundary the way a general free-variable
+/// analysis would.
+fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mut Vec<&'a str>) {
+    match expr {
+        HirExpr::NamedExpr { name, value } => {
+            collect_named_expr_names_in_expr(value, names);
+            if !is_local(names, name) {
+                names.push(name);
+            }
+        }
+        HirExpr::IntLiteral(_)
+        | HirExpr::FloatLiteral(_)
+        | HirExpr::BoolLiteral(_)
+        | HirExpr::StringLiteral(_)
+        | HirExpr::NoneLiteral
+        | HirExpr::Name(_)
+        | HirExpr::ListPop { .. }
+        | HirExpr::Super => {}
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_named_expr_names_in_expr(arg, names);
+            }
+        }
+        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+            collect_named_expr_names_in_expr(left, names);
+            collect_named_expr_names_in_expr(right, names);
+        }
+        HirExpr::UnaryOp { operand, .. } => collect_named_expr_names_in_expr(operand, names),
+        HirExpr::FString(parts) => {
+            for part in parts {
+                if let FStringPart::Interpolation(inner) = part {
+                    collect_named_expr_names_in_expr(inner, names);
+                }
+            }
+        }
+        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+            for e in es {
+                collect_named_expr_names_in_expr(e, names);
+            }
+        }
+        HirExpr::Subscript { base, index } => {
+            collect_named_expr_names_in_expr(base, names);
+            collect_named_expr_names_in_expr(index, names);
+        }
+        HirExpr::Slice { base, start, stop, step } => {
+            collect_named_expr_names_in_expr(base, names);
+            for bound in [start, stop, step].into_iter().flatten() {
+                collect_named_expr_names_in_expr(bound, names);
+            }
+        }
+        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+            collect_named_expr_names_in_expr(value, names);
+        }
+        HirExpr::DictLiteral(pairs) => {
+            for (k, v) in pairs {
+                collect_named_expr_names_in_expr(k, names);
+                collect_named_expr_names_in_expr(v, names);
+            }
+        }
+        HirExpr::DictGetOrDefault { key, default, .. } => {
+            collect_named_expr_names_in_expr(key, names);
+            collect_named_expr_names_in_expr(default, names);
+        }
+        HirExpr::AttrGet { base, .. } => collect_named_expr_names_in_expr(base, names),
+        HirExpr::MethodCall { base, args, .. } => {
+            collect_named_expr_names_in_expr(base, names);
+            for arg in args {
+                collect_named_expr_names_in_expr(arg, names);
+            }
+        }
+        HirExpr::GenericClassInstantiate { args, .. } => {
+            for arg in args {
+                collect_named_expr_names_in_expr(arg, names);
+            }
+        }
+    }
+}
+
 fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
     for stmt in body {
         match stmt {
@@ -502,11 +589,15 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
                     names.push(target);
                 }
             }
-            HirStmt::If { body, orelse, .. } => {
+            HirStmt::If { test, body, orelse } => {
+                collect_named_expr_names_in_expr(test, names);
                 collect_local_names(body, names);
                 collect_local_names(orelse, names);
             }
-            HirStmt::While { body, .. } => collect_local_names(body, names),
+            HirStmt::While { test, body } => {
+                collect_named_expr_names_in_expr(test, names);
+                collect_local_names(body, names);
+            }
             HirStmt::ForRange { var, body, .. } => {
                 if !is_local(names, var) {
                     names.push(var);
@@ -542,8 +633,8 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
             // `base.attr = value` (D-154) is the same shape: it mutates an
             // existing instance's attribute slot, never binds a new local
             // name.
-            HirStmt::ExprStmt(_)
-            | HirStmt::Return(_)
+            HirStmt::ExprStmt(expr) => collect_named_expr_names_in_expr(expr, names),
+            HirStmt::Return(_)
             | HirStmt::DictSet { .. }
             | HirStmt::AttrSet { .. }
             | HirStmt::Raise { .. } => {}
@@ -662,6 +753,7 @@ fn bind_local_types_in_body(env: &mut Environment, local_names: &[&str], body: &
 fn bind_local_types_in_stmt(env: &mut Environment, local_names: &[&str], stmt: &HirStmt) {
     match stmt {
         HirStmt::Assign { target, value } => {
+            bind_named_expr_types_in_expr(env, local_names, value);
             if let Ok(ty) = infer_expr_in(env, local_names, value) {
                 env.bind(target.clone(), ty);
             }
@@ -673,6 +765,7 @@ fn bind_local_types_in_stmt(env: &mut Environment, local_names: &[&str], stmt: &
             ..
         } => {
             if let Some(val) = value {
+                bind_named_expr_types_in_expr(env, local_names, val);
                 if let Ok(ty) = infer_expr_in(env, local_names, val) {
                     env.bind(target.clone(), ty);
                 }
@@ -680,11 +773,18 @@ fn bind_local_types_in_stmt(env: &mut Environment, local_names: &[&str], stmt: &
                 env.bind(target.clone(), annotation.clone());
             }
         }
-        HirStmt::If { body, orelse, .. } => {
+        // PEP 572 (#774): `test` can itself contain a walrus target
+        // (`if (n := f()):`), and this pass -- unlike `bind_local_types_in_body`'s
+        // own recursion into `body`/`orelse` -- has no other point where
+        // `test` is visited at all, so a walrus bound only in `test` was
+        // never pre-bound here without this call.
+        HirStmt::If { test, body, orelse } => {
+            bind_named_expr_types_in_expr(env, local_names, test);
             bind_local_types_in_body(env, local_names, body);
             bind_local_types_in_body(env, local_names, orelse);
         }
-        HirStmt::While { body, .. } => {
+        HirStmt::While { test, body } => {
+            bind_named_expr_types_in_expr(env, local_names, test);
             bind_local_types_in_body(env, local_names, body);
         }
         HirStmt::ForRange { var, body, .. } => {
@@ -697,8 +797,28 @@ fn bind_local_types_in_stmt(env: &mut Environment, local_names: &[&str], stmt: &
             }
             bind_local_types_in_body(env, local_names, body);
         }
+        // PEP 572 (#774): a bare expression statement is the other
+        // placement `violates_walrus_placement` permits a walrus in
+        // (`n := f()` on its own line) -- without a dedicated arm this fell
+        // into the catch-all below and its walrus target was never
+        // pre-bound.
+        HirStmt::ExprStmt(expr) => bind_named_expr_types_in_expr(env, local_names, expr),
         _ => {}
     }
+}
+
+/// Best-effort counterpart to a dedicated walk: reuses the already-exhaustive
+/// `collect_named_expr_bindings` (below) to find and bind every
+/// `HirExpr::NamedExpr` reachable from `expr` at any depth, exactly as
+/// `bind_local_types_in_stmt`'s `Assign`/`AnnAssign` arms already bind their
+/// own targets. Its `Result` is discarded rather than propagated, matching
+/// every other binding attempt in this pass -- this walk only grows `env`
+/// for later resolution, it never validates, and `collect_named_expr_bindings`
+/// itself still binds every target it reaches before returning any error
+/// for a *later* sibling, so a discarded `Err` does not lose an earlier
+/// successful binding.
+fn bind_named_expr_types_in_expr(env: &mut Environment, local_names: &[&str], expr: &HirExpr) {
+    let _ = collect_named_expr_bindings(env, local_names, expr);
 }
 
 fn is_assignable(from: Ty, to: Ty) -> bool {
@@ -876,6 +996,109 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
     }
     env.bind(target.to_string(), ty);
     Ok(())
+}
+
+/// PEP 572 (#774): walks `expr` for every `HirExpr::NamedExpr { name, value }`
+/// node (an `if`/`while` test or a bare expression statement -- the only
+/// placements `pycc_hir::stmt::lower_stmt`'s own placement restriction
+/// allows a `NamedExpr` to survive lowering in) and binds each `name` into
+/// `env` via [`check_assignment`], exactly as `HirStmt::Assign`'s own arm
+/// does for an ordinary `target = value` assignment.
+///
+/// Walked in the expression's own left-to-right evaluation order, and each
+/// binding is applied immediately (not batched) -- so a later sibling
+/// sub-expression that reads an earlier walrus-bound name (e.g. `(a := 1) +
+/// (b := a + 1)`) resolves correctly. `value`'s type is re-derived here via
+/// `infer_expr_in` rather than threaded through from the walk that already
+/// validated it (this statement's own `infer_expr`/`infer_expr_in` call,
+/// made by the caller just before this one runs) -- `value` has no side
+/// effects of its own beyond further nested walrus bindings, which this
+/// same recursive walk also applies, so recomputing its type is
+/// behavior-preserving, just not the cheapest possible implementation.
+fn collect_named_expr_bindings(
+    env: &mut Environment,
+    local_names: &[&str],
+    expr: &HirExpr,
+) -> Result<(), Diagnostic> {
+    match expr {
+        HirExpr::NamedExpr { name, value } => {
+            collect_named_expr_bindings(env, local_names, value)?;
+            let ty = infer_expr_in(env, local_names, value)?;
+            check_assignment(env, name, ty)
+        }
+        HirExpr::IntLiteral(_)
+        | HirExpr::FloatLiteral(_)
+        | HirExpr::BoolLiteral(_)
+        | HirExpr::StringLiteral(_)
+        | HirExpr::NoneLiteral
+        | HirExpr::Name(_)
+        | HirExpr::ListPop { .. }
+        | HirExpr::Super => Ok(()),
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_named_expr_bindings(env, local_names, arg)?;
+            }
+            Ok(())
+        }
+        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+            collect_named_expr_bindings(env, local_names, left)?;
+            collect_named_expr_bindings(env, local_names, right)
+        }
+        HirExpr::UnaryOp { operand, .. } => collect_named_expr_bindings(env, local_names, operand),
+        HirExpr::FString(parts) => {
+            for part in parts {
+                if let FStringPart::Interpolation(inner) = part {
+                    collect_named_expr_bindings(env, local_names, inner)?;
+                }
+            }
+            Ok(())
+        }
+        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+            for e in es {
+                collect_named_expr_bindings(env, local_names, e)?;
+            }
+            Ok(())
+        }
+        HirExpr::Subscript { base, index } => {
+            collect_named_expr_bindings(env, local_names, base)?;
+            collect_named_expr_bindings(env, local_names, index)
+        }
+        HirExpr::Slice { base, start, stop, step } => {
+            collect_named_expr_bindings(env, local_names, base)?;
+            for bound in [start, stop, step].into_iter().flatten() {
+                collect_named_expr_bindings(env, local_names, bound)?;
+            }
+            Ok(())
+        }
+        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+            collect_named_expr_bindings(env, local_names, value)
+        }
+        HirExpr::DictLiteral(pairs) => {
+            for (k, v) in pairs {
+                collect_named_expr_bindings(env, local_names, k)?;
+                collect_named_expr_bindings(env, local_names, v)?;
+            }
+            Ok(())
+        }
+        HirExpr::DictGetOrDefault { key, default, .. } => {
+            collect_named_expr_bindings(env, local_names, key)?;
+            collect_named_expr_bindings(env, local_names, default)
+        }
+        HirExpr::AttrGet { base, .. } => collect_named_expr_bindings(env, local_names, base),
+        HirExpr::MethodCall { base, args, .. } => {
+            collect_named_expr_bindings(env, local_names, base)?;
+            for arg in args {
+                collect_named_expr_bindings(env, local_names, arg)?;
+            }
+            Ok(())
+        }
+        HirExpr::GenericClassInstantiate { args, .. } => {
+            for arg in args {
+                collect_named_expr_bindings(env, local_names, arg)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Resolves a comprehension's iterable (`pycc_hir::CompIter`) to the loop
@@ -1539,8 +1762,33 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             }
             Ok(())
         }
-        HirStmt::ExprStmt(expr) => infer_expr(env, expr).map(|_| ()),
+        HirStmt::ExprStmt(expr) => {
+            // PEP 572 (#774): bind any walrus target the expression
+            // introduces (`x := value`) *before* the full `infer_expr`
+            // validation pass below -- a walrus value can itself reference
+            // an earlier walrus bound within the very same expression
+            // (`(a := 1) + (b := a + 1)`), and `infer_expr`'s own read-only
+            // walk never binds anything, so `b`'s value would otherwise see
+            // `a` as never bound. `collect_named_expr_bindings` performs its
+            // own `infer_expr_in` call on each walrus's `value` as it binds
+            // it (in the expression's true left-to-right evaluation order),
+            // so by the time the full-expression `infer_expr` call below
+            // runs, every walrus name it may reference is already bound;
+            // `infer_expr` still does the real work of enforcing T0050 on
+            // each `NamedExpr` node and type-checking the expression as a
+            // whole (a nested walrus's own `check_assignment` inside this
+            // first pass can also fail, e.g. T0045/T0023, which aborts
+            // before `infer_expr` ever runs -- fine, since either error
+            // aborts the same statement).
+            collect_named_expr_bindings(env, &[], expr)?;
+            infer_expr(env, expr).map(|_| ())
+        }
         HirStmt::If { test, body, orelse } => {
+            // PEP 572 (#774): bind before validating, mirroring the
+            // `ExprStmt` arm's own ordering rationale above -- the test
+            // always executes, so this binding is unconditional relative to
+            // the branch join below.
+            collect_named_expr_bindings(env, &[], test)?;
             infer_expr(env, test)?; // any type is accepted as truthy for v0.1 -- Python's own truthiness has no static type restriction
             // Issue #118 Part 1: check each branch in an independent clone of
             // env, then join the results. A no-else `if` makes all body-only
@@ -1564,6 +1812,9 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             }
         }
         HirStmt::While { test, body } => {
+            // PEP 572 (#774): bind before validating -- see the `ExprStmt`
+            // arm's doc comment above for why this order is required.
+            collect_named_expr_bindings(env, &[], test)?;
             infer_expr(env, test)?;
             // Issue #118 Part 1: the loop body may execute zero times, so
             // every body-only binding joins back as `Maybe`.
@@ -2131,6 +2382,15 @@ fn check_stmt_in_function(
             Ok(())
         }
         HirStmt::If { test, body, orelse } => {
+            // PEP 572 (#774): bind before validating -- see the module-scope
+            // `check_stmt`'s `ExprStmt` arm's doc comment for why a walrus
+            // value that references an earlier walrus in the same
+            // expression (`(a := 1) + (b := a + 1)`) requires the binding
+            // pass to run before the full-expression `infer_expr_in` check.
+            // `collect_local_names` (Step 1) already added the name to
+            // `local_names`. The test always executes, so this binding is
+            // unconditional relative to the branch join below.
+            collect_named_expr_bindings(env, local_names, test)?;
             infer_expr_in(env, local_names, test)?;
             // Issue #118 Part 1: check each branch in an independent clone of
             // env, then join the results. A no-else `if` makes all body-only
@@ -2158,6 +2418,9 @@ fn check_stmt_in_function(
             }
         }
         HirStmt::While { test, body } => {
+            // PEP 572 (#774): bind before validating, mirroring the `If`
+            // arm just above.
+            collect_named_expr_bindings(env, local_names, test)?;
             infer_expr_in(env, local_names, test)?;
             // Issue #118 Part 1: the loop body may execute zero times, so
             // every body-only binding joins back as `Maybe`.
@@ -2398,7 +2661,12 @@ fn check_stmt_in_function(
             }
             Ok(())
         }
-        HirStmt::ExprStmt(expr) => infer_expr_in(env, local_names, expr).map(|_| ()),
+        HirStmt::ExprStmt(expr) => {
+            // PEP 572 (#774): bind before validating, mirroring the
+            // module-scope `check_stmt`'s `ExprStmt` arm's doc comment.
+            collect_named_expr_bindings(env, local_names, expr)?;
+            infer_expr_in(env, local_names, expr).map(|_| ())
+        }
         HirStmt::DictSet { dict, key, value } => check_dict_set(env, local_names, dict, key, value),
         HirStmt::AttrSet { base, attr, value } => {
             class::check_attr_set(env, local_names, base, attr, value)
@@ -2808,6 +3076,11 @@ fn reject_generic_calls_in_expr(
                 reject_generic_calls_in_expr(module_env, own_name, arg)?;
             }
             Ok(())
+        }
+        // PEP 572 (#774): `target := value` — recurse into `value` only,
+        // mirroring `AttrGet`'s own single-sub-expression shape just above.
+        HirExpr::NamedExpr { name: _, value } => {
+            reject_generic_calls_in_expr(module_env, own_name, value)
         }
         HirExpr::IntLiteral(_)
         | HirExpr::FloatLiteral(_)

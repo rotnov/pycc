@@ -707,6 +707,34 @@ def g(x: int | None) -> None:  # OK -- Optional[int]
 ",
     },
     DiagnosticExplanation {
+        code: "T0050",
+        severity: Severity::Error,
+        summary: "walrus assignment (`:=`) value type is not supported yet (PEP 572)",
+        explanation: "\
+T0050 fires when a walrus assignment expression's (`target := value`, PEP \
+572, issue #774) `value` operand does not have one of the non-reference-\
+counted scalar types this compiler version supports for a walrus value: \
+`int`, `float`, `bool`, `None`, or `Optional` of those. Codegen's \
+`MirExpr::NamedExpr` yields the value it just stored by re-reading the \
+slot, exactly like a plain `Name` read, but that read's refcount contract \
+(\"the yielded value borrows the slot's reference\") is only worked out for \
+`Ty::Int` so far; a reference-counted type such as `str`, `list`, `dict`, \
+`set`, `tuple`, or a class instance would need the same duplicate-\
+reference handling plain reads of those types already carry, and skipping \
+it would silently reproduce the exact D-154 Part 1 use-after-free class \
+already fixed once. This is a versioned capability gap, not a rejected-by-\
+design language rule: CPython allows a walrus value of any type. A future \
+compiler version extends walrus-value support to the remaining \
+reference-counted types once their `MirExpr::NamedExpr` refcount \
+contract is worked out.",
+        example: "\
+(n := \"hi\")  # T0050 -- str is not yet a supported walrus value
+
+if (n := 5) > 0:  # OK -- int is a supported walrus value
+    print(n)
+",
+    },
+    DiagnosticExplanation {
         code: "O0201",
         severity: Severity::Error,
         summary: "value used after move across scope boundary",

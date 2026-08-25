@@ -481,6 +481,30 @@ pub enum HirExpr {
     /// the next class after the current one in the MRO (D-006's static-
     /// dispatch framing — no vtable, no runtime dispatch, per the #433 ADR).
     Super,
+    /// `target := value` (PEP 572, #774): the walrus assignment expression.
+    /// CPython's own grammar restricts `target` to a single bare identifier
+    /// (`Expr::Named`'s target is never a tuple/attribute/subscript, unlike
+    /// `Stmt::Assign`'s multi-shape target) -- `lower_expr`'s own
+    /// `Expr::Named` arm enforces that restriction defensively even though
+    /// no real parse should ever violate it. Evaluating this expression
+    /// binds `name` in the *enclosing function or module scope* (PEP 572's
+    /// headline scoping rule -- a walrus never creates its own scope, and
+    /// even skips a comprehension's scope, unlike a `for`-target) to
+    /// `value`'s own value, and the expression's own result is that same
+    /// value -- mirroring an assignment statement's binding side effect
+    /// while still yielding a value the way every other `HirExpr` does.
+    /// `pycc_types::infer_expr_in`'s own `NamedExpr` arm reports `value`'s
+    /// inferred type as this expression's type; the actual binding into the
+    /// enclosing scope's `Environment` happens one level up, at the
+    /// statement boundary (`pycc_types::collect_named_expr_bindings`),
+    /// because `infer_expr_in` itself only ever holds a shared `&Environment`
+    /// reference. Comprehension-embedded walrus scoping (binding into the
+    /// scope *outside* the comprehension) is out of scope for #774 -- see
+    /// that issue's own scope-cut note and the corresponding manifest entry.
+    NamedExpr {
+        name: String,
+        value: Box<HirExpr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

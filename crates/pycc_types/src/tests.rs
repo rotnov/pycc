@@ -46,6 +46,74 @@ fn bare_super_in_check_returns_c0001() {
     assert_eq!(err.code, "C0001");
 }
 
+// PEP 572 (#774): `function_local_names`'s own `collect_named_expr_names_in_
+// expr` walk records a walrus target as a function-local name wherever it is
+// nested -- including inside a unary operand and a slice bound, which no
+// other test in this suite reaches (every other walrus fixture is
+// module-level, never inside a `HirItem::Function` body). Hand-built HIR,
+// bypassing the parser, to pin the exact nesting shape.
+#[test]
+fn a_walrus_inside_a_unary_operand_in_a_function_body_is_a_local_name() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::If {
+                    test: HirExpr::Compare {
+                        op: CmpOpKind::Lt,
+                        left: Box::new(HirExpr::UnaryOp {
+                            op: UnaryOpKind::USub,
+                            operand: Box::new(HirExpr::NamedExpr {
+                                name: "n".to_string(),
+                                value: Box::new(HirExpr::IntLiteral(3)),
+                            }),
+                        }),
+                        right: Box::new(HirExpr::IntLiteral(0)),
+                    },
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("n".to_string())))],
+                    orelse: vec![],
+                },
+                HirStmt::Return(Some(HirExpr::IntLiteral(0))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_ok(), "{:?}", check(&hir));
+}
+
+#[test]
+fn a_walrus_inside_a_slice_bound_in_a_function_body_is_a_local_name() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "g".to_string(),
+            params: vec![("lst".to_string(), Ty::List(Box::new(Ty::Int)))],
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::ExprStmt(HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("lst".to_string())),
+                    start: Some(Box::new(HirExpr::NamedExpr {
+                        name: "m".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(0)),
+                    })),
+                    stop: None,
+                    step: None,
+                }),
+                HirStmt::Return(Some(HirExpr::Name("m".to_string()))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_ok(), "{:?}", check(&hir));
+}
+
 #[test]
 fn concrete_signatures_take_the_validation_only_fast_path() {
     let hir = HirModule {
@@ -21887,6 +21955,24 @@ fn protocol_typed_parameter_with_expr_stmt_triggers_monomorphization() {
 }
 
 #[test]
+fn protocol_typed_parameter_wrapped_in_a_walrus_triggers_monomorphization() {
+    // PEP 572 (#774), deep-review follow-up: `rewrite_protocol_calls_in_expr`
+    // is a non-exhaustive recursion (a trailing `_ => {}` catch-all) over
+    // only the shapes a protocol-typed call can appear inside. Without a
+    // dedicated `HirExpr::NamedExpr` arm, `(x := proto_fn(c))` fell into
+    // that catch-all: the call site was never rewritten to its
+    // specialization, while `monomorphize_protocol_params` unconditionally
+    // drops the original `proto_fn` item regardless, leaving a dangling
+    // call to a function no longer in the module. Also reads `x` on the
+    // next line, exercising `bind_local_types_in_stmt`'s `ExprStmt` arm
+    // pre-binding the walrus target for this same pass.
+    let result = check_source(
+        "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef proto_fn(p: P) -> int:\n    return p.foo()\ndef caller() -> None:\n    (x := proto_fn(c))\n    print(x)\nc = C()\ncaller()\n",
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
 fn protocol_typed_parameter_with_method_call_triggers_monomorphization() {
     // This exercises rewrite_protocol_calls_in_expr's MethodCall arm.
     // `print(proto_fn(c))` is a Call whose argument is a Call to the
@@ -25214,6 +25300,663 @@ _helper(1)
 }
 
 #[test]
+fn walrus_with_solver_path_succeeds() {
+    // PEP 572 (#774): force the solver path with a private helper that
+    // contains a walrus in its body, exercising `constraints::
+    // collect_expr_constraints`'s own `HirExpr::NamedExpr` arm -- the
+    // solver's own private-helper type-inference path never otherwise
+    // recurses into that arm anywhere else in this test suite.
+    let src = "\
+def _helper(x) -> int:
+    if (n := 1) > 0:
+        pass
+    return x
+_helper(1)
+";
+    parse_check_resolve(src).expect("check should succeed");
+}
+
+#[test]
+fn walrus_target_read_after_an_if_test_on_the_solver_path_succeeds() {
+    // PEP 572 (#774), deep-review follow-up (round 4): unlike
+    // `walrus_with_solver_path_succeeds` above (which never reads `n` after
+    // the `if`, so it exercises `collect_expr_constraints`'s own
+    // `NamedExpr` arm for coverage without observing whether the binding
+    // it produces is actually usable), this test reads `n` in the `return`
+    // that follows -- a walrus in an `if`/`while` test always executes
+    // whenever the statement itself is reached, so `n` is definitely bound
+    // there, not merely maybe-bound the way a name assigned in only one
+    // branch would be. Before `bind_named_expr_targets`, the solver path's
+    // `HirExpr::Name` arm found `n` in `local_names` (via `collect_named_
+    // expr_names_in_expr`) but never in `env.bindings`, producing a false
+    // T0021 "not bound" diagnostic for this legal, T0050-conformant code.
+    let src = "\
+def _helper(x) -> int:
+    if (n := 1) > 0:
+        return n
+    return x
+_helper(1)
+";
+    parse_check_resolve(src).expect("check should succeed");
+}
+
+#[test]
+fn walrus_target_read_after_a_while_test_on_the_solver_path_succeeds() {
+    // PEP 572 (#774), deep-review follow-up (round 4): the `While` arm's
+    // own call to `bind_named_expr_targets` is a separate line from the
+    // `If` arm's -- this repository's 100% line-coverage gate (D-014)
+    // needs a solver-path (unannotated private helper) `while` test with a
+    // walrus to exercise it, since module-scope code (the existing
+    // `while (n := 1) > 0` tests elsewhere in this file) never reaches
+    // `constraints::collect_block_constraints` at all -- that solver only
+    // runs for a private helper whose signature the annotation-driven fast
+    // path cannot resolve.
+    let src = "\
+def _helper(x) -> int:
+    while (n := x) > 0:
+        return n
+    return x
+_helper(1)
+";
+    parse_check_resolve(src).expect("check should succeed");
+}
+
+#[test]
+fn bare_expr_stmt_walrus_on_the_solver_path_propagates_a_forward_reference_error() {
+    // PEP 572 (#774), deep-review follow-up (round 4): the three
+    // tests above all place the walrus as an `if`/`while` test, never
+    // as a standalone `ExprStmt` -- that leaves `bind_named_expr_
+    // targets`'s own call from the `HirStmt::ExprStmt` arm (as opposed
+    // to the `If`/`While` arms) unexercised, and none of them exercise
+    // its `?`'s error-propagation branch at all (`m` in every prior
+    // test's walrus value already has a term by the time it is read,
+    // so `collect_expr_constraints` inside `bind_named_expr_targets`
+    // never returns `Err` there). `m` here is local to `_helper` (it
+    // is assigned two lines below) but not yet bound at the point the
+    // walrus reads it, so the recursive `collect_expr_constraints`
+    // call inside `bind_named_expr_targets` fails with T0021 before
+    // the walrus's own binding step, or the outer `collect_expr_
+    // constraints` call on the `ExprStmt` itself, is ever reached.
+    let src = "\
+def _helper(x) -> int:
+    (n := m)
+    m = 1
+    return x
+_helper(1)
+";
+    let err = parse_check_resolve(src).unwrap_err();
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_inside_an_if_test_on_the_solver_path_propagates_a_forward_reference_error() {
+    // PEP 572 (#774), deep-review follow-up (round 4): the `If` arm's
+    // own error-propagation sibling of the test above -- `m` is local
+    // but unbound at the point the walrus inside the `if` test reads
+    // it, so `bind_named_expr_targets`'s own recursive call fails
+    // before `collect_expr_constraints` is reached on `test` itself.
+    let src = "\
+def _helper(x) -> int:
+    if (n := m) > 0:
+        pass
+    m = 1
+    return x
+_helper(1)
+";
+    let err = parse_check_resolve(src).unwrap_err();
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_inside_a_while_test_on_the_solver_path_propagates_a_forward_reference_error() {
+    // PEP 572 (#774), deep-review follow-up (round 4): the `While`
+    // arm's own error-propagation sibling of the two tests above.
+    let src = "\
+def _helper(x) -> int:
+    while (n := m) > 0:
+        pass
+    m = 1
+    return x
+_helper(1)
+";
+    let err = parse_check_resolve(src).unwrap_err();
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_a_unary_op_in_an_if_test_on_the_solver_path_succeeds() {
+    // PEP 572 (#774), deep-review follow-up (round 4): every prior
+    // `bind_named_expr_targets` test above places the walrus directly
+    // as the `Compare`'s own left operand, never inside another
+    // recursive shape -- `bind_named_expr_targets`'s `UnaryOp` arm is
+    // otherwise unexercised by this whole test suite. `-(n := 1)`
+    // nests the walrus inside a `UnaryOp` within the `if` test, and
+    // `n` is read afterward to confirm the binding the pre-pass
+    // produces is actually usable (not merely exercised for coverage).
+    let src = "\
+def _helper(x) -> int:
+    if -(n := 1) > 0:
+        return n
+    return x
+_helper(1)
+";
+    parse_check_resolve(src).expect("check should succeed");
+}
+
+// PEP 572 (#774), deep-review follow-up (round 4), coverage closure: the
+// tests above close every *line* in `bind_named_expr_targets`, but 13 of
+// its recursive call sites still show an uncovered `?`-error-propagation
+// *region* -- every arm besides the top-level `NamedExpr` arm itself only
+// ever originates an `Err` by recursing into a nested `NamedExpr`, and no
+// existing test places a forward-reference-erroring walrus in most of
+// these nested positions. Each test below goes through
+// `collect_block_constraints` directly (this repository's established
+// low-level solver-path pattern, e.g.
+// `collect_block_constraints_propagates_an_error_from_the_initializer_expression`
+// above) rather than `parse_check_resolve`, because several of the target
+// HIR shapes (`DictGetOrDefault`, `GenericClassInstantiate`) have no
+// parseable Python source that constructs them directly. `bind_named_expr_
+// targets` itself has no `pub` qualifier, so these tests cannot call it in
+// isolation -- `collect_block_constraints`'s `ExprStmt` arm is the only
+// reachable entry point, exactly like every other test in this file.
+// `m` is always declared local (so `is_local` is true) but never bound, so
+// reading it inside a walrus's own value fails with T0021 (`unbound_local`)
+// -- an undeclared/global name would instead resolve silently via the
+// `Name` arm's `None => Ok(None)` fallback and never error at all.
+
+#[test]
+fn walrus_nested_inside_another_walrus_value_on_the_solver_path_propagates_a_forward_reference_error()
+ {
+    // Exercises `NamedExpr`'s own recursive `bind_named_expr_targets(value)?`
+    // call (source line 974): the outer walrus's value is itself a walrus
+    // whose own value forward-references `m`.
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["n", "m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::NamedExpr {
+        name: "n".to_string(),
+        value: Box::new(HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        }),
+    })];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_a_call_arg_on_the_solver_path_propagates_a_forward_reference_error() {
+    // Exercises `Call`'s own `bind_named_expr_targets(arg)?` call inside its
+    // argument loop (source line 994).
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::Call {
+        callee: "f".to_string(),
+        args: vec![HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        }],
+    })];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_an_fstring_interpolation_on_the_solver_path_propagates_a_forward_reference_error()
+ {
+    // Exercises `FString`'s own `bind_named_expr_targets(inner)?` call
+    // inside its interpolation-part loop (source line 1008).
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::FString(vec![
+        FStringPart::Interpolation(Box::new(HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        })),
+    ]))];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_a_list_literal_element_on_the_solver_path_propagates_a_forward_reference_error()
+ {
+    // Exercises the shared `ListLiteral`/`SetLiteral`/`TupleLiteral` arm's
+    // own `bind_named_expr_targets(e)?` call inside its element loop
+    // (source line 1015).
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::ListLiteral(vec![
+        HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        },
+    ]))];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_a_subscript_base_on_the_solver_path_propagates_a_forward_reference_error() {
+    // Exercises `Subscript`'s own `bind_named_expr_targets(base)?` call
+    // (source line 1020). The index is a harmless literal that is never
+    // reached because the base's error propagates first.
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::Subscript {
+        base: Box::new(HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        }),
+        index: Box::new(HirExpr::IntLiteral(0)),
+    })];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_a_slice_base_on_the_solver_path_propagates_a_forward_reference_error() {
+    // Exercises `Slice`'s own `bind_named_expr_targets(base)?` call (source
+    // line 1029).
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::Slice {
+        base: Box::new(HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        }),
+        start: None,
+        stop: None,
+        step: None,
+    })];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_a_slice_bound_on_the_solver_path_propagates_a_forward_reference_error() {
+    // Exercises `Slice`'s own `bind_named_expr_targets(bound)?` call inside
+    // its `[start, stop, step].into_iter().flatten()` loop (source line
+    // 1031). The base is a harmless bare name -- `bind_named_expr_targets`'s
+    // `Name` arm never looks the name up, so it always succeeds regardless
+    // of binding state -- so the base's own recursion (line 1029) succeeds
+    // and the loop is reached.
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::Slice {
+        base: Box::new(HirExpr::Name("xs".to_string())),
+        start: Some(Box::new(HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        })),
+        stop: None,
+        step: None,
+    })];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_a_dict_literal_key_on_the_solver_path_propagates_a_forward_reference_error()
+ {
+    // Exercises `DictLiteral`'s own `bind_named_expr_targets(k)?` call
+    // (source line 1040).
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::DictLiteral(vec![(
+        HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        },
+        HirExpr::Name("v".to_string()),
+    )]))];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_a_dict_literal_value_on_the_solver_path_propagates_a_forward_reference_error()
+ {
+    // Exercises `DictLiteral`'s own `bind_named_expr_targets(v)?` call
+    // (source line 1041). The key is a harmless bare name so the key's own
+    // recursion (line 1040) succeeds and the value is reached.
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::DictLiteral(vec![(
+        HirExpr::Name("k".to_string()),
+        HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        },
+    )]))];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_a_dict_get_or_default_key_on_the_solver_path_propagates_a_forward_reference_error()
+ {
+    // Exercises `DictGetOrDefault`'s own `bind_named_expr_targets(key)?`
+    // call (source line 1046).
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::DictGetOrDefault {
+        dict: "d".to_string(),
+        key: Box::new(HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        }),
+        default: Box::new(HirExpr::Name("v".to_string())),
+    })];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_a_method_call_base_on_the_solver_path_propagates_a_forward_reference_error()
+ {
+    // Exercises `MethodCall`'s own `bind_named_expr_targets(base)?` call
+    // (source line 1053).
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::MethodCall {
+        base: Box::new(HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        }),
+        method: "foo".to_string(),
+        args: vec![],
+    })];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_a_method_call_arg_on_the_solver_path_propagates_a_forward_reference_error() {
+    // Exercises `MethodCall`'s own `bind_named_expr_targets(arg)?` call
+    // inside its argument loop (source line 1055). The base is a harmless
+    // bare name so the base's own recursion (line 1053) succeeds and the
+    // argument loop is reached.
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::MethodCall {
+        base: Box::new(HirExpr::Name("xs".to_string())),
+        method: "foo".to_string(),
+        args: vec![HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        }],
+    })];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn walrus_nested_inside_a_generic_class_instantiate_arg_on_the_solver_path_propagates_a_forward_reference_error()
+ {
+    // Exercises `GenericClassInstantiate`'s own `bind_named_expr_targets(arg)?`
+    // call inside its argument loop (source line 1061).
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["m"],
+    };
+    let body = vec![HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+        class: "C".to_string(),
+        type_arg: Ty::Int,
+        args: vec![HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        }],
+    })];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
 fn raise_with_solver_path_succeeds() {
     // Force the solver path with a private helper that has a raise.
     let src = "\
@@ -25381,6 +26124,184 @@ _helper(1)
 ";
     let err = parse_check_resolve(src).unwrap_err();
     assert!(err.message.contains("operator"));
+}
+
+#[test]
+fn walrus_wrapping_a_generic_call_is_rewritten_and_collected() {
+    // PEP 572 (#774): exercises `monomorphize::rewrite_generic_calls_in_expr`'s
+    // and `collect_generic_class_instantiations_from_expr`'s own
+    // `HirExpr::NamedExpr` arms -- both walks are exhaustive over every
+    // `HirExpr` (see their own doc comments), and neither is otherwise
+    // reached by any other test in this suite. Hand-built HIR (mirroring
+    // this file's other `monomorphize(&hir)` tests, which bypass `check`
+    // entirely) with the walrus's own value directly wrapping the call to
+    // the generic `identity` function -- one node for both walks to visit.
+    let param = Ty::Param(Box::new("T".to_string()));
+    let identity = generic_identity_fn(param.clone(), param);
+    let f = HirItem::Function {
+        name: "f".to_string(),
+        params: vec![],
+        return_ty: Ty::None,
+        body: vec![HirStmt::ExprStmt(HirExpr::NamedExpr {
+            name: "z".to_string(),
+            value: Box::new(HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            }),
+        })],
+    };
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![identity, f],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let resolved = monomorphize(&hir).unwrap();
+    assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+}
+
+#[test]
+fn walrus_wrapping_a_wrong_arity_generic_call_propagates_the_rewrite_error() {
+    // The error-propagation sibling of the success test above: exercises
+    // `rewrite_generic_calls_in_expr`'s `HirExpr::NamedExpr` arm's own `?`
+    // -- a generic call nested inside a walrus's value that itself fails to
+    // rewrite. Mirrors
+    // `monomorphize_propagates_an_instantiation_error_from_inside_a_function_body`
+    // above exactly (wrong-arity call to `identity`, expecting `T0021`),
+    // with the call wrapped in a walrus.
+    let param = Ty::Param(Box::new("T".to_string()));
+    let identity = generic_identity_fn(param.clone(), param);
+    let f = HirItem::Function {
+        name: "f".to_string(),
+        params: vec![],
+        return_ty: Ty::None,
+        body: vec![HirStmt::ExprStmt(HirExpr::NamedExpr {
+            name: "z".to_string(),
+            value: Box::new(HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+            }),
+        })],
+    };
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![identity, f],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
+}
+
+#[test]
+fn walrus_target_read_later_as_a_generic_calls_argument_resolves() {
+    // PEP 572 (#774), deep-review follow-up: the opposite direction from
+    // `walrus_wrapping_a_generic_call_is_rewritten_and_collected` above --
+    // here the walrus is its own statement, and the generic call comes
+    // *after*, reading the walrus target as a plain name. This exercises
+    // `rewrite_generic_calls_in_stmt`'s `ExprStmt` arm delegating to
+    // `rewrite_generic_calls_in_expr`'s `NamedExpr` arm, which must bind
+    // `n` into `env` (this pass starts every function body from a fresh
+    // `Environment`, not the one `check_and_resolve` already populated) so
+    // the later `HirExpr::Name("n")` resolves instead of raising a
+    // spurious "not defined" error for code the checker already accepted.
+    let param = Ty::Param(Box::new("T".to_string()));
+    let identity = generic_identity_fn(param.clone(), param);
+    let f = HirItem::Function {
+        name: "f".to_string(),
+        params: vec![],
+        return_ty: Ty::None,
+        body: vec![
+            HirStmt::ExprStmt(HirExpr::NamedExpr {
+                name: "n".to_string(),
+                value: Box::new(HirExpr::IntLiteral(1)),
+            }),
+            HirStmt::ExprStmt(HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::Name("n".to_string())],
+            }),
+        ],
+    };
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![identity, f],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let resolved = monomorphize(&hir).unwrap();
+    assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+}
+
+#[test]
+fn walrus_target_inside_an_if_test_resolves_in_the_branch_body() {
+    // PEP 572 (#774), deep-review follow-up: covers the same
+    // fresh-`Environment` gap as the test above, but for a walrus nested
+    // inside an `if` test (`rewrite_generic_calls_in_stmt`'s `If` arm calls
+    // `rewrite_generic_calls_in_expr` on `test` directly, not through the
+    // `ExprStmt` arm) with the read happening in the branch body rather
+    // than a sibling statement.
+    let param = Ty::Param(Box::new("T".to_string()));
+    let identity = generic_identity_fn(param.clone(), param);
+    let f = HirItem::Function {
+        name: "f".to_string(),
+        params: vec![],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: HirExpr::NamedExpr {
+                name: "n".to_string(),
+                value: Box::new(HirExpr::IntLiteral(1)),
+            },
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::Name("n".to_string())],
+            })],
+            orelse: vec![],
+        }],
+    };
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![identity, f],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let resolved = monomorphize(&hir).unwrap();
+    assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+}
+
+#[test]
+fn walrus_wrapping_a_generic_call_propagates_a_t0050_error_from_its_own_type() {
+    // PEP 572 (#774), deep-review follow-up: `rewrite_generic_calls_in_expr`'s
+    // `NamedExpr` arm added an explicit `let ty = infer_expr_in(..)?;` (to
+    // capture the type for its own new `env.bind` call) where the arm
+    // previously just tail-returned `infer_expr_in(..)` directly -- that
+    // turns what was a single fall-through region into a real branch, so
+    // the error side needs its own coverage. Hand-built HIR (bypassing
+    // `check`, same as the sibling tests above) with a walrus whose value
+    // is a `str`, which `infer_expr_in`'s own `NamedExpr` arm rejects with
+    // T0050 (walrus values are restricted to non-reference-counted
+    // scalars) -- exercising the `?`'s early-return path.
+    let param = Ty::Param(Box::new("T".to_string()));
+    let identity = generic_identity_fn(param.clone(), param);
+    let f = HirItem::Function {
+        name: "f".to_string(),
+        params: vec![],
+        return_ty: Ty::None,
+        body: vec![HirStmt::ExprStmt(HirExpr::NamedExpr {
+            name: "z".to_string(),
+            value: Box::new(HirExpr::StringLiteral("bad".to_string())),
+        })],
+    };
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![identity, f],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert_eq!(monomorphize(&hir).unwrap_err().code, "T0050");
 }
 
 #[test]
@@ -26224,4 +27145,470 @@ fn none_on_the_left_of_is_still_reads_the_other_operands_type() {
         result.is_ok(),
         "`None is x` against an `Optional[int]` must type-check as bool: {result:?}"
     );
+}
+
+// -- PEP 572 (#774): the walrus assignment (`:=`) value-type restriction
+// (T0050) -----------------------------------------------------------
+
+#[test]
+fn a_walrus_with_an_int_value_type_checks() {
+    let result = check_source("if (n := 7) > 5:\n    print(n)\n");
+    assert!(
+        result.is_ok(),
+        "an `int`-valued walrus must type-check: {result:?}"
+    );
+}
+
+#[test]
+fn a_walrus_with_an_optional_int_value_type_checks() {
+    // `is_walrus_value_ty_supported`'s `Ty::Optional(inner)` arm recurses
+    // into `inner` -- here an `Optional[int]` walrus value, reached via a
+    // `Name` already declared `int | None`.
+    let result = check_source("x: int | None = 5\nif (y := x) is not None:\n    print(y)\n");
+    assert!(
+        result.is_ok(),
+        "an `Optional[int]`-valued walrus must type-check: {result:?}"
+    );
+}
+
+#[test]
+fn a_walrus_with_a_str_value_is_rejected_with_t0050() {
+    let result = check_source("s = \"hi\"\nif (y := s) == \"hi\":\n    print(y)\n");
+    let err = result.expect_err("a `str`-valued walrus must be rejected");
+    assert_eq!(err.code, "T0050");
+}
+
+#[test]
+fn a_walrus_with_an_optional_str_value_is_rejected_with_t0050() {
+    // `is_walrus_value_ty_supported`'s `Ty::Optional(inner)` arm recurses
+    // into `inner` and, for an unsupported inner type such as `str`,
+    // reports unsupported -- the region gap this closes is that recursive
+    // `false` return specifically (the sibling `Optional[int]` test above
+    // only exercises the recursive `true` return). A real parsed program
+    // can never reach this: `annotation_to_ty` (`pycc_hir/src/func.rs`) is
+    // the one place a `Ty::Optional` is ever constructed from source, and
+    // it rejects every inner type but `int` at lowering time with T0049,
+    // before `pycc_types` ever runs -- so `Ty::Optional(Ty::Str)` only
+    // exists as a hand-built `Environment` binding here, bypassing
+    // `check_source`/lowering entirely to reach the type-checker's own
+    // `is_walrus_value_ty_supported` directly.
+    let mut env = Environment::new();
+    env.bind("x".to_string(), Ty::Optional(Box::new(Ty::Str)));
+    let expr = HirExpr::NamedExpr {
+        name: "y".to_string(),
+        value: Box::new(HirExpr::Name("x".to_string())),
+    };
+    let err = infer_expr(&env, &expr).expect_err("an `Optional[str]`-valued walrus must be rejected");
+    assert_eq!(err.code, "T0050");
+}
+
+#[test]
+fn a_walrus_whose_value_fails_to_infer_propagates_the_error_before_the_t0050_check() {
+    // `infer_expr_in`'s own `NamedExpr` arm (`crates/pycc_types/src/expr.rs`)
+    // computes `value`'s type via its own `infer_expr_in(..)?` call before
+    // ever reaching `is_walrus_value_ty_supported` -- that `?`'s error
+    // branch is distinct from `collect_named_expr_bindings`'s identically-
+    // shaped call in `lib.rs` (already covered elsewhere in this file):
+    // `collect_named_expr_bindings` always runs first, over the same
+    // `value`, so any error reachable through an ordinary `check_source`
+    // program is always caught there first, never here. Reaching this
+    // arm's own failure requires calling `infer_expr` directly (as the
+    // sibling `Optional[str]` test above does) on a `NamedExpr` whose
+    // `value` is a plain undefined-name read.
+    let env = Environment::new();
+    let expr = HirExpr::NamedExpr {
+        name: "y".to_string(),
+        value: Box::new(HirExpr::Name("undefined".to_string())),
+    };
+    let err = infer_expr(&env, &expr).expect_err("an undefined-name walrus value must be rejected");
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn a_walrus_in_a_generic_functions_body_does_not_trip_the_t0042_self_call_scan() {
+    // `reject_generic_calls_in_expr`'s own `HirExpr::NamedExpr` arm (#774):
+    // a generic function's body is pre-scanned for illegal self-calls
+    // (D-134/T0042) before it is type-checked at all, and that scan walks
+    // every `HirExpr` including a bare walrus expression statement.
+    let result = check_source("def identity[T](value: T) -> T:\n    (z := 1)\n    return value\n");
+    assert!(
+        result.is_ok(),
+        "a walrus with no generic self-call must not trip T0042: {result:?}"
+    );
+}
+
+#[test]
+fn a_walrus_nested_inside_a_list_slice_and_dict_literal_binds_every_name() {
+    // Module-level `collect_named_expr_bindings` walk (lib.rs), exercising
+    // its `ListLiteral`/`SetLiteral`/`TupleLiteral`, `Slice`, and
+    // `DictLiteral` arms in one bare expression statement -- mirroring
+    // `pycc_mir`'s own equivalent walk test for the same #774 nesting shape.
+    let result = check_source(
+        "lst = [1, 2, 3]\n[a := 1]\nlst[(b := 0):]\n{\"k\": (c := 3)}\nprint(a)\nprint(b)\nprint(c)\n",
+    );
+    assert!(
+        result.is_ok(),
+        "every nested walrus target must be bound and visible afterward: {result:?}"
+    );
+}
+
+// The test above only exercises `collect_named_expr_bindings`'s
+// `ListLiteral`/`SetLiteral`/`TupleLiteral`, `Slice`, and `DictLiteral`
+// arms. This one covers every other container-shaped arm at module scope:
+// `Call` args, `BinOp`, `Compare`, an `FString` interpolation, a
+// non-`Slice` `Subscript`, `ListAppend`, `SetAdd`, `AttrGet` (via a `Call`
+// base), `MethodCall` args, `GenericClassInstantiate` args, and
+// `DictGetOrDefault`.
+//
+// The fixture deliberately includes a generic class (`Box[T]`) so that
+// `monomorphize`'s top-level rewrite pass actually runs (its early-return
+// fast path is skipped whenever the module has a generic function/class or
+// a protocol-typed parameter): `rewrite_generic_calls_in_expr`'s own
+// `NamedExpr` arm calls `env.bind`, so a module-level walrus name bound by
+// an earlier bare statement stays visible to a later top-level statement's
+// name lookup inside that pass, exactly like the ordinary
+// `check`/`check_and_resolve` path. Goes through `check_source` (full
+// `check_and_resolve`, `monomorphize` included) rather than `check` alone,
+// so a regression in either pass's env bookkeeping fails this test.
+#[test]
+fn a_walrus_nested_inside_every_remaining_container_shape_binds_every_name_at_module_scope() {
+    let result = check_source(
+        "\
+class Box[T]:
+    def __init__(self, x: T):
+        self.x = x
+class C:
+    def __init__(self, x: int):
+        self.x = x
+    def m(self, y: int) -> int:
+        return y
+def f(v: int) -> int:
+    return v
+def make_c(v: int) -> C:
+    return C(v)
+c = C(3)
+lst = [1, 2, 3]
+s = {1, 2}
+dct = {\"k\": 2}
+print(f((a := 1)))
+print((b := 2) + 1)
+print((dd := 3) == 3)
+print(f\"{(e := 4)}\")
+print(lst[(g := 0)])
+lst.append((h := 5))
+s.add((i := 6))
+print(make_c((j := 0)).x)
+print(c.m((k := 7)))
+print(Box[int]((l := 8)).x)
+print(dct.get(f\"k{(m := 1)}\", 0))
+{(p := 9)}
+((q := 10),)
+print(a, b, dd, e, g, h, i, j, k, l, m, p, q)
+",
+    );
+    assert!(
+        result.is_ok(),
+        "every nested walrus target across every container shape must be bound and visible \
+         afterward: {result:?}"
+    );
+}
+
+// PEP 572 (#774): `collect_named_expr_bindings` is called from six call
+// sites -- module-scope `check_stmt`'s `ExprStmt`/`If`/`While` arms and
+// function-scope `check_stmt_in_function`'s same three arms -- each behind
+// a `?`. These six tests exercise that error-propagation branch at each
+// site: `n` is first bound `str`, then a nested walrus tries to rebind it
+// `int` (a `T0050`-supported value type), which `check_assignment` rejects
+// as an incompatible redefinition (`T0023`).
+#[test]
+fn a_failing_walrus_binding_in_a_module_bare_expr_stmt_propagates_t0023() {
+    let err = check_source("n = \"hi\"\n(n := 1)\n").expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_binding_in_a_module_if_test_propagates_t0023() {
+    let err =
+        check_source("n = \"hi\"\nif (n := 1) > 0:\n    pass\n").expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_binding_in_a_module_while_test_propagates_t0023() {
+    let err = check_source("n = \"hi\"\nwhile (n := 1) > 0:\n    pass\n")
+        .expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_binding_in_a_function_bare_expr_stmt_propagates_t0023() {
+    let err = check_source("def f() -> int:\n    n = \"hi\"\n    (n := 1)\n    return 0\n")
+        .expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_binding_in_a_function_if_test_propagates_t0023() {
+    let err = check_source(
+        "def f() -> int:\n    n = \"hi\"\n    if (n := 1) > 0:\n        pass\n    return 0\n",
+    )
+    .expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_binding_in_a_function_while_test_propagates_t0023() {
+    let err = check_source(
+        "def f() -> int:\n    n = \"hi\"\n    while (n := 1) > 0:\n        pass\n    return 0\n",
+    )
+    .expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+// PEP 572 (#774): the comprehensive
+// `a_walrus_nested_inside_every_remaining_container_shape_binds_every_name_at_module_scope`
+// test above only exercises `collect_named_expr_bindings`'s recursive `?`
+// propagation on its *success* path for every container shape -- each
+// recursive `collect_named_expr_bindings(env, local_names, ..)?` call is its
+// own coverage region distinct from the call's success path, and none of
+// them is exercised when every nested walrus binds cleanly. These tests
+// each nest a *failing* walrus (`n` already bound `str`, rebound `int`) one
+// level inside a specific container shape so that shape's own recursive `?`
+// takes its error branch instead. Every fixture here is expected to fail
+// during `check`, before `check_and_resolve` ever reaches `monomorphize`.
+#[test]
+fn a_failing_walrus_nested_inside_a_named_exprs_own_value_propagates_t0023() {
+    // Exercises the `NamedExpr` arm's own recursive call into `value`
+    // (line ~996) failing, as opposed to `check_assignment` on the outer
+    // name failing -- the outer name `m` binds cleanly; it's the *inner*
+    // `n` rebind nested inside `m`'s value that fails.
+    let err =
+        check_source("n = \"hi\"\n(m := (n := 1))\n").expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_type_error_inside_a_named_exprs_own_value_propagates_through_infer_expr_in() {
+    // Exercises the `NamedExpr` arm's own `infer_expr_in(env, local_names,
+    // value)` call (line ~997) failing on a `value` that contains no
+    // nested walrus at all (so the preceding `collect_named_expr_bindings`
+    // recursion succeeds trivially) but is otherwise ill-typed.
+    let err = check_source("(m := 1 + \"x\")\n").expect_err("adding int and str is a type error");
+    assert_ne!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_nested_inside_a_call_argument_propagates_t0023() {
+    let err = check_source("def f(v: int) -> int:\n    return v\nn = \"hi\"\nf((n := 1))\n")
+        .expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_nested_inside_an_fstring_interpolation_propagates_t0023() {
+    let err = check_source("n = \"hi\"\nf\"{(n := 1)}\"\n").expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_nested_inside_a_list_literal_element_propagates_t0023() {
+    let err = check_source("n = \"hi\"\n[(n := 1)]\n").expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_nested_inside_a_subscript_base_propagates_t0023() {
+    let err = check_source("n = \"hi\"\n(n := 1)[0]\n").expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_nested_inside_a_slice_base_propagates_t0023() {
+    let err = check_source("n = \"hi\"\n(n := 1)[0:1]\n").expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_nested_inside_a_slice_bound_propagates_t0023() {
+    let err = check_source("n = \"hi\"\nlst = [1, 2, 3]\nlst[(n := 1):]\n")
+        .expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_nested_inside_a_dict_literal_key_propagates_t0023() {
+    let err = check_source("n = \"hi\"\n{(n := 1): 2}\n").expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_nested_inside_a_dict_literal_value_propagates_t0023() {
+    let err = check_source("n = \"hi\"\n{1: (n := 1)}\n").expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_nested_inside_a_dict_get_or_default_key_propagates_t0023() {
+    let err = check_source("n = \"hi\"\ndct = {\"k\": 2}\ndct.get((n := 1), 0)\n")
+        .expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_nested_inside_a_method_call_base_propagates_t0023() {
+    let err = check_source(
+        "class C:\n    def __init__(self, x: int):\n        self.x = x\n    def m(self) -> int:\n        return self.x\nn = \"hi\"\n(n := C(1)).m()\n",
+    )
+    .expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_nested_inside_a_method_call_argument_propagates_t0023() {
+    let err = check_source(
+        "class C:\n    def __init__(self, x: int):\n        self.x = x\n    def m(self, y: int) -> int:\n        return y\nn = \"hi\"\nc = C(1)\nc.m((n := 1))\n",
+    )
+    .expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+#[test]
+fn a_failing_walrus_nested_inside_a_generic_class_instantiate_argument_propagates_t0023() {
+    let err = check_source(
+        "class Box[T]:\n    def __init__(self, x: T):\n        self.x = x\nn = \"hi\"\nBox[int]((n := 1))\n",
+    )
+    .expect_err("incompatible redefinition");
+    assert_eq!(err.code, "T0023");
+}
+
+// PEP 572 (#774): `collect_named_expr_names_in_expr` (function-local-name
+// detection, distinct from `collect_named_expr_bindings` above) has two
+// arms not reached by the two existing function-body fixtures
+// (`a_walrus_inside_a_unary_operand_..`/`a_walrus_inside_a_slice_bound_..`
+// above): the `is_local` *true* branch (a second walrus reusing an
+// already-registered name skips the push) and the
+// `ListLiteral`/`SetLiteral`/`TupleLiteral` arm. Hand-built HIR, mirroring
+// this file's other function-body walrus fixtures.
+#[test]
+fn a_walrus_reusing_an_already_local_name_in_a_function_body_skips_the_duplicate_push() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::If {
+                    test: HirExpr::Compare {
+                        op: CmpOpKind::Lt,
+                        left: Box::new(HirExpr::NamedExpr {
+                            name: "x".to_string(),
+                            value: Box::new(HirExpr::IntLiteral(1)),
+                        }),
+                        right: Box::new(HirExpr::NamedExpr {
+                            name: "x".to_string(),
+                            value: Box::new(HirExpr::IntLiteral(2)),
+                        }),
+                    },
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                    orelse: vec![],
+                },
+                HirStmt::Return(Some(HirExpr::IntLiteral(0))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_ok(), "{:?}", check(&hir));
+}
+
+#[test]
+fn a_walrus_inside_a_list_literal_test_in_a_function_body_is_a_local_name() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::If {
+                    test: HirExpr::ListLiteral(vec![HirExpr::NamedExpr {
+                        name: "a".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(1)),
+                    }]),
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("a".to_string())))],
+                    orelse: vec![],
+                },
+                HirStmt::Return(Some(HirExpr::IntLiteral(0))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_ok(), "{:?}", check(&hir));
+}
+
+
+// The `ListLiteral`/`SetLiteral`/`TupleLiteral` match arm above is one
+// source line shared by all three variants, but each `|`-alternative still
+// carries its own coverage region -- the test above only ever exercises
+// the `ListLiteral` alternative. These two exercise the other two
+// alternatives directly (not nested inside one another: a
+// `set[..]`-typed tuple element is independently rejected by D-116 as
+// "not compiled yet", so `TupleLiteral(vec![SetLiteral(..)])` is not a
+// legal fixture here -- each container shape gets its own flat walrus).
+#[test]
+fn a_walrus_inside_a_set_literal_test_in_a_function_body_is_a_local_name() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::If {
+                    test: HirExpr::SetLiteral(vec![HirExpr::NamedExpr {
+                        name: "b".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(1)),
+                    }]),
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("b".to_string())))],
+                    orelse: vec![],
+                },
+                HirStmt::Return(Some(HirExpr::IntLiteral(0))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_ok(), "{:?}", check(&hir));
+}
+
+#[test]
+fn a_walrus_inside_a_tuple_literal_test_in_a_function_body_is_a_local_name() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::If {
+                    test: HirExpr::TupleLiteral(vec![HirExpr::NamedExpr {
+                        name: "c".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(1)),
+                    }]),
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("c".to_string())))],
+                    orelse: vec![],
+                },
+                HirStmt::Return(Some(HirExpr::IntLiteral(0))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_ok(), "{:?}", check(&hir));
 }

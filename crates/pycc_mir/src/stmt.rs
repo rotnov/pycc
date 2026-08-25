@@ -7,6 +7,7 @@ use super::{
     handler_type_tags, lookup, lower_expr, lower_raise, mro_attrs, mro_class_def,
     resolve_comp_source,
 };
+use super::expr::pre_bind_named_expr_targets;
 use pycc_hir::{HirStmt, Ty};
 use std::collections::HashMap;
 
@@ -18,7 +19,28 @@ pub(super) fn lower_stmt(
 ) -> MirStmt {
     match stmt {
         HirStmt::ExprStmt(expr) => {
-            MirStmt::ExprStmt(lower_expr(expr, scopes, classes, current_class))
+            // PEP 572 (#774): bind before lowering the whole expression --
+            // see `pre_bind_named_expr_targets`'s own doc comment for why a
+            // walrus value that references an earlier walrus in the very
+            // same expression (`(a := 1) + (b := a + 1)`) requires this.
+            pre_bind_named_expr_targets(expr, scopes, classes, current_class);
+            let expr = lower_expr(expr, scopes, classes, current_class);
+            // PEP 572 (#774): a bare expression statement is one of the
+            // three placements `pycc_hir::stmt::lower_stmt`'s own
+            // `contains_named_expr` restriction permits a walrus in (`(n :=
+            // 5)` alone on a line). `name` must be bound into `scopes`
+            // even though nothing *within this statement* looks it up,
+            // because a later statement in the same block might (`(n :=
+            // 5)\nprint(n)`) -- `MirExpr::collect_named_expr_bindings`
+            // finds every `NamedExpr` this lowered expression contains, at
+            // any nesting depth, so this also covers a walrus buried in a
+            // larger expression statement like `f(n := 5)`.
+            let mut named_bindings = Vec::new();
+            expr.collect_named_expr_bindings(&mut named_bindings);
+            for (name, ty) in named_bindings {
+                bind_variable(scopes, name, ty);
+            }
+            MirStmt::ExprStmt(expr)
         }
         HirStmt::Assign { target, value } => {
             let value = lower_expr(value, scopes, classes, current_class);
@@ -174,24 +196,56 @@ pub(super) fn lower_stmt(
             MirStmt::NoOp
         }
         HirStmt::AnnAssign { value: None, .. } => MirStmt::NoOp,
-        HirStmt::If { test, body, orelse } => MirStmt::If {
-            test: lower_expr(test, scopes, classes, current_class),
-            body: body
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect(),
-            orelse: orelse
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect(),
-        },
-        HirStmt::While { test, body } => MirStmt::While {
-            test: lower_expr(test, scopes, classes, current_class),
-            body: body
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect(),
-        },
+        HirStmt::If { test, body, orelse } => {
+            // PEP 572 (#774): bind before lowering, mirroring `ExprStmt`'s
+            // own ordering rationale above.
+            pre_bind_named_expr_targets(test, scopes, classes, current_class);
+            let test = lower_expr(test, scopes, classes, current_class);
+            // PEP 572 (#774): an `if` test condition is one of the three
+            // placements a walrus is permitted in. Bound *before* lowering
+            // `body`/`orelse` (not after, unlike `ExprStmt`'s own
+            // after-the-fact bind, since here there genuinely is code
+            // within this same statement -- the branches -- that can
+            // reference the bound name: `if (n := f()) > 0: print(n)`).
+            let mut named_bindings = Vec::new();
+            test.collect_named_expr_bindings(&mut named_bindings);
+            for (name, ty) in named_bindings {
+                bind_variable(scopes, name, ty);
+            }
+            MirStmt::If {
+                test,
+                body: body
+                    .iter()
+                    .map(|s| lower_stmt(s, scopes, classes, current_class))
+                    .collect(),
+                orelse: orelse
+                    .iter()
+                    .map(|s| lower_stmt(s, scopes, classes, current_class))
+                    .collect(),
+            }
+        }
+        HirStmt::While { test, body } => {
+            // PEP 572 (#774): bind before lowering, mirroring `If`'s own
+            // ordering just above.
+            pre_bind_named_expr_targets(test, scopes, classes, current_class);
+            let test = lower_expr(test, scopes, classes, current_class);
+            // PEP 572 (#774): mirrors `If`'s own bind-before-body handling
+            // just above -- a `while` test condition is the other
+            // permitted placement, and a name it binds must be visible to
+            // the loop body: `while (chunk := f()) is not None: use(chunk)`.
+            let mut named_bindings = Vec::new();
+            test.collect_named_expr_bindings(&mut named_bindings);
+            for (name, ty) in named_bindings {
+                bind_variable(scopes, name, ty);
+            }
+            MirStmt::While {
+                test,
+                body: body
+                    .iter()
+                    .map(|s| lower_stmt(s, scopes, classes, current_class))
+                    .collect(),
+            }
+        }
         HirStmt::ForRange {
             var,
             start,

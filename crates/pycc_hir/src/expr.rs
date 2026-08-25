@@ -722,6 +722,25 @@ pub(crate) fn lower_expr(
         Expr::YieldFrom(yf) if !in_function => {
             return Err(context_invalid("'yield from' outside function", yf.range));
         }
+        // PEP 572 (#774): `target := value`. CPython's own grammar only ever
+        // parses a bare identifier as a walrus target -- there is no
+        // tuple/attribute/subscript walrus target to reject here in
+        // practice, but the check is kept explicit (rather than an
+        // unchecked `Expr::Name` pattern) so a future `ruff_python_parser`
+        // upgrade that somehow relaxed the grammar would still surface a
+        // clean diagnostic instead of an `unreachable!()`/panic.
+        Expr::Named(named) => {
+            let Expr::Name(target) = named.target.as_ref() else {
+                return Err(unsupported(
+                    "a walrus assignment target must be a bare name",
+                    pycc_ast::expr_range(&named.target),
+                ));
+            };
+            HirExpr::NamedExpr {
+                name: target.id.as_str().to_string(),
+                value: Box::new(lower_expr(&named.value, in_function, class_name)?),
+            }
+        }
         other => {
             return Err(unsupported(
                 "expression kind not supported yet",
@@ -855,6 +874,88 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         // #433: `Super` carries no names to rename — it is a compile-time
         // marker, not a value with sub-expressions.
         HirExpr::Super => expr,
+        // PEP 572 (#774): a walrus target is renamed exactly like a bound
+        // `Name` would be (mirroring `HirExpr::Name`'s own arm above) if it
+        // happens to collide with the comprehension loop variable being
+        // synthesized-renamed; `value` is recursed into normally. In
+        // practice a walrus embedded in a comprehension's `elt`/`cond` is
+        // out of scope for #774 (comprehension-scope walrus semantics are
+        // not implemented -- see that issue's scope-cut note) and is
+        // rejected upstream before lowering ever reaches a real
+        // comprehension body, but this arm still needs to exist so this
+        // exhaustive match compiles, and it does the structurally correct
+        // thing on its own terms regardless.
+        HirExpr::NamedExpr { name, value } => HirExpr::NamedExpr {
+            name: if name == from { to.to_string() } else { name },
+            value: Box::new(recurse(*value)),
+        },
+    }
+}
+
+/// PEP 572 (#774): whether `expr` contains a `HirExpr::NamedExpr` anywhere
+/// within it, at any nesting depth. `crate::stmt::lower_stmt` calls this on
+/// every expression field of a statement kind other than `Stmt::If`'s/
+/// `Stmt::While`'s own `test` and a bare `Stmt::Expr`'s own value -- the
+/// three placements a walrus is permitted in (#774's own explicit
+/// permitted-scope-cut) -- to reject a walrus lowered anywhere else with a
+/// clean diagnostic instead of leaving `pycc_types`/`pycc_mir` to either
+/// silently mishandle it or panic downstream on an unbound name. An
+/// exhaustive match over every `HirExpr` variant, mirroring
+/// `rename_name_in_expr`'s own exhaustive structure just above, so a future
+/// variant is a compile error here rather than a silently-permitted new
+/// placement.
+pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
+    match expr {
+        HirExpr::NamedExpr { .. } => true,
+        HirExpr::IntLiteral(_)
+        | HirExpr::FloatLiteral(_)
+        | HirExpr::BoolLiteral(_)
+        | HirExpr::StringLiteral(_)
+        | HirExpr::NoneLiteral
+        | HirExpr::Name(_)
+        | HirExpr::Super => false,
+        HirExpr::Call { args, .. } => args.iter().any(contains_named_expr),
+        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+            contains_named_expr(left) || contains_named_expr(right)
+        }
+        HirExpr::UnaryOp { operand, .. } => contains_named_expr(operand),
+        HirExpr::FString(parts) => parts.iter().any(|part| match part {
+            FStringPart::Literal(_) => false,
+            FStringPart::Interpolation(e) => contains_named_expr(e),
+        }),
+        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+            es.iter().any(contains_named_expr)
+        }
+        HirExpr::Subscript { base, index } => {
+            contains_named_expr(base) || contains_named_expr(index)
+        }
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
+            contains_named_expr(base)
+                || [start, stop, step]
+                    .into_iter()
+                    .flatten()
+                    .any(|b| contains_named_expr(b))
+        }
+        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+            contains_named_expr(value)
+        }
+        HirExpr::DictLiteral(pairs) => pairs
+            .iter()
+            .any(|(k, v)| contains_named_expr(k) || contains_named_expr(v)),
+        HirExpr::ListPop { .. } => false,
+        HirExpr::DictGetOrDefault { key, default, .. } => {
+            contains_named_expr(key) || contains_named_expr(default)
+        }
+        HirExpr::AttrGet { base, .. } => contains_named_expr(base),
+        HirExpr::MethodCall { base, args, .. } => {
+            contains_named_expr(base) || args.iter().any(contains_named_expr)
+        }
+        HirExpr::GenericClassInstantiate { args, .. } => args.iter().any(contains_named_expr),
     }
 }
 
@@ -1380,5 +1481,124 @@ mod tests {
             message.contains("f-string debug specifier (=) is not supported yet"),
             "unexpected message: {message}"
         );
+    }
+
+    // PEP 572 (#774): CPython's own grammar never actually parses a
+    // non-name walrus target -- `ruff_python_parser` agrees -- so the only
+    // way to exercise `lower_expr`'s own defensive rejection is a hand-built
+    // `Expr::Named` whose `target` is some other expression kind, bypassing
+    // the parser entirely (mirroring `pycc_types::tests`'s own hand-built-HIR
+    // convention for a similarly unreachable-via-the-parser guard).
+    #[test]
+    fn a_walrus_target_that_is_not_a_bare_name_is_rejected() {
+        let named = pycc_ast::Expr::Named(pycc_ast::ExprNamed {
+            node_index: Default::default(),
+            range: Default::default(),
+            target: Box::new(pycc_ast::Expr::NumberLiteral(pycc_ast::ExprNumberLiteral {
+                node_index: Default::default(),
+                range: Default::default(),
+                value: pycc_ast::Number::Int(pycc_ast::Int::from(0u8)),
+            })),
+            value: Box::new(pycc_ast::Expr::NumberLiteral(pycc_ast::ExprNumberLiteral {
+                node_index: Default::default(),
+                range: Default::default(),
+                value: pycc_ast::Number::Int(pycc_ast::Int::from(1u8)),
+            })),
+        });
+        let err = super::lower_expr(&named, false, None).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message
+                .contains("a walrus assignment target must be a bare name"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    // PEP 572 (#774): `rename_name_in_expr`'s own `HirExpr::NamedExpr` arm --
+    // structurally required for the match to compile (see that arm's own
+    // doc comment on why a walrus can never actually reach a real
+    // comprehension body in practice) but otherwise untested by any source
+    // fixture, since #774's scope cut keeps a walrus out of every
+    // comprehension field. Exercised directly here, mirroring
+    // `renaming_walks_through_a_unary_operand` just above.
+    #[test]
+    fn renaming_walks_through_a_named_expr_target_and_value() {
+        let renamed = super::rename_name_in_expr(
+            HirExpr::NamedExpr {
+                name: "v".to_string(),
+                value: Box::new(HirExpr::Name("v".to_string())),
+            },
+            "v",
+            "$comp0",
+        );
+        assert_eq!(
+            renamed,
+            HirExpr::NamedExpr {
+                name: "$comp0".to_string(),
+                value: Box::new(HirExpr::Name("$comp0".to_string())),
+            }
+        );
+    }
+
+    // The `else` sibling of the test above: the walrus's own target name
+    // does *not* match `from`, so `rename_name_in_expr`'s `HirExpr::
+    // NamedExpr` arm's `if name == from { .. } else { name }` takes its
+    // `else` branch (the target name is left alone) while still recursing
+    // into `value`, which does contain a `from`-matching `Name` to rename.
+    #[test]
+    fn renaming_walks_through_a_named_exprs_value_without_renaming_a_different_target() {
+        let renamed = super::rename_name_in_expr(
+            HirExpr::NamedExpr {
+                name: "other".to_string(),
+                value: Box::new(HirExpr::Name("v".to_string())),
+            },
+            "v",
+            "$comp0",
+        );
+        assert_eq!(
+            renamed,
+            HirExpr::NamedExpr {
+                name: "other".to_string(),
+                value: Box::new(HirExpr::Name("$comp0".to_string())),
+            }
+        );
+    }
+
+    // PEP 572 (#774): the `?` error-propagation branch of `lower_expr`'s own
+    // `Expr::Named` arm -- a walrus whose *value* itself fails to lower
+    // (here, a bare `yield` used as the value at module scope, rejected by
+    // the `Expr::Yield` arm above with `L0001` `'yield' outside function`)
+    // must surface that inner error rather than being swallowed. Every
+    // other walrus fixture in this suite has a value that lowers
+    // successfully, so this is the only one exercising this branch.
+    #[test]
+    fn a_walrus_whose_value_fails_to_lower_propagates_the_inner_error() {
+        assert_eq!(lower_err_code("(x := (yield 1))\n"), "L0001");
+    }
+
+    // PEP 572 (#774): a walrus assigned into a `HirStmt::Assign`'s own RHS
+    // (i.e. not an `if`/`while` test or a bare expression statement) is
+    // rejected by `lower_stmt`'s placement check, which itself is driven by
+    // `contains_named_expr`. This is the only fixture in the whole test
+    // suite that finds a *top-level* `NamedExpr` via `contains_named_expr`
+    // (every other placement test only feeds it expressions with no walrus
+    // at all), so it is what exercises that function's own `true` arm.
+    #[test]
+    fn a_walrus_outside_if_while_or_a_bare_expression_statement_is_rejected() {
+        let message = lower_err_message("x = (y := 1)\n");
+        assert!(
+            message.contains("only supported in an `if`/`while`"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn contains_named_expr_finds_a_top_level_walrus() {
+        let expr = HirExpr::NamedExpr {
+            name: "y".to_string(),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        assert!(super::contains_named_expr(&expr));
     }
 }
