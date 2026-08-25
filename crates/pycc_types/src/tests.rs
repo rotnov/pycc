@@ -576,6 +576,8 @@ fn collect_block_constraints_binds_the_annotation_and_records_the_initializer_de
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &[],
     };
@@ -616,6 +618,8 @@ fn collect_block_constraints_preserves_an_existing_annotated_target_binding() {
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::from([("y".to_string(), Ok(Ty::Str))]),
         local_names: &["y"],
     };
@@ -655,6 +659,8 @@ fn collect_block_constraints_binds_the_annotation_when_the_initializer_has_no_te
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &[],
     };
@@ -689,6 +695,8 @@ fn collect_block_constraints_ignores_a_value_less_annotated_assignment() {
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["y"],
     };
@@ -727,6 +735,8 @@ fn collect_block_constraints_propagates_an_error_from_the_initializer_expression
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["z"],
     };
@@ -767,6 +777,8 @@ fn constraint_collection_carries_none_literal_as_ty_none() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::NoneLiteral;
 
@@ -800,6 +812,8 @@ fn constraint_collection_carries_a_homogeneous_scalar_list_literal_as_an_element
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]);
 
@@ -827,6 +841,8 @@ fn constraint_collection_propagates_an_error_from_a_list_literal_element() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListLiteral(vec![HirExpr::Name("missing".to_string())]);
 
@@ -854,6 +870,8 @@ fn constraint_collection_treats_a_subscript_as_unconstrained_but_recurses_into_b
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::IntLiteral(1)),
@@ -884,6 +902,8 @@ fn constraint_collection_propagates_an_error_from_a_subscript_base() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::Name("missing".to_string())),
@@ -914,6 +934,8 @@ fn constraint_collection_propagates_an_error_from_a_subscript_index() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::IntLiteral(1)),
@@ -947,6 +969,8 @@ fn constraint_collection_carries_a_homogeneous_float_list_literal_as_an_element_
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListLiteral(vec![HirExpr::FloatLiteral(1.0), HirExpr::FloatLiteral(2.0)]);
 
@@ -976,6 +1000,8 @@ fn constraint_collection_carries_a_single_element_scalar_list_literal() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]);
 
@@ -1008,6 +1034,8 @@ fn constraint_collection_does_not_carry_a_heterogeneous_list_literal() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::FloatLiteral(2.0)]);
 
@@ -1041,6 +1069,8 @@ fn constraint_collection_does_not_carry_a_bool_int_heterogeneous_list_literal() 
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::BoolLiteral(true)]);
 
@@ -1070,6 +1100,8 @@ fn constraint_collection_does_not_carry_an_empty_list_literal() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListLiteral(vec![]);
 
@@ -1101,6 +1133,8 @@ fn constraint_collection_does_not_carry_a_list_literal_with_a_non_scalar_element
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListLiteral(vec![HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])]);
 
@@ -1132,6 +1166,8 @@ fn constraint_collection_does_not_carry_a_list_literal_when_an_element_has_no_te
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListLiteral(vec![
         HirExpr::IntLiteral(1),
@@ -1166,6 +1202,8 @@ fn constraint_collection_subscript_on_a_list_literal_base_extracts_the_element_t
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::Name("xs".to_string())),
@@ -1199,6 +1237,8 @@ fn constraint_collection_subscript_on_a_non_list_bound_base_keeps_ok_none() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::Name("x".to_string())),
@@ -1234,6 +1274,8 @@ fn constraint_collection_subscript_on_an_unresolved_list_base_keeps_ok_none() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::Name("xs".to_string())),
@@ -1267,6 +1309,8 @@ fn constraint_collection_list_pop_on_a_list_typed_bound_name_extracts_the_elemen
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListPop {
         list: "xs".to_string(),
@@ -1299,6 +1343,8 @@ fn constraint_collection_list_pop_on_an_unbound_name_keeps_ok_none() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListPop {
         list: "xs".to_string(),
@@ -1331,6 +1377,8 @@ fn constraint_collection_list_pop_on_a_non_list_bound_name_keeps_ok_none() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListPop {
         list: "xs".to_string(),
@@ -1364,6 +1412,8 @@ fn constraint_collection_list_append_after_a_list_binding_still_keeps_ok_none() 
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListAppend {
         list: "xs".to_string(),
@@ -1397,6 +1447,8 @@ fn constraint_collection_inline_subscript_on_a_list_literal_extracts_the_element
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
@@ -1495,6 +1547,8 @@ fn constraint_collection_treats_a_slice_as_unconstrained_but_recurses_into_base_
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Slice {
         base: Box::new(HirExpr::IntLiteral(1)),
@@ -1529,6 +1583,8 @@ fn constraint_collection_treats_a_slice_with_every_bound_omitted_as_unconstraine
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Slice {
         base: Box::new(HirExpr::IntLiteral(1)),
@@ -1561,6 +1617,8 @@ fn constraint_collection_propagates_an_error_from_a_slice_base() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Slice {
         base: Box::new(HirExpr::Name("missing".to_string())),
@@ -1593,6 +1651,8 @@ fn constraint_collection_propagates_an_error_from_a_slice_bound() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Slice {
         base: Box::new(HirExpr::IntLiteral(1)),
@@ -1625,6 +1685,8 @@ fn constraint_collection_treats_a_list_append_as_unconstrained_but_recurses_into
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListAppend {
         list: "lst".to_string(),
@@ -1655,6 +1717,8 @@ fn constraint_collection_propagates_an_error_from_a_list_append_value() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListAppend {
         list: "lst".to_string(),
@@ -1691,6 +1755,8 @@ fn constraint_collection_treats_a_list_pop_as_unconstrained() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::ListPop {
         list: "lst".to_string(),
@@ -1721,6 +1787,8 @@ fn constraint_collection_treats_a_dict_get_or_default_as_unconstrained_but_recur
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::DictGetOrDefault {
         dict: "d".to_string(),
@@ -1752,6 +1820,8 @@ fn constraint_collection_propagates_an_error_from_a_dict_get_or_default_key() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::DictGetOrDefault {
         dict: "d".to_string(),
@@ -1783,6 +1853,8 @@ fn constraint_collection_propagates_an_error_from_a_dict_get_or_default_default(
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::DictGetOrDefault {
         dict: "d".to_string(),
@@ -1814,6 +1886,8 @@ fn constraint_collection_treats_a_set_add_as_unconstrained_but_recurses_into_val
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::SetAdd {
         set: "s".to_string(),
@@ -1844,6 +1918,8 @@ fn constraint_collection_propagates_an_error_from_a_set_add_value() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::SetAdd {
         set: "s".to_string(),
@@ -1879,6 +1955,8 @@ fn constraint_collection_len_call_returns_int_for_a_concretely_bound_list() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "len".to_string(),
@@ -1915,6 +1993,8 @@ fn constraint_collection_len_call_defers_an_unresolved_argument_to_the_real_chec
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "len".to_string(),
@@ -1945,6 +2025,8 @@ fn constraint_collection_len_call_rejects_the_wrong_arity() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "len".to_string(),
@@ -1976,6 +2058,8 @@ fn constraint_collection_len_call_rejects_a_concretely_known_non_list_argument()
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "len".to_string(),
@@ -2013,6 +2097,8 @@ fn constraint_collection_float_call_returns_float_regardless_of_argument_resolut
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "float".to_string(),
@@ -2048,6 +2134,8 @@ fn constraint_collection_float_call_defers_an_unresolved_argument_to_the_real_ch
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "float".to_string(),
@@ -2078,6 +2166,8 @@ fn constraint_collection_float_call_rejects_the_wrong_arity() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "float".to_string(),
@@ -2109,6 +2199,8 @@ fn constraint_collection_float_call_rejects_a_concretely_known_non_numeric_argum
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "float".to_string(),
@@ -2151,6 +2243,8 @@ fn constraint_collection_honors_a_user_defined_float_signature_over_the_builtin(
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "float".to_string(),
@@ -2181,6 +2275,8 @@ fn collect_block_constraints_gives_a_for_list_loop_variable_a_fresh_term_when_un
         local_names: &["i"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::ForList {
         var: "i".to_string(),
@@ -2213,6 +2309,8 @@ fn collect_block_constraints_keeps_a_for_list_loop_variable_s_existing_term() {
         local_names: &["i"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::ForList {
         var: "i".to_string(),
@@ -2245,6 +2343,8 @@ fn collect_block_constraints_propagates_an_error_from_a_for_list_loop_body() {
         local_names: &["i", "z"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::ForList {
         var: "i".to_string(),
@@ -6695,11 +6795,17 @@ fn list_pop_on_a_list_typed_parameter_infers_the_scalar_element_type_inside_an_u
 }
 
 #[test]
-fn dict_get_or_default_assigned_inside_an_unannotated_private_helper_hits_the_pre_existing_solver_binding_gap_today()
+fn dict_get_or_default_assigned_inside_an_unannotated_private_helper_reaches_the_genuine_cannot_infer_return_type_diagnostic()
  {
     // Same pre-existing D-116 gap as the `ListPop` test immediately
     // above, exercised through `DictGetOrDefault`'s own
-    // `collect_expr_constraints` arm (also `Ok(None)`) instead.
+    // `collect_expr_constraints` arm (also `Ok(None)`) instead. Issue
+    // #771/D-199: `y` is now tracked as definitely-but-opaquely bound
+    // (`opaque_bindings`), so `return y` no longer misfires as an unbound
+    // local ("not bound before this use") -- it correctly falls through
+    // to the genuine "cannot infer return type" diagnostic instead, since
+    // the solver still has no type term for `y` (that half of the gap is
+    // unchanged; only the misleading consequence is fixed).
     let hir = HirModule {
         seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
@@ -6724,7 +6830,10 @@ fn dict_get_or_default_assigned_inside_an_unannotated_private_helper_hits_the_pr
     };
     let err = check(&hir).unwrap_err();
     assert_eq!(err.code, "T0021");
-    assert!(err.message.contains("not bound before this use"));
+    assert_eq!(
+        err.message,
+        "cannot infer return type of private helper `_h`; add an annotation"
+    );
 }
 
 #[test]
@@ -7504,6 +7613,8 @@ fn constraint_collection_classifies_value_error_as_c0001() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "ValueError".to_string(),
@@ -7533,6 +7644,8 @@ fn constraint_collection_classifies_exception_as_c0001() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "Exception".to_string(),
@@ -7565,6 +7678,8 @@ fn constraint_collection_defers_unknown_callees_to_final_validation() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "totally_undefined".to_string(),
@@ -7599,6 +7714,8 @@ fn constraint_collection_honors_user_defined_value_error_over_c0001() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "ValueError".to_string(),
@@ -7839,6 +7956,8 @@ fn constraint_collection_len_call_returns_int_for_a_concretely_bound_dict() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "len".to_string(),
@@ -7869,6 +7988,8 @@ fn constraint_collection_treats_a_dict_literal_as_unconstrained_but_recurses_int
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::DictLiteral(vec![(
         HirExpr::StringLiteral("a".to_string()),
@@ -7899,6 +8020,8 @@ fn constraint_collection_propagates_an_error_from_a_dict_literal_key() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::DictLiteral(vec![(
         HirExpr::Name("missing".to_string()),
@@ -7929,6 +8052,8 @@ fn constraint_collection_propagates_an_error_from_a_dict_literal_value() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::DictLiteral(vec![(
         HirExpr::StringLiteral("a".to_string()),
@@ -7959,6 +8084,8 @@ fn collect_block_constraints_recurses_into_a_dict_set_s_key_and_value() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::DictSet {
         dict: "x".to_string(),
@@ -7989,6 +8116,8 @@ fn collect_block_constraints_propagates_an_error_from_a_dict_set_key() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::DictSet {
         dict: "x".to_string(),
@@ -8021,6 +8150,8 @@ fn collect_block_constraints_propagates_an_error_from_a_dict_set_value() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::DictSet {
         dict: "x".to_string(),
@@ -9321,6 +9452,8 @@ fn constraint_collection_len_call_returns_int_for_a_concretely_bound_set() {
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::Call {
         callee: "len".to_string(),
@@ -9351,6 +9484,8 @@ fn constraint_collection_treats_a_set_literal_as_unconstrained_but_recurses_into
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1)]);
 
@@ -9378,6 +9513,8 @@ fn constraint_collection_propagates_an_error_from_a_set_literal_element() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::SetLiteral(vec![HirExpr::Name("missing".to_string())]);
 
@@ -9573,6 +9710,8 @@ fn constraint_collection_treats_a_tuple_literal_as_unconstrained_but_recurses_in
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::TupleLiteral(vec![HirExpr::IntLiteral(1)]);
 
@@ -9600,6 +9739,8 @@ fn constraint_collection_propagates_an_error_from_a_tuple_literal_element() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let expr = HirExpr::TupleLiteral(vec![HirExpr::Name("missing".to_string())]);
 
@@ -17613,6 +17754,8 @@ fn solver_if_no_else_marks_body_only_binding_as_maybe() {
         local_names: &["cond", "x"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::If {
         test: HirExpr::Name("cond".to_string()),
@@ -17651,6 +17794,8 @@ fn solver_if_with_else_marks_both_branch_binding_as_definite() {
         local_names: &["cond", "x"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::If {
         test: HirExpr::Name("cond".to_string()),
@@ -17693,6 +17838,8 @@ fn solver_if_no_else_does_not_leak_binding_into_orelse() {
         local_names: &["cond", "x", "y"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     // Body assigns x; orelse assigns y. After the if, both x and y
     // should be maybe-bound (each was introduced by only one branch).
@@ -17738,6 +17885,8 @@ fn solver_while_loop_marks_body_only_binding_as_maybe() {
         local_names: &["cond", "x"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::While {
         test: HirExpr::Name("cond".to_string()),
@@ -17775,6 +17924,8 @@ fn solver_for_range_marks_loop_variable_as_maybe() {
         local_names: &["i"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::ForRange {
         var: "i".to_string(),
@@ -17812,6 +17963,8 @@ fn solver_for_range_body_only_binding_is_maybe() {
         local_names: &["i", "x"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::ForRange {
         var: "i".to_string(),
@@ -17852,6 +18005,8 @@ fn solver_for_range_pre_existing_binding_stays_definite() {
         local_names: &["i", "x"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::ForRange {
         var: "i".to_string(),
@@ -17894,6 +18049,8 @@ fn solver_maybe_bound_name_skips_unification_in_name_arm() {
         local_names: &["x"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::from(["x".to_string()]),
+
+        opaque_bindings: HashSet::new(),
     };
 
     let term = collect_expr_constraints(
@@ -17925,6 +18082,8 @@ fn solver_unconditional_assignment_upgrades_maybe_to_definite() {
         local_names: &["cond", "x"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![
         HirStmt::If {
@@ -17971,6 +18130,8 @@ fn solver_definitely_bound_name_returns_its_term() {
         local_names: &["x"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
     };
 
     let term = collect_expr_constraints(
@@ -22476,6 +22637,52 @@ fn cast_down_to_a_derived_class_is_c0001() {
 }
 
 #[test]
+fn cast_down_to_a_derived_class_via_a_plain_assignment_binding_is_c0001() {
+    // #771: the exact filed repro. Binding a rejected `cast(...)` result to
+    // a plain (non-annotated) local before reading it used to report a
+    // misleading `T0021` ("`d` is not bound before this use") instead of
+    // the real `C0001` down-cast rejection that the equivalent inline form
+    // (`cast_down_to_a_derived_class_is_c0001` above) already reported
+    // correctly. Root cause (D-199): `check()` discards the concrete
+    // path's correct `C0001` on `Err` and unconditionally falls back to
+    // `infer_function_signatures_with_solver`, whose `Assign` arm left `d`
+    // wholly untracked because the `Cast` arm returns `Ok(None)` for a
+    // non-scalar target -- so `return d.b` misfired as an unbound local in
+    // that second pass before the first pass's real diagnostic could
+    // surface. `opaque_bindings` tracks `d` as definitely-but-opaquely
+    // bound instead, so the solver pass no longer errors and the real
+    // `C0001` (computed by the first, concrete pass) is the one returned.
+    let err = check_source(
+        "from typing import cast\nclass Base:\n    def __init__(self, a: int) -> None:\n        self.a = a\nclass Derived(Base):\n    def __init__(self, a: int, b: int) -> None:\n        self.a = a\n        self.b = b\ndef f(base: Base) -> int:\n    d = cast(Derived, base)\n    return d.b\nprint(f(Base(1)))\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message.contains("narrow the value's attribute layout"),
+        "expected the layout message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn an_opaque_assignment_whose_value_is_never_read_still_compiles() {
+    // Issue #771 positive-path coverage: adding `opaque_bindings` tracking
+    // for an unconditional assignment whose RHS the solver can't represent
+    // as a term must not introduce a new false positive when that binding
+    // is simply never read afterward. `y` is assigned from `d.get("a", 0)`
+    // (a `DictGetOrDefault`, one of the affected-site inventory's
+    // constructs) inside an unannotated private helper (the return type is
+    // `Ty::Infer`, forcing the whole module through the solver path per
+    // `concrete_function_environment`), so the solver runs, but `y` is
+    // discarded rather than returned -- only the literal `1` determines
+    // the inferred return type.
+    check_source(
+        "def _h():\n    d = {\"a\": 1}\n    y = d.get(\"a\", 0)\n    return 1\nprint(_h())\n",
+    )
+    .unwrap_or_else(|e| panic!("expected a clean compile, got: {e:?}"));
+}
+
+#[test]
 fn cast_between_two_unrelated_class_types_is_c0001() {
     // #767 review fix (second pass, D-198): two classes with no MRO
     // relationship are neither an up-cast nor an identity cast, so this is
@@ -22732,10 +22939,7 @@ fn cast_without_its_import_is_currently_accepted_through_the_solver_mirror() {
     // private helper -- so a #768 fix that inverts only the validation-pass
     // gate would leave this route accepting unimported `cast` unnoticed.
     // Pinning both routes now means #768 must invert both.
-    check_source(
-        "def _helper():\n    return cast(int, 1)\nprint(_helper())\n",
-    )
-    .unwrap();
+    check_source("def _helper():\n    return cast(int, 1)\nprint(_helper())\n").unwrap();
 }
 
 #[test]
@@ -24526,6 +24730,8 @@ fn collect_block_constraints_propagates_error_from_match_subject() {
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["z"],
     };
@@ -24559,6 +24765,8 @@ fn collect_block_constraints_propagates_error_from_match_case_body() {
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["z"],
     };

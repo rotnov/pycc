@@ -1,0 +1,99 @@
+---
+id: D-199
+title: "Track opaque bindings in the private-helper constraint solver (#771)"
+status: accepted
+---
+
+## D-199: Track opaque bindings in the private-helper constraint solver (#771)
+
+- Status: accepted
+- Context: Issue #771 filed a misleading diagnostic: `d = cast(Derived, base); return d.b` inside a
+  module the private-helper constraint solver (`infer_function_signatures_with_solver`) reaches
+  reported `T0021` ("`d` is not bound before this use") instead of the real `C0001` down-cast
+  rejection the equivalent inline form (`return cast(Derived, base).b`) already reported correctly.
+  Root cause, traced to source: `check()` (`crates/pycc_types/src/lib.rs`) first tries a fast
+  concrete-only path, which correctly computes the `C0001` rejection, but discards that result on
+  `Err` and unconditionally falls back to `infer_function_signatures_with_solver` — a second,
+  independent walk of the same module. That solver's `collect_block_constraints` `Assign` arm only
+  inserts a binding into `env.bindings` when `collect_expr_constraints` returns `Some(term)`; the
+  `Cast` arm (added for #767) deliberately returns `Ok(None)` for a non-scalar target, since the
+  solver has no resolved `Ty` for the cast's argument to validate the cast against. `d` is therefore
+  left in neither `env.bindings` nor `env.maybe_bindings` (the existing "assigned in only one
+  branch" tracking, D-147). When `return d.b` is walked, `HirExpr::Name("d")` finds no binding but
+  *is* a syntactic local, so it returns `Err(unbound_local("d"))` — `T0021` — which propagates
+  straight out of `check()`, and the correct `C0001` computed by the first, discarded pass never
+  surfaces.
+
+  This is not cast-specific or novel: it is a pre-existing, already-documented architectural gap in
+  the same solver, present since before D-146. `crates/pycc_hir/src/lib.rs`'s `ListPop`/
+  `DictGetOrDefault` doc comments and `constraints.rs`'s `Subscript`/`AttrGet`/`MethodCall`/
+  `TupleLiteral`/`DictLiteral`/`SetLiteral` arms all state that assigning one of these expressions
+  to a name inside a solver-checked function registers no binding, and a later read then fails with
+  the same misleading "not bound before this use". D-146 already fixed this exact symptom once, for
+  `ListLiteral`/`Subscript`/`ListPop` specifically, via a "destructured carrier term" (a `Ty::List`
+  term the solver can partially interpret). `isinstance`/`issubclass` do not exhibit this bug —
+  their solver arm unconditionally returns a term. `cast`'s class-target case is simply the newest
+  construct to expose the same pre-D-146-unfixed class, on the *result* side rather than the
+  argument side D-146 fixed. Confirmed cosmetic, not a soundness gap: `T0021` and `C0001` are both
+  `error`-tier and the program is rejected under either code.
+- Decision: Add a second, purpose-distinct binding set to `ConstraintEnvironment`
+  (`crates/pycc_types/src/constraints.rs`), `opaque_bindings: HashSet<String>`, fixing the general
+  class rather than `cast` specifically (matching D-146's own precedent and directly serving #771's
+  own suggestion to check whether other constructs share the symptom — they do). In
+  `collect_block_constraints`'s `Assign` arm only, when `collect_expr_constraints` returns `Ok(None)`
+  for an *unconditional* assignment target, `target` is inserted into `env.opaque_bindings` instead
+  of being left untracked; a fresh assignment first clears any stale opaque marker for the same name
+  (mirroring the existing `maybe_bindings.remove` at the same site), then either binds a real term or
+  reinstates the opaque marker. The `AnnAssign`-with-`value` arm is deliberately *not* wired to insert
+  into `opaque_bindings` — unlike `Assign`, it already unconditionally binds `target` into
+  `env.bindings` from the annotation itself, regardless of the initializer term, so the insertion
+  would be dead code at best and, given the lookup order below, a precision regression at worst; it
+  only gets the same stale-marker cleanup for hygiene. In `HirExpr::Name`'s lookup, a name in
+  `env.maybe_bindings` still short-circuits to `Ok(None)` first (unchanged, D-147 semantics); then a
+  present `env.bindings` term always wins; only when *neither* holds a term does `env.opaque_bindings`
+  membership return `Ok(None)` instead of falling through to `unbound_local` — so a real term always
+  takes priority over a stale opaque marker for the same name. `opaque_bindings` is kept semantically
+  separate from `maybe_bindings` (not reused or folded in) and mirrors `maybe_bindings`'s own
+  lifecycle exactly at every rebind, scope-clear, and environment-construction/clone site.
+- Alternatives: Reuse `maybe_bindings` directly instead of adding a new field (rejected —
+  `maybe_bindings` has a specific, D-147-tied meaning inspected by the if/loop branch-merge logic
+  at two other sites; polluting the same set with "definitely assigned, but the solver has no term
+  for it" entries risks changing that merge behavior in ways not fully traced here). Short-circuit
+  `check()`/`checked_function_signatures()` to return the concrete path's `Err` directly instead of
+  falling back to the solver (rejected — both functions carry an explicit comment preserving the
+  historical solver-first diagnostic selection for modules with multiple errors, so short-circuiting
+  changes that selection more broadly than this issue calls for; it also does not fix the general
+  class, since a module that legitimately reaches the solver path for an unrelated unannotated
+  helper would still hit the same misfire for `.pop()`, `AttrGet`, `MethodCall`, etc.). Give `cast`'s
+  solver arm a real "carrier" term, mirroring D-146's `Ty::List` carrier (rejected — D-146's carrier
+  works because a list's element type is still derivable without full class resolution; a
+  `cast(Derived, base)` target's validity depends on `check_cast`'s representation/layout/dispatch
+  analysis, which needs a resolved `Ty` the solver does not have by design; the same is true for
+  `AttrGet`/`MethodCall`, so a carrier only works for the D-146 subset, not the general class).
+- Consequences: `crates/pycc_types/src/constraints.rs` gains the `opaque_bindings` field (mirrored
+  at its two production construction sites and every `maybe_bindings` rebind/scope-clear site) and
+  the `HirExpr::Name` lookup change. `crates/pycc_types/src/tests.rs`'s 78 direct
+  `ConstraintEnvironment { ... }` construction sites each gain `opaque_bindings: HashSet::new()`.
+  `crates/pycc_hir/src/lib.rs`'s `ListPop`/`DictGetOrDefault` doc comments and the affected
+  `constraints.rs` arm comments (`Subscript`/`AttrGet`/`MethodCall`/`TupleLiteral`/`DictLiteral`/
+  `SetLiteral`) are updated to strike only the "later read fails with a misleading diagnostic"
+  clause — the "this construct contributes no solver term" clause is unchanged and remains true;
+  the gap is not closed, only its misleading consequence is. The pre-existing pinned regression test
+  `dict_get_or_default_assigned_inside_an_unannotated_private_helper_...` (renamed to drop its now-
+  inaccurate "hits the pre-existing solver binding gap today" suffix) is updated in place: it still
+  reports `T0021`, but now with the genuine "cannot infer return type of private helper `_h`; add an
+  annotation" message instead of the misleading "not bound before this use" one. A new test pins the
+  #771 repro itself (`d = cast(Derived, base); return d.b` now reports `C0001`), and a new positive-
+  path test confirms an unconditional assignment from an opaque expression whose value is never read
+  still compiles cleanly. Every construct in the affected-site inventory (`Cast`, `Subscript`,
+  `ListPop`, `AttrGet`, `MethodCall`, `DictGetOrDefault`, `SetAdd`, `TupleLiteral`, `DictLiteral`,
+  `SetLiteral`, non-scalar `ListLiteral`) is fixed by this single shared `HirExpr::Name` change, since
+  the bug's mechanism is identical in every case. Branch-conditional variants (e.g.
+  `if cond: d = cast(...)` read later) remain out of scope — a genuinely different case that
+  interacts with `maybe_bindings`/D-147 for real, deferred to a follow-up issue if it is found to
+  also misfire. This extends D-146's own precedent (a construct the solver can't fully model still
+  shouldn't cause a spurious `unbound_local`) via a general mechanism instead of a per-construct
+  carrier term; it references, and does not supersede, D-146. It also references the existing
+  `maybe_bindings`/`BindingState::Maybe` definite-assignment tracking the surrounding source comments
+  attribute to D-147 (issue #118, `T0041`), whose semantics `opaque_bindings` is deliberately kept
+  distinct from.
