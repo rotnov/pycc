@@ -85,3 +85,16 @@ def local_optional() -> None:
 
 
 local_optional()
+
+# D-199, #769: the narrowed read must also work when the payload is a
+# heap-allocated bigint, not just a smallint -- assigning the narrowed
+# read into a second binding forces codegen's duplicate-reference retain
+# path (`retain_if_int_duplicate`) to run on an `OptionalUnwrap` source,
+# not just the plain-int sources it already covered. 4611686018427387904
+# is 2**62, the same promoted-to-bigint boundary value used by the
+# bigint fixtures (e.g. `tests/fixtures/bigint_range.py`).
+big: int | None = 4611686018427387904
+if big is not None:
+    duplicated = big
+    print(big + 1)
+    print(duplicated)
