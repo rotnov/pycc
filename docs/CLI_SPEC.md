@@ -105,7 +105,8 @@ directory once project mode exists.
                     conflicts with an explicit `--interop-policy`
 --error-format human|json     json = stable schema for editors/CI (check only)
 --format human|json           json = stable schema for editors/CI (explain only; deliberately not --error-format -- explain's output is never an error, see D-150)
---fix               apply machine-applicable suggestions (check only)
+--fix               planned: apply machine-applicable suggestions (check
+                    only); not yet implemented, currently rejected
 -j N                parallelism (default: cores)
 ```
 
