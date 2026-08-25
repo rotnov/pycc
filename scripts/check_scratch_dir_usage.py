@@ -80,8 +80,6 @@ EXEMPT_FILES = frozenset({"crates/pycc_scratch/src/lib.rs"})
 # `try_build`/`run`) and its five test-only ones (Part 2's scope, inside its
 # `#[cfg(test)] mod tests`).
 ALLOWLIST: dict[str, int] = {
-    "crates/pycc_codegen/src/tests.rs": 1,
-    "crates/pycc_codegen/src/tests_support.rs": 1,
     "src/main.rs": 7,
     "src/project_config.rs": 26,
     "tests/conformance.rs": 1,
