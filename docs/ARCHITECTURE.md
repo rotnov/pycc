@@ -54,6 +54,7 @@ closure to the deployment artifact under `auto` or `allowlist`; `deny` and
 | `pycc_rt` | Runtime staticlib (see RUNTIME.md) — pure Rust, `#![no_std]`-friendly core |
 | `pycc_artifact_layout` | Where Cargo-produced artifacts live: target-directory resolution (D-183) and `pycc_rt` archive naming. A dependency-free leaf shared by `pycc_codegen`'s library *and* its build script (D-184), and re-exported as `pycc_codegen::artifact_layout` |
 | `pycc_std` | Compiled stdlib subset (typed Python + Rust intrinsics, see STDLIB_PLAN.md) |
+| `pycc_scratch` | `ScratchDir`: shared RAII scratch-directory abstraction with panic-safe `Drop` cleanup and collision-safe naming, used by tests/benchmarks/CLI helpers instead of ad hoc `std::env::temp_dir().join(...)` calls (issue #779/#781, D-201) |
 | `pycc_diag` | Diagnostics engine, error registry (see DIAGNOSTICS.md) |
 | `pycc_testkit` | Conformance/differential test harness (see TESTING.md) |
 

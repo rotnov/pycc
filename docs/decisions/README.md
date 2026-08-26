@@ -207,3 +207,4 @@ current.
 | [D-198](./D-198-cast-erasure-limits-cast-to-representation.md) | `cast` erasure limits `cast` to representation-preserving targets | accepted |
 | [D-199](./D-199-opaque-bindings-for-solver-unrepresentable.md) | Track opaque bindings in the private-helper constraint solver (#771) | accepted |
 | [D-200](./D-200-raise-llms-txt-aggregate-budget-to-264-kib.md) | Raise the llms.txt aggregate context budget from 256 KiB to 264 KiB (issue #207) | accepted |
+| [D-201](./D-201-shared-pycc-scratch-crate-and-lint-gate-for.md) | Shared `pycc_scratch` crate and lint gate for scratch-directory lifecycle | accepted |
