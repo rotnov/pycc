@@ -105,7 +105,9 @@ directory once project mode exists.
                     conflicts with an explicit `--interop-policy`
 --error-format human|json     json = stable schema for editors/CI (check only)
 --format human|json           json = stable schema for editors/CI (explain only; deliberately not --error-format -- explain's output is never an error, see D-150)
---fix               apply machine-applicable suggestions (check only)
+--fix               planned: apply machine-applicable suggestions (check
+                    only); not yet implemented -- currently rejected as an
+                    unrecognized argument, not specially recognized
 -j N                parallelism (default: cores)
 ```
 
@@ -287,7 +289,7 @@ is, and the caret label always repeats the diagnostic's full message rather
 than an independent short label -- both are current, real behavior, not an
 aspirational target (D-043).
 
-JSON format versioned (`"format_version": 1`), one object per diagnostic: code, severity, spans[{file,line,col,len,label}], message, help[], fix{edits[]}?. `line` and `col` are 1-indexed Unicode-scalar positions; `len` counts Unicode scalar values from the span start, including normalized line separators in a multi-line span. Consumed by editors and the corpus bot (TESTING.md).
+JSON format versioned (`"format_version": 1`), one object per diagnostic: code, severity, spans[{file,line,col,len,label}], message, help[]; a planned `fix{edits[]}` field for machine-applicable suggestions is not yet emitted by the serializer (`crates/pycc_diag/src/lib.rs`'s `render_json`/`Diagnostic` have no `fix` key today) and awaits the same `--fix` implementation described above. `line` and `col` are 1-indexed Unicode-scalar positions; `len` counts Unicode scalar values from the span start, including normalized line separators in a multi-line span. Consumed by editors and the corpus bot (TESTING.md).
 
 `help[]` holds exactly one entry for a diagnostic whose message already states a determinate, safe fix (an exact expected type, an exact expected count, an exact "add an annotation" instruction, an already-embedded usage example, or a self-contained constraint the message itself already names, such as a literal-index requirement), and is empty otherwise (D-152). This is currently true for arity/type-mismatch, missing-annotation, and literal-index-constraint diagnostic families; name-resolution, capability-limitation, and ambiguous-conflict diagnostics still emit `help: []`. The human format above has no `help:` line codepath at all, regardless of whether `help[]` is populated in JSON (D-043, D-083).
 
