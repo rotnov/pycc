@@ -472,23 +472,26 @@ pub(crate) fn annotation_to_ty(
                 }
             };
             let inner = annotation_to_ty(other_side, type_param, class_name, aliases, class_defs)?;
-            // `Optional[T]` is only supported for `T == int` in this PR
-            // (D-197, #763, Part 1 of #747): codegen's `{ inner, i8 }`
-            // representation (`crates/pycc_codegen/src/lib.rs`'s
-            // `ty_to_basic_type`) and every downstream `Scalar`/emit site
-            // are exercised and tested for `Optional[int]` only, mirroring
-            // `list[int]`'s own `T0034` scope cut (D-105/D-122). Gated here,
-            // pre-lowering, at the one place a `Ty::Optional` is ever
-            // constructed from source, so nothing else in the pipeline
-            // needs to re-derive this check: a `Ty::Optional` reaching
-            // `pycc_types`/`pycc_mir`/`pycc_codegen` is *always* wrapping
-            // `Ty::Int` starting from this return.
-            if inner != Ty::Int {
+            // `Optional[T]` is only supported for `T` in `{int, float, bool}`
+            // (D-197, #763, Part 1 of #747; widened to `float`/`bool` by
+            // #809, Part 2): codegen's `{ inner, i8 }` representation
+            // (`crates/pycc_codegen/src/lib.rs`'s `ty_to_basic_type`) and
+            // every downstream `Scalar`/emit site are exercised and tested
+            // for these three scalar inner types only. Refcounted/pointer
+            // inner types (`str` and friends) and general `A | B` unions
+            // stay out of scope, mirroring `list[int]`'s own `T0034` scope
+            // cut (D-105/D-122). Gated here, pre-lowering, at the one place
+            // a `Ty::Optional` is ever constructed from source, so nothing
+            // else in the pipeline needs to re-derive this check: a
+            // `Ty::Optional` reaching `pycc_types`/`pycc_mir`/`pycc_codegen`
+            // always wraps one of `Ty::Int`, `Ty::Float`, or `Ty::Bool`
+            // starting from this return.
+            if !matches!(inner, Ty::Int | Ty::Float | Ty::Bool) {
                 let range = std::ops::Range::<u32>::from(bin_op.range);
                 return Err(Diagnostic::error(
                     "T0049",
                     format!(
-                        "`Optional[{}]` is not supported yet -- only `Optional[int]` (`int | None`) is",
+                        "`Optional[{}]` is not supported yet -- only `Optional[int]`, `Optional[float]`, and `Optional[bool]` (`int | None`, `float | None`, `bool | None`) are",
                         inner.name()
                     ),
                     Span::new(range.start, range.end),

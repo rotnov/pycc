@@ -212,3 +212,4 @@ current.
 | [D-202](./D-202-kill-prescan-for-re-enterable-narrowed-bodies.md) | Kill-prescan for re-enterable Optional[T] narrowed bodies (D-068 re-review of #780, third round) | accepted |
 | [D-202](./D-202-pep-654-except-star-and-exceptiongroup.md) | PEP 654 `except*`/ExceptionGroup: six deliberate simplifications | accepted |
 | [D-203](./D-203-narrow-the-d-091-bench-manifest-tail-check-to.md) | Narrow the D-091 bench-manifest tail check to tolerate the `pycc_scratch` root dev-dependency line | accepted |
+| [D-204](./D-204-widen-optional-t-codegen-to-float-and-bool-inner.md) | Widen Optional[T] codegen to float and bool inner types (Part 3 of #747) | accepted |
