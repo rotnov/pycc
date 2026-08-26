@@ -1147,25 +1147,51 @@ fn coerce_scalar_to_type<'ctx>(
         // `truthy` and an `if x is not None:` narrowed unwrap.
         (pycc_mir::Ty::Optional(inner), Scalar::Optional(v)) => {
             let struct_ty =
-                ty_to_basic_type(context, pycc_mir::Ty::Optional(inner)).into_struct_type();
+                ty_to_basic_type(context, pycc_mir::Ty::Optional(inner.clone()))
+                    .into_struct_type();
             if v.get_type() == struct_ty {
                 Scalar::Optional(v)
             } else {
-                // The placeholder's field 0 must still be a *valid*
-                // D-141-encoded int, not a raw zero word: `truthy`'s own
-                // `Scalar::Optional` arm unconditionally calls
-                // `pycc_rt_int_truthy` on field 0 and ANDs the result with
-                // the present flag rather than branching around it, so an
-                // absent-but-invalid payload would trip
-                // `classify_encoded_int`'s fail-closed panic even though
-                // the AND makes the payload's truth value irrelevant.
-                // `tag_smallint_const(context, 0)` encodes `0` the same
-                // way `to_encoded_int` would, so the placeholder is
-                // indistinguishable from a real (never-observed) `int` `0`.
+                // The placeholder's field 0 must be a value of field 0's
+                // *actual* declared type (`struct_ty`'s first field, sized
+                // by `inner`), not unconditionally a D-141-encoded int:
+                // `struct_ty.get_undef()` is `inner`-shaped (`{ i64, i8 }`
+                // for `Ty::Int`, `{ f64, i8 }` for `Ty::Float`, `{ i8, i8 }`
+                // for `Ty::Bool`), and `build_insert_value` performs no
+                // type-matching validation of its own -- inserting a
+                // mismatched-type constant (e.g. an `i64` into a `Ty::Float`
+                // struct's `f64` field 0) builds a malformed
+                // `ConstantStruct` that both `module.verify()` and LLVM's
+                // own IR printer accept without complaint (neither
+                // re-validates a `ConstantAggregate`'s element types against
+                // its declared struct type), so this was previously a
+                // latent miscompile rather than a build-time or
+                // verification failure. For `Ty::Int`,
+                // `tag_smallint_const(context, 0)` encodes `0` the same way
+                // `to_encoded_int` would (`truthy`'s own `Scalar::Optional`
+                // arm unconditionally calls `pycc_rt_int_truthy` on field 0
+                // and ANDs the result with the present flag rather than
+                // branching around it, so an absent-but-invalid payload
+                // would trip `classify_encoded_int`'s fail-closed panic even
+                // though the AND makes the payload's truth value
+                // irrelevant). `Ty::Float` and `Ty::Bool` carry no such
+                // tagged encoding, so a plain zero of the field's own type
+                // is exact.
+                let payload0: inkwell::values::BasicValueEnum = match inner.as_ref() {
+                    pycc_mir::Ty::Int => tag_smallint_const(context, 0).into(),
+                    pycc_mir::Ty::Float => context.f64_type().const_zero().into(),
+                    pycc_mir::Ty::Bool => context.i8_type().const_zero().into(),
+                    // `T0049` (`crates/pycc_hir/src/func.rs`) rejects every
+                    // `Optional[T]` annotation for `T` outside `{int, float,
+                    // bool}` before this value could ever be constructed.
+                    other => panic!(
+                        "pycc_codegen: internal error: an Optional[_] placeholder targeted an unsupported inner type ({other:?}) -- pycc_types::check (T0049) should have rejected this before codegen"
+                    ),
+                };
                 let with_payload = builder
                     .build_insert_value(
                         struct_ty.get_undef(),
-                        tag_smallint_const(context, 0),
+                        payload0,
                         0,
                         "opt_none_payload",
                     )

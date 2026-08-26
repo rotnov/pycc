@@ -7539,6 +7539,77 @@ fn coerce_scalar_to_type_rejects_a_non_int_payload_widening_into_optional_int() 
 }
 
 #[test]
+#[should_panic(
+    expected = "internal error: an Optional[_] placeholder targeted an unsupported inner type"
+)]
+fn coerce_scalar_to_type_rejects_a_none_placeholder_targeting_an_unsupported_inner_type() {
+    // The sibling defensive backstop to the test immediately above, this
+    // time for the *placeholder* branch (`v.get_type() != struct_ty`) added
+    // by this PR's own fix: `T0049` never admits `Optional[str]`, so a
+    // hand-built call reaching this arm directly (bypassing `T0049`
+    // entirely, the same way the sibling test above does) proves the
+    // `match inner.as_ref() { Ty::Int | Ty::Float | Ty::Bool => .., other
+    // => panic!(..) }` catch-all is reachable and fires for any inner type
+    // outside the three #809/#763 admit.
+    let context = Context::create();
+    let builder = context.create_builder();
+    let none_placeholder = context
+        .struct_type(&[context.i8_type().into(), context.i8_type().into()], false)
+        .const_zero();
+    coerce_scalar_to_type(
+        &context,
+        &builder,
+        Scalar::Optional(none_placeholder),
+        pycc_mir::Ty::Optional(Box::new(Ty::Str)),
+    );
+}
+
+#[test]
+fn coerce_scalar_to_type_builds_an_i8_zero_placeholder_payload_for_a_mismatched_optional_bool_struct(
+) {
+    // `Ty::Bool`'s real `Optional[bool]` struct shape (`{ i8, i8 }`)
+    // happens to be the literal same `StructType` as the bare-`None`
+    // placeholder's own fixed `{ i8, i8 }` shape (see
+    // `optional_bool_none_placeholder_and_real_absent_value_are_the_same_
+    // llvm_struct_type`), so no value ever built by real codegen takes
+    // this arm's `else` branch for `inner == Ty::Bool` -- every real
+    // `Optional[bool]` value's `v.get_type() == struct_ty` check is
+    // always true. `match inner.as_ref() { .. Ty::Bool => .. }`'s own line
+    // is therefore otherwise unreachable and untestable through any real
+    // MIR program. Pin it directly with a hand-built, deliberately
+    // mismatched `Scalar::Optional` (an `{ i64, i8 }`-shaped struct value,
+    // never producible for a `Ty::Bool` inner type by real codegen) so
+    // this arm still has direct coverage and is proven to build a
+    // correctly-typed `i8` zero rather than the sibling `Ty::Int` arm's
+    // `i64` constant, mirroring `truthy_of_an_optional_with_a_pointer_
+    // payload_panics_as_an_internal_error` above's use of a positioned
+    // builder to exercise a codegen function directly.
+    let context = Context::create();
+    let module = context.create_module("test");
+    let builder = context.create_builder();
+    let fn_type = context.void_type().fn_type(&[], false);
+    let f = module.add_function("f", fn_type, None);
+    let block = context.append_basic_block(f, "entry");
+    builder.position_at_end(block);
+    let mismatched = ty_to_basic_type(&context, pycc_mir::Ty::Optional(Box::new(Ty::Int)))
+        .into_struct_type()
+        .get_undef();
+    let result = coerce_scalar_to_type(
+        &context,
+        &builder,
+        Scalar::Optional(mismatched),
+        pycc_mir::Ty::Optional(Box::new(Ty::Bool)),
+    );
+    let Scalar::Optional(v) = result else {
+        panic!("coerce_scalar_to_type should return Scalar::Optional for an Optional target");
+    };
+    assert_eq!(
+        v.get_type(),
+        ty_to_basic_type(&context, optional_bool()).into_struct_type()
+    );
+}
+
+#[test]
 fn a_return_inside_a_for_list_body_returns_immediately_without_looping() {
     // The `MirStmt::ForList` counterpart of `a_return_inside_a_for_
     // range_body_returns_immediately_without_looping` above, for the
@@ -14257,4 +14328,171 @@ fn fstring_interpolation_of_a_caught_exception_binding_renders_its_message() {
     link_object_with_runtime(&obj_path, &bin_path);
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"boom\n");
+}
+
+// --- #812 review finding: bare `None` through the argument/return paths
+// (`coerce_scalar_to_type`'s `(Ty::Optional(inner), Scalar::Optional(v))`
+// arm, not the `OptionalWrap`-mediated assignment path the tests above
+// exercise) -----------------------------------------------------------
+
+#[test]
+fn optional_float_bare_none_argument_constructs_a_correctly_typed_absent_struct() {
+    // `def f(x: float | None): print(x is None); print(x is not None)` ;
+    // `f(None)` -- a bare `None` literal argument reaches
+    // `build_call_to_with_leading_args`'s own `coerce_scalar_to_type` call
+    // directly, with no `MirExpr::OptionalWrap` wrapper in between (only
+    // `HirStmt::Assign`/`HirStmt::AnnAssign` construct `OptionalWrap`).
+    // Before this PR's fix, the mismatched-struct branch always inserted
+    // `tag_smallint_const` (an `i64`) into field 0 regardless of the
+    // parameter's declared inner type, producing a malformed
+    // `{ f64, i8 }` constant for `Ty::Float` that neither `module.verify()`
+    // nor LLVM's own IR printer rejected.
+    let mir = MirModule {
+        items: vec![
+            MirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), optional_float())],
+                return_ty: Ty::None,
+                body: vec![
+                    print_expr(MirExpr::Compare {
+                        op: pycc_mir::CmpOpKind::Is,
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: optional_float(),
+                        }),
+                        right: Box::new(MirExpr::NoneLiteral),
+                        ty: Ty::Bool,
+                    }),
+                    print_expr(MirExpr::Compare {
+                        op: pycc_mir::CmpOpKind::IsNot,
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: optional_float(),
+                        }),
+                        right: Box::new(MirExpr::NoneLiteral),
+                        ty: Ty::Bool,
+                    }),
+                ],
+            },
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "f".to_string(),
+                args: vec![MirExpr::NoneLiteral],
+                ty: Ty::None,
+            })),
+        ],
+        class_defs: Vec::new(),
+    };
+    let dir = pycc_scratch::ScratchDir::new("optional_float_bare_none_argument").expect("failed to create scratch dir");
+    let obj_path = dir.join("optional_float_bare_none_argument.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("optional_float_bare_none_argument");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"True\nFalse\n");
+}
+
+#[test]
+fn optional_bool_bare_none_argument_constructs_a_correctly_typed_absent_struct() {
+    // The `Optional[bool]` counterpart of the `Optional[float]` argument
+    // test immediately above. `Ty::Bool`'s real `{ i8, i8 }` shape happens
+    // to collide with the placeholder's own fixed `{ i8, i8 }` (see
+    // `optional_bool_none_placeholder_and_real_absent_value_are_the_same_
+    // llvm_struct_type`), so this specific inner type was never at risk of
+    // the field-0-type-mismatch this PR fixes -- kept for parity with the
+    // rest of this file's float/bool pairing and to pin the argument path
+    // for both admitted inner types.
+    let mir = MirModule {
+        items: vec![
+            MirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), optional_bool())],
+                return_ty: Ty::None,
+                body: vec![
+                    print_expr(MirExpr::Compare {
+                        op: pycc_mir::CmpOpKind::Is,
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: optional_bool(),
+                        }),
+                        right: Box::new(MirExpr::NoneLiteral),
+                        ty: Ty::Bool,
+                    }),
+                    print_expr(MirExpr::Compare {
+                        op: pycc_mir::CmpOpKind::IsNot,
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: optional_bool(),
+                        }),
+                        right: Box::new(MirExpr::NoneLiteral),
+                        ty: Ty::Bool,
+                    }),
+                ],
+            },
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "f".to_string(),
+                args: vec![MirExpr::NoneLiteral],
+                ty: Ty::None,
+            })),
+        ],
+        class_defs: Vec::new(),
+    };
+    let dir = pycc_scratch::ScratchDir::new("optional_bool_bare_none_argument").expect("failed to create scratch dir");
+    let obj_path = dir.join("optional_bool_bare_none_argument.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("optional_bool_bare_none_argument");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"True\nFalse\n");
+}
+
+#[test]
+fn optional_float_bare_none_return_constructs_a_correctly_typed_absent_struct() {
+    // `def g() -> float | None: return None` ; `z = g()` ;
+    // `print(z is None); print(z is not None)` -- a bare `None` literal
+    // `return` reaches `coerce_scalar_to_type` from the function's own
+    // return-handling call site, again with no `OptionalWrap` wrapper.
+    let mir = MirModule {
+        items: vec![
+            MirItem::Function {
+                name: "g".to_string(),
+                params: vec![],
+                return_ty: optional_float(),
+                body: vec![MirStmt::Return(Some(MirExpr::NoneLiteral))],
+            },
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "z".to_string(),
+                value: MirExpr::Call {
+                    callee: "g".to_string(),
+                    args: vec![],
+                    ty: optional_float(),
+                },
+            }),
+            MirItem::TopLevelStmt(print_expr(MirExpr::Compare {
+                op: pycc_mir::CmpOpKind::Is,
+                left: Box::new(MirExpr::Name {
+                    name: "z".to_string(),
+                    ty: optional_float(),
+                }),
+                right: Box::new(MirExpr::NoneLiteral),
+                ty: Ty::Bool,
+            })),
+            MirItem::TopLevelStmt(print_expr(MirExpr::Compare {
+                op: pycc_mir::CmpOpKind::IsNot,
+                left: Box::new(MirExpr::Name {
+                    name: "z".to_string(),
+                    ty: optional_float(),
+                }),
+                right: Box::new(MirExpr::NoneLiteral),
+                ty: Ty::Bool,
+            })),
+        ],
+        class_defs: Vec::new(),
+    };
+    let dir = pycc_scratch::ScratchDir::new("optional_float_bare_none_return").expect("failed to create scratch dir");
+    let obj_path = dir.join("optional_float_bare_none_return.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("optional_float_bare_none_return");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"True\nFalse\n");
 }
