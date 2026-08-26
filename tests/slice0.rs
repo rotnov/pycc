@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -21,8 +22,7 @@ fn a_missing_input_file_is_a_clean_error_not_a_panic() {
     // Regression test (found in PR review): an earlier version used
     // .expect() on read_to_string, so a typo'd path panicked (exit 101,
     // raw backtrace) instead of a clean CLI error.
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_missing_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_missing").expect("failed to create scratch dir");
     let missing_path = dir.join("does_not_exist.py");
     let out = dir.join("out");
 
@@ -43,8 +43,7 @@ fn a_missing_input_file_is_a_clean_error_not_a_panic() {
 fn build_and_run_explicit_call_to_main() {
     // Python never auto-invokes a function merely because it's named
     // `main` -- the source has to call it, same as any other function.
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "hello.py",
@@ -73,8 +72,7 @@ fn defining_main_without_calling_it_produces_no_output() {
     // interpreter path would be machine-specific and break CI; the real
     // conformance harness that runs this kind of check portably is
     // pycc_testkit, deferred per DECISIONS.md): zero bytes of stdout.
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_uncalled_main_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_uncalled_main").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "hello_uncalled.py",
@@ -103,8 +101,7 @@ fn build_and_run_a_function_reading_a_module_level_global_it_does_not_assign() {
     // classification), and `pycc_codegen` (module globals as real LLVM
     // globals, reachable from any function) all agree end to end that a
     // function may read a module-level global it does not itself assign.
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_module_global_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_module_global").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "reads_global.py",
@@ -124,8 +121,7 @@ fn build_and_run_a_function_reading_a_module_level_global_it_does_not_assign() {
 
 #[test]
 fn build_and_run_top_level_print_with_no_main() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_toplevel_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_toplevel").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "hello_toplevel.py", "print(42)\n");
     let out = dir.join("hello_toplevel");
 
@@ -141,8 +137,7 @@ fn build_and_run_top_level_print_with_no_main() {
 
 #[test]
 fn run_subcommand_builds_and_executes_in_one_step() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_run_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_run").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "hello_run.py", "print(42)\n");
 
     let output = Command::new(pycc_bin())
@@ -155,9 +150,7 @@ fn run_subcommand_builds_and_executes_in_one_step() {
 
 #[test]
 fn run_subcommand_normalizes_a_generated_runtime_failure_to_101() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_e2e_run_runtime_fail_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_run_runtime_fail").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "runtime_fail.py", "print(1.0 / 0.0)\n");
 
     let output = Command::new(pycc_bin())
@@ -169,8 +162,7 @@ fn run_subcommand_normalizes_a_generated_runtime_failure_to_101() {
 
 #[test]
 fn run_subcommand_propagates_a_build_failure() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_run_fail_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_run_fail").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "bad_run.py", "def main(:\n");
 
     let output = Command::new(pycc_bin())
@@ -191,8 +183,7 @@ fn run_subcommand_maps_a_signal_terminated_compiled_program_to_exit_code_101() {
     // exit) -- `run`'s previous `.unwrap_or(1)` silently mapped that to
     // exit code 1 instead of the `101` CLI_SPEC.md promises for "compiled
     // program panicked/uncaught exception".
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_run_signal_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_run_signal").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "div_zero_run.py", "print(1.0 / 0.0)\n");
 
     let output = Command::new(pycc_bin())
@@ -213,8 +204,7 @@ fn run_subcommand_maps_a_signal_terminated_compiled_program_to_exit_code_101() {
 /// come back through the public build path.
 #[test]
 fn build_rejects_a_module_value_binding_that_shadows_a_function_call() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_shadowed_call_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_shadowed_call").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "shadowed_call.py",
@@ -322,12 +312,11 @@ fn unimplemented_subcommands_exit_with_code_2() {
 
 #[test]
 fn init_scaffolds_pycc_toml_and_main_py_in_the_current_directory() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_init").expect("failed to create scratch dir");
 
     let output = Command::new(pycc_bin())
         .args(["init", "e2e_init_project"])
-        .current_dir(&dir)
+        .current_dir(&*dir)
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
@@ -354,12 +343,12 @@ fn init_refuses_when_pycc_toml_exists_as_a_directory() {
     // pre-check phase now refuses it up front (any entry type counts as
     // an existing `pycc.toml`). Same exit code and stderr prefix, honest
     // new name for the new mechanism.
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_conflict_{}", std::process::id()));
+    let dir = ScratchDir::new("e2e_init_conflict").expect("failed to create scratch dir");
     std::fs::create_dir_all(dir.join("pycc.toml")).unwrap();
 
     let output = Command::new(pycc_bin())
         .args(["init"])
-        .current_dir(&dir)
+        .current_dir(&*dir)
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -372,14 +361,14 @@ fn init_refuses_when_pycc_toml_exists_as_a_directory() {
 /// exit 2 and leave both byte-for-byte unchanged.
 #[test]
 fn init_refuses_to_overwrite_an_existing_project() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_existing_{}", std::process::id()));
+    let dir = ScratchDir::new("e2e_init_existing").expect("failed to create scratch dir");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("pycc.toml"), "user toml").unwrap();
     std::fs::write(dir.join("src").join("main.py"), "user code").unwrap();
 
     let output = Command::new(pycc_bin())
         .args(["init", "clobber"])
-        .current_dir(&dir)
+        .current_dir(&*dir)
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -399,13 +388,12 @@ fn init_refuses_to_overwrite_an_existing_project() {
 /// #237 regression 2 (variant A): only `pycc.toml` exists.
 #[test]
 fn init_refuses_when_only_pycc_toml_exists() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_toml_only_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_init_toml_only").expect("failed to create scratch dir");
     std::fs::write(dir.join("pycc.toml"), "user toml").unwrap();
 
     let output = Command::new(pycc_bin())
         .args(["init"])
-        .current_dir(&dir)
+        .current_dir(&*dir)
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -421,13 +409,13 @@ fn init_refuses_when_only_pycc_toml_exists() {
 /// must also leave `pycc.toml` uncreated.
 #[test]
 fn init_refuses_when_only_main_py_exists() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_py_only_{}", std::process::id()));
+    let dir = ScratchDir::new("e2e_init_py_only").expect("failed to create scratch dir");
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("src").join("main.py"), "user code").unwrap();
 
     let output = Command::new(pycc_bin())
         .args(["init"])
-        .current_dir(&dir)
+        .current_dir(&*dir)
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -442,13 +430,12 @@ fn init_refuses_when_only_main_py_exists() {
 /// #237 regression 3: `src` exists as a plain file.
 #[test]
 fn init_refuses_when_src_is_a_plain_file() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_src_file_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_init_src_file").expect("failed to create scratch dir");
     std::fs::write(dir.join("src"), "not a directory").unwrap();
 
     let output = Command::new(pycc_bin())
         .args(["init"])
-        .current_dir(&dir)
+        .current_dir(&*dir)
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -470,8 +457,7 @@ fn init_refuses_when_src_is_a_plain_file() {
 #[cfg(unix)]
 #[test]
 fn init_rolls_back_main_py_when_a_late_write_fails() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_late_fail_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_init_late_fail").expect("failed to create scratch dir");
     std::os::unix::fs::symlink(
         dir.join("missing_dir").join("pycc.toml"),
         dir.join("pycc.toml"),
@@ -480,7 +466,7 @@ fn init_rolls_back_main_py_when_a_late_write_fails() {
 
     let output = Command::new(pycc_bin())
         .args(["init"])
-        .current_dir(&dir)
+        .current_dir(&*dir)
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -504,8 +490,7 @@ fn init_rolls_back_main_py_when_a_late_write_fails() {
 #[cfg(unix)]
 #[test]
 fn init_succeeds_on_retry_after_a_late_write_failure_is_fixed() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_retry_ok_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_init_retry_ok").expect("failed to create scratch dir");
     std::os::unix::fs::symlink(
         dir.join("missing_dir").join("pycc.toml"),
         dir.join("pycc.toml"),
@@ -514,7 +499,7 @@ fn init_succeeds_on_retry_after_a_late_write_failure_is_fixed() {
 
     let first = Command::new(pycc_bin())
         .args(["init"])
-        .current_dir(&dir)
+        .current_dir(&*dir)
         .output()
         .unwrap();
     assert_eq!(first.status.code(), Some(2));
@@ -523,7 +508,7 @@ fn init_succeeds_on_retry_after_a_late_write_failure_is_fixed() {
 
     let second = Command::new(pycc_bin())
         .args(["init"])
-        .current_dir(&dir)
+        .current_dir(&*dir)
         .output()
         .unwrap();
     assert_eq!(second.status.code(), Some(0));
@@ -546,8 +531,7 @@ fn init_succeeds_on_retry_after_a_late_write_failure_is_fixed() {
 #[cfg(unix)]
 #[test]
 fn init_reports_an_unavailable_cwd_without_panicking() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_no_cwd_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_init_no_cwd").expect("failed to create scratch dir");
     let pycc = pycc_bin();
 
     // `sh -c '...' sh "$dir" "$pycc"` — positional args ($1, $2) avoid
@@ -556,7 +540,7 @@ fn init_reports_an_unavailable_cwd_without_panicking() {
         .arg("-c")
         .arg("cd \"$1\" && rmdir \"$1\" && exec \"$2\" init")
         .arg("sh")
-        .arg(&dir)
+        .arg(&*dir)
         .arg(&pycc)
         .output()
         .unwrap();
@@ -609,8 +593,7 @@ fn init_reports_an_unavailable_cwd_without_panicking() {
 #[cfg(unix)]
 #[test]
 fn build_reports_a_missing_linker_driver_without_panicking() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_no_linker_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_no_linker").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "no_linker.py", "print(42)\n");
     let out = dir.join("no_linker");
 
@@ -637,8 +620,7 @@ fn build_reports_a_missing_linker_driver_without_panicking() {
 #[cfg(unix)]
 #[test]
 fn run_reports_a_missing_linker_driver_without_panicking() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_run_no_linker_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_run_no_linker").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "no_linker_run.py", "print(42)\n");
 
     let output = Command::new(pycc_bin())
@@ -654,8 +636,7 @@ fn run_reports_a_missing_linker_driver_without_panicking() {
 
 #[test]
 fn a_syntax_error_is_a_compile_error_exit_code_1() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_synerr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_synerr").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "bad.py", "def main(:\n");
     let out = dir.join("bad");
 
@@ -669,8 +650,7 @@ fn a_syntax_error_is_a_compile_error_exit_code_1() {
 
 #[test]
 fn a_type_error_is_a_compile_error_exit_code_1() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_typeerr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_typeerr").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "typeerr.py", "x = undefined\n");
     let out = dir.join("typeerr");
 
@@ -684,8 +664,7 @@ fn a_type_error_is_a_compile_error_exit_code_1() {
 
 #[test]
 fn an_unannotated_public_function_is_a_compile_error_exit_code_1() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_t0001_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_t0001").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "t0001.py", "def add(a, b):\n    return a + b\n");
     let out = dir.join("t0001");
 
@@ -702,8 +681,7 @@ fn defining_a_function_under_any_name_without_calling_it_succeeds() {
     // There's no "must be named main" restriction: any function name is
     // legal to define; only calling one runs it (matches CPython, which
     // has no such restriction either).
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_anyfn_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_anyfn").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "anyfn.py", "def helper() -> None:\n    print(1)\n");
     let out = dir.join("anyfn");
 
@@ -720,8 +698,7 @@ fn defining_a_function_under_any_name_without_calling_it_succeeds() {
 fn calling_an_undefined_function_is_a_compile_error() {
     // Caught by pycc_types (T0021) since Task 9 added real function-call
     // signature checking; previously this only failed later, at codegen.
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_undefined_fn_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_undefined_fn").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "undefined_fn.py", "does_not_exist()\n");
     let out = dir.join("undefined_fn");
 
@@ -770,8 +747,7 @@ fn build_and_run_cross_compiled_to_a_different_tier_1_target() {
         eprintln!("skipping: x86_64-apple-darwin pycc_rt build not available in this environment");
         return;
     }
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_cross_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_cross").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "hello_cross.py", "print(42)\n");
     let out = dir.join("hello_cross");
 
@@ -829,8 +805,7 @@ fn build_and_run_with_target_set_to_the_host_s_own_triple_on_linux() {
         return;
     }
 
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_owntriple_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_owntriple").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "hello_owntriple.py", "print(42)\n");
     let out = dir.join("hello_owntriple");
 
@@ -853,8 +828,7 @@ fn build_and_run_with_target_set_to_the_host_s_own_triple_on_linux() {
 
 #[test]
 fn an_unknown_target_triple_is_a_clean_build_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_badtriple_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_badtriple").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "hello_badtriple.py", "print(42)\n");
     let out = dir.join("hello_badtriple");
 
@@ -885,8 +859,7 @@ fn targeting_a_valid_triple_with_no_local_pycc_rt_build_is_a_clean_error() {
     // false on that one runner (this exact regression was caught in PR
     // review: this test failed on ubuntu-24.04-arm once D-031 gave that
     // runner its own aarch64-unknown-linux-gnu build).
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_no_rt_build_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_no_rt_build").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "hello_no_rt.py", "print(42)\n");
     let out = dir.join("hello_no_rt");
 
@@ -907,8 +880,7 @@ fn targeting_a_valid_triple_with_no_local_pycc_rt_build_is_a_clean_error() {
 
 #[test]
 fn check_subcommand_reports_no_issues_on_valid_code() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_ok_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_ok").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "ok.py",
@@ -925,11 +897,7 @@ fn check_subcommand_reports_no_issues_on_valid_code() {
 
 #[test]
 fn check_subcommand_infers_a_private_helper_signature() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_e2e_check_private_inference_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_private_inference").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "private.py",
@@ -946,11 +914,8 @@ fn check_subcommand_infers_a_private_helper_signature() {
 
 #[test]
 fn check_subcommand_honors_an_annotated_private_local_without_widening_its_source() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_e2e_check_annotated_private_local_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_annotated_private_local")
+        .expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "annotated_private_local.py",
@@ -967,11 +932,8 @@ fn check_subcommand_honors_an_annotated_private_local_without_widening_its_sourc
 
 #[test]
 fn build_accepts_an_annotated_private_local_with_a_bool_initializer() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_e2e_build_annotated_private_local_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_build_annotated_private_local")
+        .expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "annotated_private_local.py",
@@ -990,11 +952,8 @@ fn build_accepts_an_annotated_private_local_with_a_bool_initializer() {
 
 #[test]
 fn annotated_private_local_does_not_widen_an_independently_returned_bool() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_e2e_run_annotated_private_echo_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_run_annotated_private_echo")
+        .expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "annotated_private_echo.py",
@@ -1014,11 +973,8 @@ fn annotated_private_local_does_not_widen_an_independently_returned_bool() {
 
 #[test]
 fn check_subcommand_still_rejects_annotated_private_local_narrowing() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_e2e_check_annotated_private_narrowing_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_annotated_private_narrowing")
+        .expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "annotated_private_narrowing.py",
@@ -1035,11 +991,7 @@ fn check_subcommand_still_rejects_annotated_private_local_narrowing() {
 
 #[test]
 fn check_subcommand_rejects_conflicting_private_helper_constraints() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_e2e_check_private_conflict_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_private_conflict").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "private_conflict.py",
@@ -1056,11 +1008,7 @@ fn check_subcommand_rejects_conflicting_private_helper_constraints() {
 
 #[test]
 fn check_subcommand_propagates_an_annotated_binary_result() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_e2e_check_private_binop_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_private_binop").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "private_binop.py",
@@ -1077,9 +1025,7 @@ fn check_subcommand_propagates_an_annotated_binary_result() {
 
 #[test]
 fn check_subcommand_rejects_true_division_with_an_int_result_annotation() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_e2e_check_private_div_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_private_div").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "private_div.py",
@@ -1096,11 +1042,8 @@ fn check_subcommand_rejects_true_division_with_an_int_result_annotation() {
 
 #[test]
 fn check_subcommand_rejects_known_string_operands_for_an_int_result() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_e2e_check_private_string_binop_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_private_string_binop")
+        .expect("failed to create scratch dir");
 
     for (name, source) in [
         (
@@ -1127,8 +1070,7 @@ fn check_subcommand_rejects_known_string_operands_for_an_int_result() {
 
 #[test]
 fn check_subcommand_reports_t0001_on_an_unannotated_public_function() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_t0001_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_t0001").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "bad.py", "def add(a, b):\n    return a + b\n");
 
     let output = Command::new(pycc_bin())
@@ -1141,8 +1083,7 @@ fn check_subcommand_reports_t0001_on_an_unannotated_public_function() {
 
 #[test]
 fn check_subcommand_supports_json_error_format() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_json_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_json").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "bad.py", "def add(a, b):\n    return a + b\n");
 
     let output = Command::new(pycc_bin())
@@ -1404,8 +1345,7 @@ fn direct_type_api_rejects_incompatible_resolved_binary_operands() {
 
 #[test]
 fn check_subcommand_reports_a_clean_error_on_a_missing_file() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_missing_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_missing").expect("failed to create scratch dir");
     let missing_path = dir.join("does_not_exist.py");
 
     let output = Command::new(pycc_bin())
@@ -1418,8 +1358,7 @@ fn check_subcommand_reports_a_clean_error_on_a_missing_file() {
 
 #[test]
 fn check_subcommand_reports_a_syntax_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_syntax_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_syntax").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "bad.py", "def main(:\n");
 
     let output = Command::new(pycc_bin())
@@ -1437,8 +1376,7 @@ fn check_subcommand_reports_a_type_error() {
     // cleanly; the undefined-name error only surfaces from
     // pycc_types::check's own inference pass, exercising check_frontend's
     // third (and otherwise untested) diagnostic-producing stage.
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_typeerr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_typeerr").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "bad.py", "x = undefined\n");
 
     let output = Command::new(pycc_bin())
@@ -1457,9 +1395,7 @@ fn a_top_level_return_is_a_clean_error_not_a_panic() {
     // contract. `ruff_python_parser` parses this fine -- CPython itself only
     // rejects it in a later compile pass, not the grammar -- so this is
     // reachable from ordinary (if unusual) CLI input.
-    let dir =
-        std::env::temp_dir().join(format!("pycc_e2e_top_level_return_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_top_level_return").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "bad.py", "return\n");
 
     let output = Command::new(pycc_bin())
@@ -1472,8 +1408,7 @@ fn a_top_level_return_is_a_clean_error_not_a_panic() {
 
 #[test]
 fn a_bad_output_path_is_a_link_error_exit_code_1() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_badout_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_badout").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "hello_badout.py", "print(42)\n");
     let bad_out = dir.join("does_not_exist_dir").join("hello");
 
@@ -1491,8 +1426,7 @@ fn a_bad_output_path_is_a_link_error_exit_code_1() {
 
 #[test]
 fn a_bad_temporary_directory_is_a_codegen_error_exit_code_1() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_badtmp_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_badtmp").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "hello_badtmp.py", "print(42)\n");
     let out = dir.join("hello");
     let missing_tmp = dir.join("does_not_exist");
@@ -1511,8 +1445,7 @@ fn a_bad_temporary_directory_is_a_codegen_error_exit_code_1() {
 
 #[test]
 fn check_accepts_every_staged_file_in_one_invocation() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_many_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_many").expect("failed to create scratch dir");
     let first = write_fixture(&dir, "first.py", "print(1)\n");
     let second = write_fixture(&dir, "second.py", "def helper() -> None:\n    print(2)\n");
 
@@ -1530,11 +1463,7 @@ fn check_accepts_every_staged_file_in_one_invocation() {
 
 #[test]
 fn check_reports_capability_errors_and_continues_the_batch() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_e2e_check_capability_batch_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_capability_batch").expect("failed to create scratch dir");
     // #435: `pass` is now supported (filtered as a no-op in `lower_body`),
     // so use `with` — a valid Python statement that is still unsupported —
     // to exercise the C0001 capability error path.
@@ -1561,8 +1490,7 @@ fn check_reports_capability_errors_and_continues_the_batch() {
 
 #[test]
 fn check_accepts_a_pep_263_latin_1_source_file() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_latin1_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_latin1").expect("failed to create scratch dir");
     let src = dir.join("latin1.py");
     std::fs::write(
         &src,
@@ -1583,11 +1511,7 @@ fn check_accepts_a_pep_263_latin_1_source_file() {
 
 #[test]
 fn check_accepts_python_normalized_encoding_separators() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_e2e_check_encoding_name_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_encoding_name").expect("failed to create scratch dir");
     let utf8 = dir.join("utf8.py");
     std::fs::write(&utf8, b"# coding: utf--8\nprint(1)\n").unwrap();
     let latin1 = dir.join("latin1.py");
@@ -1617,11 +1541,7 @@ fn check_accepts_python_normalized_encoding_separators() {
 
 #[test]
 fn check_rejects_collapsed_utf8_separators_when_a_bom_is_present() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_e2e_check_bom_encoding_name_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_bom_encoding_name").expect("failed to create scratch dir");
     let src = dir.join("bom_conflict.py");
     std::fs::write(&src, b"\xef\xbb\xbf# coding: utf--8\nprint(1)\n").unwrap();
 
@@ -1638,8 +1558,7 @@ fn check_rejects_collapsed_utf8_separators_when_a_bom_is_present() {
 
 #[test]
 fn check_normalizes_python_universal_newlines_before_rendering_diagnostics() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_newlines_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_newlines").expect("failed to create scratch dir");
 
     for (name, source) in [
         ("cr.py", b"print(1)\r$\r".as_slice()),
@@ -1663,11 +1582,7 @@ fn check_normalizes_python_universal_newlines_before_rendering_diagnostics() {
 
 #[test]
 fn check_reports_a_malformed_encoded_source_as_an_input_error() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_e2e_check_bad_encoding_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_bad_encoding").expect("failed to create scratch dir");
     let src = dir.join("invalid_utf8.py");
     std::fs::write(&src, b"print(42)\n# \xff\n").unwrap();
 
@@ -1685,8 +1600,7 @@ fn check_reports_a_malformed_encoded_source_as_an_input_error() {
 
 #[test]
 fn check_rejects_a_codec_without_python_compatible_mappings() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_gbk_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_gbk").expect("failed to create scratch dir");
     let src = dir.join("invalid_gbk.py");
     std::fs::write(&src, b"# coding: gbk\n# \x80\nprint(42)\n").unwrap();
 
@@ -1703,13 +1617,12 @@ fn check_rejects_a_codec_without_python_compatible_mappings() {
 
 #[test]
 fn check_accepts_a_staged_filename_that_starts_with_a_hyphen() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_hyphen_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_hyphen").expect("failed to create scratch dir");
     write_fixture(&dir, "--staged.py", "print(1)\n");
 
     let output = Command::new(pycc_bin())
         .args(["check", "--", "--staged.py"])
-        .current_dir(&dir)
+        .current_dir(&*dir)
         .output()
         .unwrap();
 
@@ -1739,8 +1652,7 @@ fn check_help_flags_show_help_instead_of_becoming_filenames() {
 fn check_accepts_a_non_utf8_staged_path_losslessly() {
     use std::os::unix::ffi::OsStringExt;
 
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_non_utf8_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_non_utf8").expect("failed to create scratch dir");
     let filename = std::ffi::OsString::from_vec(b"invalid_\xff.py".to_vec());
     let src = dir.join(filename);
     std::fs::write(&src, b"$\n").unwrap();
@@ -1759,8 +1671,7 @@ fn check_accepts_a_non_utf8_staged_path_losslessly() {
 
 #[test]
 fn check_reports_every_failure_and_io_errors_take_exit_code_precedence() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_errors_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_errors").expect("failed to create scratch dir");
     let invalid = write_fixture(&dir, "invalid.py", "print(1)\n$\n");
     let missing = dir.join("missing.py");
 
@@ -1785,8 +1696,7 @@ fn check_reports_every_failure_and_io_errors_take_exit_code_precedence() {
 
 #[test]
 fn check_aligns_a_diagnostic_caret_after_tab_indentation() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_tab_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_tab").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "tab.py", "def main() -> None:\n\t$\n");
 
     let output = Command::new(pycc_bin())
@@ -1804,8 +1714,7 @@ fn check_aligns_a_diagnostic_caret_after_tab_indentation() {
 
 #[test]
 fn check_uses_unicode_display_width_for_diagnostic_carets() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_unicode_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_unicode").expect("failed to create scratch dir");
 
     for (filename, source, expected) in [
         (
@@ -1830,8 +1739,7 @@ fn check_uses_unicode_display_width_for_diagnostic_carets() {
 
 #[test]
 fn check_sizes_the_diagnostic_gutter_for_three_digit_line_numbers() {
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_gutter_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("e2e_check_gutter").expect("failed to create scratch dir");
     let mut source = "print(1)\n".repeat(99);
     source.push_str("$\n");
     let src = write_fixture(&dir, "line_100.py", &source);

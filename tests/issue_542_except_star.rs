@@ -4,6 +4,7 @@
 //! (`tests/issue_739_oserror_hierarchy.rs` for Part 2 of #543,
 //! `tests/issue_740_multi_type_except.rs` for Part 3 of #543).
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -56,8 +57,7 @@ fn check_only(dir: &std::path::Path, src_name: &str, source: &str) -> (bool, Str
 
 #[test]
 fn except_star_single_clause_catches_a_plain_exception() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_single_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_single").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "single.py",
@@ -69,8 +69,7 @@ fn except_star_single_clause_catches_a_plain_exception() {
 
 #[test]
 fn except_star_dispatches_a_plain_exception_to_the_matching_clause() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_dispatch_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_dispatch").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "dispatch.py",
@@ -82,8 +81,7 @@ fn except_star_dispatches_a_plain_exception_to_the_matching_clause() {
 
 #[test]
 fn except_star_group_dispatches_each_member_to_its_own_clause() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_group_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_group").expect("failed to create scratch dir");
     // D-202: an `ExceptionGroup` member must be an *existing* exception
     // value, not a fresh `SomeError("msg")` construction (see
     // `check_exception_group_member_operand`'s own doc comment) -- so `e1`/
@@ -110,8 +108,7 @@ fn except_star_group_dispatches_each_member_to_its_own_clause() {
 /// never reached) or raises no group at all.
 #[test]
 fn except_star_partial_match_reraises_the_unmatched_remainder() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_partial_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_partial").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "partial.py",
@@ -141,8 +138,7 @@ fn except_star_partial_match_reraises_the_unmatched_remainder() {
 /// falling through to the next clause (or `reraise_remainder_bb`) instead.
 #[test]
 fn except_star_broad_first_clause_consuming_the_whole_group_does_not_crash_the_next_clause() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_broad_first_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_broad_first").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "broad_first.py",
@@ -164,8 +160,7 @@ fn except_star_broad_first_clause_consuming_the_whole_group_does_not_crash_the_n
 /// raises, dispatches, and is caught end to end under that simplification.
 #[test]
 fn base_exception_group_construction_and_dispatch() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_baseeg_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_baseeg").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "baseeg.py",
@@ -177,8 +172,7 @@ fn base_exception_group_construction_and_dispatch() {
 
 #[test]
 fn except_star_as_binding_is_accessible() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_asbind_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_asbind").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "asbind.py",
@@ -196,8 +190,7 @@ fn except_star_as_binding_is_accessible() {
 /// to exercise that separate path.
 #[test]
 fn except_star_as_binding_inside_a_function_is_a_local() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_asbind_fn_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_asbind_fn").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "asbind_fn.py",
@@ -217,8 +210,7 @@ fn except_star_as_binding_inside_a_function_is_a_local() {
 /// still walks all four blocks looking for one.
 #[test]
 fn except_star_inside_a_generic_function_body_type_checks() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_generic_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_generic").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "generic.py",
@@ -229,8 +221,7 @@ fn except_star_inside_a_generic_function_body_type_checks() {
 
 #[test]
 fn except_star_unmatched_member_propagates_uncaught() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_unmatched_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_unmatched").expect("failed to create scratch dir");
     let (ok, _out, err) = build_and_run(
         &dir,
         "unmatched.py",
@@ -245,8 +236,7 @@ fn except_star_unmatched_member_propagates_uncaught() {
 
 #[test]
 fn except_star_finally_always_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_finally_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_finally").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "finally.py",
@@ -264,8 +254,7 @@ fn except_star_finally_always_runs() {
 /// path is only ever exercised for plain `Try`, never `TryStar`.
 #[test]
 fn except_star_with_finally_in_a_value_returning_function_returns_correctly() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_finally_ret_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_finally_ret").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "finally_ret.py",
@@ -277,8 +266,7 @@ fn except_star_with_finally_in_a_value_returning_function_returns_correctly() {
 
 #[test]
 fn except_star_else_runs_when_no_exception() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_else_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_else").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "else.py",
@@ -298,8 +286,7 @@ fn except_star_else_runs_when_no_exception() {
 /// terminating the block before this check runs) has never been exercised.
 #[test]
 fn a_try_star_else_that_itself_returns_never_falls_through() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_else_returns_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_else_returns").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "else_returns.py",
@@ -311,16 +298,14 @@ fn a_try_star_else_that_itself_returns_never_falls_through() {
 
 #[test]
 fn except_star_bare_clause_is_rejected_at_parse_time() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_bare_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_bare").expect("failed to create scratch dir");
     let (ok, _combined) = check_only(&dir, "bare.py", "try:\n    pass\nexcept*:\n    pass\n");
     assert!(!ok, "a typeless except* should be rejected as a syntax error");
 }
 
 #[test]
 fn exception_group_construction_rejects_a_non_literal_member_list() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_nonlit_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_nonlit").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "nonlit.py",
@@ -340,8 +325,7 @@ fn exception_group_construction_rejects_a_non_literal_member_list() {
 /// top-level `raise` operand.
 #[test]
 fn exception_group_construction_rejects_a_fresh_constructor_call_member() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_freshctor_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_freshctor").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "freshctor.py",
@@ -367,8 +351,7 @@ fn exception_group_construction_rejects_a_fresh_constructor_call_member() {
 /// either argument's own type is even inspected.
 #[test]
 fn exception_group_construction_rejects_the_wrong_argument_count() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_argc_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_argc").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "argc.py",
@@ -386,8 +369,7 @@ fn exception_group_construction_rejects_the_wrong_argument_count() {
 /// plain `raise SomeError(...)`'s own message argument.
 #[test]
 fn exception_group_construction_rejects_a_non_str_message() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_msgty_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_msgty").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "msgty.py",
@@ -410,8 +392,7 @@ fn exception_group_construction_rejects_a_non_str_message() {
 /// `?` operator's own error-propagation branch instead.
 #[test]
 fn exception_group_construction_rejects_an_unresolved_message_name() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_msgname_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_msgname").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "msgname.py",
@@ -437,8 +418,7 @@ fn exception_group_construction_rejects_an_unresolved_message_name() {
 /// itself fail instead.
 #[test]
 fn exception_group_construction_rejects_an_unresolved_member_name() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_membername_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_membername").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "membername.py",
@@ -460,8 +440,7 @@ fn exception_group_construction_rejects_an_unresolved_member_name() {
 /// reaching codegen with nothing to partition.
 #[test]
 fn exception_group_construction_rejects_an_empty_member_list() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_empty_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_empty").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "empty.py",
@@ -479,8 +458,7 @@ fn exception_group_construction_rejects_an_empty_member_list() {
 /// at all (e.g. a plain `int`) is rejected too.
 #[test]
 fn exception_group_construction_rejects_a_non_exception_member() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_nonexc_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_nonexc").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "nonexc.py",
@@ -502,8 +480,7 @@ fn exception_group_construction_rejects_a_non_exception_member() {
 /// not yet exercised for `except*`.
 #[test]
 fn except_star_rejects_an_unrecognized_exception_type() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_unrecognized_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_unrecognized").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "unrecognized.py",
@@ -524,8 +501,7 @@ fn except_star_rejects_an_unrecognized_exception_type() {
 /// ever runs, so a builtin-only fixture never exercises the second disjunct.
 #[test]
 fn exception_group_construction_rejects_a_fresh_user_defined_constructor_call_member() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_freshuserctor_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_freshuserctor").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "freshuserctor.py",
@@ -553,8 +529,7 @@ fn exception_group_construction_rejects_a_fresh_user_defined_constructor_call_me
 /// this fallthrough-proof machinery.
 #[test]
 fn a_value_returning_function_whose_entire_body_is_a_terminating_try_star_never_falls_through() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_terminates_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_terminates").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "terminates.py",
@@ -579,8 +554,7 @@ fn a_value_returning_function_whose_entire_body_is_a_terminating_try_star_never_
 /// this first `?` site.
 #[test]
 fn a_type_conflict_inside_a_try_star_body_is_rejected_by_the_solver() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_solver_body_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_solver_body").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "solver_body.py",
@@ -600,9 +574,7 @@ fn a_type_conflict_inside_a_try_star_body_is_rejected_by_the_solver() {
 /// `except*` handler body's own mismatched return is visited.
 #[test]
 fn a_type_conflict_inside_a_try_star_handler_is_rejected_by_the_solver() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_542_solver_handler_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_solver_handler").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "solver_handler.py",
@@ -624,8 +596,7 @@ fn a_type_conflict_inside_a_try_star_handler_is_rejected_by_the_solver() {
 /// visited.
 #[test]
 fn a_type_conflict_inside_a_try_star_else_is_rejected_by_the_solver() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_solver_else_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_solver_else").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "solver_else.py",
@@ -651,9 +622,7 @@ fn a_type_conflict_inside_a_try_star_else_is_rejected_by_the_solver() {
 /// conflict -- the try/handler/else bodies above it all type-check cleanly.
 #[test]
 fn a_type_conflict_inside_a_try_star_finally_is_rejected_by_the_solver() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_542_solver_finally_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_solver_finally").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "solver_finally.py",
@@ -677,8 +646,7 @@ fn a_type_conflict_inside_a_try_star_finally_is_rejected_by_the_solver() {
 /// call's error branch has never been reached for `TryStar`.
 #[test]
 fn except_star_rejects_a_handler_type_with_its_own_constructor() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_own_ctor_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_own_ctor").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "own_ctor.py",
@@ -703,8 +671,7 @@ fn except_star_rejects_a_handler_type_with_its_own_constructor() {
 /// arm).
 #[test]
 fn a_type_error_inside_a_try_star_handler_body_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_handler_err_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_handler_err").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "handler_err.py",
@@ -719,8 +686,7 @@ fn a_type_error_inside_a_try_star_handler_body_is_rejected() {
 
 #[test]
 fn a_type_error_inside_a_try_star_else_body_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_else_err_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_else_err").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "else_err.py",
@@ -735,8 +701,7 @@ fn a_type_error_inside_a_try_star_else_body_is_rejected() {
 
 #[test]
 fn a_type_error_inside_a_try_star_finally_body_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_finally_err_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_finally_err").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "finally_err.py",
@@ -763,8 +728,7 @@ fn a_type_error_inside_a_try_star_finally_body_is_rejected() {
 /// below for a fixture that reaches `join_if_branches`'s own error branch.
 #[test]
 fn conflicting_types_across_two_try_star_handlers_are_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_join_conflict_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_join_conflict").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "join_conflict.py",
@@ -800,8 +764,7 @@ fn conflicting_types_across_two_try_star_handlers_are_rejected() {
 /// `ExceptionGroup` type is where the mismatch is first detected.
 #[test]
 fn a_handler_as_binding_conflicting_with_a_pre_existing_name_is_rejected_at_the_join() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_join_as_conflict_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_join_as_conflict").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "join_as_conflict.py",
@@ -828,8 +791,7 @@ fn a_handler_as_binding_conflicting_with_a_pre_existing_name_is_rejected_at_the_
 /// directly.
 #[test]
 fn a_try_star_finally_returning_a_value_propagates_through_an_enclosing_finally() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_nested_ret_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_nested_ret").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "nested_ret.py",
@@ -846,8 +808,7 @@ fn a_try_star_finally_returning_a_value_propagates_through_an_enclosing_finally(
 /// `ret_val` store.
 #[test]
 fn a_try_star_finally_bare_return_propagates_through_an_enclosing_finally() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_nested_void_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_nested_void").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "nested_void.py",
@@ -866,8 +827,7 @@ fn a_try_star_finally_bare_return_propagates_through_an_enclosing_finally() {
 /// (which has a return value).
 #[test]
 fn a_try_star_finally_bare_return_with_no_enclosing_finally_emits_ret_void() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_bare_void_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_bare_void").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "bare_void.py",
@@ -889,8 +849,7 @@ fn a_try_star_finally_bare_return_with_no_enclosing_finally_emits_ret_void() {
 /// block entirely -- the only way to exercise that flag's other value.
 #[test]
 fn a_try_star_finally_that_itself_raises_never_falls_through() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_finally_raises_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_finally_raises").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "finally_raises.py",
@@ -916,8 +875,7 @@ fn a_try_star_finally_that_itself_raises_never_falls_through() {
 /// instead of diverging, exercising the loop's closing brace.
 #[test]
 fn except_star_catches_a_user_defined_exception_class_without_a_binding() {
-    let dir = std::env::temp_dir().join(format!("pycc_542_user_class_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("542_user_class").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "user_exc_star.py",
