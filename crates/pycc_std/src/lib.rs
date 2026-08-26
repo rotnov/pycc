@@ -124,6 +124,26 @@ pub enum StdSymbolKind {
     /// calling it through its qualified name (`typing.cast(...)`), is
     /// rejected by the type checker.
     CastMarker,
+    /// The `typing.TYPE_CHECKING` marker symbol (#790). Unlike every other
+    /// marker kind, `TYPE_CHECKING` *is* a genuine runtime `bool` constant
+    /// in CPython (always `False`) -- but pycc supports it for exactly one
+    /// purpose: the standard `if TYPE_CHECKING: ...` idiom that guards
+    /// imports/statements meant only for static type checkers. `pycc_hir`'s
+    /// `Stmt::If` lowering (`crates/pycc_hir/src/stmt.rs`) recognizes the
+    /// bare name `TYPE_CHECKING` or the qualified `typing.TYPE_CHECKING`
+    /// spelling as the `if`/`elif` test *before* this registry entry is
+    /// ever consulted (matching the existing `Final` bare-name precedent),
+    /// and constant-folds the branch the same way CPython evaluates it --
+    /// the guarded body is never lowered or type-checked at all, so it may
+    /// freely contain constructs pycc doesn't support elsewhere (forward-
+    /// reference-only imports, typing-only names). This registry entry
+    /// exists only so `from typing import TYPE_CHECKING` itself resolves
+    /// instead of failing with `C0002`; a general reference to
+    /// `TYPE_CHECKING` as a first-class value (assigned, printed, passed as
+    /// an argument, or used inside a larger boolean expression such as `if
+    /// TYPE_CHECKING and x:`) is out of this issue's scope and is rejected
+    /// by the type checker exactly like every other marker kind.
+    TypeCheckingMarker,
 }
 
 /// A single registered stdlib symbol: which module it lives in, its source
@@ -210,6 +230,11 @@ const REGISTRY: &[StdSymbol] = &[
         module: StdModule::Typing,
         name: "cast",
         kind: StdSymbolKind::CastMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "TYPE_CHECKING",
+        kind: StdSymbolKind::TypeCheckingMarker,
     },
 ];
 
@@ -414,6 +439,15 @@ mod tests {
     }
 
     #[test]
+    fn resolve_symbol_finds_typing_type_checking() {
+        let sym = resolve_symbol(StdModule::Typing, "TYPE_CHECKING")
+            .expect("typing.TYPE_CHECKING is registered");
+        assert_eq!(sym.module, StdModule::Typing);
+        assert_eq!(sym.name, "TYPE_CHECKING");
+        assert_eq!(sym.kind, StdSymbolKind::TypeCheckingMarker);
+    }
+
+    #[test]
     fn resolve_symbol_finds_abc_abc() {
         let sym = resolve_symbol(StdModule::Abc, "ABC").expect("abc.ABC is registered");
         assert_eq!(sym.module, StdModule::Abc);
@@ -537,5 +571,14 @@ mod tests {
         let cast_sym2 = cast_sym;
         assert_eq!(cast_sym, cast_sym2);
         assert!(format!("{cast_sym:?}").contains("CastMarker"));
+
+        let type_checking_sym = StdSymbol {
+            module: StdModule::Typing,
+            name: "TYPE_CHECKING",
+            kind: StdSymbolKind::TypeCheckingMarker,
+        };
+        let type_checking_sym2 = type_checking_sym;
+        assert_eq!(type_checking_sym, type_checking_sym2);
+        assert!(format!("{type_checking_sym:?}").contains("TypeCheckingMarker"));
     }
 }

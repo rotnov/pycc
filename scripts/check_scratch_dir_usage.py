@@ -146,6 +146,14 @@ ALLOWLIST: dict[str, int] = {
     "tests/issue_762_typing_final_annotated.rs": 3,
     "tests/issue_767_typing_cast.rs": 6,
     "tests/issue_770_optional_reassignment.rs": 2,
+    # Same D-091 blocker as `tests/issue_769_optional_narrowing.rs` and
+    # `tests/issue_767_typing_cast.rs` above: this file's raw-`temp_dir` call
+    # sites cannot migrate to `pycc_scratch::ScratchDir` without adding
+    # `pycc_scratch` back as a root `[dev-dependencies]` entry, which
+    # `f79bb2b5` already tried and reverted because it trips D-091's
+    # bench-manifest fingerprint gate in `frontend-perf-measure`. Tracked
+    # under the same #782 Part 2 migration scope.
+    "tests/issue_790_typing_type_checking.rs": 6,
     "tests/nbody_bench.rs": 1,
     "tests/pycc_toml_release_default.rs": 1,
     "tests/quick_start.rs": 1,

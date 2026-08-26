@@ -22,8 +22,8 @@ use crate::{
     is_known_callable_builtin, is_local, is_marker_kind, lookup_bound_name, marker_is_not_a_value,
     non_callable_binding, numeric_or_bool_compatible, possibly_unbound,
     std_constant_is_not_callable, std_function_used_as_a_value, std_qualified_symbol,
-    std_receiver_name, std_receiver_shadowed, std_scalar_to_ty, unbound_local,
-    unsupported_callable_builtin,
+    std_receiver_name, std_receiver_shadowed, std_scalar_to_ty, type_checking_marker_is_not_a_value,
+    unbound_local, unsupported_callable_builtin,
 };
 
 use pycc_diag::{Diagnostic, Span};
@@ -74,6 +74,9 @@ pub(crate) fn infer_expr_in(
                         Err(annotation_marker_is_not_a_value(name))
                     }
                     pycc_std::StdSymbolKind::CastMarker => Err(cast_marker_is_not_a_value(name)),
+                    pycc_std::StdSymbolKind::TypeCheckingMarker => {
+                        Err(type_checking_marker_is_not_a_value(name))
+                    }
                     pycc_std::StdSymbolKind::ProtocolMarker
                     | pycc_std::StdSymbolKind::AbcMarker
                     | pycc_std::StdSymbolKind::DecoratorMarker => {
@@ -327,6 +330,11 @@ pub(crate) fn infer_expr_in(
                             annotation_marker_is_not_a_value(callee)
                         } else if matches!(symbol.kind, pycc_std::StdSymbolKind::CastMarker) {
                             cast_marker_is_not_a_value(callee)
+                        } else if matches!(
+                            symbol.kind,
+                            pycc_std::StdSymbolKind::TypeCheckingMarker
+                        ) {
+                            type_checking_marker_is_not_a_value(callee)
                         } else {
                             marker_is_not_a_value(callee)
                         }
