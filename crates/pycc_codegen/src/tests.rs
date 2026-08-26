@@ -11797,6 +11797,31 @@ fn exception_terminal_analysis_covers_structured_paths() {
         finalbody: vec![returned()],
     }]));
     assert!(!exception::block_always_terminates(&[falls_through()]));
+
+    // `except*` (#542) shares `Try`'s exact fallthrough shape via the
+    // combined `MirStmt::Try { .. } | MirStmt::TryStar { .. }` arm above --
+    // the `Try` alternative's own field-destructure lines are already
+    // exercised by the assertions above, but the `TryStar` alternative's
+    // own lines are only reached when the analyzed statement is actually a
+    // `TryStar`.
+    let terminal_handler = MirExceptHandler {
+        exc_type_tag: Some(vec![1]),
+        binding_name: None,
+        binding_ty: None,
+        body: vec![returned()],
+    };
+    assert!(exception::block_always_terminates(&[MirStmt::TryStar {
+        body: vec![falls_through()],
+        handlers: vec![terminal_handler.clone()],
+        orelse: vec![returned()],
+        finalbody: vec![],
+    }]));
+    assert!(!exception::block_always_terminates(&[MirStmt::TryStar {
+        body: vec![falls_through()],
+        handlers: vec![terminal_handler],
+        orelse: vec![],
+        finalbody: vec![],
+    }]));
 }
 
 #[test]
@@ -11956,6 +11981,97 @@ fn constructed_group_with_a_non_instance_member_is_a_codegen_error() {
     let err = compile_to_object(&mir, &obj_path, None, false)
         .expect_err("a non-instance ExceptionGroup member must be a codegen error");
     assert!(err.contains("group member must be an exception instance"), "{err}");
+}
+
+/// The two tests above only exercise `ConstructedGroup`'s `Err` paths (a
+/// non-`str` message, a non-instance member); neither reaches the success
+/// path -- the member-pointer-array build loop (`build_gep`/`build_store`
+/// for each member) or the final `pycc_rt_exception_group_alloc` call. This
+/// test drives a real, successful multi-member `ExceptionGroup` build: two
+/// exceptions are caught and bound (`e1`, `e2`), then combined into an
+/// `ExceptionGroup`, raised, and caught by an outer handler that prints the
+/// group's own message -- covering the loop and the success-path tail.
+#[test]
+fn a_successful_multi_member_exception_group_construction_compiles_and_runs() {
+    let value_error_ty = Ty::Instance(Box::new("ValueError".to_string()));
+    let type_error_ty = Ty::Instance(Box::new("TypeError".to_string()));
+    let group_ty = Ty::Instance(Box::new("ExceptionGroup".to_string()));
+
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::Try {
+            body: vec![MirStmt::Try {
+                body: vec![MirStmt::Raise {
+                    exception: MirExceptionValue::Constructed {
+                        type_tag: 1,
+                        class_name: "ValueError".to_string(),
+                        message: MirExpr::StringLiteral("v1".to_string()),
+                    },
+                }],
+                handlers: vec![MirExceptHandler {
+                    exc_type_tag: Some(vec![1]),
+                    binding_name: Some("e1".to_string()),
+                    binding_ty: Some(value_error_ty.clone()),
+                    body: vec![MirStmt::Try {
+                        body: vec![MirStmt::Raise {
+                            exception: MirExceptionValue::Constructed {
+                                type_tag: 2,
+                                class_name: "TypeError".to_string(),
+                                message: MirExpr::StringLiteral("v2".to_string()),
+                            },
+                        }],
+                        handlers: vec![MirExceptHandler {
+                            exc_type_tag: Some(vec![2]),
+                            binding_name: Some("e2".to_string()),
+                            binding_ty: Some(type_error_ty.clone()),
+                            body: vec![MirStmt::Raise {
+                                exception: MirExceptionValue::ConstructedGroup {
+                                    type_tag: EXCEPTION_GROUP_TYPE_TAG,
+                                    class_name: "ExceptionGroup".to_string(),
+                                    message: MirExpr::StringLiteral("multi".to_string()),
+                                    members: vec![
+                                        MirExpr::Name {
+                                            name: "e1".to_string(),
+                                            ty: value_error_ty.clone(),
+                                        },
+                                        MirExpr::Name {
+                                            name: "e2".to_string(),
+                                            ty: type_error_ty.clone(),
+                                        },
+                                    ],
+                                },
+                            }],
+                        }],
+                        orelse: vec![],
+                        finalbody: vec![],
+                    }],
+                }],
+                orelse: vec![],
+                finalbody: vec![],
+            }],
+            handlers: vec![MirExceptHandler {
+                exc_type_tag: Some(vec![EXCEPTION_GROUP_TYPE_TAG]),
+                binding_name: Some("eg".to_string()),
+                binding_ty: Some(group_ty.clone()),
+                body: vec![print_expr(MirExpr::ExceptionMessage(Box::new(
+                    MirExpr::Name {
+                        name: "eg".to_string(),
+                        ty: group_ty,
+                    },
+                )))],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("successful_multi_member_exception_group");
+    let obj_path = dir.join("successful_multi_member_exception_group.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("successful_multi_member_exception_group");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"multi\n");
+    assert!(output.status.success());
 }
 
 /// Same rationale as `constructed_group_with_non_string_message_is_a_codegen_error`
@@ -12180,6 +12296,202 @@ fn a_try_star_with_a_bound_handler_else_and_finally_compiles_and_runs() {
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"boom\nfinally\n");
     assert!(output.status.success());
+}
+
+/// `emit_try_star`'s non-empty-`orelse` path only inserts its own
+/// fallthrough branch to `finally_bb` when the `orelse` body itself falls
+/// through without a terminator (`else_falls_through`). The fixture above
+/// (`a_try_star_with_a_bound_handler_else_and_finally_compiles_and_runs`)
+/// has a non-empty `orelse`, but its `body` always raises, so `orelse`
+/// never actually runs at all -- this test's `body` completes without
+/// raising instead, so `orelse` does run, and its own body (a bare
+/// `print`, not a `return`) falls through, forcing `emit_try_star` to
+/// synthesize the branch to `finally_bb`.
+#[test]
+fn a_try_star_else_that_falls_through_branches_to_finally() {
+    let exception_ty = Ty::Instance(Box::new("ValueError".to_string()));
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::TryStar {
+            body: vec![print_expr(MirExpr::StringLiteral("try".to_string()))],
+            handlers: vec![MirExceptHandler {
+                exc_type_tag: Some(vec![1]),
+                binding_name: Some("e".to_string()),
+                binding_ty: Some(exception_ty.clone()),
+                body: vec![print_expr(MirExpr::ExceptionMessage(Box::new(
+                    MirExpr::Name {
+                        name: "e".to_string(),
+                        ty: exception_ty,
+                    },
+                )))],
+            }],
+            orelse: vec![print_expr(MirExpr::StringLiteral("else".to_string()))],
+            finalbody: vec![print_expr(MirExpr::StringLiteral("finally".to_string()))],
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("try_star_else_falls_through");
+    let obj_path = dir.join("try_star_else_falls_through.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("try_star_else_falls_through");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"try\nelse\nfinally\n");
+    assert!(output.status.success());
+}
+
+/// Complement of `a_try_star_else_that_falls_through_branches_to_finally`
+/// above: `emit_try_star`'s `if else_falls_through { .. }` wrapper only
+/// synthesizes its own branch to `finally_bb` when `orelse` itself falls
+/// through. This fixture's `orelse` instead ends in an explicit `Return`,
+/// so `orelse`'s own body already installs a terminator and
+/// `else_falls_through` is false -- exercising the wrapper's implicit
+/// "false" branch (nothing further emitted after `emit_body(orelse)`).
+#[test]
+fn a_try_star_else_that_returns_does_not_branch_to_finally() {
+    let mir = MirModule {
+        items: vec![MirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![MirStmt::TryStar {
+                body: vec![call_print(1)],
+                handlers: vec![MirExceptHandler {
+                    exc_type_tag: Some(vec![1]),
+                    binding_name: None,
+                    binding_ty: None,
+                    body: vec![call_print(99)],
+                }],
+                orelse: vec![return_int(4)],
+                finalbody: vec![call_print(2)],
+            }],
+        }],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("try_star_else_returns");
+    let obj_path = dir.join("try_star_else_returns.o");
+    compile_to_object(&mir, &obj_path, None, false)
+        .expect("an orelse ending in Return must codegen without a spurious branch");
+}
+
+/// `emit_try_star`'s `has_finally` return-slot allocation (only reached
+/// when the enclosing function has a non-`None` ABI) and the `ret_bb`
+/// value-load/store path it feeds are otherwise unexercised: the
+/// `TryStar` fixtures above all live at module top level, where
+/// `expected_return_ty` is always `Ty::None`. This fixture also carries
+/// two `except*` clauses, so the dispatch chain's "there is a next
+/// clause" branch (as opposed to falling through to the unmatched-
+/// remainder reraise) is exercised too.
+#[test]
+fn a_try_star_returning_a_value_through_its_finally_in_a_non_none_function() {
+    let mir = MirModule {
+        items: vec![MirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![MirStmt::TryStar {
+                body: vec![MirStmt::Return(Some(MirExpr::IntLiteral(7)))],
+                handlers: vec![
+                    MirExceptHandler {
+                        exc_type_tag: Some(vec![1]),
+                        binding_name: None,
+                        binding_ty: None,
+                        body: vec![MirStmt::Return(Some(MirExpr::IntLiteral(2)))],
+                    },
+                    MirExceptHandler {
+                        exc_type_tag: Some(vec![2]),
+                        binding_name: None,
+                        binding_ty: None,
+                        body: vec![MirStmt::Return(Some(MirExpr::IntLiteral(3)))],
+                    },
+                ],
+                orelse: vec![],
+                finalbody: vec![call_print(1)],
+            }],
+        }],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("try_star_return_value_through_finally");
+    let obj_path = dir.join("try_star_return_value_through_finally.o");
+    compile_to_object(&mir, &obj_path, None, false)
+        .expect("a value return routed through a try*'s finally must codegen");
+}
+
+/// Mirrors `try_finally_body_with_return_does_not_fall_through` above, but
+/// for `MirStmt::TryStar` (#542): a `Return` in the `finally` body itself
+/// terminates the block, so `finally_falls_through` is false and the
+/// `if finally_falls_through { .. }` wrapper's implicit "false" branch
+/// (nothing further is emitted) is exercised instead of either of its
+/// `has_finally` arms.
+#[test]
+fn try_star_finally_body_with_return_does_not_fall_through() {
+    let mir = MirModule {
+        items: vec![MirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![MirStmt::TryStar {
+                body: vec![call_print(1)],
+                handlers: vec![MirExceptHandler {
+                    exc_type_tag: Some(vec![1]),
+                    binding_name: None,
+                    binding_ty: None,
+                    body: vec![call_print(99)],
+                }],
+                orelse: Vec::new(),
+                finalbody: vec![return_int(4)],
+            }],
+        }],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("try_star_finally_return");
+    let obj_path = dir.join("try_star_finally_return.o");
+    compile_to_object(&mir, &obj_path, None, false)
+        .expect("codegen should succeed for a try*'s finally body with return");
+}
+
+/// `emit_try_star`'s `finalbody.is_empty()` branch ("no finally body --
+/// just check `is_returning` / branch") is otherwise unexercised: every
+/// other `TryStar` fixture in this file carries a non-empty `finally`.
+/// This also exercises the unmatched-remainder reraise path, since the
+/// raised `ValueError` (tag 1) matches neither clause (tags 2 and 3).
+#[test]
+fn a_try_star_without_a_finally_reraises_an_unmatched_remainder() {
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::TryStar {
+            body: vec![MirStmt::Raise {
+                exception: MirExceptionValue::Constructed {
+                    type_tag: 1,
+                    class_name: "ValueError".to_string(),
+                    message: MirExpr::StringLiteral("boom".to_string()),
+                },
+            }],
+            handlers: vec![
+                MirExceptHandler {
+                    exc_type_tag: Some(vec![2]),
+                    binding_name: None,
+                    binding_ty: None,
+                    body: vec![call_print(2)],
+                },
+                MirExceptHandler {
+                    exc_type_tag: Some(vec![3]),
+                    binding_name: None,
+                    binding_ty: None,
+                    body: vec![call_print(3)],
+                },
+            ],
+            orelse: vec![],
+            finalbody: vec![],
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("try_star_no_finally_reraise");
+    let obj_path = dir.join("try_star_no_finally_reraise.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("try_star_no_finally_reraise");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"");
+    assert!(!output.status.success(), "an unmatched remainder must propagate uncaught");
 }
 
 #[test]
@@ -12569,6 +12881,99 @@ fn nested_finally_return_routing_covers_value_and_none_abis() {
     let obj_path = dir.join("direct_none_finally.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("a None return routed through finally must produce valid object code");
+}
+
+/// Mirrors `nested_finally_return_routing_covers_value_and_none_abis`
+/// above, but for `MirStmt::TryStar` (#542): `emit_try_star`'s own
+/// `ret_bb` routing only reaches its "there is an outer `finally_stack`
+/// entry" branches (both the `ret_slot: Some` and `ret_slot: None`
+/// halves) when a `try*` with a `finally` is itself nested inside
+/// another `finally`-bearing `try*`'s body, and only reaches its
+/// "no outer, function ABI is `None`" branch when a top-level `try*`'s
+/// `finally` routes a bare `return` in a `None`-returning function.
+#[test]
+fn nested_try_star_finally_return_routing_covers_value_and_none_abis() {
+    // `block_always_terminates`'s defensive fallthrough check (independent
+    // of `pycc_types::check`, since this is hand-built MIR) requires every
+    // clause to itself terminate, so each handler returns a default value
+    // of the matching ABI rather than falling through.
+    for (name, return_ty, returned, handler_return) in [
+        (
+            "value",
+            Ty::Int,
+            MirStmt::Return(Some(MirExpr::IntLiteral(7))),
+            MirStmt::Return(Some(MirExpr::IntLiteral(0))),
+        ),
+        (
+            "none",
+            Ty::None,
+            MirStmt::Return(None),
+            MirStmt::Return(None),
+        ),
+        (
+            "none_expr",
+            Ty::None,
+            MirStmt::Return(Some(MirExpr::Name {
+                name: "None".to_string(),
+                ty: Ty::None,
+            })),
+            MirStmt::Return(None),
+        ),
+    ] {
+        let ordinary_handler = |body| MirExceptHandler {
+            exc_type_tag: Some(vec![1]),
+            binding_name: None,
+            binding_ty: None,
+            body: vec![body],
+        };
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: format!("nested_trystar_{name}"),
+                params: vec![],
+                return_ty,
+                body: vec![MirStmt::TryStar {
+                    body: vec![MirStmt::TryStar {
+                        body: vec![returned],
+                        handlers: vec![ordinary_handler(handler_return.clone())],
+                        orelse: vec![],
+                        finalbody: vec![MirStmt::NoOp],
+                    }],
+                    handlers: vec![ordinary_handler(handler_return)],
+                    orelse: vec![],
+                    finalbody: vec![MirStmt::NoOp],
+                }],
+            }],
+            class_defs: vec![],
+        };
+        let dir = tempfile_dir(&format!("nested_trystar_finally_{name}"));
+        let obj_path = dir.join(format!("nested_trystar_finally_{name}.o"));
+        compile_to_object(&mir, &obj_path, None, false)
+            .expect("nested try* finally return routing must produce valid object code");
+    }
+
+    let mir = MirModule {
+        items: vec![MirItem::Function {
+            name: "direct_none_trystar".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![MirStmt::TryStar {
+                body: vec![MirStmt::Return(None)],
+                handlers: vec![MirExceptHandler {
+                    exc_type_tag: Some(vec![1]),
+                    binding_name: None,
+                    binding_ty: None,
+                    body: vec![MirStmt::Return(None)],
+                }],
+                orelse: vec![],
+                finalbody: vec![MirStmt::NoOp],
+            }],
+        }],
+        class_defs: vec![],
+    };
+    let dir = tempfile_dir("direct_none_trystar_finally");
+    let obj_path = dir.join("direct_none_trystar_finally.o");
+    compile_to_object(&mir, &obj_path, None, false)
+        .expect("a None return routed through a try*'s finally must produce valid object code");
 }
 
 // -- #382: RaiseFrom, Reraise, and remaining Try codegen paths --
