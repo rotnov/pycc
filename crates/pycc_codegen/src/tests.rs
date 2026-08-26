@@ -12122,6 +12122,66 @@ fn a_codegen_error_in_a_try_star_finally_body_propagates_out_of_emit_try_star() 
     assert!(err.contains("message must be a string"), "{err}");
 }
 
+/// The four error-propagation tests above all use empty `orelse`/`finalbody`
+/// and a bindingless handler, so they only ever exercise `emit_try_star`'s
+/// early-return `?` branches -- never the ordinary successful-compile path
+/// through a non-empty `else`, a non-empty `finally`, and a handler that
+/// binds its matched subgroup to a name (the `if let Some(binding_name) =
+/// &handler.binding_name` branch), nor the "did the finally body fall
+/// through, and was there a pending exception to restore" logic that only
+/// exists when `finalbody` is non-empty. This test supplies all three at
+/// once so a single successful `compile_to_object` call builds every one of
+/// those blocks, then actually runs the resulting binary to confirm the
+/// generated code still behaves correctly: `except*` matches the raised
+/// `ValueError`, binds it, prints its message, and the `finally` body still
+/// runs -- while `else` (guarded by "no exception was raised") does not,
+/// since the try body did raise.
+#[test]
+fn a_try_star_with_a_bound_handler_else_and_finally_compiles_and_runs() {
+    let exception_ty = Ty::Instance(Box::new("ValueError".to_string()));
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::TryStar {
+            body: vec![MirStmt::Raise {
+                exception: MirExceptionValue::Constructed {
+                    type_tag: 1,
+                    class_name: "ValueError".to_string(),
+                    message: MirExpr::StringLiteral("boom".to_string()),
+                },
+            }],
+            handlers: vec![MirExceptHandler {
+                exc_type_tag: Some(vec![1]),
+                binding_name: Some("e".to_string()),
+                binding_ty: Some(exception_ty.clone()),
+                body: vec![print_expr(MirExpr::ExceptionMessage(Box::new(
+                    MirExpr::Name {
+                        name: "e".to_string(),
+                        ty: exception_ty,
+                    },
+                )))],
+            }],
+            orelse: vec![MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::StringLiteral("else".to_string())],
+                ty: Ty::None,
+            })],
+            finalbody: vec![MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::StringLiteral("finally".to_string())],
+                ty: Ty::None,
+            })],
+        })],
+        class_defs: Vec::new(),
+    };
+    let dir = tempfile_dir("try_star_bound_handler_else_finally");
+    let obj_path = dir.join("try_star_bound_handler_else_finally.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("try_star_bound_handler_else_finally");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"boom\nfinally\n");
+    assert!(output.status.success());
+}
+
 #[test]
 fn raise_from_with_non_string_message_is_a_codegen_error() {
     // Tests the error path for a non-string raise message in RaiseFrom.
