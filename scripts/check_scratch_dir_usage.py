@@ -85,10 +85,16 @@ EXEMPT_FILES = frozenset({"crates/pycc_scratch/src/lib.rs"})
 # One-time snapshot generated mechanically at Part 1's (#781's) own merge
 # commit via `git ls-files '*.rs'` piped through a count of this script's own
 # pattern match per file (see the docstring above). Every entry here is a
-# file Part 2 (#782) or Part 3 (#783) still needs to migrate; `src/main.rs`'s
-# count includes both its two production call sites (Part 3's own scope,
-# `try_build`/`run`) and its five test-only ones (Part 2's scope, inside its
-# `#[cfg(test)] mod tests`).
+# file Part 2 (#782) or Part 3 (#783) still needs to migrate.
+#
+# `src/main.rs`'s count of 2 (down from the snapshot's 7 after #782's
+# Batch B migrated all five of its test-only sites and removed
+# `src/project_config.rs`'s entry outright, its 26 sites all migrated) is
+# exactly its two production call sites, owned by Part 3 (#783): the
+# `try_build_obj_path` helper carrying `try_build`'s temp object path --
+# which the release-isolation test also calls, so reading back the exact
+# object `try_build` wrote needs no second raw call site -- and `run`'s
+# output path.
 ALLOWLIST: dict[str, int] = {
     # Added post-snapshot: `main` merged issue #150's fix (a `tests/`
     # integration test using the raw pattern) after Part 1's original
@@ -116,8 +122,7 @@ ALLOWLIST: dict[str, int] = {
     # blocker is likewise resolved by D-203's narrowing. Tracked under the
     # same #782 Part 2 migration scope.
     "tests/issue_769_optional_narrowing.rs": 1,
-    "src/main.rs": 7,
-    "src/project_config.rs": 26,
+    "src/main.rs": 2,
     "tests/conformance.rs": 1,
     "tests/container_methods1_codegen_depth.rs": 1,
     "tests/issue_146_bigint_release.rs": 2,
