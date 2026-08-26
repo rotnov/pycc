@@ -109,7 +109,17 @@ status: accepted
      path an ordinary handler's raise already takes, reusing tested
      primitives instead of inventing an new, untested merge-semantics path
      purely to chain the new exception alongside the statement's remaining
-     unmatched members.
+     unmatched members. A bare `raise` (re-raising the clause's own matched
+     subgroup, via `rt.exceptions.reraise_values`) takes this identical
+     `finally_bb` path, not a separate one: `emit_body` cannot distinguish
+     "the value being raised is a fresh object" from "the value being
+     raised is the matched subgroup already handed to this clause" once
+     lowering reaches a bare `Reraise`, so both go through the same
+     handler-body-raise control flow and both abandon later clauses and any
+     remaining unmatched members identically. This is the same narrowing as
+     above, not an additional one -- CPython's own derived-exception-group
+     semantics do not distinguish a bare re-raise from a fresh raise here
+     either; both become part of the handler's own escaping exception.
   6. **A group member must not itself be an `ExceptionGroup`/
      `BaseExceptionGroup`-typed value -- nested groups are rejected with
      `T0021` at the type-check boundary
@@ -123,8 +133,11 @@ status: accepted
      hierarchy) would type-check as an ordinary member of a freshly
      constructed outer group, building a group the runtime cannot partition
      correctly and silently losing the inner exceptions on a subsequent
-     `except*` dispatch. This was found by the pinned local reviewer during
-     #542's own review pass and fixed by extending the type-checker rule
+     `except*` dispatch. This was found independently by both this project's
+     own pinned D-068/D-155 `ievo:deep-reviewer` gate and an external
+     automated review of PR #794, and verified against
+     `pycc_rt_exception_group_partition`'s actual tag-only matching before
+     being fixed by extending the type-checker rule
      that simplification 3 already established for fresh constructor-call
      members, rather than teaching the runtime partition function to
      recurse.

@@ -1082,6 +1082,28 @@ pub(super) fn emit_try_star<'ctx>(
             .expect("build_load should not fail for the trystar current-group slot")
             .into_pointer_value();
 
+        // An earlier, broader clause (e.g. one matching the universal
+        // `EXCEPTION_TYPE_EXCEPTION` tag) can already have consumed every
+        // remaining member, in which case `rest_ptr` from that clause's own
+        // partition call -- stored into `current_group_slot` below -- is
+        // null (`build_group_or_null` returns null for an empty half).
+        // `pycc_rt_exception_group_partition`'s safety contract requires a
+        // non-null `group`, so this clause must not be dispatched at all
+        // when nothing is left to test; skip straight to the next clause
+        // (or `reraise_remainder_bb`) instead of calling the runtime
+        // function with a null pointer.
+        if i > 0 {
+            let group_is_null = builder
+                .build_is_null(group_ptr, "trystar_group_is_null")
+                .expect("build_is_null should not fail for a pointer comparison");
+            let dispatch_body_bb =
+                context.append_basic_block(function, &format!("trystar_dispatch_body_{i}"));
+            builder
+                .build_conditional_branch(group_is_null, next_bb, dispatch_body_bb)
+                .expect("build_conditional_branch should not fail");
+            builder.position_at_end(dispatch_body_bb);
+        }
+
         // `pycc_mir` always resolves an `except*` clause's tag set --
         // `pycc_hir::stmt::lower_stmt`'s own `Stmt::Try` arm rejects a
         // typeless `except*:` at parse time before lowering ever runs (see

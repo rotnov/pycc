@@ -128,6 +128,34 @@ fn except_star_partial_match_reraises_the_unmatched_remainder() {
     );
 }
 
+/// Regression test for a P1 null-pointer dereference found in an external
+/// review of PR #794: `except* Exception:` uses the universal
+/// `EXCEPTION_TYPE_EXCEPTION` tag, so a first clause naming `Exception` can
+/// claim every member of the raised group, leaving `current_group_slot`
+/// null (`pycc_rt_exception_group_partition`'s `rest_out` is null for an
+/// empty remainder). Without a null guard, the *next* clause's dispatch
+/// block would reload that null pointer and pass it straight back into
+/// `pycc_rt_exception_group_partition`, which unconditionally dereferences
+/// its `group` argument -- undefined behavior. `emit_try_star` now skips a
+/// clause's dispatch entirely once the threaded group pointer is null,
+/// falling through to the next clause (or `reraise_remainder_bb`) instead.
+#[test]
+fn except_star_broad_first_clause_consuming_the_whole_group_does_not_crash_the_next_clause() {
+    let dir = std::env::temp_dir().join(format!("pycc_542_broad_first_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "broad_first.py",
+        "try:\n    raise ValueError(\"v\")\nexcept ValueError as e1:\n    try:\n        raise ExceptionGroup(\"multi\", [e1])\n    except* Exception:\n        print(\"caught broad\")\n    except* ValueError:\n        print(\"caught value\")\n",
+    );
+    assert!(ok, "build/run failed: {err}");
+    assert_eq!(
+        out, b"caught broad\n",
+        "the broad first clause claims the only member; the second clause's dispatch \
+         must be skipped (not crash) rather than reraise or run"
+    );
+}
+
 /// Part 3 of #382 (#542, PEP 654, D-202): `BaseExceptionGroup` construction
 /// and dispatch, exercised nowhere else in this file -- every other
 /// `except*`/group test uses `ExceptionGroup`. D-202 records that
