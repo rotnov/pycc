@@ -1145,11 +1145,16 @@ backlog — it already wrapped the raw pattern behind its own helper, so the
 lint never saw it) directly onto `ScratchDir`; `tests_support.rs` no longer
 exists in the tree. Part 2
 ([#782](https://github.com/rotnov/pycc/issues/782)) then migrated every
-`ALLOWLIST`-tracked test call site onto
-`ScratchDir`, so the snapshot allowlist in
-`scripts/check_scratch_dir_usage.py` now holds exactly one entry:
-`src/main.rs`'s two production call sites (`try_build`'s `pycc_obj_*`
-object file, `run`'s `pycc_run_*` executable), which stay raw until Part 3
+`ALLOWLIST`-tracked test call site onto `ScratchDir` except one:
+`tests/quick_start.rs`'s single site stays raw because the public site's
+versioned evidence-hero contract (`docs/WEBSITE.md`, enforced by
+`scripts/check-site.sh` via `site/evidence-heroes.json`) pins that file's
+exact bytes against the reviewed evidence commit, so migrating it requires
+the full re-attestation ceremony rather than an ordinary edit. The snapshot
+allowlist in `scripts/check_scratch_dir_usage.py` therefore holds exactly
+two entries: that evidence-pinned test site, and `src/main.rs`'s two
+production call sites (`try_build`'s `pycc_obj_*` object file, `run`'s
+`pycc_run_*` executable), which stay raw until Part 3
 ([#783](https://github.com/rotnov/pycc/issues/783)) rewrites them — tracked,
 like the rest, under the parent
 [#779](https://github.com/rotnov/pycc/issues/779).

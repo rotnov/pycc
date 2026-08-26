@@ -1,4 +1,3 @@
-use pycc_scratch::ScratchDir;
 use std::path::Path;
 use std::process::Command;
 
@@ -9,7 +8,8 @@ fn pycc_bin() -> std::path::PathBuf {
 #[test]
 fn quick_start_fixture_builds_and_prints_the_documented_sequence() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/quick_start.py");
-    let dir = ScratchDir::new("quick_start").expect("failed to create scratch dir");
+    let dir = std::env::temp_dir().join(format!("pycc_quick_start_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("hello");
     let status = Command::new(pycc_bin())
         .args([

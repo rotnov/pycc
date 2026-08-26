@@ -1,4 +1,4 @@
-# Session handoff: issue #782 Batch D — final batch, all remaining test files
+# Session handoff: issue #782 Batch D — final batch, all remaining test files except the evidence-pinned one
 
 ## Status
 
@@ -7,22 +7,30 @@ implemented against `origin/main` at `4906ba58` (the Batch C merge;
 re-verified at implementation start) on branch
 `feat/issue-782-batch-d-tests`, from the reviewed plan published at issue
 #782's 2026-08-25 plan comment (§3/§4 "Batch D"). This entry lands with
-this PR's merge (D-192). **This PR completes and closes #782** — after it,
-zero raw `std::env::temp_dir().join(...)` call sites remain anywhere in
-test code; the only remaining raw sites in the tree are `src/main.rs`'s
-two production call sites, owned by #783.
+this PR's merge (D-192). **This PR does not close #782**: it migrates every
+remaining test-file call site except one. `tests/quick_start.rs`'s single
+site stays raw because the public site's versioned evidence-hero contract
+(`docs/WEBSITE.md`, enforced by `scripts/check-site.sh` against
+`site/evidence-heroes.json`) pins that file's exact bytes to the reviewed
+evidence commit `8ccc05b5` — the originally-drafted migration of it failed
+the Pages `build` check, and the file was carved back out of this PR rather
+than red-merged or re-attested inline (re-attestation is a distinct
+ceremony: new evidence commit, accepted CI run, updated checker allowlist
+and site projections). After this PR the raw sites remaining in the tree
+are that pinned test site (still #782's scope; #782 stays open for it) and
+`src/main.rs`'s two production call sites, owned by #783.
 
 ## What this PR delivers
 
-- All 205 raw `std::env::temp_dir().join(...)` call sites in the 32
+- 204 raw `std::env::temp_dir().join(...)` call sites across 31 of the 32
   remaining `tests/*.rs` files migrated onto `pycc_scratch::ScratchDir`
   (RAII cleanup that survives panic unwind, collision-safe
   `pid`/`nanos`/`seq` naming). Largest files: `tests/issue_378_dataclasses.rs`
   (25 sites), `tests/issue_380_protocols.rs` (22), `tests/issue_379_enum.rs`
   (21), `tests/issue_381_match.rs` (20), `tests/issue_436_classmethod_staticmethod.rs`
   (18), `tests/issue_22_execution_order.rs` (15), `tests/issue_433_super.rs`
-  (15), `tests/issue_432_inheritance.rs` (11); the remaining 24 files carried
-  1–8 sites each. Every site binds the handle to a named local spanning the
+  (15), `tests/issue_432_inheritance.rs` (11); the remaining 23 migrated
+  files carried 1–8 sites each. Every site binds the handle to a named local spanning the
   whole test (`let dir = ScratchDir::new("label").expect(...)`) — never a
   chained temporary — and uses `.expect()` uniformly (no `?`/`match`, per
   D-014's region-coverage constraint). Labels are the old directory names
@@ -60,14 +68,16 @@ two production call sites, owned by #783.
   (D-091/f79bb2b5/f9231e2f, already superseded by D-203's tolerance and
   resolved by this migration) was removed with the site it described.
   `issue_150`/`issue_767`/`issue_790` carried no in-file blocker comments.
-- `scripts/check_scratch_dir_usage.py`: ALLOWLIST reduced to its final
-  state — all 32 tests entries removed (205 tracked sites → 0) together
-  with the three attached comment blocks describing now-migrated files
-  (above `issue_150`, `issue_769`, `issue_790`). Exactly one entry
-  remains: `"src/main.rs": 2` with its existing #783 comment. The module
-  docstring and the ALLOWLIST header comment were updated where they
-  stated Part 2 was still pending; checker logic untouched, and the
-  allowlist-empty completeness signal for #779 Parts 2/3 stays as written.
+- `scripts/check_scratch_dir_usage.py`: 31 tests entries removed
+  (204 tracked sites → 0) together with the three attached comment blocks
+  describing now-migrated files (above `issue_150`, `issue_769`,
+  `issue_790`). Exactly two entries remain: `"src/main.rs": 2` with its
+  existing #783 comment, and `"tests/quick_start.rs": 1` with a new
+  comment explaining the evidence-hero byte pin and the re-attestation
+  ceremony migrating it requires. The module docstring and the ALLOWLIST
+  header comment were updated where they stated Part 2 was still pending;
+  checker logic untouched, and the allowlist-empty completeness signal
+  for #779 Parts 2/3 stays as written.
 - No file decomposition: pure token-level substitution creates no
   cohesion-driven extraction boundary (same recorded reasoning as
   Batch C); `tests/slice1_codegen_depth.rs`'s 3 pre-existing
@@ -77,16 +87,18 @@ two production call sites, owned by #783.
 ## Documentation review (verified, not skipped)
 
 - `docs/TESTING.md` "Scratch directories": the migration-status caveat
-  paragraph flipped to the completed state, per the plan §5 decision that
-  this happens in the final batch's PR — the section now records that
-  every ALLOWLIST-tracked test call site uses `ScratchDir` and only
-  `src/main.rs`'s two production sites (#783) remain raw. (This also
-  replaced the "most of the tree's scratch-directory handling still
-  predates this section" sentence Batch C's log flagged as borderline.)
+  paragraph rewritten, per the plan §5 decision that this happens in the
+  final batch's PR — the section now records that every ALLOWLIST-tracked
+  test call site uses `ScratchDir` except `tests/quick_start.rs`'s
+  evidence-pinned site, and that the allowlist holds exactly that entry
+  plus `src/main.rs`'s two production sites (#783). (This also replaced
+  the "most of the tree's scratch-directory handling still predates this
+  section" sentence Batch C's log flagged as borderline.)
 - `docs/decisions/D-201-shared-pycc-scratch-crate-and-lint-gate-for.md`:
   dated addendum appended (the same annotation pattern as the existing
   D-203 update block and the #807 precedent) recording Part 2's
-  completion; no accepted content rewritten.
+  near-completion and the quick_start.rs carve-out; no accepted content
+  rewritten.
 - `docs/ROADMAP.md`: **no update required, none made.** Batch D is
   test-infrastructure migration closing an open issue — no behavior,
   platform-support, milestone-acceptance, or sequencing change. Its only
@@ -103,11 +115,11 @@ two production call sites, owned by #783.
 
 ## Gates (all green at this snapshot, macOS local run)
 
-- `python3 scripts/check_scratch_dir_usage.py`: passed with the 32
+- `python3 scripts/check_scratch_dir_usage.py`: passed with the 31
   entries removed, proving 0 raw sites remain in those files.
 - `python3 -m unittest discover -s scripts -p 'test_check_scratch*'`:
-  12 tests, OK (includes the exact-count ratchet test, so the sole
-  remaining ALLOWLIST value is proven equal to the tree's real count).
+  12 tests, OK (includes the exact-count ratchet test, so both
+  remaining ALLOWLIST values are proven equal to the tree's real counts).
 - `cargo test --workspace`: 65 result lines, all ok — 3,837 passed,
   0 failed.
 - Warning check: 0 new compiler warnings; the workspace build's only
@@ -146,6 +158,9 @@ per-run `TMPDIR` for clean attribution:
 
 ## Pending — NOT delivered by this PR
 
+- `tests/quick_start.rs`'s single raw site — still #782's scope, blocked
+  on the evidence-hero re-attestation ceremony (see Status above).
+  #782 stays open for it.
 - #783 (the two production sites in `src/main.rs`, reconfirmed by the
   leak check above), #784 (bounded stale-root sweep), #785
   (operational `TMPDIR` guidance + closing verification) — untouched,
@@ -153,10 +168,14 @@ per-run `TMPDIR` for clean attribution:
 
 ## Where to resume
 
-#782 closes with this PR's merge. Next in the #779 sequence: #783
-(rewrite `try_build`'s `pycc_obj_*` object path and `run`'s `pycc_run_*`
-executable path in `src/main.rs` onto `ScratchDir`), then #784, then
-#785. The `src/main.rs` ALLOWLIST entry and its comment in
-`scripts/check_scratch_dir_usage.py` are the mechanical tracker: #783's
-PR removes it, leaving the ALLOWLIST empty — #779 Parts 2/3's recorded
+#782 stays open for `tests/quick_start.rs`'s evidence-pinned site; its
+migration rides the next re-attestation of the landing hero (new evidence
+commit, accepted CI run, updated `scripts/check-site.sh` allowlist,
+`site/evidence-heroes.json`, and site projections). Next in the #779
+sequence: #783 (rewrite `try_build`'s `pycc_obj_*` object path and `run`'s
+`pycc_run_*` executable path in `src/main.rs` onto `ScratchDir`), then
+#784, then #785. The ALLOWLIST entries and their comments in
+`scripts/check_scratch_dir_usage.py` are the mechanical tracker: the
+re-attestation removes `tests/quick_start.rs` and #783's PR removes
+`src/main.rs`, leaving the ALLOWLIST empty — #779 Parts 2/3's recorded
 completeness signal.
