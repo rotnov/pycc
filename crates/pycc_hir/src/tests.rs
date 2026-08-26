@@ -5209,6 +5209,129 @@ fn killed_names_recurses_into_every_match_case_body() {
 }
 
 #[test]
+fn killed_names_includes_a_match_cases_own_pattern_capture_names() {
+    // D-068 re-review of #780 (fourth round, blocker finding 2): a case's
+    // pattern can itself bind a bare name (`case x:`) exactly like an
+    // `Assign` does -- `check_match` routes every pattern capture through
+    // `check_assignment` (see `collect_killed_names`'s `Match` arm's own
+    // doc comment). This must be visible even when the case body itself
+    // kills nothing.
+    let body = [HirStmt::Match {
+        subject: HirExpr::Name("y".to_string()),
+        cases: vec![HirMatchCase {
+            pattern: HirPattern::Capture("x".to_string()),
+            guard: None,
+            body: vec![],
+        }],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(killed, HashSet::from(["x".to_string()]));
+}
+
+#[test]
+fn killed_names_includes_capture_names_nested_inside_a_sequence_pattern() {
+    let body = [HirStmt::Match {
+        subject: HirExpr::Name("y".to_string()),
+        cases: vec![HirMatchCase {
+            pattern: HirPattern::SequenceStar(vec![HirPattern::Capture("a".to_string())], Some("rest".to_string())),
+            guard: None,
+            body: vec![],
+        }],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(killed, HashSet::from(["a".to_string(), "rest".to_string()]));
+}
+
+#[test]
+fn killed_names_covers_every_pattern_kind_and_the_no_rest_branches() {
+    // Exercises every `HirPattern` variant `collect_pattern_capture_names_as_killed`
+    // matches on, including both arms of its `SequenceStar`/`Mapping`
+    // `rest: Option<String>` branches (`Some`/`None`), mirroring
+    // `pycc_types::collect_pattern_capture_names_covers_all_pattern_kinds`'s
+    // own exhaustive coverage of its sibling function.
+    let body = [HirStmt::Match {
+        subject: HirExpr::Name("y".to_string()),
+        cases: vec![
+            HirMatchCase {
+                pattern: HirPattern::Wildcard,
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Literal(HirExpr::IntLiteral(1)),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Singleton(true),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::NoneSingleton,
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Sequence(vec![HirPattern::Capture("a".to_string())]),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::SequenceStar(vec![HirPattern::Capture("b".to_string())], None),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Mapping(
+                    vec![(
+                        HirExpr::StringLiteral("k".to_string()),
+                        HirPattern::Capture("c".to_string()),
+                    )],
+                    Some("mrest".to_string()),
+                ),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Mapping(vec![], None),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Class {
+                    class_name: "P".to_string(),
+                    positional: vec![HirPattern::Capture("d".to_string())],
+                    keyword: vec![("a".to_string(), HirPattern::Capture("e".to_string()))],
+                },
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::Or(vec![HirPattern::Capture("f".to_string())]),
+                guard: None,
+                body: vec![],
+            },
+            HirMatchCase {
+                pattern: HirPattern::As(
+                    Box::new(HirPattern::Capture("g".to_string())),
+                    "h".to_string(),
+                ),
+                guard: None,
+                body: vec![],
+            },
+        ],
+    }];
+    let killed = killed_names(&body);
+    for expected in ["a", "b", "c", "mrest", "d", "e", "f", "g", "h"] {
+        assert!(
+            killed.contains(expected),
+            "expected `killed_names` to include capture name `{expected}`, got {killed:?}"
+        );
+    }
+}
+
+#[test]
 fn killed_names_recurses_into_every_part_of_a_try_statement() {
     let body = [HirStmt::Try {
         body: vec![HirStmt::Assign {
@@ -5242,6 +5365,26 @@ fn killed_names_recurses_into_every_part_of_a_try_statement() {
             "d".to_string(),
         ])
     );
+}
+
+#[test]
+fn killed_names_includes_an_except_handlers_own_as_binding_name() {
+    // D-068 re-review of #780 (fourth round, blocker finding 1's MIR/HIR
+    // shared prescan half): `except ValueError as e:` binds `e` before the
+    // handler body runs, exactly like an `Assign` -- this must be visible
+    // even when the handler body itself kills nothing.
+    let body = [HirStmt::Try {
+        body: vec![],
+        handlers: vec![HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: Some("e".to_string()),
+            body: vec![],
+        }],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(killed, HashSet::from(["e".to_string()]));
 }
 
 #[test]

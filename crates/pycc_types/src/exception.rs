@@ -86,6 +86,23 @@ pub(super) fn check_try_stmt(
             if let Some(name) = &handler.name {
                 let binding_type = except_handler_binding_type_name(exc_types);
                 handler_env.bind(name.clone(), Ty::Instance(Box::new(binding_type)));
+                // D-068 re-review of #780 (fourth round): `bind` only
+                // overwrites `bindings`, never `narrowed` (see `bind`'s own
+                // doc comment in `env.rs`), so a name previously narrowed by
+                // an enclosing `if <name> is not None:` stayed narrowed
+                // here even though it is now bound to the caught exception
+                // instance -- a later read inside the handler body would be
+                // type-checked as the narrowed `int`/whatever, not
+                // `Instance(binding_type)`, via `HirExpr::Name`'s
+                // `narrowed_ty` preference (`expr.rs`). Kill it explicitly,
+                // mirroring `check_assignment`'s own unconditional
+                // `env.narrowed.remove(target)` for every other reassignment
+                // kind -- this handler binding is not routed through
+                // `check_assignment` itself (it must skip that function's
+                // previous-type compatibility check, which would wrongly
+                // reject `except X as name:` reusing a name whose earlier
+                // type is incompatible with the exception instance type).
+                handler_env.narrowed.remove(name);
             }
         }
         check_stmt_sequence_shared(&mut handler_env, local_names, &handler.body, return_ty)?;

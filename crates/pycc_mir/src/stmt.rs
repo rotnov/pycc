@@ -670,6 +670,19 @@ pub(super) fn lower_stmt(
                             name.clone(),
                             Ty::Instance(Box::new(binding_type.clone())),
                         );
+                        // D-068 re-review of #780 (fourth round): `bind`
+                        // only overwrites the type scope, never the
+                        // narrowing sentinel (mirrors the checker-side gap
+                        // fixed in `exception::check_try_stmt` --
+                        // `crates/pycc_types/src/exception.rs`). Without
+                        // this, a name narrowed before entering `try` and
+                        // still carrying a `$narrowed:{name}` sentinel here
+                        // would make `lower_expr`'s `Name` arm keep emitting
+                        // `MirExpr::OptionalUnwrap` for reads of `name`
+                        // inside the handler body, even though `name` now
+                        // holds the caught exception instance, not the
+                        // narrowed `Optional`'s inner value.
+                        super::kill_narrowing(scopes, name);
                     }
                     let (handler_body, _end_narrowed) =
                         super::lower_scoped_body(&h.body, scopes, classes, current_class, None);

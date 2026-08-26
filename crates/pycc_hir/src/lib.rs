@@ -881,6 +881,18 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
             }
             HirStmt::Match { cases, .. } => {
                 for case in cases {
+                    // D-068 re-review of #780 (fourth round): a case's
+                    // pattern can itself bind bare names (`case x:`, an
+                    // `As`/`Sequence`/`Mapping`/`Class` capture) exactly
+                    // like `check_pattern` routes through
+                    // `check_assignment` in `pycc_types::lib`'s
+                    // `check_match` -- these are kills too, not just
+                    // statements inside `case.body`. Omitting them left
+                    // `apply_kill_prescan` under-reporting a kill routed
+                    // through a capturing `match` pattern inside a
+                    // re-enterable body (see this function's own doc
+                    // comment above).
+                    collect_pattern_capture_names_as_killed(&case.pattern, killed);
                     collect_killed_names(&case.body, killed);
                 }
             }
@@ -892,6 +904,21 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
             } => {
                 collect_killed_names(body, killed);
                 for handler in handlers {
+                    // D-068 re-review of #780 (fourth round): `except ...
+                    // as name:` binds `name` to the caught exception
+                    // instance before the handler body runs -- the same
+                    // kill of a bare name that a plain `Assign` performs
+                    // (see the paired `check_assignment`/`bind` fix in
+                    // `crates/pycc_types/src/exception.rs` and
+                    // `crates/pycc_mir/src/stmt.rs`'s `Try` handler
+                    // arm). Without this, `apply_kill_prescan` treated a
+                    // handler's own `as` binding as invisible, letting a
+                    // later re-entry into a body containing this handler
+                    // (e.g. this `Try` nested inside a `while` loop)
+                    // still read the pre-handler narrowed type.
+                    if let Some(name) = &handler.name {
+                        killed.insert(name.clone());
+                    }
                     collect_killed_names(&handler.body, killed);
                 }
                 collect_killed_names(orelse, killed);
@@ -901,6 +928,58 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
                 collect_named_expr_targets_in_expr(expr, killed);
             }
             HirStmt::DictSet { .. } | HirStmt::AttrSet { .. } | HirStmt::Return(_) | HirStmt::Raise { .. } => {}
+        }
+    }
+}
+
+/// D-068 re-review of #780 (fourth round): walks `pattern` for every bare
+/// capture name it binds (recursively through `Sequence`/`SequenceStar`/
+/// `Mapping`/`Class`/`Or`/`As`) and inserts each into `killed`. Mirrors
+/// `pycc_types::collect_pattern_capture_names`'s own identical walk
+/// (duplicated here rather than shared because `pycc_hir` has no dependency
+/// on `pycc_types`, and `check_match`'s `check_pattern` routes every one of
+/// these names through `check_assignment` -- see `collect_killed_names`'s
+/// `Match` arm above and its own doc comment's inclusion criterion).
+fn collect_pattern_capture_names_as_killed(pattern: &HirPattern, killed: &mut HashSet<String>) {
+    match pattern {
+        HirPattern::Wildcard | HirPattern::Literal(_) | HirPattern::Singleton(_) | HirPattern::NoneSingleton => {}
+        HirPattern::Capture(name) => {
+            killed.insert(name.clone());
+        }
+        HirPattern::Sequence(subs) | HirPattern::Or(subs) => {
+            for sub in subs {
+                collect_pattern_capture_names_as_killed(sub, killed);
+            }
+        }
+        HirPattern::SequenceStar(subs, rest) => {
+            for sub in subs {
+                collect_pattern_capture_names_as_killed(sub, killed);
+            }
+            if let Some(rest) = rest {
+                killed.insert(rest.clone());
+            }
+        }
+        HirPattern::Mapping(pairs, rest) => {
+            for (_, sub) in pairs {
+                collect_pattern_capture_names_as_killed(sub, killed);
+            }
+            if let Some(rest) = rest {
+                killed.insert(rest.clone());
+            }
+        }
+        HirPattern::Class {
+            positional, keyword, ..
+        } => {
+            for sub in positional {
+                collect_pattern_capture_names_as_killed(sub, killed);
+            }
+            for (_, sub) in keyword {
+                collect_pattern_capture_names_as_killed(sub, killed);
+            }
+        }
+        HirPattern::As(inner, name) => {
+            collect_pattern_capture_names_as_killed(inner, killed);
+            killed.insert(name.clone());
         }
     }
 }

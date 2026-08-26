@@ -959,3 +959,76 @@ fn an_except_handler_reached_after_a_try_body_kill_does_not_unwrap_the_read() {
         })
     );
 }
+
+/// D-068 re-review of #780 (fourth round, blocker finding 1's MIR half):
+/// `except ValueError as x:` reuses the narrowed name `x` as its own `as`
+/// binding -- the handler's `bind` call must be paired with a
+/// `kill_narrowing` call (`stmt::lower_stmt`'s `Try` arm) exactly like the
+/// checker-side fix in `exception::check_try_stmt`
+/// (`crates/pycc_types/src/exception.rs`), so a read of `x` inside the
+/// handler body lowers to a bare `MirExpr::Name { ty: Instance(..), .. }`
+/// -- the caught exception instance's real type -- rather than a stale
+/// `MirExpr::OptionalUnwrap` wrapping the pre-handler narrowed `int`. The
+/// checker rejects this shape at the type level (T0021, since `print`'s
+/// argument is now `Instance(ValueError)` not `Optional[int]`... but this
+/// crate trusts the checker already ran, so a direct hand-built-HIR test
+/// is the only way to exercise `pycc_mir::build`'s independent copy of the
+/// fix.
+#[test]
+fn an_except_as_binding_reusing_the_narrowed_name_does_not_unwrap_the_handler_read() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![("x".to_string(), Ty::Optional(Box::new(Ty::Int)))],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![HirStmt::Try {
+                body: vec![HirStmt::Raise {
+                    exc: Some(HirExpr::Call {
+                        callee: "ValueError".to_string(),
+                        args: vec![HirExpr::StringLiteral("boom".to_string())],
+                    }),
+                    cause: None,
+                }],
+                handlers: vec![pycc_hir::HirExceptHandler {
+                    exc_type: Some(vec!["ValueError".to_string()]),
+                    name: Some("x".to_string()),
+                    body: vec![print_x("x")],
+                }],
+                orelse: vec![],
+                finalbody: vec![],
+            }],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: outer_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered outer `if`");
+    };
+    let MirStmt::Try { handlers, .. } = &outer_body[0] else {
+        panic!("expected the outer `if` body's only statement to be the lowered `try`");
+    };
+    // A read of an exception-instance-typed name lowers to
+    // `MirExpr::ExceptionMessage` wrapping the bare `Name` (pre-existing
+    // behavior unrelated to this fix -- exception values render via their
+    // message, not a direct instance read). The `Instance(ValueError)`
+    // type on the wrapped `Name` is what matters here: it proves the read
+    // was *not* unwrapped as a stale narrowed `Optional[int]`.
+    assert_eq!(
+        handlers[0].body[0],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::ExceptionMessage(Box::new(MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Instance(Box::new("ValueError".to_string())),
+            }))],
+            ty: Ty::None,
+        })
+    );
+}

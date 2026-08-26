@@ -29327,3 +29327,41 @@ fn a_narrowed_read_inside_a_while_loop_body_killed_only_by_a_walrus_is_rejected(
     );
     assert_eq!(err.code, "T0021");
 }
+
+#[test]
+fn an_except_as_binding_that_reuses_a_narrowed_name_kills_the_narrowing() {
+    // D-068 re-review of #780 (fourth round, blocker finding 1): `except
+    // ValueError as x:` rebinds `x` to the caught exception instance, but
+    // `handler_env.bind` alone never cleared `x`'s narrowing overlay entry
+    // -- a read of `x` inside the handler body was wrongly type-checked as
+    // the narrowed `int` (from the enclosing `if x is not None:`) instead
+    // of the real `Instance(ValueError)` the runtime actually holds. Before
+    // the fix this incorrectly type-checked; after it, `x + 1` is a binop
+    // between an exception instance and an `int`, which must be rejected.
+    let result = check_source(
+        "def f(x: int | None) -> int:\n    if x is not None:\n        try:\n            raise ValueError(\"boom\")\n        except ValueError as x:\n            return x + 1\n    return -1\n",
+    );
+    let err = result.expect_err(
+        "an `except ... as x:` binding must kill `x`'s narrowing overlay entry, since `x` now holds the caught exception instance rather than the narrowed `Optional`'s inner value",
+    );
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn a_match_capture_pattern_that_reuses_a_narrowed_name_inside_a_while_loop_is_rejected() {
+    // D-068 re-review of #780 (fourth round, blocker finding 2): a `match`
+    // case's capture pattern (`case x:`) binds a bare name exactly like an
+    // `Assign` does (routed through `check_assignment` by `check_match`),
+    // but `collect_killed_names`'s `Match` arm only recursed into each
+    // case's body, never inspecting the pattern itself -- so
+    // `apply_kill_prescan` under-reported this kill for a re-enterable
+    // `while` body, reproducing D-202's own loop-reentry counterexample
+    // through an unrecognized kill vector.
+    let result = check_source(
+        "def f(x: int | None, y: int | None) -> int:\n    if x is not None:\n        i: int = 0\n        while i < 2:\n            print(x + 1)\n            match y:\n                case x:\n                    pass\n            i = i + 1\n        return 0\n    return -1\n",
+    );
+    let err = result.expect_err(
+        "a `while` body that reads a narrowed name before a later iteration's `match` capture-pattern kill must still be rejected",
+    );
+    assert_eq!(err.code, "T0021");
+}
