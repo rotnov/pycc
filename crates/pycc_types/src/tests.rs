@@ -26044,6 +26044,7 @@ fn walrus_nested_inside_another_walrus_value_on_the_solver_path_propagates_a_for
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["n", "m"],
     };
@@ -26080,6 +26081,7 @@ fn walrus_nested_inside_a_call_arg_on_the_solver_path_propagates_a_forward_refer
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["m"],
     };
@@ -26117,6 +26119,7 @@ fn walrus_nested_inside_an_fstring_interpolation_on_the_solver_path_propagates_a
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["m"],
     };
@@ -26154,6 +26157,7 @@ fn walrus_nested_inside_a_list_literal_element_on_the_solver_path_propagates_a_f
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["m"],
     };
@@ -26190,6 +26194,7 @@ fn walrus_nested_inside_a_subscript_base_on_the_solver_path_propagates_a_forward
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["m"],
     };
@@ -26226,6 +26231,7 @@ fn walrus_nested_inside_a_slice_base_on_the_solver_path_propagates_a_forward_ref
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["m"],
     };
@@ -26268,6 +26274,7 @@ fn walrus_nested_inside_a_slice_bound_on_the_solver_path_propagates_a_forward_re
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["m"],
     };
@@ -26307,6 +26314,7 @@ fn walrus_nested_inside_a_dict_literal_key_on_the_solver_path_propagates_a_forwa
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["m"],
     };
@@ -26345,6 +26353,7 @@ fn walrus_nested_inside_a_dict_literal_value_on_the_solver_path_propagates_a_for
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["m"],
     };
@@ -26382,6 +26391,7 @@ fn walrus_nested_inside_a_dict_get_or_default_key_on_the_solver_path_propagates_
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["m"],
     };
@@ -26420,6 +26430,7 @@ fn walrus_nested_inside_a_method_call_base_on_the_solver_path_propagates_a_forwa
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["m"],
     };
@@ -26459,6 +26470,7 @@ fn walrus_nested_inside_a_method_call_arg_on_the_solver_path_propagates_a_forwar
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["m"],
     };
@@ -26497,6 +26509,7 @@ fn walrus_nested_inside_a_generic_class_instantiate_arg_on_the_solver_path_propa
     let mut env = ConstraintEnvironment {
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
         bindings: HashMap::new(),
         local_names: &["m"],
     };
