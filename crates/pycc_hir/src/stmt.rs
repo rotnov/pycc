@@ -101,8 +101,9 @@ use pycc_diag::Diagnostic;
 /// guard expression, spelled either as the bare name (`from typing import
 /// TYPE_CHECKING`) or the qualified attribute access (`import typing`,
 /// then `typing.TYPE_CHECKING`) (#790). Checked purely syntactically,
-/// matching this module's existing bare-name `Final` precedent above
-/// (`is_final`) and `expr.rs`'s textual, non-import-gated resolution of
+/// matching this module's existing bare-name `Final` precedent (`is_final`,
+/// a local `let` binding below in the `Stmt::AnnAssign` arm, not a separate
+/// function) and `expr.rs`'s textual, non-import-gated resolution of
 /// `math.sqrt`-shaped attribute access -- `lower_stmt`/`lower_body` have no
 /// access to the module-level import side-table `lower_checked` builds, so
 /// this recognizes the two concrete spellings the real-world idiom uses
@@ -112,6 +113,14 @@ use pycc_diag::Diagnostic;
 /// itself has the real-world precedent (bodies containing constructs pycc
 /// doesn't support) this fold exists to unblock; a compound test is left
 /// to ordinary lowering, which type-checks both branches exactly as before.
+///
+/// Known gap (tracked in #798, deliberately not fixed here): this check is
+/// not import-gated and not shadow-aware. A module that never imports
+/// `typing`/`TYPE_CHECKING` but happens to bind its own truthy module-level
+/// `TYPE_CHECKING` name would, under CPython, execute the guarded body --
+/// this compiler still folds it away as dead code, silently diverging from
+/// CPython for that (contrived) program. #798 tracks gating the fold on an
+/// actual `typing` import.
 fn is_type_checking_guard(test: &Expr) -> bool {
     match test {
         Expr::Name(name) => name.id.as_str() == "TYPE_CHECKING",

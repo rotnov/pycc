@@ -151,6 +151,46 @@ fn elif_type_checking_guard_with_an_unsupported_body_builds_and_runs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #791 D-068 review finding: every other test in this file exercises the
+/// guard either through `pycc check` alone or with a live `else`/`elif`
+/// clause -- none proves a *bare* `if TYPE_CHECKING:` with no `else` at all
+/// builds and runs to completion. Confirms the constant-folded `HirStmt::If`
+/// (empty `body`, empty `orelse`) reaches codegen and executes as a
+/// genuine no-op, not just that `check` accepts it.
+#[test]
+fn a_bare_type_checking_guard_with_no_else_builds_and_runs() {
+    let dir = std::env::temp_dir().join(format!("pycc_790_bare_no_else_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "bare_no_else.py",
+        "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import some_module_that_does_not_exist_at_runtime_or_compile_time\n\nprint(\"ran\")\n",
+    );
+    let exe = dir.join("bare_no_else");
+    let build = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "pycc build should succeed for a bare `if TYPE_CHECKING:` with no `else`; stderr: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&exe).output().unwrap();
+    assert!(
+        run.status.success(),
+        "the built binary should exit successfully; stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "ran\n",
+        "the folded guard's empty body/orelse must be a genuine no-op, and the \
+         statement after the guard must still execute"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #790: `TYPE_CHECKING` referenced as a first-class value (not the test of
 /// an `if`/`elif`) is rejected by the type checker -- it is a compile-time
 /// marker for exactly one purpose, not a general-purpose boolean.

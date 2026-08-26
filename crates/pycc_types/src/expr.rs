@@ -330,6 +330,11 @@ pub(crate) fn infer_expr_in(
                             annotation_marker_is_not_a_value(callee)
                         } else if matches!(symbol.kind, pycc_std::StdSymbolKind::CastMarker) {
                             cast_marker_is_not_a_value(callee)
+                        } else if matches!(
+                            symbol.kind,
+                            pycc_std::StdSymbolKind::TypeCheckingMarker
+                        ) {
+                            type_checking_marker_is_not_a_value(callee)
                         } else {
                             marker_is_not_a_value(callee)
                         }

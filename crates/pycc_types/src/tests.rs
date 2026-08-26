@@ -23860,6 +23860,60 @@ fn qualified_type_checking_marker_as_value_in_private_helper_is_t0021() {
 }
 
 #[test]
+fn qualified_type_checking_marker_called_is_t0021() {
+    // #791 D-068 review finding: the call-site marker guard in expr.rs's
+    // infer_expr_in (the `Function` let-else fallthrough) previously fell
+    // through to the generic `marker_is_not_a_value` message for
+    // `TypeCheckingMarker` instead of the dedicated
+    // `type_checking_marker_is_not_a_value` diagnostic its own doc comment
+    // claims to produce -- `typing.TYPE_CHECKING(...)` must be rejected
+    // with the TYPE_CHECKING-specific guidance, mirroring the `CastMarker`
+    // precedent (`qualified_cast_marker_called_is_t0021`).
+    let err = check_source("import typing\nx = typing.TYPE_CHECKING()\n").unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("compile-time marker"),
+        "expected a TYPE_CHECKING-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn qualified_type_checking_marker_called_inside_an_annotated_function_is_t0021() {
+    // #791 D-068 review finding: same call-site arm, reached via the
+    // validation pass (a call inside a fully annotated public function)
+    // rather than the solver path -- mirrors
+    // `qualified_cast_marker_called_inside_an_annotated_function_is_t0021`.
+    let err = check_source(
+        "import typing\ndef f() -> int:\n    x = typing.TYPE_CHECKING()\n    return 1\nprint(f())\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("compile-time marker"),
+        "expected a TYPE_CHECKING-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn qualified_type_checking_marker_called_in_private_helper_is_t0021() {
+    // #791 D-068 review finding: the same call-site `TypeCheckingMarker`
+    // branch in constraints.rs's collect_expr_constraints (the solver
+    // path) -- mirrors `qualified_cast_marker_called_in_private_helper_is_t0021`.
+    let err = check_source(
+        "import typing\ndef _helper() -> int:\n    x = typing.TYPE_CHECKING()\n    return 1\n_helper()\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("compile-time marker"),
+        "expected a TYPE_CHECKING-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
 fn protocol_argument_mismatch_emits_t0046() {
     // This exercises the assignable_error call (line 2894) when
     // a non-conforming class is passed to a protocol-typed parameter.
