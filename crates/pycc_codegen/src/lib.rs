@@ -3934,9 +3934,30 @@ fn truthy<'ctx>(
                     .try_as_basic_value()
                     .expect_basic("pycc_rt_int_truthy returns a non-void i8")
                     .into_int_value(),
-                other => panic!(
-                    "pycc_codegen: internal error: an Optional[_] payload had an unsupported LLVM representation ({other:?}) -- pycc_types::check (T0049) should have rejected this inner type before codegen"
-                ),
+                other => {
+                    // Describe the variant by name only, without `{other:?}`:
+                    // inkwell's `Debug` impl for an LLVM value calls
+                    // `LLVMPrintValueToString`/`LLVMPrintTypeToString` on it,
+                    // and printing a payload freshly extracted from a
+                    // constant struct inside a function whose block is not
+                    // yet terminated crashed the Windows CI runner with a
+                    // native `STATUS_ACCESS_VIOLATION` (see PR #812) rather
+                    // than raising the intended Rust panic.
+                    let kind = match other {
+                        inkwell::values::BasicValueEnum::ArrayValue(_) => "ArrayValue",
+                        inkwell::values::BasicValueEnum::IntValue(_) => "IntValue",
+                        inkwell::values::BasicValueEnum::FloatValue(_) => "FloatValue",
+                        inkwell::values::BasicValueEnum::PointerValue(_) => "PointerValue",
+                        inkwell::values::BasicValueEnum::StructValue(_) => "StructValue",
+                        inkwell::values::BasicValueEnum::VectorValue(_) => "VectorValue",
+                        inkwell::values::BasicValueEnum::ScalableVectorValue(_) => {
+                            "ScalableVectorValue"
+                        }
+                    };
+                    panic!(
+                        "pycc_codegen: internal error: an Optional[_] payload had an unsupported LLVM representation ({kind}) -- pycc_types::check (T0049) should have rejected this inner type before codegen"
+                    )
+                }
             };
             builder
                 .build_and(present, payload_truthy, "opt_truthy")

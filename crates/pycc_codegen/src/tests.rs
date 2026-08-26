@@ -3507,31 +3507,12 @@ fn truthy_of_an_optional_with_a_pointer_payload_panics_as_an_internal_error() {
         ptr_ty.const_null().into(),
         context.i8_type().const_int(1, false).into(),
     ]);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        truthy(
-            &context,
-            &builder,
-            &rt,
-            Scalar::Optional(optional_with_pointer_payload),
-        );
-    }));
-    // Deliberately leak the LLVM context/module/builder instead of letting
-    // them drop: dropping them here would dispose a module holding a
-    // function with an unterminated block, mid-unwind, which is a plausible
-    // cause of the native STATUS_ACCESS_VIOLATION crash this test triggered
-    // in Windows CI (a process crash, not a normal Rust panic, so
-    // `#[should_panic]` never saw it -- see PR #812). This test's only job
-    // is to pin the panic message below, so leaking the LLVM handles is
-    // harmless.
-    std::mem::forget(builder);
-    std::mem::forget(module);
-    std::mem::forget(context);
-    match result {
-        Ok(()) => panic!(
-            "expected truthy() to panic on an Optional payload with an unsupported LLVM representation"
-        ),
-        Err(payload) => std::panic::resume_unwind(payload),
-    }
+    truthy(
+        &context,
+        &builder,
+        &rt,
+        Scalar::Optional(optional_with_pointer_payload),
+    );
 }
 
 #[test]
