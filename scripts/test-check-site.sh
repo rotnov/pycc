@@ -1244,6 +1244,12 @@ mutations = (
         "landing page with a superseded v0.3 status",
     ),
     (
+        site_dir / "index.html",
+        "v0.4 (multi-file projects, imports, incremental compilation) is next and has not started",
+        "v0.4 (multi-file projects, imports, incremental compilation) is already well underway.",
+        "landing page that overclaims v0.4 progress that has not started",
+    ),
+    (
         site_dir / "status" / "index.html",
         "<strong>Strict checking and inference</strong>",
         "<strong>Type checker placeholder</strong>",

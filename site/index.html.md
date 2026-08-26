@@ -158,7 +158,7 @@ roadmap work.
 - v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)
 - v0.2 acceptance criteria also met
 - v0.3 acceptance criteria met and released as `v0.3.0`
-- v0.4 (multi-file projects, imports, incremental compilation) is next
+- v0.4 (multi-file projects, imports, incremental compilation) is unstarted
 
 The landing page's code example uses only implemented v0.1 language features
 (statement-form `if`, `while`, recursive calls, `print`) and matches the
