@@ -583,6 +583,73 @@ D91_VERIFY_REVISIONS_SCRIPT = <<~'SHELL'.strip
   diff <(awk '/^\[dev-dependencies\]$/,0' previous/Cargo.toml) \
        <(awk '/^\[dev-dependencies\]$/,0' current/Cargo.toml)
 SHELL
+D203_VERIFY_REVISIONS_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  test "$(git -C previous rev-parse HEAD)" = "$EXPECTED_PREDECESSOR_SHA"
+  test "$(git -C current rev-parse HEAD)" = "$EXPECTED_CURRENT_SHA"
+  contract_paths=(
+    benches
+    rust-toolchain.toml
+    rust-toolchain
+    .cargo
+  )
+  for contract_path in "${contract_paths[@]}"; do
+    previous_path="previous/$contract_path"
+    current_path="current/$contract_path"
+    if [ ! -e "$previous_path" ] && [ ! -L "$previous_path" ] &&
+       [ ! -e "$current_path" ] && [ ! -L "$current_path" ]; then
+      continue
+    fi
+    git diff --no-index --exit-code -- "$previous_path" "$current_path"
+  done
+  # D-091: root Cargo.toml's bench-defining tail ([dev-dependencies]
+  # onward, which today is exactly [dev-dependencies] plus [[bench]])
+  # stays part of this hard contract even though the rest of the
+  # manifest is reclassified below -- see "Classify executable
+  # benchmark inputs"' own comment. Nothing below [dev-dependencies]
+  # reaches the built pycc binary the benchmark times, so relaxing
+  # it would let a faster measuring apparatus (a bumped criterion, a
+  # rewritten [[bench]] target) pass as a faster compiler. This is a
+  # standalone check, not an addition to contract_paths above: it
+  # extracts and diffs a sub-region of one file rather than
+  # requiring a whole path byte-identical. Two invariants are
+  # asserted, not assumed, so a future manifest edit cannot widen
+  # or narrow the pinned region without a loud abort: (1)
+  # [dev-dependencies] exists and only [[bench]] follows it, so an
+  # unrelated section landing after [dev-dependencies] cannot be
+  # silently swallowed into the pinned tail; (2) every [[bench]]
+  # section in the file is inside that tail, so reordering
+  # [[bench]] above [dev-dependencies] cannot silently move it out
+  # of the pinned region and into the softer reclassification below.
+  for repo_dir in previous current; do
+    manifest="$repo_dir/Cargo.toml"
+    if ! grep -q '^\[dev-dependencies\]$' "$manifest"; then
+      echo "$manifest has no [dev-dependencies] section; bench-manifest fingerprint invariant violated" >&2
+      exit 1
+    fi
+    extra_headers="$(awk '
+      /^\[dev-dependencies\]$/ { found = 1 }
+      found && /^\[/ && !/^\[dev-dependencies\]$/ && !/^\[\[bench\]\]$/ { print }
+    ' "$manifest")"
+    if [ -n "$extra_headers" ]; then
+      echo "$manifest has unexpected section(s) after [dev-dependencies]: $extra_headers" >&2
+      exit 1
+    fi
+    whole_bench_count="$(grep -c '^\[\[bench\]\]$' "$manifest" || true)"
+    tail_bench_count="$(awk '/^\[dev-dependencies\]$/,0' "$manifest" | grep -c '^\[\[bench\]\]$' || true)"
+    if [ "$whole_bench_count" != "$tail_bench_count" ]; then
+      echo "$manifest has a [[bench]] section outside its [dev-dependencies]-onward tail; bench-manifest fingerprint invariant violated" >&2
+      exit 1
+    fi
+  done
+  # D-203: tolerate exactly one reviewed line -- the pycc_scratch root
+  # dev-dependency -- in the [dev-dependencies]-onward tail; every other
+  # tail difference still hard-aborts (D-091).
+  diff <(awk '/^\[dev-dependencies\]$/,0' previous/Cargo.toml |
+         grep -vxF 'pycc_scratch = { path = "crates/pycc_scratch" }') \
+       <(awk '/^\[dev-dependencies\]$/,0' current/Cargo.toml |
+         grep -vxF 'pycc_scratch = { path = "crates/pycc_scratch" }')
+SHELL
 D91_EXECUTABLE_INPUT_IDENTITY_SCRIPT = <<~'SHELL'.strip
   set -euo pipefail
   executable_inputs_equal=true
@@ -924,6 +991,14 @@ D112_UBUNTU_FRONTEND_PERF_MEASURE_STEPS =
 D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB = D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_JOB.merge(
   "runs-on" => "ubuntu-latest",
   "steps" => D112_UBUNTU_FRONTEND_PERF_MEASURE_STEPS
+).freeze
+D203_SCRATCH_DEVDEP_FRONTEND_PERF_MEASURE_STEPS =
+  Marshal.load(Marshal.dump(D112_UBUNTU_FRONTEND_PERF_MEASURE_STEPS)).tap do |steps|
+    verify = steps.find { |step| step["name"] == "Verify exact benchmark revisions" }
+    verify["run"] = D203_VERIFY_REVISIONS_SCRIPT
+  end.freeze
+D203_SCRATCH_DEVDEP_FRONTEND_PERF_MEASURE_JOB = D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB.merge(
+  "steps" => D203_SCRATCH_DEVDEP_FRONTEND_PERF_MEASURE_STEPS
 ).freeze
 D112_UBUNTU_FRONTEND_PERF_GATE_JOB = REPLICATED_PERF_GATE_JOB.merge(
   "runs-on" => "ubuntu-latest"
@@ -2146,6 +2221,8 @@ def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
       # shape) -- an array here, unlike every other branch's single job
       # constant, deliberately so a single measure-job shape can authorize
       # more than one gate-job shape without a parallel measure-job branch.
+      [D112_UBUNTU_FRONTEND_PERF_GATE_JOB, D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB]
+    elsif measure_job == D203_SCRATCH_DEVDEP_FRONTEND_PERF_MEASURE_JOB
       [D112_UBUNTU_FRONTEND_PERF_GATE_JOB, D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB]
     end
   unless expected_perf_job

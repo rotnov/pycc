@@ -303,6 +303,25 @@ class RoadmapEvidenceCliTest < Minitest::Test
     { "jobs" => jobs }.to_yaml
   end
 
+  # D-203: same shape as d112_ubuntu_frontend_perf_workflow, but with the
+  # measure job carrying the narrowed verify-revisions run body; the gate
+  # job is unchanged by D-203, so either reviewed gate shape may pair with
+  # it (mirroring the D112 branch's D-114 widening).
+  def d203_scratch_devdep_frontend_perf_workflow(
+    gate_job: D112_UBUNTU_FRONTEND_PERF_GATE_JOB
+  )
+    jobs = {
+      "frontend-perf-measure" =>
+        Marshal.load(Marshal.dump(D203_SCRATCH_DEVDEP_FRONTEND_PERF_MEASURE_JOB)),
+      "frontend-perf-gate" =>
+        Marshal.load(Marshal.dump(gate_job)),
+      "ci-gate" =>
+        Marshal.load(Marshal.dump(PAIRED_PERF_CI_GATE_JOB))
+    }
+    yield jobs if block_given?
+    { "jobs" => jobs }.to_yaml
+  end
+
   def without_workflow_jobs(workflow, *job_names)
     skipping = false
     workflow.lines.reject do |line|
@@ -475,7 +494,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # constant's text -- so a change that silently breaks the bench-manifest
   # fingerprint's awk/grep logic actually fails a test, per the same
   # measurement-integrity finding this fingerprint was added to fix.
-  def run_d91_verify_revisions
+  # D-203: the script: keyword lets the same real-git-repo harness execute
+  # the narrowed D203_VERIFY_REVISIONS_SCRIPT; existing call sites keep
+  # exercising the frozen D91 script via the default.
+  def run_d91_verify_revisions(script: D91_VERIFY_REVISIONS_SCRIPT)
     Dir.mktmpdir do |directory|
       root = Pathname(directory)
       %w[previous current].each do |revision|
@@ -504,7 +526,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
         env,
         "bash",
         "-s",
-        stdin_data: D91_VERIFY_REVISIONS_SCRIPT,
+        stdin_data: script,
         chdir: root.to_s
       )
     end
@@ -519,6 +541,15 @@ class RoadmapEvidenceCliTest < Minitest::Test
     name = "check_bench"
     harness = false
   TOML
+
+  # D-203: the exact tolerated line, and a D91 tail carrying it directly
+  # after the [dev-dependencies] header (the placement PR-2 uses; the
+  # filter itself is position-independent within the tail).
+  D203_SCRATCH_DEVDEP_LINE = 'pycc_scratch = { path = "crates/pycc_scratch" }'
+  D203_BENCH_MANIFEST_TAIL_WITH_SCRATCH = D91_BENCH_MANIFEST_TAIL.sub(
+    "[dev-dependencies]\n",
+    "[dev-dependencies]\n#{D203_SCRATCH_DEVDEP_LINE}\n"
+  )
 
   def d91_cargo_toml(dependencies_extra: "", bench_manifest_tail: D91_BENCH_MANIFEST_TAIL)
     <<~TOML
@@ -1512,6 +1543,196 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "outside its [dev-dependencies]-onward tail"
   end
 
+  # D-203: the narrowed tail check must tolerate exactly the pycc_scratch
+  # root dev-dependency line appearing in the current revision's tail --
+  # the addition PR-2 of #800 performs. Confirmed by executing the real
+  # D203_VERIFY_REVISIONS_SCRIPT against throwaway git repositories, same
+  # harness as the D91 tests above.
+  def test_d203_tail_tolerates_pycc_scratch_devdep_addition
+    _stdout, stderr, status =
+      run_d91_verify_revisions(script: D203_VERIFY_REVISIONS_SCRIPT) do |root|
+        (root / "previous/Cargo.toml").write(d91_cargo_toml)
+        (root / "current/Cargo.toml").write(
+          d91_cargo_toml(
+            bench_manifest_tail: D203_BENCH_MANIFEST_TAIL_WITH_SCRATCH
+          )
+        )
+      end
+    assert status.success?, stderr
+  end
+
+  # D-203: the filter is symmetric by design, so a future removal of the
+  # tolerated line is tolerated too.
+  def test_d203_tail_tolerates_pycc_scratch_devdep_removal
+    _stdout, stderr, status =
+      run_d91_verify_revisions(script: D203_VERIFY_REVISIONS_SCRIPT) do |root|
+        (root / "previous/Cargo.toml").write(
+          d91_cargo_toml(
+            bench_manifest_tail: D203_BENCH_MANIFEST_TAIL_WITH_SCRATCH
+          )
+        )
+        (root / "current/Cargo.toml").write(d91_cargo_toml)
+      end
+    assert status.success?, stderr
+  end
+
+  # D-203: the narrowing tolerates exactly one line; a bench-tooling change
+  # (a bumped criterion) must still hard-abort even while the tolerated
+  # line is present in both revisions.
+  def test_d203_tail_hard_aborts_on_bench_tooling_change_with_tolerated_line_present
+    _stdout, stderr, status =
+      run_d91_verify_revisions(script: D203_VERIFY_REVISIONS_SCRIPT) do |root|
+        (root / "previous/Cargo.toml").write(
+          d91_cargo_toml(
+            bench_manifest_tail: D203_BENCH_MANIFEST_TAIL_WITH_SCRATCH
+          )
+        )
+        (root / "current/Cargo.toml").write(
+          d91_cargo_toml(
+            bench_manifest_tail:
+              D203_BENCH_MANIFEST_TAIL_WITH_SCRATCH.sub("0.8.2", "0.9.0")
+          )
+        )
+      end
+    refute status.success?,
+           "expected a criterion version bump to hard-abort, got: #{stderr}"
+  end
+
+  # D-203: any other added tail line -- a different dev-dependency here --
+  # must still hard-abort; the tolerance covers one reviewed byte sequence,
+  # not a category of additions.
+  def test_d203_tail_hard_aborts_on_other_added_line
+    _stdout, stderr, status =
+      run_d91_verify_revisions(script: D203_VERIFY_REVISIONS_SCRIPT) do |root|
+        (root / "previous/Cargo.toml").write(d91_cargo_toml)
+        (root / "current/Cargo.toml").write(
+          d91_cargo_toml(
+            bench_manifest_tail: D91_BENCH_MANIFEST_TAIL.sub(
+              "[dev-dependencies]\n",
+              "[dev-dependencies]\nrand = \"0.9\"\n"
+            )
+          )
+        )
+      end
+    refute status.success?,
+           "expected an unreviewed dev-dependency addition to hard-abort, got: #{stderr}"
+  end
+
+  # D-203: issue #800 completion criterion 2's deletion case -- removing an
+  # existing tail line other than the tolerated one must still hard-abort,
+  # pinning the deletion direction of the fingerprint.
+  def test_d203_tail_hard_aborts_on_deletion_of_other_tail_line
+    _stdout, stderr, status =
+      run_d91_verify_revisions(script: D203_VERIFY_REVISIONS_SCRIPT) do |root|
+        (root / "previous/Cargo.toml").write(d91_cargo_toml)
+        (root / "current/Cargo.toml").write(
+          d91_cargo_toml(
+            bench_manifest_tail:
+              D91_BENCH_MANIFEST_TAIL.sub("serde_json = \"1\"\n", "")
+          )
+        )
+      end
+    refute status.success?,
+           "expected deleting serde_json from the tail to hard-abort, got: #{stderr}"
+  end
+
+  # D-203: the tolerance is byte-exact (grep -vxF of one literal); a
+  # different-path variant and a re-spaced variant of the line must both
+  # still hard-abort.
+  def test_d203_tail_hard_aborts_on_variant_of_tolerated_line
+    [
+      'pycc_scratch = { path = "crates/other" }',
+      'pycc_scratch  = { path = "crates/pycc_scratch" }'
+    ].each do |variant|
+      _stdout, stderr, status =
+        run_d91_verify_revisions(script: D203_VERIFY_REVISIONS_SCRIPT) do |root|
+          (root / "previous/Cargo.toml").write(d91_cargo_toml)
+          (root / "current/Cargo.toml").write(
+            d91_cargo_toml(
+              bench_manifest_tail: D91_BENCH_MANIFEST_TAIL.sub(
+                "[dev-dependencies]\n",
+                "[dev-dependencies]\n#{variant}\n"
+              )
+            )
+          )
+        end
+      refute status.success?,
+             "expected variant #{variant.inspect} to hard-abort, got: #{stderr}"
+    end
+  end
+
+  # D-203: the D91 invariant guards ride along unchanged in the narrowed
+  # script -- a manifest missing [dev-dependencies] entirely must still
+  # fail loudly (mirror of the D91 test above).
+  def test_d203_tail_hard_aborts_when_dev_dependencies_is_missing
+    _stdout, stderr, status =
+      run_d91_verify_revisions(script: D203_VERIFY_REVISIONS_SCRIPT) do |root|
+        (root / "previous/Cargo.toml").write(d91_cargo_toml)
+        (root / "current/Cargo.toml").write(<<~TOML)
+          [package]
+          name = "pycc"
+          version = "0.1.0"
+
+          [dependencies]
+          clap = { version = "4", features = ["derive"] }
+        TOML
+      end
+    refute status.success?
+    assert_includes stderr, "bench-manifest fingerprint invariant violated"
+  end
+
+  # D-203: an unexpected section after [dev-dependencies] must still fail
+  # loudly under the narrowed script (mirror of the D91 test above).
+  def test_d203_tail_hard_aborts_on_unexpected_trailing_section
+    _stdout, stderr, status =
+      run_d91_verify_revisions(script: D203_VERIFY_REVISIONS_SCRIPT) do |root|
+        (root / "previous/Cargo.toml").write(d91_cargo_toml)
+        (root / "current/Cargo.toml").write(
+          d91_cargo_toml(
+            bench_manifest_tail: "#{D91_BENCH_MANIFEST_TAIL}\n[extra]\nfoo = 1\n"
+          )
+        )
+      end
+    refute status.success?
+    assert_includes stderr, "unexpected section"
+  end
+
+  # D-203: [[bench]] reordered above [dev-dependencies] must still fail
+  # loudly under the narrowed script (mirror of the D91 test above).
+  def test_d203_tail_hard_aborts_when_bench_precedes_dev_dependencies
+    reordered = <<~TOML
+      [package]
+      name = "pycc"
+      version = "0.1.0"
+
+      [dependencies]
+      clap = { version = "4", features = ["derive"] }
+
+      [[bench]]
+      name = "check_bench"
+      harness = false
+
+      [dev-dependencies]
+      serde_json = "1"
+      criterion = { version = "0.8.2", features = ["html_reports"] }
+    TOML
+    _stdout, stderr, status =
+      run_d91_verify_revisions(script: D203_VERIFY_REVISIONS_SCRIPT) do |root|
+        (root / "previous/Cargo.toml").write(d91_cargo_toml)
+        (root / "current/Cargo.toml").write(reordered)
+      end
+    refute status.success?
+    assert_includes stderr, "outside its [dev-dependencies]-onward tail"
+  end
+
+  # D-203: cheap tripwire against a future in-place mutation of the frozen
+  # D91 constant -- the filter must live only in the D203 script.
+  def test_d203_filter_is_present_only_in_the_d203_script
+    refute_includes D91_VERIFY_REVISIONS_SCRIPT, "grep -vxF"
+    assert_includes D203_VERIFY_REVISIONS_SCRIPT,
+                    "grep -vxF '#{D203_SCRATCH_DEVDEP_LINE}'"
+  end
+
   # D-091: root-level build.rs must be classified (Cargo would silently use
   # it without any Cargo.toml change), while an unrelated identical src/
   # tree still reports executable_inputs_equal=true.
@@ -1845,6 +2066,42 @@ class RoadmapEvidenceCliTest < Minitest::Test
       validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
     end
     assert_includes error.message, "reviewed source-aware comparison job"
+  end
+
+  # D-203: a measure job carrying the narrowed verify-revisions run body is
+  # accepted by the lifecycle validator, paired with either reviewed gate
+  # shape (the gate job is unchanged by D-203, mirroring the D112 branch's
+  # D-114 widening). This is the coexist half of the coexist-then-retire
+  # lifecycle: the live ci.yml still matches the D112 branch until PR-2 of
+  # #800 activates this shape.
+  def test_d203_lifecycle_accepts_scratch_devdep_measure_job
+    assert validate_source_aware_perf_gate_lifecycle(
+      d203_scratch_devdep_frontend_perf_workflow, "ci.yml"
+    )
+    assert validate_source_aware_perf_gate_lifecycle(
+      d203_scratch_devdep_frontend_perf_workflow(
+        gate_job: D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB
+      ),
+      "ci.yml"
+    )
+  end
+
+  # D-203: the lifecycle equality guards the filter literal itself, not
+  # just the surrounding step shape -- a D-203-shaped run body whose
+  # grep -vxF filters a different literal must be rejected.
+  def test_d203_lifecycle_rejects_measure_job_filtering_a_different_literal
+    workflow = d203_scratch_devdep_frontend_perf_workflow do |jobs|
+      verify = jobs.fetch("frontend-perf-measure").fetch("steps")
+                   .find { |step| step["name"] == "Verify exact benchmark revisions" }
+      rewritten = verify.fetch("run").gsub(D203_SCRATCH_DEVDEP_LINE, 'serde_json = "1"')
+      refute_equal verify.fetch("run"), rewritten
+      verify["run"] = rewritten
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed source-aware measurement job"
   end
 
   # Issue #229 (Phase 2): validate_source_aware_perf_gate_lifecycle must

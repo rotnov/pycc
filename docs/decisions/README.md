@@ -211,3 +211,4 @@ current.
 | [D-201](./D-201-shared-pycc-scratch-crate-and-lint-gate-for.md) | Shared `pycc_scratch` crate and lint gate for scratch-directory lifecycle | accepted |
 | [D-202](./D-202-kill-prescan-for-re-enterable-narrowed-bodies.md) | Kill-prescan for re-enterable Optional[T] narrowed bodies (D-068 re-review of #780, third round) | accepted |
 | [D-202](./D-202-pep-654-except-star-and-exceptiongroup.md) | PEP 654 `except*`/ExceptionGroup: six deliberate simplifications | accepted |
+| [D-203](./D-203-narrow-the-d-091-bench-manifest-tail-check-to.md) | Narrow the D-091 bench-manifest tail check to tolerate the `pycc_scratch` root dev-dependency line | accepted |
