@@ -1633,7 +1633,7 @@ fn a_walrus_in_an_if_test_predeclares_its_storage_slot_and_runs() {
         })],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("walrus_in_if_test");
+    let dir = pycc_scratch::ScratchDir::new("walrus_in_if_test").expect("failed to create scratch dir");
     let obj_path = dir.join("walrus_in_if_test.o");
     compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     let bin_path = dir.join("walrus_in_if_test");
@@ -1690,7 +1690,7 @@ fn a_walrus_with_an_optional_int_value_and_a_repeated_target_name_predeclare_cor
         ],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("walrus_optional_and_repeated_name");
+    let dir = pycc_scratch::ScratchDir::new("walrus_optional_and_repeated_name").expect("failed to create scratch dir");
     let obj_path = dir.join("walrus_optional_and_repeated_name.o");
     compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     let bin_path = dir.join("walrus_optional_and_repeated_name");
