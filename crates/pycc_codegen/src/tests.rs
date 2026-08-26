@@ -11940,7 +11940,7 @@ fn constructed_group_with_non_string_message_is_a_codegen_error() {
         })],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("constructed_group_non_str_message");
+    let dir = pycc_scratch::ScratchDir::new("constructed_group_non_str_message").expect("failed to create scratch dir");
     let obj_path = dir.join("constructed_group_non_str_message.o");
     let err = compile_to_object(&mir, &obj_path, None, false)
         .expect_err("a non-string ExceptionGroup message must be a codegen error");
@@ -11964,7 +11964,7 @@ fn constructed_group_with_a_non_instance_member_is_a_codegen_error() {
         })],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("constructed_group_non_instance_member");
+    let dir = pycc_scratch::ScratchDir::new("constructed_group_non_instance_member").expect("failed to create scratch dir");
     let obj_path = dir.join("constructed_group_non_instance_member.o");
     let err = compile_to_object(&mir, &obj_path, None, false)
         .expect_err("a non-instance ExceptionGroup member must be a codegen error");
@@ -12052,7 +12052,7 @@ fn a_successful_multi_member_exception_group_construction_compiles_and_runs() {
         })],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("successful_multi_member_exception_group");
+    let dir = pycc_scratch::ScratchDir::new("successful_multi_member_exception_group").expect("failed to create scratch dir");
     let obj_path = dir.join("successful_multi_member_exception_group.o");
     compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     let bin_path = dir.join("successful_multi_member_exception_group");
@@ -12090,7 +12090,7 @@ fn constructed_group_cause_with_non_string_message_is_a_codegen_error() {
         })],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("constructed_group_cause_non_str_message");
+    let dir = pycc_scratch::ScratchDir::new("constructed_group_cause_non_str_message").expect("failed to create scratch dir");
     let obj_path = dir.join("constructed_group_cause_non_str_message.o");
     let err = compile_to_object(&mir, &obj_path, None, false)
         .expect_err("a non-string ExceptionGroup cause message must be a codegen error");
@@ -12124,7 +12124,7 @@ fn a_codegen_error_in_a_try_star_body_propagates_out_of_emit_try_star() {
         })],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("try_star_body_codegen_error");
+    let dir = pycc_scratch::ScratchDir::new("try_star_body_codegen_error").expect("failed to create scratch dir");
     let obj_path = dir.join("try_star_body_codegen_error.o");
     let err = compile_to_object(&mir, &obj_path, None, false)
         .expect_err("a codegen error in the try* body must propagate");
@@ -12153,7 +12153,7 @@ fn a_codegen_error_in_a_try_star_handler_body_propagates_out_of_emit_try_star() 
         })],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("try_star_handler_codegen_error");
+    let dir = pycc_scratch::ScratchDir::new("try_star_handler_codegen_error").expect("failed to create scratch dir");
     let obj_path = dir.join("try_star_handler_codegen_error.o");
     let err = compile_to_object(&mir, &obj_path, None, false)
         .expect_err("a codegen error in a try* handler body must propagate");
@@ -12187,7 +12187,7 @@ fn a_codegen_error_in_a_try_star_else_body_propagates_out_of_emit_try_star() {
         })],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("try_star_else_codegen_error");
+    let dir = pycc_scratch::ScratchDir::new("try_star_else_codegen_error").expect("failed to create scratch dir");
     let obj_path = dir.join("try_star_else_codegen_error.o");
     let err = compile_to_object(&mir, &obj_path, None, false)
         .expect_err("a codegen error in a try* else body must propagate");
@@ -12219,7 +12219,7 @@ fn a_codegen_error_in_a_try_star_finally_body_propagates_out_of_emit_try_star() 
         })],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("try_star_finally_codegen_error");
+    let dir = pycc_scratch::ScratchDir::new("try_star_finally_codegen_error").expect("failed to create scratch dir");
     let obj_path = dir.join("try_star_finally_codegen_error.o");
     let err = compile_to_object(&mir, &obj_path, None, false)
         .expect_err("a codegen error in a try* finally body must propagate");
@@ -12276,7 +12276,7 @@ fn a_try_star_with_a_bound_handler_else_and_finally_compiles_and_runs() {
         })],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("try_star_bound_handler_else_finally");
+    let dir = pycc_scratch::ScratchDir::new("try_star_bound_handler_else_finally").expect("failed to create scratch dir");
     let obj_path = dir.join("try_star_bound_handler_else_finally.o");
     compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     let bin_path = dir.join("try_star_bound_handler_else_finally");
@@ -12317,7 +12317,7 @@ fn a_try_star_else_that_falls_through_branches_to_finally() {
         })],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("try_star_else_falls_through");
+    let dir = pycc_scratch::ScratchDir::new("try_star_else_falls_through").expect("failed to create scratch dir");
     let obj_path = dir.join("try_star_else_falls_through.o");
     compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     let bin_path = dir.join("try_star_else_falls_through");
@@ -12355,7 +12355,7 @@ fn a_try_star_else_that_returns_does_not_branch_to_finally() {
         }],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("try_star_else_returns");
+    let dir = pycc_scratch::ScratchDir::new("try_star_else_returns").expect("failed to create scratch dir");
     let obj_path = dir.join("try_star_else_returns.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("an orelse ending in Return must codegen without a spurious branch");
@@ -12398,7 +12398,7 @@ fn a_try_star_returning_a_value_through_its_finally_in_a_non_none_function() {
         }],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("try_star_return_value_through_finally");
+    let dir = pycc_scratch::ScratchDir::new("try_star_return_value_through_finally").expect("failed to create scratch dir");
     let obj_path = dir.join("try_star_return_value_through_finally.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("a value return routed through a try*'s finally must codegen");
@@ -12431,7 +12431,7 @@ fn try_star_finally_body_with_return_does_not_fall_through() {
         }],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("try_star_finally_return");
+    let dir = pycc_scratch::ScratchDir::new("try_star_finally_return").expect("failed to create scratch dir");
     let obj_path = dir.join("try_star_finally_return.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("codegen should succeed for a try*'s finally body with return");
@@ -12472,7 +12472,7 @@ fn a_try_star_without_a_finally_reraises_an_unmatched_remainder() {
         })],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("try_star_no_finally_reraise");
+    let dir = pycc_scratch::ScratchDir::new("try_star_no_finally_reraise").expect("failed to create scratch dir");
     let obj_path = dir.join("try_star_no_finally_reraise.o");
     compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     let bin_path = dir.join("try_star_no_finally_reraise");
@@ -12934,7 +12934,8 @@ fn nested_try_star_finally_return_routing_covers_value_and_none_abis() {
             }],
             class_defs: vec![],
         };
-        let dir = tempfile_dir(&format!("nested_trystar_finally_{name}"));
+        let dir = pycc_scratch::ScratchDir::new(&format!("nested_trystar_finally_{name}"))
+            .expect("failed to create scratch dir");
         let obj_path = dir.join(format!("nested_trystar_finally_{name}.o"));
         compile_to_object(&mir, &obj_path, None, false)
             .expect("nested try* finally return routing must produce valid object code");
@@ -12959,7 +12960,7 @@ fn nested_try_star_finally_return_routing_covers_value_and_none_abis() {
         }],
         class_defs: vec![],
     };
-    let dir = tempfile_dir("direct_none_trystar_finally");
+    let dir = pycc_scratch::ScratchDir::new("direct_none_trystar_finally").expect("failed to create scratch dir");
     let obj_path = dir.join("direct_none_trystar_finally.o");
     compile_to_object(&mir, &obj_path, None, false)
         .expect("a None return routed through a try*'s finally must produce valid object code");
