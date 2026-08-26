@@ -101,7 +101,14 @@ cannot see through
 `Derived` overrides a method `Base` defines; D-198, issue #767) are the
 current instances -- for the same reason:
 the construct is valid Python that a later slice can implement, not a
-by-design rejection.
+by-design rejection. It is also used for a direct method call on a class
+that HIR lowering synthesized for a seeded builtin exception (D-188) --
+e.g. `except Exception as e: e.__init__("oops")`, or the same call reached
+through a user subclass that inherits the method without overriding it
+(issue #714) -- because a synthetic class's method-table entry does not
+correspond to a real, callable function (D-173 propagates a raised
+exception through global runtime state rather than a real allocated
+instance); Part 1 of issue #737, issue #711.
 
 ## Quality bar
 
