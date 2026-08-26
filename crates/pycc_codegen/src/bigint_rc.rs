@@ -1465,7 +1465,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // #809 (Part 2 of #747): `T0049`'s widened gate now also admits
+    // #809 (Part 3 of #747): `T0049`'s widened gate now also admits
     // `Optional[float]`/`Optional[bool]`, so `int_value_is_a_duplicate_
     // reference`'s and `retain_if_int_duplicate`'s `OptionalUnwrap` arms
     // (both above) can no longer assume every `OptionalUnwrap` node is

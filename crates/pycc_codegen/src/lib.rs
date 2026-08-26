@@ -1194,7 +1194,7 @@ fn coerce_scalar_to_type<'ctx>(
         // result as the struct's present (`i8 = 1`) payload field.
         (pycc_mir::Ty::Optional(inner), bare) => {
             let coerced = coerce_scalar_to_type(context, builder, bare, (*inner).clone());
-            // #809 (Part 2 of #747): `T0049`'s widened gate
+            // #809 (Part 3 of #747): `T0049`'s widened gate
             // (`crates/pycc_hir/src/func.rs`) now also admits
             // `Optional[float]`/`Optional[bool]`, so this match is keyed on
             // *both* the declared inner type and the coerced `Scalar`
@@ -1742,7 +1742,7 @@ fn emit_expr_unchecked<'ctx>(
             let payload = builder
                 .build_extract_value(v, 0, "narrowed_payload")
                 .expect("build_extract_value should not fail extracting field 0 of an Optional struct");
-            // #809 (Part 2 of #747): `T0049`'s widened gate now admits
+            // #809 (Part 3 of #747): `T0049`'s widened gate now admits
             // `Ty::Float`/`Ty::Bool` inner types alongside the pre-existing
             // `Ty::Int`, so the narrowed payload must become the matching
             // `Scalar` variant instead of always `Scalar::Int` -- a plain

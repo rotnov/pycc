@@ -888,7 +888,7 @@ fn an_optional_of_a_non_int_type_produces_t0049() {
 
 #[test]
 fn a_float_or_none_return_annotation_produces_ty_optional_float() {
-    // #809 (Part 2 of #747): widens `T0049` to also admit `T == float`.
+    // #809 (Part 3 of #747): widens `T0049` to also admit `T == float`.
     let module = pycc_parser_test_helper::parse("def f() -> float | None:\n    return None\n");
     let hir = lower_checked(&module).unwrap();
     let HirItem::Function { return_ty, .. } = &hir.items[0] else {
@@ -899,7 +899,7 @@ fn a_float_or_none_return_annotation_produces_ty_optional_float() {
 
 #[test]
 fn a_bool_or_none_return_annotation_produces_ty_optional_bool() {
-    // #809 (Part 2 of #747): widens `T0049` to also admit `T == bool`.
+    // #809 (Part 3 of #747): widens `T0049` to also admit `T == bool`.
     let module = pycc_parser_test_helper::parse("def f() -> bool | None:\n    return None\n");
     let hir = lower_checked(&module).unwrap();
     let HirItem::Function { return_ty, .. } = &hir.items[0] else {
