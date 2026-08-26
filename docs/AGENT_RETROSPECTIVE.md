@@ -33,6 +33,32 @@ never a merge gate.
 
 ---
 
+## 2026-08-26 — `ci-watch.sh` reported BLOCKED "all checks completed" when GitHub Actions had dispatched zero check suites
+
+What happened: while delivering issue #800's PR-1 (PR #804) during the 2026-08-26 GitHub
+Actions major outage, the `gha-watch-ci-pr` skill's `ci-watch.sh` twice printed
+`BLOCKED -- all checks completed with no failures` for a PR on which GitHub Actions had never
+started: the outage meant zero check suites were dispatched for the head commit, and an empty
+check list satisfies the script's "no pending, no failing" test, so "nothing ever ran" was
+reported with the same words as "everything ran and passed". Acting on that verdict without
+corroboration would have meant waiting on (or worse, merging past) checks that did not exist.
+
+Root cause: the script's completion predicate quantifies over the checks GitHub returns and is
+vacuously true over an empty set. It has no distinct state for "the required check suites were
+never created", which is exactly what an Actions outage produces.
+
+What fixed it: cross-checking with `gh pr checks <n>` and the check-suites API
+(`gh api repos/{owner}/{repo}/commits/<sha>/check-suites`) showed zero suites, identifying the
+outage as the cause; re-firing the lost `pull_request` webhook by closing and reopening the PR
+made Actions dispatch the suites, after which the watch loop produced a genuine verdict and
+the PR merged normally.
+
+Lesson: before acting on a `ci-watch.sh` BLOCKED (or any "all checks completed" verdict),
+confirm that the expected checks actually exist — `gh pr checks` listing the required contexts,
+or the commit's check-suites API returning a non-empty set. During a GitHub Actions outage,
+treat a PR whose events fired into the outage window as having lost them, and re-fire with a
+close/reopen once Actions recovers rather than waiting for a dispatch that will never come.
+
 ## 2026-08-26 — A third llms.txt aggregate-budget trip during a rebase; fixed by raising the ceiling instead of re-condensing
 
 What happened: rebasing `feat/issue-771-cast-diag` (PR #778) onto a further-advanced

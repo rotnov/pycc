@@ -34,16 +34,16 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 /// matches `expected`.
 fn assert_builds_and_prints(tag: &str, source: &str, expected: &str) {
     // D-068 re-review of #780 (rebase onto #786's `pycc_scratch` landing):
-    // this raw scratch-directory call below cannot migrate to
-    // `pycc_scratch::ScratchDir` without adding `pycc_scratch` back as a
-    // root-crate `[dev-dependencies]` entry, which commit `f79bb2b5`
-    // already tried and reverted because it trips D-091's bench-manifest
-    // fingerprint gate in `frontend-perf-measure`
-    // (`.github/workflows/ci.yml`'s unconditional diff of the
-    // `[dev-dependencies]`-onward tail) -- the same blocker
-    // `scripts/check_scratch_dir_usage.py`'s `ALLOWLIST` entry for
-    // `tests/issue_150_zero_step_range.rs` already records. This file is
-    // recorded in that same `ALLOWLIST` below rather than migrated.
+    // this raw scratch-directory call originally could not migrate to
+    // `pycc_scratch::ScratchDir`, because the root-crate
+    // `[dev-dependencies]` entry that migration needs used to trip D-091's
+    // bench-manifest fingerprint gate in `frontend-perf-measure` -- an
+    // earlier root `pycc_scratch` dev-dependency was removed by `f79bb2b5`
+    // for that reason, and this file's own migration attempt was reverted
+    // by `f9231e2f` into the `scripts/check_scratch_dir_usage.py`
+    // `ALLOWLIST` entry recorded below. D-203 (activated 2026-08-26 with
+    // issue #800) has since narrowed the tail check to tolerate exactly
+    // that dev-dependency line; the migration itself is #782's scope.
     let dir = std::env::temp_dir().join(format!("pycc_769_{tag}_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, "case.py", source);

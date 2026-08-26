@@ -699,8 +699,13 @@ jobs:
               exit 1
             fi
           done
-          diff <(awk '/^\[dev-dependencies\]$/,0' previous/Cargo.toml) \
-               <(awk '/^\[dev-dependencies\]$/,0' current/Cargo.toml)
+          # D-203: tolerate exactly one reviewed line -- the pycc_scratch root
+          # dev-dependency -- in the [dev-dependencies]-onward tail; every other
+          # tail difference still hard-aborts (D-091).
+          diff <(awk '/^\[dev-dependencies\]$/,0' previous/Cargo.toml |
+                 grep -vxF 'pycc_scratch = { path = "crates/pycc_scratch" }') \
+               <(awk '/^\[dev-dependencies\]$/,0' current/Cargo.toml |
+                 grep -vxF 'pycc_scratch = { path = "crates/pycc_scratch" }')
 
       # D-091: the dependency manifest (root Cargo.toml/Cargo.lock, and each
       # crate's own Cargo.toml/build.rs -- already covered by the plain

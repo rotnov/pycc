@@ -103,6 +103,13 @@ status: accepted
   `frontend-perf-measure` -- the identical blocker tracked against #782
   Batch B (PR #793). It stays tracked under #782's Part 2 migration scope.
 
+  Update (2026-08-26): D-203 has since narrowed the D-091 bench-manifest
+  tail check to tolerate exactly the
+  `pycc_scratch = { path = "crates/pycc_scratch" }` line, and the D-203
+  activation pull request (Part 2 of #800) re-added the root
+  `pycc_scratch` dev-dependency under that tolerance. The blocker
+  described here is resolved; the migration itself proceeds under #782.
+
   **Known, accepted scope limitation**: the lint is a textual pattern match,
   not a data-flow analysis. A caller that splits the expression across a
   binding (`let dir = std::env::temp_dir(); ... dir.join(...)`) evades it
