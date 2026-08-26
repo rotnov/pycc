@@ -16,6 +16,7 @@
 //! declared shape.
 
 mod binding;
+mod method_call;
 
 use crate::{Environment, infer_expr_in, is_assignable};
 use pycc_diag::{Diagnostic, Span};
@@ -29,6 +30,10 @@ use binding::expect_class;
 // `class::resolve_instantiation` call site (and the doc comments in `lib.rs`
 // naming those paths) keeps working across the `class/binding.rs` extraction.
 pub(crate) use binding::{bind_classes, resolve_instantiation};
+// A re-export, so every existing `class::resolve_method_call` call site
+// (`expr.rs`'s `HirExpr::MethodCall` arm) keeps working across the
+// `class/method_call.rs` extraction (#815, Part 1 of #737).
+pub(crate) use method_call::resolve_method_call;
 
 /// #380 (PR-20): Checks whether a concrete class structurally conforms to
 /// a protocol. A class conforms if, for every protocol member (method or
@@ -453,65 +458,6 @@ pub(crate) fn resolve_attr_get(
         }
     }
     Err(t0044_unknown_member("attribute", class_name, attr))
-}
-
-/// Resolves `base.method(args)` against `base_ty`, checking the call's
-/// arguments against the method's own resolved signature (excluding
-/// `self`, exactly like `resolve_instantiation` excludes it from a
-/// constructor call) and returning the method's return type.
-///
-/// #432: walks the class's MRO (C3 linearization) in order, checking each
-/// class's method table. The first class in the MRO that declares the
-/// method wins, matching CPython's own MRO-based method resolution. A
-/// subclass method shadows a base class method of the same name (the
-/// subclass appears first in the MRO).
-pub(crate) fn resolve_method_call(
-    env: &Environment,
-    base_ty: &Ty,
-    method: &str,
-    arg_tys: &[Ty],
-) -> Result<Ty, Diagnostic> {
-    // #380 (PR-20, PEP 544): protocol-typed variable method call.
-    // When `base_ty` is `Ty::Protocol(P)`, look up the method in
-    // `P`'s `protocol_members` and check arguments against the
-    // protocol method's signature.
-    if let Ty::Protocol(protocol_name) = base_ty {
-        let proto_def = expect_class(env, protocol_name);
-        for member in &proto_def.protocol_members {
-            if let ProtocolMember::Method {
-                name: member_name,
-                param_tys: proto_param_tys,
-                return_ty: proto_return_ty,
-            } = member
-                && member_name == method
-            {
-                check_call_args(method, arg_tys, proto_param_tys)?;
-                return Ok(proto_return_ty.clone());
-            }
-        }
-        return Err(t0044_unknown_member("method", protocol_name, method));
-    }
-    let Ty::Instance(class_name) = base_ty else {
-        return Err(t0043_not_an_instance("call a method", base_ty));
-    };
-    let class_def = expect_class(env, class_name);
-    // #432: walk the MRO in order. The first class that declares the
-    // method wins.
-    for mro_class in &class_def.mro {
-        let mro_def = expect_class(env, mro_class);
-        if let Some((_, mangled)) = mro_def.methods.iter().find(|(name, _)| name == method) {
-            let (param_tys, return_ty) = env.lookup_function(mangled).unwrap_or_else(|| {
-                panic!(
-                    "pycc_types: internal error: `{mangled}` is in class `{mro_class}`'s own \
-                     method table but was not registered as an ordinary function"
-                )
-            });
-            let method_param_tys = &param_tys[1..]; // exclude `self`
-            check_call_args(method, arg_tys, method_param_tys)?;
-            return Ok(return_ty.clone());
-        }
-    }
-    Err(t0044_unknown_member("method", class_name, method))
 }
 
 /// #436: Resolves a call to a `@staticmethod` or `@classmethod` through
@@ -2203,41 +2149,6 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "was not registered as an ordinary function")]
-    fn resolve_method_call_panics_when_the_method_is_not_registered() {
-        let mut env = crate::Environment::new();
-        env.bind_class(
-            "Ghost".to_string(),
-            HirClassDef {
-                exception_type_tag: None,
-                name: "Ghost".to_string(),
-                bases: Vec::new(),
-                mro: vec!["Ghost".to_string()],
-                attrs: vec![],
-                methods: vec![("foo".to_string(), "Ghost.foo".to_string())],
-                type_param: None,
-                properties: Vec::new(),
-                static_methods: Vec::new(),
-                class_methods: Vec::new(),
-                enum_members: Vec::new(),
-                is_dataclass: false,
-                dataclass_fields: Vec::new(),
-                is_protocol: false,
-                runtime_checkable: false,
-                protocol_members: Vec::new(),
-                abstract_methods: Vec::new(),
-                is_abstract: false,
-            },
-        );
-        let _ = super::resolve_method_call(
-            &env,
-            &Ty::Instance(Box::new("Ghost".to_string())),
-            "foo",
-            &[],
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "was not registered as an ordinary function")]
     fn resolve_attr_get_panics_when_a_property_getter_is_not_registered() {
         // #377: a property's getter is in the class's own property table
         // but was never registered in `Environment::functions` -- the
@@ -2285,8 +2196,9 @@ mod tests {
         // "declared shape and Environment disagree" scenario
         // `check_attr_set`'s own doc comment names as unreachable from
         // any real `check`-validated program, mirroring
+        // `class/method_call.rs`'s
         // `resolve_method_call_panics_when_the_method_is_not_registered`
-        // above.
+        // (moved there by #815, Part 1 of #737).
         use pycc_hir::PropertyDef;
         let mut env = crate::Environment::new();
         env.bind_class(
@@ -4692,8 +4604,9 @@ mod tests {
         // `Ty::Instance("C")` (D-040 sticky representation), so the call
         // resolves through the instance-method path, not the protocol
         // path.  To exercise the *protocol* branch of
-        // `resolve_method_call` (line 551), the receiver must be a
-        // function parameter annotated `x: P`, which is bound as
+        // `class::method_call::resolve_method_call` (moved there by
+        // #815, Part 1 of #737), the receiver must be a function
+        // parameter annotated `x: P`, which is bound as
         // `Ty::Protocol("P")` in the function body.
         let err = check_source(
             "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef f(x: P) -> int:\n    return x.foo(99)\n",
@@ -4705,10 +4618,12 @@ mod tests {
     #[test]
     fn protocol_typed_param_method_call_wrong_arg_type_is_t0021() {
         // #380 (PR-20): exercises the `check_call_args` *type-mismatch*
-        // error path (not just arity) inside `resolve_method_call`'s
-        // protocol branch.  The receiver is a function parameter typed
-        // `x: P`, so it is bound as `Ty::Protocol("P")` and the protocol
-        // branch at line 551 is entered.  The argument count matches
+        // error path (not just arity) inside
+        // `class::method_call::resolve_method_call`'s protocol branch
+        // (moved there by #815, Part 1 of #737).  The receiver is a
+        // function parameter typed `x: P`, so it is bound as
+        // `Ty::Protocol("P")` and the protocol branch is entered.  The
+        // argument count matches
         // (1 == 1) but the type (`str` vs `int`) does not, so
         // `check_call_args` returns a type-mismatch T0021.
         let err = check_source(
