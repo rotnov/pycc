@@ -63,6 +63,18 @@ class GenerateIndexTests(unittest.TestCase):
             table = gen.generate_index(d)
             self.assertIn("| proposed |", table)
 
+    def test_duplicate_id_raises(self):
+        # Regression for https://github.com/rotnov/pycc/issues/803: two
+        # distinct files whose frontmatter both claim id D-201 must fail
+        # generation instead of silently producing a README with two rows
+        # for the same decision number.
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            write_decision(d, "D-201-first-thing.md", "D-201", "First thing", "accepted")
+            write_decision(d, "D-201-second-thing.md", "D-201", "Second thing", "accepted")
+            with self.assertRaisesRegex(ValueError, "duplicate decision id D-201"):
+                gen.generate_index(d)
+
 
 class MainCheckModeTests(unittest.TestCase):
     def test_check_passes_when_readme_matches_generated(self):
@@ -91,6 +103,26 @@ class MainCheckModeTests(unittest.TestCase):
             exit_code = gen.main([str(d), str(readme)])
             self.assertEqual(exit_code, 0)
             self.assertIn("D-001", readme.read_text(encoding="utf-8"))
+
+    def test_main_fails_closed_on_duplicate_id_without_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            write_decision(d, "D-201-first-thing.md", "D-201", "First thing", "accepted")
+            write_decision(d, "D-201-second-thing.md", "D-201", "Second thing", "accepted")
+            readme = d / "README.md"
+            exit_code = gen.main([str(d), str(readme)])
+            self.assertEqual(exit_code, 1)
+            self.assertFalse(readme.exists())
+
+    def test_main_fails_closed_on_duplicate_id_with_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            write_decision(d, "D-201-first-thing.md", "D-201", "First thing", "accepted")
+            write_decision(d, "D-201-second-thing.md", "D-201", "Second thing", "accepted")
+            readme = d / "README.md"
+            readme.write_text("stale content\n", encoding="utf-8")
+            exit_code = gen.main([str(d), str(readme), "--check"])
+            self.assertEqual(exit_code, 1)
 
 
 if __name__ == "__main__":

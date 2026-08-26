@@ -240,7 +240,7 @@ one.
 
 ## 2026-08-25 — three consecutive D-068 review rounds against #780 kept finding the same defect class in new constructs, because the fix was reviewed incrementally instead of characterized once, up front, for its full scope
 
-What happened: the `Optional[T]` flow-sensitive narrowing feature (D-201, #769/#747 Part 2)
+What happened: the `Optional[T]` flow-sensitive narrowing feature (D-204, #769/#747 Part 2)
 went through three separate D-068 pinned-reviewer rounds against PR #780, each round finding
 a *new* instance of essentially the same soundness defect class — the design's single
 left-to-right source-order pass, reconciled only at control-flow joins, silently assumed a
@@ -257,7 +257,7 @@ found — but no round asked "what is the *general* property this design needs, 
 fix I'm about to land actually establish it everywhere, or only at the specific spot the
 reviewer happened to flag?"
 
-Root cause: the original design (D-201) was implemented and reviewed one increment at a time
+Root cause: the original design (D-204) was implemented and reviewed one increment at a time
 — get *a* narrowing story working, review it, fix what's flagged, repeat — rather than
 characterizing up front, in the design's own decision record, the exact soundness invariant a
 flow-sensitive analysis over control flow needs ("no read may observe a narrowing fact that
@@ -271,7 +271,7 @@ execution order can diverge from source order, and neither was audited against t
 until a reviewer happened to construct a program that exercised it.
 
 What fixed it (round 3, this entry): rather than special-casing the two newly-found
-constructs, the fix restated the general invariant explicitly (see D-202) and applied it
+constructs, the fix restated the general invariant explicitly (see D-205) and applied it
 uniformly via a single shared primitive (`pycc_hir::killed_names`, a kill-prescan) at every
 call site in both `pycc_types` and `pycc_mir` where a body can be re-entered — not only the
 two constructs the round's own repro happened to name.

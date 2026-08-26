@@ -28421,7 +28421,7 @@ fn reversed_operand_order_none_or_int_is_equivalent_to_int_or_none() {
 
 #[test]
 fn an_optional_int_value_narrows_back_to_a_bare_int_annotation_inside_is_not_none() {
-    // Superseded by issue #769 (Part 2 of #747, D-201): flow-sensitive
+    // Superseded by issue #769 (Part 2 of #747, D-204): flow-sensitive
     // narrowing of a top-level `is not None` test now exists, so an
     // `Optional[int]` read *inside* the `is not None` body resolves to
     // plain `int` and is assignable to a bare `int`-annotated target. See
@@ -28960,7 +28960,7 @@ fn a_walrus_inside_a_tuple_literal_test_in_a_function_body_is_a_local_name() {
     assert!(check(&hir).is_ok(), "{:?}", check(&hir));
 }
 
-// -- #769 (Part 2 of #747, D-201): flow-sensitive `Optional[T]` narrowing --
+// -- #769 (Part 2 of #747, D-204): flow-sensitive `Optional[T]` narrowing --
 
 #[test]
 fn is_not_none_narrows_the_body_to_plain_int() {
@@ -29039,7 +29039,7 @@ fn narrowing_does_not_apply_to_a_non_optional_name() {
 
 #[test]
 fn compound_and_test_does_not_narrow() {
-    // Scope cut (D-201): narrowing only recognizes a *top-level* `is`/`is
+    // Scope cut (D-204): narrowing only recognizes a *top-level* `is`/`is
     // not None` test -- `pycc_hir::optional_none_test` requires the whole
     // `if` test to itself be an `HirExpr::Compare { op: Is | IsNot, .. }`
     // node, never one operand nested inside a compound `and`/`or` test.
@@ -29093,7 +29093,7 @@ fn early_return_only_in_a_nested_inner_if_does_not_narrow() {
 
 #[test]
 fn raise_in_body_does_not_narrow_the_continuation() {
-    // Deliberate scope cut (D-201): `raise` is not a terminator for
+    // Deliberate scope cut (D-204): `raise` is not a terminator for
     // `definitely_terminates`, unlike `return`.
     let result = check_source(
         "def f(x: int | None) -> int:\n    if x is None:\n        raise ValueError(\"absent\")\n    y: int = x\n    return y\n",
@@ -29467,7 +29467,7 @@ fn a_match_capture_pattern_that_reuses_a_narrowed_name_inside_a_while_loop_is_re
     // but `collect_killed_names`'s `Match` arm only recursed into each
     // case's body, never inspecting the pattern itself -- so
     // `apply_kill_prescan` under-reported this kill for a re-enterable
-    // `while` body, reproducing D-202's own loop-reentry counterexample
+    // `while` body, reproducing D-205's own loop-reentry counterexample
     // through an unrecognized kill vector.
     let result = check_source(
         "def f(x: int | None, y: int | None) -> int:\n    if x is not None:\n        i: int = 0\n        while i < 2:\n            print(x + 1)\n            match y:\n                case x:\n                    pass\n            i = i + 1\n        return 0\n    return -1\n",
