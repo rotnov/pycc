@@ -9,7 +9,7 @@ commit that contains it: behavior and evidence from that same commit count,
 while work that exists only in another open pull request or unmerged branch
 remains work in flight.
 
-**Current milestone: v0.3 — acceptance criteria met and released as `v0.3.0`; v0.4 not yet started.** v0.2 was met on 2026-08-04 and v0.3 on 2026-08-26 (see each section's "Update: met." note for evidence); the `v0.3.0` tag points at v0.3's content-complete `main` revision. No work — issue selection, branch, or plan — has begun on v0.4 yet. All five v0.1 acceptance-checklist bullets remain green. The Language surface row's documented gaps below are accepted boundaries these milestones' acceptance criteria never required closing, not blockers still outstanding.
+**Current milestone: v0.3 — acceptance criteria met; v0.4 not started.** v0.2 was met on 2026-08-04 and v0.3 on 2026-08-26 (see each section's "Update: met." note for evidence). All five v0.1 acceptance-checklist bullets remain green. The Language surface row's documented gaps below are accepted boundaries these milestones' acceptance criteria never required closing, not outstanding blockers.
 
 The public evidence-hero boundary is now versioned and fail-closed (#564,
 D-186): `site/evidence-heroes.json` binds the tested landing source, stdout,

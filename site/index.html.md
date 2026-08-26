@@ -145,20 +145,20 @@ comparisons, assignments, function calls and returns, recursion, control flow,
 primitive values, `range`, and basic f-strings. It enforces public annotations,
 rejects `Any`, infers private-helper signatures, and renders human or JSON
 diagnostics. `pycc build` and `pycc run` compile that implemented surface through MIR,
-LLVM, the host linker, and the native runtime. v0.1's own acceptance criteria
+LLVM, the host linker, and the native runtime. v0.1's acceptance criteria
 are now met: `fib` and `mandelbrot-ascii` match pinned CPython output on all
 five Tier-1 targets, `pycc check` clears its <75ms/1000 LOC throughput floor,
 and diagnostic output matches the stable CLI specification's example.
 Documented representation and lifetime gaps, the full multi-version
-conformance matrix, differential fuzzing, corpus testing, and production
-readiness remain roadmap work.
+conformance matrix, differential fuzzing, and corpus testing remain
+roadmap work.
 
 - Strict v0.1 frontend and diagnostic snapshots
 - v0.1 native backend with documented gaps
 - v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)
-- v0.2 acceptance criteria also met (2026-08-04)
-- v0.3 acceptance criteria met and released as `v0.3.0` (2026-08-26): classes, inheritance, pattern matching, and exceptions, with conformance clearing 38 of 37 required matrix rows across all 39 required PEP numbers
-- v0.4 (multi-file projects, imports, incremental compilation) is next and has not started
+- v0.2 acceptance criteria also met
+- v0.3 acceptance criteria met and released as `v0.3.0`
+- v0.4 (multi-file projects, imports, incremental compilation) is next
 
 The landing page's code example uses only implemented v0.1 language features
 (statement-form `if`, `while`, recursive calls, `print`) and matches the

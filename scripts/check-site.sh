@@ -1189,7 +1189,7 @@ if web_page.get("name") != title:
     raise SystemExit("WebPage JSON-LD name must match the page title")
 if web_page.get("description") != metadata["description"][0]["content"]:
     raise SystemExit("WebPage JSON-LD description must match the meta description")
-if web_page.get("dateModified") != "2026-08-21":
+if web_page.get("dateModified") != "2026-08-26":
     raise SystemExit("Landing WebPage dateModified is stale")
 if web_page.get("mainEntity") != {"@id": project_id}:
     raise SystemExit("WebPage JSON-LD must identify the pycc project as its main entity")
@@ -1260,8 +1260,9 @@ required_disclosures = (
     "pycc check now runs the v0.1 frontend",
     "v0.1 native backend with documented gaps",
     "v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)",
-    "v0.2 acceptance criteria also met; v0.3's class model core has landed",
-    "The full conformance matrix and the rest of v0.3 are next",
+    "v0.2 acceptance criteria also met (2026-08-04)",
+    "v0.3 acceptance criteria met and released as",
+    "v0.4 (multi-file projects, imports, incremental compilation) is next and has not started",
     (
         "Native and pure builds emit standalone executables; planned permitted "
         "CPython interop emits a self-contained bundle with its pinned runtime."
@@ -1300,12 +1301,13 @@ ROBOTS = (
 PAGE_SPECS = {
     "status": {
         "canonical": f"{ROOT}status/",
-        "date_modified": "2026-08-25",
+        "date_modified": "2026-08-26",
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
-            "implements today, what's complete for v0.1 and what's planned "
-            "next, and the CI evidence behind each claim."
+            "implements today, what's complete through v0.3 (released as "
+            "v0.3.0) and what's planned next, and the CI evidence behind "
+            "each claim."
         ),
         "required_visible_text": (
             "pycc check runs the parser → HIR → strict type checker",
@@ -1313,13 +1315,14 @@ PAGE_SPECS = {
             "Implemented v0.1 subset",
             "Validated frontend codes",
             "byte-exact CLI snapshots cover",
-            "Custom exceptions and the full conformance matrix are next.",
-            "v0.1 and v0.2's acceptance criteria are both met, and v0.3's class model core has landed",
-            "v0.2 acceptance criteria met",
-            "v0.3 in progress",
-            "user-defined exception class remains planned.",
-            "Still ahead for v0.3: raising and catching a",
-            "the full multi-version conformance matrix, differential fuzzing, and corpus testing remain planned test-depth work carried over from v0.1 and v0.2.",
+            "v0.4 — multi-file projects and incremental compilation — is next.",
+            "v0.1, v0.2, and v0.3's acceptance criteria are all met, and",
+            "v0.3 acceptance criteria met",
+            "v0.4 not started",
+            "v0.4 — multi-file projects, imports, namespace packages, an",
+            "raise it, and have it caught.",
+            "It has not started: no issue has been selected, no branch",
+            "The full multi-version conformance matrix, differential fuzzing, and corpus testing beyond the",
             "Unary operators are rejected earlier by HIR lowering with a spanned C0001 capability diagnostic, including under pycc check",
             "The 100% line/region coverage gate and the required",
             "currently a greater-than-7.0% regression floor, enforced by a paired predecessor/candidate measurement",
