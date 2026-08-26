@@ -2930,6 +2930,48 @@ fn a_non_none_function_falling_through_is_an_internal_error_not_bad_ir() {
 }
 
 #[test]
+fn a_non_none_function_whose_try_raise_finally_body_always_terminates_compiles_cleanly() {
+    // `block_always_terminates`'s own doc comment gives this exact shape
+    // as its motivating example: `try: raise ... finally: cleanup`. The
+    // `finally` block's own codegen exits back into a continuation block
+    // that carries no LLVM terminator of its own -- structurally the
+    // function body always terminates (the `try`'s only path raises),
+    // but nothing has yet placed a `ret`/`unreachable` in that trailing
+    // block. This exercises the `exception::block_always_terminates(body)
+    // == true` branch's `builder.build_unreachable()` call directly
+    // (distinct from `a_non_none_function_falling_through_is_an_internal_
+    // error_not_bad_ir` above, which covers the sibling `false` branch --
+    // an ordinary fallthrough with no raise at all).
+    let mir = MirModule {
+        items: vec![MirItem::Function {
+            name: "always_raises".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![MirStmt::Try {
+                body: vec![MirStmt::Raise {
+                    exception: MirExceptionValue::Constructed {
+                        type_tag: 1,
+                        class_name: "ValueError".to_string(),
+                        message: MirExpr::StringLiteral("boom".to_string()),
+                    },
+                }],
+                handlers: vec![],
+                orelse: vec![],
+                finalbody: vec![print_expr(MirExpr::IntLiteral(9))],
+            }],
+        }],
+        class_defs: Vec::new(),
+    };
+    let dir = pycc_scratch::ScratchDir::new("try_raise_finally_always_terminates")
+        .expect("failed to create scratch dir");
+    let obj_path = dir.join("try_raise_finally_always_terminates.o");
+    compile_to_object(&mir, &obj_path, None, false).expect(
+        "a try/raise/finally body that always terminates must produce valid object code, \
+         not panic on a missing terminator",
+    );
+}
+
+#[test]
 fn a_top_level_return_is_an_internal_error_not_bad_ir() {
     // `pycc_types`' T0024 rejects any module-level `return` already (even
     // nested in a top-level `if`/`while`/`for`) -- this proves codegen
@@ -3425,6 +3467,52 @@ fn truthiness_of_a_list_value_panics_honestly() {
         .ptr_type(inkwell::AddressSpace::default())
         .const_null();
     truthy(&context, &builder, &rt, Scalar::List(ptr));
+}
+
+#[test]
+#[should_panic(
+    expected = "pycc_codegen: internal error: an Optional[_] payload had an unsupported LLVM representation"
+)]
+fn truthy_of_an_optional_with_a_pointer_payload_panics_as_an_internal_error() {
+    // `truthy`'s `Scalar::Optional` arm dispatches on the extracted
+    // payload's own LLVM type (`FloatValue` for `Ty::Float`, an `i8`-wide
+    // `IntValue` for `Ty::Bool`, any other `IntValue` for `Ty::Int`) --
+    // #809 widened the accepted inner types to exactly `{int, float,
+    // bool}`, so every real `Scalar::Optional` this function ever sees
+    // has a payload matching one of those three shapes. The match's
+    // catch-all `other => panic!(...)` arm exists purely as a defensive
+    // backstop for a payload shape none of the three real inner types can
+    // produce -- e.g. a pointer payload, which is what `Optional[str]`
+    // would need if `pycc_types`' T0049 gate (which rejects `Optional[T]`
+    // for every `T` outside `{int, float, bool}` before codegen) were
+    // ever somehow bypassed. This pins that backstop directly with a
+    // hand-built `Scalar::Optional` carrying a pointer-typed payload,
+    // mirroring `truthiness_of_a_list_value_panics_honestly` above's use
+    // of `truthy` as a direct call rather than compiling real MIR.
+    let context = Context::create();
+    let (module, rt) = list_scalar_panic_fixture(&context);
+    let builder = context.create_builder();
+    // `truthy`'s `Scalar::Optional` arm calls `build_extract_value`
+    // before reaching the defensive match, so -- unlike
+    // `truthiness_of_a_tuple_value_panics_honestly` above, whose arm
+    // panics immediately -- the builder needs a real positioned block to
+    // extract from, not just a bare `Context`/`Builder` pair.
+    let fn_type = context.void_type().fn_type(&[], false);
+    let f = module.add_function("f", fn_type, None);
+    let block = context.append_basic_block(f, "entry");
+    builder.position_at_end(block);
+    let ptr_ty = context.ptr_type(inkwell::AddressSpace::default());
+    let struct_ty = context.struct_type(&[ptr_ty.into(), context.i8_type().into()], false);
+    let optional_with_pointer_payload = struct_ty.const_named_struct(&[
+        ptr_ty.const_null().into(),
+        context.i8_type().const_int(1, false).into(),
+    ]);
+    truthy(
+        &context,
+        &builder,
+        &rt,
+        Scalar::Optional(optional_with_pointer_payload),
+    );
 }
 
 #[test]
