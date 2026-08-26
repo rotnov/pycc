@@ -11,6 +11,7 @@
 // annotated `Annotated[int, ...]`, and asserting `pycc check`/`pycc build`
 // both succeed.
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -42,8 +43,7 @@ print(scale(21))
 /// function parameter annotated `Annotated[int, ...]`.
 #[test]
 fn typing_final_and_annotated_import_check_succeeds() {
-    let dir = std::env::temp_dir().join(format!("pycc_762_check_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("762_check").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "final_annotated.py", SOURCE);
     let output = Command::new(pycc_bin())
         .args(["check", src.to_str().unwrap()])
@@ -54,7 +54,6 @@ fn typing_final_and_annotated_import_check_succeeds() {
         "pycc check should succeed for `from typing import Final, Annotated`; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #762: `pycc build` accepts the same source and produces a binary that
@@ -63,8 +62,7 @@ fn typing_final_and_annotated_import_check_succeeds() {
 /// already cover that behavior without the import).
 #[test]
 fn typing_final_and_annotated_import_build_and_run_succeeds() {
-    let dir = std::env::temp_dir().join(format!("pycc_762_build_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("762_build").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "final_annotated.py", SOURCE);
     let out = dir.join("final_annotated");
     let build = Command::new(pycc_bin())
@@ -83,7 +81,6 @@ fn typing_final_and_annotated_import_build_and_run_succeeds() {
         "100\n42\n",
         "MAX_CONNECTIONS then scale(21) should print 100 then 42"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #762: importing an unregistered `typing` name still fails with `C0002`
@@ -91,8 +88,7 @@ fn typing_final_and_annotated_import_build_and_run_succeeds() {
 /// `Annotated`.
 #[test]
 fn typing_unregistered_symbol_import_still_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_762_reject_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("762_reject").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "unregistered.py",
@@ -115,5 +111,4 @@ fn typing_unregistered_symbol_import_still_rejected() {
         combined.contains("C0002"),
         "expected a C0002 diagnostic, got: {combined}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }

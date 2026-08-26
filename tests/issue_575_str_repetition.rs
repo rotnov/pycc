@@ -16,6 +16,7 @@
 //! valid way to reach the non-positive-count rule (empty string, matching
 //! CPython).
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -32,8 +33,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 
 /// Build `source` with the public CLI and return the compiled program's stdout.
 fn build_and_run(case: &str, source: &str) -> Vec<u8> {
-    let dir = std::env::temp_dir().join(format!("pycc_issue575_{case}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new(&format!("issue575_{case}")).expect("failed to create scratch dir");
     let src = write_fixture(&dir, "repeat.py", source);
     let out = dir.join("repeat");
 
@@ -129,8 +129,7 @@ fn repetition_composes_with_the_rest_of_the_str_surface() {
 /// count, and nothing in this part widened that rule.
 #[test]
 fn multiplying_two_strings_is_still_a_type_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue575_str_str_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue575_str_str").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "str_str.py", "print(\"ab\" * \"cd\")\n");
 
     let output = Command::new(pycc_bin())

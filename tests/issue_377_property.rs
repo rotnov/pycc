@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -17,8 +18,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 /// producing the same output as CPython.
 #[test]
 fn property_getter_builds_and_runs_correctly() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue377_getter_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue377_getter").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "getter.py",
@@ -47,8 +47,7 @@ fn property_getter_builds_and_runs_correctly() {
 /// `obj.x = v` becomes `obj.x.setter(v)`.
 #[test]
 fn property_setter_builds_and_runs_correctly() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue377_setter_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue377_setter").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "setter.py",
@@ -76,8 +75,7 @@ fn property_setter_builds_and_runs_correctly() {
 /// assignment at type-check time with a T0044 diagnostic.
 #[test]
 fn read_only_property_assignment_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue377_ro_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue377_ro").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "readonly.py",
@@ -105,8 +103,7 @@ fn read_only_property_assignment_is_a_check_error() {
 /// diagnostic.
 #[test]
 fn property_setter_type_mismatch_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue377_mismatch_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue377_mismatch").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "mismatch.py",
@@ -134,8 +131,7 @@ fn property_setter_type_mismatch_is_a_check_error() {
 /// from within a function body (pass 3), not just top-level (pass 2).
 #[test]
 fn property_getter_readable_from_another_method() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue377_method_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue377_method").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "method_read.py",
@@ -164,9 +160,7 @@ fn property_getter_readable_from_another_method() {
 /// check from within a function body.
 #[test]
 fn property_setter_writable_from_another_method() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_issue377_method_write_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue377_method_write").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "method_write.py",
@@ -195,8 +189,7 @@ fn property_setter_writable_from_another_method() {
 /// `Box[int]` should return the backing slot value after monomorphization.
 #[test]
 fn property_on_a_generic_class_builds_and_runs_correctly() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue377_generic_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue377_generic").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "generic_property.py",
@@ -225,11 +218,7 @@ fn property_on_a_generic_class_builds_and_runs_correctly() {
 /// the getter should return the updated value.
 #[test]
 fn property_setter_on_a_generic_class_builds_and_runs_correctly() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_issue377_generic_setter_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue377_generic_setter").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "generic_property_setter.py",

@@ -7,6 +7,7 @@
 //! `tests/issue_739_oserror_hierarchy.rs`'s `build_and_run`/`check_error`
 //! harness.
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -14,10 +15,8 @@ fn pycc_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_pycc"))
 }
 
-fn scratch(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pycc_740_{tag}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch(tag: &str) -> ScratchDir {
+    ScratchDir::new(&format!("740_{tag}")).expect("failed to create scratch dir")
 }
 
 fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::PathBuf {

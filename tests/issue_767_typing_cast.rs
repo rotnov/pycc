@@ -11,6 +11,7 @@
 // v)` replaced by `v` alone -- the observable definition of "runtime
 // no-op".
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -90,8 +91,7 @@ fn build_and_run(dir: &std::path::Path, stem: &str, source: &str) -> String {
 /// with `C0002` ("module `typing` has no importable symbol named `cast`").
 #[test]
 fn typing_cast_import_and_calls_check_successfully() {
-    let dir = std::env::temp_dir().join(format!("pycc_767_check_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("767_check").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "with_cast.py", WITH_CAST);
     let output = Command::new(pycc_bin())
         .args(["check", src.to_str().unwrap()])
@@ -102,7 +102,6 @@ fn typing_cast_import_and_calls_check_successfully() {
         "pycc check should succeed for `from typing import cast`; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #767: `pycc build` compiles the `cast`-using program, and the binary
@@ -112,8 +111,7 @@ fn typing_cast_import_and_calls_check_successfully() {
 /// lower.
 #[test]
 fn typing_cast_build_output_matches_the_cast_free_equivalent() {
-    let dir = std::env::temp_dir().join(format!("pycc_767_build_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("767_build").expect("failed to create scratch dir");
     let with_cast = build_and_run(&dir, "with_cast", WITH_CAST);
     let without_cast = build_and_run(&dir, "without_cast", WITHOUT_CAST);
     assert_eq!(
@@ -121,7 +119,6 @@ fn typing_cast_build_output_matches_the_cast_free_equivalent() {
         "`cast(T, v)` must produce exactly the output of `v` alone"
     );
     assert_eq!(with_cast, "42\nok\n7\n", "unexpected program output");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #767: a program defining its own `def cast(...)` calls that function,
@@ -130,8 +127,7 @@ fn typing_cast_build_output_matches_the_cast_free_equivalent() {
 /// rather than only in the type checker.
 #[test]
 fn a_user_defined_cast_function_takes_priority_end_to_end() {
-    let dir = std::env::temp_dir().join(format!("pycc_767_shadow_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("767_shadow").expect("failed to create scratch dir");
     let out = build_and_run(
         &dir,
         "user_cast",
@@ -141,7 +137,6 @@ fn a_user_defined_cast_function_takes_priority_end_to_end() {
         out, "42\n",
         "a user-defined `cast` must be called, not elided to its second argument"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #767 review fix (second pass, D-198): a genuine down-cast to a subclass
@@ -156,8 +151,7 @@ fn a_user_defined_cast_function_takes_priority_end_to_end() {
 /// out-of-bounds `pycc_rt` instance-slot read.
 #[test]
 fn a_down_cast_to_a_derived_class_is_rejected_before_build() {
-    let dir = std::env::temp_dir().join(format!("pycc_767_downcast_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("767_downcast").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "down_cast.py",
@@ -176,7 +170,6 @@ fn a_down_cast_to_a_derived_class_is_rejected_before_build() {
         stdout.contains("C0001") && stdout.contains("narrow the value's attribute layout"),
         "expected a C0001 layout-narrowing diagnostic, got: {stdout}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #767 review fix (third pass, D-198): an up-cast that crosses no
@@ -188,8 +181,7 @@ fn a_down_cast_to_a_derived_class_is_rejected_before_build() {
 /// path no earlier test exercised end-to-end.
 #[test]
 fn an_up_cast_with_no_overridden_methods_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_767_upcast_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("767_upcast").expect("failed to create scratch dir");
     let with_cast = build_and_run(
         &dir,
         "with_upcast",
@@ -206,7 +198,6 @@ fn an_up_cast_with_no_overridden_methods_builds_and_runs() {
          directly on the value would"
     );
     assert_eq!(with_cast, "3\n", "unexpected program output");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #767 review fix (third pass, D-198): the CLI-level counterpart to
@@ -217,8 +208,7 @@ fn an_up_cast_with_no_overridden_methods_builds_and_runs() {
 /// `Derived`'s override.
 #[test]
 fn an_up_cast_across_an_overridden_method_is_rejected_before_build() {
-    let dir = std::env::temp_dir().join(format!("pycc_767_override_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("767_override").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "override_cast.py",
@@ -237,5 +227,4 @@ fn an_up_cast_across_an_overridden_method_is_rejected_before_build() {
         stdout.contains("C0001") && stdout.contains("`describe`") && stdout.contains("statically resolve"),
         "expected a C0001 method-dispatch diagnostic naming `describe`, got: {stdout}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }

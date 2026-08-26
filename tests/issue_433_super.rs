@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -17,8 +18,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 /// The attribute is then readable on the `B` instance.
 #[test]
 fn super_init_no_args_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_init_no_args_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("433_init_no_args").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "init_no_args.py",
@@ -46,8 +46,7 @@ fn super_init_no_args_builds_and_runs() {
 /// takes a parameter, and `super().__init__(x)` passes it through.
 #[test]
 fn super_init_with_args_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_init_args_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("433_init_args").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "init_args.py",
@@ -76,8 +75,7 @@ fn super_init_with_args_builds_and_runs() {
 /// attributes set by the derived class's `__init__` are visible.
 #[test]
 fn super_method_call_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_method_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("433_method").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "method.py",
@@ -108,8 +106,7 @@ fn super_method_call_builds_and_runs() {
 /// `A.describe()`, building up a sum.
 #[test]
 fn three_level_super_chain_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_chain_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("433_chain").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "chain.py",
@@ -142,8 +139,7 @@ fn three_level_super_chain_builds_and_runs() {
 /// with the pinned oracle on the value of an expression.
 #[test]
 fn super_instance_attr_read_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_587_attr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("587_attr").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "attr.py",
@@ -190,8 +186,7 @@ fn super_instance_attr_read_is_a_check_error() {
 /// HIR-lowering time (build and check).
 #[test]
 fn super_outside_method_is_a_build_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_outside_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("433_outside").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "outside.py", "x = super()\n");
     let out = dir.join("outside");
 
@@ -214,8 +209,7 @@ fn super_outside_method_is_a_build_error() {
 /// (PEP 3135) is supported.
 #[test]
 fn super_with_arguments_is_a_build_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_args_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("433_args").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "super_args.py",
@@ -244,8 +238,7 @@ fn super_with_arguments_is_a_build_error() {
 /// class is rejected with T0044 at type-check time.
 #[test]
 fn super_method_not_in_base_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_missing_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("433_missing").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "missing.py",
@@ -272,8 +265,7 @@ fn super_method_not_in_base_is_a_check_error() {
 /// passed to the base class's `__init__` is rejected at type-check time.
 #[test]
 fn super_init_type_mismatch_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_typemismatch_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("433_typemismatch").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "type_mismatch.py",
@@ -300,8 +292,7 @@ fn super_init_type_mismatch_is_a_check_error() {
 /// arguments for the base class's `__init__` is rejected.
 #[test]
 fn super_init_wrong_arity_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_arity_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("433_arity").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "arity.py",
@@ -328,8 +319,7 @@ fn super_init_wrong_arity_is_a_check_error() {
 /// and `super().method(args)` passes them through correctly.
 #[test]
 fn super_method_with_args_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_method_args_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("433_method_args").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "method_args.py",
@@ -359,8 +349,7 @@ fn super_method_with_args_builds_and_runs() {
 /// is ever called.
 #[test]
 fn super_method_with_unbound_arg_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_unbound_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("433_unbound").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "unbound.py",
@@ -388,8 +377,7 @@ fn super_method_with_unbound_arg_is_a_check_error() {
 /// should be rejected with T0044 (no such member in any base class).
 #[test]
 fn super_in_class_with_no_base_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_433_nobase_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("433_nobase").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "no_base.py",
@@ -420,8 +408,7 @@ fn super_in_class_with_no_base_is_a_check_error() {
 /// coverage before #587 (only `pycc_types`/`pycc_mir` unit tests).
 #[test]
 fn super_property_read_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_587_prop_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("587_prop").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "prop.py",
@@ -452,8 +439,7 @@ fn super_property_read_builds_and_runs() {
 /// (not C.f()), because super() skips to the next class in B's own MRO.
 #[test]
 fn super_in_diamond_skips_sibling_classes() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue433_diamond_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue433_diamond").expect("failed to create scratch dir");
     // MRO for D is [D, B, C, A]. B.f calls super().f → resolves to A.f
     // (B's own MRO is [B, A], so B's super_mro is [A], and A.f is found).
     let src = write_fixture(

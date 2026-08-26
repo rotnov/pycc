@@ -7,6 +7,7 @@
 //! type checker's raisability/shadow gates, and the runtime's name-carrying
 //! `PyExceptionObj` all agree on the real, non-flat `OSError` tree.
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -14,10 +15,8 @@ fn pycc_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_pycc"))
 }
 
-fn scratch(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pycc_739_{tag}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch(tag: &str) -> ScratchDir {
+    ScratchDir::new(&format!("739_{tag}")).expect("failed to create scratch dir")
 }
 
 fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::PathBuf {

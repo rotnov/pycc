@@ -7,6 +7,7 @@
 //! the D-173 precedent this change follows (float division by zero ->
 //! `ZeroDivisionError`).
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -57,10 +58,8 @@ fn check_only(dir: &std::path::Path, src_name: &str, source: &str) -> (bool, Str
     (output.status.success(), combined)
 }
 
-fn scratch_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pycc_150_{tag}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn scratch_dir(tag: &str) -> ScratchDir {
+    ScratchDir::new(&format!("150_{tag}")).expect("failed to create scratch dir")
 }
 
 // -- `check` accepts a zero-step range: no static literal-zero-divisor --

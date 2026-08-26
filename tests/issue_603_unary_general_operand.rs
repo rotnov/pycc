@@ -20,6 +20,7 @@
 //! rejects an already-promoted bigint), and `x * -1.0` / `x * 1.0` for `float`
 //! (so `-0.0` and the infinities negate exactly, which `0.0 - x` would not do).
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -27,10 +28,8 @@ fn pycc_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_pycc"))
 }
 
-fn case_dir(case: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pycc_issue603_{case}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn case_dir(case: &str) -> ScratchDir {
+    ScratchDir::new(&format!("issue603_{case}")).expect("failed to create scratch dir")
 }
 
 fn write_fixture(dir: &std::path::Path, source: &str) -> std::path::PathBuf {

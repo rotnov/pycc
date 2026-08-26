@@ -24,32 +24,12 @@
 //! tests, which drive the contained and divergent cases directly.
 
 use pycc_codegen::artifact_layout::{pycc_rt_lib_filename, should_scrub_for_nested_cargo};
+use pycc_scratch::ScratchDir;
 
-/// A temporary directory removed when the test ends, however it ends.
-struct TempTree(std::path::PathBuf);
-
-impl Drop for TempTree {
-    fn drop(&mut self) {
-        // Branchless on purpose: a failed cleanup is not worth failing a
-        // passing test over, and an `if` here would leave an arm that
-        // never runs under D-014.
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// A fresh, empty, absolute directory nothing else is using.
-fn fresh_target_root(label: &str) -> TempTree {
-    let unique = format!(
-        "pycc-issue-630-{label}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|since| since.as_nanos())
-            .unwrap_or_default()
-    );
-    let path = std::env::temp_dir().join(unique);
-    std::fs::create_dir_all(&path).expect("cannot create the temporary build root");
-    TempTree(path)
+/// A fresh, empty, absolute directory nothing else is using, removed when
+/// the test ends, however it ends (`ScratchDir`'s `Drop`).
+fn fresh_target_root(label: &str) -> ScratchDir {
+    ScratchDir::new(&format!("630_{label}")).expect("cannot create the temporary build root")
 }
 
 /// Builds `pycc_codegen` at `root` under the requested profile.
@@ -105,15 +85,15 @@ fn assert_both_profiles_installed(root: &std::path::Path) {
 #[test]
 fn a_clean_root_gets_both_pycc_rt_archives_from_a_dev_profile_build() {
     let tree = fresh_target_root("dev");
-    build_pycc_codegen_at(&tree.0, false);
-    assert_both_profiles_installed(&tree.0);
+    build_pycc_codegen_at(&tree, false);
+    assert_both_profiles_installed(&tree);
 }
 
 #[test]
 fn a_clean_root_gets_both_pycc_rt_archives_from_a_release_profile_build() {
     let tree = fresh_target_root("release");
-    build_pycc_codegen_at(&tree.0, true);
-    assert_both_profiles_installed(&tree.0);
+    build_pycc_codegen_at(&tree, true);
+    assert_both_profiles_installed(&tree);
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -52,8 +53,7 @@ fn check_only(dir: &std::path::Path, src_name: &str, source: &str) -> (bool, Str
 
 #[test]
 fn match_literal_int_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_lit_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_lit").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "lit.py",
@@ -65,8 +65,7 @@ fn match_literal_int_builds_and_runs() {
 
 #[test]
 fn match_literal_string_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_str_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_str").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "str.py",
@@ -80,8 +79,7 @@ fn match_literal_string_builds_and_runs() {
 
 #[test]
 fn match_capture_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_cap_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_cap").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "cap.py",
@@ -95,8 +93,7 @@ fn match_capture_builds_and_runs() {
 
 #[test]
 fn match_wildcard_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_wild_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_wild").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "wild.py",
@@ -110,8 +107,7 @@ fn match_wildcard_builds_and_runs() {
 
 #[test]
 fn match_singleton_true_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_true_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_true").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "true.py",
@@ -123,8 +119,7 @@ fn match_singleton_true_builds_and_runs() {
 
 #[test]
 fn match_singleton_false_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_false_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_false").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "false.py",
@@ -136,8 +131,7 @@ fn match_singleton_false_builds_and_runs() {
 
 #[test]
 fn match_singleton_none_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_none_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_none").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "none.py",
@@ -151,8 +145,7 @@ fn match_singleton_none_builds_and_runs() {
 
 #[test]
 fn match_bool_exhaustive_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_bool_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_bool").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "bool.py",
@@ -166,8 +159,7 @@ fn match_bool_exhaustive_builds_and_runs() {
 
 #[test]
 fn match_guard_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_guard_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_guard").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "guard.py",
@@ -179,8 +171,7 @@ fn match_guard_builds_and_runs() {
 
 #[test]
 fn match_guard_false_falls_through() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_guard2_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_guard2").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "guard2.py",
@@ -194,8 +185,7 @@ fn match_guard_false_falls_through() {
 
 #[test]
 fn match_or_pattern_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_or_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_or").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "or.py",
@@ -209,8 +199,7 @@ fn match_or_pattern_builds_and_runs() {
 
 #[test]
 fn match_non_exhaustive_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_nonex_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_nonex").expect("failed to create scratch dir");
     let (ok, err) = check_only(
         &dir,
         "nonex.py",
@@ -227,8 +216,7 @@ fn match_non_exhaustive_is_a_check_error() {
 
 #[test]
 fn match_pass_only_body_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_pass_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_pass").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "pass.py",
@@ -242,8 +230,7 @@ fn match_pass_only_body_builds_and_runs() {
 
 #[test]
 fn match_capture_available_in_body() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_capbody_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_capbody").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "capbody.py",
@@ -257,8 +244,7 @@ fn match_capture_available_in_body() {
 
 #[test]
 fn match_definite_assignment_join() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_def_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_def").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "def.py",
@@ -272,8 +258,7 @@ fn match_definite_assignment_join() {
 
 #[test]
 fn match_guard_not_bool_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_guardty_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_guardty").expect("failed to create scratch dir");
     let (ok, err) = check_only(
         &dir,
         "guardty.py",
@@ -290,8 +275,7 @@ fn match_guard_not_bool_is_a_check_error() {
 
 #[test]
 fn match_nested_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_nested_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_nested").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "nested.py",
@@ -305,8 +289,7 @@ fn match_nested_builds_and_runs() {
 
 #[test]
 fn match_inside_function_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_fn_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_fn").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "fn.py",
@@ -320,8 +303,7 @@ fn match_inside_function_builds_and_runs() {
 
 #[test]
 fn match_with_return_in_each_arm_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_381_ret_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_ret").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "ret.py",
@@ -340,8 +322,7 @@ fn match_maybe_binding_join_builds_and_runs() {
     // the `BindingState::Maybe` arm, exercising the `ty()` method on
     // a `Maybe` binding through the full pycc binary.  `y` is never
     // read after the match, so the Maybe binding is not a T0021 error.
-    let dir = std::env::temp_dir().join(format!("pycc_381_maybe_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("381_maybe").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "maybe.py",
