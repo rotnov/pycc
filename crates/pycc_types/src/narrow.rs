@@ -57,7 +57,7 @@
 //! scope cut, kept simple and sound by omission rather than by an
 //! exhaustiveness heuristic that could be wrong).
 //!
-//! ## Deliberate scope cuts (recorded in D-201)
+//! ## Deliberate scope cuts (recorded in D-205)
 //!
 //! - Only a *top-level* `if name is None:` / `if name is not None:` test is
 //!   recognized -- no narrowing through a compound `and`/`or` test.

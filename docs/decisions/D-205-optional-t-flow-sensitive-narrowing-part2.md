@@ -1,10 +1,10 @@
 ---
-id: D-201
+id: D-205
 title: "Optional[T] flow-sensitive is/is not None narrowing (Part 2 of #747)"
 status: accepted
 ---
 
-## D-201: Optional[T] flow-sensitive is/is not None narrowing (Part 2 of #747)
+## D-205: Optional[T] flow-sensitive is/is not None narrowing (Part 2 of #747)
 - Status: accepted
 - Context: D-197 (issue #763, Part 1 of #747) shipped `Optional[int]`
   presence testing (`is`/`is not None`) but deliberately deferred narrowing

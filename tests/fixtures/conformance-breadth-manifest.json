@@ -75,17 +75,17 @@
         {
           "category": "narrowing through a compound `and`/`or` test (e.g. `if x is not None and y is not None:`), or through a non-top-level test embedded in a larger boolean expression",
           "kind": "core",
-          "reason": "only a bare top-level `name is None`/`name is not None` test is recognized (`pycc_hir::optional_none_test`); not implemented (D-201, #769, Part 2 of #747)."
+          "reason": "only a bare top-level `name is None`/`name is not None` test is recognized (`pycc_hir::optional_none_test`); not implemented (D-204, #769, Part 2 of #747)."
         },
         {
           "category": "narrowing a name to `None` (the mirror of the implemented shape: `if name is not None: ... else: <use name as None>`, or a `return`-terminated `if name is not None:` guard narrowing the continuation to `None`)",
           "kind": "core",
-          "reason": "deliberately not implemented -- there is no `Ty::None`-typed narrowing target in this design (D-201, #769, Part 2 of #747)."
+          "reason": "deliberately not implemented -- there is no `Ty::None`-typed narrowing target in this design (D-204, #769, Part 2 of #747)."
         },
         {
           "category": "`raise` (instead of `return`) as a branch terminator for the early-return continuation shape",
           "kind": "core",
-          "reason": "`definitely_terminates` (`pycc_hir::definitely_terminates`) deliberately does not treat `raise` as a terminator; only a bare `return`, or an exhaustive nested `if`/`else` both ending in `return`, count (D-201, #769, Part 2 of #747)."
+          "reason": "`definitely_terminates` (`pycc_hir::definitely_terminates`) deliberately does not treat `raise` as a terminator; only a bare `return`, or an exhaustive nested `if`/`else` both ending in `return`, count (D-204, #769, Part 2 of #747)."
         }
       ]
     },

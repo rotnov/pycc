@@ -42,12 +42,54 @@ def read_frontmatter(path):
     return id_, unescape_yaml(title_escaped), status
 
 
+def check_unique_ids(entries):
+    """Fail closed on a duplicate D-NNN id across distinct decision files.
+
+    Two files each claiming the same numeric prefix (e.g. two files whose
+    frontmatter both say ``id: D-201``) makes every cross-reference to that
+    number ambiguous. Regenerating the index from such a tree must not
+    silently produce a README with two rows for the same id -- it must
+    raise instead, so both the plain-generate and ``--check`` paths fail
+    closed on the same defect class as
+    https://github.com/rotnov/pycc/issues/803.
+    """
+    seen: dict[str, str] = {}
+    for id_, _title, _status, filename in entries:
+        if id_ in seen:
+            raise ValueError(
+                f"duplicate decision id {id_}: claimed by both "
+                f"{seen[id_]} and {filename}"
+            )
+        seen[id_] = filename
+
+
+def check_filename_matches_id(entries):
+    """Fail closed when a filename's own D-NNN prefix disagrees with its
+    frontmatter id.
+
+    ``check_unique_ids`` only dedups on the frontmatter id, so a file named
+    ``D-201-second.md`` whose frontmatter claims ``id: D-999`` would pass
+    that check while still recreating the ambiguous-numbering defect class
+    from https://github.com/rotnov/pycc/issues/803: the README links D-999
+    at a path a reader would expect to hold D-201, and a future file
+    legitimately named D-201-... collides with a path that already exists.
+    """
+    for id_, _title, _status, filename in entries:
+        if not filename.startswith(f"{id_}-") and filename != f"{id_}.md":
+            raise ValueError(
+                f"{filename}: filename prefix does not match its "
+                f"frontmatter id {id_}"
+            )
+
+
 def generate_index(decisions_dir):
     entries = []
     for path in sorted(decisions_dir.glob("D-*.md")):
         id_, title, status = read_frontmatter(path)
         entries.append((id_, title, status, path.name))
     entries.sort(key=lambda e: int(e[0].split("-")[1]))
+    check_unique_ids(entries)
+    check_filename_matches_id(entries)
 
     lines = [PREAMBLE, "", "| ID | Decision | Status |", "|---|---|---|"]
     for id_, title, status, filename in entries:
@@ -62,7 +104,11 @@ def main(argv=None):
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
 
-    generated = generate_index(args.decisions_dir)
+    try:
+        generated = generate_index(args.decisions_dir)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
     if args.check:
         current = (

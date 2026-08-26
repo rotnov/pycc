@@ -33,6 +33,47 @@ never a merge gate.
 
 ---
 
+## 2026-08-26 — A "next free D-NNN number" picked from a stale `main` collided with a concurrently-merged decision on the same number
+
+What happened: PR #820 (issue #803) renumbered two decision files that
+collided with pre-existing D-201/D-202 entries, choosing D-204/D-205 as
+the next free numbers as of its own base commit. While that PR's CI ran
+against a rebased `main` tip, PR #812 merged independently and had
+*itself* just claimed a new D-204 (`docs/decisions/D-204-widen-optional-t-...md`)
+for an unrelated change — the exact defect class #803 exists to close,
+recurring live between two in-flight branches that never saw each
+other's claim. It surfaced as a real merge conflict (`git merge
+origin/main` on the #803 branch) rather than as a `check_unique_ids`
+failure, because that check only runs against files that already coexist
+on one tree — it cannot see a number another branch has reserved but not
+yet merged.
+
+Root cause: there is no reservation mechanism for an in-flight decision
+number. `check_unique_ids` (added by this same PR) is fail-closed but
+necessarily reactive — it only catches a collision once both files land
+on the same tree, by which point one of the two branches must redo its
+renumbering and rebase.
+
+What fixed it: re-ran the same by-hand classify-every-reference procedure
+from the original #803 fix (`docs/sessions/2026-08-26-11-issue-803-decision-renumber.md`)
+a second time, shifting the two colliding files from D-204/D-205 to
+D-205/D-206, regenerating `docs/decisions/README.md`, and rebasing onto
+the newer `main` before re-requesting CI.
+
+Lesson: when renumbering a decision file to "the next free number," treat
+that number as provisional until the PR actually merges — re-check
+`docs/decisions/README.md` on the current `main` tip immediately before
+merge (not just at branch-base time), since another in-flight PR can
+claim the same number in the interim. This is a narrow, low-frequency
+race (it requires two concurrent PRs both adding new decision files
+around the same numeric boundary) and does not by itself justify a
+reservation mechanism — the existing fail-closed `check_unique_ids` /
+`check_filename_matches_id` gates already make the failure mode loud
+(a merge conflict or a red gate) rather than silent, which is the
+property #803 was actually filed to guarantee.
+
+---
+
 ## 2026-08-26 — Assumed a root-package test file could take a new dev-dependency; D-091 makes that impossible for any root-package test
 
 What happened: while scoping #782 (Part 2 of #779, migrating raw
@@ -240,7 +281,7 @@ one.
 
 ## 2026-08-25 — three consecutive D-068 review rounds against #780 kept finding the same defect class in new constructs, because the fix was reviewed incrementally instead of characterized once, up front, for its full scope
 
-What happened: the `Optional[T]` flow-sensitive narrowing feature (D-201, #769/#747 Part 2)
+What happened: the `Optional[T]` flow-sensitive narrowing feature (D-205, #769/#747 Part 2)
 went through three separate D-068 pinned-reviewer rounds against PR #780, each round finding
 a *new* instance of essentially the same soundness defect class — the design's single
 left-to-right source-order pass, reconciled only at control-flow joins, silently assumed a
@@ -257,7 +298,7 @@ found — but no round asked "what is the *general* property this design needs, 
 fix I'm about to land actually establish it everywhere, or only at the specific spot the
 reviewer happened to flag?"
 
-Root cause: the original design (D-201) was implemented and reviewed one increment at a time
+Root cause: the original design (D-205) was implemented and reviewed one increment at a time
 — get *a* narrowing story working, review it, fix what's flagged, repeat — rather than
 characterizing up front, in the design's own decision record, the exact soundness invariant a
 flow-sensitive analysis over control flow needs ("no read may observe a narrowing fact that
@@ -271,7 +312,7 @@ execution order can diverge from source order, and neither was audited against t
 until a reviewer happened to construct a program that exercised it.
 
 What fixed it (round 3, this entry): rather than special-casing the two newly-found
-constructs, the fix restated the general invariant explicitly (see D-202) and applied it
+constructs, the fix restated the general invariant explicitly (see D-206) and applied it
 uniformly via a single shared primitive (`pycc_hir::killed_names`, a kill-prescan) at every
 call site in both `pycc_types` and `pycc_mir` where a body can be re-entered — not only the
 two constructs the round's own repro happened to name.

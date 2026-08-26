@@ -792,7 +792,7 @@ pub fn optional_none_test(test: &HirExpr) -> Option<(&str, NoneTestPolarity)> {
 /// identical reason [`optional_none_test`] is shared: `pycc_mir` does not
 /// depend on `pycc_types`, so the one predicate both need lives here, in
 /// their common dependency, rather than as two independently-maintained
-/// copies (D-201).
+/// copies (D-205).
 pub fn definitely_terminates(body: &[HirStmt]) -> bool {
     match body.last() {
         Some(HirStmt::Return(_)) => true,
@@ -1020,7 +1020,7 @@ fn collect_pattern_capture_names_as_killed(pattern: &HirPattern, killed: &mut Ha
 /// Before this fix, `collect_killed_names` put a bare `ExprStmt` in a no-op
 /// arm and never inspected `If`/`While`'s own `test`, so a re-enterable loop
 /// body whose only kill of a narrowed name was a walrus (see
-/// `docs/decisions/D-202-kill-prescan-for-re-enterable-narrowed-bodies.md`)
+/// `docs/decisions/D-206-kill-prescan-for-re-enterable-narrowed-bodies.md`)
 /// was invisible to the prescan: a read textually before the walrus within
 /// the loop body was wrongly treated as still narrowed on every iteration
 /// after the first, even though the *previous* iteration's walrus already
