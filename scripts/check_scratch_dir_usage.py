@@ -80,6 +80,21 @@ EXEMPT_FILES = frozenset({"crates/pycc_scratch/src/lib.rs"})
 # `try_build`/`run`) and its five test-only ones (Part 2's scope, inside its
 # `#[cfg(test)] mod tests`).
 ALLOWLIST: dict[str, int] = {
+    # Added post-snapshot: `main` merged issue #150's fix (a `tests/`
+    # integration test using the raw pattern) after Part 1's original
+    # snapshot commit but before this PR's own merge onto `main` during a
+    # rebase. The snapshot's definition is "every file containing the
+    # pattern at the commit where the gate takes effect" -- that commit is
+    # this rebased merge, not the pre-rebase branch tip -- so recording this
+    # file here fulfills the snapshot rather than breaching its "one-time"
+    # property (see D-201). Migrating it is out of scope for this PR: it
+    # would require adding `pycc_scratch` back as a root `[dev-dependencies]`
+    # entry, which f79bb2b5 already tried and reverted because it trips
+    # D-091's bench-manifest fingerprint gate in `frontend-perf-measure` --
+    # the same blocker tracked against #782 Batch B (PR #793). It stays
+    # tracked under #782's Part 2 migration scope alongside every other
+    # entry below.
+    "tests/issue_150_zero_step_range.rs": 1,
     "src/main.rs": 7,
     "src/project_config.rs": 26,
     "tests/conformance.rs": 1,
