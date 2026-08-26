@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -20,8 +21,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 /// its own class.
 #[test]
 fn isinstance_true_for_same_class() {
-    let dir = std::env::temp_dir().join(format!("pycc_435_isinstance_same_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_same").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "same.py",
@@ -47,8 +47,7 @@ fn isinstance_true_for_same_class() {
 /// class is in D's MRO.
 #[test]
 fn isinstance_true_for_base_class() {
-    let dir = std::env::temp_dir().join(format!("pycc_435_isinstance_base_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_base").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "base.py",
@@ -73,11 +72,7 @@ fn isinstance_true_for_base_class() {
 /// #435: `isinstance(D(), C)` returns False when D and C are unrelated.
 #[test]
 fn isinstance_false_for_unrelated_class() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_isinstance_unrelated_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_unrelated").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "unrelated.py",
@@ -103,11 +98,7 @@ fn isinstance_false_for_unrelated_class() {
 /// an instance of a derived class.
 #[test]
 fn isinstance_false_for_subclass() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_isinstance_subclass_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_subclass").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "subclass.py",
@@ -132,8 +123,7 @@ fn isinstance_false_for_subclass() {
 /// #435: `isinstance(5, int)` returns True.
 #[test]
 fn isinstance_with_int() {
-    let dir = std::env::temp_dir().join(format!("pycc_435_isinstance_int_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_int").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "int.py", "r = isinstance(5, int)\nprint(r)\n");
     let out = dir.join("int");
     let status = Command::new(pycc_bin())
@@ -154,11 +144,7 @@ fn isinstance_with_int() {
 /// #435: `isinstance(True, int)` returns True — bool is a subtype of int.
 #[test]
 fn isinstance_with_bool_as_int() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_isinstance_bool_int_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_bool_int").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "bool_int.py", "r = isinstance(True, int)\nprint(r)\n");
     let out = dir.join("bool_int");
     let status = Command::new(pycc_bin())
@@ -179,8 +165,7 @@ fn isinstance_with_bool_as_int() {
 /// #435: `isinstance("hi", str)` returns True.
 #[test]
 fn isinstance_with_str() {
-    let dir = std::env::temp_dir().join(format!("pycc_435_isinstance_str_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_str").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "str.py", "r = isinstance(\"hi\", str)\nprint(r)\n");
     let out = dir.join("str");
     let status = Command::new(pycc_bin())
@@ -202,9 +187,7 @@ fn isinstance_with_str() {
 /// classes, any match.
 #[test]
 fn isinstance_with_tuple_of_classes() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_435_isinstance_tuple_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_tuple").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "tuple.py",
@@ -229,11 +212,7 @@ fn isinstance_with_tuple_of_classes() {
 /// #435: `isinstance(D(), (C,))` returns False when D extends B, not C.
 #[test]
 fn isinstance_with_tuple_no_match() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_isinstance_tuple_no_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_tuple_no").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "tuple_no.py",
@@ -262,9 +241,7 @@ fn isinstance_with_tuple_no_match() {
 /// #435: `isinstance()` with wrong arg count is rejected with T0021.
 #[test]
 fn isinstance_wrong_arg_count() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_435_isinstance_arity_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_arity").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "arity.py",
@@ -289,11 +266,7 @@ fn isinstance_wrong_arg_count() {
 /// #435: `isinstance(D(), UnknownClass)` is rejected with T0001.
 #[test]
 fn isinstance_unknown_class() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_isinstance_unknown_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_unknown").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "unknown.py",
@@ -318,11 +291,7 @@ fn isinstance_unknown_class() {
 /// #435: `isinstance(D(), 5)` — second arg is not a class name or tuple.
 #[test]
 fn isinstance_non_class_second_arg() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_isinstance_nonclass_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_nonclass").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "nonclass.py",
@@ -350,8 +319,7 @@ fn isinstance_non_class_second_arg() {
 /// must assign the call result to a variable first.
 #[test]
 fn isinstance_with_call_expression_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_435_isinstance_call_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_call").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "call.py",
@@ -378,8 +346,7 @@ fn isinstance_with_call_expression_is_rejected() {
 /// lowered as an ordinary function call, not intercepted.
 #[test]
 fn user_defined_isinstance_takes_priority_over_builtin() {
-    let dir = std::env::temp_dir().join(format!("pycc_435_user_isinstance_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_user_isinstance").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "user_isinstance.py",
@@ -405,8 +372,7 @@ fn user_defined_isinstance_takes_priority_over_builtin() {
 /// priority over the compile-time builtin.
 #[test]
 fn user_defined_issubclass_takes_priority_over_builtin() {
-    let dir = std::env::temp_dir().join(format!("pycc_435_user_issubclass_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_user_issubclass").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "user_issubclass.py",
@@ -435,8 +401,7 @@ fn user_defined_issubclass_takes_priority_over_builtin() {
 /// #435: `issubclass(D, D)` returns True.
 #[test]
 fn issubclass_true_for_same_class() {
-    let dir = std::env::temp_dir().join(format!("pycc_435_issubclass_same_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_issubclass_same").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "same.py",
@@ -458,8 +423,7 @@ fn issubclass_true_for_same_class() {
 /// #435: `issubclass(D, B)` returns True when D extends B.
 #[test]
 fn issubclass_true_for_base_class() {
-    let dir = std::env::temp_dir().join(format!("pycc_435_issubclass_base_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_issubclass_base").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "base.py",
@@ -481,11 +445,7 @@ fn issubclass_true_for_base_class() {
 /// #435: `issubclass(D, C)` returns False when D and C are unrelated.
 #[test]
 fn issubclass_false_for_unrelated() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_issubclass_unrelated_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_issubclass_unrelated").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "unrelated.py",
@@ -510,11 +470,7 @@ fn issubclass_false_for_unrelated() {
 /// #435: `issubclass(bool, int)` returns True — bool is a subtype of int.
 #[test]
 fn issubclass_bool_is_int() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_issubclass_bool_int_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_issubclass_bool_int").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "bool_int.py", "r = issubclass(bool, int)\nprint(r)\n");
     let out = dir.join("bool_int");
     let status = Command::new(pycc_bin())
@@ -535,9 +491,7 @@ fn issubclass_bool_is_int() {
 /// #435: `issubclass(D, (B, C))` returns True if D extends B.
 #[test]
 fn issubclass_with_tuple() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_435_issubclass_tuple_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_issubclass_tuple").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "tuple.py",
@@ -566,9 +520,7 @@ fn issubclass_with_tuple() {
 /// #435: `issubclass()` with wrong arg count is rejected with T0021.
 #[test]
 fn issubclass_wrong_arg_count() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_435_issubclass_arity_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_issubclass_arity").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "arity.py",
@@ -593,11 +545,7 @@ fn issubclass_wrong_arg_count() {
 /// #435: `issubclass(5, int)` — first arg is not a class name.
 #[test]
 fn issubclass_non_class_first_arg() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_issubclass_nonclass_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_issubclass_nonclass").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "nonclass.py", "r = issubclass(5, int)\n");
     let out = dir.join("nonclass");
     let output = Command::new(pycc_bin())
@@ -618,11 +566,7 @@ fn issubclass_non_class_first_arg() {
 /// #435: `issubclass(D, UnknownClass)` is rejected with T0001.
 #[test]
 fn issubclass_unknown_class() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_issubclass_unknown_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_issubclass_unknown").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "unknown.py",
@@ -654,11 +598,7 @@ fn issubclass_unknown_class() {
 /// classmethod protocol is not modeled — `self` is used instead).
 #[test]
 fn init_subclass_with_pass_body_is_accepted() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_init_subclass_pass_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_init_subclass_pass").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "pass.py",
@@ -682,11 +622,7 @@ fn init_subclass_with_pass_body_is_accepted() {
 /// `__init_subclass__`.
 #[test]
 fn init_subclass_with_non_trivial_body_is_rejected() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_init_subclass_reject_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_init_subclass_reject").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "reject.py",
@@ -716,11 +652,7 @@ fn init_subclass_with_non_trivial_body_is_rejected() {
 /// NOT redefine `__init_subclass__` compiles without re-defining it.
 #[test]
 fn init_subclass_inherited_from_base() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_init_subclass_inherit_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_init_subclass_inherit").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "inherit.py",
@@ -744,9 +676,7 @@ fn init_subclass_inherited_from_base() {
 /// no side effects).
 #[test]
 fn init_subclass_with_docstring_body_is_accepted() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_435_init_subclass_doc_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_init_subclass_doc").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "doc.py",
@@ -775,8 +705,7 @@ fn init_subclass_with_docstring_body_is_accepted() {
 /// the method name is recognized as valid).
 #[test]
 fn set_name_method_is_accepted() {
-    let dir = std::env::temp_dir().join(format!("pycc_435_set_name_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_set_name").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "set_name.py",
@@ -802,8 +731,7 @@ fn set_name_method_is_accepted() {
 /// #435 (Part D): a class with a `__class_getitem__` static method compiles.
 #[test]
 fn class_getitem_method_is_accepted() {
-    let dir = std::env::temp_dir().join(format!("pycc_435_class_getitem_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_class_getitem").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "class_getitem.py",
@@ -828,9 +756,7 @@ fn class_getitem_method_is_accepted() {
 /// `annotation_to_ty` self-referential-class-name rule applies).
 #[test]
 fn class_getitem_allows_subscript_syntax() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_435_class_getitem_sub_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_class_getitem_sub").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "subscript.py",
@@ -858,11 +784,7 @@ fn class_getitem_allows_subscript_syntax() {
 /// is required.
 #[test]
 fn isinstance_with_empty_tuple_is_rejected() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_isinstance_empty_tuple_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_empty_tuple").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "empty_tuple.py", "r = isinstance(1, ())\nprint(r)\n");
     let out = dir.join("empty_tuple");
     let output = Command::new(pycc_bin())
@@ -883,11 +805,7 @@ fn isinstance_with_empty_tuple_is_rejected() {
 /// #435: `issubclass(int, ())` — an empty tuple is rejected with T0021.
 #[test]
 fn issubclass_with_empty_tuple_is_rejected() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_435_issubclass_empty_tuple_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_issubclass_empty_tuple").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "empty_tuple_sub.py",
@@ -914,8 +832,7 @@ fn issubclass_with_empty_tuple_is_rejected() {
 /// user-defined classes), so this is rejected with T0001.
 #[test]
 fn isinstance_with_list_builtin_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_435_isinstance_list_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("435_isinstance_list").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "list_builtin.py",
