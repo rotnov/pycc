@@ -1,17 +1,17 @@
 ---
-id: D-205
+id: D-206
 title: "Kill-prescan for re-enterable Optional[T] narrowed bodies (D-068 re-review of #780, third round)"
 status: accepted
 ---
 
-## D-205: Kill-prescan for re-enterable Optional[T] narrowed bodies (D-068 re-review of #780, third round)
+## D-206: Kill-prescan for re-enterable Optional[T] narrowed bodies (D-068 re-review of #780, third round)
 - Status: accepted
-- Context: D-204 (Part 2 of #747) implemented `Optional[T]` flow-sensitive
+- Context: D-205 (Part 2 of #747) implemented `Optional[T]` flow-sensitive
   narrowing as a single left-to-right source-order pass, reconciled only at
   control-flow *joins* (`join_if_branches`/`join_loop_body`/
   `join_match_branches`). Two earlier D-068 pinned-reviewer rounds against
   #780 already found and fixed soundness gaps in that join-reconciliation
-  step itself (see D-204's own Alternatives section and
+  step itself (see D-205's own Alternatives section and
   `narrow::join_narrowed`'s doc comment). This third round found a
   different defect class in the same design: the source-order pass
   silently assumed a body's *execution* order always matches its *source*
@@ -95,7 +95,7 @@ status: accepted
      conservative (it can only ever drop a narrowing that was actually
      safe on some execution paths, e.g. a loop's first iteration before
      its own kill runs) rather than a precise fixpoint analysis, matching
-     this repository's existing D-127 judgment call (recorded in D-204's
+     this repository's existing D-127 judgment call (recorded in D-205's
      Alternatives and re-applied here) that a narrower conservative rule
      which can only *drop* a valid narrowing is preferable to a more
      precise one that risks keeping an invalid one, at zero
@@ -110,7 +110,7 @@ status: accepted
      A straight-line body or an `if`/`else` with no enclosing loop or
      `try` needs no prescan: execution order there already equals source
      order, so the existing sequential pass is already sound, matching
-     D-204 decision 2's scope (a `match` case body and a `try`'s `orelse`/
+     D-205 decision 2's scope (a `match` case body and a `try`'s `orelse`/
      `finalbody` are likewise not re-enterable in the sense this fix
      addresses, and need no prescan either -- `finalbody` in particular is
      checked (`check_try_stmt`, `crates/pycc_types/src/exception.rs`)
@@ -127,7 +127,7 @@ status: accepted
      with no separate prescan needed).
   3. **Identical logic in both `pycc_types` and `pycc_mir`, sharing only
      the pure `killed_names` predicate via `pycc_hir`** -- the same
-     cross-crate split D-204 decision 4 established for
+     cross-crate split D-205 decision 4 established for
      `optional_none_test`/`definitely_terminates`. `pycc_mir::expr.rs` has
      exactly one caller of `narrowed_ty` (`HirExpr::Name`'s lowering arm),
      reading the same `scopes` structure `apply_kill_prescan` mutates
@@ -173,9 +173,9 @@ status: accepted
     already-idempotent re-application for the body itself).
 
 - Consequences:
-  - **Narrows D-204's Consequences claim** that "a narrowing fact ...
+  - **Narrows D-205's Consequences claim** that "a narrowing fact ...
     never survives a reassignment of the narrowed name" — that statement
-    was true only for the constructs D-204 itself covered (straight-line
+    was true only for the constructs D-205 itself covered (straight-line
     bodies and `if`/`else` joins); it was never true in general once
     re-enterable bodies (`while`/`for` loops, `try`/`except` handlers)
     entered scope, as this entry's two counterexamples demonstrate. The
@@ -183,10 +183,10 @@ status: accepted
     reassignment of the narrowed name *reachable from any point later in
     execution order than the read*, which for a re-enterable body means
     "anywhere in the body," not merely "earlier in source order."
-  - `docs/decisions/D-204-optional-t-flow-sensitive-narrowing-part2.md`
+  - `docs/decisions/D-205-optional-t-flow-sensitive-narrowing-part2.md`
     itself is left unedited per this repository's decision-log convention
     (an accepted entry is never hand-edited; a superseding entry narrows
-    it instead) — a reader relying on D-204 alone should cross-reference
+    it instead) — a reader relying on D-205 alone should cross-reference
     this entry for the corrected scope of its narrowing-survival claim.
   - The kill-prescan is deliberately whole-body and non-positional: a read
     of a narrowed name that occurs *before* the body's own kill in both
@@ -194,7 +194,7 @@ status: accepted
     iteration) is now rejected too, even though that specific read would
     have been sound on that one iteration. This trades a small amount of
     narrowing precision for a soundness guarantee that costs no
-    additional analysis passes — consistent with D-204's own
+    additional analysis passes — consistent with D-205's own
     `join_narrowed` precedent of preferring "can only drop, never keep an
     invalid narrowing" over maximal precision.
   - `match` case bodies and `try`'s `body`/handler/`orelse`/`finalbody`

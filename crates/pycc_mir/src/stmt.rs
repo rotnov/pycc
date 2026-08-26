@@ -346,7 +346,7 @@ pub(super) fn lower_stmt(
             for (name, ty) in named_bindings {
                 bind_variable(scopes, name, ty);
             }
-            // Issue #769 (Part 2 of #747), D-204 scope cut: narrowing is
+            // Issue #769 (Part 2 of #747), D-205 scope cut: narrowing is
             // deliberately `if`-only -- `pycc_types::narrow` never applies
             // `apply_branch_narrowing` to a `while` test (see its own call
             // sites), so no narrow overlay is pushed for entering the body,

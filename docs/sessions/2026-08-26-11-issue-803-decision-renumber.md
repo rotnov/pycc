@@ -29,11 +29,24 @@ uniqueness check on the numeric prefix.
 
 The two pre-existing files keep their numbers unchanged. The two newer
 (#780) files were renamed to the next free numbers — D-203 was already
-claimed by issue #800's work, so:
+claimed by issue #800's work, so the first pass (commit `b47821e8`)
+renumbered them to D-204/D-205.
 
-- `D-201-optional-t-flow-sensitive-narrowing-part2.md` → `D-204-...md`
+Before this PR reached merge, `main` independently gained its own new
+D-204 (PR #812, "Widen Optional[T] codegen to float and bool inner
+types") — a second, live instance of the exact defect class #803 exists
+to close, discovered only because this PR's own CI run against the
+updated `main` tip surfaced a real merge conflict on
+`docs/decisions/README.md`/`docs/decisions/D-204-*.md`, not by any
+proactive check (there is no cross-branch reservation mechanism for
+in-flight D-NNN numbers; `check_unique_ids` only fires once both files
+land on the same tree). The two files below were therefore renumbered a
+second time to the next free numbers as of the rebase onto that
+newer `main`:
+
+- `D-201-optional-t-flow-sensitive-narrowing-part2.md` → `D-205-...md`
   (`Optional[T]` flow-sensitive narrowing, Part 2 of #747)
-- `D-202-kill-prescan-for-re-enterable-narrowed-bodies.md` → `D-205-...md`
+- `D-202-kill-prescan-for-re-enterable-narrowed-bodies.md` → `D-206-...md`
   (kill-prescan for re-enterable narrowed bodies)
 
 Both files' YAML `id:` frontmatter and `## D-20N: ...` heading were updated
@@ -45,7 +58,7 @@ to match the new filename number.
 pycc_scratch and PEP 654 decisions are both cited across many source files,
 tests, and docs). Every hit from `grep -rn 'D-201\b'` / `'D-202\b'` across
 the tree was read in context individually before deciding whether to
-change it. Renumbered (narrowing/kill-prescan → D-204/D-205):
+change it. Renumbered (narrowing/kill-prescan → D-205/D-206):
 
 - `crates/pycc_types/src/narrow.rs`, `crates/pycc_types/src/tests.rs` (5
   narrowing-related occurrences, one kill-prescan occurrence),
@@ -85,7 +98,7 @@ citations and one `D-202` citation in its 2026-08-25 entry about the
 three-round D-068 review of #780's narrowing feature. All three
 unambiguously cite the renumbered decisions (the narrowing feature itself,
 and the kill-prescan fix that closed round 3) rather than the pre-existing
-pycc_scratch/except-star decisions, so they were corrected to D-204/D-205
+pycc_scratch/except-star decisions, so they were corrected to D-205/D-206
 as a deliberate factual fix — the entry's own historical lesson content is
 unchanged, only the now-stale decision numbers it cites.
 
@@ -130,8 +143,25 @@ fixture.
   working-tree diff before opening the PR; actionable findings addressed
   before merge (see PR body/thread for specifics).
 
+## Second collision and a further gate: filename-vs-frontmatter mismatch
+
+While this PR's CI was running against the rebased `main` tip, an
+external `chatgpt-codex-connector` review found a second, independent gap
+in `check_unique_ids`: it dedups only by frontmatter `id`, so a file whose
+own `D-NNN` filename prefix disagrees with its frontmatter `id` (e.g. a
+file named `D-201-....md` whose frontmatter claims `id: D-999`) would
+pass silently, recreating the same ambiguous-numbering defect at a
+different layer. Fixed by adding `check_filename_matches_id` alongside
+`check_unique_ids`, with two new tests in
+`scripts/test_generate_decisions_index.py`.
+
 ## Where to resume
 
 Nothing pending from this issue. If a future decision renumbering is
-needed, `check_unique_ids` in `scripts/generate_decisions_index.py` is now
-the enforcement point — extend its tests alongside any change there.
+needed, `check_unique_ids` and `check_filename_matches_id` in
+`scripts/generate_decisions_index.py` are now the enforcement points —
+extend their tests alongside any change there. Note the concurrency gap
+documented above under "Renumbering": neither check can catch a
+same-number collision between two branches that have not yet merged onto
+the same tree — only landing order and CI's post-rebase check surfaces
+that.
