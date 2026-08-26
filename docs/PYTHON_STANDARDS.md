@@ -209,6 +209,34 @@ For each newly observed upstream release:
     `l0001_except_multi_type_as_binding_requires_parens`), so pycc's
     rejection matches the oracle and the manifest records this as
     `out-of-scope` rather than `core`.
+12. PEP 654 (`except*`/`ExceptionGroup`) and PEP 572 (walrus `:=`) were
+    flipped to `◐` on the same rule 5/9 basis, tracked by
+    [#796](https://github.com/rotnov/pycc/issues/796). PEP 654's fixture
+    (`pep_0654_except_star.py`, registered by
+    [#542](https://github.com/rotnov/pycc/issues/542)/PR #794) was observed
+    green across all 5 Tier-1 targets in both profiles on run
+    [32972131277](https://github.com/rotnov/pycc/actions/runs/32972131277)
+    (`main` push for `e77c1b65295f8d77d9fedcbe6f8b21f1fad3f166`, PR #794's
+    merge). PEP 572's fixture (`pep_0572_walrus.py`, registered by
+    [#774](https://github.com/rotnov/pycc/issues/774)/PR #787) was observed
+    green the same way on run
+    [32826913767](https://github.com/rotnov/pycc/actions/runs/32826913767)
+    (`main` push for `a6cf21b4fb9dc649c189ed38e90ac6d428f03ec8`, PR #787's
+    merge). Neither row is `✅`: PEP 654's fixture skips
+    `ExceptionGroup.subgroup()`/`.split()` (deferred to
+    [#775](https://github.com/rotnov/pycc/issues/775)) and two
+    over-acceptance gaps [#795](https://github.com/rotnov/pycc/issues/795)
+    later found (a direct `return`/`break`/`continue` inside an `except*`
+    body, and `except* ExceptionGroup:`/`except* BaseExceptionGroup:` not
+    being rejected); PEP 572's fixture restricts the walrus value to
+    `int`/`float`/`bool`/`None` (new diagnostic `T0050`) and skips a walrus
+    nested inside a comprehension, matching CPython's own
+    comprehension-scope-skip semantics per #774's recorded scope cut. All are
+    `core` gaps under [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md)
+    -- including PEP 654's six [D-202](./decisions/D-202-pep-654-except-star-and-exceptiongroup.md)
+    simplifications, which D-202 records as independently revisitable rather
+    than a permanent non-goal (breadth manifest has the full reasoning) --
+    and a `core` gap forces `◐`.
 
 ## Python 3.0–3.2 (foundations)
 
@@ -287,7 +315,7 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [544](https://peps.python.org/pep-0544/) | `Protocol` — structural typing | typing | `pep_0544_protocol.py` | ◐ |
 | [570](https://peps.python.org/pep-0570/) | Positional-only params `/` | syntax | `pep_0570_pos_only.py` | ◐ |
-| [572](https://peps.python.org/pep-0572/) | Walrus `:=` | syntax | `pep_0572_walrus.py` | ☐ |
+| [572](https://peps.python.org/pep-0572/) | Walrus `:=` | syntax | `pep_0572_walrus.py` (rule 12) | ◐ |
 | [586](https://peps.python.org/pep-0586/) | `Literal` | typing | `py38/pep_0586_literal.py` | ☐ |
 | [589](https://peps.python.org/pep-0589/) | `TypedDict` | typing | `py38/pep_0589_typeddict.py` | ☐ |
 | [591](https://peps.python.org/pep-0591/) | `Final` | typing | `pep_0591_final.py` | ◐ |
@@ -320,7 +348,7 @@ For each newly observed upstream release:
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
 | [646](https://peps.python.org/pep-0646/) | `TypeVarTuple` — variadic generics | typing | `py311/pep_0646_typevartuple.py` | ☐ |
-| [654](https://peps.python.org/pep-0654/) | `except*` + `ExceptionGroup` | syntax | `tests/fixtures/pep_0654_except_star.py` | ☐ |
+| [654](https://peps.python.org/pep-0654/) | `except*` + `ExceptionGroup` | syntax | `pep_0654_except_star.py` (rule 12) | ◐ |
 | [655](https://peps.python.org/pep-0655/) | `Required` / `NotRequired` | typing | `py311/pep_0655_required.py` | ☐ |
 | [657](https://peps.python.org/pep-0657/) | Fine-grained error locations | rt | (drives pycc diagnostics UX) | ☐ |
 | [673](https://peps.python.org/pep-0673/) | `Self` as method return/param annotation (#387 Part 1) — resolves to the class's own instance type at HIR-lowering time | typing | `pep_0673_self.py` | ◐ |

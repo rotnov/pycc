@@ -573,20 +573,27 @@ def check_roadmap_counts(
             f"{label}'s headline states {total} evidence-backed rows but then "
             f"says `{accepted} of those {restated_total}`"
         )
-    if gap != required - total:
+    expected_gap = max(0, required - total)
+    if gap != expected_gap:
         failures.append(
             f"{label} states a {gap}-row gap, but {required} required minus "
-            f"{total} evidence-backed is {required - total}"
+            f"{total} evidence-backed is {required - total} "
+            f"(a met or exceeded floor states a 0-row gap, not a negative one, "
+            f"so the expected gap here is {expected_gap})"
         )
     if pep_total != computed_pep_total:
         failures.append(
             f"{label} claims {pep_total} distinct PEP numbers, but the matrix "
             f"encompasses {computed_pep_total}"
         )
-    if pep_gap != pep_required - pep_total:
+    expected_pep_gap = max(0, pep_required - pep_total)
+    if pep_gap != expected_pep_gap:
         failures.append(
             f"{label} states a {pep_gap}-PEP gap, but {pep_required} required "
-            f"minus {pep_total} distinct PEP numbers is {pep_required - pep_total}"
+            f"minus {pep_total} distinct PEP numbers is "
+            f"{pep_required - pep_total} (a met or exceeded floor states a "
+            f"0-PEP gap, not a negative one, so the expected gap here is "
+            f"{expected_pep_gap})"
         )
     if required != accept_required:
         failures.append(
