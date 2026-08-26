@@ -370,9 +370,16 @@ fn a_type_error_inside_a_try_star_finally_body_propagates_out() {
 #[test]
 fn a_try_star_handler_with_incompatible_binding_is_t0023() {
     // A handler that rebinds a pre-existing variable to an incompatible
-    // type triggers `join_if_branches`'s `?` error path -- mirroring
+    // type is rejected -- mirroring
     // `try_handler_with_incompatible_binding_is_t0023` in `tests.rs` for
-    // the plain `try`/`except` case.
+    // the plain `try`/`except` case. This specific reassignment
+    // (`x = "bad"` inside the handler body) is a same-block rebinding, so
+    // it is actually caught directly by `check_assignment` (via
+    // `check_stmt_shared`) before `check_try_star_stmt` ever reaches its
+    // own `join_if_branches` call -- see
+    // `try_star_handler_as_binding_incompatible_type_is_t0023` in
+    // `tests.rs` for a fixture that reaches `join_if_branches` itself,
+    // via an `except* ... as` binding (which bypasses `check_assignment`).
     let diagnostic = expect_error(
         "def main() -> None:\n\
          \x20   x = 1\n\

@@ -3379,6 +3379,31 @@ fn unroll_enum_loops_in_stmts(
                     finalbody: unroll_enum_loops_in_stmts(finalbody, enum_members),
                 });
             }
+            // `except*` (PEP 654, #542) shares `Try`'s recursion shape --
+            // an enum `for` loop nested in a `try*` body, an `except*`
+            // handler, `else`, or `finally` must be unrolled exactly like
+            // its `Try` counterpart above, or a `ForList`-over-enum left
+            // inside a `try*` would reach MIR lowering unexpanded.
+            HirStmt::TryStar {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                result.push(HirStmt::TryStar {
+                    body: unroll_enum_loops_in_stmts(body, enum_members),
+                    handlers: handlers
+                        .iter()
+                        .map(|h| pycc_hir::HirExceptHandler {
+                            exc_type: h.exc_type.clone(),
+                            name: h.name.clone(),
+                            body: unroll_enum_loops_in_stmts(&h.body, enum_members),
+                        })
+                        .collect(),
+                    orelse: unroll_enum_loops_in_stmts(orelse, enum_members),
+                    finalbody: unroll_enum_loops_in_stmts(finalbody, enum_members),
+                });
+            }
             other => result.push(other.clone()),
         }
     }

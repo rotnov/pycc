@@ -25259,6 +25259,28 @@ except ValueError:
 }
 
 #[test]
+fn try_star_with_enum_loop_unrolls() {
+    // Mirrors `try_with_enum_loop_unrolls` but for `except*` (#542): covers
+    // `check_stmt`'s module-level `HirStmt::TryStar` arm and the
+    // `HirStmt::TryStar` arm of `unroll_enum_loops_in_stmts` (which, before
+    // #542's coverage pass, silently fell through to the catch-all `other`
+    // branch and would have left a nested enum `for` loop un-unrolled).
+    let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+try:
+    for c in Color:
+        x = x + 1
+except* ValueError:
+    pass
+";
+    parse_check_resolve(src).expect("check should succeed");
+}
+
+#[test]
 fn enum_loop_inside_function_unrolls() {
     // Covers the `HirItem::Function` arm of `unroll_enum_loops` —
     // a function body containing an enum loop is unrolled.
@@ -25322,6 +25344,36 @@ x = 0
 for c in Color:
     for i in range(3):
         x = x + 1
+";
+    parse_check_resolve(src).expect("check should succeed");
+}
+
+#[test]
+fn plain_if_while_for_range_recurse_when_module_has_an_enum() {
+    // `unroll_enum_loops` runs `unroll_enum_loops_in_stmts` over every
+    // top-level statement whenever *any* class in the module is an enum --
+    // not only over statements that structurally contain a `for ... in
+    // <EnumClass>` loop. `enum_loop_with_nested_if_unrolls` (and its
+    // `_while`/`_for_range` siblings above) nest the `if`/`while`/`for
+    // range` *inside* the enum loop's own body, which the `ForList` enum
+    // branch clones verbatim rather than recursing into -- so those tests
+    // never actually reach `unroll_enum_loops_in_stmts`'s own
+    // `HirStmt::If`/`HirStmt::While`/`HirStmt::ForRange` arms. Reach them
+    // here directly with top-level `if`/`while`/`for i in range(..)`
+    // statements that sit alongside an enum class definition but are not
+    // themselves nested inside any enum loop.
+    let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+if x > 0:
+    x = x + 1
+while x < 10:
+    x = x + 1
+for i in range(3):
+    x = x + 1
 ";
     parse_check_resolve(src).expect("check should succeed");
 }
@@ -26999,6 +27051,28 @@ fn reject_generic_calls_processes_try_and_raise_arms() {
     );
 }
 
+#[test]
+fn reject_generic_calls_processes_try_star_arm() {
+    // Exercise `reject_generic_calls_in_stmt`'s `HirStmt::TryStar` half of
+    // its combined `Try { .. } | TryStar { .. }` arm (#542) directly --
+    // `reject_generic_calls_processes_try_and_raise_arms` above only
+    // reaches the `Try` alternative's own field-destructure lines.
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        }],
+        orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+        finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+    }];
+    assert!(
+        reject_generic_calls_in_block(&Environment::new(), "f", &body).is_ok(),
+        "reject_generic_calls_in_block should succeed for a try* without generic calls"
+    );
+}
+
 // -- #382: check_stmt_shared ? error propagation in try bodies --
 
 #[test]
@@ -27071,6 +27145,25 @@ fn try_handler_as_binding_incompatible_type_is_t0023() {
     assert_eq!(err.code, "T0023");
 }
 
+#[test]
+fn try_star_handler_as_binding_incompatible_type_is_t0023() {
+    // Mirrors `try_handler_as_binding_incompatible_type_is_t0023` for
+    // `except*` (#542). A same-block reassignment (`x = "bad"`) is caught
+    // directly by `check_assignment` (via `check_stmt_shared`) before
+    // `check_try_star_stmt` ever reaches its own
+    // `join_if_branches(&mut joined, &previous, handler_env)?` loop, so
+    // that specific `?` needs a mismatch that bypasses `check_assignment`
+    // instead: `e` is `int` before the try; `except* ValueError as e`
+    // rebinds `e` to `Instance("ExceptionGroup")` via `henv.bind()`
+    // directly (exactly like the plain-`try` case), which
+    // `join_if_branches` then detects as incompatible with the pre-try
+    // binding.
+    let err = parse_check(
+            "def f() -> int:\n    e = 0\n    try:\n        pass\n    except* ValueError as e:\n        pass\n    return 1\n",
+        ).unwrap_err();
+    assert_eq!(err.code, "T0023");
+}
+
 // -- #382: check_raise_operand ? error propagation --
 
 #[test]
@@ -27103,6 +27196,27 @@ def f() -> int:
     try:
         return 1
     except ValueError:
+        return 2
+    else:
+        return 3
+";
+    parse_check(src).expect("check should succeed");
+}
+
+#[test]
+fn try_star_with_return_in_body_handler_and_else_always_returns() {
+    // Mirrors `try_with_return_in_body_handler_and_else_always_returns`
+    // for `except*` (#542): covers the `HirStmt::TryStar` half of
+    // `block_always_returns`'s combined `Try { .. } | TryStar { .. }`
+    // pattern -- the `Try` arm's own field-destructure lines are already
+    // exercised by the plain-`try` test above, but the `TryStar`
+    // alternative's own lines are only reached when the analyzed function
+    // actually contains a `try*`.
+    let src = "\
+def f() -> int:
+    try:
+        return 1
+    except* ValueError:
         return 2
     else:
         return 3
