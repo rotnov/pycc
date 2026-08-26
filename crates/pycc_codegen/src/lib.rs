@@ -429,34 +429,40 @@ fn default_value_for_type<'ctx>(
             let struct_ty = context.struct_type(&field_types, false);
             struct_ty.const_zero().into()
         }
-        // `Optional[_]` (D-197, #763): an absent (`present == 0`) `{ inner,
-        // i8 }` struct, matching every other container arm above for the
-        // `present`/tag field -- but field 0 (the payload) deliberately
-        // is NOT a raw zero word the way `struct_ty.const_zero()` would
-        // give it. This function's two call sites are not both the
-        // "never executed" case its neighbours are: the abstract-method
-        // `Return(None)` site truly never runs the returned value, but the
-        // *other* call site (this function's exceptional-exit default,
-        // `emit_function`'s own `if *return_ty == pycc_mir::Ty::None`
-        // sibling) IS reached by a real, executing `int | None`-returning
-        // function that raises mid-body -- the same invariant
-        // `coerce_scalar_to_type`'s own placeholder-building arm documents
-        // (an `Optional`'s payload field must always be a *valid*
-        // D-141-encoded int regardless of the present flag, because
-        // `truthy`'s branch-free AND reads it unconditionally) applies
-        // here too, so a raw `0` word would trip `classify_encoded_int`'s
+        // `Optional[_]` (D-197, #763; widened to `float`/`bool` payloads by
+        // #809): an absent (`present == 0`) `{ inner, i8 }` struct, matching
+        // every other container arm above for the `present`/tag field --
+        // but field 0 (the payload) is NOT unconditionally a raw zero word
+        // the way `struct_ty.const_zero()` would give it. This function's
+        // two call sites are not both the "never executed" case its
+        // neighbours are: the abstract-method `Return(None)` site truly
+        // never runs the returned value, but the *other* call site (this
+        // function's exceptional-exit default, `emit_function`'s own `if
+        // *return_ty == pycc_mir::Ty::None` sibling) IS reached by a real,
+        // executing `int | None`-returning function that raises mid-body --
+        // the same invariant `coerce_scalar_to_type`'s own
+        // placeholder-building arm documents (an `Optional`'s payload field
+        // must always be a *valid* payload for its inner type regardless of
+        // the present flag, because `truthy`'s branch-free AND reads it
+        // unconditionally for `Ty::Int`) applies here too. For `Ty::Int`
+        // specifically, a raw `0` word would trip `classify_encoded_int`'s
         // fail-closed panic the moment any caller's own branch-free code
-        // touches this exceptional return value's payload field before
-        // ever consulting the exception flag. `tag_smallint_const` encodes
-        // `0` the same way `to_encoded_int` would, exactly mirroring that
-        // other arm's fix.
-        pycc_mir::Ty::Optional(_) => {
+        // touches this exceptional return value's payload field before ever
+        // consulting the exception flag, so that case keeps using
+        // `tag_smallint_const` to encode `0` exactly as `to_encoded_int`
+        // would. `Ty::Float`/`Ty::Bool` carry no analogous tagged encoding
+        // (their `truthy` arms below branch on the `Ty::Optional` shape
+        // explicitly rather than reading a D-141-encoded int), so a plain
+        // per-type zero from `default_value_for_type` itself is a valid
+        // placeholder for them.
+        pycc_mir::Ty::Optional(ref inner) => {
             let struct_ty = ty_to_basic_type(context, ty.clone()).into_struct_type();
+            let payload = match inner.as_ref() {
+                pycc_mir::Ty::Int => tag_smallint_const(context, 0).into(),
+                other_inner => default_value_for_type(context, other_inner.clone()),
+            };
             struct_ty
-                .const_named_struct(&[
-                    tag_smallint_const(context, 0).into(),
-                    context.i8_type().const_zero().into(),
-                ])
+                .const_named_struct(&[payload, context.i8_type().const_zero().into()])
                 .into()
         }
         // `Infer`, `Param`, and `None` never produce a real value at
@@ -1102,6 +1108,43 @@ fn coerce_scalar_to_type<'ctx>(
         // are not the exact same shape, and equal (and therefore pass
         // through unchanged) whenever the source already has the target's
         // exact representation.
+        //
+        // #809 risk, verified: for `inner == Ty::Bool`, `ty_to_basic_type`'s
+        // `Ty::Optional` arm produces the real `Optional[bool]` shape `{
+        // i8, i8 }` -- structurally, and therefore (LLVM struct types being
+        // uniqued per-field-type-list within a `Context`) *literally the
+        // same `StructType` value as* the `NoneLiteral` placeholder's own
+        // fixed `{ i8, i8 }`. So this arm's `v.get_type() == struct_ty`
+        // check cannot distinguish "this is genuinely the untyped None
+        // placeholder" from "this is a real, already-correctly-shaped
+        // `Optional[bool]` value" when `inner == Ty::Bool` -- both take the
+        // `v.get_type() == struct_ty` branch and pass `v` through as-is.
+        // This is harmless rather than a bug: taking that branch for the
+        // placeholder returns `{ payload: 0, present: 0 }` unchanged, which
+        // is *exactly* the correct representation for an absent
+        // `Optional[bool]` too -- `Ty::Bool`'s payload carries no tagged
+        // encoding analogous to `Ty::Int`'s D-141 word (see `truthy`'s and
+        // `MirExpr::OptionalUnwrap`'s own `Ty::Bool` handling below/in
+        // `lib.rs`, both of which read the payload only as a plain `0`/`1`
+        // and never as anything requiring a specific "valid" bit pattern
+        // the way `classify_encoded_int` does for `Ty::Int`), so an
+        // arbitrary (here, zero) payload byte is always a safe stand-in
+        // when `present == 0`. Every consumer of an `Optional[bool]`
+        // payload (`truthy`'s `Scalar::Optional` arm, `OptionalUnwrap`'s
+        // codegen arm) is itself only ever reached with `present == 1`
+        // guarding real use of the payload's *value* (narrowing proves
+        // presence before an unwrap; `truthy` ANDs the payload's
+        // truthiness with `present` rather than trusting it alone) -- so no
+        // observer can tell the difference between "the None placeholder,
+        // never coerced" and "a real, coerced, present `Optional[bool]`"
+        // for the one case (`present == 0`) where the collision could ever
+        // matter. `optional_bool_none_placeholder_and_real_absent_value_are_the_same_llvm_struct_type`
+        // and
+        // `optional_bool_absent_value_truthiness_and_narrowed_unwrap_are_both_correct`
+        // (`pycc_codegen::tests`) pin both halves of this finding: the
+        // literal type-identity collision, and that it produces correct
+        // end-to-end behavior for `x: bool | None = None` through both
+        // `truthy` and an `if x is not None:` narrowed unwrap.
         (pycc_mir::Ty::Optional(inner), Scalar::Optional(v)) => {
             let struct_ty =
                 ty_to_basic_type(context, pycc_mir::Ty::Optional(inner)).into_struct_type();
@@ -1151,15 +1194,40 @@ fn coerce_scalar_to_type<'ctx>(
         // result as the struct's present (`i8 = 1`) payload field.
         (pycc_mir::Ty::Optional(inner), bare) => {
             let coerced = coerce_scalar_to_type(context, builder, bare, (*inner).clone());
-            let payload: inkwell::values::BasicValueEnum = match coerced {
-                Scalar::Int(v) => v.into(),
+            // #809 (Part 2 of #747): `T0049`'s widened gate
+            // (`crates/pycc_hir/src/func.rs`) now also admits
+            // `Optional[float]`/`Optional[bool]`, so this match is keyed on
+            // *both* the declared inner type and the coerced `Scalar`
+            // variant, not the `Scalar` variant alone -- matching on the
+            // variant alone would accept e.g. a stray `Scalar::Float`
+            // widening into an `Optional[int]` slot (that combination
+            // falls through `coerce_scalar_to_type`'s own recursive call
+            // unchanged, since there is no `float -> int` widening arm),
+            // silently building a struct whose field 0 both has the wrong
+            // LLVM type for `Ty::Optional(Int)`'s `{ i64, i8 }` shape and
+            // is never a value any real `Optional[int]`-typed source could
+            // produce (`pycc_types` never assigns a bare `float` to an
+            // `int`-annotated slot). Pairing the target inner type with the
+            // coerced variant keeps each of the three real widenings exact
+            // and every mismatched combination falling to the panic below.
+            let payload: inkwell::values::BasicValueEnum = match (inner.as_ref(), coerced) {
+                (pycc_mir::Ty::Int, Scalar::Int(v)) => v.into(),
+                // Each passes through as-is: `ty_to_basic_type`'s own
+                // `Ty::Optional` arm already sizes field 0 from the inner
+                // type, so no further representation change is needed here.
+                (pycc_mir::Ty::Float, Scalar::Float(v)) => v.into(),
+                (pycc_mir::Ty::Bool, Scalar::Bool(v)) => v.into(),
                 // `T0049` (`crates/pycc_hir/src/func.rs`) rejects every
-                // `Optional[T]` annotation for `T != int` before this value
-                // could ever be constructed, so a non-`Int` payload here
-                // means `pycc_types::check` accepted an assignment this
-                // gate should have rejected.
+                // `Optional[T]` annotation for `T` outside `{int, float,
+                // bool}` before this value could ever be constructed, and
+                // `pycc_types::check`'s own assignability rule only ever
+                // widens a bare value into the *matching* inner type (or
+                // `bool -> int`, handled by the recursive call above), so
+                // an inner/coerced-variant mismatch reaching here means one
+                // of those upstream gates accepted something it should
+                // have rejected.
                 _ => panic!(
-                    "pycc_codegen: internal error: an Optional[int] assignment's payload did not evaluate to int -- pycc_types::check (T0049) should have rejected this before codegen"
+                    "pycc_codegen: internal error: an Optional[int|float|bool] assignment's payload did not evaluate to int, float, or bool -- pycc_types::check (T0049) should have rejected this before codegen"
                 ),
             };
             let struct_ty =
@@ -1664,7 +1732,7 @@ fn emit_expr_unchecked<'ctx>(
         // `is_owning_producer`/`int_value_is_a_duplicate_reference`
         // classification of this node (mirroring `MirExpr::Name`, not
         // `OptionalWrap`) for the corresponding compile-time classification.
-        MirExpr::OptionalUnwrap(value, _inner) => {
+        MirExpr::OptionalUnwrap(value, inner) => {
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
             let Scalar::Optional(v) = scalar else {
                 panic!(
@@ -1674,7 +1742,22 @@ fn emit_expr_unchecked<'ctx>(
             let payload = builder
                 .build_extract_value(v, 0, "narrowed_payload")
                 .expect("build_extract_value should not fail extracting field 0 of an Optional struct");
-            Scalar::Int(payload.into_int_value())
+            // #809 (Part 2 of #747): `T0049`'s widened gate now admits
+            // `Ty::Float`/`Ty::Bool` inner types alongside the pre-existing
+            // `Ty::Int`, so the narrowed payload must become the matching
+            // `Scalar` variant instead of always `Scalar::Int` -- a plain
+            // `f64`/`i8` payload handed to an `int`-typed consumer as
+            // `Scalar::Int` would misinterpret it as a D-141-encoded word.
+            match inner.as_ref() {
+                pycc_mir::Ty::Float => Scalar::Float(payload.into_float_value()),
+                pycc_mir::Ty::Bool => Scalar::Bool(payload.into_int_value()),
+                // `Ty::Int`, the pre-existing shape -- and every other
+                // `Ty` is unreachable here: `T0049`
+                // (`crates/pycc_hir/src/func.rs`) restricts every
+                // `Ty::Optional` inner type to `{int, float, bool}` before
+                // an `OptionalUnwrap` node can ever be constructed.
+                _ => Scalar::Int(payload.into_int_value()),
+            }
         }
         MirExpr::StringLiteral(s) => {
             Scalar::Str(emit_string_literal(context, builder, module, rt, s))
@@ -3780,17 +3863,33 @@ fn truthy<'ctx>(
         // `False`. A plain constant `1` correctly implements that rule
         // rather than deferring it.
         Scalar::Instance(_) => context.i8_type().const_int(1, false),
-        // `Optional[int]` (D-197, #763, Part 1 of #747): unlike every
+        // `Optional[int | float | bool]` (D-197, #763, Part 1 of #747;
+        // widened to `float`/`bool` by #809): unlike every
         // container/instance arm above, this one is real rather than a
-        // deferred panic -- CPython's `bool(x)` for `x: int | None` is
-        // `False` for `None` and otherwise `bool(<the int>)` (so `0` is
-        // still falsy even when present), and both halves are directly
-        // readable from this representation: field 1 is the present/absent
-        // flag, and field 0 (when present) is the same D-141-encoded `int`
-        // `Scalar::Int`'s own arm above already knows how to test via
-        // `pycc_rt_int_truthy`. Combines both with a plain `i8` AND (both
-        // operands are always exactly `0`/`1`), rather than a branch, so
-        // this stays branch-free like every other arm here.
+        // deferred panic -- CPython's `bool(x)` for `x: T | None` is
+        // `False` for `None` and otherwise `bool(<the T value>)` (so a
+        // present-but-zero/false payload is still falsy), and both halves
+        // are directly readable from this representation: field 1 is the
+        // present/absent flag, and field 0 (when present) is a payload
+        // whose own truthiness this function already knows how to compute
+        // for every inner type `T0049` admits -- `Ty::Int`'s D-141-encoded
+        // `int` via `pycc_rt_int_truthy` (`Scalar::Int`'s own arm above),
+        // `Ty::Float`'s plain `f64` via the *unordered*-not-equal-to-zero
+        // compare (`Scalar::Float`'s own arm above, mirrored exactly
+        // below), and `Ty::Bool`'s plain `i8` `0`/`1`, which already *is*
+        // its own truthiness with no conversion needed (`Scalar::Bool`'s
+        // own arm above).
+        //
+        // This function receives no `Ty` for the inner type -- `Scalar::
+        // Optional` carries only the LLVM struct value -- so the inner
+        // type is recovered from field 0's own LLVM type instead, which
+        // `ty_to_basic_type`'s `Ty::Optional` arm makes unambiguous per
+        // inner type: `f64` for `Ty::Float`, `i64` for `Ty::Int`, `i8` for
+        // `Ty::Bool`. Every producer of a `Scalar::Optional` reaching this
+        // function (`coerce_scalar_to_type`, `OptionalWrap`'s codegen, a
+        // `Name` read of an `Optional`-typed local) already builds the
+        // struct with the target's own inner-typed payload, so this
+        // dispatch is exact, not a heuristic.
         Scalar::Optional(v) => {
             let present = builder
                 .build_extract_value(v, 1, "opt_present")
@@ -3798,14 +3897,47 @@ fn truthy<'ctx>(
                 .into_int_value();
             let payload = builder
                 .build_extract_value(v, 0, "opt_payload")
-                .expect("build_extract_value should not fail reading field 0 of a 2-field struct")
-                .into_int_value();
-            let payload_truthy = builder
-                .build_call(rt.int_truthy, &[payload.into()], "opt_payload_truthy")
-                .expect("build_call should not fail for a well-formed truthiness check")
-                .try_as_basic_value()
-                .expect_basic("pycc_rt_int_truthy returns a non-void i8")
-                .into_int_value();
+                .expect("build_extract_value should not fail reading field 0 of a 2-field struct");
+            let payload_truthy = match payload {
+                inkwell::values::BasicValueEnum::FloatValue(fv) => {
+                    // `Ty::Float` inner: mirrors `Scalar::Float`'s own arm
+                    // above exactly (same `UNE` predicate, same
+                    // zero-extend), rather than inventing a new mechanism.
+                    let zero = context.f64_type().const_float(0.0);
+                    let cond = builder
+                        .build_float_compare(FloatPredicate::UNE, fv, zero, "opt_payload_float_truthy")
+                        .expect("build_float_compare should not fail for two f64 operands");
+                    builder
+                        .build_int_z_extend(
+                            cond,
+                            context.i8_type(),
+                            "opt_payload_bool_from_float_truthy",
+                        )
+                        .expect("build_int_z_extend should not fail widening i1 to i8")
+                }
+                // `i8`-width payload: `Ty::Bool` inner. Already the exact
+                // `0`/`1` truthiness value -- `Scalar::Bool`'s own arm
+                // above (`Scalar::Bool(v) => v`) treats a bare bool
+                // identically, with no runtime call.
+                inkwell::values::BasicValueEnum::IntValue(iv)
+                    if iv.get_type().get_bit_width() == 8 =>
+                {
+                    iv
+                }
+                // Any other int width: `Ty::Int` inner, a D-141-encoded
+                // `i64` -- the pre-existing behavior, delegated to
+                // `pycc_rt_int_truthy` exactly like `Scalar::Int`'s own arm
+                // above.
+                inkwell::values::BasicValueEnum::IntValue(iv) => builder
+                    .build_call(rt.int_truthy, &[iv.into()], "opt_payload_truthy")
+                    .expect("build_call should not fail for a well-formed truthiness check")
+                    .try_as_basic_value()
+                    .expect_basic("pycc_rt_int_truthy returns a non-void i8")
+                    .into_int_value(),
+                other => panic!(
+                    "pycc_codegen: internal error: an Optional[_] payload had an unsupported LLVM representation ({other:?}) -- pycc_types::check (T0049) should have rejected this inner type before codegen"
+                ),
+            };
             builder
                 .build_and(present, payload_truthy, "opt_truthy")
                 .expect("build_and should not fail for two i8 operands")
@@ -4869,12 +5001,29 @@ fn declare_module_globals<'ctx>(
                 // present flag itself is `0` either way, matching every
                 // "unassigned" global's own zero-flag/null-pointer pattern
                 // above.
-                pycc_mir::Ty::Optional(_) => {
+                pycc_mir::Ty::Optional(inner) => {
                     let struct_ty = ty_to_basic_type(context, ty.clone()).into_struct_type();
-                    let zeroed = struct_ty.const_named_struct(&[
-                        tag_smallint_const(context, 0).into(),
-                        context.i8_type().const_zero().into(),
-                    ]);
+                    // #809: `default_value_for_type` (below) already draws
+                    // this same `Ty::Int`-vs-other-inner-type distinction
+                    // for exactly the same reason -- only `Ty::Int`'s
+                    // payload field is the D-141 encoded-word
+                    // representation `tag_smallint_const` produces; a
+                    // `Float`/`Bool` inner type's payload field is a plain
+                    // `f64`/`i8` value, and handing `tag_smallint_const`'s
+                    // `i64` constant to `const_named_struct` for a struct
+                    // whose first field is `f64`/`i8` is an LLVM constant
+                    // type/size mismatch (the `Optional[bool]` case was
+                    // reproduced crashing the LLVM backend with "invalid
+                    // number of bytes" before this fix). Reuse
+                    // `default_value_for_type` itself so this initializer
+                    // and the per-local entry-block placeholder in
+                    // `storage_slot_at_entry` can never drift apart again.
+                    let payload = match inner.as_ref() {
+                        pycc_mir::Ty::Int => tag_smallint_const(context, 0).into(),
+                        other_inner => default_value_for_type(context, other_inner.clone()),
+                    };
+                    let zeroed = struct_ty
+                        .const_named_struct(&[payload, context.i8_type().const_zero().into()]);
                     (struct_ty.into(), zeroed.into())
                 }
                 other => panic!(
