@@ -8192,6 +8192,7 @@ fn collect_block_constraints_recurses_into_every_try_star_block_and_binds_a_name
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::TryStar {
         body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
@@ -8264,6 +8265,7 @@ fn collect_block_constraints_propagates_an_error_from_a_try_star_body_block() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::TryStar {
         body: vec![HirStmt::DictSet {
@@ -8304,6 +8306,7 @@ fn collect_block_constraints_propagates_an_error_from_a_try_star_handler_block()
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::TryStar {
         body: vec![],
@@ -8347,6 +8350,7 @@ fn collect_block_constraints_propagates_an_error_from_a_try_star_else_block() {
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::TryStar {
         body: vec![],
@@ -8386,6 +8390,7 @@ fn collect_block_constraints_propagates_an_error_from_a_try_star_finally_block()
         local_names: &["missing"],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
     };
     let body = vec![HirStmt::TryStar {
         body: vec![],
