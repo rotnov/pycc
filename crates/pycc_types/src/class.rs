@@ -4604,8 +4604,9 @@ mod tests {
         // `Ty::Instance("C")` (D-040 sticky representation), so the call
         // resolves through the instance-method path, not the protocol
         // path.  To exercise the *protocol* branch of
-        // `resolve_method_call` (line 551), the receiver must be a
-        // function parameter annotated `x: P`, which is bound as
+        // `class::method_call::resolve_method_call` (moved there by
+        // #815, Part 1 of #737), the receiver must be a function
+        // parameter annotated `x: P`, which is bound as
         // `Ty::Protocol("P")` in the function body.
         let err = check_source(
             "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef f(x: P) -> int:\n    return x.foo(99)\n",
@@ -4617,10 +4618,12 @@ mod tests {
     #[test]
     fn protocol_typed_param_method_call_wrong_arg_type_is_t0021() {
         // #380 (PR-20): exercises the `check_call_args` *type-mismatch*
-        // error path (not just arity) inside `resolve_method_call`'s
-        // protocol branch.  The receiver is a function parameter typed
-        // `x: P`, so it is bound as `Ty::Protocol("P")` and the protocol
-        // branch at line 551 is entered.  The argument count matches
+        // error path (not just arity) inside
+        // `class::method_call::resolve_method_call`'s protocol branch
+        // (moved there by #815, Part 1 of #737).  The receiver is a
+        // function parameter typed `x: P`, so it is bound as
+        // `Ty::Protocol("P")` and the protocol branch is entered.  The
+        // argument count matches
         // (1 == 1) but the type (`str` vs `int`) does not, so
         // `check_call_args` returns a type-mismatch T0021.
         let err = check_source(
