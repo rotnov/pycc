@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -442,8 +443,11 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 fn nbody_release_binary_meets_required_speedup_over_cpython() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nbody.py");
 
-    // Build the pycc binary once, --release, outside the timed loop.
-    let bin_path = std::env::temp_dir().join(format!("pycc_nbody_{}", std::process::id()));
+    // Build the pycc binary once, --release, outside the timed loop. The
+    // scratch directory handle must span the whole test: the timed loops
+    // below re-launch `bin_path` from inside it, and Drop removes it.
+    let dir = ScratchDir::new("nbody").expect("failed to create scratch dir");
+    let bin_path = dir.join("nbody");
     let build_status = Command::new(env!("CARGO_BIN_EXE_pycc"))
         .arg("build")
         .arg(&fixture)

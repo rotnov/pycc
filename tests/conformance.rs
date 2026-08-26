@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -90,11 +91,8 @@ fn run_conformance_fixture_with_profile(
     release: bool,
 ) -> (Vec<u8>, Vec<u8>) {
     let profile = if release { "release" } else { "debug" };
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_conformance_{label}_{profile}_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new(&format!("conformance_{label}_{profile}"))
+        .expect("failed to create scratch dir");
     let out = dir.join(label);
     let mut build_command = Command::new(pycc_bin());
     build_command.args([

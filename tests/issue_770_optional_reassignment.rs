@@ -21,6 +21,7 @@
 // `crates/pycc_mir/src/tests/stmt.rs` covers the MIR shape directly; these
 // tests cover the same fix end-to-end through the full compiler pipeline.
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -38,8 +39,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 /// Builds and runs `source`, asserting both steps succeed and stdout
 /// matches `expected`.
 fn assert_builds_and_prints(tag: &str, source: &str, expected: &str) {
-    let dir = std::env::temp_dir().join(format!("pycc_770_{tag}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new(&format!("770_{tag}")).expect("failed to create scratch dir");
     let src = write_fixture(&dir, "case.py", source);
     let out = dir.join("case");
     let build = Command::new(pycc_bin())
@@ -62,7 +62,6 @@ fn assert_builds_and_prints(tag: &str, source: &str, expected: &str) {
         expected,
         "unexpected stdout for `{tag}`"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The exact #770 review repro: `x: int | None` (no initializer), then a
@@ -97,8 +96,7 @@ fn a_plain_none_reassignment_after_a_value_less_optional_declaration_prints_true
 /// program never reaches MIR lowering at all.
 #[test]
 fn reading_a_value_less_optional_declaration_before_assignment_is_still_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_770_unbound_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("770_unbound").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "case.py", "x: int | None\nprint(x is None)\n");
     let output = Command::new(pycc_bin())
         .args(["check", src.to_str().unwrap()])
@@ -108,5 +106,4 @@ fn reading_a_value_less_optional_declaration_before_assignment_is_still_rejected
         !output.status.success(),
         "pycc check should still reject reading `x` before any assignment"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }

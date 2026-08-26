@@ -13,6 +13,7 @@
 // same `truthy` path as any other typed value, so a flipped carrier bit
 // changes which branch prints.
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -28,8 +29,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 }
 
 fn build_and_run(label: &str, source: &str) -> std::process::Output {
-    let dir = std::env::temp_dir().join(format!("pycc_issue167_{label}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new(&format!("issue167_{label}")).expect("failed to create scratch dir");
     let src = write_fixture(&dir, &format!("{label}.py"), source);
     let out = dir.join(label);
     let status = Command::new(pycc_bin())

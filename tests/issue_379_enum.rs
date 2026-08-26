@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -37,8 +38,7 @@ fn check_fails(dir: &std::path::Path, src: &std::path::Path) -> bool {
 /// #379: `Color.RED.value` returns the integer value assigned to the member.
 #[test]
 fn enum_member_value_lookup() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_value_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_value").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "value.py",
@@ -55,8 +55,7 @@ fn enum_member_value_lookup() {
 /// #379: `Color.RED.name` returns the member's name as a string.
 #[test]
 fn enum_member_name_lookup() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_name_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_name").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "name.py",
@@ -73,8 +72,7 @@ fn enum_member_name_lookup() {
 /// #379: `for c in Color:` iterates members in declaration order.
 #[test]
 fn enum_iteration_declaration_order() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_iter_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_iter").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "iter.py",
@@ -91,8 +89,7 @@ fn enum_iteration_declaration_order() {
 /// #379: a non-integer member value is rejected with C0001.
 #[test]
 fn non_integer_member_value_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_nonint_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_nonint").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "nonint.py", "class Color(Enum):\n    RED = 1.5\n");
     assert!(
         check_fails(&dir, &src),
@@ -103,8 +100,7 @@ fn non_integer_member_value_is_rejected() {
 /// #379: a duplicate member name is rejected with C0001.
 #[test]
 fn duplicate_member_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_dup_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_dup").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "dup.py",
@@ -119,8 +115,7 @@ fn duplicate_member_is_rejected() {
 /// #379: `class C(Enum, Other):` — multiple bases with Enum is rejected.
 #[test]
 fn multiple_bases_with_enum_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_multibase_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_multibase").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "multibase.py",
@@ -135,8 +130,7 @@ fn multiple_bases_with_enum_is_rejected() {
 /// #379: a method definition in an enum body is rejected.
 #[test]
 fn method_in_enum_body_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_method_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_method").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "method.py",
@@ -151,8 +145,7 @@ fn method_in_enum_body_is_rejected() {
 /// #379: enum iteration inside a function body works (nested unrolling).
 #[test]
 fn enum_iteration_inside_function() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_fniter_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_fniter").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "fniter.py",
@@ -173,8 +166,7 @@ fn enum_iteration_inside_function() {
 /// with T0044 (the existing class-attribute rejection).
 #[test]
 fn non_member_attribute_on_enum_class_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_nonmember_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_nonmember").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "nonmember.py",
@@ -190,8 +182,7 @@ fn non_member_attribute_on_enum_class_is_rejected() {
 /// cannot have type parameters.
 #[test]
 fn generic_enum_class_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_generic_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_generic").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "generic.py", "class Color[T](Enum):\n    RED = 1\n");
     assert!(
         check_fails(&dir, &src),
@@ -203,8 +194,7 @@ fn generic_enum_class_is_rejected() {
 /// is rejected.
 #[test]
 fn multiple_targets_in_enum_member_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_multitarget_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_multitarget").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "multitarget.py",
@@ -220,8 +210,7 @@ fn multiple_targets_in_enum_member_is_rejected() {
 /// access) is rejected.
 #[test]
 fn non_name_target_in_enum_member_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_nonname_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_nonname").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "nonname.py",
@@ -236,8 +225,7 @@ fn non_name_target_in_enum_member_is_rejected() {
 /// #379: an enum member value that overflows i64 is rejected.
 #[test]
 fn overflow_enum_member_value_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_overflow_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_overflow").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "overflow.py",
@@ -252,8 +240,7 @@ fn overflow_enum_member_value_is_rejected() {
 /// #379: an enum member value that is a non-literal expression is rejected.
 #[test]
 fn non_literal_enum_member_value_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_nonlit_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_nonlit").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "nonlit.py",
@@ -269,8 +256,7 @@ fn non_literal_enum_member_value_is_rejected() {
 /// is usable as a base class marker.
 #[test]
 fn from_enum_import_enum_works() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_fromimport_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_fromimport").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "fromimport.py",
@@ -288,8 +274,7 @@ fn from_enum_import_enum_works() {
 /// rejected — `Enum` is a class marker, not a first-class value.
 #[test]
 fn import_enum_dotted_enum_used_as_value_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_dottedval_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_dottedval").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "dottedval.py", "import enum\nprint(enum.Enum)\n");
     assert!(
         check_fails(&dir, &src),
@@ -301,8 +286,7 @@ fn import_enum_dotted_enum_used_as_value_is_rejected() {
 /// is a class marker, not a callable function.
 #[test]
 fn import_enum_dotted_enum_called_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_dottedcall_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_dottedcall").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "dottedcall.py", "import enum\nenum.Enum()\n");
     assert!(
         check_fails(&dir, &src),
@@ -315,8 +299,7 @@ fn import_enum_dotted_enum_called_is_rejected() {
 /// `unroll_enum_loops_in_stmts` fallback for `ForList`.
 #[test]
 fn non_enum_for_list_with_nested_enum_loop_unrolls() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_nestedlist_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_nestedlist").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "nestedlist.py",
@@ -337,8 +320,7 @@ fn non_enum_for_list_with_nested_enum_loop_unrolls() {
 /// recursive `unroll_enum_loops_in_stmts` `If` arm.
 #[test]
 fn enum_loop_nested_inside_if_unrolls() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_ifnest_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_ifnest").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "ifnest.py",
@@ -359,8 +341,7 @@ fn enum_loop_nested_inside_if_unrolls() {
 /// recursive `unroll_enum_loops_in_stmts` `While` arm.
 #[test]
 fn enum_loop_nested_inside_while_unrolls() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_whilenest_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_whilenest").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "whilenest.py",
@@ -381,8 +362,7 @@ fn enum_loop_nested_inside_while_unrolls() {
 /// exercises the recursive `unroll_enum_loops_in_stmts` `ForRange` arm.
 #[test]
 fn enum_loop_nested_inside_for_range_unrolls() {
-    let dir = std::env::temp_dir().join(format!("pycc_379_fornest_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("379_fornest").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "fornest.py",
