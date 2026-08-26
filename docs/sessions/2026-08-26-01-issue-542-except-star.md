@@ -130,15 +130,21 @@ actual source rather than trusting the bot's wording:
    pycc does not currently reject them. A new HIR/type-check validation
    seam, independent of this session's codegen fix, so it is tracked
    separately rather than folded in here.
-4. **P2, false positive (an existing, documented, deliberate decision).**
-   The bot observed that a bare `raise` inside an `except*` handler body
-   abandons later clauses instead of letting them process the remainder --
-   correct, but this is exactly D-202's existing fifth simplification (a
-   handler-body raise, new or bare re-raise, takes the same direct-to-
-   `finally` path `Try`'s own handler bodies already take). D-202 updated
-   to state explicitly that a bare re-raise takes the identical path as a
-   fresh raise, rather than a separate one, since the bot's framing implied
-   otherwise.
+4. **P2, real CPython divergence, deliberately accepted via an ADR
+   amendment (not a false positive).** The bot's own framing was accurate:
+   D-202, as originally written, documented its fifth simplification only
+   for a *new* raise inside an `except*` handler body, not a *bare*
+   re-raise, so a bare re-raise abandoning later clauses instead of letting
+   them process the remainder was a real, undocumented gap relative to
+   CPython. The resolution was to extend D-202 to state explicitly that a
+   bare re-raise takes the identical direct-to-`finally` path a fresh raise
+   already takes, rather than filing a separate tracking issue -- because
+   this is accepted runtime semantics (an ADR amendment records a
+   deliberate narrowing), not a validation gap the type checker should
+   reject (which is what earned findings 3 and 5 issue #795 instead). That
+   is the discriminator used throughout this pass: a gap in what pycc
+   *rejects* becomes a tracked issue; a gap in what pycc's own design
+   record *says* about accepted runtime behavior becomes an ADR amendment.
 5. **P2, real gap, deferred to the same new issue as (3).** `except*
    ExceptionGroup:` / `except* BaseExceptionGroup:` should be rejected
    (CPython raises `TypeError`), but pycc currently accepts them since both
@@ -173,17 +179,24 @@ before pushing as a fast-forward (`345dbac6..83bbb0e9`).
 - `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions
   100`: **100.00% lines / 100.00% regions** (45958 regions, 29652 lines, 0
   missed) against `83bbb0e9`.
-- CI on `345dbac6` (the pre-P1-fix head) had gone green previously; CI on
-  the current head `83bbb0e9` needs a fresh run before merge -- not yet
-  observed by this session at the time of this writing.
+- The current head is `1f3f216b`, a docs-only commit (this file's own
+  in-place correction, see the "Status" section above) layered directly on
+  top of gate-verified `83bbb0e9` with no code changes in between, so the
+  gate results above still apply unchanged to `1f3f216b`.
+- CI on `345dbac6` (an earlier, pre-P1-fix head) had gone green previously;
+  CI on `1f3f216b` needs a fresh run before merge -- not yet observed
+  green by this session at the time of this writing.
 
 ## Where to resume
 
-Not yet merged. Remaining steps: watch CI go green on `83bbb0e9`, resolve
+Not yet merged. Remaining steps: watch CI go green on `1f3f216b`, resolve
 the five external-bot review threads (reply confirming what was fixed vs.
-what was deferred to #795, per the second-pass findings above), confirm
-no unresolved review threads remain, merge PR #794 (verify via GraphQL
-`closingIssuesReferences` that it closes exactly #542 first), then run
+what was deferred to #795 vs. what was accepted as a documented D-202
+divergence, per the second-pass findings above), confirm no unresolved
+review threads remain (required by this repository's branch protection,
+independent of whether AGENTS.md treats an external bot as a required
+gate), merge PR #794 (verify via GraphQL `closingIssuesReferences` that it
+closes exactly #542 first), then run
 `python3 scripts/check_conformance_breadth.py` against the merged
 `origin/main` tip to check v0.3's Accept criteria.
 
