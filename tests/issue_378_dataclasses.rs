@@ -6,6 +6,7 @@
 // binary, and checking stdout. Error-path tests verify that unsupported
 // shapes produce C0001 diagnostics.
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -47,8 +48,7 @@ fn check_fails(dir: &std::path::Path, src: &std::path::Path) -> bool {
 /// them back.
 #[test]
 fn dataclass_basic_constructor() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_basic_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_basic").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "basic.py",
@@ -65,8 +65,7 @@ fn dataclass_basic_constructor() {
 /// #378: auto-generated `__repr__` produces `ClassName(field=value, ...)`.
 #[test]
 fn dataclass_repr() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_repr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_repr").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "repr.py",
@@ -84,8 +83,7 @@ fn dataclass_repr() {
 /// equal, different-field instances are not.
 #[test]
 fn dataclass_equality() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_eq_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_eq").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "eq.py",
@@ -105,8 +103,7 @@ fn dataclass_equality() {
 /// #378: dataclass inheritance merges parent fields before child fields.
 #[test]
 fn dataclass_inheritance() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_inh_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_inh").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "inh.py",
@@ -127,8 +124,7 @@ fn dataclass_inheritance() {
 /// participate in `__eq__`.
 #[test]
 fn dataclass_inheritance_equality() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_inh_eq_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_inh_eq").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "inh_eq.py",
@@ -148,8 +144,7 @@ fn dataclass_inheritance_equality() {
 /// #378 (PEP 681): `@dataclass_transform()` is equivalent to `@dataclass`.
 #[test]
 fn dataclass_transform_equivalent() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_dct_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_dct").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "dct.py",
@@ -169,8 +164,7 @@ fn dataclass_transform_equivalent() {
 /// #378: a non-dataclass class decorator is rejected with C0001.
 #[test]
 fn reject_non_dataclass_decorator() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_deco_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_deco").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_deco.py",
@@ -185,8 +179,7 @@ fn reject_non_dataclass_decorator() {
 /// #378: `@dataclass(frozen=True)` is rejected with C0001.
 #[test]
 fn reject_dataclass_with_options() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_frozen_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_frozen").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_frozen.py",
@@ -201,8 +194,7 @@ fn reject_dataclass_with_options() {
 /// #378: `field(default=...)` is rejected with C0001.
 #[test]
 fn reject_field_default() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_field_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_field").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_field.py",
@@ -217,8 +209,7 @@ fn reject_field_default() {
 /// #378: `field(default_factory=...)` is rejected with C0001.
 #[test]
 fn reject_field_default_factory() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_factory_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_factory").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_factory.py",
@@ -233,8 +224,7 @@ fn reject_field_default_factory() {
 /// #378: a plain default value (`x: int = 42`) is rejected with C0001.
 #[test]
 fn reject_plain_default() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_plain_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_plain").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_plain.py",
@@ -249,8 +239,7 @@ fn reject_plain_default() {
 /// #378: an explicit `__init__` in a `@dataclass` is rejected with C0001.
 #[test]
 fn reject_explicit_init() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_init_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_init").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_init.py",
@@ -265,8 +254,7 @@ fn reject_explicit_init() {
 /// #378: a `@dataclass` inheriting from a non-dataclass base is rejected.
 #[test]
 fn reject_non_dataclass_base() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_base_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_base").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_base.py",
@@ -281,8 +269,7 @@ fn reject_non_dataclass_base() {
 /// #378: an explicit `__eq__` in a `@dataclass` is rejected with C0001.
 #[test]
 fn reject_explicit_eq() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_eq_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_eq").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_eq.py",
@@ -297,8 +284,7 @@ fn reject_explicit_eq() {
 /// #378: an explicit `__repr__` in a `@dataclass` is rejected with C0001.
 #[test]
 fn reject_explicit_repr() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_repr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_repr").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_repr.py",
@@ -313,8 +299,7 @@ fn reject_explicit_repr() {
 /// #378: multiple class decorators are rejected with C0001.
 #[test]
 fn reject_multiple_decorators() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_multi_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_multi").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_multi.py",
@@ -329,8 +314,7 @@ fn reject_multiple_decorators() {
 /// #378: a non-name target in a dataclass field annotation is rejected.
 #[test]
 fn reject_non_name_field_target() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_target_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_target").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_target.py",
@@ -346,8 +330,7 @@ fn reject_non_name_field_target() {
 /// `__eq__` always returns True, `__repr__` returns `ClassName()`.
 #[test]
 fn zero_field_dataclass() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_zero_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_zero").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "zero.py",
@@ -367,8 +350,7 @@ fn zero_field_dataclass() {
 /// #378: f-string interpolation of a dataclass instance uses `__repr__`.
 #[test]
 fn dataclass_fstring_interpolation() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_fstr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_fstr").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "fstr.py",
@@ -388,8 +370,7 @@ fn dataclass_fstring_interpolation() {
 /// #378: a float field in a dataclass works with repr and equality.
 #[test]
 fn dataclass_float_field() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_float_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_float").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "float.py",
@@ -411,8 +392,7 @@ fn dataclass_float_field() {
 /// `__gt__`/`__ge__` dispatch.
 #[test]
 fn reject_ordering_between_dataclass_instances() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_ordering_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_ordering").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_ordering.py",
@@ -430,8 +410,7 @@ fn reject_ordering_between_dataclass_instances() {
 /// signature).
 #[test]
 fn reject_eq_between_non_dataclass_instances_with_user_eq() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_nondc_eq_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_nondc_eq").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_nondc_eq.py",
@@ -450,8 +429,7 @@ fn reject_eq_between_non_dataclass_instances_with_user_eq() {
 /// "internal error" message; the check rejects it cleanly at HIR time.
 #[test]
 fn reject_self_referential_dataclass_field() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_self_ref_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_self_ref").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_self_ref.py",
@@ -468,8 +446,7 @@ fn reject_self_referential_dataclass_field() {
 /// same non-scalar case as a self-referential class-name field.
 #[test]
 fn reject_self_typed_dataclass_field() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_self_typed_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_self_typed").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_self_typed.py",
@@ -485,8 +462,7 @@ fn reject_self_typed_dataclass_field() {
 /// -- `None` is not a scalar slot type.
 #[test]
 fn reject_none_typed_dataclass_field() {
-    let dir = std::env::temp_dir().join(format!("pycc_378_rej_none_field_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("378_rej_none_field").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "rej_none_field.py",

@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -34,8 +35,7 @@ fn build_and_run(dir: &std::path::Path, name: &str, source: &str) -> (bool, Vec<
 /// assignment to a protocol-typed variable compiles and runs.
 #[test]
 fn protocol_basic_conformance_compiles() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_basic_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_basic").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -60,14 +60,12 @@ c: Drawable = Circle()
         status.success(),
         "pycc build should succeed for basic protocol conformance"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: A protocol with an attribute, and a conforming class.
 #[test]
 fn protocol_attribute_conformance_compiles() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_attr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_attr").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -90,15 +88,13 @@ p: Named = Person()
         status.success(),
         "pycc build should succeed for protocol attribute conformance"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: Protocol inheritance — a sub-protocol extends a base protocol,
 /// and a class conforming to the sub-protocol compiles.
 #[test]
 fn protocol_inheritance_compiles() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_inh_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_inh").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -128,15 +124,13 @@ e: Extended = Impl()
         status.success(),
         "pycc build should succeed for protocol inheritance"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: A protocol-typed function parameter — calling the function
 /// with a conforming class instance compiles and runs.
 #[test]
 fn protocol_typed_parameter_compiles() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_param_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_param").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -161,7 +155,6 @@ say_hello(English())
         String::from_utf8_lossy(&stderr)
     );
     assert_eq!(stdout, b"hello\n");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ===========================================================================
@@ -171,8 +164,7 @@ say_hello(English())
 /// #380: A class missing a required protocol method triggers T0046.
 #[test]
 fn protocol_missing_method_emits_t0046() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_missing_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_missing").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -208,14 +200,12 @@ s: Drawable = Square()
         stderr.contains("missing") || stderr.contains("does not conform"),
         "should mention missing method or non-conformance, got: {stderr}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: A class with a method with the wrong return type triggers T0046.
 #[test]
 fn protocol_wrong_return_type_emits_t0046() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_wr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_wr").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -249,14 +239,12 @@ s: IntProducer = StrProducer()
         stderr.contains("T0046"),
         "should emit T0046, got stderr: {stderr}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: A class missing a required protocol attribute triggers T0046.
 #[test]
 fn protocol_missing_attribute_emits_t0046() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_miss_attr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_miss_attr").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -288,7 +276,6 @@ n: Named = Anon()
         stderr.contains("T0046"),
         "should emit T0046, got stderr: {stderr}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ===========================================================================
@@ -299,8 +286,7 @@ n: Named = Anon()
 /// for a conforming class.
 #[test]
 fn runtime_checkable_isinstance_true() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_rt_true_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_rt_true").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol, runtime_checkable
 
@@ -324,15 +310,13 @@ print(isinstance(c, Drawable))
         String::from_utf8_lossy(&stderr)
     );
     assert_eq!(stdout, b"True\n");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: `isinstance` with a `@runtime_checkable` protocol returns False
 /// for a non-conforming class.
 #[test]
 fn runtime_checkable_isinstance_false() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_rt_false_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_rt_false").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol, runtime_checkable
 
@@ -354,15 +338,13 @@ print(isinstance(s, Drawable))
         String::from_utf8_lossy(&stderr)
     );
     assert_eq!(stdout, b"False\n");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: `isinstance` against a non-`@runtime_checkable` protocol is
 /// rejected at compile time.
 #[test]
 fn isinstance_non_runtime_checkable_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_rt_rej_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_rt_rej").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -397,14 +379,12 @@ print(isinstance(c, Drawable))
         stderr.contains("runtime_checkable"),
         "should mention runtime_checkable, got: {stderr}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: `issubclass` with a protocol is rejected.
 #[test]
 fn issubclass_with_protocol_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_iss_rej_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_iss_rej").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol, runtime_checkable
 
@@ -439,7 +419,6 @@ print(issubclass(Circle, Drawable))
         stderr.contains("issubclass") && stderr.contains("protocol"),
         "should mention issubclass and protocol, got: {stderr}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ===========================================================================
@@ -450,8 +429,7 @@ print(issubclass(Circle, Drawable))
 /// protocol's declared return type and compiles.
 #[test]
 fn protocol_typed_variable_method_call() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_mcall_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_mcall").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -474,7 +452,6 @@ print(c.get_value())
         String::from_utf8_lossy(&stderr)
     );
     assert_eq!(stdout, b"42\n");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: Calling a protocol-typed variable's method with the wrong
@@ -482,8 +459,7 @@ print(c.get_value())
 /// path in the protocol method-call arm of `resolve_method_call`.
 #[test]
 fn protocol_typed_variable_method_call_wrong_arity_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_marity_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_marity").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -513,14 +489,12 @@ print(c.get_value(99))
         !out.status.success(),
         "pycc build should fail for protocol method call with wrong arity"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: Reading a protocol attribute on a protocol-typed variable.
 #[test]
 fn protocol_typed_variable_attribute_read() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_aread_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_aread").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -541,7 +515,6 @@ print(p.name)
         String::from_utf8_lossy(&stderr)
     );
     assert_eq!(stdout, b"Bob\n");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ===========================================================================
@@ -552,8 +525,7 @@ print(p.name)
 /// overrides the abstract method compiles.
 #[test]
 fn abc_abstract_method_override_compiles() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_abc_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_abc").expect("failed to create scratch dir");
     let source = "\
 from abc import ABC, abstractmethod
 
@@ -579,15 +551,13 @@ print(d.sound())
         String::from_utf8_lossy(&stderr)
     );
     assert_eq!(stdout, b"woof\n");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: An ABC with an @abstractmethod — a subclass that does NOT
 /// override the abstract method is rejected.
 #[test]
 fn abc_abstract_method_not_overridden_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_abc_no_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_abc_no").expect("failed to create scratch dir");
     let source = "\
 from abc import ABC, abstractmethod
 
@@ -622,15 +592,13 @@ c = Cat()
         stderr.contains("abstract"),
         "should mention abstract, got: {stderr}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: An abstract class (with unoverridden abstract methods) can be
 /// subclassed but not instantiated directly.
 #[test]
 fn abc_cannot_instantiate_abstract_class() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_abc_inst_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_abc_inst").expect("failed to create scratch dir");
     let source = "\
 from abc import ABC, abstractmethod
 
@@ -661,7 +629,6 @@ a = Animal()
         stderr.contains("abstract"),
         "should mention abstract, got: {stderr}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ===========================================================================
@@ -672,8 +639,7 @@ a = Animal()
 /// `pass`) is rejected.
 #[test]
 fn protocol_method_with_body_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_body_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_body").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -695,7 +661,6 @@ class P(Protocol):
         !out.status.success(),
         "pycc build should fail for protocol method with body"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: A protocol method with a docstring body (a non-ellipsis
@@ -703,8 +668,7 @@ class P(Protocol):
 /// return `false` for `Stmt::Expr` variants other than `EllipsisLiteral`.
 #[test]
 fn protocol_method_with_docstring_body_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_doc_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_doc").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -726,14 +690,12 @@ class P(Protocol):
         !out.status.success(),
         "pycc build should fail for protocol method with docstring body"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: A protocol attribute with a default value is rejected.
 #[test]
 fn protocol_attribute_with_default_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_def_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_def").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -754,14 +716,12 @@ class P(Protocol):
         !out.status.success(),
         "pycc build should fail for protocol attribute with default"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: `@runtime_checkable` on a non-protocol class is rejected.
 #[test]
 fn runtime_checkable_on_non_protocol_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_rt_np_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_rt_np").expect("failed to create scratch dir");
     let source = "\
 from typing import runtime_checkable
 
@@ -789,15 +749,13 @@ class C:
         stderr.contains("runtime_checkable") && stderr.contains("protocol"),
         "should mention runtime_checkable and protocol, got: {stderr}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #380: Protocol-to-protocol assignability — assigning a sub-protocol
 /// typed value to a base-protocol typed variable compiles.
 #[test]
 fn protocol_to_protocol_assignability() {
-    let dir = std::env::temp_dir().join(format!("pycc_380_p2p_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("380_p2p").expect("failed to create scratch dir");
     let source = "\
 from typing import Protocol
 
@@ -828,5 +786,4 @@ b: Base = s
         status.success(),
         "pycc build should succeed for protocol-to-protocol assignment"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }

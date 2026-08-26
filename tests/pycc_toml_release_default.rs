@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::process::Command;
 
 fn pycc_bin() -> std::path::PathBuf {
@@ -40,9 +41,7 @@ fn pycc_bin() -> std::path::PathBuf {
 /// relative-read route through the real CLI doesn't panic or exit non-zero.
 #[test]
 fn build_with_a_relative_path_and_neighboring_pycc_toml_still_produces_a_running_binary() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_toml_release_default_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("toml_release_default").expect("failed to create scratch dir");
     std::fs::write(
         dir.join("main.py"),
         "def main() -> None:\n    print(42)\n\nmain()\n",
@@ -64,7 +63,7 @@ fn build_with_a_relative_path_and_neighboring_pycc_toml_still_produces_a_running
     // passing an absolute path.
     let status = Command::new(pycc_bin())
         .args(["build", "main.py", "-o", out.to_str().unwrap()])
-        .current_dir(&dir)
+        .current_dir(&*dir)
         .status()
         .unwrap();
     assert!(
@@ -75,6 +74,4 @@ fn build_with_a_relative_path_and_neighboring_pycc_toml_still_produces_a_running
 
     let output = Command::new(&out).output().unwrap();
     assert_eq!(output.stdout, b"42\n");
-
-    std::fs::remove_dir_all(&dir).ok();
 }

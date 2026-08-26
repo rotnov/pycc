@@ -11,6 +11,7 @@
 // never checked (proven by a body that would otherwise fail to compile),
 // and the live `else` branch is checked and executed normally.
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -32,8 +33,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 /// if it were ever lowered -- is skipped entirely, so `pycc check` succeeds.
 #[test]
 fn bare_type_checking_guard_with_an_unsupported_body_checks_successfully() {
-    let dir = std::env::temp_dir().join(format!("pycc_790_bare_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("790_bare").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "bare.py",
@@ -49,15 +49,13 @@ fn bare_type_checking_guard_with_an_unsupported_body_checks_successfully() {
          otherwise-unsupported body; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #790: the qualified `import typing; if typing.TYPE_CHECKING:` spelling
 /// gets the identical fold as the bare-name form above.
 #[test]
 fn qualified_type_checking_guard_with_an_unsupported_body_checks_successfully() {
-    let dir = std::env::temp_dir().join(format!("pycc_790_qualified_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("790_qualified").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "qualified.py",
@@ -73,7 +71,6 @@ fn qualified_type_checking_guard_with_an_unsupported_body_checks_successfully() 
          otherwise-unsupported body; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #790: the `TYPE_CHECKING` guard's body never executes, but its `else`
@@ -83,8 +80,7 @@ fn qualified_type_checking_guard_with_an_unsupported_body_checks_successfully() 
 /// prints.
 #[test]
 fn the_else_branch_of_a_type_checking_guard_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_790_else_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("790_else").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "with_else.py",
@@ -111,7 +107,6 @@ fn the_else_branch_of_a_type_checking_guard_builds_and_runs() {
         "else\n",
         "only the live `else` branch should ever execute"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #790: `elif TYPE_CHECKING:` gets the same constant-fold as a leading `if
@@ -120,8 +115,7 @@ fn the_else_branch_of_a_type_checking_guard_builds_and_runs() {
 /// unsupported body is never checked, and the final `else` runs.
 #[test]
 fn elif_type_checking_guard_with_an_unsupported_body_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_790_elif_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("790_elif").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "elif.py",
@@ -148,7 +142,6 @@ fn elif_type_checking_guard_with_an_unsupported_body_builds_and_runs() {
         "else\n",
         "only the final live `else` branch should ever execute"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #791 D-068 review finding: every other test in this file exercises the
@@ -159,8 +152,7 @@ fn elif_type_checking_guard_with_an_unsupported_body_builds_and_runs() {
 /// genuine no-op, not just that `check` accepts it.
 #[test]
 fn a_bare_type_checking_guard_with_no_else_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_790_bare_no_else_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("790_bare_no_else").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "bare_no_else.py",
@@ -188,7 +180,6 @@ fn a_bare_type_checking_guard_with_no_else_builds_and_runs() {
         "the folded guard's empty body/orelse must be a genuine no-op, and the \
          statement after the guard must still execute"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #790: `TYPE_CHECKING` referenced as a first-class value (not the test of
@@ -196,8 +187,7 @@ fn a_bare_type_checking_guard_with_no_else_builds_and_runs() {
 /// marker for exactly one purpose, not a general-purpose boolean.
 #[test]
 fn type_checking_used_as_a_value_is_rejected_before_build() {
-    let dir = std::env::temp_dir().join(format!("pycc_790_value_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("790_value").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "as_value.py",
@@ -216,5 +206,4 @@ fn type_checking_used_as_a_value_is_rejected_before_build() {
         stdout.contains("T0021") && stdout.contains("compile-time marker"),
         "expected a T0021 compile-time-marker diagnostic, got: {stdout}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }

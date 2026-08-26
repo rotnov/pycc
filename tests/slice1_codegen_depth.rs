@@ -1,4 +1,5 @@
 use pycc_mir::{BinOpKind, MirExpr, MirItem, MirModule, MirStmt, Ty};
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
@@ -15,8 +16,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 }
 
 fn build_and_run(label: &str, source: &str) -> std::process::Output {
-    let dir = std::env::temp_dir().join(format!("pycc_slice1_{label}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new(&format!("slice1_{label}")).expect("failed to create scratch dir");
     let src = write_fixture(&dir, &format!("{label}.py"), source);
     let out = dir.join(label);
     let status = Command::new(pycc_bin())
@@ -32,8 +32,7 @@ fn build_and_run(label: &str, source: &str) -> std::process::Output {
 /// strict AOT frontend now rejects maybe-unbound reads at compile time
 /// (T0041) rather than leaving them for runtime traps.
 fn build_and_expect_compile_error(label: &str, source: &str, expected_code: &str) {
-    let dir = std::env::temp_dir().join(format!("pycc_slice1_{label}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new(&format!("slice1_{label}")).expect("failed to create scratch dir");
     let src = write_fixture(&dir, &format!("{label}.py"), source);
     let out = dir.join(label);
     let output = Command::new(pycc_bin())
@@ -52,8 +51,8 @@ fn build_and_expect_compile_error(label: &str, source: &str, expected_code: &str
 }
 
 fn compile_mir(label: &str, mir: &MirModule) -> Result<(), String> {
-    let dir = std::env::temp_dir().join(format!("pycc_slice1_mir_{label}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new(&format!("slice1_mir_{label}"))
+        .expect("failed to create scratch dir");
     pycc_codegen::compile_to_object(mir, &dir.join(format!("{label}.o")), None, false)
 }
 
@@ -1170,11 +1169,8 @@ def _run() -> None:
 _run()
 "
         );
-        let dir = std::env::temp_dir().join(format!(
-            "pycc_slice1_{label}_{pid}",
-            pid = std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new(&format!("slice1_{label}"))
+            .expect("failed to create scratch dir");
         let src = write_fixture(&dir, &format!("{label}.py"), &source);
         let output = Command::new(pycc_bin())
             .args([

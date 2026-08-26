@@ -17,6 +17,7 @@
 //!   #148 they were unreachable from a literal, so their current behavior is
 //!   pinned here too.
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -39,8 +40,7 @@ fn pycc_bin() -> std::path::PathBuf {
 /// reports no exit code at all. The `101` in `docs/CLI_SPEC.md`'s boundary
 /// list is the driver's own mapping of that abort.
 fn assert_runtime_abort(case: &str, source: &str, message: &str) {
-    let dir = std::env::temp_dir().join(format!("pycc_issue148_{case}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new(&format!("issue148_{case}")).expect("failed to create scratch dir");
     let src = dir.join("case.py");
     std::fs::File::create(&src)
         .unwrap()
@@ -151,8 +151,7 @@ fn an_oversized_literal_as_a_range_argument_no_longer_hits_the_runtime_int_bound
     // The success paths themselves live in
     // `tests/issue_147_bigint_range.rs`; this case stays here so the #148
     // boundary inventory records which position left the list and why.
-    let dir = std::env::temp_dir().join(format!("pycc_issue148_range_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue148_range").expect("failed to create scratch dir");
     let src = dir.join("range.py");
     std::fs::File::create(&src)
         .unwrap()
@@ -232,8 +231,7 @@ fn bigint_operations_unreachable_before_issue_148_keep_their_accepted_boundaries
 
 #[test]
 fn a_literal_outside_i64_range_is_still_a_spanned_capability_diagnostic() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue148_beyond_i64_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue148_beyond_i64").expect("failed to create scratch dir");
     let src = dir.join("beyond.py");
     std::fs::File::create(&src)
         .unwrap()

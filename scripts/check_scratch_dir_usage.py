@@ -28,8 +28,10 @@ Two allowances, both narrow and deliberate:
   filename list -- see below). A file not in `ALLOWLIST` is held to the new
   rule from the moment this check merges: any occurrence at all is a
   violation. A file that *is* in `ALLOWLIST` may keep its existing
-  occurrences (migrating them off `temp_dir().join(...)` is Part 2's job,
-  tracked by https://github.com/rotnov/pycc/issues/779); its count is
+  occurrences; Part 2 (#782) has since migrated every test-file entry off
+  the banned pattern, so the sole remaining entry is `src/main.rs`'s two
+  production call sites, Part 3's job, tracked by
+  https://github.com/rotnov/pycc/issues/783. An entry's count is
   intended to only stay the same or go down on any later pull request --
   never up. That intent is a review convention, not something this script
   mechanically enforces across commits: this check only compares the
@@ -84,8 +86,9 @@ EXEMPT_FILES = frozenset({"crates/pycc_scratch/src/lib.rs"})
 
 # One-time snapshot generated mechanically at Part 1's (#781's) own merge
 # commit via `git ls-files '*.rs'` piped through a count of this script's own
-# pattern match per file (see the docstring above). Every entry here is a
-# file Part 2 (#782) or Part 3 (#783) still needs to migrate.
+# pattern match per file (see the docstring above). Part 2 (#782) migrated
+# every test-file entry, so the sole remaining entry is `src/main.rs`,
+# owned by Part 3 (#783).
 #
 # `src/main.rs`'s count of 2 (down from the snapshot's 7 after #782's
 # Batch B migrated all five of its test-only sites and removed
@@ -96,70 +99,7 @@ EXEMPT_FILES = frozenset({"crates/pycc_scratch/src/lib.rs"})
 # object `try_build` wrote needs no second raw call site -- and `run`'s
 # output path.
 ALLOWLIST: dict[str, int] = {
-    # Added post-snapshot: `main` merged issue #150's fix (a `tests/`
-    # integration test using the raw pattern) after Part 1's original
-    # snapshot commit but before this PR's own merge onto `main` during a
-    # rebase. The snapshot's definition is "every file containing the
-    # pattern at the commit where the gate takes effect" -- that commit is
-    # this rebased merge, not the pre-rebase branch tip -- so recording this
-    # file here fulfills the snapshot rather than breaching its "one-time"
-    # property (see D-201). Migrating it was out of scope for that PR: it
-    # would have required adding `pycc_scratch` back as a root
-    # `[dev-dependencies]` entry, which f79bb2b5 tried and reverted
-    # because it tripped D-091's bench-manifest fingerprint gate in
-    # `frontend-perf-measure`. D-203 has since narrowed that gate to
-    # tolerate exactly the pycc_scratch root dev-dependency line, and the
-    # dev-dependency landed with D-203's activation, so the blocker is
-    # resolved. It stays tracked under #782's Part 2 migration scope
-    # alongside every other entry below.
-    "tests/issue_150_zero_step_range.rs": 1,
-    # D-068 re-review of #780 (rebase onto #786's `pycc_scratch` landing):
-    # same blocker as `tests/issue_150_zero_step_range.rs` immediately
-    # above -- migrating this file's own raw-`temp_dir` call would have
-    # required adding `pycc_scratch` back as a root `[dev-dependencies]`
-    # entry, which `f9231e2f` tried and reverted because it tripped D-091's
-    # bench-manifest fingerprint gate in `frontend-perf-measure`. That
-    # blocker is likewise resolved by D-203's narrowing. Tracked under the
-    # same #782 Part 2 migration scope.
-    "tests/issue_769_optional_narrowing.rs": 1,
     "src/main.rs": 2,
-    "tests/conformance.rs": 1,
-    "tests/container_methods1_codegen_depth.rs": 1,
-    "tests/issue_146_bigint_release.rs": 2,
-    "tests/issue_147_bigint_range.rs": 1,
-    "tests/issue_148_oversized_int_literal.rs": 3,
-    "tests/issue_167_none_carrier_abi.rs": 1,
-    "tests/issue_22_execution_order.rs": 15,
-    "tests/issue_377_property.rs": 8,
-    "tests/issue_378_dataclasses.rs": 25,
-    "tests/issue_379_enum.rs": 21,
-    "tests/issue_380_protocols.rs": 22,
-    "tests/issue_381_match.rs": 20,
-    "tests/issue_386_class_method_redefinition.rs": 8,
-    "tests/issue_432_inheritance.rs": 11,
-    "tests/issue_433_super.rs": 15,
-    "tests/issue_436_classmethod_staticmethod.rs": 18,
-    "tests/issue_575_str_repetition.rs": 2,
-    "tests/issue_603_unary_general_operand.rs": 1,
-    "tests/issue_630_pycc_rt_build_dependency.rs": 1,
-    "tests/issue_702_user_exceptions.rs": 1,
-    "tests/issue_739_oserror_hierarchy.rs": 1,
-    "tests/issue_740_multi_type_except.rs": 1,
-    "tests/issue_762_typing_final_annotated.rs": 3,
-    "tests/issue_767_typing_cast.rs": 6,
-    "tests/issue_770_optional_reassignment.rs": 2,
-    # Same D-091 blocker as `tests/issue_769_optional_narrowing.rs` and
-    # `tests/issue_767_typing_cast.rs` above: this file's raw-`temp_dir` call
-    # sites cannot migrate to `pycc_scratch::ScratchDir` without adding
-    # `pycc_scratch` back as a root `[dev-dependencies]` entry, which
-    # `f79bb2b5` already tried and reverted because it trips D-091's
-    # bench-manifest fingerprint gate in `frontend-perf-measure`. Tracked
-    # under the same #782 Part 2 migration scope.
-    "tests/issue_790_typing_type_checking.rs": 6,
-    "tests/nbody_bench.rs": 1,
-    "tests/pycc_toml_release_default.rs": 1,
-    "tests/quick_start.rs": 1,
-    "tests/slice1_codegen_depth.rs": 4,
 }
 
 # Tolerant of whitespace/line breaks between `temp_dir()` and `.join(`, since

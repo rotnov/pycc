@@ -17,6 +17,7 @@
 //!   and that boundary is pinned here so a later change cannot silently
 //!   widen the fix's scope without updating this file.
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -28,21 +29,23 @@ fn pycc_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_pycc"))
 }
 
-fn write_case(case: &str, source: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pycc_issue147_{case}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+/// Writes `source` into a fresh scratch directory and returns the directory
+/// handle together with the source path. The caller must keep the handle
+/// alive while the path is in use -- dropping it removes the directory.
+fn write_case(case: &str, source: &str) -> (ScratchDir, std::path::PathBuf) {
+    let dir = ScratchDir::new(&format!("issue147_{case}")).expect("failed to create scratch dir");
     let src = dir.join("case.py");
     std::fs::File::create(&src)
         .unwrap()
         .write_all(source.as_bytes())
         .unwrap();
-    src
+    (dir, src)
 }
 
 /// Runs `source` through `pycc run` and asserts it exits `0` with exactly
 /// `expected` on stdout.
 fn assert_runs_and_prints(case: &str, source: &str, expected: &str) {
-    let src = write_case(case, source);
+    let (_dir, src) = write_case(case, source);
     let run = Command::new(pycc_bin())
         .args(["run", src.to_str().unwrap()])
         .output()
@@ -73,7 +76,7 @@ fn assert_runs_and_prints(case: &str, source: &str, expected: &str) {
 /// code: no panic/backtrace text may leak across the
 /// `pycc_rt_range_continue` `extern "C"` boundary.
 fn assert_clean_value_error(case: &str, source: &str, message: &str) {
-    let src = write_case(case, source);
+    let (_dir, src) = write_case(case, source);
     let run = Command::new(pycc_bin())
         .args(["run", src.to_str().unwrap()])
         .output()
@@ -102,7 +105,7 @@ fn assert_clean_value_error(case: &str, source: &str, message: &str) {
 /// non-unwinding process abort, so the raw child reports no exit code at
 /// all. The `101` is the driver's own mapping of that abort.
 fn assert_runtime_abort(case: &str, source: &str, message: &str) {
-    let src = write_case(case, source);
+    let (_dir, src) = write_case(case, source);
     let run = Command::new(pycc_bin())
         .args(["run", src.to_str().unwrap()])
         .output()

@@ -20,6 +20,7 @@
 //!   invisible to every value assertion above. The ratio test at the bottom
 //!   of this file is the one that fails loudly for it.
 
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -31,21 +32,23 @@ fn pycc_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_pycc"))
 }
 
-fn write_case(case: &str, source: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pycc_issue146_{case}_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+/// Writes `source` into a fresh scratch directory and returns the directory
+/// handle together with the source path. The caller must keep the handle
+/// alive while the path is in use -- dropping it removes the directory.
+fn write_case(case: &str, source: &str) -> (ScratchDir, std::path::PathBuf) {
+    let dir = ScratchDir::new(&format!("issue146_{case}")).expect("failed to create scratch dir");
     let src = dir.join("case.py");
     std::fs::File::create(&src)
         .unwrap()
         .write_all(source.as_bytes())
         .unwrap();
-    src
+    (dir, src)
 }
 
 /// Runs `source` through `pycc run` and asserts it exits `0` with exactly
 /// `expected` on stdout.
 fn assert_runs_and_prints(case: &str, source: &str, expected: &str) {
-    let src = write_case(case, source);
+    let (_dir, src) = write_case(case, source);
     let run = Command::new(pycc_bin())
         .args(["run", src.to_str().unwrap()])
         .output()
@@ -617,9 +620,8 @@ mod peak_rss {
     /// own peak RSS -- never `pycc run`'s, whose footprint is dominated by
     /// LLVM and would swamp the signal.
     fn built_program_peak_rss(case: &str, source: &str) -> libc::c_long {
-        let src = write_case(case, source);
-        let bin =
-            std::env::temp_dir().join(format!("pycc_issue146_rss_{case}_{}", std::process::id()));
+        let (dir, src) = write_case(case, source);
+        let bin = dir.join(format!("{case}_rss"));
         let build = Command::new(pycc_bin())
             .arg("build")
             .arg(&src)

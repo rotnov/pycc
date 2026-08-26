@@ -1137,26 +1137,22 @@ when Part 1 merged. It is a textual pattern match, not a data-flow
 analysis — see the script's own docstring for the accepted scope
 limitation.
 
-**This section describes the pattern going forward, not the state of the
-existing tree.** Part 1 (#781) adds `pycc_scratch` and the lint above but
-does not migrate any of the ~384 `ALLOWLIST`-tracked raw call sites, and
-does not change `src/main.rs`'s two production leaks (`try_build`'s
-`pycc_obj_*` object file, `run`'s `pycc_run_*` executable) at all. One
-exception: `crates/pycc_codegen/src/tests_support.rs` (the `TempTestDir`/
-`tempfile_dir` wrapper described above) was never part of the `ALLOWLIST`
+**This section describes the state of the tree's test code, not just the
+pattern going forward.** Part 1 (#781) added `pycc_scratch` and the lint
+above, and retired `crates/pycc_codegen/src/tests_support.rs`'s
+`TempTestDir`/`tempfile_dir` wrapper (never part of the `ALLOWLIST`
 backlog — it already wrapped the raw pattern behind its own helper, so the
-lint never saw it — and this PR's rebase conflict resolution retired it
-directly onto `ScratchDir` rather than reconciling two divergent copies of
-code already slated for deletion; `tests_support.rs` no longer exists in
-the tree, and every call site in `crates/pycc_codegen/src/tests.rs` and
-`bigint_rc.rs` now calls `pycc_scratch::ScratchDir::new(...)`. Migrating
-the remaining `ALLOWLIST`-tracked call sites in other crates onto
-`ScratchDir` is Part 2 ([#782](https://github.com/rotnov/pycc/issues/782));
-fixing the two production leaks is Part 3
-([#783](https://github.com/rotnov/pycc/issues/783)) — both tracked under
-the parent [#779](https://github.com/rotnov/pycc/issues/779). Until those
-land, most of the tree's scratch-directory handling still predates this
-section.
+lint never saw it) directly onto `ScratchDir`; `tests_support.rs` no longer
+exists in the tree. Part 2
+([#782](https://github.com/rotnov/pycc/issues/782)) then migrated every
+`ALLOWLIST`-tracked test call site onto
+`ScratchDir`, so the snapshot allowlist in
+`scripts/check_scratch_dir_usage.py` now holds exactly one entry:
+`src/main.rs`'s two production call sites (`try_build`'s `pycc_obj_*`
+object file, `run`'s `pycc_run_*` executable), which stay raw until Part 3
+([#783](https://github.com/rotnov/pycc/issues/783)) rewrites them — tracked,
+like the rest, under the parent
+[#779](https://github.com/rotnov/pycc/issues/779).
 
 ## Meta
 

@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -17,8 +18,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 /// the MRO, which lists the derived class first).
 #[test]
 fn method_override_resolves_to_derived_class() {
-    let dir = std::env::temp_dir().join(format!("pycc_432_override_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("432_override").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "override.py",
@@ -48,8 +48,7 @@ fn method_override_resolves_to_derived_class() {
 /// initialized.
 #[test]
 fn inherited_method_is_callable_on_derived_instance() {
-    let dir = std::env::temp_dir().join(format!("pycc_432_inherited_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("432_inherited").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "inherited.py",
@@ -77,8 +76,7 @@ fn inherited_method_is_callable_on_derived_instance() {
 /// class's constructor. `Derived(42)` calls `Base.__init__(self, 42)`.
 #[test]
 fn inherited_init_is_used_for_instantiation() {
-    let dir = std::env::temp_dir().join(format!("pycc_432_inhinit_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("432_inhinit").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "inhinit.py",
@@ -107,8 +105,7 @@ fn inherited_init_is_used_for_instantiation() {
 /// external instance access.
 #[test]
 fn inherited_attribute_is_accessible_on_derived_instance() {
-    let dir = std::env::temp_dir().join(format!("pycc_432_inhattr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("432_inhattr").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "inhattr.py",
@@ -136,8 +133,7 @@ fn inherited_attribute_is_accessible_on_derived_instance() {
 /// builds and runs correctly.
 #[test]
 fn override_decorator_on_valid_override_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_432_valid_override_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("432_valid_override").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "valid_override.py",
@@ -165,8 +161,7 @@ fn override_decorator_on_valid_override_builds_and_runs() {
 /// method is rejected with T0031 at compile time.
 #[test]
 fn override_decorator_on_nonexistent_method_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_432_bad_override_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("432_bad_override").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "bad_override.py",
@@ -192,8 +187,7 @@ fn override_decorator_on_nonexistent_method_is_a_check_error() {
 /// #432: a class inheriting from an unknown base class is rejected.
 #[test]
 fn unknown_base_class_is_a_build_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_432_unknown_base_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("432_unknown_base").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "unknown_base.py",
@@ -220,8 +214,7 @@ fn unknown_base_class_is_a_build_error() {
 /// rejected with a clear error.
 #[test]
 fn class_without_init_and_no_base_init_is_a_build_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_432_no_init_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("432_no_init").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "no_init.py",
@@ -248,8 +241,7 @@ fn class_without_init_and_no_base_init_is_a_build_error() {
 /// which method is called.
 #[test]
 fn diamond_inheritance_resolves_via_c3_mro() {
-    let dir = std::env::temp_dir().join(format!("pycc_432_diamond_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("432_diamond").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "diamond.py",
@@ -280,8 +272,7 @@ fn diamond_inheritance_resolves_via_c3_mro() {
 /// slot (not a slot that shifted due to the derived class's new attrs).
 #[test]
 fn inherited_method_reads_correct_slot_with_derived_attrs() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue432_slot_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue432_slot").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "slot.py",
@@ -308,9 +299,7 @@ fn inherited_method_reads_correct_slot_with_derived_attrs() {
 /// #432: a generic class with base classes is rejected with a clear error.
 #[test]
 fn generic_class_with_bases_is_rejected() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_issue432_generic_base_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue432_generic_base").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "generic_base.py",

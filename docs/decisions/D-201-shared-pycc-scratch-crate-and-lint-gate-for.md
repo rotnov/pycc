@@ -110,6 +110,13 @@ status: accepted
   `pycc_scratch` dev-dependency under that tolerance. The blocker
   described here is resolved; the migration itself proceeds under #782.
 
+  Update (2026-08-26, later the same day): Part 2 (#782) is complete. Every
+  `ALLOWLIST`-tracked test call site — including
+  `tests/issue_150_zero_step_range.rs` and the other files the paragraphs
+  above deferred — now uses `pycc_scratch::ScratchDir`, and the allowlist
+  holds exactly one entry: `src/main.rs`'s two production call sites, owned
+  by Part 3 (#783).
+
   **Known, accepted scope limitation**: the lint is a textual pattern match,
   not a data-flow analysis. A caller that splits the expression across a
   binding (`let dir = std::env::temp_dir(); ... dir.join(...)`) evades it

@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -16,8 +17,7 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 /// `C.create(42)` calls `C.create.static(42)` with no implicit receiver.
 #[test]
 fn static_method_call_through_class_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_436_static_class_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_static_class").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "static_class.py",
@@ -42,8 +42,7 @@ fn static_method_call_through_class_builds_and_runs() {
 /// not passed as a receiver — only explicit arguments are forwarded.
 #[test]
 fn static_method_call_through_instance_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_436_static_inst_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_static_inst").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "static_inst.py",
@@ -70,9 +69,7 @@ fn static_method_call_through_instance_builds_and_runs() {
 /// computed from its explicit arguments without dereferencing `cls`.
 #[test]
 fn class_method_call_through_class_builds_and_runs() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_436_classmethod_class_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_classmethod_class").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "classmethod_class.py",
@@ -97,9 +94,7 @@ fn class_method_call_through_class_builds_and_runs() {
 /// passed as the implicit `cls` parameter.
 #[test]
 fn class_method_call_through_instance_builds_and_runs() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_436_classmethod_inst_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_classmethod_inst").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "classmethod_inst.py",
@@ -125,8 +120,7 @@ fn class_method_call_through_instance_builds_and_runs() {
 /// `cls.attr` reads the instance's attribute slot.
 #[test]
 fn class_method_using_cls_attribute_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_436_cls_attr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_cls_attr").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "cls_attr.py",
@@ -154,8 +148,7 @@ fn class_method_using_cls_attribute_builds_and_runs() {
 /// name, it takes no arguments and returns a constant.
 #[test]
 fn static_method_with_no_parameters_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_436_static_noargs_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_static_noargs").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "static_noargs.py",
@@ -180,8 +173,7 @@ fn static_method_with_no_parameters_builds_and_runs() {
 /// method defined in its base class through the derived class name.
 #[test]
 fn inherited_static_method_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_436_inh_static_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_inh_static").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "inh_static.py",
@@ -209,8 +201,7 @@ fn inherited_static_method_builds_and_runs() {
 /// method defined in its base class through the derived class name.
 #[test]
 fn inherited_class_method_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_436_inh_classmethod_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_inh_classmethod").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "inh_classmethod.py",
@@ -238,8 +229,7 @@ fn inherited_class_method_builds_and_runs() {
 /// constructor must be a regular instance method.
 #[test]
 fn staticmethod_on_init_is_a_build_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_436_static_init_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_static_init").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "static_init.py",
@@ -266,9 +256,7 @@ fn staticmethod_on_init_is_a_build_error() {
 /// constructor must be a regular instance method.
 #[test]
 fn classmethod_on_init_is_a_build_error() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_436_classmethod_init_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_classmethod_init").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "classmethod_init.py",
@@ -295,9 +283,7 @@ fn classmethod_on_init_is_a_build_error() {
 /// type-check time with T0021.
 #[test]
 fn static_method_wrong_argument_types_is_a_check_error() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_436_static_wrongtype_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_static_wrongtype").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "static_wrongtype.py",
@@ -325,11 +311,7 @@ fn static_method_wrong_argument_types_is_a_check_error() {
 /// from the argument count/type check.
 #[test]
 fn class_method_wrong_argument_types_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_436_classmethod_wrongtype_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_classmethod_wrongtype").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "classmethod_wrongtype.py",
@@ -359,8 +341,7 @@ fn class_method_wrong_argument_types_is_a_check_error() {
 /// where no implicit receiver exists.
 #[test]
 fn static_method_declaring_self_is_a_check_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_436_static_self_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_static_self").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "static_self.py",
@@ -387,8 +368,7 @@ fn static_method_declaring_self_is_a_check_error() {
 /// C0001 at HIR-lowering time.
 #[test]
 fn class_method_without_cls_is_a_build_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_436_no_cls_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("436_no_cls").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "no_cls.py",
@@ -415,8 +395,7 @@ fn class_method_without_cls_is_a_build_error() {
 /// method in the same class.
 #[test]
 fn static_method_collides_with_regular_method_is_a_build_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue436_collide_sm_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue436_collide_sm").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "collide_sm.py",
@@ -443,8 +422,7 @@ fn static_method_collides_with_regular_method_is_a_build_error() {
 /// method in the same class.
 #[test]
 fn class_method_collides_with_regular_method_is_a_build_error() {
-    let dir = std::env::temp_dir().join(format!("pycc_issue436_collide_cm_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue436_collide_cm").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "collide_cm.py",
@@ -471,9 +449,7 @@ fn class_method_collides_with_regular_method_is_a_build_error() {
 /// @classmethod in the same class.
 #[test]
 fn static_method_collides_with_class_method_is_a_build_error() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_issue436_collide_both_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue436_collide_both").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "collide_both.py",
@@ -500,9 +476,7 @@ fn static_method_collides_with_class_method_is_a_build_error() {
 /// the same name is also rejected (reverse direction collision).
 #[test]
 fn regular_method_collides_with_static_method_is_a_build_error() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_issue436_collide_rev_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("issue436_collide_rev").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "collide_rev.py",
