@@ -1,3 +1,4 @@
+use pycc_scratch::ScratchDir;
 use std::io::Write;
 use std::process::Command;
 
@@ -349,11 +350,8 @@ except ValueError:
 }
 
 fn assert_raw_codegen_error(name: &str, stmt: pycc_mir::MirStmt, expected_message: &str) {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_raw_codegen_{name}_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new(&format!("382_raw_codegen_{name}"))
+        .expect("failed to create scratch dir");
     let mir = pycc_mir::MirModule {
         items: vec![pycc_mir::MirItem::TopLevelStmt(stmt)],
         class_defs: vec![],
@@ -361,7 +359,6 @@ fn assert_raw_codegen_error(name: &str, stmt: pycc_mir::MirStmt, expected_messag
     let err = pycc_codegen::compile_to_object(&mir, &dir.join("invalid.o"), None, false)
         .expect_err("invalid raw MIR must fail closed");
     assert!(err.contains(expected_message), "unexpected error: {err}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -457,11 +454,7 @@ fn raw_mir_exception_paths_are_checked_in_the_dependency_instance() {
         assert_raw_codegen_error(name, nested, "missing_");
     }
 
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_raw_codegen_bare_except_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_raw_codegen_bare_except").expect("failed to create scratch dir");
     let mir = pycc_mir::MirModule {
         items: vec![pycc_mir::MirItem::TopLevelStmt(MirStmt::Try {
             body: vec![MirStmt::Raise {
@@ -540,7 +533,6 @@ fn raw_mir_exception_paths_are_checked_in_the_dependency_instance() {
         panic.is_err(),
         "raw top-level return must trip codegen's defensive frontend invariant"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn undefined_void_call(name: &str) -> pycc_mir::MirStmt {
@@ -553,8 +545,7 @@ fn undefined_void_call(name: &str) -> pycc_mir::MirStmt {
 
 #[test]
 fn a_terminal_try_with_match_and_handler_has_no_fallthrough() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_terminal_match_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_terminal_match").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "terminal_match.py",
@@ -566,9 +557,7 @@ fn a_terminal_try_with_match_and_handler_has_no_fallthrough() {
 
 #[test]
 fn an_exhaustive_bool_match_inside_try_has_no_synthetic_fallthrough() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_382_exhaustive_match_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_exhaustive_match").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "exhaustive_match.py",
@@ -582,8 +571,7 @@ fn an_exhaustive_bool_match_inside_try_has_no_synthetic_fallthrough() {
 
 #[test]
 fn caught_value_error_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_cve_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_cve").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "cve.py",
@@ -597,8 +585,7 @@ fn caught_value_error_builds_and_runs() {
 
 #[test]
 fn catch_all_exception_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_ca_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_ca").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "ca.py",
@@ -612,8 +599,7 @@ fn catch_all_exception_builds_and_runs() {
 
 #[test]
 fn handler_ordering_first_match_wins() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_ho_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_ho").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "ho.py",
@@ -627,8 +613,7 @@ fn handler_ordering_first_match_wins() {
 
 #[test]
 fn else_body_runs_when_no_exception() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_else_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_else").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "else.py",
@@ -640,8 +625,7 @@ fn else_body_runs_when_no_exception() {
 
 #[test]
 fn else_body_can_read_a_binding_created_by_the_successful_try_body() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_else_bind_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_else_bind").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "else_bind.py",
@@ -655,8 +639,7 @@ fn else_body_can_read_a_binding_created_by_the_successful_try_body() {
 
 #[test]
 fn finally_always_runs_on_success() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_fin1_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_fin1").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "fin1.py",
@@ -668,8 +651,7 @@ fn finally_always_runs_on_success() {
 
 #[test]
 fn finally_runs_after_handler() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_fin2_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_fin2").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "fin2.py",
@@ -681,8 +663,7 @@ fn finally_runs_after_handler() {
 
 #[test]
 fn an_exception_from_else_runs_finally_and_reaches_an_outer_handler() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_else_exc_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_else_exc").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "else_exc.py",
@@ -694,8 +675,7 @@ fn an_exception_from_else_runs_finally_and_reaches_an_outer_handler() {
 
 #[test]
 fn an_exception_from_handler_runs_finally_and_reaches_an_outer_handler() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_handler_exc_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_handler_exc").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "handler_exc.py",
@@ -709,8 +689,7 @@ fn an_exception_from_handler_runs_finally_and_reaches_an_outer_handler() {
 
 #[test]
 fn uncaught_exception_exits_nonzero() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_uncaught_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_uncaught").expect("failed to create scratch dir");
     let (ok, _out, err) = build_and_run(&dir, "uncaught.py", "raise ValueError(\"uncaught\")\n");
     assert!(!ok, "expected non-zero exit for uncaught exception");
     assert!(
@@ -723,8 +702,7 @@ fn uncaught_exception_exits_nonzero() {
 
 #[test]
 fn division_by_zero_is_caught() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_zdiv_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_zdiv").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "zdiv.py",
@@ -738,8 +716,7 @@ fn division_by_zero_is_caught() {
 
 #[test]
 fn float_division_by_zero_is_caught() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_fzdiv_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_fzdiv").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "fzdiv.py",
@@ -753,8 +730,7 @@ fn float_division_by_zero_is_caught() {
 
 #[test]
 fn missing_dict_key_is_caught() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_key_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_key").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "key.py",
@@ -768,8 +744,7 @@ fn missing_dict_key_is_caught() {
 
 #[test]
 fn list_index_out_of_range_is_caught() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_idx_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_idx").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "idx.py",
@@ -783,8 +758,7 @@ fn list_index_out_of_range_is_caught() {
 
 #[test]
 fn raise_from_builds_and_runs() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_from_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_from").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "from.py",
@@ -799,8 +773,7 @@ fn raise_from_none_builds_and_runs() {
     // PEP 409: `from None` suppresses implicit context chaining. pycc emits
     // no traceback, so the observable behavior is identical to a plain
     // `raise` -- the handler still catches the primary exception.
-    let dir = std::env::temp_dir().join(format!("pycc_382_from_none_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_from_none").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "from_none.py",
@@ -812,11 +785,7 @@ fn raise_from_none_builds_and_runs() {
 
 #[test]
 fn exceptions_while_evaluating_raise_operands_are_not_overwritten() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_raise_operand_exception_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_raise_operand_exception").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "raise_operand_exception.py",
@@ -830,8 +799,7 @@ fn exceptions_while_evaluating_raise_operands_are_not_overwritten() {
 
 #[test]
 fn bare_reraise_propagates() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_reraise_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_reraise").expect("failed to create scratch dir");
     let (ok, _out, err) = build_and_run(
         &dir,
         "reraise.py",
@@ -848,19 +816,14 @@ fn bare_reraise_propagates() {
 
 #[test]
 fn bare_raise_outside_handler_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_bare_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_bare").expect("failed to create scratch dir");
     let (ok, _combined) = check_only(&dir, "bare.py", "raise\n");
     assert!(!ok, "bare raise outside handler should be rejected");
 }
 
 #[test]
 fn a_user_function_cannot_silently_shadow_a_builtin_exception_in_raise() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_shadowed_exception_fn_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_shadowed_exception_fn").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "shadowed_exception_fn.py",
@@ -878,11 +841,8 @@ fn a_user_function_cannot_silently_shadow_a_builtin_exception_in_raise() {
 
 #[test]
 fn a_user_class_cannot_silently_shadow_a_builtin_exception_in_raise() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_shadowed_exception_class_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_shadowed_exception_class")
+        .expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "shadowed_exception_class.py",
@@ -897,11 +857,8 @@ fn a_user_class_cannot_silently_shadow_a_builtin_exception_in_raise() {
 
 #[test]
 fn a_value_binding_cannot_silently_shadow_a_builtin_exception_in_raise() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_shadowed_exception_value_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_shadowed_exception_value")
+        .expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "shadowed_exception_value.py",
@@ -916,11 +873,8 @@ fn a_value_binding_cannot_silently_shadow_a_builtin_exception_in_raise() {
 
 #[test]
 fn a_function_local_cannot_silently_shadow_a_builtin_exception_in_raise() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_shadowed_exception_local_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_shadowed_exception_local")
+        .expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "shadowed_exception_local.py",
@@ -935,11 +889,8 @@ fn a_function_local_cannot_silently_shadow_a_builtin_exception_in_raise() {
 
 #[test]
 fn a_value_binding_cannot_silently_shadow_a_builtin_exception_in_except() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_shadowed_exception_handler_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_shadowed_exception_handler")
+        .expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "shadowed_exception_handler.py",
@@ -957,11 +908,8 @@ fn a_value_binding_cannot_silently_shadow_a_builtin_exception_in_except() {
 
 #[test]
 fn a_try_body_binding_cannot_silently_shadow_its_exception_handler_type() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_shadowed_exception_handler_from_body_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_shadowed_exception_handler_from_body")
+        .expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "shadowed_exception_handler_from_body.py",
@@ -981,8 +929,7 @@ fn a_try_body_binding_cannot_silently_shadow_its_exception_handler_type() {
 
 #[test]
 fn return_in_try_routes_through_finally() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_retfin_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_retfin").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "retfin.py",
@@ -996,8 +943,7 @@ fn return_in_try_routes_through_finally() {
 
 #[test]
 fn except_as_binding_is_accessible() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_asbind_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_asbind").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "asbind.py",
@@ -1011,8 +957,7 @@ fn except_as_binding_is_accessible() {
 
 #[test]
 fn unknown_exception_type_in_handler_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_unk_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_unk").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "unk.py",
@@ -1029,8 +974,7 @@ fn unknown_exception_type_in_handler_is_rejected() {
 
 #[test]
 fn unmatched_exception_propagates_to_outer_handler() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_prop_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_prop").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "prop.py",
@@ -1044,8 +988,7 @@ fn unmatched_exception_propagates_to_outer_handler() {
 
 #[test]
 fn explicit_raise_in_called_function_is_caught_by_caller() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_call_raise_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_call_raise").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "call_raise.py",
@@ -1057,8 +1000,7 @@ fn explicit_raise_in_called_function_is_caught_by_caller() {
 
 #[test]
 fn a_value_returning_function_may_terminate_only_by_raising() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_raise_int_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_raise_int").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "raise_int.py",
@@ -1070,9 +1012,7 @@ fn a_value_returning_function_may_terminate_only_by_raising() {
 
 #[test]
 fn a_value_function_with_a_raising_try_finally_cannot_fall_through() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_382_raise_finally_int_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_raise_finally_int").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "raise_finally_int.py",
@@ -1084,11 +1024,7 @@ fn a_value_function_with_a_raising_try_finally_cannot_fall_through() {
 
 #[test]
 fn a_generic_call_inside_an_exception_message_is_monomorphized() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_raise_generic_message_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_raise_generic_message").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "raise_generic_message.py",
@@ -1100,11 +1036,7 @@ fn a_generic_call_inside_an_exception_message_is_monomorphized() {
 
 #[test]
 fn nested_finally_blocks_preserve_a_value_return() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_nested_finally_value_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_nested_finally_value").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "nested_finally_value.py",
@@ -1116,11 +1048,7 @@ fn nested_finally_blocks_preserve_a_value_return() {
 
 #[test]
 fn nested_finally_blocks_preserve_a_bare_none_return() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_nested_finally_none_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_nested_finally_none").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "nested_finally_none.py",
@@ -1132,9 +1060,7 @@ fn nested_finally_blocks_preserve_a_bare_none_return() {
 
 #[test]
 fn a_none_expression_return_routes_through_finally() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_382_none_expr_finally_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_none_expr_finally").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "none_expr_finally.py",
@@ -1146,8 +1072,7 @@ fn a_none_expression_return_routes_through_finally() {
 
 #[test]
 fn runtime_exception_in_called_function_is_caught_by_caller() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_call_runtime_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_call_runtime").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "call_runtime.py",
@@ -1161,8 +1086,7 @@ fn runtime_exception_in_called_function_is_caught_by_caller() {
 
 #[test]
 fn runtime_exception_skips_remaining_try_body() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_skip_try_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_skip_try").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "skip_try.py",
@@ -1174,8 +1098,7 @@ fn runtime_exception_skips_remaining_try_body() {
 
 #[test]
 fn runtime_exception_skips_remaining_nested_suite() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_skip_nested_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_skip_nested").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "skip_nested.py",
@@ -1187,8 +1110,7 @@ fn runtime_exception_skips_remaining_nested_suite() {
 
 #[test]
 fn failed_assignment_does_not_overwrite_its_target() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_atomic_assign_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_atomic_assign").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "atomic_assign.py",
@@ -1200,8 +1122,7 @@ fn failed_assignment_does_not_overwrite_its_target() {
 
 #[test]
 fn failed_print_argument_produces_no_partial_output() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_atomic_print_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_atomic_print").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "atomic_print.py",
@@ -1213,8 +1134,7 @@ fn failed_print_argument_produces_no_partial_output() {
 
 #[test]
 fn failed_condition_does_not_enter_either_branch() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_condition_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_condition").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "condition.py",
@@ -1226,9 +1146,7 @@ fn failed_condition_does_not_enter_either_branch() {
 
 #[test]
 fn failed_condition_does_not_mutate_in_the_selected_branch() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_382_condition_effect_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_condition_effect").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "condition_effect.py",
@@ -1240,8 +1158,7 @@ fn failed_condition_does_not_mutate_in_the_selected_branch() {
 
 #[test]
 fn failed_left_operand_skips_the_right_operand() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_operand_order_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_operand_order").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "operand_order.py",
@@ -1253,8 +1170,7 @@ fn failed_left_operand_skips_the_right_operand() {
 
 #[test]
 fn uncaught_failed_left_operand_skips_the_right_operand_at_top_level() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_top_operand_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_top_operand").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "top_operand.py",
@@ -1273,8 +1189,7 @@ fn uncaught_failed_left_operand_skips_the_right_operand_at_top_level() {
 
 #[test]
 fn failed_return_expression_is_caught_before_return_commits() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_return_expr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_return_expr").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "return_expr.py",
@@ -1286,8 +1201,7 @@ fn failed_return_expression_is_caught_before_return_commits() {
 
 #[test]
 fn nested_handler_does_not_replace_outer_bare_reraise_value() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_nested_reraise_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_nested_reraise").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "nested_reraise.py",
@@ -1299,8 +1213,7 @@ fn nested_handler_does_not_replace_outer_bare_reraise_value() {
 
 #[test]
 fn raising_an_except_binding_preserves_its_exception_type() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_raise_binding_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_raise_binding").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "raise_binding.py",
@@ -1312,11 +1225,7 @@ fn raising_an_except_binding_preserves_its_exception_type() {
 
 #[test]
 fn raise_from_an_except_binding_preserves_the_primary_exception_type() {
-    let dir = std::env::temp_dir().join(format!(
-        "pycc_382_raise_from_binding_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_raise_from_binding").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "raise_from_binding.py",
@@ -1328,8 +1237,7 @@ fn raise_from_an_except_binding_preserves_the_primary_exception_type() {
 
 #[test]
 fn exception_in_finally_overrides_pending_return() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_finally_raise_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_finally_raise").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "finally_raise.py",
@@ -1341,8 +1249,7 @@ fn exception_in_finally_overrides_pending_return() {
 
 #[test]
 fn finally_runs_while_an_unmatched_exception_is_propagating() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_finally_pending_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_finally_pending").expect("failed to create scratch dir");
     let (ok, out, err) = build_and_run(
         &dir,
         "finally_pending.py",
@@ -1366,8 +1273,7 @@ fn return_in_finally_is_rejected_at_build_time() {
     // constructs the HIR directly rather than going through this compiler's
     // own AST-lowering front end -- exactly the seam this PEP 765 check
     // lives at.
-    let dir = std::env::temp_dir().join(format!("pycc_382_finally_return_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("382_finally_return").expect("failed to create scratch dir");
     let (ok, _out, err) = build_and_run(
         &dir,
         "finally_return.py",

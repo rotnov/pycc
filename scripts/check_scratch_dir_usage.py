@@ -135,13 +135,10 @@ ALLOWLIST: dict[str, int] = {
     "tests/issue_379_enum.rs": 21,
     "tests/issue_380_protocols.rs": 22,
     "tests/issue_381_match.rs": 20,
-    "tests/issue_382_exceptions.rs": 56,
     "tests/issue_386_class_method_redefinition.rs": 8,
     "tests/issue_432_inheritance.rs": 11,
     "tests/issue_433_super.rs": 15,
-    "tests/issue_435_isinstance_issubclass.rs": 33,
     "tests/issue_436_classmethod_staticmethod.rs": 18,
-    "tests/issue_542_except_star.rs": 41,
     "tests/issue_575_str_repetition.rs": 2,
     "tests/issue_603_unary_general_operand.rs": 1,
     "tests/issue_630_pycc_rt_build_dependency.rs": 1,
@@ -162,7 +159,6 @@ ALLOWLIST: dict[str, int] = {
     "tests/nbody_bench.rs": 1,
     "tests/pycc_toml_release_default.rs": 1,
     "tests/quick_start.rs": 1,
-    "tests/slice0.rs": 62,
     "tests/slice1_codegen_depth.rs": 4,
 }
 
