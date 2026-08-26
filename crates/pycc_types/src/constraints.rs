@@ -2236,6 +2236,7 @@ pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environme
         current_class: None,
         finals: HashSet::new(),
         in_except_handler: false,
+        narrowed: HashMap::new(),
     };
     // Part 1 of #541: register the class table through `bind_class` (via
     // `bind_classes`) rather than by populating `classes` directly, so this

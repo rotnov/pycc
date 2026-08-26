@@ -5,6 +5,7 @@ mod env;
 mod exception;
 mod expr;
 mod monomorphize;
+mod narrow;
 mod solver;
 #[cfg(test)]
 mod tests;
@@ -940,6 +941,16 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
     // `child_for_function` clones, so a body-local assignment clears only
     // that body's view, never the module-level fact.
     env.def_rebound.remove(target);
+    // Issue #769 (Part 2 of #747): any assignment to `target` kills its
+    // narrowing overlay entry from this point forward -- the overlay
+    // records a fact about the value `target` held at narrowing time
+    // (`x is not None`), which a reassignment (even to a value that
+    // happens to be compatible with the narrowed type) invalidates.
+    // Unconditional and target-only: this fires for every assignment path
+    // (`Assign`, `AnnAssign`, a `for` loop's own target, ...) since they all
+    // route through this single function, and never touches any other
+    // name's overlay entry.
+    env.narrowed.remove(target);
     // Issue #118 Part 1: use `lookup_any` (not `lookup`) so a maybe-bound name
     // being reassigned on the current path becomes definite, while the
     // first-assignment-wins representation (type) from the maybe-binding is
@@ -1221,6 +1232,14 @@ fn join_if_branches(
         }
     }
     env.bindings = joined;
+    // Blocker fix (D-068 review of #780): reconcile the `narrowed` overlay
+    // the same way `bindings` is reconciled just above, instead of leaving
+    // it as whatever it was before this `if` ran. See
+    // `narrow::join_narrowed`'s doc comment for the full soundness
+    // rationale -- a name stays narrowed only if both branches still narrow
+    // it to the exact same type; a kill (or a narrowing established in only
+    // one branch) drops out.
+    env.narrowed = narrow::join_narrowed(&body_env.narrowed, &[&orelse_env.narrowed]);
     Ok(())
 }
 
@@ -1251,6 +1270,15 @@ fn join_loop_body(env: &mut Environment, body_env: &Environment) {
             }
         }
     }
+    // Blocker fix (D-068 review of #780): a loop may run zero or more
+    // times, so a name stays narrowed after the loop only if the body
+    // still narrows it to the same type it had going in -- the loop
+    // running zero times is exactly "env's own narrowed map", and the loop
+    // body having run is "body_env's narrowed map after the body executed
+    // once", so intersecting the two covers both cases. A kill inside the
+    // body (e.g. `while flag: x = None`) drops `x` out, matching
+    // `join_if_branches`'s identical fix. See `narrow::join_narrowed`.
+    env.narrowed = narrow::join_narrowed(&env.narrowed, &[&body_env.narrowed]);
 }
 
 /// PEP 634-636 (#381, PR-21): joins N case environments from a `match`
@@ -1280,6 +1308,16 @@ fn join_match_branches(env: &mut Environment, case_envs: &[Environment], exhaust
         }
     }
     env.bindings = joined;
+    // Blocker fix (D-068 review of #780): reconcile `narrowed` the same
+    // conservative way as `join_if_branches`/`join_loop_body`. `env` itself
+    // (pre-match) stands in for the implicit "no case matched" path -- safe
+    // to include unconditionally (exhaustive or not): it never *adds* a
+    // name to the intersection, since it can only narrow the result set
+    // further, so an exhaustive match that never actually needed the
+    // implicit path is unaffected wherever every case agrees anyway.
+    let case_narrowed_maps: Vec<&HashMap<String, Ty>> =
+        case_envs.iter().map(|ce| &ce.narrowed).collect();
+    env.narrowed = narrow::join_narrowed(&env.narrowed, &case_narrowed_maps);
 }
 
 /// PEP 634-636 (#381, PR-21): checks a `match` statement. The subject is
@@ -1312,11 +1350,22 @@ fn check_match(
                 ));
             }
         }
-        for stmt in &case.body {
-            match return_ty {
-                Some(rt) => check_stmt_in_function(&mut case_env, local_names, stmt, rt.clone())?,
-                None => check_stmt(&mut case_env, stmt)?,
-            }
+        // D-068 re-review of #780 (third round, warning finding): route
+        // each case body through `narrow::check_stmt_sequence[_in_function]`
+        // instead of a raw per-statement loop, so a nested early-return
+        // guard inside a `match` case narrows the rest of that same case
+        // body -- the identical fast-path-bypass defect the `if`/`while`
+        // fast-path helpers already had fixed for finding 2, but which
+        // `check_match`'s own always-raw loop had never been routed
+        // through in the first place.
+        match return_ty {
+            Some(rt) => narrow::check_stmt_sequence_in_function(
+                &mut case_env,
+                local_names,
+                &case.body,
+                rt.clone(),
+            )?,
+            None => narrow::check_stmt_sequence(&mut case_env, &case.body)?,
         }
         case_envs.push(case_env);
     }
@@ -1678,15 +1727,25 @@ fn check_if_branches_in_place(
     body: &[HirStmt],
     orelse: &[HirStmt],
 ) -> Result<(), Diagnostic> {
-    body.iter().try_for_each(|stmt| check_stmt(env, stmt))?;
-    orelse.iter().try_for_each(|stmt| check_stmt(env, stmt))
+    // Warning fix (D-068 review of #780): route through the
+    // narrowing-aware sequence checker, not a raw per-statement loop.
+    // `introduces_bindings` gates this fast path on "no new bindings", but
+    // says nothing about whether a *nested* statement recognizes an
+    // early-return narrowing guard (`narrow::apply_post_if_narrowing`) that
+    // needs to propagate to later statements in this same body/orelse --
+    // skipping that propagation here silently rejected an otherwise valid
+    // nested guard shape. See `crates/pycc_types/src/narrow.rs`.
+    narrow::check_stmt_sequence(env, body)?;
+    narrow::check_stmt_sequence(env, orelse)
 }
 
 /// Issue #118 Part 1: fast-path helper for module-scope `while` loops
 /// where the body introduces no new bindings. Checks the body in-place
 /// without cloning env.
 fn check_while_body_in_place(env: &mut Environment, body: &[HirStmt]) -> Result<(), Diagnostic> {
-    body.iter().try_for_each(|stmt| check_stmt(env, stmt))
+    // Warning fix (D-068 review of #780): see `check_if_branches_in_place`'s
+    // identical comment.
+    narrow::check_stmt_sequence(env, body)
 }
 
 pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnostic> {
@@ -1805,24 +1864,39 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // env, then join the results. A no-else `if` makes all body-only
             // bindings `Maybe` (the orelse clone is empty, so every body
             // binding is "one branch only" -> Maybe).
-            // Fast path: if neither branch introduces any new bindings, skip
-            // the clone+join and check both branches in-place (matching the
-            // pre-#118 behavior for guard-only ifs).
-            if !introduces_bindings(body) && !introduces_bindings(orelse) {
+            // Issue #769 (Part 2 of #747): a narrowing-eligible test needs
+            // per-branch overlay state (`narrow::apply_branch_narrowing`),
+            // which only exists on a branch-local `env` clone -- force the
+            // slow/cloning path even when neither branch introduces a
+            // binding, so the fast path below never silently skips
+            // narrowing.
+            let narrowing = narrow::narrowing_target(env, test);
+            // Fast path: if neither branch introduces any new bindings and
+            // no narrowing applies, skip the clone+join and check both
+            // branches in-place (matching the pre-#118 behavior for
+            // guard-only ifs).
+            if narrowing.is_none() && !introduces_bindings(body) && !introduces_bindings(orelse) {
                 check_if_branches_in_place(env, body, orelse)
             } else {
                 let mut body_env = env.clone();
-                for stmt in body {
-                    check_stmt(&mut body_env, stmt)?;
-                }
                 let mut orelse_env = env.clone();
-                for stmt in orelse {
-                    check_stmt(&mut orelse_env, stmt)?;
+                if let Some(target) = &narrowing {
+                    narrow::apply_branch_narrowing(&mut body_env, &mut orelse_env, target);
                 }
+                narrow::check_stmt_sequence(&mut body_env, body)?;
+                narrow::check_stmt_sequence(&mut orelse_env, orelse)?;
                 join_if_branches(env, &body_env, &orelse_env)
             }
         }
         HirStmt::While { test, body } => {
+            // Issue #769 follow-up (D-068 re-review round 3): a `while`
+            // body can be re-entered, and `test` itself re-executes on
+            // every iteration too -- prescan and drop any name `body`
+            // kills *before* checking `test`, so both the test and the
+            // body (fast in-place path or slow clone+join path, which
+            // clones `env` after this line and so inherits the pruning)
+            // see it. See `narrow::apply_kill_prescan`'s doc comment.
+            narrow::apply_kill_prescan(env, body);
             // PEP 572 (#774): bind before validating -- see the `ExprStmt`
             // arm's doc comment above for why this order is required.
             collect_named_expr_bindings(env, &[], test)?;
@@ -1834,9 +1908,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                 check_while_body_in_place(env, body)
             } else {
                 let mut body_env = env.clone();
-                for stmt in body {
-                    check_stmt(&mut body_env, stmt)?;
-                }
+                narrow::check_stmt_sequence(&mut body_env, body)?;
                 join_loop_body(env, &body_env);
                 Ok(())
             }
@@ -1859,9 +1931,11 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
             check_assignment(env, var, Ty::Int)?;
             let mut body_env = env.clone();
-            for stmt in body {
-                check_stmt(&mut body_env, stmt)?;
-            }
+            // Issue #769 follow-up (D-068 re-review round 3): the loop
+            // body can re-run, so prescan-drop any name it kills before
+            // checking it. See `narrow::apply_kill_prescan`.
+            narrow::apply_kill_prescan(&mut body_env, body);
+            narrow::check_stmt_sequence(&mut body_env, body)?;
             join_loop_body(env, &body_env);
             // Issue #118 Part 1: if the loop variable was not definitely bound
             // before the loop, downgrade it to Maybe (the loop may execute
@@ -1925,9 +1999,10 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
             check_assignment(env, var, var_ty)?;
             let mut body_env = env.clone();
-            for stmt in body {
-                check_stmt(&mut body_env, stmt)?;
-            }
+            // Issue #769 follow-up (D-068 re-review round 3): see
+            // `narrow::apply_kill_prescan`.
+            narrow::apply_kill_prescan(&mut body_env, body);
+            narrow::check_stmt_sequence(&mut body_env, body)?;
             join_loop_body(env, &body_env);
             // Issue #118 Part 1: if the loop variable was not definitely bound
             // before the loop, downgrade it to Maybe (the loop may execute
@@ -2218,9 +2293,7 @@ fn check_function_in(
             class_def.abstract_methods.iter().any(|m| m == method_name)
         });
     if !is_abstract_method {
-        for stmt in body {
-            check_stmt_in_function(&mut env, local_names, stmt, resolved_return.clone())?;
-        }
+        narrow::check_stmt_sequence_in_function(&mut env, local_names, body, resolved_return.clone())?;
     }
     if !is_abstract_method && resolved_return != Ty::None && !block_always_returns(body) {
         return Err(Diagnostic::error(
@@ -2315,11 +2388,12 @@ fn check_if_branches_in_place_in_function(
     orelse: &[HirStmt],
     return_ty: Ty,
 ) -> Result<(), Diagnostic> {
-    body.iter()
-        .try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))?;
-    orelse
-        .iter()
-        .try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))
+    // Warning fix (D-068 review of #780): see the module-scope
+    // `check_if_branches_in_place`'s identical comment -- route through the
+    // narrowing-aware sequence checker so a nested early-return guard's
+    // narrowing propagates to later statements even on this fast path.
+    narrow::check_stmt_sequence_in_function(env, local_names, body, return_ty.clone())?;
+    narrow::check_stmt_sequence_in_function(env, local_names, orelse, return_ty)
 }
 
 /// Issue #118 Part 1: fast-path helper for function-scope `while` loops
@@ -2330,8 +2404,9 @@ fn check_while_body_in_place_in_function(
     body: &[HirStmt],
     return_ty: Ty,
 ) -> Result<(), Diagnostic> {
-    body.iter()
-        .try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))
+    // Warning fix (D-068 review of #780): see
+    // `check_if_branches_in_place_in_function`'s identical comment.
+    narrow::check_stmt_sequence_in_function(env, local_names, body, return_ty)
 }
 
 fn check_stmt_in_function(
@@ -2422,9 +2497,14 @@ fn check_stmt_in_function(
             // Issue #118 Part 1: check each branch in an independent clone of
             // env, then join the results. A no-else `if` makes all body-only
             // bindings `Maybe`.
-            // Fast path: if neither branch introduces any new bindings, skip
-            // the clone+join and check both branches in-place.
-            if !introduces_bindings(body) && !introduces_bindings(orelse) {
+            // Issue #769 (Part 2 of #747): see the module-scope `If` arm's
+            // identical comment -- a narrowing-eligible test forces the
+            // slow/cloning path.
+            let narrowing = narrow::narrowing_target(env, test);
+            // Fast path: if neither branch introduces any new bindings and
+            // no narrowing applies, skip the clone+join and check both
+            // branches in-place.
+            if narrowing.is_none() && !introduces_bindings(body) && !introduces_bindings(orelse) {
                 check_if_branches_in_place_in_function(
                     env,
                     local_names,
@@ -2434,17 +2514,30 @@ fn check_stmt_in_function(
                 )
             } else {
                 let mut body_env = env.clone();
-                for s in body {
-                    check_stmt_in_function(&mut body_env, local_names, s, return_ty.clone())?;
-                }
                 let mut orelse_env = env.clone();
-                for s in orelse {
-                    check_stmt_in_function(&mut orelse_env, local_names, s, return_ty.clone())?;
+                if let Some(target) = &narrowing {
+                    narrow::apply_branch_narrowing(&mut body_env, &mut orelse_env, target);
                 }
+                narrow::check_stmt_sequence_in_function(
+                    &mut body_env,
+                    local_names,
+                    body,
+                    return_ty.clone(),
+                )?;
+                narrow::check_stmt_sequence_in_function(
+                    &mut orelse_env,
+                    local_names,
+                    orelse,
+                    return_ty.clone(),
+                )?;
                 join_if_branches(env, &body_env, &orelse_env)
             }
         }
         HirStmt::While { test, body } => {
+            // Issue #769 follow-up (D-068 re-review round 3): see the
+            // module-scope `While` arm's identical comment and
+            // `narrow::apply_kill_prescan`'s doc comment.
+            narrow::apply_kill_prescan(env, body);
             // PEP 572 (#774): bind before validating, mirroring the `If`
             // arm just above.
             collect_named_expr_bindings(env, local_names, test)?;
@@ -2456,9 +2549,12 @@ fn check_stmt_in_function(
                 check_while_body_in_place_in_function(env, local_names, body, return_ty.clone())
             } else {
                 let mut body_env = env.clone();
-                for s in body {
-                    check_stmt_in_function(&mut body_env, local_names, s, return_ty.clone())?;
-                }
+                narrow::check_stmt_sequence_in_function(
+                    &mut body_env,
+                    local_names,
+                    body,
+                    return_ty.clone(),
+                )?;
                 join_loop_body(env, &body_env);
                 Ok(())
             }
@@ -2478,9 +2574,15 @@ fn check_stmt_in_function(
             let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
             check_assignment(env, var, Ty::Int)?;
             let mut body_env = env.clone();
-            for s in body {
-                check_stmt_in_function(&mut body_env, local_names, s, return_ty.clone())?;
-            }
+            // Issue #769 follow-up (D-068 re-review round 3): see
+            // `narrow::apply_kill_prescan`.
+            narrow::apply_kill_prescan(&mut body_env, body);
+            narrow::check_stmt_sequence_in_function(
+                &mut body_env,
+                local_names,
+                body,
+                return_ty.clone(),
+            )?;
             join_loop_body(env, &body_env);
             // Issue #118 Part 1: if the loop variable was not definitely bound
             // before the loop, downgrade it to Maybe (the loop may execute
@@ -2531,9 +2633,15 @@ fn check_stmt_in_function(
             let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
             check_assignment(env, var, var_ty)?;
             let mut body_env = env.clone();
-            for s in body {
-                check_stmt_in_function(&mut body_env, local_names, s, return_ty.clone())?;
-            }
+            // Issue #769 follow-up (D-068 re-review round 3): see
+            // `narrow::apply_kill_prescan`.
+            narrow::apply_kill_prescan(&mut body_env, body);
+            narrow::check_stmt_sequence_in_function(
+                &mut body_env,
+                local_names,
+                body,
+                return_ty.clone(),
+            )?;
             join_loop_body(env, &body_env);
             // Issue #118 Part 1: if the loop variable was not definitely bound
             // before the loop, downgrade it to Maybe (the loop may execute
@@ -3186,9 +3294,11 @@ fn check_enum_loop_body_module(
     let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
     check_assignment(env, var, var_ty)?;
     let mut body_env = env.clone();
-    for stmt in body {
-        check_stmt(&mut body_env, stmt)?;
-    }
+    // Issue #769 follow-up (D-068 re-review round 3): an enum loop with
+    // more than one member re-runs `body` once per member, same
+    // re-entrant shape as any other loop -- see `narrow::apply_kill_prescan`.
+    narrow::apply_kill_prescan(&mut body_env, body);
+    narrow::check_stmt_sequence(&mut body_env, body)?;
     join_loop_body(env, &body_env);
     if !was_definite && let Some(ty) = env.lookup_any(var) {
         env.bind_maybe(var.to_string(), ty);
@@ -3211,9 +3321,10 @@ fn check_enum_loop_body_function(
     let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
     check_assignment(env, var, var_ty)?;
     let mut body_env = env.clone();
-    for s in body {
-        check_stmt_in_function(&mut body_env, local_names, s, return_ty.clone())?;
-    }
+    // Issue #769 follow-up (D-068 re-review round 3): see
+    // `check_enum_loop_body_module`'s identical comment.
+    narrow::apply_kill_prescan(&mut body_env, body);
+    narrow::check_stmt_sequence_in_function(&mut body_env, local_names, body, return_ty.clone())?;
     join_loop_body(env, &body_env);
     if !was_definite && let Some(ty) = env.lookup_any(var) {
         env.bind_maybe(var.to_string(), ty);
@@ -3609,7 +3720,16 @@ fn check_with_environment(
     // and in pass 3's final environment alike.
     for item in &hir.items {
         match item {
-            HirItem::TopLevelStmt(stmt) => check_stmt(&mut env, stmt)?,
+            HirItem::TopLevelStmt(stmt) => {
+                check_stmt(&mut env, stmt)?;
+                // Issue #769 (Part 2 of #747): applied uniformly with every
+                // other sequential-statement-list call site in this crate
+                // for consistency, even though `HirStmt::Return` (the only
+                // terminator `definitely_terminates` recognizes) cannot
+                // syntactically appear at module top level -- so this is a
+                // structural no-op here today, not dead functionality.
+                narrow::apply_post_if_narrowing(&mut env, stmt);
+            }
             HirItem::Function { name, .. } => {
                 env.def_rebound.insert(name.clone());
                 // Issue #22: a `def` at its source position makes the

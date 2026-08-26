@@ -163,6 +163,20 @@ pub struct Environment {
     /// (re-raise) — only valid inside an except handler. Set to `true`
     /// before checking a handler body, reset to the previous value after.
     pub(crate) in_except_handler: bool,
+    /// Issue #769 (Part 2 of #747): flow-sensitive `Optional[T]` narrowing
+    /// overlay -- maps a name currently narrowed to `T` (from `T | None`)
+    /// in the code being checked *right now* to that inner `T`. Deliberately
+    /// a separate map from `bindings`, never merged into it and never
+    /// consulted by `join_if_branches` -- see `crate::narrow`'s module doc
+    /// comment for why an overlay, not a mutation of the branch-local
+    /// clone's own `bindings` entry, is the only leak-safe design. Consulted
+    /// by `infer_expr_in`'s `HirExpr::Name` arm (a *read* of a narrowed name
+    /// gets the inner type); never consulted by `check_assignment` (an
+    /// assignment *target* is still checked against the name's real,
+    /// un-narrowed type) -- `check_assignment` clears an entry here for its
+    /// own target instead, killing the narrowing the moment the name is
+    /// reassigned anywhere inside a narrowed region.
+    pub(crate) narrowed: HashMap<String, Ty>,
 }
 
 impl Environment {
@@ -338,12 +352,24 @@ impl Environment {
         self.current_class.as_deref()
     }
 
+    /// Issue #769 (Part 2 of #747): the inner type `name` is currently
+    /// narrowed to, if any. Returns `None` outside a narrowed region -- the
+    /// overlay is populated only on branch-local clones (in-branch
+    /// narrowing) and on the shared env directly for the early-return
+    /// continuation shape (see `crate::narrow`), and is never merged back
+    /// into `bindings`, so this is `None` again as soon as the narrowed
+    /// region ends.
+    pub(crate) fn narrowed_ty(&self, name: &str) -> Option<Ty> {
+        self.narrowed.get(name).cloned()
+    }
+
     pub(crate) fn child_for_function(&self, local_names: &[&str]) -> Self {
         let mut child = self.clone();
         for name in local_names {
             child.bindings.remove(*name);
             child.declared.remove(*name);
             child.finals.remove(*name);
+            child.narrowed.remove(*name);
         }
         // Issue #22: a function body may call any module-level function
         // regardless of source order -- Python's late binding evaluates a

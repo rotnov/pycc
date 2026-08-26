@@ -1629,6 +1629,53 @@ fn emit_expr_unchecked<'ctx>(
                 pycc_mir::Ty::Optional(inner.clone()),
             )
         }
+        // Issue #769 (Part 2 of #747): the read-side counterpart of
+        // `OptionalWrap` immediately above. `pycc_types::check` (via its
+        // own `narrow` overlay) has already proven this particular read is
+        // reachable only when the value is present, so `value` below
+        // always evaluates to a real `Scalar::Optional { payload, present }`
+        // struct (never the `MirExpr::NoneLiteral` all-zero placeholder --
+        // that placeholder is only ever a `coerce_scalar_to_type` target,
+        // never something a narrowing test could recognize as
+        // `Optional`). `T0049` (`crates/pycc_hir/src/func.rs`) restricts
+        // every `Optional[T]` annotation to `T = int`, so `inner` here is
+        // always `Ty::Int` and field 0 is always an already-D-141-encoded
+        // int word -- extracting it and returning `Scalar::Int` needs no
+        // decode/re-encode step, exactly like `Ty::Optional(_)`'s own
+        // `MirExpr::Name` read arm above returns the struct as-is with no
+        // transformation of its own fields.
+        //
+        // Refcount reasoning (bigint case, `n: int | None = <heap bigint>`
+        // then `if n is not None: use(n)`): this arm performs a plain
+        // *read* of `n`'s slot (via the inner `Name` -> `Ty::Optional`
+        // load above), extracting the payload word without incrementing
+        // any refcount -- exactly mirroring a bare (non-`Optional`) `int`
+        // local's own `MirExpr::Name` read arm, which likewise loads and
+        // returns `Scalar::Int` with no retain. Both are borrowed reads:
+        // ownership transfer (and therefore the retain that must accompany
+        // it) happens only where a value is *stored* into a new owning
+        // slot -- `MirStmt::Assign`'s `retain_if_int_duplicate` call, or
+        // (for the wrap direction) `OptionalWrap`'s own arm just above.
+        // `use(n)` here passing the unwrapped `Scalar::Int` to a function
+        // call follows the same already-correct borrowed-argument
+        // convention every other bare `int` argument uses; nothing about
+        // narrowing changes that convention, so no extra retain belongs in
+        // this arm specifically. See `pycc_codegen::bigint_rc`'s
+        // `is_owning_producer`/`int_value_is_a_duplicate_reference`
+        // classification of this node (mirroring `MirExpr::Name`, not
+        // `OptionalWrap`) for the corresponding compile-time classification.
+        MirExpr::OptionalUnwrap(value, _inner) => {
+            let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
+            let Scalar::Optional(v) = scalar else {
+                panic!(
+                    "pycc_codegen: internal error: OptionalUnwrap's operand did not evaluate to Scalar::Optional -- pycc_mir should only ever wrap a Ty::Optional-scoped Name read"
+                );
+            };
+            let payload = builder
+                .build_extract_value(v, 0, "narrowed_payload")
+                .expect("build_extract_value should not fail extracting field 0 of an Optional struct");
+            Scalar::Int(payload.into_int_value())
+        }
         MirExpr::StringLiteral(s) => {
             Scalar::Str(emit_string_literal(context, builder, module, rt, s))
         }

@@ -2,8 +2,8 @@
 //! the pattern-condition helpers that desugar a `match` into nested `if`s.
 
 use super::{
-    HirClassDef, MATCH_SUBJECT_COUNTER, MirExpr, MirStmt, bind_variable, lower_expr, lower_stmt,
-    mro_attrs,
+    HirClassDef, MATCH_SUBJECT_COUNTER, MirExpr, MirStmt, bind_variable, lower_expr,
+    lower_scoped_body, mro_attrs,
 };
 use pycc_hir::{CmpOpKind, HirExpr, HirMatchCase, HirPattern, Ty};
 use std::collections::HashMap;
@@ -69,6 +69,22 @@ fn lower_match_chain(
     for (name, val) in &bindings {
         let ty = val.ty();
         bind_variable(scopes, name.clone(), ty);
+        // D-068 re-review of #780 (fifth round): a pattern-capture binding
+        // (`case x:`, or a capture nested in `Sequence`/`SequenceStar`/
+        // `Mapping`/`Class`/`Or`/`As`) rebinds `name` exactly like `Assign`/
+        // `AnnAssign`/the `Try`-handler `as` binding do -- each of those
+        // pairs its own `bind_variable`/`bind` call with `kill_narrowing`
+        // (see `stmt.rs`'s `Assign`/`AnnAssign`/`Try` arms and `expr.rs`'s
+        // `pre_bind_named_expr_targets`), but this call site never did.
+        // Without this, a name narrowed by an enclosing `if name is not
+        // None:` kept its stale `$narrowed:{name}` sentinel after a `match`
+        // case captured the same name, so a later read of `name` -- even
+        // outside the `match` entirely, since this binding is applied
+        // directly to `scopes` rather than inside `case.body`'s isolated
+        // snapshot -- would still wrongly lower to `MirExpr::OptionalUnwrap`
+        // against the pre-match narrowed type instead of the pattern
+        // capture's real type.
+        super::kill_narrowing(scopes, name);
     }
     let binding_stmts: Vec<MirStmt> = bindings
         .iter()
@@ -77,11 +93,14 @@ fn lower_match_chain(
             value: value.clone(),
         })
         .collect();
-    let case_body: Vec<MirStmt> = case
-        .body
-        .iter()
-        .map(|s| lower_stmt(s, scopes, classes, current_class))
-        .collect();
+    // D-068 review of #780: `match` case bodies are not this fix's scope --
+    // each case is already isolated from its siblings by
+    // `lower_scoped_body`'s own snapshot/restore, and the checker's own
+    // (now narrowing-aware) `join_match_branches` gate means no HIR this
+    // crate lowers can rely on a narrowing fact this ending state would
+    // have supplied -- see `lower_scoped_body`'s doc comment. The ending
+    // narrowed state is intentionally discarded here.
+    let (case_body, _end_narrowed) = lower_scoped_body(&case.body, scopes, classes, current_class, None);
     let else_chain = lower_match_chain(subj_var, subj_ty, rest, scopes, classes, current_class);
     let inner_body = if let Some(guard) = &case.guard {
         let guard_cond = lower_expr(guard, scopes, classes, current_class);
@@ -370,7 +389,10 @@ fn lower_class_conds(
     }
     (vec![conds], bindings)
 }
-/// on the enum class) to `MirExpr::Name` reading the synthetic
+
+/// Rewrites an attribute access `base.attr` (where `base` names an enum
+/// class and `attr` is one of its declared members, i.e. `attr` reads a
+/// member on the enum class) to `MirExpr::Name` reading the synthetic
 /// `<Class>.<Member>.enum_member` global. Returns `None` if `base` is not
 /// an enum class name or `attr` is not one of its members. Extracted from
 /// `lower_expr` to isolate the enum-specific code paths (see

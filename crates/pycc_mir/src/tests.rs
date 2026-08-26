@@ -19,6 +19,7 @@ mod exception;
 mod expr;
 mod expr_ty;
 mod matching;
+mod narrow;
 mod protocol;
 mod scope;
 mod slice;

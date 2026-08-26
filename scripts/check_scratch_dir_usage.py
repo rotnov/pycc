@@ -105,6 +105,14 @@ ALLOWLIST: dict[str, int] = {
     # tracked under #782's Part 2 migration scope alongside every other
     # entry below.
     "tests/issue_150_zero_step_range.rs": 1,
+    # D-068 re-review of #780 (rebase onto #786's `pycc_scratch` landing):
+    # same blocker as `tests/issue_150_zero_step_range.rs` immediately
+    # above -- migrating this file's own raw-`temp_dir` call would require
+    # adding `pycc_scratch` back as a root `[dev-dependencies]` entry, which
+    # `f79bb2b5` already tried and reverted because it trips D-091's
+    # bench-manifest fingerprint gate in `frontend-perf-measure`. Tracked
+    # under the same #782 Part 2 migration scope.
+    "tests/issue_769_optional_narrowing.rs": 1,
     "src/main.rs": 7,
     "src/project_config.rs": 26,
     "tests/conformance.rs": 1,
