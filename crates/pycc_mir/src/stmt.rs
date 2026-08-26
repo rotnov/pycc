@@ -756,19 +756,34 @@ pub(super) fn lower_stmt(
         // an `as` binding always resolves to `ExceptionGroup`, never the
         // named handler type (see `pycc_types::exception::
         // check_try_star_stmt`'s identical rule at type-checking time).
+        //
+        // D-068 re-review of #780 (eighth round): this arm now routes every
+        // body/handler/orelse/finalbody position through
+        // `lower_scoped_body` and mirrors the `Try` arm's full
+        // pre_handlers_narrowed/apply_kill_prescan/restore_narrowing
+        // sequence around the handler loop -- a raw per-statement
+        // `.map(lower_stmt)` loop (this arm's prior shape) never calls
+        // `apply_post_if_narrowing`, so it silently dropped guard-clause
+        // narrowing propagation across `try`/`except*`/`else`/`finally`
+        // bodies, and never ran `apply_kill_prescan` to protect a handler
+        // from a narrowing the `try` body's own prefix already killed --
+        // the exact defect class `check_stmt_sequence_shared`'s doc
+        // comment (`crates/pycc_types/src/exception.rs`) describes for the
+        // type-checker side of this same construct.
         HirStmt::TryStar {
-            body,
+            body: hir_body,
             handlers,
             orelse,
             finalbody,
         } => {
-            let body = body
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
+            let (body, _end_narrowed) =
+                super::lower_scoped_body(hir_body, scopes, classes, current_class, None);
+            let pre_handlers_narrowed = super::narrowing_snapshot(scopes);
             let handlers = handlers
                 .iter()
                 .map(|h| {
+                    super::restore_narrowing(scopes, pre_handlers_narrowed.clone());
+                    super::apply_kill_prescan(scopes, hir_body);
                     let exc_type_tag = h.exc_type.as_ref().map(|names| {
                         let mut tags: Vec<u8> = names
                             .iter()
@@ -795,11 +810,8 @@ pub(super) fn lower_stmt(
                         // the narrowed `Optional`'s inner value.
                         super::kill_narrowing(scopes, name);
                     }
-                    let handler_body = h
-                        .body
-                        .iter()
-                        .map(|s| lower_stmt(s, scopes, classes, current_class))
-                        .collect();
+                    let (handler_body, _end_narrowed) =
+                        super::lower_scoped_body(&h.body, scopes, classes, current_class, None);
                     MirExceptHandler {
                         exc_type_tag,
                         binding_name: h.name.clone(),
@@ -811,14 +823,11 @@ pub(super) fn lower_stmt(
                     }
                 })
                 .collect();
-            let orelse = orelse
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
-            let finalbody = finalbody
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
+            super::restore_narrowing(scopes, pre_handlers_narrowed);
+            let (orelse, _end_narrowed) =
+                super::lower_scoped_body(orelse, scopes, classes, current_class, None);
+            let (finalbody, _end_narrowed) =
+                super::lower_scoped_body(finalbody, scopes, classes, current_class, None);
             MirStmt::TryStar {
                 body,
                 handlers,

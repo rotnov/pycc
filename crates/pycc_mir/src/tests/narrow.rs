@@ -1102,6 +1102,134 @@ fn a_try_star_except_as_binding_reusing_the_narrowed_name_does_not_unwrap_the_ha
     );
 }
 
+/// D-068 re-review of #780 (eighth round): mirrors
+/// `an_except_handler_reached_after_a_try_body_kill_does_not_unwrap_the_read`
+/// above for `TryStar` -- the same handler-reached-after-a-body-kill
+/// soundness gap the plain `Try` arm's `pre_handlers_narrowed`/
+/// `apply_kill_prescan` sequence fixes applies identically to `except*`,
+/// since a subgroup handler also only ever runs after some prefix of the
+/// `try` body already executed. `pycc_types::check` now rejects the source
+/// this HIR models too (T0021, via `check_try_star_stmt`'s own
+/// `apply_kill_prescan` call, added this same round), so this hand-built-HIR
+/// test is the only way to exercise `pycc_mir::build`'s independent copy of
+/// the fix (`stmt::lower_stmt`'s `TryStar` arm) directly.
+#[test]
+fn a_try_star_except_handler_reached_after_a_try_body_kill_does_not_unwrap_the_read() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![("x".to_string(), Ty::Optional(Box::new(Ty::Int)))],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![HirStmt::TryStar {
+                body: vec![
+                    HirStmt::Assign {
+                        target: "x".to_string(),
+                        value: HirExpr::NoneLiteral,
+                    },
+                    HirStmt::Raise {
+                        exc: Some(HirExpr::Call {
+                            callee: "ValueError".to_string(),
+                            args: vec![HirExpr::StringLiteral("boom".to_string())],
+                        }),
+                        cause: None,
+                    },
+                ],
+                handlers: vec![pycc_hir::HirExceptHandler {
+                    exc_type: Some(vec!["ValueError".to_string()]),
+                    name: None,
+                    body: vec![print_x("x")],
+                }],
+                orelse: vec![],
+                finalbody: vec![],
+            }],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: outer_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered outer `if`");
+    };
+    let MirStmt::TryStar { handlers, .. } = &outer_body[0] else {
+        panic!("expected the outer `if` body's only statement to be the lowered `try`/`except*`");
+    };
+    assert_eq!(
+        handlers[0].body[0],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Optional(Box::new(Ty::Int)),
+            }],
+            ty: Ty::None,
+        })
+    );
+}
+
+/// D-068 re-review of #780 (eighth round): proves the `TryStar` arm's
+/// `body`/`orelse`/`finalbody` positions route through `lower_scoped_body`
+/// (and therefore `lower_stmt_sequence`/`apply_post_if_narrowing`) exactly
+/// like the plain `Try` arm's -- an early-return guard inside the `try`
+/// body must still narrow the read in the statement right after it, the
+/// same early-return-continuation shape
+/// `an_early_return_guard_narrows_the_read_after_it_in_a_function_body`
+/// proves at the function-body level. Before this round's fix, `TryStar`
+/// lowered its body with a raw `.map(lower_stmt)` loop that never called
+/// `apply_post_if_narrowing`, so this read would have stayed a plain
+/// `MirExpr::Name` (unnarrowed) instead of an `OptionalUnwrap`.
+#[test]
+fn an_early_return_guard_inside_a_try_star_body_narrows_the_read_after_it() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![("x".to_string(), Ty::Optional(Box::new(Ty::Int)))],
+        return_ty: Ty::None,
+        body: vec![HirStmt::TryStar {
+            body: vec![
+                HirStmt::If {
+                    test: is_none("x"),
+                    body: vec![HirStmt::Return(None)],
+                    orelse: vec![],
+                },
+                print_x("x"),
+            ],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some(vec!["ValueError".to_string()]),
+                name: None,
+                body: vec![],
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::TryStar { body: try_body, .. } = &body[0] else {
+        panic!("expected the only function statement to be the lowered `try`/`except*`");
+    };
+    assert_eq!(
+        try_body[1],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::OptionalUnwrap(
+                Box::new(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::Optional(Box::new(Ty::Int)),
+                }),
+                Box::new(Ty::Int),
+            )],
+            ty: Ty::None,
+        })
+    );
+}
+
 /// D-068 re-review of #780 (fifth round): a `match` case's own capture
 /// pattern (`case x:`) reusing a narrowed name must kill that name's
 /// narrowing sentinel too, exactly like the `Try`-handler `as` binding

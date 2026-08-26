@@ -276,7 +276,7 @@ fn a_non_exception_group_member_is_rejected() {
 
 #[test]
 fn a_type_error_inside_a_try_star_body_propagates_out() {
-    // The `?` on `check_stmt_shared` for the try body.
+    // The `?` on `check_stmt_sequence_shared` for the try body.
     let diagnostic = expect_error(
         "def main() -> None:\n\
          \x20   try:\n\
@@ -338,7 +338,7 @@ fn an_except_star_handler_naming_a_class_with_its_own_constructor_is_rejected() 
 
 #[test]
 fn a_type_error_inside_a_try_star_handler_body_propagates_out() {
-    // The `?` on `check_stmt_shared` for a handler body.
+    // The `?` on `check_stmt_sequence_shared` for a handler body.
     let diagnostic = expect_error(
         "def main() -> None:\n\
          \x20   try:\n\
@@ -355,7 +355,7 @@ fn a_type_error_inside_a_try_star_handler_body_propagates_out() {
 
 #[test]
 fn a_type_error_inside_a_try_star_else_body_propagates_out() {
-    // The `?` on `check_stmt_shared` for the else body.
+    // The `?` on `check_stmt_sequence_shared` for the else body.
     let diagnostic = expect_error(
         "def main() -> None:\n\
          \x20   try:\n\
@@ -374,7 +374,7 @@ fn a_type_error_inside_a_try_star_else_body_propagates_out() {
 
 #[test]
 fn a_type_error_inside_a_try_star_finally_body_propagates_out() {
-    // The `?` on `check_stmt_shared` for the finally body.
+    // The `?` on `check_stmt_sequence_shared` for the finally body.
     let diagnostic = expect_error(
         "def main() -> None:\n\
          \x20   try:\n\
@@ -399,7 +399,7 @@ fn a_try_star_handler_with_incompatible_binding_is_t0023() {
     // the plain `try`/`except` case. This specific reassignment
     // (`x = "bad"` inside the handler body) is a same-block rebinding, so
     // it is actually caught directly by `check_assignment` (via
-    // `check_stmt_shared`) before `check_try_star_stmt` ever reaches its
+    // `check_stmt_sequence_shared`) before `check_try_star_stmt` ever reaches its
     // own `join_if_branches` call -- see
     // `try_star_handler_as_binding_incompatible_type_is_t0023` in
     // `tests.rs` for a fixture that reaches `join_if_branches` itself,
