@@ -22,10 +22,13 @@ through MIR, LLVM, the host linker, and the native runtime. v0.1's own
 acceptance criteria are now met: `fib` and `mandelbrot-ascii` match pinned
 CPython output on all five Tier-1 targets, `pycc check` clears its
 <75ms/1000 LOC throughput floor, and diagnostic output matches the stable CLI
-specification's example. Documented representation and lifetime gaps, the
-full multi-version conformance matrix, differential fuzzing, corpus testing,
-and production readiness remain roadmap work; design targets must not be
-interpreted as released features.
+specification's example. v0.2 (collections, generics) and v0.3 (classes,
+inheritance, pattern matching, exceptions) are also met, with v0.3 released
+as the `v0.3.0` tag; v0.4 (multi-file projects, imports, incremental
+compilation) is the next milestone and has not started. Documented
+representation and lifetime gaps, the full multi-version conformance matrix,
+differential fuzzing, corpus testing, and production readiness remain
+roadmap work; design targets must not be interpreted as released features.
 
 ## Evidence hero inventory
 

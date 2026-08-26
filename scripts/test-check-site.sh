@@ -1233,9 +1233,21 @@ mutations = (
     ),
     (
         site_dir / "index.html",
-        "v0.2 acceptance criteria also met; v0.3's class model core has landed",
+        "v0.2 acceptance criteria also met (2026-08-04)",
         "v0.2 acceptance criteria remain unmet",
-        "landing page with a superseded v0.2/v0.3 status",
+        "landing page with a superseded v0.2 status",
+    ),
+    (
+        site_dir / "index.html",
+        "v0.3 acceptance criteria met and released as",
+        "v0.3 acceptance criteria remain unmet",
+        "landing page with a superseded v0.3 status",
+    ),
+    (
+        site_dir / "index.html",
+        "v0.4 (multi-file projects, imports, incremental compilation) is next and has not started",
+        "v0.4 (multi-file projects, imports, incremental compilation) is already well underway.",
+        "landing page that overclaims v0.4 progress that has not started",
     ),
     (
         site_dir / "status" / "index.html",
@@ -1251,31 +1263,31 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "v0.1 and v0.2's acceptance criteria are both met, and v0.3's\n              class model core has landed",
+        "v0.1, v0.2, and v0.3's acceptance criteria are all met, and\n              v0.3 is released as the",
         "v0.1's acceptance criteria remain unmet, and v0.3's\n              class model core has landed",
-        "status page that understates v0.1/v0.2 acceptance-checklist completion",
+        "status page that understates v0.1/v0.2/v0.3 acceptance-checklist completion",
     ),
     (
         site_dir / "status" / "index.html",
         (
-            "full multi-version conformance matrix, differential fuzzing,\n"
-            "              and corpus testing remain planned test-depth work carried over\n"
-            "              from v0.1 and v0.2."
+            "matrix, differential fuzzing, and corpus testing beyond the\n"
+            "              v0.3 floor remain planned test-depth work carried over from\n"
+            "              earlier milestones"
         ),
         "The full multi-version conformance matrix is already complete.",
         "status page that overclaims conformance-matrix completion",
     ),
     (
         site_dir / "status" / "index.html",
-        "user-defined exception class remains planned.",
-        "user-defined exception classes and protocols remain planned.",
-        "status page that understates landed v0.3 class-model items",
+        "raise it, and have it caught.",
+        "raising and catching a user-defined exception remains planned.",
+        "status page that understates landed v0.3 exception-handling items",
     ),
     (
         site_dir / "status" / "index.html",
-        "Still ahead for v0.3: raising and catching a",
-        "Still ahead for v0.3: raising, catching, and protocols are a",
-        "status page that understates landed v0.3 class-model items in the next-slice prose",
+        "It has not started: no issue has been selected, no branch",
+        "v0.4 work is already well underway.",
+        "status page that overclaims v0.4 progress that has not started",
     ),
     (
         site_dir / "status" / "index.html",
@@ -2017,7 +2029,7 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-21</lastmod>"""
+    <lastmod>2026-08-26</lastmod>"""
 assert entry in content
 path.write_text(content.replace(entry, entry + "\n    <lastmod>2026-07-30</lastmod>", 1))
 PY
@@ -2039,9 +2051,9 @@ content = path.read_text()
 # a lastmod, so replacing a bare date literal would silently mutate whichever
 # entry comes first in document order instead of the one named here.
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-21</lastmod>"""
+    <lastmod>2026-08-26</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-21", "not-a-date"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-08-26", "not-a-date"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -2058,9 +2070,9 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-21</lastmod>"""
+    <lastmod>2026-08-26</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-21", "9999-12-31"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-08-26", "9999-12-31"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then

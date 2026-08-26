@@ -186,6 +186,9 @@ and `pre-commit try-repo` both succeeded on all five Tier-1 targets --
 Linux x64, Linux arm64, macOS x64, macOS arm64, and Windows x64 -- by the
 same checklist-items-1-3 evidence bar as the prior runs, and the run's own
 `conclusion` field reports `success`. This satisfies the tag-advertising
-constraint for commit `de66c55bb9ba27a2437169a1c128547b25499837`. No
-`v0.3.0` release tag has been created from this evidence; creating and
-pushing that tag is a separate, later step this session does not take.
+constraint for commit `de66c55bb9ba27a2437169a1c128547b25499837`. **Update
+(2026-08-26):** the `v0.3.0` release tag has since been created and pushed,
+pointing at `908297593d3cc49252f2b234957f9985bca65fa8` (PR #801's merge
+commit into `main`) -- the tag-advertising constraint above is satisfied by
+that revision, which is a descendant of the audited
+`de66c55bb9ba27a2437169a1c128547b25499837`.
