@@ -24,8 +24,9 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > matches CPython output on all five Tier-1 targets, `--release` clears its
 > nbody-vs-CPython speedup floor on every target, and conformance covers ≥15
 > [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md) matrix rows
-> (17 distinct PEPs); see [`docs/ROADMAP.md`](./docs/ROADMAP.md) for the full,
-> per-bullet evidence.
+> (17 distinct PEPs). v0.3's own acceptance criteria are now also met:
+> conformance reaches 38 rows/39 PEPs, `T0030`/`T0031` are complete, and
+> `pycc explain` is implemented; see [`docs/ROADMAP.md`](./docs/ROADMAP.md).
 > The frontend performance measurement and isolated greater-than-2% regression
 > gate are required through `ci-gate` independently of that compiler sequence.
 > The source-aware paired gate measures the exact predecessor and candidate
@@ -208,20 +209,19 @@ are especially important:
 
 ## Roadmap
 
-**Current status (pre-alpha):** v0.1 and v0.2 acceptance criteria are both
-met. For v0.1: `fib` and `mandelbrot-ascii` match pinned CPython output on
-all five Tier-1 targets (Linux x64/arm64, macOS x64/arm64, Windows x64),
-`pycc check` clears its <75ms/1000 LOC throughput floor, diagnostic output
-matches the CLI specification, the five-target native CI matrix and one
-cross-host compilation path are live, the 100% line/region coverage gate is
-required and green, and the README coverage badge is bound to the enforced
-CI coverage thresholds. v0.2's container/generics corpus and `--release`
-speedup floor are likewise met on all five Tier-1 targets. v0.3 (classes,
-dataclasses, protocols, pattern matching, exceptions) is the current
-delivery milestone, in progress. Later capabilities — modules/imports,
-stdlib subset, generators, ownership & escape analysis, GIL-free threads,
-the ecosystem bot, and transparent CPython interop — remain planned. The
-compiler is still pre-alpha: documented representation and lifetime gaps
+**Current status (pre-alpha):** v0.1, v0.2, and v0.3 acceptance criteria are
+all met on all five Tier-1 targets (Linux, macOS, Windows). v0.1 covers
+`fib`/`mandelbrot-ascii` matching CPython output on all five Tier-1
+targets, the throughput floor, diagnostic output matching the CLI spec,
+the native CI matrix, cross-host compilation, the 100% line/region coverage
+gate, and the coverage badge bound to CI thresholds. v0.2 adds
+the container/generics corpus and the `--release` speedup floor. v0.3 adds
+conformance, `T0030`/`T0031`, and `pycc explain` — classes, inheritance,
+`match` exhaustiveness, and structured exceptions ship; see
+[`docs/ROADMAP.md`](./docs/ROADMAP.md). v0.4 (projects & incremental
+compilation) is the current delivery milestone, in progress. Later work —
+stdlib, generators, escape analysis, GIL-free threads, ecosystem bot,
+and CPython interop — remains planned. Still pre-alpha: documented gaps
 are roadmap work, not production readiness.
 
 The complete, commit-relative milestone status — every acceptance bullet,
