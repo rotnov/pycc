@@ -127,7 +127,10 @@ toward 2% once that one-time cost is absorbed into every future baseline.
 The active `.github/workflows/ci.yml` uses D-171 change-aware routing. For a
 compiler-relevant change, its `frontend-perf-measure` and isolated
 `frontend-perf-gate` retain D-112's Ubuntu runner, D-062's five-replicate
-sample plan, and D-114's `>7%` regression threshold. The D-172 audit validates
+sample plan, and D-114's `>7%` regression threshold; per D-203 the D-091
+bench-manifest tail check tolerates exactly one reviewed line -- the
+`pycc_scratch` root dev-dependency -- and hard-aborts on every other tail
+difference. The D-172 audit validates
 the exact predecessor/candidate bindings, artifact identities, reviewed
 comparator, threshold command, routing dependency, and `ci-gate` result
 branches as named properties; it does not authorize the active workflow by a

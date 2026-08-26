@@ -59,6 +59,7 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
+pycc_scratch = { path = "crates/pycc_scratch" }
 serde_json = "1"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 

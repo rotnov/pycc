@@ -97,21 +97,24 @@ ALLOWLIST: dict[str, int] = {
     # pattern at the commit where the gate takes effect" -- that commit is
     # this rebased merge, not the pre-rebase branch tip -- so recording this
     # file here fulfills the snapshot rather than breaching its "one-time"
-    # property (see D-201). Migrating it is out of scope for this PR: it
-    # would require adding `pycc_scratch` back as a root `[dev-dependencies]`
-    # entry, which f79bb2b5 already tried and reverted because it trips
-    # D-091's bench-manifest fingerprint gate in `frontend-perf-measure` --
-    # the same blocker tracked against #782 Batch B (PR #793). It stays
-    # tracked under #782's Part 2 migration scope alongside every other
-    # entry below.
+    # property (see D-201). Migrating it was out of scope for that PR: it
+    # would have required adding `pycc_scratch` back as a root
+    # `[dev-dependencies]` entry, which f79bb2b5 tried and reverted
+    # because it tripped D-091's bench-manifest fingerprint gate in
+    # `frontend-perf-measure`. D-203 has since narrowed that gate to
+    # tolerate exactly the pycc_scratch root dev-dependency line, and the
+    # dev-dependency landed with D-203's activation, so the blocker is
+    # resolved. It stays tracked under #782's Part 2 migration scope
+    # alongside every other entry below.
     "tests/issue_150_zero_step_range.rs": 1,
     # D-068 re-review of #780 (rebase onto #786's `pycc_scratch` landing):
     # same blocker as `tests/issue_150_zero_step_range.rs` immediately
-    # above -- migrating this file's own raw-`temp_dir` call would require
-    # adding `pycc_scratch` back as a root `[dev-dependencies]` entry, which
-    # `f79bb2b5` already tried and reverted because it trips D-091's
-    # bench-manifest fingerprint gate in `frontend-perf-measure`. Tracked
-    # under the same #782 Part 2 migration scope.
+    # above -- migrating this file's own raw-`temp_dir` call would have
+    # required adding `pycc_scratch` back as a root `[dev-dependencies]`
+    # entry, which `f9231e2f` tried and reverted because it tripped D-091's
+    # bench-manifest fingerprint gate in `frontend-perf-measure`. That
+    # blocker is likewise resolved by D-203's narrowing. Tracked under the
+    # same #782 Part 2 migration scope.
     "tests/issue_769_optional_narrowing.rs": 1,
     "src/main.rs": 7,
     "src/project_config.rs": 26,
