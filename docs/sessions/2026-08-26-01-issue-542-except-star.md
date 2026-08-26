@@ -171,34 +171,73 @@ the external bot, since both independently found the same issue) by hand,
 then re-verifying `cargo build --workspace` and the affected test files
 before pushing as a fast-forward (`345dbac6..83bbb0e9`).
 
+Replied to and resolved all five review threads via the GitHub GraphQL API
+(`addPullRequestReviewThreadReply` then `resolveReviewThread`), each reply
+citing the specific fix/ADR-amendment/deferral above; re-verified
+afterward that `closingIssuesReferences` still reports exactly one entry
+(#542) and that all five threads report `isResolved: true`.
+
+## A second concurrent-writer overlap, and its own resolution
+
+While gates were being re-verified against `1f3f216b`, `origin/main`
+advanced again with PR [#786](https://github.com/rotnov/pycc/pull/786)
+(issue #781: a new `pycc_scratch` crate replacing the ad hoc
+`tempfile_dir`/raw `std::env::temp_dir().join(...)` pattern across the
+workspace, including this crate's own `crates/pycc_codegen/src/
+tests_support.rs` helper). `gh pr view 794` reported `mergeable:
+CONFLICTING` against the refreshed tip. This session merged `origin/main`
+into `issue-542-except-star` (`git merge`, matching this branch's existing
+history of merge commits rather than rebases), converting this PR's own
+new `tempfile_dir(...)` call sites in `crates/pycc_codegen/src/tests.rs`
+(16 sites) and `tests/issue_542_except_star.rs` (41 raw
+`std::env::temp_dir().join(...)` sites, added to `scripts/
+check_scratch_dir_usage.py`'s `ALLOWLIST` instead of migrated, matching
+the same root-`[dev-dependencies]` blocker already recorded there for
+`tests/issue_150_zero_step_range.rs`) to the new `pycc_scratch::
+ScratchDir::new(...).expect(...)` pattern, regenerating `docs/decisions/
+README.md` to resolve its own generated-index conflict, and lowering
+`tests/issue_382_exceptions.rs`'s recorded `ALLOWLIST` count from 57 to 56
+to match a reduction issue #542's own earlier commit (`397d9b25`) had
+already made to that file before this merge.
+
+Before this session could push its own merge commit, a **second**
+concurrent writer independently resolved the identical conflict (commit
+`53ea7d2e`, "fix(codegen): migrate except*/ExceptionGroup unit tests off
+tempfile_dir") and pushed it to `origin/issue-542-except-star` first --
+`gh pr view 794` showed `headRefOid` had moved to `53ea7d2e` and
+`mergeable: MERGEABLE` before this session's own push. Per the "Concurrent
+background actor on pycc" operating lesson (fetch-and-diff before trusting
+remembered state; adopt the other writer's already-pushed resolution
+rather than force a redundant one), this session discarded its own
+unpushed merge commit (`git reset --hard origin/issue-542-except-star`,
+safe since nothing from it had been pushed or was visible to anyone else)
+and re-ran every gate from that authoritative head instead of trusting its
+own now-superseded local work.
+
 ## Gates
 
-- `cargo build --workspace`, `cargo test --workspace`, `cargo clippy
-  --workspace --all-targets -- -D warnings`, `cargo doc --workspace
-  --no-deps` all green against `83bbb0e9`.
+- Against `53ea7d2e` (the merge-with-`origin/main` resolution that
+  actually landed on the branch, superseding this session's own discarded
+  merge commit -- see above): `cargo build --workspace`, `cargo test
+  --workspace` (1399 unit tests plus every integration-test binary, 0
+  failed), `cargo clippy --workspace --all-targets -- -D warnings`, and
+  `cargo doc --workspace --no-deps` all green.
 - `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions
-  100`: **100.00% lines / 100.00% regions** (45958 regions, 29652 lines, 0
-  missed) against `83bbb0e9`.
-- The current head is `1f3f216b`, a docs-only commit (this file's own
-  in-place correction, see the "Status" section above) layered directly on
-  top of gate-verified `83bbb0e9` with no code changes in between, so the
-  gate results above still apply unchanged to `1f3f216b`.
-- CI on `345dbac6` (an earlier, pre-P1-fix head) had gone green previously;
-  CI on `1f3f216b` needs a fresh run before merge -- not yet observed
-  green by this session at the time of this writing.
+  100` against `53ea7d2e`: **100.00% lines / 100.00% regions** (46057
+  regions, 29702 lines, 0 missed).
+- CI (`build-test-coverage`, `native-build-test` x4, `governance`,
+  `cross-compile-build`/`-verify`, `audit`) was already running against
+  `53ea7d2e` at the time of this writing; not yet observed green by this
+  session.
 
 ## Where to resume
 
-Not yet merged. Remaining steps: watch CI go green on `1f3f216b`, resolve
-the five external-bot review threads (reply confirming what was fixed vs.
-what was deferred to #795 vs. what was accepted as a documented D-202
-divergence, per the second-pass findings above), confirm no unresolved
-review threads remain (required by this repository's branch protection,
-independent of whether AGENTS.md treats an external bot as a required
-gate), merge PR #794 (verify via GraphQL `closingIssuesReferences` that it
-closes exactly #542 first), then run
-`python3 scripts/check_conformance_breadth.py` against the merged
-`origin/main` tip to check v0.3's Accept criteria.
+Not yet merged. Remaining steps: watch CI go green on `53ea7d2e`, merge PR
+#794 (re-verify via GraphQL `closingIssuesReferences` that it still closes
+exactly #542 immediately before merging, since branch state has moved more
+than once during this review), then run `python3 scripts/
+check_conformance_breadth.py` against the merged `origin/main` tip to
+check v0.3's Accept criteria.
 
 Once the `pep_0654_except_star_matches_cpython_3_14_7_byte_for_byte`
 conformance fixture is observed green under a CPython-oracle-enabled CI
