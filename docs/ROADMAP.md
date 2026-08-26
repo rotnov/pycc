@@ -226,7 +226,7 @@ All six issues above are also assigned to the GitHub [v0.3 milestone](https://gi
 
 **[#769](https://github.com/rotnov/pycc/issues/769) — `Optional[int]` flow-sensitive `is`/`is not None` narrowing (Part 2 of [#747](https://github.com/rotnov/pycc/issues/747), D-201):** a top-level `if name is None:`/`if name is not None:` test now narrows `name` from `Optional[int]` back to plain `int` for the region its polarity implies presence in, closing a gap D-197 (Part 1, #763) deferred. Covers in-branch narrowing and the early-return continuation shape. Implemented as a side-table overlay never merged into the real binding table, so it cannot leak past an `if`/`else` join by construction; MIR snapshots/restores that overlay around every nested body so a kill inside a nested branch survives the nested body's own close. See D-201 for the full design and scope cuts. `tests/fixtures/pep_0604_union.py` gains narrowed-use rungs; the PEP 604 conformance row moves narrowing from `not_proven` to `proven`.
 
-**[#790](https://github.com/rotnov/pycc/issues/790):** register `TYPE_CHECKING`, fold branch; no row move. The fold is not import-gated (silent-divergence gap, see `docs/STDLIB_PLAN.md`); tracked by [#798](https://github.com/rotnov/pycc/issues/798).
+**[#790](https://github.com/rotnov/pycc/issues/790):** register `TYPE_CHECKING`, fold branch. Not import-gated; [#798](https://github.com/rotnov/pycc/issues/798) tracks.
 
 ## v0.4 — projects & incremental
 
