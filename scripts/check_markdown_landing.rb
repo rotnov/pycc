@@ -107,13 +107,14 @@ SECTION_CONTRACT = {
     ],
   },
   "honest status" => {
-    html_anchor: "The v0.1 and v0.2 frontend and native backend exist.",
+    html_anchor: "v0.1 through v0.3 are met and released as",
     md_heading: "## Honest status",
     md_markers: [
-      "The v0.1 and v0.2 frontend and native backend exist.",
+      "v0.1 through v0.3 are met and released as",
       "v0.1 acceptance criteria met",
       "v0.2 acceptance criteria also met",
-      "The full conformance matrix and the rest of v0.3 are next",
+      "v0.3 acceptance criteria met and released as",
+      "v0.4 (multi-file projects, imports, incremental compilation) is unstarted",
     ],
   },
   "evidence pages" => {

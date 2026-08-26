@@ -135,7 +135,7 @@ From source file to machine code.
 
 ## Honest status
 
-The v0.1 and v0.2 frontend and native backend exist. The compiler is not
+v0.1 through v0.3 are met and released as `v0.3.0`. The compiler is not
 ready for production.
 
 pycc is pre-alpha and is not ready for production. The repository contains an
@@ -145,19 +145,20 @@ comparisons, assignments, function calls and returns, recursion, control flow,
 primitive values, `range`, and basic f-strings. It enforces public annotations,
 rejects `Any`, infers private-helper signatures, and renders human or JSON
 diagnostics. `pycc build` and `pycc run` compile that implemented surface through MIR,
-LLVM, the host linker, and the native runtime. v0.1's own acceptance criteria
+LLVM, the host linker, and the native runtime. v0.1's acceptance criteria
 are now met: `fib` and `mandelbrot-ascii` match pinned CPython output on all
 five Tier-1 targets, `pycc check` clears its <75ms/1000 LOC throughput floor,
 and diagnostic output matches the stable CLI specification's example.
 Documented representation and lifetime gaps, the full multi-version
-conformance matrix, differential fuzzing, corpus testing, and production
-readiness remain roadmap work.
+conformance matrix, differential fuzzing, and corpus testing remain
+roadmap work.
 
 - Strict v0.1 frontend and diagnostic snapshots
 - v0.1 native backend with documented gaps
 - v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)
-- v0.2 acceptance criteria also met; v0.3's class model core has landed
-- The full conformance matrix and the rest of v0.3 are next
+- v0.2 acceptance criteria also met
+- v0.3 acceptance criteria met and released as `v0.3.0`
+- v0.4 (multi-file projects, imports, incremental compilation) is unstarted
 
 The landing page's code example uses only implemented v0.1 language features
 (statement-form `if`, `while`, recursive calls, `print`) and matches the
