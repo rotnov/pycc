@@ -376,14 +376,18 @@ pub enum HirExpr {
     /// every container-literal expression, per D-116's own correction), so
     /// once any function in a module is unannotated, assigning `y =
     /// xs.pop()` inside that solver-checked function's body never registers
-    /// a binding for `y` -- a later read of `y` in the same function then
-    /// fails with a misleading "not bound before this use" instead of the
-    /// expected type. This is not a novel gap: `HirExpr::Subscript`'s own
-    /// `collect_expr_constraints` arm (predates D-116/D-119, see commit
-    /// `0930903`) already returns `Ok(None)` the same way, so a scalar-typed
-    /// expression (`xs[0]`) already reached this exact gap long before this
-    /// task. `.pop()` is simply another instance of the same pre-existing
-    /// class, not a new or different failure mode.
+    /// a real type term for `y` in that solver pass. This is not a novel
+    /// gap: `HirExpr::Subscript`'s own `collect_expr_constraints` arm
+    /// (predates D-116/D-119, see commit `0930903`) already returns
+    /// `Ok(None)` the same way, so a scalar-typed expression (`xs[0]`)
+    /// already reached this exact gap long before this task. `.pop()` is
+    /// simply another instance of the same pre-existing class, not a new or
+    /// different failure mode. A later read of `y` in the same function no
+    /// longer fails with a misleading "not bound before this use" (issue
+    /// #771, D-199): the solver now tracks `y` as definitely-but-opaquely
+    /// bound, so a genuine downstream diagnostic surfaces instead. The
+    /// underlying gap -- no type term for `y` in this solver pass -- is
+    /// unchanged; only its misleading consequence is fixed.
     ListPop {
         list: String,
     },
@@ -398,7 +402,8 @@ pub enum HirExpr {
     /// caller to always supply a same-typed default sidesteps that gap
     /// entirely rather than half-solving it. Shares `ListPop`'s own
     /// pre-existing D-116 solver-binding caveat above verbatim (also
-    /// `Ok(None)` in the solver, also scalar-valued).
+    /// `Ok(None)` in the solver, also scalar-valued, also no longer
+    /// misleading downstream per issue #771/D-199).
     DictGetOrDefault {
         dict: String,
         key: Box<HirExpr>,
