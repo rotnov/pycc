@@ -177,3 +177,15 @@ Linux x64, Linux arm64, macOS x64, macOS arm64, and Windows x64 -- by the same
 checklist-items-1-3 evidence bar as the prior run. This satisfies the
 tag-advertising constraint for commit `97acf5032e0fb13bbd8cc6036691a20edf53b48f`
 and is the dated evidence backing the `v0.2.0` release tag.
+
+**Update (2026-08-26):** [`hook-install-check.yml` run
+32982395620](https://github.com/rotnov/pycc/actions/runs/32982395620),
+dispatched against commit `de66c55bb9ba27a2437169a1c128547b25499837` (`main`,
+2026-08-26 -- v0.3's content-complete revision): `pre-commit validate-manifest`
+and `pre-commit try-repo` both succeeded on all five Tier-1 targets --
+Linux x64, Linux arm64, macOS x64, macOS arm64, and Windows x64 -- by the
+same checklist-items-1-3 evidence bar as the prior runs, and the run's own
+`conclusion` field reports `success`. This satisfies the tag-advertising
+constraint for commit `de66c55bb9ba27a2437169a1c128547b25499837`. No
+`v0.3.0` release tag has been created from this evidence; creating and
+pushing that tag is a separate, later step this session does not take.
