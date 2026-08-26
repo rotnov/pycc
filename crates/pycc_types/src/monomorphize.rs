@@ -965,6 +965,45 @@ fn rewrite_generic_calls_in_stmt(
             }
             Ok(())
         }
+        // Part 3 of #382 (#542): `except*` always binds `as e` to
+        // `ExceptionGroup`, never to the named handler type -- see
+        // `check_try_star_stmt` in `pycc_types::exception` for the same rule
+        // at type-checking time.
+        HirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            for s in body.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            for handler in handlers.iter_mut() {
+                let mut handler_env = env.clone();
+                if let Some(name) = &handler.name {
+                    handler_env.bind(
+                        name.clone(),
+                        Ty::Instance(Box::new("ExceptionGroup".to_string())),
+                    );
+                }
+                for s in handler.body.iter_mut() {
+                    rewrite_generic_calls_in_stmt(
+                        &mut handler_env,
+                        local_names,
+                        s,
+                        instantiations,
+                        seen,
+                    )?;
+                }
+            }
+            for s in orelse.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            for s in finalbody.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            Ok(())
+        }
         HirStmt::Raise { exc, cause } => {
             if let Some(exc) = exc.as_mut() {
                 rewrite_generic_calls_in_raise_operand(
@@ -1280,6 +1319,12 @@ pub(crate) fn collect_generic_class_instantiations_from_stmt(
             }
         }
         HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        }
+        | HirStmt::TryStar {
             body,
             handlers,
             orelse,

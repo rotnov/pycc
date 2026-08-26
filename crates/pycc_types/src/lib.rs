@@ -12,7 +12,9 @@ mod unop;
 
 pub(crate) use env::BindingState;
 pub use env::Environment;
-use exception::{check_raise_stmt, check_try_stmt, is_unshadowed_builtin_exception};
+use exception::{
+    check_raise_stmt, check_try_star_stmt, check_try_stmt, is_unshadowed_builtin_exception,
+};
 pub use expr::infer_expr;
 pub(crate) use expr::infer_expr_in;
 
@@ -644,7 +646,16 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
                     collect_local_names(&case.body, names);
                 }
             }
+            // Part 3 of #382 (#542): `except*` collects local names exactly
+            // like plain `try`/`except` -- its `as` binding introduces a
+            // local the same way, whatever the bound type turns out to be.
             HirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            }
+            | HirStmt::TryStar {
                 body,
                 handlers,
                 orelse,
@@ -2037,6 +2048,12 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             orelse,
             finalbody,
         } => check_try_stmt(env, &[], body, handlers, orelse, finalbody, None),
+        HirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => check_try_star_stmt(env, &[], body, handlers, orelse, finalbody, None),
         HirStmt::Raise { exc, cause } => check_raise_stmt(env, &[], exc, cause),
     }
 }
@@ -2251,7 +2268,17 @@ fn block_always_returns(body: &[HirStmt]) -> bool {
                 }
                 all_cases_return
             }
+            // `except*` shares `Try`'s termination shape exactly: a terminal
+            // `finally` replaces every earlier outcome, and otherwise the
+            // normal path (body or `else`) and every matched subgroup's
+            // handler must all terminate.
             HirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            }
+            | HirStmt::TryStar {
                 body,
                 handlers,
                 orelse,
@@ -2688,6 +2715,20 @@ fn check_stmt_in_function(
             finalbody,
             Some(&return_ty),
         ),
+        HirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => check_try_star_stmt(
+            env,
+            local_names,
+            body,
+            handlers,
+            orelse,
+            finalbody,
+            Some(&return_ty),
+        ),
         HirStmt::Raise { exc, cause } => check_raise_stmt(env, local_names, exc, cause),
     }
 }
@@ -2966,6 +3007,12 @@ fn reject_generic_calls_in_stmt(
             }
         }
         HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        }
+        | HirStmt::TryStar {
             body,
             handlers,
             orelse,
@@ -3319,6 +3366,31 @@ fn unroll_enum_loops_in_stmts(
                 finalbody,
             } => {
                 result.push(HirStmt::Try {
+                    body: unroll_enum_loops_in_stmts(body, enum_members),
+                    handlers: handlers
+                        .iter()
+                        .map(|h| pycc_hir::HirExceptHandler {
+                            exc_type: h.exc_type.clone(),
+                            name: h.name.clone(),
+                            body: unroll_enum_loops_in_stmts(&h.body, enum_members),
+                        })
+                        .collect(),
+                    orelse: unroll_enum_loops_in_stmts(orelse, enum_members),
+                    finalbody: unroll_enum_loops_in_stmts(finalbody, enum_members),
+                });
+            }
+            // `except*` (PEP 654, #542) shares `Try`'s recursion shape --
+            // an enum `for` loop nested in a `try*` body, an `except*`
+            // handler, `else`, or `finally` must be unrolled exactly like
+            // its `Try` counterpart above, or a `ForList`-over-enum left
+            // inside a `try*` would reach MIR lowering unexpanded.
+            HirStmt::TryStar {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                result.push(HirStmt::TryStar {
                     body: unroll_enum_loops_in_stmts(body, enum_members),
                     handlers: handlers
                         .iter()

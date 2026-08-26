@@ -47,6 +47,45 @@ fn expect_top_level_try(
     }
 }
 
+/// Part 3 of #382 (#542, PEP 654): a `HirModule` wrapping a single
+/// top-level `HirStmt::TryStar`, mirroring `try_module` above for the
+/// plain `Try` case.
+fn try_star_module(
+    body: Vec<HirStmt>,
+    handlers: Vec<pycc_hir::HirExceptHandler>,
+    orelse: Vec<HirStmt>,
+    finalbody: Vec<HirStmt>,
+) -> HirModule {
+    HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    }
+}
+
+/// Test helper: extract a `TryStar` statement from a top-level MIR item,
+/// panicking if the item is not a `TryStar`.
+fn expect_top_level_try_star(
+    item: &MirItem,
+) -> (&[MirStmt], &[MirExceptHandler], &[MirStmt], &[MirStmt]) {
+    match item {
+        MirItem::TopLevelStmt(MirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        }) => (body, handlers, orelse, finalbody),
+        _ => panic!("expected TryStar"),
+    }
+}
+
 /// Test helper: extract a `Raise` statement from a top-level MIR item,
 /// panicking if the item is not a `Raise`.  The panic arm is covered by
 /// `expect_top_level_raise_panics_on_non_raise`.
@@ -72,7 +111,9 @@ fn expect_constructed_exception(value: &MirExceptionValue) -> (&u8, &MirExpr) {
         MirExceptionValue::Constructed {
             type_tag, message, ..
         } => (type_tag, message),
-        MirExceptionValue::Existing(_) => panic!("expected constructed exception"),
+        MirExceptionValue::Existing(_) | MirExceptionValue::ConstructedGroup { .. } => {
+            panic!("expected constructed exception")
+        }
     }
 }
 
@@ -108,6 +149,20 @@ fn expect_top_level_raise_from_panics_on_non_raise_from() {
 #[should_panic(expected = "expected constructed exception")]
 fn expect_constructed_exception_panics_on_an_existing_exception() {
     expect_constructed_exception(&MirExceptionValue::Existing(MirExpr::IntLiteral(0)));
+}
+
+/// Part 3 of #382 (#542, PEP 654, D-202): the same panic arm, reached via
+/// the other non-`Constructed` variant -- a `ConstructedGroup` is not a
+/// single-exception `Constructed` value either.
+#[test]
+#[should_panic(expected = "expected constructed exception")]
+fn expect_constructed_exception_panics_on_a_constructed_group() {
+    expect_constructed_exception(&MirExceptionValue::ConstructedGroup {
+        type_tag: 24,
+        class_name: "ExceptionGroup".to_string(),
+        message: MirExpr::StringLiteral("msg".to_string()),
+        members: Vec::new(),
+    });
 }
 
 #[test]
@@ -212,6 +267,64 @@ fn lowers_try_with_else_and_finally_to_mir() {
     assert_eq!(body.len(), 1);
     assert_eq!(handlers.len(), 1);
     assert_eq!(handlers[0].exc_type_tag, Some(vec![0])); // Exception = 0
+    assert_eq!(orelse.len(), 1);
+    assert_eq!(finalbody.len(), 1);
+}
+
+/// Part 3 of #382 (#542, PEP 654): `lower_stmt`'s own unit-test binary
+/// never previously built a `HirStmt::TryStar` at all -- every existing
+/// `except*` test drove it end-to-end through `pycc_types`/`pycc_codegen`,
+/// a *different* compiled instance of this crate under `cargo llvm-cov
+/// --workspace`. Both instances are tracked separately for the D-014
+/// region/line gate (`llvm-cov export`/`report` counts each monomorphized
+/// compilation unit's regions independently, unlike `llvm-cov show`'s
+/// per-source-line merge), so the end-to-end exercise of `HirStmt::TryStar`
+/// left this crate's *own* instance of `lower_stmt`'s `TryStar` arm --
+/// its body/handlers/orelse/finalbody closures -- literally unexecuted.
+/// A named, typed handler with a non-empty body, plus non-empty orelse
+/// and finalbody, exercises every closure in the arm: the body map, the
+/// handlers map, its nested `exc_type` tag-collection map/flat_map, the
+/// handler-body map, the `binding_ty` map (only entered when `h.name` is
+/// `Some`), the orelse map, and the finalbody map.
+#[test]
+fn lowers_try_star_with_named_handler_else_and_finally_to_mir() {
+    let hir = try_star_module(
+        vec![HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::StringLiteral("body".to_string())],
+        })],
+        vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: Some("eg".to_string()),
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::StringLiteral("handler".to_string())],
+            })],
+        }],
+        vec![HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::StringLiteral("else".to_string())],
+        })],
+        vec![HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::StringLiteral("finally".to_string())],
+        })],
+    );
+    let mir = build(&hir);
+    assert_eq!(mir.items.len(), 1);
+    let (body, handlers, orelse, finalbody) = expect_top_level_try_star(&mir.items[0]);
+    assert_eq!(body.len(), 1);
+    assert_eq!(handlers.len(), 1);
+    assert_eq!(handlers[0].exc_type_tag, Some(vec![1])); // ValueError = 1
+    assert_eq!(handlers[0].binding_name.as_deref(), Some("eg"));
+    // `except*` always binds the handler name to `ExceptionGroup`, never
+    // the named handler type (matching `pycc_types::exception::
+    // check_try_star_stmt`'s identical rule at type-checking time).
+    assert_eq!(
+        handlers[0].binding_ty,
+        Some(Ty::Instance(Box::new("ExceptionGroup".to_string())))
+    );
+    assert_eq!(handlers[0].body.len(), 1);
     assert_eq!(orelse.len(), 1);
     assert_eq!(finalbody.len(), 1);
 }

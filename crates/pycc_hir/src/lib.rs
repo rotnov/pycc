@@ -11,10 +11,11 @@ mod typecheck;
 
 pub use class::{HirClassDef, PropertyDef, ProtocolMember};
 pub use exception::{
-    BUILTIN_EXCEPTION_CLASSES, EXCEPTION_INIT_MANGLED_NAME, FIRST_USER_EXCEPTION_TYPE_TAG,
-    HirExceptHandler, MAX_USER_EXCEPTION_CLASSES, builtin_exception_class_defs,
-    builtin_exception_init_item, builtin_exception_parent, except_handler_binding_type_name,
-    is_builtin_exception_class, is_flat_builtin_exception_class,
+    BUILTIN_EXCEPTION_CLASSES, EXCEPTION_GROUP_TYPE_TAG, EXCEPTION_INIT_MANGLED_NAME,
+    FIRST_USER_EXCEPTION_TYPE_TAG, HirExceptHandler, MAX_USER_EXCEPTION_CLASSES,
+    builtin_exception_class_defs, builtin_exception_init_item, builtin_exception_parent,
+    except_handler_binding_type_name, is_builtin_exception_class,
+    is_flat_builtin_exception_class,
 };
 pub(crate) use func::{
     annotation_to_ty, lower_arg_list, lower_function, lower_return_annotation, type_param_name,
@@ -673,6 +674,27 @@ pub enum HirStmt {
     /// The `finalbody` always runs, whether the try completed normally, an
     /// exception was caught, or an exception is propagating.
     Try {
+        body: Vec<HirStmt>,
+        handlers: Vec<HirExceptHandler>,
+        orelse: Vec<HirStmt>,
+        finalbody: Vec<HirStmt>,
+    },
+    /// `try: ... except* T: ...` (PEP 654, Part 3 of #382, #542). Shares
+    /// `HirExceptHandler`'s shape with plain `Try` -- the grammar node is
+    /// identical, only the `is_star` flag on the AST differs -- but is a
+    /// distinct variant rather than an `is_star: bool` field on `Try`
+    /// because the two forms cannot mix (`except`/`except*` may not appear
+    /// in the same `try`, enforced at parse time) and every downstream
+    /// consumer (MIR lowering, `block_always_terminates`, `pycc_types`)
+    /// needs its own dispatch anyway: `except*` always binds `as e` to an
+    /// `ExceptionGroup`, never to the named type itself, and lowers to a
+    /// partition-based dispatch rather than mutually exclusive `type_matches`
+    /// branches. A bare `except*:` has no `HirExceptHandler` counterpart --
+    /// PEP 654 requires every `except*` clause to name a type -- so
+    /// `handlers[i].exc_type` is never `None` here: a bare `except*:` is
+    /// rejected by ruff's own parser as a syntax error (`L0001`) before HIR
+    /// lowering ever runs.
+    TryStar {
         body: Vec<HirStmt>,
         handlers: Vec<HirExceptHandler>,
         orelse: Vec<HirStmt>,

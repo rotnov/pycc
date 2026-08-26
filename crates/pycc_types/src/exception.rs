@@ -108,6 +108,89 @@ pub(super) fn check_try_stmt(
     Ok(())
 }
 
+/// `try: ... except* T: ...` (PEP 654, Part 3 of #382, #542).
+///
+/// Structurally mirrors [`check_try_stmt`] -- same body/handler/orelse/
+/// finalbody scoping and environment-joining shape -- but differs in what an
+/// `as` binding resolves to. Plain `except E as e:` binds `e` to `E` itself;
+/// `except* E as e:` always binds `e` to an `ExceptionGroup` containing the
+/// matched subgroup, never to `E`, because `except*` always operates on
+/// groups (PEP 654 section "Runtime Semantics"). pycc has no first-class
+/// generic-group type distinct from the flat `ExceptionGroup` name, so the
+/// binding is `Ty::Instance("ExceptionGroup")` unconditionally.
+pub(super) fn check_try_star_stmt(
+    env: &mut Environment,
+    local_names: &[&str],
+    body: &[HirStmt],
+    handlers: &[HirExceptHandler],
+    orelse: &[HirStmt],
+    finalbody: &[HirStmt],
+    return_ty: Option<&Ty>,
+) -> Result<(), Diagnostic> {
+    let mut body_env = env.clone();
+    for stmt in body {
+        check_stmt_shared(&mut body_env, local_names, stmt, return_ty)?;
+    }
+
+    let mut handler_envs = Vec::with_capacity(handlers.len());
+    for handler in handlers {
+        let mut handler_env = env.clone();
+        handler_env.in_except_handler = true;
+        // A bare `except*:` is rejected by ruff's own parser as a syntax
+        // error (PEP 654 requires every `except*` clause to name a type),
+        // so `handler.exc_type` is always `Some` by the time an
+        // `HirStmt::TryStar` reaches type-checking -- see
+        // `pycc_hir::stmt`'s own comment on the matching lowering site for
+        // why no defensive `None` re-check belongs here either.
+        if let Some(exc_types) = &handler.exc_type {
+            for exc_type in exc_types {
+                let builtin = is_unshadowed_builtin_exception(&body_env, local_names, exc_type);
+                if !builtin {
+                    let Some(def) = user_exception_class(&body_env, local_names, exc_type) else {
+                        return Err(Diagnostic::error(
+                            "T0021",
+                            format!(
+                                "`{exc_type}` is not a recognized exception class — only builtin exception classes and classes derived from them are supported in `except*` handlers"
+                            ),
+                            Span::new(0, 0),
+                        ));
+                    };
+                    reject_own_constructor(&body_env, def)?;
+                }
+            }
+        }
+        if let Some(name) = &handler.name {
+            handler_env.bind(
+                name.clone(),
+                Ty::Instance(Box::new("ExceptionGroup".to_string())),
+            );
+        }
+        for stmt in &handler.body {
+            check_stmt_shared(&mut handler_env, local_names, stmt, return_ty)?;
+        }
+        handler_envs.push(handler_env);
+    }
+
+    let mut else_env = body_env.clone();
+    for stmt in orelse {
+        check_stmt_shared(&mut else_env, local_names, stmt, return_ty)?;
+    }
+
+    let mut joined = env.clone();
+    join_loop_body(&mut joined, &body_env);
+    for handler_env in &handler_envs {
+        let previous = joined.clone();
+        join_if_branches(&mut joined, &previous, handler_env)?;
+    }
+    let previous = joined.clone();
+    let _ = join_if_branches(&mut joined, &previous, &else_env);
+    *env = joined;
+    for stmt in finalbody {
+        check_stmt_shared(env, local_names, stmt, return_ty)?;
+    }
+    Ok(())
+}
+
 pub(super) fn check_raise_stmt(
     env: &Environment,
     local_names: &[&str],
@@ -134,12 +217,161 @@ pub(super) fn check_raise_stmt(
     Ok(())
 }
 
+/// Part 3 of #382 (#542, PEP 654, D-202): the narrow, literal-list-only
+/// relaxation for `ExceptionGroup(msg, [exc1, exc2, ...])` /
+/// `BaseExceptionGroup(msg, [...])` construction inside a `raise` operand.
+///
+/// D-105/T0021 makes `list[T]` annotations unsupported in general, so this
+/// deliberately does not accept an arbitrary `list[BaseException]`-typed
+/// expression as the second argument -- only a literal `[...]` written
+/// directly at the call site, each element of which is validated by
+/// [`check_exception_group_member_operand`], a narrower check than
+/// [`check_raise_operand`]: it requires an *existing* exception value and
+/// rejects any fresh constructor-call member, including a nested inline
+/// `ExceptionGroup(...)`/`BaseExceptionGroup(...)` call, with `T0021`. A
+/// member that fails its own validation reports that specific element's
+/// diagnostic rather than a generic group-level one.
+fn check_exception_group_operand(
+    env: &Environment,
+    local_names: &[&str],
+    callee: &str,
+    args: &[HirExpr],
+) -> Result<(), Diagnostic> {
+    if args.len() != 2 {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!(
+                "`{callee}` expects exactly 2 arguments (a message string and a literal list \
+                 of member exceptions), got {}",
+                args.len()
+            ),
+            Span::new(0, 0),
+        ));
+    }
+    let message_ty = infer_expr_in(env, local_names, &args[0])?;
+    if message_ty != Ty::Str {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!(
+                "`{callee}` expects a `str` message argument, got `{}`",
+                message_ty.name()
+            ),
+            Span::new(0, 0),
+        ));
+    }
+    let HirExpr::ListLiteral(members) = &args[1] else {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!(
+                "`{callee}`'s second argument must be a literal list of member exceptions \
+                 (`[e1, e2, ...]`); a computed or `list[T]`-typed expression is not supported"
+            ),
+            Span::new(0, 0),
+        ));
+    };
+    if members.is_empty() {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!("`{callee}` requires at least one member exception"),
+            Span::new(0, 0),
+        ));
+    }
+    for member in members {
+        check_exception_group_member_operand(env, local_names, member)?;
+    }
+    Ok(())
+}
+
+/// Part 3 of #382 (#542, PEP 654, D-202): validates one `ExceptionGroup`/
+/// `BaseExceptionGroup` member expression.
+///
+/// Deliberately narrower than [`check_raise_operand`]: a member must be an
+/// *existing* exception value (e.g. a `except ... as e:` binding, or another
+/// name/expression that already evaluates to one), not a fresh
+/// `SomeError("msg")` constructor call, even though such a call is a
+/// perfectly valid top-level `raise` operand. `pycc_mir::exception::
+/// lower_exception_value`'s `ConstructedGroup` arm lowers each member through
+/// ordinary expression lowering (`lower_expr`), which has no way to
+/// construct a *new* exception object -- only `lower_exception_value` itself
+/// (used for the group's own top-level `raise` operand, and for a plain,
+/// non-group `raise SomeError(...)`) knows how to do that. Accepting a fresh
+/// constructor-call member here would type-check successfully under
+/// `check_raise_operand`'s own rules and then panic in codegen (member
+/// lowering would resolve `SomeError` as an ordinary user function, which it
+/// is not), so this narrower rule is enforced structurally at the type-check
+/// boundary rather than left for MIR/codegen to reject.
+fn check_exception_group_member_operand(
+    env: &Environment,
+    local_names: &[&str],
+    expr: &HirExpr,
+) -> Result<(), Diagnostic> {
+    if let HirExpr::Call { callee, .. } = expr
+        && (is_unshadowed_builtin_exception(env, local_names, callee)
+            || user_exception_class(env, local_names, callee).is_some())
+    {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!(
+                "an `ExceptionGroup`/`BaseExceptionGroup` member must be an existing exception \
+                 value (e.g. a caught `except ... as e:` binding), not a fresh `{callee}(...)` \
+                 construction -- assign it to a name first, then list that name"
+            ),
+            Span::new(0, 0),
+        ));
+    }
+    let ty = infer_expr_in(env, local_names, expr)?;
+    if let Ty::Instance(class_name) = &ty
+        && pycc_hir::is_builtin_exception_class(class_name)
+        && !is_user_defined_class(env, class_name)
+    {
+        // D-202's sixth simplification: `pycc_rt_exception_group_partition`
+        // matches each member by its own top-level `type_tag` only and never
+        // recurses into a member's own `exceptions`/`exceptions_len` array
+        // when that member is itself a group -- unlike CPython's `split()`,
+        // which does recurse into nested groups. `ExceptionGroup`/
+        // `BaseExceptionGroup` are themselves ordinary entries in
+        // `BUILTIN_EXCEPTION_CLASSES`, so without this check a value already
+        // bound to one type-checks as a member of a freshly constructed
+        // *outer* group (e.g. `ExceptionGroup("outer", [eg])` where `eg`
+        // came from a prior `except* ValueError as eg:`), silently building
+        // a nested group the runtime cannot partition correctly. Rejecting
+        // it here keeps the type checker's accepted surface matching what
+        // the runtime actually implements, the same enforce-at-type-check-
+        // boundary approach this function already takes for a fresh
+        // constructor-call member above.
+        if class_name.as_str() == "ExceptionGroup" || class_name.as_str() == "BaseExceptionGroup" {
+            return Err(Diagnostic::error(
+                "T0021",
+                "an `ExceptionGroup`/`BaseExceptionGroup` member must not itself be an \
+                 exception group -- nested groups are not supported"
+                    .to_string(),
+                Span::new(0, 0),
+            ));
+        }
+        return Ok(());
+    }
+    Err(Diagnostic::error(
+        "T0021",
+        format!(
+            "an `ExceptionGroup`/`BaseExceptionGroup` member must be an exception instance, got `{}`",
+            ty.name()
+        ),
+        Span::new(0, 0),
+    ))
+}
+
 fn check_raise_operand(
     env: &Environment,
     local_names: &[&str],
     expr: &HirExpr,
     error_prefix: &str,
 ) -> Result<(), Diagnostic> {
+    if let HirExpr::Call { callee, args } = expr
+        && (callee == "ExceptionGroup" || callee == "BaseExceptionGroup")
+        && is_unshadowed_builtin_exception(env, local_names, callee)
+    {
+        return check_exception_group_operand(env, local_names, callee, args);
+    }
     if let HirExpr::Call { callee, args } = expr
         && is_unshadowed_builtin_exception(env, local_names, callee)
     {
@@ -324,3 +556,6 @@ mod synthetic_class_tests;
 
 #[cfg(test)]
 mod user_class_tests;
+
+#[cfg(test)]
+mod except_star_tests;

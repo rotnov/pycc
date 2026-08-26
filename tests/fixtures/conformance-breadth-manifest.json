@@ -1231,7 +1231,7 @@
         {
           "category": "unparenthesized except* A, B: (PEP 758's own title covers both except and except* without parentheses; this row's fixture and D-195's implementation address only plain except)",
           "kind": "core",
-          "reason": "pycc has no except*/ExceptionGroup (PEP 654) support at all yet -- tracked by #542, gating PEP 654's own separate matrix row -- so the except*-without-parentheses half of PEP 758's own scope has no implementation to exercise, let alone a fixture."
+          "reason": "Part 3 of #382 (#542, PEP 654) has since added except* itself, including the bare-comma multi-type spelling (except* A, B: parses and dispatches the same way except A, B: does, reusing D-195's own per-handler multi-tag machinery) -- but no fixture in this suite exercises that combination against the CPython oracle yet, so it stays an unproven gap on this row rather than the still-unimplemented one recorded here previously."
         }
       ]
     }

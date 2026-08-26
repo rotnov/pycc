@@ -8173,6 +8173,304 @@ fn collect_block_constraints_propagates_an_error_from_a_dict_set_value() {
     assert_eq!(err.code, "T0021");
 }
 
+/// Part 3 of #382 (#542, PEP 654): `collect_block_constraints`'s `TryStar`
+/// arm collects constraints from all four of its blocks (body, handler
+/// body, `else`, `finally`) and, when a handler names its binding, seeds it
+/// as `ExceptionGroup` -- exactly like `check_try_star_stmt` does at
+/// type-checking time. Nothing else in this file calls
+/// `collect_block_constraints` (directly or via `infer_function_signatures_
+/// with_solver`) with a `TryStar` body, so without this test the entire arm
+/// -- including the named-handler-binding branch -- goes unexercised.
+#[test]
+fn collect_block_constraints_recurses_into_every_try_star_block_and_binds_a_named_handler() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &[],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
+    };
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: Some("e".to_string()),
+            body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
+        }],
+        orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(3))],
+        finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(4))],
+    }];
+
+    collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap();
+}
+
+/// `check_try_star_stmt`'s own comment on its `if let Some(exc_types) =
+/// &handler.exc_type` check explains that a bare `except*:` is rejected by
+/// ruff's own parser as a syntax error (PEP 654 requires every `except*`
+/// clause to name a type), so `handler.exc_type` is always `Some` by the
+/// time an `HirStmt::TryStar` reaches type-checking through the public
+/// `check`/`build` CLI -- there is no valid Python source that reaches this
+/// function with `exc_type: None`. `HirExceptHandler.exc_type` is still
+/// `Option<Vec<String>>` at the type level, though, so the `None` arm is a
+/// real branch the compiler must still exhaustively handle; a fixture that
+/// builds a `HirStmt::TryStar` directly (bypassing the parser) and passes a
+/// handler with `exc_type: None` is the only way to prove it once
+/// unconditionally skips the whole type-validation block and falls through
+/// to bind the handler's name (if any) and check its body, exactly like a
+/// handler whose single named type happens to validate cleanly.
+#[test]
+fn check_try_star_stmt_skips_type_validation_for_a_handler_with_no_named_type() {
+    let mut env = Environment::default();
+    let body: Vec<HirStmt> = vec![];
+    let handlers = vec![pycc_hir::HirExceptHandler {
+        exc_type: None,
+        name: Some("e".to_string()),
+        body: vec![],
+    }];
+    let orelse: Vec<HirStmt> = vec![];
+    let finalbody: Vec<HirStmt> = vec![];
+
+    check_try_star_stmt(&mut env, &[], &body, &handlers, &orelse, &finalbody, None)
+        .expect("a handler with no named type should skip validation, not error");
+}
+
+/// A `DictSet` whose target name is declared local but never bound
+/// (`local_names` claims it but `bindings` never seeds it) is the same
+/// unresolved-local-reference shape the two `DictSet`-focused tests above
+/// use to reach `T0021`. Placing it in `TryStar`'s own `body` block reaches
+/// the first of that arm's four `collect_block_constraints(...)?` call
+/// sites and proves the `?` actually propagates the body block's error
+/// instead of only ever seeing `Ok` there.
+#[test]
+fn collect_block_constraints_propagates_an_error_from_a_try_star_body_block() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &["missing"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
+    };
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::DictSet {
+            dict: "x".to_string(),
+            key: HirExpr::Name("missing".to_string()),
+            value: HirExpr::IntLiteral(1),
+        }],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+/// Same unresolved-local-reference shape as above, but placed in a
+/// `TryStar` handler's body instead -- reaches the arm's second
+/// `collect_block_constraints(...)?` call site (the per-handler loop).
+#[test]
+fn collect_block_constraints_propagates_an_error_from_a_try_star_handler_block() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &["missing"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
+    };
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::Name("missing".to_string()),
+                value: HirExpr::IntLiteral(1),
+            }],
+        }],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+/// Same shape again, placed in `TryStar`'s `else` block -- reaches the
+/// arm's third `collect_block_constraints(...)?` call site.
+#[test]
+fn collect_block_constraints_propagates_an_error_from_a_try_star_else_block() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &["missing"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
+    };
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![HirStmt::DictSet {
+            dict: "x".to_string(),
+            key: HirExpr::Name("missing".to_string()),
+            value: HirExpr::IntLiteral(1),
+        }],
+        finalbody: vec![],
+    }];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+/// Issue #771 join-site follow-up, extended to `TryStar`'s own
+/// `pre_existing` snapshot in the same commit that adds this test: `y` is
+/// already opaquely bound *before* the `try*` (e.g. from `y = d.get("a",
+/// 0)` two lines above), then reassigned to a real, solver-representable
+/// term inside the `try*` body only. Mirrors
+/// `solver_if_reassigns_pre_existing_opaque_binding_in_one_branch_only`'s
+/// scenario but through the `TryStar` arm's `join_loop_body_solver` call
+/// instead of `If`'s `join_if_branches_solver` -- before this fix,
+/// `TryStar`'s `pre_existing` was computed as `env.bindings.keys()` alone
+/// (unlike every sibling join site, including the `Try` arm immediately
+/// above it, which all `.chain(env.opaque_bindings.iter())`), so `y` looked
+/// "newly introduced" to the join helper and was wrongly folded into
+/// `env.maybe_bindings` even though it was already definitely (if opaquely)
+/// bound beforehand.
+#[test]
+fn collect_block_constraints_try_star_body_reassigns_pre_existing_opaque_binding() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &["y"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::from(["y".to_string()]),
+    };
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::IntLiteral(1),
+        }],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+
+    collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap();
+
+    // `y` must never become newly *maybe* bound: it was already definitely
+    // (if opaquely) bound before the `try*`, and the body reassigning it
+    // does not retroactively make a pre-existing name conditional.
+    assert!(!env.maybe_bindings.contains("y"));
+}
+
+/// Same shape again, placed in `TryStar`'s `finally` block -- reaches the
+/// arm's fourth and last `collect_block_constraints(...)?` call site.
+#[test]
+fn collect_block_constraints_propagates_an_error_from_a_try_star_finally_block() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &["missing"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
+    };
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![HirStmt::DictSet {
+            dict: "x".to_string(),
+            key: HirExpr::Name("missing".to_string()),
+            value: HirExpr::IntLiteral(1),
+        }],
+    }];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
 #[test]
 fn local_name_collection_ignores_a_dict_set_target() {
     // `d[k] = v` mutates an existing binding's contents, not a name --
@@ -16301,6 +16599,45 @@ fn assert_monomorphize_propagates_error(body: Vec<HirStmt>) {
     assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
 }
 
+/// `rewrite_generic_calls_in_stmt`'s `TryStar` arm only runs at all when the
+/// module contains a generic function/class/protocol elsewhere (`monomorphize`
+/// short-circuits to a plain clone otherwise, per its own leading gate) --
+/// unlike the `assert_monomorphize_propagates_error` group below, this
+/// exercises the *success* path, including the `handler.name` binding to
+/// `ExceptionGroup` (Part 3 of #382, #542, PEP 654), which no error-only
+/// fixture reaches since every one of those uses `name: None`.
+#[test]
+fn monomorphize_rewrites_a_try_star_handler_binding_when_the_module_has_a_generic_function() {
+    let param = Ty::Param(Box::new("T".to_string()));
+    let identity = generic_identity_fn(param.clone(), param);
+    let f = HirItem::Function {
+        name: "f".to_string(),
+        params: vec![],
+        return_ty: Ty::None,
+        body: vec![HirStmt::TryStar {
+            body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
+            handlers: vec![pycc_hir::HirExceptHandler {
+                exc_type: Some(vec!["ValueError".to_string()]),
+                name: Some("e".to_string()),
+                body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
+            }],
+            orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(3))],
+            finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(4))],
+        }],
+    };
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![identity, f],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    monomorphize(&hir).expect(
+        "a module with a generic function and an unrelated try*/except* elsewhere \
+         should monomorphize successfully",
+    );
+}
+
 // PR-13 Task 3: every structural recursion position in
 // `rewrite_generic_calls_in_expr`/`rewrite_generic_calls_in_stmt`/
 // `rewrite_comp_iter` needs its own covering error-propagation case for
@@ -16598,6 +16935,38 @@ fn rewrite_generic_calls_in_stmt_propagates_errors_from_every_recursive_position
         finalbody: vec![],
     }]);
     assert_monomorphize_propagates_error(vec![HirStmt::Try {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![HirStmt::ExprStmt(bad_generic_call())],
+    }]);
+    // `TryStar`'s own body, handler body, else body, and finally body (Part
+    // 3 of #382, #542, PEP 654) -- mirrors the four `Try` cases directly
+    // above, since `collect_block_constraints` propagates each of the four
+    // blocks' errors with its own `?` rather than sharing `Try`'s.
+    assert_monomorphize_propagates_error(vec![HirStmt::TryStar {
+        body: vec![HirStmt::ExprStmt(bad_generic_call())],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![],
+    }]);
+    assert_monomorphize_propagates_error(vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::ExprStmt(bad_generic_call())],
+        }],
+        orelse: vec![],
+        finalbody: vec![],
+    }]);
+    assert_monomorphize_propagates_error(vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![HirStmt::ExprStmt(bad_generic_call())],
+        finalbody: vec![],
+    }]);
+    assert_monomorphize_propagates_error(vec![HirStmt::TryStar {
         body: vec![],
         handlers: vec![],
         orelse: vec![],
@@ -25542,6 +25911,28 @@ except ValueError:
 }
 
 #[test]
+fn try_star_with_enum_loop_unrolls() {
+    // Mirrors `try_with_enum_loop_unrolls` but for `except*` (#542): covers
+    // `check_stmt`'s module-level `HirStmt::TryStar` arm and the
+    // `HirStmt::TryStar` arm of `unroll_enum_loops_in_stmts` (which, before
+    // #542's coverage pass, silently fell through to the catch-all `other`
+    // branch and would have left a nested enum `for` loop un-unrolled).
+    let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+try:
+    for c in Color:
+        x = x + 1
+except* ValueError:
+    pass
+";
+    parse_check_resolve(src).expect("check should succeed");
+}
+
+#[test]
 fn enum_loop_inside_function_unrolls() {
     // Covers the `HirItem::Function` arm of `unroll_enum_loops` —
     // a function body containing an enum loop is unrolled.
@@ -25605,6 +25996,36 @@ x = 0
 for c in Color:
     for i in range(3):
         x = x + 1
+";
+    parse_check_resolve(src).expect("check should succeed");
+}
+
+#[test]
+fn plain_if_while_for_range_recurse_when_module_has_an_enum() {
+    // `unroll_enum_loops` runs `unroll_enum_loops_in_stmts` over every
+    // top-level statement whenever *any* class in the module is an enum --
+    // not only over statements that structurally contain a `for ... in
+    // <EnumClass>` loop. `enum_loop_with_nested_if_unrolls` (and its
+    // `_while`/`_for_range` siblings above) nest the `if`/`while`/`for
+    // range` *inside* the enum loop's own body, which the `ForList` enum
+    // branch clones verbatim rather than recursing into -- so those tests
+    // never actually reach `unroll_enum_loops_in_stmts`'s own
+    // `HirStmt::If`/`HirStmt::While`/`HirStmt::ForRange` arms. Reach them
+    // here directly with top-level `if`/`while`/`for i in range(..)`
+    // statements that sit alongside an enum class definition but are not
+    // themselves nested inside any enum loop.
+    let src = "\
+from enum import Enum
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+x = 0
+if x > 0:
+    x = x + 1
+while x < 10:
+    x = x + 1
+for i in range(3):
+    x = x + 1
 ";
     parse_check_resolve(src).expect("check should succeed");
 }
@@ -25718,6 +26139,151 @@ fn contains_return_does_not_find_a_return_in_a_try_without_one() {
         finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(4))],
     }];
     assert!(!contains_return(&body));
+}
+
+// Part 3 of #382 (#542, PEP 654): `contains_return`/`introduces_bindings`
+// share their `HirStmt::Try` match arm with `HirStmt::TryStar` via an `|`
+// pattern, but the `Try`-only tests above never actually construct a
+// `TryStar` value, so that shared arm's binding pattern is only ever matched
+// through `Try`. Mirror each `Try` case once for `TryStar` so the shared arm
+// is exercised through both variants.
+
+#[test]
+fn contains_return_finds_a_return_inside_a_try_star_body() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+    assert!(contains_return(&body));
+}
+
+#[test]
+fn contains_return_finds_a_return_inside_a_try_star_handler() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
+        }],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+    assert!(contains_return(&body));
+}
+
+#[test]
+fn contains_return_finds_a_return_inside_a_try_star_else() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![HirStmt::Return(Some(HirExpr::IntLiteral(3)))],
+        finalbody: vec![],
+    }];
+    assert!(contains_return(&body));
+}
+
+#[test]
+fn contains_return_finds_a_return_inside_a_try_star_finally() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![HirStmt::Return(Some(HirExpr::IntLiteral(4)))],
+    }];
+    assert!(contains_return(&body));
+}
+
+#[test]
+fn contains_return_does_not_find_a_return_in_a_try_star_without_one() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
+        }],
+        orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(3))],
+        finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(4))],
+    }];
+    assert!(!contains_return(&body));
+}
+
+#[test]
+fn introduces_bindings_finds_bindings_inside_a_try_star_body() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::IntLiteral(1),
+        }],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+    assert!(introduces_bindings(&body));
+}
+
+#[test]
+fn introduces_bindings_finds_bindings_inside_a_try_star_handler() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::Assign {
+                target: "z".to_string(),
+                value: HirExpr::IntLiteral(2),
+            }],
+        }],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+    assert!(introduces_bindings(&body));
+}
+
+#[test]
+fn introduces_bindings_finds_bindings_inside_a_try_star_else() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![HirStmt::Assign {
+            target: "w".to_string(),
+            value: HirExpr::IntLiteral(3),
+        }],
+        finalbody: vec![],
+    }];
+    assert!(introduces_bindings(&body));
+}
+
+#[test]
+fn introduces_bindings_finds_bindings_inside_a_try_star_finally() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![HirStmt::Assign {
+            target: "v".to_string(),
+            value: HirExpr::IntLiteral(4),
+        }],
+    }];
+    assert!(introduces_bindings(&body));
+}
+
+#[test]
+fn introduces_bindings_does_not_find_bindings_in_a_try_star_without_any() {
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(2))],
+        }],
+        orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(3))],
+        finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(4))],
+    }];
+    assert!(!introduces_bindings(&body));
 }
 
 #[test]
@@ -27150,6 +27716,28 @@ fn reject_generic_calls_processes_try_and_raise_arms() {
     );
 }
 
+#[test]
+fn reject_generic_calls_processes_try_star_arm() {
+    // Exercise `reject_generic_calls_in_stmt`'s `HirStmt::TryStar` half of
+    // its combined `Try { .. } | TryStar { .. }` arm (#542) directly --
+    // `reject_generic_calls_processes_try_and_raise_arms` above only
+    // reaches the `Try` alternative's own field-destructure lines.
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        handlers: vec![pycc_hir::HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        }],
+        orelse: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+        finalbody: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(0))],
+    }];
+    assert!(
+        reject_generic_calls_in_block(&Environment::new(), "f", &body).is_ok(),
+        "reject_generic_calls_in_block should succeed for a try* without generic calls"
+    );
+}
+
 // -- #382: check_stmt_shared ? error propagation in try bodies --
 
 #[test]
@@ -27222,6 +27810,25 @@ fn try_handler_as_binding_incompatible_type_is_t0023() {
     assert_eq!(err.code, "T0023");
 }
 
+#[test]
+fn try_star_handler_as_binding_incompatible_type_is_t0023() {
+    // Mirrors `try_handler_as_binding_incompatible_type_is_t0023` for
+    // `except*` (#542). A same-block reassignment (`x = "bad"`) is caught
+    // directly by `check_assignment` (via `check_stmt_shared`) before
+    // `check_try_star_stmt` ever reaches its own
+    // `join_if_branches(&mut joined, &previous, handler_env)?` loop, so
+    // that specific `?` needs a mismatch that bypasses `check_assignment`
+    // instead: `e` is `int` before the try; `except* ValueError as e`
+    // rebinds `e` to `Instance("ExceptionGroup")` via `henv.bind()`
+    // directly (exactly like the plain-`try` case), which
+    // `join_if_branches` then detects as incompatible with the pre-try
+    // binding.
+    let err = parse_check(
+            "def f() -> int:\n    e = 0\n    try:\n        pass\n    except* ValueError as e:\n        pass\n    return 1\n",
+        ).unwrap_err();
+    assert_eq!(err.code, "T0023");
+}
+
 // -- #382: check_raise_operand ? error propagation --
 
 #[test]
@@ -27254,6 +27861,27 @@ def f() -> int:
     try:
         return 1
     except ValueError:
+        return 2
+    else:
+        return 3
+";
+    parse_check(src).expect("check should succeed");
+}
+
+#[test]
+fn try_star_with_return_in_body_handler_and_else_always_returns() {
+    // Mirrors `try_with_return_in_body_handler_and_else_always_returns`
+    // for `except*` (#542): covers the `HirStmt::TryStar` half of
+    // `block_always_returns`'s combined `Try { .. } | TryStar { .. }`
+    // pattern -- the `Try` arm's own field-destructure lines are already
+    // exercised by the plain-`try` test above, but the `TryStar`
+    // alternative's own lines are only reached when the analyzed function
+    // actually contains a `try*`.
+    let src = "\
+def f() -> int:
+    try:
+        return 1
+    except* ValueError:
         return 2
     else:
         return 3

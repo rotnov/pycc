@@ -26,7 +26,7 @@ use stmt::lower_stmt;
 // `pycc_mir::{Ty, BinOpKind, CmpOpKind}` from any downstream crate, exactly
 // like `pycc_types` already re-exports `Ty` (`pycc_types::Ty`, its own line
 // 4) for the same reason.
-pub use pycc_hir::{BinOpKind, CmpOpKind, Ty};
+pub use pycc_hir::{BinOpKind, CmpOpKind, EXCEPTION_GROUP_TYPE_TAG, Ty};
 
 /// Monotonic counter for synthesized match-subject temporaries. Each
 /// `match` statement gets a unique `__match_subj_N` name, avoiding
@@ -677,6 +677,22 @@ pub enum MirStmt {
     /// lowering assigned the class for a user-defined one) plus every
     /// raisable subclass's tag — or `None` for a bare `except:`.
     Try {
+        body: Vec<MirStmt>,
+        handlers: Vec<MirExceptHandler>,
+        orelse: Vec<MirStmt>,
+        finalbody: Vec<MirStmt>,
+    },
+    /// `try: ... except* T: ...` (PEP 654, Part 3 of #382, #542). Shares
+    /// `Try`'s shape exactly -- `MirExceptHandler`'s `exc_type_tag` still
+    /// carries the matched-type tag set (always `Some`, since `except*`
+    /// requires a named type; see `pycc_hir::stmt`'s comment on the
+    /// matching lowering site) -- but codegen dispatches each handler with
+    /// a partition (`pycc_rt_exception_group_partition`) against the raised
+    /// group rather than `Try`'s mutually-exclusive `type_matches` checks,
+    /// and every matched subgroup's handler can run (PEP 654 semantics: more
+    /// than one `except*` clause may fire for the same raised group), unlike
+    /// `Try`'s first-match-wins dispatch.
+    TryStar {
         body: Vec<MirStmt>,
         handlers: Vec<MirExceptHandler>,
         orelse: Vec<MirStmt>,

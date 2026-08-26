@@ -844,24 +844,6 @@ fn bare_reraise_propagates() {
     );
 }
 
-// -- except* is rejected (C0001) --
-
-#[test]
-fn except_star_is_rejected() {
-    let dir = std::env::temp_dir().join(format!("pycc_382_star_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let (ok, combined) = check_only(
-        &dir,
-        "star.py",
-        "try:\n    pass\nexcept* ValueError:\n    pass\n",
-    );
-    assert!(!ok, "except* should be rejected");
-    assert!(
-        combined.contains("C0001"),
-        "should mention C0001: {combined}"
-    );
-}
-
 // -- Bare raise outside handler is rejected --
 
 #[test]

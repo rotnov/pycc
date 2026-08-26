@@ -170,6 +170,23 @@ pub(super) struct RtFns<'ctx> {
     pub(super) exception_message: FunctionValue<'ctx>,
     /// `exception_print_and_exit(obj: *mut PyExceptionObj) -> !` (noreturn).
     pub(super) exception_print_and_exit: FunctionValue<'ctx>,
+    /// Part 3 of #382 (#542, PEP 654): `exception_group_alloc(type_tag: u8,
+    /// name: *const u8, name_len: usize, message: *mut PyStrObj, exceptions:
+    /// *const *mut PyExceptionObj, exceptions_len: usize) -> *mut
+    /// PyExceptionObj`. Builds an `ExceptionGroup`/`BaseExceptionGroup`
+    /// instance from a literal member array, mirroring `exception_alloc`
+    /// with two extra parameters for the member pointers.
+    pub(super) exception_group_alloc: FunctionValue<'ctx>,
+    /// Part 3 of #382 (#542, PEP 654): `exception_group_partition(group:
+    /// *mut PyExceptionObj, tags: *const u8, tags_len: usize,
+    /// group_type_tag: u8, group_name: *const u8, group_name_len: usize,
+    /// matched_out: *mut *mut PyExceptionObj, rest_out: *mut *mut
+    /// PyExceptionObj)` (void). Splits `group`'s members by `tags` into two
+    /// output slots -- `emit_try_star` calls this once per `except*`
+    /// clause, feeding `rest_out` from one call into the next clause's
+    /// `group` input, exactly like `Try`'s own sequential
+    /// `exception_type_matches` chain.
+    pub(super) exception_group_partition: FunctionValue<'ctx>,
     /// Lexically enclosing `except` handler values used by bare `raise`.
     /// Each handler owns an LLVM local slot. A stack is required because a
     /// nested handler must not overwrite the exception saved by its outer
@@ -462,6 +479,36 @@ pub(super) fn declare_rt_functions<'ctx>(
         exception_print_and_exit: declare(
             "pycc_rt_exception_print_and_exit",
             void_type.fn_type(&[ptr_type.into()], false),
+        ),
+        exception_group_alloc: declare(
+            "pycc_rt_exception_group_alloc",
+            ptr_type.fn_type(
+                &[
+                    context.i8_type().into(),
+                    ptr_type.into(),
+                    context.i64_type().into(),
+                    ptr_type.into(),
+                    ptr_type.into(),
+                    context.i64_type().into(),
+                ],
+                false,
+            ),
+        ),
+        exception_group_partition: declare(
+            "pycc_rt_exception_group_partition",
+            void_type.fn_type(
+                &[
+                    ptr_type.into(),
+                    ptr_type.into(),
+                    context.i64_type().into(),
+                    context.i8_type().into(),
+                    ptr_type.into(),
+                    context.i64_type().into(),
+                    ptr_type.into(),
+                    ptr_type.into(),
+                ],
+                false,
+            ),
         ),
         exceptions: ExceptionCodegenState::new(),
     }

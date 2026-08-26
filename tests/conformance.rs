@@ -1398,3 +1398,38 @@ fn pep_0758_except_noparens_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0758_except_noparens.py"
     );
 }
+
+// Part 3 of #382 (#542, PEP 654, D-202): `except*` clauses and
+// `ExceptionGroup` construction/dispatch. Covers a single `except*` clause
+// catching a plain (non-group) exception, dispatch across multiple `except*`
+// clauses in source order, a group built from two existing bindings with
+// each member routed to its own matching clause, an `except* ... as`
+// binding, `finally` running on the `except*` path, and `else` running when
+// the `try` body raises nothing. This exercises exactly the literal-member-
+// list, existing-value-only construction shape D-202 keeps in scope; it does
+// not exercise a fresh constructor-call member (`T0021`, rejected before
+// codegen), a non-literal member list (`T0021`), a bare unparameterized
+// `except*:` (rejected at parse time), or a new exception raised from inside
+// an `except*` clause body (D-202's own documented handler-body-raise
+// simplification) -- none of those are byte-for-byte oracle comparisons a
+// single fixture can usefully exercise, since the first three are
+// compile-time rejections and the last has no accepted fixture anywhere in
+// this suite.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn pep_0654_except_star_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0654_except_star.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0654_except_star_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/pep_0654_except_star.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0654_except_star_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0654_except_star.py"
+    );
+}

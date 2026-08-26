@@ -16,6 +16,20 @@ pub enum MirExceptionValue {
         message: MirExpr,
     },
     Existing(MirExpr),
+    /// `ExceptionGroup(msg, [e1, e2, ...])` / `BaseExceptionGroup(msg,
+    /// [...])` (Part 3 of #382, #542, PEP 654, D-202): the narrow,
+    /// literal-list-only construction form `pycc_types::exception::
+    /// check_exception_group_operand` type-checks. Each `members` entry
+    /// lowers exactly like an `Existing` operand -- an expression that
+    /// evaluates to an already-allocated exception instance -- since a
+    /// group's members are themselves exceptions raised or caught earlier,
+    /// never freshly constructed inline.
+    ConstructedGroup {
+        type_tag: u8,
+        class_name: String,
+        message: MirExpr,
+        members: Vec<MirExpr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -86,6 +100,31 @@ pub(super) fn lower_exception_value(
     classes: &HashMap<String, HirClassDef>,
     current_class: Option<&str>,
 ) -> MirExceptionValue {
+    // Part 3 of #382 (#542, PEP 654, D-202): `ExceptionGroup(msg, [e1, e2,
+    // ...])` / `BaseExceptionGroup(msg, [...])`. Checked structurally, like
+    // the plain-constructor arm below, rather than by inferred type -- the
+    // callee names are the only two `pycc_types::exception::
+    // check_exception_group_operand` type-checks in this two-argument,
+    // literal-second-list shape, and MIR must lower exactly that shape
+    // (`pycc_types` has already rejected everything else, including a
+    // non-literal second argument).
+    if let HirExpr::Call { callee, args } = expr
+        && (callee == "ExceptionGroup" || callee == "BaseExceptionGroup")
+        && let Some(type_tag) = exception_type_tag(callee, classes)
+        && let [message, HirExpr::ListLiteral(member_exprs)] = args.as_slice()
+    {
+        let message = lower_expr(message, scopes, classes, current_class);
+        let members = member_exprs
+            .iter()
+            .map(|m| lower_expr(m, scopes, classes, current_class))
+            .collect();
+        return MirExceptionValue::ConstructedGroup {
+            type_tag,
+            class_name: callee.clone(),
+            message,
+            members,
+        };
+    }
     if let HirExpr::Call { callee, args } = expr
         && let Some(type_tag) = exception_type_tag(callee, classes)
     {

@@ -1850,6 +1850,85 @@ pub(crate) fn collect_block_constraints(
                     return_term.clone(),
                 )?;
             }
+            // Part 3 of #382 (#542): `except*` collects constraints exactly
+            // like plain `try`/`except`, except an `as` binding always
+            // resolves to `ExceptionGroup` (never the named handler type) --
+            // see `check_try_star_stmt` in `pycc_types::exception` for the
+            // same rule at type-checking time.
+            HirStmt::TryStar {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                // Issue #771 join-site follow-up: include `opaque_bindings`
+                // alongside `bindings` here, exactly as the `Try` arm above
+                // does. A name definitely-but-opaquely bound before this
+                // construct must count as pre-existing too -- otherwise a
+                // branch that reassigns it to a real, solver-representable
+                // term looks "newly introduced" to the join helper below,
+                // and when only one branch performs that reassignment the
+                // name is misclassified as bound in both branches (the
+                // other, untouched branch still carries the opaque marker),
+                // unmasking a term that only reflects one path as if it
+                // were unconditionally correct.
+                let pre_existing: HashSet<String> = env
+                    .bindings
+                    .keys()
+                    .chain(env.opaque_bindings.iter())
+                    .cloned()
+                    .collect();
+                let mut body_env = env.clone();
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    constraints,
+                    &mut body_env,
+                    body,
+                    return_term.clone(),
+                )?;
+                solver::join_loop_body_solver(env, &body_env, &pre_existing);
+                for handler in handlers {
+                    let mut henv = env.clone();
+                    if let Some(name) = &handler.name {
+                        henv.bindings.insert(
+                            name.clone(),
+                            Ok(Ty::Instance(Box::new("ExceptionGroup".to_string()))),
+                        );
+                    }
+                    collect_block_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        constraints,
+                        &mut henv,
+                        &handler.body,
+                        return_term.clone(),
+                    )?;
+                    solver::join_loop_body_solver(env, &henv, &pre_existing);
+                }
+                let mut else_env = env.clone();
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    constraints,
+                    &mut else_env,
+                    orelse,
+                    return_term.clone(),
+                )?;
+                solver::join_loop_body_solver(env, &else_env, &pre_existing);
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    constraints,
+                    env,
+                    finalbody,
+                    return_term.clone(),
+                )?;
+            }
             HirStmt::Raise { exc, cause } => {
                 // #382 (PR-22 Part 1): A raise expression that is a direct
                 // call to a builtin exception class (e.g.
@@ -2025,6 +2104,12 @@ pub(crate) fn contains_return(body: &[HirStmt]) -> bool {
             handlers,
             orelse,
             finalbody,
+        }
+        | HirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
         } => {
             contains_return(body)
                 || handlers.iter().any(|h| contains_return(&h.body))
@@ -2057,6 +2142,12 @@ pub(crate) fn introduces_bindings(body: &[HirStmt]) -> bool {
         HirStmt::Match { cases, .. } => cases.iter().any(|case| introduces_bindings(&case.body)),
         HirStmt::Return(_) | HirStmt::ExprStmt(_) => false,
         HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        }
+        | HirStmt::TryStar {
             body,
             handlers,
             orelse,

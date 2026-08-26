@@ -219,11 +219,12 @@ pub struct HirClassDef {
     ///
     /// A tag is assigned by `lower_checked` to every user-declared class whose
     /// MRO reaches a builtin exception class, in a deterministic order, from
-    /// the range `23..=255` — `0..=22` are reserved for the 23-member builtin
-    /// hierarchy (the flat seven plus the `OSError` family). A module
-    /// declaring more than 233 such classes is rejected with `C0001`. Every
-    /// other class — including a user class that never touches the exception
-    /// hierarchy — keeps `None`.
+    /// the range `25..=255` — `0..=24` are reserved for the 25-member builtin
+    /// hierarchy (the flat seven, the `OSError` family, and `ExceptionGroup`/
+    /// `BaseExceptionGroup` per Part 3 of #382 (#542, PEP 654, D-202)). A
+    /// module declaring more than 231 such classes is rejected with `C0001`.
+    /// Every other class — including a user class that never touches the
+    /// exception hierarchy — keeps `None`.
     pub exception_type_tag: Option<u8>,
 }
 

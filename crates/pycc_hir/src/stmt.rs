@@ -534,12 +534,6 @@ pub(crate) fn lower_stmt(
             class_defs,
         )?,
         Stmt::Try(try_stmt) => {
-            if try_stmt.is_star {
-                return Err(unsupported(
-                    "except* (exception groups) is not supported yet",
-                    try_stmt.range,
-                ));
-            }
             let body = lower_body(
                 &try_stmt.body,
                 aliases,
@@ -554,6 +548,17 @@ pub(crate) fn lower_stmt(
                 .handlers
                 .iter()
                 .map(|h| {
+                    // Part 3 of #382 (#542, PEP 654): `except*` requires
+                    // every clause to name a type. Unlike PEP 758's
+                    // "at least one name in a tuple" rule (checked in
+                    // `lower_except_handler`, since ruff's parser accepts an
+                    // empty `except ():`), a completely typeless
+                    // `except*:` is rejected by ruff's own parser as a
+                    // syntax error before this lowering pass ever runs (see
+                    // `lower_try_star_bare_except_star_is_rejected_at_parse_time`),
+                    // so no defensive re-check belongs here -- one would be
+                    // unreachable and untestable under this repository's
+                    // 100%-region coverage gate.
                     lower_except_handler(
                         h,
                         aliases,
@@ -591,11 +596,20 @@ pub(crate) fn lower_stmt(
                 type_param,
                 class_defs,
             )?;
-            HirStmt::Try {
-                body,
-                handlers,
-                orelse,
-                finalbody,
+            if try_stmt.is_star {
+                HirStmt::TryStar {
+                    body,
+                    handlers,
+                    orelse,
+                    finalbody,
+                }
+            } else {
+                HirStmt::Try {
+                    body,
+                    handlers,
+                    orelse,
+                    finalbody,
+                }
             }
         }
         Stmt::Raise(raise_stmt) => {
@@ -707,7 +721,7 @@ pub(crate) fn lower_stmt(
         // `handlers`' own only expression-shaped content is each handler's
         // own `body: Vec<HirStmt>`, already independently checked (see this
         // block's own doc comment above).
-        HirStmt::Try { .. } => false,
+        HirStmt::Try { .. } | HirStmt::TryStar { .. } => false,
         HirStmt::Raise { exc, cause } => {
             exc.as_ref().is_some_and(contains_named_expr)
                 || cause.as_ref().is_some_and(contains_named_expr)

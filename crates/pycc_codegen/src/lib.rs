@@ -9,7 +9,9 @@ use inkwell::targets::{
 };
 use inkwell::types::BasicType;
 use inkwell::values::{FloatValue, FunctionValue, IntValue, PointerValue};
-use pycc_mir::{CompSource, MirExceptionValue, MirExpr, MirItem, MirModule, MirStmt};
+use pycc_mir::{
+    CompSource, EXCEPTION_GROUP_TYPE_TAG, MirExceptionValue, MirExpr, MirItem, MirModule, MirStmt,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
@@ -4579,7 +4581,19 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         }
         // #382 (PR-22 Part 1): try/except/else/finally — recurse into all
         // nested bodies to collect any bindings introduced within them.
+        // Part 3 of #382 (#542, PEP 654, D-202): `except*`/`TryStar` shares
+        // this exact recursion -- a handler body's nested bindings are
+        // collected identically regardless of whether the handler binds its
+        // name to the named exception type (`Try`) or to `ExceptionGroup`
+        // (`TryStar`), since that binding-type distinction is resolved by
+        // `pycc_mir` lowering, not by this bindings-discovery pass.
         MirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        }
+        | MirStmt::TryStar {
             body,
             handlers,
             orelse,
@@ -8403,6 +8417,28 @@ fn emit_stmt<'ctx>(
             orelse,
             finalbody,
         } => exception::emit_try(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            body,
+            handlers,
+            orelse,
+            finalbody,
+            expected_return_ty,
+            finally_stack,
+        ),
+        // Part 3 of #382 (#542, PEP 654, D-202): `try`/`except*`/`else`/
+        // `finally` codegen -- see `exception::emit_try_star`'s own doc
+        // comment for how its handler dispatch differs from `Try`'s above.
+        MirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => exception::emit_try_star(
             context,
             builder,
             module,
