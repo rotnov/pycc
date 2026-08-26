@@ -47,6 +47,10 @@
         {
           "category": "a function returning `int | None` from both branches (a real value and `None`), with the caller reading the result's presence",
           "evidence": "pep_0604_union.py"
+        },
+        {
+          "category": "flow-sensitive narrowing of an `Optional[int]` back to plain `int` inside a top-level `if name is not None:`/`if name is None: ... else:` branch, module-global and function-local, including kill-on-reassignment inside the narrowed branch and the early-return continuation shape (`if name is None: ...; return` narrowing every read after the `if`)",
+          "evidence": "pep_0604_union.py"
         }
       ],
       "not_proven": [
@@ -61,9 +65,19 @@
           "reason": "rejected with T0049; codegen's `{ inner, present }` representation is exercised and tested for `Optional[int]` only, mirroring the `list[int]`-only (T0034) and `dict[str, int]`-only (T0036) v0.2 scope cuts."
         },
         {
-          "category": "flow-sensitive narrowing of an `Optional[int]` back to plain `int` inside an `is not None` branch",
+          "category": "narrowing through a compound `and`/`or` test (e.g. `if x is not None and y is not None:`), or through a non-top-level test embedded in a larger boolean expression",
           "kind": "core",
-          "reason": "no narrowing exists yet anywhere in pycc_types -- an Optional[int] stays Optional[int] on every path. Verified unnecessary for this row's own fixture (a 5-rung manual ladder using only presence-test reads matched CPython byte-for-byte in both build profiles); tracked as Part 2 follow-up work against #747, not required for this PR's own completion criteria (D-197)."
+          "reason": "only a bare top-level `name is None`/`name is not None` test is recognized (`pycc_hir::optional_none_test`); not implemented (D-201, #769, Part 2 of #747)."
+        },
+        {
+          "category": "narrowing a name to `None` (the mirror of the implemented shape: `if name is not None: ... else: <use name as None>`, or a `return`-terminated `if name is not None:` guard narrowing the continuation to `None`)",
+          "kind": "core",
+          "reason": "deliberately not implemented -- there is no `Ty::None`-typed narrowing target in this design (D-201, #769, Part 2 of #747)."
+        },
+        {
+          "category": "`raise` (instead of `return`) as a branch terminator for the early-return continuation shape",
+          "kind": "core",
+          "reason": "`definitely_terminates` (`pycc_hir::definitely_terminates`) deliberately does not treat `raise` as a terminator; only a bare `return`, or an exhaustive nested `if`/`else` both ending in `return`, count (D-201, #769, Part 2 of #747)."
         }
       ]
     },

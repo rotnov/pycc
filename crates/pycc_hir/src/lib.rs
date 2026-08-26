@@ -1,5 +1,6 @@
 use pycc_ast::{ModModule, Stmt};
 use pycc_diag::{Diagnostic, Span};
+use std::collections::HashSet;
 
 mod class;
 mod exception;
@@ -707,6 +708,403 @@ pub enum HirStmt {
         exc: Option<HirExpr>,
         cause: Option<HirExpr>,
     },
+}
+
+/// Issue #769 (Part 2 of #747): the polarity of an `if`'s `name is [not]
+/// None` test, as recognized by [`optional_none_test`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoneTestPolarity {
+    /// `name is None` -- true in the `if` body means `name` is absent, so
+    /// only the `orelse` branch can be narrowed to the Optional's inner
+    /// type.
+    Is,
+    /// `name is not None` -- true in the `if` body means `name` is present,
+    /// so only the `body` branch can be narrowed.
+    IsNot,
+}
+
+/// Issue #769 (Part 2 of #747): recognizes an `HirStmt::If`'s `test` as a
+/// top-level `name is None` / `name is not None` shape and extracts the
+/// bare name and polarity, or `None` for every other test shape --
+/// including a compound `and`/`or` test, a test where neither side is a
+/// bare `HirExpr::Name`, or a test that is not an `is`/`is not` comparison
+/// at all. Deliberately does not inspect the name's *type* -- callers
+/// combine this syntactic recognition with their own scope's current type
+/// for `name` (checker: `Environment`; MIR: the `scopes` stack) to decide
+/// whether narrowing actually applies.
+///
+/// This is the single shared recognizer `pycc_types` (the checker's
+/// narrowing overlay) and `pycc_mir` (the `OptionalUnwrap` lowering) both
+/// call, so the syntactic pattern-match lives in exactly one place instead
+/// of drifting between two independent copies -- `pycc_mir` does not
+/// depend on `pycc_types` (see `crates/pycc_mir/Cargo.toml`), so this
+/// recognizer lives here in `pycc_hir`, which both already depend on.
+///
+/// HIR lowering (`crates/pycc_hir/src/expr.rs`'s `Expr::Compare` arm,
+/// D-197) already guarantees that whenever `op` is `Is`/`IsNot`, exactly
+/// one operand is syntactically `HirExpr::NoneLiteral` -- every other
+/// `is`/`is not` shape is rejected at HIR-lowering time with `C0001` and
+/// never reaches this function at all. This function re-derives which side
+/// is which rather than assuming an operand order, so it stays correct
+/// regardless of that lowering invariant.
+pub fn optional_none_test(test: &HirExpr) -> Option<(&str, NoneTestPolarity)> {
+    let HirExpr::Compare { op, left, right } = test else {
+        return None;
+    };
+    let polarity = match op {
+        CmpOpKind::Is => NoneTestPolarity::Is,
+        CmpOpKind::IsNot => NoneTestPolarity::IsNot,
+        _ => return None,
+    };
+    let name_side = match (left.as_ref(), right.as_ref()) {
+        (HirExpr::Name(name), HirExpr::NoneLiteral) => name,
+        (HirExpr::NoneLiteral, HirExpr::Name(name)) => name,
+        _ => return None,
+    };
+    Some((name_side.as_str(), polarity))
+}
+
+/// Issue #769 (Part 2 of #747): true only when `body`'s control flow
+/// unconditionally terminates the enclosing function on every path through
+/// it -- the strict predicate the early-return-narrows-the-continuation
+/// shape needs (`if name is None: <body>` narrows every read after the
+/// `if` only when `<body>` is provably inescapable).
+///
+/// Deliberately **not** the same thing as "a `return` occurs somewhere in
+/// `body`" (an existing, separately-named unsound check elsewhere in this
+/// codebase treats those as equivalent, which is wrong: `if flag: return
+/// 0` contains a `return` but does not terminate on every path). This
+/// predicate is true only when `body`'s *last* statement is itself
+/// unconditionally terminating -- a bare `return`, or an `if` whose `body`
+/// **and** non-empty `orelse` both recursively terminate. `raise` is
+/// deliberately not a terminator (a program that raises still guarantees
+/// the same soundness a `return` does, but correctly recognizing that
+/// would additionally have to account for an enclosing `try`/`except`
+/// catching it before it propagates out of the function -- out of scope
+/// here), and `match` is not analyzed at all (also out of scope, kept
+/// sound by omission rather than by an exhaustiveness heuristic that could
+/// be wrong). Sound-by-omission for any statement shape not explicitly
+/// handled below: an unhandled last statement makes the whole body report
+/// `false`, never `true`.
+///
+/// Shared between `pycc_types::narrow` (the checker's own narrowing
+/// overlay) and `pycc_mir` (its `OptionalUnwrap` lowering) for the
+/// identical reason [`optional_none_test`] is shared: `pycc_mir` does not
+/// depend on `pycc_types`, so the one predicate both need lives here, in
+/// their common dependency, rather than as two independently-maintained
+/// copies (D-201).
+pub fn definitely_terminates(body: &[HirStmt]) -> bool {
+    match body.last() {
+        Some(HirStmt::Return(_)) => true,
+        Some(HirStmt::If { body, orelse, .. }) => {
+            !orelse.is_empty() && definitely_terminates(body) && definitely_terminates(orelse)
+        }
+        _ => false,
+    }
+}
+
+/// Issue #769 follow-up (D-068 re-review of #780, third round): the set of
+/// bare names `body` reassigns anywhere within it, recursively -- every
+/// name that some execution of `body` could pass to
+/// `pycc_types::check_assignment` (checker) or its MIR lowering
+/// counterpart, which is exactly the set of names whose `Optional`
+/// narrowing overlay entry that assignment kills.
+///
+/// This exists to support a *kill-prescan*: before checking/lowering a
+/// body that can be entered such that a read inside it observes a kill
+/// from an execution earlier than that read's own source position -- a
+/// loop body re-entered on a later iteration, or an `except` handler
+/// reached partway through the `try` body it guards -- the caller drops
+/// every currently-narrowed name this function reports from its working
+/// narrowing state *before* checking/lowering starts, rather than only
+/// from the kill's own source position onward. See
+/// `crates/pycc_types/src/narrow.rs`'s module doc comment for the full
+/// soundness rationale (loop re-entry and except-from-mid-try both
+/// unsound under a single left-to-right source-order pass) and
+/// `docs/decisions/` for the decision record narrowing D-199's
+/// "never survives a reassignment" consequence to this conservative rule.
+///
+/// Mirrors exactly the set of statement kinds that route a bare-name
+/// target through `check_assignment` in `pycc_types::lib`: `Assign`,
+/// a *valued* `AnnAssign` (a value-less `Final` declaration never calls
+/// `check_assignment` -- see that function's own doc comment), a
+/// `ForRange`/`ForList` loop variable, and both names a list/set/dict
+/// comprehension assignment binds (its own loop variable and its result
+/// `target`). `DictSet`/`AttrSet` do not rebind a bare name (they mutate
+/// a container/attribute the name still refers to) and are correctly
+/// excluded. Recurses into every nested body this HIR can hold --
+/// `If`/`While`/`ForRange`/`ForList`/`Match`/`Try` -- so a kill nested
+/// arbitrarily deep (e.g. `while ...: if flag: x = None`) is still
+/// found. This match is intentionally exhaustive over every `HirStmt`
+/// variant (no wildcard arm): adding a new statement kind that can kill a
+/// binding forces this function to be updated rather than silently
+/// under-reporting kills.
+pub fn killed_names(body: &[HirStmt]) -> HashSet<String> {
+    let mut killed = HashSet::new();
+    collect_killed_names(body, &mut killed);
+    killed
+}
+
+fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
+    for stmt in body {
+        match stmt {
+            HirStmt::Assign { target, .. } => {
+                killed.insert(target.clone());
+            }
+            HirStmt::AnnAssign { target, value, .. } => {
+                if value.is_some() {
+                    killed.insert(target.clone());
+                }
+            }
+            HirStmt::ForRange { var, body, .. } => {
+                killed.insert(var.clone());
+                collect_killed_names(body, killed);
+            }
+            HirStmt::ForList { var, body, .. } => {
+                killed.insert(var.clone());
+                collect_killed_names(body, killed);
+            }
+            HirStmt::ListCompAssign { target, var, .. }
+            | HirStmt::SetCompAssign { target, var, .. }
+            | HirStmt::DictCompAssign { target, var, .. } => {
+                killed.insert(target.clone());
+                killed.insert(var.clone());
+            }
+            HirStmt::If { test, body, orelse } => {
+                collect_named_expr_targets_in_expr(test, killed);
+                collect_killed_names(body, killed);
+                collect_killed_names(orelse, killed);
+            }
+            HirStmt::While { test, body } => {
+                collect_named_expr_targets_in_expr(test, killed);
+                collect_killed_names(body, killed);
+            }
+            HirStmt::Match { cases, .. } => {
+                for case in cases {
+                    // D-068 re-review of #780 (fourth round): a case's
+                    // pattern can itself bind bare names (`case x:`, an
+                    // `As`/`Sequence`/`Mapping`/`Class` capture) exactly
+                    // like `check_pattern` routes through
+                    // `check_assignment` in `pycc_types::lib`'s
+                    // `check_match` -- these are kills too, not just
+                    // statements inside `case.body`. Omitting them left
+                    // `apply_kill_prescan` under-reporting a kill routed
+                    // through a capturing `match` pattern inside a
+                    // re-enterable body (see this function's own doc
+                    // comment above).
+                    collect_pattern_capture_names_as_killed(&case.pattern, killed);
+                    collect_killed_names(&case.body, killed);
+                }
+            }
+            HirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                collect_killed_names(body, killed);
+                for handler in handlers {
+                    // D-068 re-review of #780 (fourth round): `except ...
+                    // as name:` binds `name` to the caught exception
+                    // instance before the handler body runs -- the same
+                    // kill of a bare name that a plain `Assign` performs
+                    // (see the paired `check_assignment`/`bind` fix in
+                    // `crates/pycc_types/src/exception.rs` and
+                    // `crates/pycc_mir/src/stmt.rs`'s `Try` handler
+                    // arm). Without this, `apply_kill_prescan` treated a
+                    // handler's own `as` binding as invisible, letting a
+                    // later re-entry into a body containing this handler
+                    // (e.g. this `Try` nested inside a `while` loop)
+                    // still read the pre-handler narrowed type.
+                    if let Some(name) = &handler.name {
+                        killed.insert(name.clone());
+                    }
+                    collect_killed_names(&handler.body, killed);
+                }
+                collect_killed_names(orelse, killed);
+                collect_killed_names(finalbody, killed);
+            }
+            HirStmt::TryStar {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                // D-068 re-review of #780 (rebase onto #542's except* landing):
+                // mirrors the plain `Try` arm above -- each `except* T as
+                // name:` clause binds `name` to the caught `ExceptionGroup`
+                // before the handler body runs, exactly the same bare-name
+                // kill a plain `except ... as name:` performs (see the
+                // paired MIR-side `kill_narrowing` fix in
+                // `crates/pycc_mir/src/stmt.rs`'s `TryStar` handler arm).
+                collect_killed_names(body, killed);
+                for handler in handlers {
+                    if let Some(name) = &handler.name {
+                        killed.insert(name.clone());
+                    }
+                    collect_killed_names(&handler.body, killed);
+                }
+                collect_killed_names(orelse, killed);
+                collect_killed_names(finalbody, killed);
+            }
+            HirStmt::ExprStmt(expr) => {
+                collect_named_expr_targets_in_expr(expr, killed);
+            }
+            HirStmt::DictSet { .. } | HirStmt::AttrSet { .. } | HirStmt::Return(_) | HirStmt::Raise { .. } => {}
+        }
+    }
+}
+
+/// D-068 re-review of #780 (fourth round): walks `pattern` for every bare
+/// capture name it binds (recursively through `Sequence`/`SequenceStar`/
+/// `Mapping`/`Class`/`Or`/`As`) and inserts each into `killed`. Mirrors
+/// `pycc_types::collect_pattern_capture_names`'s own identical walk
+/// (duplicated here rather than shared because `pycc_hir` has no dependency
+/// on `pycc_types`, and `check_match`'s `check_pattern` routes every one of
+/// these names through `check_assignment` -- see `collect_killed_names`'s
+/// `Match` arm above and its own doc comment's inclusion criterion).
+fn collect_pattern_capture_names_as_killed(pattern: &HirPattern, killed: &mut HashSet<String>) {
+    match pattern {
+        HirPattern::Wildcard | HirPattern::Literal(_) | HirPattern::Singleton(_) | HirPattern::NoneSingleton => {}
+        HirPattern::Capture(name) => {
+            killed.insert(name.clone());
+        }
+        HirPattern::Sequence(subs) | HirPattern::Or(subs) => {
+            for sub in subs {
+                collect_pattern_capture_names_as_killed(sub, killed);
+            }
+        }
+        HirPattern::SequenceStar(subs, rest) => {
+            for sub in subs {
+                collect_pattern_capture_names_as_killed(sub, killed);
+            }
+            if let Some(rest) = rest {
+                killed.insert(rest.clone());
+            }
+        }
+        HirPattern::Mapping(pairs, rest) => {
+            for (_, sub) in pairs {
+                collect_pattern_capture_names_as_killed(sub, killed);
+            }
+            if let Some(rest) = rest {
+                killed.insert(rest.clone());
+            }
+        }
+        HirPattern::Class {
+            positional, keyword, ..
+        } => {
+            for sub in positional {
+                collect_pattern_capture_names_as_killed(sub, killed);
+            }
+            for (_, sub) in keyword {
+                collect_pattern_capture_names_as_killed(sub, killed);
+            }
+        }
+        HirPattern::As(inner, name) => {
+            collect_pattern_capture_names_as_killed(inner, killed);
+            killed.insert(name.clone());
+        }
+    }
+}
+
+/// D-068 review of #780/#774's interaction (blocker finding 2): walks `expr`
+/// for every `HirExpr::NamedExpr { name, .. }` node at any depth and inserts
+/// each `name` into `killed`. A bare walrus (`(x := None)`) is a reassignment
+/// exactly like `HirStmt::Assign`, but it never appears as its own
+/// `HirStmt` variant -- `lower_stmt`'s placement restriction (PEP 572) only
+/// allows a `NamedExpr` inside a bare `HirStmt::ExprStmt`'s expression or an
+/// `If`/`While` statement's `test`, so [`collect_killed_names`] must inspect
+/// those two expression positions directly instead of relying on a
+/// statement-level match arm the way every other kill kind above does.
+///
+/// Before this fix, `collect_killed_names` put a bare `ExprStmt` in a no-op
+/// arm and never inspected `If`/`While`'s own `test`, so a re-enterable loop
+/// body whose only kill of a narrowed name was a walrus (see
+/// `docs/decisions/D-202-kill-prescan-for-re-enterable-narrowed-bodies.md`)
+/// was invisible to the prescan: a read textually before the walrus within
+/// the loop body was wrongly treated as still narrowed on every iteration
+/// after the first, even though the *previous* iteration's walrus already
+/// killed it. Mirrors `pycc_types::collect_named_expr_names_in_expr`'s own
+/// identical walk (duplicated here rather than shared because `pycc_hir` has
+/// no dependency on `pycc_types`, and this function only needs to collect
+/// names, not also bind their inferred types the way that one does).
+fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<String>) {
+    match expr {
+        HirExpr::NamedExpr { name, value } => {
+            collect_named_expr_targets_in_expr(value, killed);
+            killed.insert(name.clone());
+        }
+        HirExpr::IntLiteral(_)
+        | HirExpr::FloatLiteral(_)
+        | HirExpr::BoolLiteral(_)
+        | HirExpr::StringLiteral(_)
+        | HirExpr::NoneLiteral
+        | HirExpr::Name(_)
+        | HirExpr::ListPop { .. }
+        | HirExpr::Super => {}
+        HirExpr::Call { args, .. } => {
+            for arg in args {
+                collect_named_expr_targets_in_expr(arg, killed);
+            }
+        }
+        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+            collect_named_expr_targets_in_expr(left, killed);
+            collect_named_expr_targets_in_expr(right, killed);
+        }
+        HirExpr::UnaryOp { operand, .. } => collect_named_expr_targets_in_expr(operand, killed),
+        HirExpr::FString(parts) => {
+            for part in parts {
+                if let FStringPart::Interpolation(inner) = part {
+                    collect_named_expr_targets_in_expr(inner, killed);
+                }
+            }
+        }
+        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+            for e in es {
+                collect_named_expr_targets_in_expr(e, killed);
+            }
+        }
+        HirExpr::Subscript { base, index } => {
+            collect_named_expr_targets_in_expr(base, killed);
+            collect_named_expr_targets_in_expr(index, killed);
+        }
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
+            collect_named_expr_targets_in_expr(base, killed);
+            for bound in [start, stop, step].into_iter().flatten() {
+                collect_named_expr_targets_in_expr(bound, killed);
+            }
+        }
+        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+            collect_named_expr_targets_in_expr(value, killed);
+        }
+        HirExpr::DictLiteral(pairs) => {
+            for (k, v) in pairs {
+                collect_named_expr_targets_in_expr(k, killed);
+                collect_named_expr_targets_in_expr(v, killed);
+            }
+        }
+        HirExpr::DictGetOrDefault { key, default, .. } => {
+            collect_named_expr_targets_in_expr(key, killed);
+            collect_named_expr_targets_in_expr(default, killed);
+        }
+        HirExpr::AttrGet { base, .. } => collect_named_expr_targets_in_expr(base, killed),
+        HirExpr::MethodCall { base, args, .. } => {
+            collect_named_expr_targets_in_expr(base, killed);
+            for arg in args {
+                collect_named_expr_targets_in_expr(arg, killed);
+            }
+        }
+        HirExpr::GenericClassInstantiate { args, .. } => {
+            for arg in args {
+                collect_named_expr_targets_in_expr(arg, killed);
+            }
+        }
+    }
 }
 
 /// PEP 634-636 (#381, PR-21): a single `match` case's pattern, lowered from

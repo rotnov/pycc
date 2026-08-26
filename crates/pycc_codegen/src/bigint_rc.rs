@@ -279,6 +279,15 @@ pub(super) fn retain_if_int_duplicate<'ctx>(
             // element is an `int` word, so a `Ty::Float`/`Ty::Bool` tuple
             // field never reaches here at all.
             MirExpr::Subscript { base, .. } => matches!(base.ty(), pycc_mir::Ty::Tuple(_)),
+            // Issue #769 (Part 2 of #747): same borrowed-read shape as
+            // `Name { ty: Ty::Int, .. }` immediately above -- see
+            // `int_value_is_a_duplicate_reference`'s own `OptionalUnwrap`
+            // arm (`bigint_rc.rs`) for the full reasoning this mirrors. No
+            // `Ty::Int` guard needed here either, for the identical reason
+            // the tuple arm omits one: `retain_if_int_duplicate`'s enclosing
+            // `if let Scalar::Int` has already established the payload word
+            // this arm is deciding whether to retain.
+            MirExpr::OptionalUnwrap(_, _) => true,
             _ => false,
         }
     {
@@ -353,7 +362,22 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         | MirExpr::NamedExpr {
             ty: pycc_mir::Ty::Int,
             ..
-        } => true,
+        }
+        // Issue #769 (Part 2 of #747): unlike `OptionalWrap` (whose `.ty()`
+        // is always `Ty::Optional(_)`, so it can never reach this
+        // `Ty::Int`-classified function at all -- see its own arm below),
+        // `OptionalUnwrap`'s `.ty()` genuinely is `Ty::Int` (T0049 restricts
+        // every `Optional[T]` annotation to `T = int`), so it *does* reach
+        // here as `int_temporary_word`'s classified expression. Its codegen
+        // arm (`emit_expr`'s `OptionalUnwrap` arm in `lib.rs`) performs a
+        // plain `build_extract_value` out of a struct that was itself just
+        // loaded from the narrowed name's own local slot -- the exact same
+        // "borrowed read out of a slot this expression does not own" shape
+        // as the plain `Name { ty: Ty::Int, .. }` arm immediately above, so
+        // it is classified identically: `true` (a duplicate reference that
+        // needs its own retain wherever it is stored into a second owning
+        // slot).
+        | MirExpr::OptionalUnwrap(_, _) => true,
         // No `Ty::Int` test alongside the tuple test, for the same reason
         // `retain_if_int_duplicate`'s own tuple arm omits one: the only
         // caller, `int_temporary_word`, has already established that this
@@ -900,6 +924,61 @@ mod tests {
         // release this fix adds to keep the preceding test's retain
         // balanced instead of leaking on every reassignment.
         assert_eq!((retains, releases), (2, 2), "got {calls:?}");
+    }
+
+    /// Issue #769 (Part 2 of #747): the read-side mirror of
+    /// `an_optional_wrap_of_a_borrowed_int_name_retains_the_duplicate_reference`
+    /// above. `y = n` for an `Optional[int]`-scoped, currently-narrowed
+    /// `n` lowers `n`'s read to `MirExpr::OptionalUnwrap`, classified
+    /// `true` (a duplicate reference, exactly like a plain `Ty::Int` name
+    /// read) by `int_value_is_a_duplicate_reference`'s own `OptionalUnwrap`
+    /// arm -- `y`'s store of the extracted payload word must retain it, or
+    /// `n`'s later reassignment/death would free the bigint out from under
+    /// `y` despite `y` still being live (the exact D-181/#770-class defect
+    /// this classification exists to prevent, one layer down from
+    /// `OptionalWrap`'s own).
+    #[test]
+    fn an_optional_unwrap_of_a_narrowed_name_retains_the_duplicate_reference() {
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "unwrap_dup".to_string(),
+                params: vec![("n".to_string(), Ty::Optional(Box::new(Ty::Int)))],
+                return_ty: Ty::None,
+                body: vec![
+                    MirStmt::Assign {
+                        target: "y".to_string(),
+                        value: MirExpr::OptionalUnwrap(
+                            Box::new(MirExpr::Name {
+                                name: "n".to_string(),
+                                ty: Ty::Optional(Box::new(Ty::Int)),
+                            }),
+                            Box::new(Ty::Int),
+                        ),
+                    },
+                    MirStmt::Return(None),
+                ],
+            }],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_optional_unwrap_retain", &mir);
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        // One retain: `y`'s own store of the unwrapped duplicate word. One
+        // release too, for the identical structural reason
+        // `an_optional_wrap_of_a_borrowed_int_name_retains_the_duplicate_reference`
+        // documents -- `emit_assign` unconditionally emits a guarded
+        // release-before-store for every `Ty::Int` slot, including `y`'s
+        // first store, proven guarded (and a runtime no-op here, since
+        // `y`'s slot has no prior value) by the same
+        // `guarded_bigint_refcount_calls` machinery every other assertion
+        // in this module relies on.
+        assert_eq!((retains, releases), (1, 1), "got {calls:?}");
     }
 
     #[test]

@@ -76,7 +76,14 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // node's operation, let child expressions guard themselves" rule;
         // `value`'s own guard (if any) is applied where `value` is itself
         // evaluated, before this node's store ever runs.
-        | MirExpr::NamedExpr { .. } => false,
+        | MirExpr::NamedExpr { .. }
+        // Issue #769 (Part 2 of #747): `OptionalUnwrap` only extracts a
+        // field out of a struct value that has already been evaluated --
+        // like `OptionalWrap` immediately above, a plain `build_extract_value`
+        // is infallible, so it cannot itself set D-173's pending-exception
+        // state. The wrapped sub-expression is not re-inspected here either,
+        // mirroring every other arm in this match.
+        | MirExpr::OptionalUnwrap(_, _) => false,
     }
 }
 

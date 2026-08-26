@@ -1,9 +1,6 @@
 //! Type checking for builtin exceptions (#382).
 
-use super::{
-    Environment, HirExpr, HirStmt, Ty, check_stmt, check_stmt_in_function, infer_expr_in,
-    join_if_branches, join_loop_body,
-};
+use super::{Environment, HirExpr, HirStmt, Ty, infer_expr_in, join_if_branches, join_loop_body};
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
     EXCEPTION_INIT_MANGLED_NAME, HirClassDef, HirExceptHandler, except_handler_binding_type_name,
@@ -19,13 +16,26 @@ pub(super) fn check_try_stmt(
     return_ty: Option<&Ty>,
 ) -> Result<(), Diagnostic> {
     let mut body_env = env.clone();
-    for stmt in body {
-        check_stmt_shared(&mut body_env, local_names, stmt, return_ty)?;
-    }
+    check_stmt_sequence_shared(&mut body_env, local_names, body, return_ty)?;
 
     let mut handler_envs = Vec::with_capacity(handlers.len());
     for handler in handlers {
         let mut handler_env = env.clone();
+        // Issue #769 follow-up (D-068 re-review of #780, third round): a
+        // handler runs only after *some* prefix of `body` already
+        // executed -- unlike `else_env` (which starts from `body_env`'s
+        // full post-execution state because it only runs after `body`
+        // completes normally), a handler can be entered after any
+        // partial execution, so no single point-in-time snapshot of
+        // `body`'s narrowing state is safe to hand it. Conservatively
+        // prescan-drop every name `body` kills *anywhere* from
+        // `handler_env`'s narrowing overlay before checking the handler,
+        // rather than starting from the pre-try `env` clone unmodified
+        // (which is what let a read of a name `body` reassigned to
+        // `None` right before raising still see it narrowed). See
+        // `narrow::apply_kill_prescan`'s doc comment in
+        // `crates/pycc_types/src/narrow.rs` for the full rationale.
+        super::narrow::apply_kill_prescan(&mut handler_env, body);
         handler_env.in_except_handler = true;
         if let Some(exc_types) = &handler.exc_type {
             // PEP 758 (#740): a handler may name more than one exception
@@ -76,11 +86,26 @@ pub(super) fn check_try_stmt(
             if let Some(name) = &handler.name {
                 let binding_type = except_handler_binding_type_name(exc_types);
                 handler_env.bind(name.clone(), Ty::Instance(Box::new(binding_type)));
+                // D-068 re-review of #780 (fourth round): `bind` only
+                // overwrites `bindings`, never `narrowed` (see `bind`'s own
+                // doc comment in `env.rs`), so a name previously narrowed by
+                // an enclosing `if <name> is not None:` stayed narrowed
+                // here even though it is now bound to the caught exception
+                // instance -- a later read inside the handler body would be
+                // type-checked as the narrowed `int`/whatever, not
+                // `Instance(binding_type)`, via `HirExpr::Name`'s
+                // `narrowed_ty` preference (`expr.rs`). Kill it explicitly,
+                // mirroring `check_assignment`'s own unconditional
+                // `env.narrowed.remove(target)` for every other reassignment
+                // kind -- this handler binding is not routed through
+                // `check_assignment` itself (it must skip that function's
+                // previous-type compatibility check, which would wrongly
+                // reject `except X as name:` reusing a name whose earlier
+                // type is incompatible with the exception instance type).
+                handler_env.narrowed.remove(name);
             }
         }
-        for stmt in &handler.body {
-            check_stmt_shared(&mut handler_env, local_names, stmt, return_ty)?;
-        }
+        check_stmt_sequence_shared(&mut handler_env, local_names, &handler.body, return_ty)?;
         handler_envs.push(handler_env);
     }
 
@@ -89,9 +114,7 @@ pub(super) fn check_try_stmt(
     // pre-try environment silently rejected valid reads such as
     // `try: x = 1; ...; else: print(x)`.
     let mut else_env = body_env.clone();
-    for stmt in orelse {
-        check_stmt_shared(&mut else_env, local_names, stmt, return_ty)?;
-    }
+    check_stmt_sequence_shared(&mut else_env, local_names, orelse, return_ty)?;
 
     let mut joined = env.clone();
     join_loop_body(&mut joined, &body_env);
@@ -102,9 +125,7 @@ pub(super) fn check_try_stmt(
     let previous = joined.clone();
     let _ = join_if_branches(&mut joined, &previous, &else_env);
     *env = joined;
-    for stmt in finalbody {
-        check_stmt_shared(env, local_names, stmt, return_ty)?;
-    }
+    check_stmt_sequence_shared(env, local_names, finalbody, return_ty)?;
     Ok(())
 }
 
@@ -128,13 +149,21 @@ pub(super) fn check_try_star_stmt(
     return_ty: Option<&Ty>,
 ) -> Result<(), Diagnostic> {
     let mut body_env = env.clone();
-    for stmt in body {
-        check_stmt_shared(&mut body_env, local_names, stmt, return_ty)?;
-    }
+    check_stmt_sequence_shared(&mut body_env, local_names, body, return_ty)?;
 
     let mut handler_envs = Vec::with_capacity(handlers.len());
     for handler in handlers {
         let mut handler_env = env.clone();
+        // D-068 re-review of #780 (rebase onto #542's except* landing):
+        // mirrors `check_try_stmt`'s identical prescan above -- `except*`
+        // dispatches subgroups the same way a plain `except` handler does,
+        // so a handler here can equally be entered after only some prefix
+        // of `body` executed. Without this, a name `body` reassigns to
+        // `None` right before raising could still read as narrowed inside
+        // a handler that runs after that reassignment. See
+        // `narrow::apply_kill_prescan`'s doc comment in
+        // `crates/pycc_types/src/narrow.rs` for the full rationale.
+        super::narrow::apply_kill_prescan(&mut handler_env, body);
         handler_env.in_except_handler = true;
         // A bare `except*:` is rejected by ruff's own parser as a syntax
         // error (PEP 654 requires every `except*` clause to name a type),
@@ -164,17 +193,21 @@ pub(super) fn check_try_star_stmt(
                 name.clone(),
                 Ty::Instance(Box::new("ExceptionGroup".to_string())),
             );
+            // D-068 re-review of #780 (rebase onto #542's except* landing):
+            // mirrors `check_try_stmt`'s identical fix above -- `bind`
+            // overwrites `bindings`, never `narrowed`, so a name previously
+            // narrowed by an enclosing `if <name> is not None:` would stay
+            // narrowed in `handler_env` even though `name` now names the
+            // caught `ExceptionGroup` instance, not its old Optional value.
+            // Kill it explicitly, the same way a plain reassignment does.
+            handler_env.narrowed.remove(name);
         }
-        for stmt in &handler.body {
-            check_stmt_shared(&mut handler_env, local_names, stmt, return_ty)?;
-        }
+        check_stmt_sequence_shared(&mut handler_env, local_names, &handler.body, return_ty)?;
         handler_envs.push(handler_env);
     }
 
     let mut else_env = body_env.clone();
-    for stmt in orelse {
-        check_stmt_shared(&mut else_env, local_names, stmt, return_ty)?;
-    }
+    check_stmt_sequence_shared(&mut else_env, local_names, orelse, return_ty)?;
 
     let mut joined = env.clone();
     join_loop_body(&mut joined, &body_env);
@@ -185,9 +218,7 @@ pub(super) fn check_try_star_stmt(
     let previous = joined.clone();
     let _ = join_if_branches(&mut joined, &previous, &else_env);
     *env = joined;
-    for stmt in finalbody {
-        check_stmt_shared(env, local_names, stmt, return_ty)?;
-    }
+    check_stmt_sequence_shared(env, local_names, finalbody, return_ty)?;
     Ok(())
 }
 
@@ -538,16 +569,28 @@ fn reject_own_constructor(env: &Environment, def: &HirClassDef) -> Result<(), Di
     ))
 }
 
-fn check_stmt_shared(
+/// D-068 re-review of #780 (third round, warning finding): a
+/// return-type-generic sequence-checking helper, routing through
+/// `narrow::check_stmt_sequence[_in_function]` instead of
+/// `check_stmt`/`check_stmt_in_function` directly so a nested early-return
+/// guard inside a `try`/`except`/`else`/`finally` body narrows the rest of
+/// that same body -- `check_try_stmt`'s four body loops (`body`, each
+/// handler's `body`, `orelse`, `finalbody`) previously called a
+/// per-statement `check_stmt`/`check_stmt_in_function` dispatcher in a raw
+/// loop, which never ran `apply_post_if_narrowing` and so silently dropped
+/// this narrowing, exactly like the `if`/`while` fast-path helpers and
+/// `check_match`'s own case-body loop had before their own fixes for the
+/// same finding.
+fn check_stmt_sequence_shared(
     env: &mut Environment,
     local_names: &[&str],
-    stmt: &HirStmt,
+    stmts: &[HirStmt],
     return_ty: Option<&Ty>,
 ) -> Result<(), Diagnostic> {
     if let Some(return_ty) = return_ty {
-        check_stmt_in_function(env, local_names, stmt, return_ty.clone())
+        super::narrow::check_stmt_sequence_in_function(env, local_names, stmts, return_ty.clone())
     } else {
-        check_stmt(env, stmt)
+        super::narrow::check_stmt_sequence(env, stmts)
     }
 }
 

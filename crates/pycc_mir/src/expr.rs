@@ -35,6 +35,25 @@ pub(super) fn lower_expr(
             name: name.clone(),
             ty: Ty::Float,
         },
+        // Issue #769 (Part 2 of #747): a name read inside a narrowing-
+        // eligible branch (`super::narrowed_ty`'s `$narrowed:{name}`
+        // sentinel, pushed by `stmt::lower_stmt`'s `HirStmt::If` arm) is
+        // wrapped in `OptionalUnwrap` so `.ty()` reports the Optional's
+        // inner type for this read alone, without touching the slot's own
+        // still-`Optional` declared representation looked up via `lookup`
+        // just below. Checked before the plain `Name` arm so a narrowed
+        // read never falls through to it.
+        HirExpr::Name(name) if super::narrowed_ty(scopes, name).is_some() => {
+            let inner = super::narrowed_ty(scopes, name)
+                .expect("just matched Some above");
+            MirExpr::OptionalUnwrap(
+                Box::new(MirExpr::Name {
+                    name: name.clone(),
+                    ty: lookup(scopes, name),
+                }),
+                Box::new(inner),
+            )
+        }
         HirExpr::Name(name) => MirExpr::Name {
             name: name.clone(),
             ty: lookup(scopes, name),
@@ -906,6 +925,14 @@ pub(super) fn pre_bind_named_expr_targets(
             pre_bind_named_expr_targets(value, scopes, classes, current_class);
             let lowered_value = lower_expr(value, scopes, classes, current_class);
             let ty = lowered_value.ty();
+            // D-068 review of #780/#774's interaction (blocker finding 1): a
+            // walrus target is a reassignment exactly like `Assign`'s own arm
+            // in `stmt.rs` (see its paired `kill_narrowing`/`bind_variable`
+            // calls), so it must clear any stale narrowing sentinel for
+            // `name` the same way -- otherwise a subsequent read still
+            // lowers to an unconditional `MirExpr::OptionalUnwrap` for a
+            // value the walrus may have just overwritten with `None`.
+            super::kill_narrowing(scopes, name);
             super::bind_variable(scopes, name.clone(), ty);
         }
         HirExpr::IntLiteral(_)

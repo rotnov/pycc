@@ -122,6 +122,103 @@ another in-flight branch may already hold the very number pattern-matching would
 
 ---
 
+## 2026-08-25 — a dispatched sub-agent's task became unrecoverable in place after a context-compaction restart landed it in a different worktree; `git worktree list` + `gh pr view <n>` (not the stale summary) was what actually located the live work
+
+What happened: a sub-agent session was dispatched to fix two D-068 pinned-reviewer blocker
+findings (a walrus target never calling `kill_narrowing` in `pycc_mir::expr::
+pre_bind_named_expr_targets`, and `pycc_hir::collect_killed_names` never scanning an
+`ExprStmt`/`If`/`While` `test` for an embedded `NamedExpr`) in worktree `/private/tmp/
+pr780-fix` on local branch `fix/pr780-conflict-resolve` at commit `c304ae92`. A
+context-compaction restart resumed the session in an entirely different, unrelated sandboxed
+worktree with no access to that path, branch, or any uncommitted state that may have existed
+there. The inherited conversation summary described specific file line numbers and completed
+work, but none of it could be verified or continued from the new location.
+
+Root cause: trusting the inherited summary's *location* claims (worktree path, branch name)
+as if they were still live, reachable state, rather than treating them as a hypothesis to
+re-verify against the actual git/GitHub state visible from the new sandbox. The summary was
+accurate about what a *previous* session had done, but the current session's sandbox is a hard
+boundary the summary cannot see past — a worktree path from an old summary may not even exist
+in the current session, and a locally-named branch (`fix/pr780-conflict-resolve`) may never
+have been pushed, making it invisible to `gh` entirely.
+
+What fixed it: `git worktree list` (no arguments, safe from any worktree) enumerated every
+worktree across the whole local clone, including ones this session could not `cd` into,
+confirming `fix/pr780-conflict-resolve` was still checked out (holding the described
+`c304ae92` fix work) at `/private/tmp/pr780-fix` — just not reachable from this sandbox.
+Separately, `gh pr view 780 --json state,headRefName,mergeable` established the actual GitHub
+ground truth: PR #780's real head branch is `feat/issue-769-optional-narrowing`, not
+`fix/pr780-conflict-resolve` (an unpushed local-only branch that had never itself become a PR).
+Since `c304ae92`'s commit object was still reachable in the shared `.git` object store (all
+worktrees of one clone share one object database), `git checkout -b <new-branch> c304ae92`
+from *this* session's own worktree created a fresh, isolated branch carrying that exact base
+state — without touching the other worktree's checkout at all (branches are refs, not
+worktree-locked; only one worktree may have a given branch *name* checked out at a time, but
+any worktree can start a new branch from any reachable commit).
+
+Lesson: when a dispatched sub-agent's session resumes somewhere unexpected (different
+worktree, different branch, different HEAD) after a compaction restart, do not try to
+reconstruct or continue the prior location from memory. Run `git worktree list` first — it is
+safe from anywhere and shows every checkout across the clone, including ones outside the
+current sandbox. Then confirm the *authoritative* branch/PR identity with `gh pr view` (or
+equivalent) rather than trusting a locally-named branch mentioned in a stale summary — a
+branch name is not evidence it is the PR's actual head, or even pushed at all. If the commit
+the prior work was based on is still reachable in the shared object database, branch fresh
+from it in the current, reachable worktree instead of trying to regain access to the original
+one.
+
+---
+
+## 2026-08-25 — three consecutive D-068 review rounds against #780 kept finding the same defect class in new constructs, because the fix was reviewed incrementally instead of characterized once, up front, for its full scope
+
+What happened: the `Optional[T]` flow-sensitive narrowing feature (D-201, #769/#747 Part 2)
+went through three separate D-068 pinned-reviewer rounds against PR #780, each round finding
+a *new* instance of essentially the same soundness defect class — the design's single
+left-to-right source-order pass, reconciled only at control-flow joins, silently assumed a
+body's execution order always matches its source order. Round 1 found the join-reconciliation
+gap for `.narrowed` itself (`join_if_branches`/`join_loop_body`/`join_match_branches` never
+touched the overlay). Round 2 found the `if`/`while` fast-path-helper bypass of
+`apply_post_if_narrowing`. Round 3 (this entry) found that the join fix from round 1 still
+didn't make loop bodies or `try`/`except` handlers sound against *re-entry*: a `while` loop
+re-running its own body, or an `except` handler reachable only after some partial prefix of
+the `try` body already ran, could both observe a read as narrowed against entry-time state
+that its own kill-in-the-same-body had already invalidated by the time that read actually
+executed. Each round's fix was correct and narrowly scoped to what the round's own review
+found — but no round asked "what is the *general* property this design needs, and does the
+fix I'm about to land actually establish it everywhere, or only at the specific spot the
+reviewer happened to flag?"
+
+Root cause: the original design (D-201) was implemented and reviewed one increment at a time
+— get *a* narrowing story working, review it, fix what's flagged, repeat — rather than
+characterizing up front, in the design's own decision record, the exact soundness invariant a
+flow-sensitive analysis over control flow needs ("no read may observe a narrowing fact that
+some reachable execution path already invalidated by the time that read actually runs") and
+then auditing every construct in the language against that invariant before calling the
+feature done. Each individual round's fix was locally sound; the recurring pattern was that
+fixing *one* violation of a general invariant, found by inspection rather than by checking the
+invariant systematically, reliably leaves other unexamined violations of the same invariant
+in place. Loops and `try`/`except` are exactly the two constructs in this language where
+execution order can diverge from source order, and neither was audited against the invariant
+until a reviewer happened to construct a program that exercised it.
+
+What fixed it (round 3, this entry): rather than special-casing the two newly-found
+constructs, the fix restated the general invariant explicitly (see D-202) and applied it
+uniformly via a single shared primitive (`pycc_hir::killed_names`, a kill-prescan) at every
+call site in both `pycc_types` and `pycc_mir` where a body can be re-entered — not only the
+two constructs the round's own repro happened to name.
+
+Lesson: when a flow-sensitive analysis is reviewed incrementally and a defect is found, do not
+stop at fixing the reported instance. Before closing out the round, state the general
+soundness invariant the fix is actually supposed to establish, then check every other
+construct in the language against that same invariant — the next review round will otherwise
+just find the next unaudited construct, at the cost of another full review cycle. Concretely
+for this codebase: for any future flow-sensitive per-scope fact (narrowing or otherwise),
+audit its soundness against every construct where execution order can differ from source
+order (currently `while`/`for` loops and `try`/`except`/`finally`) as part of the *original*
+design work, not as a reactive response to successive review findings.
+
+---
+
 ## 2026-08-24 — `docs/ROADMAP.md` growth on `origin/main` tripped the llms.txt budget after a rebase, even though `check-site.sh` had already passed pre-rebase
 
 What happened: on the `#767` branch, `RUBYOPT="-E UTF-8" bash scripts/check-site.sh` passed

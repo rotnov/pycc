@@ -11,6 +11,39 @@ use super::expr::pre_bind_named_expr_targets;
 use pycc_hir::{HirStmt, Ty};
 use std::collections::HashMap;
 
+/// Blocker fix (D-068 review of #780): shared loop-body lowering helper for
+/// `While`/`ForRange`/`ForList`'s three arms below -- lowers `body` via
+/// `lower_scoped_body`, then reconciles the narrowing overlay the same way
+/// `pycc_types::join_loop_body` does: a name stays narrowed after the loop
+/// only if it is narrowed to the same type whether the loop ran zero times
+/// (the pre-loop snapshot) or ran the body at least once (the body's own
+/// ending state). See `lower_scoped_body`'s doc comment for why this needs
+/// a second, explicit `restore_narrowing` call rather than trusting its own
+/// internal one.
+fn lower_loop_body(
+    body: &[HirStmt],
+    scopes: &mut Vec<HashMap<String, Ty>>,
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) -> Vec<MirStmt> {
+    // Issue #769 follow-up (D-068 re-review round 3): a loop body can be
+    // re-entered, so a read inside it can execute after a kill from a
+    // prior iteration even though the kill comes later in source order.
+    // Prescan-drop every name `body` kills before lowering it -- see
+    // `super::apply_kill_prescan`'s doc comment. Applied on top of
+    // `scopes`' current state before `lower_scoped_body` takes its own
+    // isolating snapshot, so the pruning is visible for the lowering
+    // below but the `pre_snapshot` used by the post-loop join already
+    // reflects it too (matching `pycc_types::narrow`'s equivalent fix,
+    // which mutates the same `env` both the pre-loop test and the loop
+    // body itself read from).
+    super::apply_kill_prescan(scopes, body);
+    let pre_snapshot = super::narrowing_snapshot(scopes);
+    let (body, body_end) = super::lower_scoped_body(body, scopes, classes, current_class, None);
+    super::restore_narrowing(scopes, super::join_narrowed(&pre_snapshot, &[&body_end]));
+    body
+}
+
 pub(super) fn lower_stmt(
     stmt: &HirStmt,
     scopes: &mut Vec<HashMap<String, Ty>>,
@@ -82,6 +115,15 @@ pub(super) fn lower_stmt(
             // accepted by the type checker but must not silently change the
             // later MIR name type from tagged i64 to i8.
             bind_variable(scopes, target.clone(), value.ty());
+            // Issue #769 (Part 2 of #747): a reassignment kills any
+            // narrowing currently recorded for `target` -- mirroring
+            // `pycc_types::lib::check_assignment`'s own unconditional
+            // `env.narrowed.remove(target)` at the checker layer. Without
+            // this, a read of `target` later in the same narrowed branch
+            // (after this assignment overwrote it) would keep emitting a
+            // stale `OptionalUnwrap` for a value the checker never proved
+            // present.
+            super::kill_narrowing(scopes, target);
             MirStmt::Assign {
                 target: target.clone(),
                 value,
@@ -148,6 +190,10 @@ pub(super) fn lower_stmt(
             } else {
                 annotation.clone()
             };
+            // Issue #769 (Part 2 of #747): same kill-on-assignment as the
+            // plain `Assign` arm above -- a re-annotated declaration is
+            // still a reassignment of `target`.
+            super::kill_narrowing(scopes, target);
             bind_variable(scopes, target.clone(), bind_ty);
             MirStmt::Assign {
                 target: target.clone(),
@@ -192,6 +238,7 @@ pub(super) fn lower_stmt(
             // lowering pass at all. This binding is consulted only by the
             // plain `HirStmt::Assign` arm's own later-reassignment check
             // above.
+            super::kill_narrowing(scopes, target);
             bind_variable(scopes, target.clone(), annotation.clone());
             MirStmt::NoOp
         }
@@ -200,7 +247,7 @@ pub(super) fn lower_stmt(
             // PEP 572 (#774): bind before lowering, mirroring `ExprStmt`'s
             // own ordering rationale above.
             pre_bind_named_expr_targets(test, scopes, classes, current_class);
-            let test = lower_expr(test, scopes, classes, current_class);
+            let lowered_test = lower_expr(test, scopes, classes, current_class);
             // PEP 572 (#774): an `if` test condition is one of the three
             // placements a walrus is permitted in. Bound *before* lowering
             // `body`/`orelse` (not after, unlike `ExprStmt`'s own
@@ -208,42 +255,109 @@ pub(super) fn lower_stmt(
             // within this same statement -- the branches -- that can
             // reference the bound name: `if (n := f()) > 0: print(n)`).
             let mut named_bindings = Vec::new();
-            test.collect_named_expr_bindings(&mut named_bindings);
+            lowered_test.collect_named_expr_bindings(&mut named_bindings);
             for (name, ty) in named_bindings {
                 bind_variable(scopes, name, ty);
             }
+            // Issue #769 (Part 2 of #747): recognize the same top-level
+            // `name is None` / `name is not None` shape the checker does
+            // (`pycc_hir::optional_none_test`, the shared recognizer), and
+            // -- only when `name` is *currently* scoped as `Ty::Optional`
+            // -- push a `$narrowed:{name}` sentinel into the top `scopes`
+            // frame before lowering the one branch that is reachable only
+            // when the value is present, exactly mirroring
+            // `pycc_types::narrow::apply_branch_narrowing`'s own polarity
+            // split: `is not None` narrows only `body`; `is None` narrows
+            // only `orelse`. The sentinel is popped again immediately after
+            // that branch's statements are lowered, so it never leaks past
+            // this `if` into a sibling statement (MIR's `scopes` frame is
+            // shared, mutable, and per-function rather than per-branch, so
+            // an unpopped sentinel would otherwise leak across the join the
+            // same way the checker's own module doc comment describes for
+            // its own, separate `narrowed` overlay). `test` here is the
+            // original (pre-lowering) HIR node, matching the checker's own
+            // recognizer, which is also HIR-level.
+            let narrowing = pycc_hir::optional_none_test(test).and_then(|(name, polarity)| {
+                match lookup(scopes, name) {
+                    Ty::Optional(inner) => Some((name.to_string(), polarity, *inner)),
+                    _ => None,
+                }
+            });
+            let narrows_body = matches!(
+                narrowing,
+                Some((_, pycc_hir::NoneTestPolarity::IsNot, _))
+            );
+            let narrows_orelse = matches!(narrowing, Some((_, pycc_hir::NoneTestPolarity::Is, _)));
+
+            let body_narrow = narrows_body.then(|| {
+                let (name, _, inner) = narrowing.as_ref().expect("narrows_body implies Some");
+                (name.as_str(), inner.clone())
+            });
+            let (body, body_end) =
+                super::lower_scoped_body(body, scopes, classes, current_class, body_narrow);
+
+            let orelse_narrow = narrows_orelse.then(|| {
+                let (name, _, inner) = narrowing.as_ref().expect("narrows_orelse implies Some");
+                (name.as_str(), inner.clone())
+            });
+            let (orelse, orelse_end) =
+                super::lower_scoped_body(orelse, scopes, classes, current_class, orelse_narrow);
+
+            // Blocker fix (D-068 review of #780): an `if` always runs
+            // exactly one of `body`/`orelse`, never neither, so the
+            // narrowing state visible to whatever statement follows this
+            // `if` in the enclosing sequence is the join of both branches'
+            // own ending states -- not whatever `scopes` happened to hold
+            // before this `if` ran (each `lower_scoped_body` call above
+            // already reverted `scopes` back to exactly that pre-`if`
+            // state on its own, so without this call the join would
+            // silently never have happened at all, reverting any kill made
+            // inside just one of the two branches -- e.g. `if flag: x =
+            // None` nested inside an outer `if x is not None:` -- the
+            // moment this `if` closed). Mirrors
+            // `pycc_types::join_if_branches`'s identical fix exactly, one
+            // layer down.
+            super::restore_narrowing(scopes, super::join_narrowed(&body_end, &[&orelse_end]));
+
             MirStmt::If {
-                test,
-                body: body
-                    .iter()
-                    .map(|s| lower_stmt(s, scopes, classes, current_class))
-                    .collect(),
-                orelse: orelse
-                    .iter()
-                    .map(|s| lower_stmt(s, scopes, classes, current_class))
-                    .collect(),
+                test: lowered_test,
+                body,
+                orelse,
             }
         }
         HirStmt::While { test, body } => {
+            // Issue #769 follow-up (D-068 re-review round 3): `test`
+            // re-executes on every iteration too, so it needs the same
+            // prescan `lower_loop_body` applies to `body` below, applied
+            // *before* `test` is lowered -- `lower_loop_body` reapplies it
+            // to the same `scopes` before lowering `body` itself, which is
+            // a harmless no-op the second time.
+            super::apply_kill_prescan(scopes, body);
             // PEP 572 (#774): bind before lowering, mirroring `If`'s own
             // ordering just above.
             pre_bind_named_expr_targets(test, scopes, classes, current_class);
-            let test = lower_expr(test, scopes, classes, current_class);
+            let lowered_test = lower_expr(test, scopes, classes, current_class);
             // PEP 572 (#774): mirrors `If`'s own bind-before-body handling
             // just above -- a `while` test condition is the other
             // permitted placement, and a name it binds must be visible to
             // the loop body: `while (chunk := f()) is not None: use(chunk)`.
             let mut named_bindings = Vec::new();
-            test.collect_named_expr_bindings(&mut named_bindings);
+            lowered_test.collect_named_expr_bindings(&mut named_bindings);
             for (name, ty) in named_bindings {
                 bind_variable(scopes, name, ty);
             }
+            // Issue #769 (Part 2 of #747), D-201 scope cut: narrowing is
+            // deliberately `if`-only -- `pycc_types::narrow` never applies
+            // `apply_branch_narrowing` to a `while` test (see its own call
+            // sites), so no narrow overlay is pushed for entering the body,
+            // mirroring the checker. `lower_loop_body` (D-068 review fix)
+            // still reconciles any narrowing state established/killed
+            // *inside* the loop body itself against the loop running zero
+            // times, exactly like `ForRange`/`ForList` below.
+            let body = lower_loop_body(body, scopes, classes, current_class);
             MirStmt::While {
-                test,
-                body: body
-                    .iter()
-                    .map(|s| lower_stmt(s, scopes, classes, current_class))
-                    .collect(),
+                test: lowered_test,
+                body,
             }
         }
         HirStmt::ForRange {
@@ -257,10 +371,18 @@ pub(super) fn lower_stmt(
             let stop = lower_expr(stop, scopes, classes, current_class);
             let step = lower_expr(step, scopes, classes, current_class);
             bind_variable(scopes, var.clone(), Ty::Int);
-            let body = body
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
+            // D-068 re-review of #780 (sixth round): the loop's own
+            // induction variable is a rebinding exactly like `Assign`, but
+            // `bind_variable` alone never clears a stale narrowing
+            // sentinel -- mirrors the `Assign`/`AnnAssign` arms' own
+            // `kill_narrowing`+`bind_variable` pairing above, and the
+            // checker's `check_assignment(env, var, Ty::Int)` (`pycc_types`'
+            // `ForRange` arm), which unconditionally clears `env.narrowed`.
+            // Applied *before* `lower_loop_body`'s own snapshot so the
+            // clear also survives past the loop's own close, matching the
+            // checker's `env`/`body_env` split.
+            super::kill_narrowing(scopes, var);
+            let body = lower_loop_body(body, scopes, classes, current_class);
             MirStmt::ForRange {
                 var: var.clone(),
                 start,
@@ -298,10 +420,12 @@ pub(super) fn lower_stmt(
             match lookup(scopes, list) {
                 Ty::List(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
-                    let body = body
-                        .iter()
-                        .map(|s| lower_stmt(s, scopes, classes, current_class))
-                        .collect();
+                    // D-068 re-review of #780 (sixth round): see the
+                    // `ForRange` arm's identical comment above -- the loop
+                    // variable's own rebinding must kill a stale narrowing
+                    // sentinel too.
+                    super::kill_narrowing(scopes, var);
+                    let body = lower_loop_body(body, scopes, classes, current_class);
                     MirStmt::ForList {
                         var: var.clone(),
                         list: list.clone(),
@@ -310,10 +434,10 @@ pub(super) fn lower_stmt(
                 }
                 Ty::Dict(kv) => {
                     bind_variable(scopes, var.clone(), kv.0);
-                    let body = body
-                        .iter()
-                        .map(|s| lower_stmt(s, scopes, classes, current_class))
-                        .collect();
+                    // D-068 re-review of #780 (sixth round): see the
+                    // `ForRange` arm's identical comment above.
+                    super::kill_narrowing(scopes, var);
+                    let body = lower_loop_body(body, scopes, classes, current_class);
                     MirStmt::ForDict {
                         var: var.clone(),
                         dict: list.clone(),
@@ -328,10 +452,10 @@ pub(super) fn lower_stmt(
                 // Task 7 fix round).
                 Ty::Set(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
-                    let body = body
-                        .iter()
-                        .map(|s| lower_stmt(s, scopes, classes, current_class))
-                        .collect();
+                    // D-068 re-review of #780 (sixth round): see the
+                    // `ForRange` arm's identical comment above.
+                    super::kill_narrowing(scopes, var);
+                    let body = lower_loop_body(body, scopes, classes, current_class);
                     MirStmt::ForSet {
                         var: var.clone(),
                         set: list.clone(),
@@ -357,6 +481,11 @@ pub(super) fn lower_stmt(
                 .map(|c| lower_expr(c, scopes, classes, current_class));
             let elt = lower_expr(elt, scopes, classes, current_class);
             bind_variable(scopes, target.clone(), Ty::List(Box::new(elt.ty())));
+            // D-068 re-review of #780 (sixth round): the comprehension's
+            // own result `target` is a rebinding exactly like `Assign`,
+            // paralleling `resolve_comp_source`'s own `var` fix just above
+            // -- must kill a stale narrowing sentinel too.
+            super::kill_narrowing(scopes, target);
             MirStmt::ListCompAssign {
                 target: target.clone(),
                 var: var.clone(),
@@ -379,6 +508,9 @@ pub(super) fn lower_stmt(
                 .map(|c| lower_expr(c, scopes, classes, current_class));
             let elt = lower_expr(elt, scopes, classes, current_class);
             bind_variable(scopes, target.clone(), Ty::Set(Box::new(elt.ty())));
+            // D-068 re-review of #780 (sixth round): see `ListCompAssign`'s
+            // identical comment above.
+            super::kill_narrowing(scopes, target);
             MirStmt::SetCompAssign {
                 target: target.clone(),
                 var: var.clone(),
@@ -407,6 +539,9 @@ pub(super) fn lower_stmt(
                 target.clone(),
                 Ty::Dict(Box::new((key.ty(), value.ty()))),
             );
+            // D-068 re-review of #780 (sixth round): see `ListCompAssign`'s
+            // identical comment above.
+            super::kill_narrowing(scopes, target);
             MirStmt::DictCompAssign {
                 target: target.clone(),
                 var: var.clone(),
@@ -507,18 +642,38 @@ pub(super) fn lower_stmt(
             lower_match(subject, cases, scopes, classes, current_class)
         }
         HirStmt::Try {
-            body,
+            body: hir_body,
             handlers,
             orelse,
             finalbody,
         } => {
-            let body = body
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
+            // D-068 review of #780: `try`'s body/handlers/orelse/finally are
+            // not this fix's scope -- see `lower_scoped_body`'s doc comment
+            // (same reasoning as `match`'s case bodies in `matching.rs`).
+            // Each remains isolated from its siblings as before; the ending
+            // narrowed state is intentionally discarded at every one of
+            // these four call sites.
+            let (body, _end_narrowed) =
+                super::lower_scoped_body(hir_body, scopes, classes, current_class, None);
+            // Issue #769 follow-up (D-068 re-review round 3): a handler
+            // runs only after *some* prefix of `body` already executed at
+            // runtime, so it must not see a narrowing `body` could have
+            // killed anywhere within it -- the MIR counterpart of
+            // `exception::check_try_stmt`'s identical `handler_env` fix
+            // (`crates/pycc_types/src/exception.rs`). Each iteration below
+            // explicitly restores `scopes` to this pre-try snapshot before
+            // its own prescan, since `lower_scoped_body`'s internal
+            // snapshot/restore only round-trips to *its own* entry state
+            // (the just-pruned state, not the shared pre-try one) --
+            // without the explicit restore, a second handler would start
+            // from the first handler's own pruning instead of the true
+            // pre-try state.
+            let pre_handlers_narrowed = super::narrowing_snapshot(scopes);
             let handlers = handlers
                 .iter()
                 .map(|h| {
+                    super::restore_narrowing(scopes, pre_handlers_narrowed.clone());
+                    super::apply_kill_prescan(scopes, hir_body);
                     // PEP 758 (#740): a handler may name more than one
                     // exception type. Union each named type's own tag set,
                     // then dedup -- overlapping families (e.g. `OSError`
@@ -548,12 +703,22 @@ pub(super) fn lower_stmt(
                             name.clone(),
                             Ty::Instance(Box::new(binding_type.clone())),
                         );
+                        // D-068 re-review of #780 (fourth round): `bind`
+                        // only overwrites the type scope, never the
+                        // narrowing sentinel (mirrors the checker-side gap
+                        // fixed in `exception::check_try_stmt` --
+                        // `crates/pycc_types/src/exception.rs`). Without
+                        // this, a name narrowed before entering `try` and
+                        // still carrying a `$narrowed:{name}` sentinel here
+                        // would make `lower_expr`'s `Name` arm keep emitting
+                        // `MirExpr::OptionalUnwrap` for reads of `name`
+                        // inside the handler body, even though `name` now
+                        // holds the caught exception instance, not the
+                        // narrowed `Optional`'s inner value.
+                        super::kill_narrowing(scopes, name);
                     }
-                    let handler_body = h
-                        .body
-                        .iter()
-                        .map(|s| lower_stmt(s, scopes, classes, current_class))
-                        .collect();
+                    let (handler_body, _end_narrowed) =
+                        super::lower_scoped_body(&h.body, scopes, classes, current_class, None);
                     MirExceptHandler {
                         exc_type_tag,
                         binding_name: h.name.clone(),
@@ -566,14 +731,19 @@ pub(super) fn lower_stmt(
                     }
                 })
                 .collect();
-            let orelse = orelse
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
-            let finalbody = finalbody
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
+            // Restore `scopes` to the pre-handlers (pre-try) narrowing
+            // state once more: each handler's own `lower_scoped_body` call
+            // above restores only to *that handler's* pruned entry state
+            // (the `apply_kill_prescan` mutation applied right before it),
+            // not all the way back to `pre_handlers_narrowed` -- without
+            // this, `orelse`/`finalbody` below would see whichever
+            // handler ran last's pruning, not the pre-try state they saw
+            // before this fix.
+            super::restore_narrowing(scopes, pre_handlers_narrowed);
+            let (orelse, _end_narrowed) =
+                super::lower_scoped_body(orelse, scopes, classes, current_class, None);
+            let (finalbody, _end_narrowed) =
+                super::lower_scoped_body(finalbody, scopes, classes, current_class, None);
             MirStmt::Try {
                 body,
                 handlers,
@@ -586,19 +756,34 @@ pub(super) fn lower_stmt(
         // an `as` binding always resolves to `ExceptionGroup`, never the
         // named handler type (see `pycc_types::exception::
         // check_try_star_stmt`'s identical rule at type-checking time).
+        //
+        // D-068 re-review of #780 (eighth round): this arm now routes every
+        // body/handler/orelse/finalbody position through
+        // `lower_scoped_body` and mirrors the `Try` arm's full
+        // pre_handlers_narrowed/apply_kill_prescan/restore_narrowing
+        // sequence around the handler loop -- a raw per-statement
+        // `.map(lower_stmt)` loop (this arm's prior shape) never calls
+        // `apply_post_if_narrowing`, so it silently dropped guard-clause
+        // narrowing propagation across `try`/`except*`/`else`/`finally`
+        // bodies, and never ran `apply_kill_prescan` to protect a handler
+        // from a narrowing the `try` body's own prefix already killed --
+        // the exact defect class `check_stmt_sequence_shared`'s doc
+        // comment (`crates/pycc_types/src/exception.rs`) describes for the
+        // type-checker side of this same construct.
         HirStmt::TryStar {
-            body,
+            body: hir_body,
             handlers,
             orelse,
             finalbody,
         } => {
-            let body = body
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
+            let (body, _end_narrowed) =
+                super::lower_scoped_body(hir_body, scopes, classes, current_class, None);
+            let pre_handlers_narrowed = super::narrowing_snapshot(scopes);
             let handlers = handlers
                 .iter()
                 .map(|h| {
+                    super::restore_narrowing(scopes, pre_handlers_narrowed.clone());
+                    super::apply_kill_prescan(scopes, hir_body);
                     let exc_type_tag = h.exc_type.as_ref().map(|names| {
                         let mut tags: Vec<u8> = names
                             .iter()
@@ -614,12 +799,19 @@ pub(super) fn lower_stmt(
                             name.clone(),
                             Ty::Instance(Box::new("ExceptionGroup".to_string())),
                         );
+                        // D-068 re-review of #780 (rebase onto #542's
+                        // except* landing): mirrors the plain `Try` handler
+                        // arm's identical fix above -- `bind` only
+                        // overwrites the type scope, never the narrowing
+                        // sentinel, so a name narrowed before entering
+                        // `try` would keep emitting `MirExpr::OptionalUnwrap`
+                        // for reads inside this handler body even though
+                        // `name` now holds the caught `ExceptionGroup`, not
+                        // the narrowed `Optional`'s inner value.
+                        super::kill_narrowing(scopes, name);
                     }
-                    let handler_body = h
-                        .body
-                        .iter()
-                        .map(|s| lower_stmt(s, scopes, classes, current_class))
-                        .collect();
+                    let (handler_body, _end_narrowed) =
+                        super::lower_scoped_body(&h.body, scopes, classes, current_class, None);
                     MirExceptHandler {
                         exc_type_tag,
                         binding_name: h.name.clone(),
@@ -631,14 +823,11 @@ pub(super) fn lower_stmt(
                     }
                 })
                 .collect();
-            let orelse = orelse
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
-            let finalbody = finalbody
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
+            super::restore_narrowing(scopes, pre_handlers_narrowed);
+            let (orelse, _end_narrowed) =
+                super::lower_scoped_body(orelse, scopes, classes, current_class, None);
+            let (finalbody, _end_narrowed) =
+                super::lower_scoped_body(finalbody, scopes, classes, current_class, None);
             MirStmt::TryStar {
                 body,
                 handlers,

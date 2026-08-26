@@ -13,7 +13,7 @@ mod matching;
 use matching::nest_match_alternatives;
 use matching::try_lower_enum_member_attr;
 mod stmt;
-use pycc_hir::{CompIter, HirItem, HirModule};
+use pycc_hir::{CompIter, HirItem, HirModule, HirStmt};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 use stmt::lower_stmt;
@@ -76,6 +76,30 @@ pub enum MirExpr {
     /// `coerce_scalar_to_type` is driven by that already-correct slot type
     /// directly at the assignment site either way.
     OptionalWrap(Box<MirExpr>, Box<Ty>),
+    /// Issue #769 (Part 2 of #747): the read-side counterpart of
+    /// `OptionalWrap` above. `pycc_types::check` has already proven, via its
+    /// own flow-sensitive `narrowed` overlay (`pycc_types::narrow`), that a
+    /// particular *read* of an `Optional[inner]`-typed name is reachable
+    /// only when the value is actually present -- e.g. any read of `x`
+    /// inside `if x is not None: ...`. This node re-states that already-
+    /// proven fact for codegen: unlike `OptionalWrap`, which fixes `.ty()`
+    /// to *widen* a bare value's static type to `Optional(inner)` so a slot
+    /// gets declared with the right representation, `OptionalUnwrap`
+    /// *narrows* `.ty()` back down to the plain `inner` type for this one
+    /// read, without touching the underlying slot's own declared
+    /// `Optional(inner)` representation at all (the boxed `Ty` here is that
+    /// same `inner` type, carried for codegen the same way `OptionalWrap`
+    /// carries its own target type). Only `pycc_mir::expr::lower_expr`'s
+    /// `HirExpr::Name` arm introduces it, driven by `pycc_mir::lib`'s own
+    /// `$narrowed:{name}` scope sentinel (see `narrowed_ty` below) that
+    /// `pycc_mir::stmt::lower_stmt`'s `HirStmt::If` arm pushes for a
+    /// narrowing-eligible branch, mirroring `pycc_types::narrow`'s own
+    /// `Environment::narrowed` overlay one layer down. `pycc_codegen` reads
+    /// the runtime `Scalar::Optional { inner, present }` representation
+    /// directly for this node (see its own doc comment in
+    /// `pycc_codegen::bigint_rc` for the refcount reasoning); it is a
+    /// pure read, never a slot's own storage type.
+    OptionalUnwrap(Box<MirExpr>, Box<Ty>),
     Name {
         name: String,
         ty: Ty,
@@ -323,6 +347,7 @@ impl MirExpr {
             MirExpr::StringLiteral(_) | MirExpr::FString(_) => Ty::Str,
             MirExpr::NoneLiteral => Ty::None,
             MirExpr::OptionalWrap(_, inner) => Ty::Optional(inner.clone()),
+            MirExpr::OptionalUnwrap(_, inner) => (**inner).clone(),
             MirExpr::Name { ty, .. }
             | MirExpr::Call { ty, .. }
             | MirExpr::BinOp { ty, .. }
@@ -472,6 +497,14 @@ impl MirExpr {
             | MirExpr::NullInstance { .. } => {}
             MirExpr::IntBoundary(inner) => inner.collect_named_expr_bindings(out),
             MirExpr::OptionalWrap(inner, _) => inner.collect_named_expr_bindings(out),
+            // Issue #769 (Part 2 of #747): `OptionalUnwrap` wraps a single
+            // sub-expression (the narrowed name's own read), exactly like
+            // `OptionalWrap`/`IntBoundary` immediately above -- a walrus
+            // nested inside it (e.g. `(x if (n := x) is not None else
+            // 0)`-shaped MIR is not producible by this compiler's own
+            // narrowing lowering today, but the recursive walk still must
+            // not silently skip whatever sub-expression this node wraps).
+            MirExpr::OptionalUnwrap(inner, _) => inner.collect_named_expr_bindings(out),
             MirExpr::Call { args, .. } => {
                 for arg in args {
                     arg.collect_named_expr_bindings(out);
@@ -786,8 +819,18 @@ pub fn build(hir: &HirModule) -> MirModule {
     // its `def` because function bodies are evaluated only when called.
     let mut lowered: Vec<Option<MirItem>> = hir.items.iter().map(|_| None).collect();
     for (index, item) in hir.items.iter().enumerate() {
-        if matches!(item, HirItem::TopLevelStmt(_)) {
+        if let HirItem::TopLevelStmt(stmt) = item {
             lowered[index] = Some(lower_item(item, &mut scopes, &classes));
+            // Issue #769 (Part 2 of #747): the early-return continuation
+            // shape has no meaning at true module scope (`return` cannot
+            // syntactically appear outside a function, so
+            // `apply_post_if_narrowing` never actually narrows anything
+            // here), but this call keeps every sequential-statement-list
+            // walk in this crate routed through the same narrowing-aware
+            // shape uniformly, mirroring
+            // `pycc_types::check_with_environment`'s own identical no-op
+            // call at its module top level.
+            apply_post_if_narrowing(stmt, &mut scopes);
         }
     }
     for (index, item) in hir.items.iter().enumerate() {
@@ -824,10 +867,7 @@ fn lower_item(
             let current_class: Option<&str> =
                 name.split('.').next().filter(|prefix| *prefix != name);
             scopes.push(params.iter().cloned().collect());
-            let body = body
-                .iter()
-                .map(|s| lower_stmt(s, scopes, classes, current_class))
-                .collect();
+            let body = lower_stmt_sequence(body, scopes, classes, current_class);
             scopes.pop();
             MirItem::Function {
                 name: name.clone(),
@@ -863,6 +903,275 @@ fn lookup(scopes: &[HashMap<String, Ty>], name: &str) -> Ty {
         .rev()
         .find_map(|scope| scope.get(name).cloned())
         .unwrap_or_else(|| panic!("pycc_mir: internal error: `{name}` has no recorded type -- pycc_types::check should have rejected this HIR before it reached pycc_mir"))
+}
+
+/// Issue #769 (Part 2 of #747): the sentinel key `narrowed_scope_key`
+/// pushes into the top `scopes` frame to record "`name` is currently
+/// narrowed to its `Optional`'s inner type" -- mirroring `lower_expr`'s
+/// existing `format!("$fn:{callee}")` sentinel-key pattern (used to record
+/// "this name is a user-defined function", also inside the same `scopes`
+/// stack rather than through a separate threaded parameter). `$` never
+/// appears in a real Python identifier, so a sentinel key can never
+/// collide with an actual variable name.
+fn narrowed_scope_key(name: &str) -> String {
+    format!("$narrowed:{name}")
+}
+
+/// Issue #769 (Part 2 of #747): records that `name` is narrowed to `inner`
+/// for the remainder of the current top `scopes` frame -- called by
+/// `lower_stmt`'s `If` arm before lowering the narrowed branch, and popped
+/// with [`kill_narrowing`] immediately after.
+fn push_narrowing(scopes: &mut [HashMap<String, Ty>], name: &str, inner: Ty) {
+    scopes
+        .last_mut()
+        .expect("at least one scope is always present")
+        .insert(narrowed_scope_key(name), inner);
+}
+
+/// Issue #769 (Part 2 of #747): clears `name`'s narrowing sentinel from the
+/// top `scopes` frame -- called both to pop a narrowed region
+/// ([`push_narrowing`]'s counterpart) and, independently, whenever `name`
+/// is reassigned inside a narrowed region (`lower_stmt`'s `Assign`/
+/// `AnnAssign` arms) so a stale `MirExpr::OptionalUnwrap` is never emitted
+/// for a read that follows the reassignment.
+///
+/// D-068 re-review of #780 (seventh round): only clears the sentinel in
+/// `scopes.last()`, while [`narrowed_ty`] searches the whole stack
+/// innermost-to-outward. This is sound today only because `scopes` ever
+/// gains a second frame in exactly one place (`lower_item`'s `Function`
+/// arm) and no narrowing sentinel is ever live across that push --
+/// functions are lowered in a separate pass after all module-level
+/// statements, and this HIR has no nested-function construct. If a future
+/// change adds another `scopes.push` while an outer-frame sentinel is
+/// still live, that sentinel would become unkillable through this
+/// function (which only touches the top frame) while remaining visible to
+/// [`narrowed_ty`]'s full-stack search -- silently reintroducing the same
+/// stale-narrowing class every earlier round of this review fixed, through
+/// a different mechanism. Any new `scopes.push` site must account for this
+/// before it can carry a live narrowing sentinel across it.
+fn kill_narrowing(scopes: &mut [HashMap<String, Ty>], name: &str) {
+    scopes
+        .last_mut()
+        .expect("at least one scope is always present")
+        .remove(&narrowed_scope_key(name));
+}
+
+/// Issue #769 follow-up (D-068 re-review of #780, third round): the MIR
+/// counterpart of `pycc_types::narrow::apply_kill_prescan` -- drops every
+/// name `body` reassigns anywhere within it (per `pycc_hir::killed_names`)
+/// from `scopes`' top-frame narrowing sentinels, for `body`'s entire
+/// extent rather than only from the kill's own source position onward.
+///
+/// Required for MIR to stay consistent with the checker's identical fix:
+/// without this, `pycc_types::check` would reject a re-entrant read (a
+/// loop body, or an `except` handler reached partway through the `try`
+/// body it guards) that the checker's own `narrow::apply_kill_prescan`
+/// drops the narrowing for, but MIR lowering -- reached only when
+/// `pycc_types::check` already accepted the same HIR for some *other*,
+/// still-narrowable read in the same body -- would still emit an
+/// unconditional `MirExpr::OptionalUnwrap` for a read this checker fix
+/// now no longer allows to be narrowed. Called from the same two site
+/// classes as the checker's: `stmt::lower_loop_body` (every
+/// `While`/`ForRange`/`ForList` lowering path, all funneled through that
+/// one shared helper) and `stmt::lower_stmt`'s `Try` arm (each handler
+/// body, prescanned against the *try body's* kill set before lowering).
+fn apply_kill_prescan(scopes: &mut [HashMap<String, Ty>], body: &[HirStmt]) {
+    for name in pycc_hir::killed_names(body) {
+        kill_narrowing(scopes, &name);
+    }
+}
+
+/// Issue #769 (Part 2 of #747): `Some(inner)` when `name` is currently
+/// narrowed to `inner` (an `Optional`'s inner type), `None` otherwise.
+/// Consulted only by `lower_expr`'s `HirExpr::Name` arm, exactly mirroring
+/// `pycc_types::env::Environment::narrowed_ty`'s own "reads consult the
+/// overlay, assignment targets never do" split -- `lower_stmt`'s own
+/// `Assign`/`AnnAssign` arms bind `target`'s *real* type via `bind`/
+/// `bind_variable` directly and never call this.
+fn narrowed_ty(scopes: &[HashMap<String, Ty>], name: &str) -> Option<Ty> {
+    scopes
+        .iter()
+        .rev()
+        .find_map(|scope| scope.get(&narrowed_scope_key(name)).cloned())
+}
+
+/// Issue #769 (Part 2 of #747), the early-return continuation shape: if
+/// `stmt` is `if name is None: <body that definitely terminates>`, `name`
+/// is known to be present (the `Optional`'s inner type) for every
+/// statement *after* `stmt` in the same sequential statement list --
+/// mirroring `pycc_types::narrow::apply_post_if_narrowing` one layer down,
+/// using the same shared `pycc_hir::optional_none_test` /
+/// `pycc_hir::definitely_terminates` recognizers that module's own doc
+/// comment explains in full. Unlike [`push_narrowing`]'s in-branch use in
+/// `stmt::lower_stmt`'s own `HirStmt::If` arm (which pairs every push with
+/// a [`kill_narrowing`] once that one branch finishes lowering), this
+/// sentinel is deliberately never popped by its own caller -- it is meant
+/// to persist for the rest of the enclosing sequence, exactly like
+/// `pycc_types::narrow`'s own overlay entry does when applied directly to
+/// (not a clone of) the real `env`. Only [`lower_stmt_sequence`] below
+/// calls this, once per statement, immediately after lowering it.
+fn apply_post_if_narrowing(stmt: &HirStmt, scopes: &mut [HashMap<String, Ty>]) {
+    let HirStmt::If { test, body, .. } = stmt else {
+        return;
+    };
+    let Some((name, polarity)) = pycc_hir::optional_none_test(test) else {
+        return;
+    };
+    if !matches!(polarity, pycc_hir::NoneTestPolarity::Is) {
+        return;
+    }
+    if !pycc_hir::definitely_terminates(body) {
+        return;
+    }
+    if let Ty::Optional(inner) = lookup(scopes, name) {
+        push_narrowing(scopes, name, *inner);
+    }
+}
+
+/// Issue #769 (Part 2 of #747): lowers a sequential list of statements --
+/// a function body, or any `if`/`while`/`for` body -- applying the
+/// early-return continuation narrowing ([`apply_post_if_narrowing`]) after
+/// each one. The narrowing-aware replacement for the raw `stmts.iter()
+/// .map(|s| lower_stmt(s, scopes, classes, current_class)).collect()`
+/// pattern every sequential body lowering in this crate used before this
+/// issue (mirroring `pycc_types::narrow::check_stmt_sequence`'s identical
+/// role at the checker layer).
+///
+/// Callers processing the *top-level* sequence of a function or module body
+/// call this directly, since narrowing established there is meant to persist
+/// for the rest of that same sequence. A *nested* body (an `if`/`while`/`for`
+/// arm, a `try`/`except` handler, a `match` arm, ...) must instead go through
+/// [`lower_scoped_body`], which isolates whatever this function accumulates
+/// in `scopes`' top frame so it cannot leak past the nested body's own close
+/// -- see that function's doc comment for the soundness rationale.
+fn lower_stmt_sequence(
+    stmts: &[HirStmt],
+    scopes: &mut Vec<HashMap<String, Ty>>,
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) -> Vec<MirStmt> {
+    let mut out = Vec::with_capacity(stmts.len());
+    for stmt in stmts {
+        out.push(lower_stmt(stmt, scopes, classes, current_class));
+        apply_post_if_narrowing(stmt, scopes);
+    }
+    out
+}
+
+/// Issue #769 (Part 2 of #747): captures the narrowing-sentinel subset
+/// (every `$narrowed:{name}` key, see [`narrowed_scope_key`]) of `scopes`'
+/// top frame, for later restoration via [`restore_narrowing`].
+fn narrowing_snapshot(scopes: &[HashMap<String, Ty>]) -> HashMap<String, Ty> {
+    scopes
+        .last()
+        .expect("at least one scope is always present")
+        .iter()
+        .filter(|(key, _)| key.starts_with("$narrowed:"))
+        .map(|(key, ty)| (key.clone(), ty.clone()))
+        .collect()
+}
+
+/// Issue #769 (Part 2 of #747): replaces `scopes`' top frame's entire
+/// narrowing-sentinel subset with `snapshot` -- the counterpart of
+/// [`narrowing_snapshot`], undoing every `push_narrowing`/`kill_narrowing`
+/// mutation made since the snapshot was taken, whether from a direct
+/// `push_narrowing` call or indirectly from a nested
+/// [`apply_post_if_narrowing`] hit deeper in the body being restored from.
+fn restore_narrowing(scopes: &mut [HashMap<String, Ty>], snapshot: HashMap<String, Ty>) {
+    let top = scopes
+        .last_mut()
+        .expect("at least one scope is always present");
+    top.retain(|key, _| !key.starts_with("$narrowed:"));
+    top.extend(snapshot);
+}
+
+/// Blocker fix (D-068 review of #780): the MIR-side counterpart of
+/// `pycc_types::narrow::join_narrowed`. A name stays narrowed to `ty` after
+/// two or more possible-path narrowing snapshots are reconciled only if
+/// *every* supplied snapshot narrows it to that exact `ty`; a snapshot that
+/// killed it (or never had it) drops it from the intersection entirely.
+/// Operates on [`narrowing_snapshot`]-shaped maps (`$narrowed:{name}` ->
+/// inner type), so the result can be handed directly to
+/// [`restore_narrowing`]. See that Rust doc's checker-side twin for the
+/// full soundness rationale -- this is the identical algorithm, kept as an
+/// independent copy rather than a shared crate dependency because
+/// `pycc_mir` does not (and per the existing `pycc_hir::optional_none_test`
+/// precedent, should not) depend on `pycc_types`.
+///
+/// Every call site has at least one snapshot by construction (an `if`'s
+/// body/orelse end-state, or a loop's pre-body/post-body end-state), so
+/// `first` is taken separately from `rest` rather than a possibly-empty
+/// slice -- that keeps the join total without an unreachable empty-input
+/// branch.
+fn join_narrowed(
+    first: &HashMap<String, Ty>,
+    rest: &[&HashMap<String, Ty>],
+) -> HashMap<String, Ty> {
+    let mut joined: HashMap<String, Ty> = first.clone();
+    for snapshot in rest {
+        joined.retain(|key, ty| snapshot.get(key) == Some(ty));
+    }
+    joined
+}
+
+/// Issue #769 (Part 2 of #747): lowers a *nested* statement body (an
+/// `if`/`while`/`for` arm, a `try`/`except`/`finally` handler, a `match`
+/// arm, ...) with its own narrowing state isolated from the enclosing
+/// sequence, mirroring `pycc_types::narrow`'s own per-branch `Environment`
+/// clone-and-discard design (see `narrow.rs`'s module doc comment) one layer
+/// down.
+///
+/// `scopes`' single function-level frame (pushed once at function entry,
+/// never per-block -- see this module's existing scope-stack convention) is
+/// shared, mutable state threaded through every nested body, unlike the
+/// checker's own per-branch `Environment` *clones*. Without this wrapper, a
+/// narrowing fact established by [`apply_post_if_narrowing`] deep inside one
+/// branch (e.g. a nested early-return guard) would persist in that shared
+/// frame past the branch's own close and incorrectly narrow reads in a
+/// sibling branch or in code after the enclosing construct entirely.
+/// [`narrowing_snapshot`]/[`restore_narrowing`] recreate the clone-and-discard
+/// effect cheaply, without cloning the rest of `scopes`.
+///
+/// `narrow` optionally pushes one additional in-branch narrowing fact (the
+/// enclosing `if`'s own recognized `is`/`is not None` test, exactly the
+/// role `push_narrowing`/`kill_narrowing` played before this wrapper existed)
+/// before lowering `stmts` -- `restore_narrowing` undoes this push too, since
+/// the snapshot is taken before it is applied.
+///
+/// Blocker fix (D-068 review of #780): also returns the narrowing-sentinel
+/// subset as it stood *immediately after* lowering `stmts`, before the
+/// isolating restore -- this branch's "ending" narrowed state. Isolation
+/// during lowering (so a nested body's own narrowing never leaks into a
+/// sibling while both are being lowered) and reporting that branch's own
+/// outcome to the caller are two different concerns: unconditionally
+/// discarding the ending state (the pre-fix behavior) silently reverted a
+/// same-branch `kill_narrowing` the moment this nested body closed, even
+/// when nothing else contradicted it. A caller that needs the
+/// join-reconciled effect of one or more sibling branches (`HirStmt::If`'s
+/// body+orelse pair, a loop's single body joined against "the loop ran zero
+/// times") combines the returned end-states with [`join_narrowed`] and
+/// applies the result back onto `scopes` via a second, deliberate
+/// `restore_narrowing` call of its own -- see `stmt.rs`'s `If`/`While`/
+/// `ForRange`/`ForList` arms. A caller that does not need that (a `match`
+/// case, a `try` handler/`orelse`/`finally` body -- each already isolated
+/// from its siblings by this same wrapper, and not this session's fix
+/// scope) simply ignores the second return value, preserving the prior
+/// "restore to entry state" behavior exactly.
+fn lower_scoped_body(
+    stmts: &[HirStmt],
+    scopes: &mut Vec<HashMap<String, Ty>>,
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+    narrow: Option<(&str, Ty)>,
+) -> (Vec<MirStmt>, HashMap<String, Ty>) {
+    let snapshot = narrowing_snapshot(scopes);
+    if let Some((name, inner)) = narrow {
+        push_narrowing(scopes, name, inner);
+    }
+    let out = lower_stmt_sequence(stmts, scopes, classes, current_class);
+    let end_state = narrowing_snapshot(scopes);
+    restore_narrowing(scopes, snapshot);
+    (out, end_state)
 }
 
 /// #436/#432: Looks up a class in the `classes` table by its MRO entry
@@ -919,19 +1228,30 @@ fn resolve_comp_source(
             let stop = lower_expr(stop, scopes, classes, current_class);
             let step = lower_expr(step, scopes, classes, current_class);
             bind_variable(scopes, var.to_string(), Ty::Int);
+            // D-068 re-review of #780 (sixth round): a comprehension's own
+            // loop variable is a rebinding exactly like `ForRange`'s
+            // induction variable (see that arm's identical comment in
+            // `stmt.rs`) -- must kill a stale narrowing sentinel too,
+            // mirroring the checker's `check_assignment(env, var, Ty::Int)`
+            // for the equivalent `ListCompAssign`/`SetCompAssign`/
+            // `DictCompAssign` arms.
+            kill_narrowing(scopes, var);
             (CompSource::Range { start, stop, step }, Ty::Int)
         }
         CompIter::Name(name) => match lookup(scopes, name) {
             Ty::List(elem_ty) => {
                 bind_variable(scopes, var.to_string(), (*elem_ty).clone());
+                kill_narrowing(scopes, var);
                 (CompSource::List(name.clone()), *elem_ty)
             }
             Ty::Dict(kv) => {
                 bind_variable(scopes, var.to_string(), kv.0.clone());
+                kill_narrowing(scopes, var);
                 (CompSource::Dict(name.clone()), kv.0)
             }
             Ty::Set(elem_ty) => {
                 bind_variable(scopes, var.to_string(), (*elem_ty).clone());
+                kill_narrowing(scopes, var);
                 (CompSource::Set(name.clone()), *elem_ty)
             }
             other => panic!(

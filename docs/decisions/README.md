@@ -207,5 +207,7 @@ current.
 | [D-198](./D-198-cast-erasure-limits-cast-to-representation.md) | `cast` erasure limits `cast` to representation-preserving targets | accepted |
 | [D-199](./D-199-opaque-bindings-for-solver-unrepresentable.md) | Track opaque bindings in the private-helper constraint solver (#771) | accepted |
 | [D-200](./D-200-raise-llms-txt-aggregate-budget-to-264-kib.md) | Raise the llms.txt aggregate context budget from 256 KiB to 264 KiB (issue #207) | accepted |
+| [D-201](./D-201-optional-t-flow-sensitive-narrowing-part2.md) | Optional[T] flow-sensitive is/is not None narrowing (Part 2 of #747) | accepted |
 | [D-201](./D-201-shared-pycc-scratch-crate-and-lint-gate-for.md) | Shared `pycc_scratch` crate and lint gate for scratch-directory lifecycle | accepted |
+| [D-202](./D-202-kill-prescan-for-re-enterable-narrowed-bodies.md) | Kill-prescan for re-enterable Optional[T] narrowed bodies (D-068 re-review of #780, third round) | accepted |
 | [D-202](./D-202-pep-654-except-star-and-exceptiongroup.md) | PEP 654 `except*`/ExceptionGroup: six deliberate simplifications | accepted |
