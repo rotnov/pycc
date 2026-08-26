@@ -175,6 +175,20 @@ fn check_paths(paths: &[std::path::PathBuf], error_format: ErrorFormat) -> ExitC
     ExitCode::from(exit_code)
 }
 
+/// The process-keyed temporary object path `try_build` emits codegen output
+/// into before linking. Deliberately still a raw `std::env::temp_dir()`
+/// path rather than a `pycc_scratch::ScratchDir`: it is one of this file's
+/// two production scratch sites owned by Part 3 of #779 (#783), together
+/// with `run`'s output path below. A named function (instead of an inline
+/// expression in `try_build`) so that
+/// `try_build_ignores_a_neighboring_release_pycc_toml_when_given_release_false`
+/// can read back the exact object `try_build` wrote without duplicating
+/// this formula as a second raw call site -- and so #783 has exactly one
+/// place to change it.
+fn try_build_obj_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()))
+}
+
 /// `Ok(())` on success, `Err(code)` carrying the exit code to use on
 /// failure. `?` inside this function needs a `Result`, not an `ExitCode`
 /// directly -- `run` then just propagates whatever `Err` it gets.
@@ -200,7 +214,7 @@ fn try_build(path: &str, out: &str, target: Option<&str>, release: bool) -> Resu
         .map_err(|failure| ExitCode::from(report_build_failure(path, failure)))?;
     let mir = pycc_mir::build(&typed_hir);
 
-    let obj_path = std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()));
+    let obj_path = try_build_obj_path();
     pycc_codegen::compile_to_object(&mir, &obj_path, target, release).map_err(|e| {
         eprintln!("error: codegen failed: {e}");
         ExitCode::from(1)
@@ -554,17 +568,15 @@ fn find_pycc_rt_lib_dir(target: Option<&str>, release: bool) -> Result<std::path
 #[cfg(test)]
 mod init_tests {
     use super::*;
+    use pycc_scratch::ScratchDir;
 
     #[test]
     fn succeeds_and_scaffolds_a_project_in_a_writable_directory() {
-        let dir = std::env::temp_dir().join(format!("pycc_main_init_test_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("main_init_test").expect("failed to create scratch dir");
 
         assert_eq!(init(Some("initdirect"), &dir), Ok(()));
         assert!(dir.join("pycc.toml").exists());
         assert!(dir.join("src").join("main.py").exists());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -575,11 +587,8 @@ mod init_tests {
         // `create_dir_all` creates it -- see `project_config.rs`'s
         // `scaffold_creates_a_missing_target_directory`). The refusal
         // message flows through `init`'s io::Error -> String mapping.
-        let dir = std::env::temp_dir().join(format!(
-            "pycc_main_init_existing_toml_{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir =
+            ScratchDir::new("main_init_existing_toml").expect("failed to create scratch dir");
         std::fs::write(dir.join("pycc.toml"), "user content").unwrap();
 
         let err = init(Some("irrelevant"), &dir).unwrap_err();
@@ -588,22 +597,17 @@ mod init_tests {
             std::fs::read_to_string(dir.join("pycc.toml")).unwrap(),
             "user content"
         );
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 }
 
 #[cfg(test)]
 mod release_flag_tests {
     use super::*;
+    use pycc_scratch::ScratchDir;
 
-    fn temp_dir(label: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "pycc_main_release_flag_{label}_{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch_dir(label: &str) -> ScratchDir {
+        ScratchDir::new(&format!("main_release_flag_{label}"))
+            .expect("failed to create scratch dir")
     }
 
     #[test]
@@ -624,30 +628,26 @@ mod release_flag_tests {
 
     #[test]
     fn no_neighboring_pycc_toml_falls_back_to_false() {
-        let dir = temp_dir("no_toml");
+        let dir = scratch_dir("no_toml");
         let source_path = dir.join("main.py");
 
         assert!(!resolve_release_flag(false, &source_path));
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn a_malformed_neighboring_pycc_toml_falls_back_to_false_instead_of_aborting() {
         // A build must not fail merely because an optional default it
         // doesn't even need happens to be unreadable.
-        let dir = temp_dir("malformed_toml");
+        let dir = scratch_dir("malformed_toml");
         std::fs::write(dir.join("pycc.toml"), "this is not [valid toml").unwrap();
         let source_path = dir.join("main.py");
 
         assert!(!resolve_release_flag(false, &source_path));
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn a_neighboring_pycc_toml_with_a_non_release_opt_falls_back_to_false() {
-        let dir = temp_dir("debug_opt");
+        let dir = scratch_dir("debug_opt");
         std::fs::write(
             dir.join("pycc.toml"),
             "[project]\nname = \"t\"\nentry = \"main.py\"\npython = \"3.14\"\n\n\
@@ -657,13 +657,11 @@ mod release_flag_tests {
         let source_path = dir.join("main.py");
 
         assert!(!resolve_release_flag(false, &source_path));
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn a_neighboring_pycc_toml_with_no_build_section_falls_back_to_false() {
-        let dir = temp_dir("no_build_section");
+        let dir = scratch_dir("no_build_section");
         std::fs::write(
             dir.join("pycc.toml"),
             "[project]\nname = \"t\"\nentry = \"main.py\"\npython = \"3.14\"\n",
@@ -672,13 +670,11 @@ mod release_flag_tests {
         let source_path = dir.join("main.py");
 
         assert!(!resolve_release_flag(false, &source_path));
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn a_neighboring_pycc_toml_with_a_release_opt_becomes_the_default() {
-        let dir = temp_dir("release_opt");
+        let dir = scratch_dir("release_opt");
         std::fs::write(
             dir.join("pycc.toml"),
             "[project]\nname = \"t\"\nentry = \"main.py\"\npython = \"3.14\"\n\n\
@@ -688,14 +684,13 @@ mod release_flag_tests {
         let source_path = dir.join("main.py");
 
         assert!(resolve_release_flag(false, &source_path));
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 }
 
 #[cfg(test)]
 mod try_build_release_isolation_tests {
     use super::*;
+    use pycc_scratch::ScratchDir;
 
     /// Regression test for a bug caught in review: `try_build` used to call
     /// `resolve_release_flag` internally, so `run`'s hardcoded `false` (see
@@ -724,9 +719,7 @@ mod try_build_release_isolation_tests {
     /// crate writes to that same path.
     #[test]
     fn try_build_ignores_a_neighboring_release_pycc_toml_when_given_release_false() {
-        let dir =
-            std::env::temp_dir().join(format!("pycc_release_isolation_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("release_isolation").expect("failed to create scratch dir");
         let src = dir.join("main.py");
         std::fs::write(&src, "def main() -> None:\n    print(42)\n\nmain()\n").unwrap();
         std::fs::write(
@@ -741,7 +734,11 @@ mod try_build_release_isolation_tests {
         try_build(src.to_str().unwrap(), out.to_str().unwrap(), None, false)
             .expect("try_build should succeed");
 
-        let obj_path = std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()));
+        // Deliberately `try_build_obj_path()` and not a `ScratchDir`: this
+        // must resolve to the exact path `try_build`'s own production code
+        // (out of scope for issue #782's Batch B -- owned by #783) emits
+        // its temp object file to, keyed only by this test process's pid.
+        let obj_path = try_build_obj_path();
         let obj_bytes = std::fs::read(&obj_path).expect("try_build's temp object should exist");
 
         // Independently compiled reference: the same source's MIR, built
@@ -762,8 +759,6 @@ mod try_build_release_isolation_tests {
              `opt = \"release\"` entirely -- only main()'s Command::Build arm may \
              consult it, before try_build is ever called"
         );
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Exercises `BindingState::Maybe` in `join_match_branches` through the

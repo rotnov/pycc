@@ -295,6 +295,7 @@ fn write_new_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pycc_scratch::ScratchDir;
 
     #[test]
     fn parses_a_minimal_valid_pycc_toml() {
@@ -363,8 +364,7 @@ paths = ["tests/"]
 
     #[test]
     fn scaffold_writes_a_valid_pycc_toml_and_main_py() {
-        let dir = std::env::temp_dir().join(format!("pycc_init_test_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("init_test").expect("failed to create scratch dir");
 
         scaffold(Some("scaffoldtest"), &dir).expect("scaffold should succeed");
 
@@ -374,8 +374,6 @@ paths = ["tests/"]
 
         let main_py = std::fs::read_to_string(dir.join("src").join("main.py")).unwrap();
         assert!(main_py.contains("def main"));
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -385,8 +383,7 @@ paths = ["tests/"]
         // branch (derive from the target directory), distinct from both
         // the explicit-name test above and the no-file-name fallback test
         // below.
-        let dir = std::env::temp_dir().join(format!("pycc_derived_name_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("derived_name").expect("failed to create scratch dir");
 
         scaffold(None, &dir).expect("scaffold should succeed");
 
@@ -394,8 +391,6 @@ paths = ["tests/"]
         let config = parse(&toml_contents).expect("scaffolded pycc.toml must itself parse");
         let expected_name = dir.file_name().unwrap().to_string_lossy().into_owned();
         assert_eq!(config.project.name, expected_name);
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -411,7 +406,7 @@ paths = ["tests/"]
         // (verified empirically: writing there succeeds and lands in the
         // parent). This keeps the test independent of the filesystem-
         // mutation injection scenarios covered further below.
-        let dir = std::env::temp_dir().join(format!("pycc_myapp_fallback_{}", std::process::id()));
+        let dir = ScratchDir::new("myapp_fallback").expect("failed to create scratch dir");
         let existing_subdir = dir.join("existing_subdir");
         std::fs::create_dir_all(&existing_subdir).unwrap();
         let target = existing_subdir.join("..");
@@ -422,8 +417,6 @@ paths = ["tests/"]
         let toml_contents = std::fs::read_to_string(dir.join("pycc.toml")).unwrap();
         let config = parse(&toml_contents).expect("scaffolded pycc.toml must itself parse");
         assert_eq!(config.project.name, "myapp");
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -436,18 +429,18 @@ paths = ["tests/"]
         // always passes the existing current directory. This test used to
         // pin the old order's `NotFound` from writing `pycc.toml` first;
         // the Err arms are now covered by the injection trio below.
-        let dir = std::env::temp_dir().join(format!(
-            "pycc_nonexistent_target_dir_{}",
-            std::process::id()
-        ));
-        std::fs::remove_dir_all(&dir).ok();
+        // `ScratchDir::new` unconditionally creates its own directory, so
+        // the deliberately-nonexistent target this test needs is a child of
+        // a real scratch parent rather than the scratch dir itself -- the
+        // parent's Drop still removes `dir` recursively once it exists.
+        let parent =
+            ScratchDir::new("nonexistent_target_dir").expect("failed to create scratch dir");
+        let dir = parent.join("nonexistent");
         assert!(!dir.exists());
 
         scaffold(Some("x"), &dir).expect("scaffold should create the missing directory");
         assert!(dir.join("pycc.toml").is_file());
         assert!(dir.join("src").join("main.py").is_file());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -458,8 +451,7 @@ paths = ["tests/"]
         // (rather than `format!`) exists to handle safely: the round trip
         // through `parse` must recover the exact original name, and
         // `scaffold` must not panic.
-        let dir = std::env::temp_dir().join(format!("pycc_special_name_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("special_name").expect("failed to create scratch dir");
         let tricky_name = "my\"app\\weird";
 
         scaffold(Some(tricky_name), &dir).expect("scaffold must not panic on a special-char name");
@@ -467,8 +459,6 @@ paths = ["tests/"]
         let toml_contents = std::fs::read_to_string(dir.join("pycc.toml")).unwrap();
         let config = parse(&toml_contents).expect("scaffolded pycc.toml must itself parse");
         assert_eq!(config.project.name, tricky_name);
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -477,16 +467,13 @@ paths = ["tests/"]
         // pre-check phase (it used to surface later, as `create_dir_all`'s
         // own error after `pycc.toml` had already been replaced). Nothing
         // is written on refusal.
-        let dir = std::env::temp_dir().join(format!("pycc_src_conflict_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("src_conflict").expect("failed to create scratch dir");
         std::fs::write(dir.join("src"), "not a directory").unwrap();
 
         let err = scaffold(Some("x"), &dir).expect_err("scaffold must refuse a non-directory src");
         assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
         assert_eq!(err.to_string(), "`src` exists and is not a directory");
         assert!(!dir.join("pycc.toml").exists());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -495,24 +482,20 @@ paths = ["tests/"]
         // any entry type counts) is caught by the pre-check phase, and
         // nothing is written -- it used to surface as the final write's
         // own error after `pycc.toml` had already been replaced.
-        let dir =
-            std::env::temp_dir().join(format!("pycc_main_py_conflict_{}", std::process::id()));
+        let dir = ScratchDir::new("main_py_conflict").expect("failed to create scratch dir");
         std::fs::create_dir_all(dir.join("src").join("main.py")).unwrap();
 
         let err = scaffold(Some("x"), &dir).expect_err("scaffold must refuse an existing main.py");
         assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
         assert_eq!(err.to_string(), "`src/main.py` already exists");
         assert!(!dir.join("pycc.toml").exists());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn scaffold_refuses_when_pycc_toml_already_exists() {
         // #237's headline defect: an existing `pycc.toml` was silently
         // replaced. Refusal must leave it byte-for-byte unchanged.
-        let dir = std::env::temp_dir().join(format!("pycc_toml_conflict_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("toml_conflict").expect("failed to create scratch dir");
         std::fs::write(dir.join("pycc.toml"), "user content").unwrap();
 
         let err =
@@ -524,8 +507,6 @@ paths = ["tests/"]
             "user content"
         );
         assert!(!dir.join("src").exists());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -533,14 +514,12 @@ paths = ["tests/"]
         // #237's deliberate non-conflict: an existing `src/` directory is
         // not itself a conflict -- only its entry type and `main.py`'s
         // presence are checked.
-        let dir = std::env::temp_dir().join(format!("pycc_empty_src_{}", std::process::id()));
+        let dir = ScratchDir::new("empty_src").expect("failed to create scratch dir");
         std::fs::create_dir_all(dir.join("src")).unwrap();
 
         scaffold(Some("x"), &dir).expect("an empty src directory is not a conflict");
         assert!(dir.join("pycc.toml").is_file());
         assert!(dir.join("src").join("main.py").is_file());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -548,7 +527,7 @@ paths = ["tests/"]
         // The acceptance condition is deliberately "any directory without
         // a `main.py`", not emptiness: existing sibling files are left
         // untouched and scaffolded alongside.
-        let dir = std::env::temp_dir().join(format!("pycc_populated_src_{}", std::process::id()));
+        let dir = ScratchDir::new("populated_src").expect("failed to create scratch dir");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src").join("lib.py"), "user lib").unwrap();
 
@@ -559,8 +538,6 @@ paths = ["tests/"]
             std::fs::read_to_string(dir.join("src").join("lib.py")).unwrap(),
             "user lib"
         );
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -568,8 +545,7 @@ paths = ["tests/"]
         // PR #253's review: a write failure after `create_new` succeeded
         // must not leave the freshly created entry behind. The injected
         // failing writer is the only portable way to trigger this path.
-        let dir = std::env::temp_dir().join(format!("pycc_write_new_fail_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("write_new_fail").expect("failed to create scratch dir");
         let path = dir.join("partial.txt");
 
         let err = write_new_in(&path, b"contents", |_, _| {
@@ -578,9 +554,18 @@ paths = ["tests/"]
         .expect_err("the injected write failure must propagate");
         assert_eq!(err.to_string(), "injected write failure");
         assert!(!path.exists(), "the partial file must be cleaned up");
-
-        std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// The scratch directory that `write_new_in_reports_a_cleanup_failure_honestly`
+    /// makes read-only, published for `chmod_containing_dir_readonly_then_fail_write`
+    /// below. A `OnceLock` because `write_new_in` requires a capture-free
+    /// `fn` pointer (see its own doc comment), which can neither close over
+    /// the test's `ScratchDir` nor recompute its name -- `ScratchDir::new`
+    /// embeds a per-call nanosecond timestamp and atomic sequence number
+    /// precisely so that no two calls agree on a path. Set exactly once, by
+    /// that one test, before it injects the writer.
+    #[cfg(unix)]
+    static CLEANUP_FAIL_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
     #[cfg(unix)]
     fn chmod_containing_dir_readonly_then_fail_write(
@@ -589,15 +574,13 @@ paths = ["tests/"]
     ) -> std::io::Result<()> {
         // A plain top-level `fn`, not a closure: `write_new_in` requires a
         // capture-free `fn` pointer (see its own doc comment), so the
-        // directory this recomputes must be deterministically derivable
-        // from process state alone, matching the caller's own formula
-        // exactly rather than being passed in.
+        // directory to make read-only arrives through `CLEANUP_FAIL_DIR`
+        // above rather than through a capture.
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!(
-            "pycc_write_new_cleanup_fail_{}",
-            std::process::id()
-        ));
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let dir = CLEANUP_FAIL_DIR
+            .get()
+            .expect("the owning test publishes the scratch directory before injecting this writer");
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
         Err(std::io::Error::other("injected write failure"))
     }
 
@@ -615,38 +598,35 @@ paths = ["tests/"]
         // root test runner; hosted CI and the coverage sandbox's `nobody`
         // user are both non-root.)
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!(
-            "pycc_write_new_cleanup_fail_{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("write_new_cleanup_fail").expect("failed to create scratch dir");
+        CLEANUP_FAIL_DIR
+            .set(dir.to_path_buf())
+            .expect("only this test sets CLEANUP_FAIL_DIR");
         let path = dir.join("partial.txt");
 
-        let err = write_new_in(
+        let result = write_new_in(
             &path,
             b"contents",
             chmod_containing_dir_readonly_then_fail_write,
-        )
-        .expect_err("the injected write failure must propagate");
+        );
+        // Restore write permission before any assertion can panic, so the
+        // scratch dir's Drop can remove it even when this test fails.
+        std::fs::set_permissions(&*dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let err = result.expect_err("the injected write failure must propagate");
         let message = err.to_string();
         assert!(message.contains("injected write failure"));
         assert!(message.contains("could not remove"));
         assert!(message.contains("remove it manually"));
-
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn write_new_succeeds_and_keeps_the_file_on_a_clean_write() {
-        let dir = std::env::temp_dir().join(format!("pycc_write_new_ok_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("write_new_ok").expect("failed to create scratch dir");
         let path = dir.join("whole.txt");
 
         write_new(&path, b"contents").expect("a clean write must succeed");
         assert_eq!(std::fs::read(&path).unwrap(), b"contents");
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(unix)]
@@ -655,14 +635,11 @@ paths = ["tests/"]
         // A self-referential `pycc.toml` symlink makes `try_exists` itself
         // fail (`ELOOP`), covering the first check's `?` propagation --
         // distinct from a dangling symlink, which resolves to Ok(false).
-        let dir = std::env::temp_dir().join(format!("pycc_toml_eloop_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("toml_eloop").expect("failed to create scratch dir");
         std::os::unix::fs::symlink(dir.join("pycc.toml"), dir.join("pycc.toml")).unwrap();
 
         let err = scaffold(Some("x"), &dir).expect_err("the existence check must propagate ELOOP");
         assert!(!err.to_string().is_empty());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(unix)]
@@ -671,15 +648,12 @@ paths = ["tests/"]
         // A self-referential `src` symlink makes `metadata` fail with
         // `ELOOP` -- neither a usable directory nor `NotFound` -- covering
         // the check's error-propagation arm.
-        let dir = std::env::temp_dir().join(format!("pycc_src_eloop_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("src_eloop").expect("failed to create scratch dir");
         std::os::unix::fs::symlink(dir.join("src"), dir.join("src")).unwrap();
 
         let err = scaffold(Some("x"), &dir).expect_err("the src metadata check must propagate");
         assert_ne!(err.kind(), std::io::ErrorKind::AlreadyExists);
         assert!(!dir.join("pycc.toml").exists());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(unix)]
@@ -687,7 +661,7 @@ paths = ["tests/"]
     fn scaffold_propagates_a_main_py_existence_check_error() {
         // Same `ELOOP` shape for the third check: `src` is a real
         // directory, `src/main.py` is a self-referential symlink.
-        let dir = std::env::temp_dir().join(format!("pycc_py_eloop_{}", std::process::id()));
+        let dir = ScratchDir::new("py_eloop").expect("failed to create scratch dir");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::os::unix::fs::symlink(
             dir.join("src").join("main.py"),
@@ -698,8 +672,6 @@ paths = ["tests/"]
         let err = scaffold(Some("x"), &dir).expect_err("the main.py check must propagate ELOOP");
         assert!(!err.to_string().is_empty());
         assert!(!dir.join("pycc.toml").exists());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(unix)]
@@ -709,15 +681,12 @@ paths = ["tests/"]
         // symlink passes the follow-symlink pre-check (its target does not
         // exist), then `create_dir_all` fails on the symlink itself.
         // `pycc.toml` must not be created.
-        let dir = std::env::temp_dir().join(format!("pycc_src_dangling_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("src_dangling").expect("failed to create scratch dir");
         std::os::unix::fs::symlink(dir.join("nonexistent_target"), dir.join("src")).unwrap();
 
         let err = scaffold(Some("x"), &dir).expect_err("create_dir_all must fail on the symlink");
         assert!(!err.to_string().is_empty());
         assert!(!dir.join("pycc.toml").exists());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(unix)]
@@ -730,17 +699,19 @@ paths = ["tests/"]
         // root test runner; hosted CI and the coverage sandbox's `nobody`
         // user are both non-root.)
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("pycc_src_readonly_{}", std::process::id()));
+        let dir = ScratchDir::new("src_readonly").expect("failed to create scratch dir");
         let src = dir.join("src");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o555)).unwrap();
 
-        let err = scaffold(Some("x"), &dir).expect_err("the main.py write must fail");
+        let result = scaffold(Some("x"), &dir);
+        // Restore write permission before any assertion can panic, so the
+        // scratch dir's Drop can remove `src` even when this test fails.
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).ok();
+
+        let err = result.expect_err("the main.py write must fail");
         assert!(!err.to_string().is_empty());
         assert!(!dir.join("pycc.toml").exists());
-
-        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).ok();
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(unix)]
@@ -755,8 +726,7 @@ paths = ["tests/"]
         // residue nothing would otherwise clean up, so it must be rolled
         // back rather than left behind (issue #256's item 1 / regression 4
         // "at the last possible moment").
-        let dir = std::env::temp_dir().join(format!("pycc_toml_dangling_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("toml_dangling").expect("failed to create scratch dir");
         std::os::unix::fs::symlink(
             dir.join("missing_dir").join("pycc.toml"),
             dir.join("pycc.toml"),
@@ -782,8 +752,6 @@ paths = ["tests/"]
         assert!(!dir.join("src").exists());
         // ...and pycc.toml still does not resolve to any file.
         assert!(!dir.join("pycc.toml").try_exists().unwrap());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(unix)]
@@ -797,8 +765,7 @@ paths = ["tests/"]
         // reaches and exercises the rollback path -- a directory conflict
         // would instead be refused at the pre-check, before `src`/`main.py`
         // are ever created, and would not discriminate this fix at all.
-        let dir = std::env::temp_dir().join(format!("pycc_retry_ok_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("retry_ok").expect("failed to create scratch dir");
         std::os::unix::fs::symlink(
             dir.join("missing_dir").join("pycc.toml"),
             dir.join("pycc.toml"),
@@ -815,8 +782,6 @@ paths = ["tests/"]
         scaffold(Some("x"), &dir).expect("retry after removing the cause must succeed");
         assert!(dir.join("pycc.toml").is_file());
         assert!(dir.join("src").join("main.py").is_file());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(unix)]
@@ -827,7 +792,7 @@ paths = ["tests/"]
         // must retain every user file; only the invocation-owned main.py
         // is rolled back, and src/ itself -- not created by this
         // invocation -- is never removed.
-        let dir = std::env::temp_dir().join(format!("pycc_preserve_src_{}", std::process::id()));
+        let dir = ScratchDir::new("preserve_src").expect("failed to create scratch dir");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src").join("lib.py"), "user lib").unwrap();
         std::os::unix::fs::symlink(
@@ -843,14 +808,11 @@ paths = ["tests/"]
         );
         assert!(!dir.join("src").join("main.py").exists());
         assert!(dir.join("src").is_dir(), "pre-existing src/ must survive");
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn roll_back_after_toml_failure_removes_the_owned_main_py() {
-        let dir = std::env::temp_dir().join(format!("pycc_rollback_helper_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("rollback_helper").expect("failed to create scratch dir");
         let main_py = dir.join("main.py");
         std::fs::write(&main_py, "content").unwrap();
         let toml_error = std::io::Error::other("original toml failure");
@@ -858,14 +820,11 @@ paths = ["tests/"]
         let returned = roll_back_after_toml_failure(toml_error, &main_py, &dir, false);
         assert_eq!(returned.to_string(), "original toml failure");
         assert!(!main_py.exists());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn roll_back_after_toml_failure_removes_an_invocation_created_empty_src_dir() {
-        let parent =
-            std::env::temp_dir().join(format!("pycc_rollback_srcdir_{}", std::process::id()));
+        let parent = ScratchDir::new("rollback_srcdir").expect("failed to create scratch dir");
         let src_dir = parent.join("src");
         std::fs::create_dir_all(&src_dir).unwrap();
         let main_py = src_dir.join("main.py");
@@ -877,14 +836,12 @@ paths = ["tests/"]
             !src_dir.exists(),
             "an invocation-created, now-empty src/ must be removed"
         );
-
-        std::fs::remove_dir_all(&parent).ok();
     }
 
     #[test]
     fn roll_back_after_toml_failure_never_removes_a_preexisting_src_dir() {
         let parent =
-            std::env::temp_dir().join(format!("pycc_rollback_preexisting_{}", std::process::id()));
+            ScratchDir::new("rollback_preexisting").expect("failed to create scratch dir");
         let src_dir = parent.join("src");
         std::fs::create_dir_all(&src_dir).unwrap();
         std::fs::write(src_dir.join("sibling.py"), "user file").unwrap();
@@ -902,8 +859,6 @@ paths = ["tests/"]
             std::fs::read_to_string(src_dir.join("sibling.py")).unwrap(),
             "user file"
         );
-
-        std::fs::remove_dir_all(&parent).ok();
     }
 
     #[cfg(unix)]
@@ -918,22 +873,22 @@ paths = ["tests/"]
         // root test runner; hosted CI and the coverage sandbox's `nobody`
         // user are both non-root.)
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("pycc_rollback_fail_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = ScratchDir::new("rollback_fail").expect("failed to create scratch dir");
         let main_py = dir.join("main.py");
         std::fs::write(&main_py, "content").unwrap();
         // The file already exists; making its parent read-only now blocks
         // only the later `unlink`, not the write that already happened.
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        std::fs::set_permissions(&*dir, std::fs::Permissions::from_mode(0o555)).unwrap();
         let toml_error = std::io::Error::other("original toml failure");
 
         let returned = roll_back_after_toml_failure(toml_error, &main_py, &dir, false);
+        // Restore write permission before any assertion can panic, so the
+        // scratch dir's Drop can remove it even when this test fails.
+        std::fs::set_permissions(&*dir, std::fs::Permissions::from_mode(0o755)).ok();
+
         let message = returned.to_string();
         assert!(message.contains("original toml failure"));
         assert!(message.contains("could not remove"));
         assert!(message.contains("remove it manually"));
-
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).ok();
-        std::fs::remove_dir_all(&dir).ok();
     }
 }
