@@ -1331,8 +1331,9 @@
         },
         {
           "category": "D-202's six deliberate simplifications (ExceptionGroup identity through subgroup/split reconstruction, restrictions on dynamic non-literal member lists, and related narrowings)",
-          "kind": "out-of-scope",
-          "reason": "These are accepted design decisions recorded in D-202, each enforced by its own diagnostic or fixed reconstructed identity rather than an unimplemented capability -- every rejected program produces a clear compile-time diagnostic instead of a wrong runtime result, so this is deliberate narrowing, not a gap this row's fixture leaves unproven."
+          "kind": "core",
+          "reason": "D-202 itself records each simplification as independently revisitable once a materialized exception instance (#703) and/or a genuinely dynamic group object become available -- not a permanent non-goal, so D-177 does not permit classifying it `out-of-scope`. Each is enforced by its own diagnostic or fixed reconstructed identity today rather than an unimplemented capability, but the underlying infrastructure gap (no dynamic group object, no materialized instance identity) is real, unimplemented core work.",
+          "issue": 542
         }
       ]
     }

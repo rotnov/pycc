@@ -231,12 +231,12 @@ For each newly observed upstream release:
     being rejected); PEP 572's fixture restricts the walrus value to
     `int`/`float`/`bool`/`None` (new diagnostic `T0050`) and skips a walrus
     nested inside a comprehension, matching CPython's own
-    comprehension-scope-skip semantics per #774's recorded scope cut. Both
-    are `core` gaps (PEP 654's six deliberate simplifications in
-    [D-202](./decisions/D-202-pep-654-except-star-and-exceptiongroup.md)
-    are `out-of-scope` instead, an accepted design narrowing rather than an
-    unimplemented capability), and a `core` gap forces `◐` under
-    [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
+    comprehension-scope-skip semantics per #774's recorded scope cut. All are
+    `core` gaps under [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md)
+    -- including PEP 654's six [D-202](./decisions/D-202-pep-654-except-star-and-exceptiongroup.md)
+    simplifications, which D-202 records as independently revisitable rather
+    than a permanent non-goal (breadth manifest has the full reasoning) --
+    and a `core` gap forces `◐`.
 
 ## Python 3.0–3.2 (foundations)
 
