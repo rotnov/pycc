@@ -67,6 +67,21 @@ status: accepted
   itself is exempt unconditionally, as the one legitimate implementation
   site.
 
+  The snapshot was taken once, but this pull request landed via a rebase
+  onto a refreshed `main` that had, in the interim, merged issue #150's fix
+  (a `tests/` integration test using the raw `temp_dir().join(...)` pattern)
+  after the snapshot was generated but before this PR's own merge commit.
+  Because the snapshot's definition is "every file containing the pattern at
+  the commit where the gate takes effect" -- that commit is the rebased
+  merge, not the pre-rebase branch tip -- `tests/issue_150_zero_step_range.rs`
+  was added to `ALLOWLIST` with count 1 to fulfill that definition rather
+  than breach the allowlist's one-time-snapshot property. Migrating it is
+  out of scope here: doing so would require re-adding `pycc_scratch` as a
+  root `[dev-dependencies]` entry, which this same PR's `f79bb2b5` tried and
+  reverted because it trips D-091's bench-manifest fingerprint gate in
+  `frontend-perf-measure` -- the identical blocker tracked against #782
+  Batch B (PR #793). It stays tracked under #782's Part 2 migration scope.
+
   **Known, accepted scope limitation**: the lint is a textual pattern match,
   not a data-flow analysis. A caller that splits the expression across a
   binding (`let dir = std::env::temp_dir(); ... dir.join(...)`) evades it
