@@ -8377,6 +8377,60 @@ fn collect_block_constraints_propagates_an_error_from_a_try_star_else_block() {
     assert_eq!(err.code, "T0021");
 }
 
+/// Issue #771 join-site follow-up, extended to `TryStar`'s own
+/// `pre_existing` snapshot in the same commit that adds this test: `y` is
+/// already opaquely bound *before* the `try*` (e.g. from `y = d.get("a",
+/// 0)` two lines above), then reassigned to a real, solver-representable
+/// term inside the `try*` body only. Mirrors
+/// `solver_if_reassigns_pre_existing_opaque_binding_in_one_branch_only`'s
+/// scenario but through the `TryStar` arm's `join_loop_body_solver` call
+/// instead of `If`'s `join_if_branches_solver` -- before this fix,
+/// `TryStar`'s `pre_existing` was computed as `env.bindings.keys()` alone
+/// (unlike every sibling join site, including the `Try` arm immediately
+/// above it, which all `.chain(env.opaque_bindings.iter())`), so `y` looked
+/// "newly introduced" to the join helper and was wrongly folded into
+/// `env.maybe_bindings` even though it was already definitely (if opaquely)
+/// bound beforehand.
+#[test]
+fn collect_block_constraints_try_star_body_reassigns_pre_existing_opaque_binding() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &["y"],
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::from(["y".to_string()]),
+    };
+    let body = vec![HirStmt::TryStar {
+        body: vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: HirExpr::IntLiteral(1),
+        }],
+        handlers: vec![],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+
+    collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap();
+
+    // `y` must never become newly *maybe* bound: it was already definitely
+    // (if opaquely) bound before the `try*`, and the body reassigning it
+    // does not retroactively make a pre-existing name conditional.
+    assert!(!env.maybe_bindings.contains("y"));
+}
+
 /// Same shape again, placed in `TryStar`'s `finally` block -- reaches the
 /// arm's fourth and last `collect_block_constraints(...)?` call site.
 #[test]

@@ -1861,7 +1861,23 @@ pub(crate) fn collect_block_constraints(
                 orelse,
                 finalbody,
             } => {
-                let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
+                // Issue #771 join-site follow-up: include `opaque_bindings`
+                // alongside `bindings` here, exactly as the `Try` arm above
+                // does. A name definitely-but-opaquely bound before this
+                // construct must count as pre-existing too -- otherwise a
+                // branch that reassigns it to a real, solver-representable
+                // term looks "newly introduced" to the join helper below,
+                // and when only one branch performs that reassignment the
+                // name is misclassified as bound in both branches (the
+                // other, untouched branch still carries the opaque marker),
+                // unmasking a term that only reflects one path as if it
+                // were unconditionally correct.
+                let pre_existing: HashSet<String> = env
+                    .bindings
+                    .keys()
+                    .chain(env.opaque_bindings.iter())
+                    .cloned()
+                    .collect();
                 let mut body_env = env.clone();
                 collect_block_constraints(
                     signatures,

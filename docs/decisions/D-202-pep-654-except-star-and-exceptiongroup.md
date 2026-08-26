@@ -1,10 +1,10 @@
 ---
 id: D-202
-title: "PEP 654 `except*`/ExceptionGroup: five deliberate simplifications"
+title: "PEP 654 `except*`/ExceptionGroup: six deliberate simplifications"
 status: accepted
 ---
 
-## D-202: PEP 654 `except*`/ExceptionGroup: five deliberate simplifications
+## D-202: PEP 654 `except*`/ExceptionGroup: six deliberate simplifications
 - Status: accepted
 - Context: Part 3 of #382 (#542) adds PEP 654's `except*` clauses and the
   `ExceptionGroup`/`BaseExceptionGroup` builtin exception types on top of
@@ -29,7 +29,7 @@ status: accepted
   something that can represent a partially-handled group. None of that is
   needed to give #542 a real, testable, spec-referenced `except*` surface
   that composes with the rest of the exception model landed so far -- this
-  decision records five narrower simplifications, each satisfying today's
+  decision records six narrower simplifications, each satisfying today's
   literal, non-dynamic-membership use of exception groups exactly, that make
   that surface implementable inside the existing model. Each is independently
   revisitable without disturbing the others once a materialized exception
@@ -110,6 +110,24 @@ status: accepted
      primitives instead of inventing an new, untested merge-semantics path
      purely to chain the new exception alongside the statement's remaining
      unmatched members.
+  6. **A group member must not itself be an `ExceptionGroup`/
+     `BaseExceptionGroup`-typed value -- nested groups are rejected with
+     `T0021` at the type-check boundary
+     (`pycc_types::exception::check_exception_group_member_operand`).**
+     `pycc_rt_exception_group_partition` matches each member only by its own
+     top-level `type_tag`, with no recursion into a member's own
+     `exceptions`/`exceptions_len` array when that member is itself a group
+     -- unlike CPython's PEP 654 `split()`, which does recurse into nested
+     groups. Without this rejection, an `except* ... as eg:` binding (whose
+     type is unconditionally `ExceptionGroup`, per simplification 1's
+     hierarchy) would type-check as an ordinary member of a freshly
+     constructed outer group, building a group the runtime cannot partition
+     correctly and silently losing the inner exceptions on a subsequent
+     `except*` dispatch. This was found by the pinned local reviewer during
+     #542's own review pass and fixed by extending the type-checker rule
+     that simplification 3 already established for fresh constructor-call
+     members, rather than teaching the runtime partition function to
+     recurse.
 - Alternatives:
   - Modeling `BaseException` as a real second root, so
     `BaseExceptionGroup`/`KeyboardInterrupt`/etc. are not conflated with
@@ -143,18 +161,25 @@ status: accepted
     that is only observable once a program both raises from inside an
     `except*` clause and inspects the resulting group's shape -- a
     combination no accepted conformance fixture exercises.
+  - Teaching `pycc_rt_exception_group_partition` to recurse into a member
+    that is itself a group, matching CPython's `split()`: rejected as
+    unnecessary scope growth once the narrower type-checker rejection
+    produces a working, spec-compliant surface for every literal-member-list
+    group construction that does not itself nest groups; nothing in this
+    PR's scope needs a program to build a group whose member is another
+    group.
 - Consequences: `except*`/`ExceptionGroup`/`BaseExceptionGroup` land as a
   real, tested, spec-referenced surface for the common case -- catching and
   raising literal groups of existing exceptions -- without requiring a
   materialized exception instance, a dynamic list type, or a `BaseException`
   second root, all of which remain open work tracked elsewhere (#703, D-105).
-  The five simplifications are all deliberately observable narrowings (a
+  The six simplifications are all deliberately observable narrowings (a
   `T0021` diagnostic, or a fixed reconstructed identity) rather than silent
   behavioral divergences from CPython: every rejected program produces a
   clear compile-time diagnostic instead of a wrong runtime result, and every
   accepted program's runtime behavior for group re-tagging and clause-body
   raises is documented here and in `docs/RUNTIME.md` rather than left
-  implicit. Revisiting any one of the five (a real `BaseException` root, a
+  implicit. Revisiting any one of the six (a real `BaseException` root, a
   dynamic member list, in-place member construction, subclass-preserving
-  partition, or CPython-style derived-group chaining) is additive: none
-  requires reverting the other four.
+  partition, CPython-style derived-group chaining, or recursive nested-group
+  partitioning) is additive: none requires reverting the other five.

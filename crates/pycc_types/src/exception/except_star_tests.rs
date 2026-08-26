@@ -225,6 +225,30 @@ fn a_fresh_user_exception_constructor_call_is_not_a_valid_group_member() {
 }
 
 #[test]
+fn an_exception_group_valued_binding_is_not_a_valid_group_member() {
+    // D-202's sixth simplification: `pycc_rt_exception_group_partition`
+    // matches each member by its own top-level `type_tag` only and never
+    // recurses into a member's own `exceptions`/`exceptions_len` when that
+    // member is itself a group, so a value already bound to
+    // `ExceptionGroup`/`BaseExceptionGroup` -- such as an
+    // `except* ... as eg:` binding -- must be rejected as a group member
+    // rather than silently accepted into an unpartitionable nested group.
+    let diagnostic = expect_error(
+        "def main() -> None:\n\
+         \x20   try:\n\
+         \x20       raise ValueError(\"v\")\n\
+         \x20   except* ValueError as eg:\n\
+         \x20       raise ExceptionGroup(\"outer\", [eg])\n",
+    );
+    assert_eq!(diagnostic.code, "T0021");
+    assert!(
+        diagnostic.message.contains("must not itself be"),
+        "unexpected message: {}",
+        diagnostic.message
+    );
+}
+
+#[test]
 fn a_non_exception_group_member_is_rejected() {
     let diagnostic = expect_error(&format!(
         "{CAUGHT_PAIR}\x20           raise ExceptionGroup(\"multi\", [e1, 3])\n"

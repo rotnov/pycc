@@ -320,8 +320,34 @@ fn check_exception_group_member_operand(
         ));
     }
     let ty = infer_expr_in(env, local_names, expr)?;
-    if matches!(&ty, Ty::Instance(class_name) if pycc_hir::is_builtin_exception_class(class_name) && !is_user_defined_class(env, class_name))
+    if let Ty::Instance(class_name) = &ty
+        && pycc_hir::is_builtin_exception_class(class_name)
+        && !is_user_defined_class(env, class_name)
     {
+        // D-202's sixth simplification: `pycc_rt_exception_group_partition`
+        // matches each member by its own top-level `type_tag` only and never
+        // recurses into a member's own `exceptions`/`exceptions_len` array
+        // when that member is itself a group -- unlike CPython's `split()`,
+        // which does recurse into nested groups. `ExceptionGroup`/
+        // `BaseExceptionGroup` are themselves ordinary entries in
+        // `BUILTIN_EXCEPTION_CLASSES`, so without this check a value already
+        // bound to one type-checks as a member of a freshly constructed
+        // *outer* group (e.g. `ExceptionGroup("outer", [eg])` where `eg`
+        // came from a prior `except* ValueError as eg:`), silently building
+        // a nested group the runtime cannot partition correctly. Rejecting
+        // it here keeps the type checker's accepted surface matching what
+        // the runtime actually implements, the same enforce-at-type-check-
+        // boundary approach this function already takes for a fresh
+        // constructor-call member above.
+        if class_name.as_str() == "ExceptionGroup" || class_name.as_str() == "BaseExceptionGroup" {
+            return Err(Diagnostic::error(
+                "T0021",
+                "an `ExceptionGroup`/`BaseExceptionGroup` member must not itself be an \
+                 exception group -- nested groups are not supported"
+                    .to_string(),
+                Span::new(0, 0),
+            ));
+        }
         return Ok(());
     }
     Err(Diagnostic::error(
