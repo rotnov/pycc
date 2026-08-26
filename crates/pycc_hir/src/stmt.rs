@@ -112,7 +112,12 @@ use pycc_diag::Diagnostic;
 /// TYPE_CHECKING:`, `if TYPE_CHECKING and x:`) -- only the bare guard
 /// itself has the real-world precedent (bodies containing constructs pycc
 /// doesn't support) this fold exists to unblock; a compound test is left
-/// to ordinary lowering, which type-checks both branches exactly as before.
+/// to ordinary lowering, which type-checks both branches as it would any
+/// other `if`. Since #790 registered `TYPE_CHECKING` as a resolvable
+/// marker symbol, using it inside such a test now reaches the dedicated
+/// `type_checking_marker_is_not_a_value` diagnostic (T0021) rather than
+/// the unresolved-import error (C0002) it produced before #790 -- a
+/// different diagnostic at a later pipeline stage, not unchanged behavior.
 ///
 /// Known gap (tracked in #798, deliberately not fixed here): this check is
 /// not import-gated and not shadow-aware. A module that never imports
