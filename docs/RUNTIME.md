@@ -222,7 +222,7 @@ never the original raised object's dynamic subclass (D-202). A new exception
 raised inside an `except*` clause's body propagates directly past the
 statement's `finally`, rather than merging into the group's still-unmatched
 remainder the way CPython's derived-exception-group chaining would (D-202).
-A bare, typeless `except*:` is rejected at parse time (`C0001`) rather than
+A bare, typeless `except*:` is rejected at parse time (`L0001`) rather than
 reaching codegen. `BaseExceptionGroup`'s hierarchy parent is treated as
 `Exception` rather than modeled as a separate `BaseException`-only branch
 (D-202) -- see the decision entry for the full simplification list.

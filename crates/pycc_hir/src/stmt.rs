@@ -555,7 +555,7 @@ pub(crate) fn lower_stmt(
                     // empty `except ():`), a completely typeless
                     // `except*:` is rejected by ruff's own parser as a
                     // syntax error before this lowering pass ever runs (see
-                    // `lower_try_star_bare_except_star_rejects_with_c0001`),
+                    // `lower_try_star_bare_except_star_is_rejected_at_parse_time`),
                     // so no defensive re-check belongs here -- one would be
                     // unreachable and untestable under this repository's
                     // 100%-region coverage gate.

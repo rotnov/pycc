@@ -224,12 +224,13 @@ pub(super) fn check_raise_stmt(
 /// D-105/T0021 makes `list[T]` annotations unsupported in general, so this
 /// deliberately does not accept an arbitrary `list[BaseException]`-typed
 /// expression as the second argument -- only a literal `[...]` written
-/// directly at the call site, each element of which must itself be a valid
-/// raise operand (an existing exception instance, checked by recursing into
-/// [`check_raise_operand`] itself, so a nested `ExceptionGroup` member is
-/// accepted exactly like the top-level case, and a member that fails its own
-/// validation reports that specific element's diagnostic rather than a
-/// generic group-level one).
+/// directly at the call site, each element of which is validated by
+/// [`check_exception_group_member_operand`], a narrower check than
+/// [`check_raise_operand`]: it requires an *existing* exception value and
+/// rejects any fresh constructor-call member, including a nested inline
+/// `ExceptionGroup(...)`/`BaseExceptionGroup(...)` call, with `T0021`. A
+/// member that fails its own validation reports that specific element's
+/// diagnostic rather than a generic group-level one.
 fn check_exception_group_operand(
     env: &Environment,
     local_names: &[&str],

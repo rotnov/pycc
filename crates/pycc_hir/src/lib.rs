@@ -686,8 +686,9 @@ pub enum HirStmt {
     /// partition-based dispatch rather than mutually exclusive `type_matches`
     /// branches. A bare `except*:` has no `HirExceptHandler` counterpart --
     /// PEP 654 requires every `except*` clause to name a type -- so
-    /// `handlers[i].exc_type` is never `None` here (`lower_try_star_handler`
-    /// rejects a bare `except*:` with `C0001` before this variant is built).
+    /// `handlers[i].exc_type` is never `None` here: a bare `except*:` is
+    /// rejected by ruff's own parser as a syntax error (`L0001`) before HIR
+    /// lowering ever runs.
     TryStar {
         body: Vec<HirStmt>,
         handlers: Vec<HirExceptHandler>,
