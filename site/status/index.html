@@ -401,7 +401,11 @@
               (<code>:=</code>, the walrus operator) are also type-checked
               now, in every position the grammar allows, though the row for
               PEP 572 in the conformance matrix stays unchecked until CI
-              confirms it on all Tier-1 targets.
+              confirms it on all Tier-1 targets. Separately, a rejected
+              <code>cast(...)</code> bound to a plain local previously
+              reported a misleading "not bound" error instead of its real
+              diagnostic, a diagnostic-quality-only bug now fixed for that
+              construct and every other one sharing its underlying cause.
             </p>
             <p>
               The 100% line/region coverage gate and the required
