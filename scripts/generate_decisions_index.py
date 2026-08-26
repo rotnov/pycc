@@ -63,6 +63,25 @@ def check_unique_ids(entries):
         seen[id_] = filename
 
 
+def check_filename_matches_id(entries):
+    """Fail closed when a filename's own D-NNN prefix disagrees with its
+    frontmatter id.
+
+    ``check_unique_ids`` only dedups on the frontmatter id, so a file named
+    ``D-201-second.md`` whose frontmatter claims ``id: D-999`` would pass
+    that check while still recreating the ambiguous-numbering defect class
+    from https://github.com/rotnov/pycc/issues/803: the README links D-999
+    at a path a reader would expect to hold D-201, and a future file
+    legitimately named D-201-... collides with a path that already exists.
+    """
+    for id_, _title, _status, filename in entries:
+        if not filename.startswith(f"{id_}-") and filename != f"{id_}.md":
+            raise ValueError(
+                f"{filename}: filename prefix does not match its "
+                f"frontmatter id {id_}"
+            )
+
+
 def generate_index(decisions_dir):
     entries = []
     for path in sorted(decisions_dir.glob("D-*.md")):
@@ -70,6 +89,7 @@ def generate_index(decisions_dir):
         entries.append((id_, title, status, path.name))
     entries.sort(key=lambda e: int(e[0].split("-")[1]))
     check_unique_ids(entries)
+    check_filename_matches_id(entries)
 
     lines = [PREAMBLE, "", "| ID | Decision | Status |", "|---|---|---|"]
     for id_, title, status, filename in entries:

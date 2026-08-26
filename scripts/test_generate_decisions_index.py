@@ -75,6 +75,27 @@ class GenerateIndexTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate decision id D-201"):
                 gen.generate_index(d)
 
+    def test_filename_prefix_mismatch_raises(self):
+        # Regression for the P2 finding on
+        # https://github.com/rotnov/pycc/pull/820: a file named with one
+        # D-NNN prefix but frontmatter claiming a different id must fail
+        # generation, since check_unique_ids alone would not catch it (the
+        # frontmatter ids differ and are individually unique).
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            write_decision(d, "D-201-first-thing.md", "D-999", "Mismatched", "accepted")
+            with self.assertRaisesRegex(
+                ValueError, r"D-201-first-thing\.md: filename prefix does not match"
+            ):
+                gen.generate_index(d)
+
+    def test_filename_prefix_match_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            write_decision(d, "D-201-first-thing.md", "D-201", "First thing", "accepted")
+            table = gen.generate_index(d)
+            self.assertIn("D-201", table)
+
 
 class MainCheckModeTests(unittest.TestCase):
     def test_check_passes_when_readme_matches_generated(self):
