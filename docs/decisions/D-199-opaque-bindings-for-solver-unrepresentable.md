@@ -173,3 +173,21 @@ status: accepted
   `maybe_bindings`/`BindingState::Maybe` definite-assignment tracking the surrounding source comments
   attribute to D-147 (issue #118, `T0041`), whose semantics `opaque_bindings` is deliberately kept
   distinct from.
+
+  A rebase-time review pass (2026-08-26, when this branch was integrated against `origin/main`
+  after PEP 572/`#774` walrus-operator support (`:=`) landed there independently) found the "every
+  construct in the affected-site inventory is fixed" claim above needed a fifth binding form added
+  to it: `crates/pycc_types/src/constraints.rs`'s `bind_named_expr_targets` — the walrus-target
+  pre-pass PEP 572 introduced, structurally the `NamedExpr` counterpart of the `Assign` arm this
+  decision modifies — did not yet exist when this decision was drafted, and its `NamedExpr` arm
+  only bound `env.bindings` on a `Some(term)` result, leaving `opaque_bindings` untouched. A walrus
+  target assigned from an opaque expression (`(d := cast(Derived, base))`) reproduced the exact
+  `T0021` misdiagnosis this decision exists to eliminate. Fixed by mirroring the `Assign` arm's
+  clear-then-either-bind-or-mark-opaque shape in `bind_named_expr_targets`'s `NamedExpr` arm, with
+  a new pinned regression test,
+  `cast_down_to_a_derived_class_via_a_walrus_binding_is_c0001`, alongside the existing
+  plain-assignment repro test. This was not a defect in either PR #778 or #774 individually — each
+  was correct in isolation, since neither existed when the other was authored — but an integration
+  gap only visible once both binding pre-passes needed to agree on the same environment fields;
+  it is recorded here rather than in a separate decision because it completes this decision's own
+  "every construct" claim rather than making an independent design choice.

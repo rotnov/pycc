@@ -996,12 +996,25 @@ fn bind_named_expr_targets(
     match expr {
         HirExpr::NamedExpr { name, value } => {
             bind_named_expr_targets(signatures, parents, concrete, binops, env, value)?;
+            // Issue #771 (D-199), mirrored here for the walrus operator: a
+            // `:=` target is unconditionally (re)bound wherever it is
+            // evaluated, so any earlier `def` shadow, maybe-bound marker, or
+            // stale opaque marker for `name` is cleared regardless of what
+            // the new value's term turns out to be below.
+            env.defs_rebound.remove(name.as_str());
+            env.maybe_bindings.remove(name.as_str());
+            env.opaque_bindings.remove(name.as_str());
             if let Some(term) =
                 collect_expr_constraints(signatures, parents, concrete, binops, env, value)?
             {
-                env.defs_rebound.remove(name.as_str());
-                env.maybe_bindings.remove(name.as_str());
                 env.bindings.entry(name.clone()).or_insert(term);
+            } else {
+                // The solver produced no term for the walrus value (e.g. a
+                // class-target `cast`, `.pop()`, an attribute read, a method
+                // call, or a heterogeneous container literal). Track `name`
+                // as opaquely-but-definitely bound so a later read reports
+                // "no term" instead of misreporting it as unbound.
+                env.opaque_bindings.insert(name.clone());
             }
             Ok(())
         }

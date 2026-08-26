@@ -23024,6 +23024,32 @@ fn cast_down_to_a_derived_class_via_a_plain_assignment_binding_is_c0001() {
 }
 
 #[test]
+fn cast_down_to_a_derived_class_via_a_walrus_binding_is_c0001() {
+    // #771/D-199 deep-review follow-up: this branch's `opaque_bindings`
+    // mechanism was developed before PEP 572 (#774) walrus support reached
+    // this crate. When the two features were rebased together,
+    // `bind_named_expr_targets`'s own `HirExpr::NamedExpr` arm (the walrus
+    // equivalent of `collect_block_constraints`'s `Assign` arm) was found
+    // not to mirror the `opaque_bindings` tracking `Assign` gained --
+    // `(d := cast(Derived, base))` left `d` untracked in exactly the same
+    // way a plain `d = cast(Derived, base)` did before this decision, so a
+    // later read misreported `T0021` instead of the real `C0001` down-cast
+    // rejection. This is the walrus counterpart of
+    // `cast_down_to_a_derived_class_via_a_plain_assignment_binding_is_c0001`
+    // above, pinning that the fix now covers both binding forms.
+    let err = check_source(
+        "from typing import cast\nclass Base:\n    def __init__(self, a: int) -> None:\n        self.a = a\nclass Derived(Base):\n    def __init__(self, a: int, b: int) -> None:\n        self.a = a\n        self.b = b\ndef f(base: Base) -> int:\n    (d := cast(Derived, base))\n    return d.b\nprint(f(Base(1)))\n",
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message.contains("narrow the value's attribute layout"),
+        "expected the layout message, got: {}",
+        err.message
+    );
+}
+
+#[test]
 fn an_opaque_assignment_whose_value_is_never_read_still_compiles() {
     // Issue #771 positive-path coverage: adding `opaque_bindings` tracking
     // for an unconditional assignment whose RHS the solver can't represent
