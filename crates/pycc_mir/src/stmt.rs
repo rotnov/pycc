@@ -371,6 +371,17 @@ pub(super) fn lower_stmt(
             let stop = lower_expr(stop, scopes, classes, current_class);
             let step = lower_expr(step, scopes, classes, current_class);
             bind_variable(scopes, var.clone(), Ty::Int);
+            // D-068 re-review of #780 (sixth round): the loop's own
+            // induction variable is a rebinding exactly like `Assign`, but
+            // `bind_variable` alone never clears a stale narrowing
+            // sentinel -- mirrors the `Assign`/`AnnAssign` arms' own
+            // `kill_narrowing`+`bind_variable` pairing above, and the
+            // checker's `check_assignment(env, var, Ty::Int)` (`pycc_types`'
+            // `ForRange` arm), which unconditionally clears `env.narrowed`.
+            // Applied *before* `lower_loop_body`'s own snapshot so the
+            // clear also survives past the loop's own close, matching the
+            // checker's `env`/`body_env` split.
+            super::kill_narrowing(scopes, var);
             let body = lower_loop_body(body, scopes, classes, current_class);
             MirStmt::ForRange {
                 var: var.clone(),
@@ -409,6 +420,11 @@ pub(super) fn lower_stmt(
             match lookup(scopes, list) {
                 Ty::List(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
+                    // D-068 re-review of #780 (sixth round): see the
+                    // `ForRange` arm's identical comment above -- the loop
+                    // variable's own rebinding must kill a stale narrowing
+                    // sentinel too.
+                    super::kill_narrowing(scopes, var);
                     let body = lower_loop_body(body, scopes, classes, current_class);
                     MirStmt::ForList {
                         var: var.clone(),
@@ -418,6 +434,9 @@ pub(super) fn lower_stmt(
                 }
                 Ty::Dict(kv) => {
                     bind_variable(scopes, var.clone(), kv.0);
+                    // D-068 re-review of #780 (sixth round): see the
+                    // `ForRange` arm's identical comment above.
+                    super::kill_narrowing(scopes, var);
                     let body = lower_loop_body(body, scopes, classes, current_class);
                     MirStmt::ForDict {
                         var: var.clone(),
@@ -433,6 +452,9 @@ pub(super) fn lower_stmt(
                 // Task 7 fix round).
                 Ty::Set(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
+                    // D-068 re-review of #780 (sixth round): see the
+                    // `ForRange` arm's identical comment above.
+                    super::kill_narrowing(scopes, var);
                     let body = lower_loop_body(body, scopes, classes, current_class);
                     MirStmt::ForSet {
                         var: var.clone(),
@@ -459,6 +481,11 @@ pub(super) fn lower_stmt(
                 .map(|c| lower_expr(c, scopes, classes, current_class));
             let elt = lower_expr(elt, scopes, classes, current_class);
             bind_variable(scopes, target.clone(), Ty::List(Box::new(elt.ty())));
+            // D-068 re-review of #780 (sixth round): the comprehension's
+            // own result `target` is a rebinding exactly like `Assign`,
+            // paralleling `resolve_comp_source`'s own `var` fix just above
+            // -- must kill a stale narrowing sentinel too.
+            super::kill_narrowing(scopes, target);
             MirStmt::ListCompAssign {
                 target: target.clone(),
                 var: var.clone(),
@@ -481,6 +508,9 @@ pub(super) fn lower_stmt(
                 .map(|c| lower_expr(c, scopes, classes, current_class));
             let elt = lower_expr(elt, scopes, classes, current_class);
             bind_variable(scopes, target.clone(), Ty::Set(Box::new(elt.ty())));
+            // D-068 re-review of #780 (sixth round): see `ListCompAssign`'s
+            // identical comment above.
+            super::kill_narrowing(scopes, target);
             MirStmt::SetCompAssign {
                 target: target.clone(),
                 var: var.clone(),
@@ -509,6 +539,9 @@ pub(super) fn lower_stmt(
                 target.clone(),
                 Ty::Dict(Box::new((key.ty(), value.ty()))),
             );
+            // D-068 re-review of #780 (sixth round): see `ListCompAssign`'s
+            // identical comment above.
+            super::kill_narrowing(scopes, target);
             MirStmt::DictCompAssign {
                 target: target.clone(),
                 var: var.clone(),

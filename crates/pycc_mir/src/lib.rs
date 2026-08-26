@@ -1213,19 +1213,30 @@ fn resolve_comp_source(
             let stop = lower_expr(stop, scopes, classes, current_class);
             let step = lower_expr(step, scopes, classes, current_class);
             bind_variable(scopes, var.to_string(), Ty::Int);
+            // D-068 re-review of #780 (sixth round): a comprehension's own
+            // loop variable is a rebinding exactly like `ForRange`'s
+            // induction variable (see that arm's identical comment in
+            // `stmt.rs`) -- must kill a stale narrowing sentinel too,
+            // mirroring the checker's `check_assignment(env, var, Ty::Int)`
+            // for the equivalent `ListCompAssign`/`SetCompAssign`/
+            // `DictCompAssign` arms.
+            kill_narrowing(scopes, var);
             (CompSource::Range { start, stop, step }, Ty::Int)
         }
         CompIter::Name(name) => match lookup(scopes, name) {
             Ty::List(elem_ty) => {
                 bind_variable(scopes, var.to_string(), (*elem_ty).clone());
+                kill_narrowing(scopes, var);
                 (CompSource::List(name.clone()), *elem_ty)
             }
             Ty::Dict(kv) => {
                 bind_variable(scopes, var.to_string(), kv.0.clone());
+                kill_narrowing(scopes, var);
                 (CompSource::Dict(name.clone()), kv.0)
             }
             Ty::Set(elem_ty) => {
                 bind_variable(scopes, var.to_string(), (*elem_ty).clone());
+                kill_narrowing(scopes, var);
                 (CompSource::Set(name.clone()), *elem_ty)
             }
             other => panic!(

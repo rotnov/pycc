@@ -1020,12 +1020,6 @@ fn an_except_as_binding_reusing_the_narrowed_name_does_not_unwrap_the_handler_re
     // message, not a direct instance read). The `Instance(ValueError)`
     // type on the wrapped `Name` is what matters here: it proves the read
     // was *not* unwrapped as a stale narrowed `Optional[int]`.
-    // A read of an exception-instance-typed name lowers to
-    // `MirExpr::ExceptionMessage` wrapping the bare `Name` (pre-existing
-    // behavior unrelated to this fix -- exception values render via their
-    // message, not a direct instance read). The `Instance(ValueError)`
-    // type on the wrapped `Name` is what matters here: it proves the read
-    // was *not* unwrapped as a stale narrowed `Optional[int]`.
     assert_eq!(
         handlers[0].body[0],
         MirStmt::ExprStmt(MirExpr::Call {
@@ -1087,6 +1081,122 @@ fn a_match_capture_pattern_reusing_a_narrowed_name_does_not_unwrap_a_later_read(
     // `outer_body[1]` is the `print(x)` statement after it -- the read
     // that must see `x`'s real (pattern-capture, still `Optional[int]`)
     // type rather than a stale `OptionalUnwrap`.
+    assert_eq!(
+        outer_body[1],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Optional(Box::new(Ty::Int)),
+            }],
+            ty: Ty::None,
+        })
+    );
+}
+
+/// D-068 re-review of #780 (sixth round): a `for` loop's own induction
+/// variable reusing a narrowed name must kill that name's narrowing
+/// sentinel too, exactly like the `Try`-handler `as` binding and the
+/// `match` capture-pattern binding fixed in the two rounds just above --
+/// `HirStmt::ForRange`'s arm previously called `bind_variable` alone,
+/// never `kill_narrowing`, so a read of the same name *after* the loop
+/// closes would still wrongly see the pre-loop narrowed sentinel.
+#[test]
+fn a_for_range_loop_variable_reusing_a_narrowed_name_does_not_unwrap_a_later_read() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![("x".to_string(), Ty::Optional(Box::new(Ty::Int)))],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![
+                HirStmt::ForRange {
+                    var: "x".to_string(),
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                    body: vec![],
+                },
+                print_x("x"),
+            ],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: outer_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered outer `if`");
+    };
+    // `bind_variable` only inserts when the key is absent (mirroring the
+    // checker's own "sticky representation" rule for a compatible
+    // reassignment -- `check_assignment`'s `lookup_any`/`Definitely(previous)`
+    // path in `pycc_types::lib`), so `x`'s type stays its original
+    // `Optional[int]` parameter type rather than becoming `Int` -- what
+    // this test actually proves is that the read is a bare `Name`, not a
+    // stale `OptionalUnwrap`.
+    assert_eq!(
+        outer_body[1],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Optional(Box::new(Ty::Int)),
+            }],
+            ty: Ty::None,
+        })
+    );
+}
+
+/// D-068 re-review of #780 (sixth round): a list comprehension's own
+/// result `target` reusing a narrowed name must kill that name's
+/// narrowing sentinel too -- `HirStmt::ListCompAssign`'s arm previously
+/// called `bind_variable` alone for `target`, never `kill_narrowing`.
+#[test]
+fn a_list_comprehension_target_reusing_a_narrowed_name_does_not_unwrap_a_later_read() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![
+            ("x".to_string(), Ty::Optional(Box::new(Ty::Int))),
+            ("xs".to_string(), Ty::List(Box::new(Ty::Int))),
+        ],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![
+                HirStmt::ListCompAssign {
+                    target: "x".to_string(),
+                    var: "i".to_string(),
+                    iter: pycc_hir::CompIter::Name("xs".to_string()),
+                    cond: None,
+                    elt: Box::new(HirExpr::Name("i".to_string())),
+                },
+                HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Name("x".to_string())],
+                }),
+            ],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: outer_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered outer `if`");
+    };
+    // Same `bind_variable` or-insert semantics as the for-range case above:
+    // `x`'s recorded type stays its original `Optional[int]` parameter type.
+    // What this test proves is that the read is a bare `Name`, not a stale
+    // `OptionalUnwrap`.
     assert_eq!(
         outer_body[1],
         MirStmt::ExprStmt(MirExpr::Call {
