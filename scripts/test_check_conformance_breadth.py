@@ -137,6 +137,36 @@ ROADMAP = """
 """.lstrip()
 
 
+#: A matrix whose evidence-backed rows overshoot the same `**Accept:**`
+#: floor (5 rows / 6 distinct PEPs) that `ROADMAP` above targets -- six rows,
+#: one of them a two-PEP range cell, so the total is 6 rows / 7 distinct PEPs.
+#: `required - total` is therefore negative on both axes, which no
+#: `\d+`-anchored gap clause can state; this fixture proves the guard accepts
+#: the floored `0`-gap phrasing instead of demanding the unwritable negative.
+EXCEEDED_MATRIX = """
+# Conformance
+
+| PEP | Feature | Cat | Test | St |
+|---|---|---|---|---|
+| [100](https://peps.python.org/pep-0100/) | A | syntax | `a.py` | ◐ |
+| [200](https://peps.python.org/pep-0200/) | B | syntax | `b.py` | ◐ |
+| [300](https://peps.python.org/pep-0300/) | C | syntax | `c.py` | ◐ |
+| [400](https://peps.python.org/pep-0400/) | D | syntax | `d.py` | ◐ |
+| [500](https://peps.python.org/pep-0500/) | E | syntax | `e.py` | ◐ |
+| [600](https://peps.python.org/pep-0600/)–601 | F | syntax | `f.py` | ✅ |
+""".lstrip()
+
+EXCEEDED_ROWS = evidence_rows(EXCEEDED_MATRIX)
+
+EXCEEDED_ROADMAP = """
+## v0.3
+
+**Accept:** conformance ≥ 5 `PYTHON_STANDARDS.md` matrix rows at `◐` or better — that is, rows whose fixtures pass — encompassing 6 distinct PEP numbers.
+
+**Conformance progress (2026-01-01): 6 of the required 5 matrix rows are at `◐` or better, leaving a 0-row gap; 1 of those 6 are `✅` (whole-PEP acceptance), which is reported but not gated before v1.0; those rows encompass 7 of the required 6 distinct PEP numbers, leaving a 0-PEP gap.** This figure is derived mechanically — `python3 scripts/check_conformance_breadth.py` reports "6 evidence-backed rows, all declared (1 accepted as whole-PEP, 5 subset), encompassing 7 distinct PEP numbers" — and both required floors are now met and exceeded.
+""".lstrip()
+
+
 class ParsingTests(unittest.TestCase):
     def test_only_status_marked_five_cell_rows_are_matrix_rows(self) -> None:
         rows = parse_matrix(MATRIX)
@@ -601,6 +631,50 @@ class RoadmapCountTests(unittest.TestCase):
             ROADMAP.replace("(1 accepted as whole-PEP, 1 subset)", "(1 accepted, 1 sub)"),
             "does not quote the checker's current summary verbatim",
         )
+
+    def test_a_row_gap_of_zero_is_accepted_once_the_row_floor_is_exceeded(
+        self,
+    ) -> None:
+        # Reaching a milestone's distinct-PEP target does not require landing
+        # exactly `required` rows -- a run of single-PEP-per-row flips can
+        # overshoot the row floor while still closing the PEP gap. `required
+        # - total` then goes negative, which no `\d+`-anchored gap clause can
+        # state; the guard must accept a stated 0-row gap instead of demanding
+        # the unwritable negative value.
+        exceeded = EXCEEDED_ROADMAP
+        check_roadmap_counts(exceeded, EXCEEDED_ROWS)
+
+    def test_a_nonzero_row_gap_is_still_rejected_once_the_floor_is_exceeded(
+        self,
+    ) -> None:
+        # The floor-exceeded relaxation only ever permits the single value
+        # `max(0, required - total)` -- it must not turn into "any gap value
+        # passes once total >= required".
+        with self.assertRaises(BreadthError) as caught:
+            check_roadmap_counts(
+                EXCEEDED_ROADMAP.replace("leaving a 0-row gap", "leaving a 1-row gap"),
+                EXCEEDED_ROWS,
+            )
+        message = str(caught.exception)
+        self.assertIn("states a 1-row gap", message)
+        self.assertIn("expected gap here is 0", message)
+
+    def test_a_pep_gap_of_zero_is_accepted_once_the_pep_floor_is_exceeded(
+        self,
+    ) -> None:
+        check_roadmap_counts(EXCEEDED_ROADMAP, EXCEEDED_ROWS)
+
+    def test_a_nonzero_pep_gap_is_still_rejected_once_the_floor_is_exceeded(
+        self,
+    ) -> None:
+        with self.assertRaises(BreadthError) as caught:
+            check_roadmap_counts(
+                EXCEEDED_ROADMAP.replace("leaving a 0-PEP gap", "leaving a 1-PEP gap"),
+                EXCEEDED_ROWS,
+            )
+        message = str(caught.exception)
+        self.assertIn("states a 1-PEP gap", message)
+        self.assertIn("expected gap here is 0", message)
 
     def test_a_missing_headline_is_a_failure_not_a_silent_pass(self) -> None:
         self.assert_rejected(
