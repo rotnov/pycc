@@ -814,6 +814,7 @@ dependencies = [
  "inkwell",
  "pycc_artifact_layout",
  "pycc_mir",
+ "pycc_scratch",
 ]
 
 [[package]]
@@ -852,6 +853,10 @@ dependencies = [
 
 [[package]]
 name = "pycc_rt"
+version = "0.1.0"
+
+[[package]]
+name = "pycc_scratch"
 version = "0.1.0"
 
 [[package]]
