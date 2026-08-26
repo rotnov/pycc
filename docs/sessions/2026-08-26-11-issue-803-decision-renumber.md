@@ -155,6 +155,32 @@ different layer. Fixed by adding `check_filename_matches_id` alongside
 `check_unique_ids`, with two new tests in
 `scripts/test_generate_decisions_index.py`.
 
+## Merging PR #812 (the concurrent D-204 collision) after the renumber
+
+`git merge origin/main` after the D-204→D-205/D-206 renumbering produced
+real, adjacent-content conflicts (not further numbering conflicts) in
+`docs/PYTHON_STANDARDS.md`, `docs/ROADMAP.md`, and `docs/TYPE_SYSTEM.md`:
+both this branch (Part 2's narrowing) and #812 (Part 3's `float`/`bool`
+widening) had independently edited the same PEP 604/`Optional[T]`
+narrative paragraphs. Resolved by hand, combining both changes'
+substance rather than picking one side, and correcting every lingering
+`D-201`/`D-204` reference in #812's own conflicting hunks to the final
+`D-205`/`D-204` numbers this branch settled on (#812's own `D-204` decision
+for the float/bool widening keeps its number — only the pre-existing
+narrowing citations that #812 had inherited from the stale pre-renumber
+`main` needed correcting). `docs/decisions/README.md` conflicted too, but
+was resolved by regenerating from source (`generate_decisions_index.py`)
+rather than hand-merging the generated table, per this repo's own
+generated-file convention.
+
+The merged prose pushed `site/llms.txt`'s non-optional aggregate 197
+bytes over its 264 KiB CI-enforced budget (issue #207) — the same trap
+recorded in `docs/sessions/2026-08-26-12-issue-711-815-method-call-diagnostic.md`.
+Trimmed via several rounds of `GITHUB_PAGES=true bash scripts/check-site.sh`
+in a tight edit-and-recheck loop, tightening wording in the merged
+`docs/PYTHON_STANDARDS.md`/`docs/ROADMAP.md` paragraphs without dropping
+any factual content, until the aggregate cleared the budget.
+
 ## Where to resume
 
 Nothing pending from this issue. If a future decision renumbering is
@@ -164,4 +190,13 @@ extend their tests alongside any change there. Note the concurrency gap
 documented above under "Renumbering": neither check can catch a
 same-number collision between two branches that have not yet merged onto
 the same tree — only landing order and CI's post-rebase check surfaces
-that.
+that, as it did here a second time against PR #812.
+
+All local gates green at this final snapshot: `cargo check --workspace`;
+`python3 -B -m unittest discover -s scripts -p 'test_*.py'` (960 tests,
+OK, skipped=6); `ruby scripts/test_check_roadmap_evidence.rb` (237 runs,
+0 failures) and `ruby scripts/check_roadmap_evidence.rb` (passed);
+`GITHUB_PAGES=true bash scripts/check-site.sh` (passed, after the trim
+above); `ruby scripts/check_ci_permissions.rb` (passed, 10 files). The
+D-014 100% Rust coverage gate was not run locally (this change alters no
+compiled behavior) but must stay green in CI.
