@@ -27738,7 +27738,7 @@ fn reject_generic_calls_processes_try_star_arm() {
     );
 }
 
-// -- #382: check_stmt_shared ? error propagation in try bodies --
+// -- #382: check_stmt_sequence_shared ? error propagation in try bodies --
 
 #[test]
 fn check_try_body_type_error_propagates() {
@@ -27814,7 +27814,7 @@ fn try_handler_as_binding_incompatible_type_is_t0023() {
 fn try_star_handler_as_binding_incompatible_type_is_t0023() {
     // Mirrors `try_handler_as_binding_incompatible_type_is_t0023` for
     // `except*` (#542). A same-block reassignment (`x = "bad"`) is caught
-    // directly by `check_assignment` (via `check_stmt_shared`) before
+    // directly by `check_assignment` (via `check_stmt_sequence_shared`) before
     // `check_try_star_stmt` ever reaches its own
     // `join_if_branches(&mut joined, &previous, handler_env)?` loop, so
     // that specific `?` needs a mismatch that bypasses `check_assignment`
