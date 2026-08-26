@@ -934,6 +934,21 @@ fn push_narrowing(scopes: &mut [HashMap<String, Ty>], name: &str, inner: Ty) {
 /// is reassigned inside a narrowed region (`lower_stmt`'s `Assign`/
 /// `AnnAssign` arms) so a stale `MirExpr::OptionalUnwrap` is never emitted
 /// for a read that follows the reassignment.
+///
+/// D-068 re-review of #780 (seventh round): only clears the sentinel in
+/// `scopes.last()`, while [`narrowed_ty`] searches the whole stack
+/// innermost-to-outward. This is sound today only because `scopes` ever
+/// gains a second frame in exactly one place (`lower_item`'s `Function`
+/// arm) and no narrowing sentinel is ever live across that push --
+/// functions are lowered in a separate pass after all module-level
+/// statements, and this HIR has no nested-function construct. If a future
+/// change adds another `scopes.push` while an outer-frame sentinel is
+/// still live, that sentinel would become unkillable through this
+/// function (which only touches the top frame) while remaining visible to
+/// [`narrowed_ty`]'s full-stack search -- silently reintroducing the same
+/// stale-narrowing class every earlier round of this review fixed, through
+/// a different mechanism. Any new `scopes.push` site must account for this
+/// before it can carry a live narrowing sentinel across it.
 fn kill_narrowing(scopes: &mut [HashMap<String, Ty>], name: &str) {
     scopes
         .last_mut()

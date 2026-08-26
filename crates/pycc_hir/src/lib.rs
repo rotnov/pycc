@@ -997,7 +997,7 @@ fn collect_pattern_capture_names_as_killed(pattern: &HirPattern, killed: &mut Ha
 /// Before this fix, `collect_killed_names` put a bare `ExprStmt` in a no-op
 /// arm and never inspected `If`/`While`'s own `test`, so a re-enterable loop
 /// body whose only kill of a narrowed name was a walrus (see
-/// `docs/decisions/D-201-kill-prescan-for-re-enterable-narrowed-bodies.md`)
+/// `docs/decisions/D-202-kill-prescan-for-re-enterable-narrowed-bodies.md`)
 /// was invisible to the prescan: a read textually before the walrus within
 /// the loop body was wrongly treated as still narrowed on every iteration
 /// after the first, even though the *previous* iteration's walrus already

@@ -389,7 +389,10 @@ fn lower_class_conds(
     }
     (vec![conds], bindings)
 }
-/// on the enum class) to `MirExpr::Name` reading the synthetic
+
+/// Rewrites an attribute access `base.attr` (where `base` names an enum
+/// class and `attr` is one of its declared members, i.e. `attr` reads a
+/// member on the enum class) to `MirExpr::Name` reading the synthetic
 /// `<Class>.<Member>.enum_member` global. Returns `None` if `base` is not
 /// an enum class name or `attr` is not one of its members. Extracted from
 /// `lower_expr` to isolate the enum-specific code paths (see
