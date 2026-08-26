@@ -363,20 +363,28 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
             ty: pycc_mir::Ty::Int,
             ..
         }
-        // Issue #769 (Part 2 of #747): unlike `OptionalWrap` (whose `.ty()`
-        // is always `Ty::Optional(_)`, so it can never reach this
-        // `Ty::Int`-classified function at all -- see its own arm below),
-        // `OptionalUnwrap`'s `.ty()` genuinely is `Ty::Int` (T0049 restricts
-        // every `Optional[T]` annotation to `T = int`), so it *does* reach
-        // here as `int_temporary_word`'s classified expression. Its codegen
-        // arm (`emit_expr`'s `OptionalUnwrap` arm in `lib.rs`) performs a
-        // plain `build_extract_value` out of a struct that was itself just
-        // loaded from the narrowed name's own local slot -- the exact same
-        // "borrowed read out of a slot this expression does not own" shape
-        // as the plain `Name { ty: Ty::Int, .. }` arm immediately above, so
-        // it is classified identically: `true` (a duplicate reference that
-        // needs its own retain wherever it is stored into a second owning
-        // slot).
+        // Issue #769 (Part 2 of #747; re-verified for #809's widened
+        // `T0049`): unlike `OptionalWrap` (whose `.ty()` is always
+        // `Ty::Optional(_)`, so it can never reach this `Ty::Int`-classified
+        // function at all -- see its own arm below), `OptionalUnwrap`'s
+        // `.ty()` (`pycc_mir::MirExpr::ty`) is `(**inner).clone()` -- it
+        // reaches *this* `Ty::Int`-scoped arm only for the `T = int` case;
+        // `T0049` now also admits `T = float`/`T = bool`
+        // (`crates/pycc_hir/src/func.rs`), but those give `.ty() ==
+        // Ty::Float`/`Ty::Bool`, which this function's own `Name { ty:
+        // Ty::Int, .. }` sibling arm's exact-`Ty::Int` guard already
+        // excludes -- and this whole function is reached only via
+        // `int_temporary_word`'s own `source_expr.ty() == pycc_mir::Ty::Int`
+        // short-circuit guard, so a float/bool-inner `OptionalUnwrap` never
+        // reaches here regardless. For the `T = int` case that does reach
+        // here, its codegen arm (`emit_expr`'s `OptionalUnwrap` arm in
+        // `lib.rs`) performs a plain `build_extract_value` out of a struct
+        // that was itself just loaded from the narrowed name's own local
+        // slot -- the exact same "borrowed read out of a slot this
+        // expression does not own" shape as the plain `Name { ty: Ty::Int,
+        // .. }` arm immediately above, so it is classified identically:
+        // `true` (a duplicate reference that needs its own retain wherever
+        // it is stored into a second owning slot).
         | MirExpr::OptionalUnwrap(_, _) => true,
         // No `Ty::Int` test alongside the tuple test, for the same reason
         // `retain_if_int_duplicate`'s own tuple arm omits one: the only
@@ -1454,5 +1462,121 @@ mod tests {
         // arm. Every call listed was proved guarded, on its own operand, by
         // `guarded_bigint_refcount_calls`.
         assert_eq!((retains, releases), (1, 2), "got {calls:?}");
+    }
+
+    // -----------------------------------------------------------------
+    // #809 (Part 2 of #747): `T0049`'s widened gate now also admits
+    // `Optional[float]`/`Optional[bool]`, so `int_value_is_a_duplicate_
+    // reference`'s and `retain_if_int_duplicate`'s `OptionalUnwrap` arms
+    // (both above) can no longer assume every `OptionalUnwrap` node is
+    // `Ty::Int`-typed. Tracing both call sites (`int_temporary_word`'s own
+    // `source_expr.ty() == pycc_mir::Ty::Int` short-circuit guard, and
+    // `retain_if_int_duplicate`'s enclosing `if let Scalar::Int(word) =
+    // scalar` guard) shows each already restricts to `Ty::Int` at the
+    // *caller*, before `OptionalUnwrap`'s own arm is ever consulted -- so
+    // no code change was needed there, only the stale comment fix above.
+    // These two tests prove that empirically rather than by inspection
+    // alone: a `float | None` and a `bool | None` local, each narrowed and
+    // unwrapped in a shape that would trigger retain-classification if the
+    // guard were missing, produce zero bigint refcount calls.
+    // -----------------------------------------------------------------
+
+    /// `x: float | None = 5.5; if x is not None: y = x` -- narrows and
+    /// unwraps a present `Optional[float]`, landing `OptionalUnwrap`'s
+    /// result in a second (`y`) slot exactly the shape that would call
+    /// `retain_if_int_duplicate` on a `Ty::Int`-classified `OptionalUnwrap`.
+    /// A `float` payload is never `Scalar::Int`, so this must emit zero
+    /// bigint refcount calls.
+    #[test]
+    fn a_narrowed_optional_float_unwrap_emits_no_bigint_refcount_calls() {
+        let optional_float = Ty::Optional(Box::new(Ty::Float));
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::OptionalWrap(
+                        Box::new(MirExpr::FloatLiteral(5.5)),
+                        Box::new(Ty::Float),
+                    ),
+                }),
+                MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::Compare {
+                        op: pycc_mir::CmpOpKind::IsNot,
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: optional_float.clone(),
+                        }),
+                        right: Box::new(MirExpr::NoneLiteral),
+                        ty: Ty::Bool,
+                    },
+                    body: vec![MirStmt::Assign {
+                        target: "y".to_string(),
+                        value: MirExpr::OptionalUnwrap(
+                            Box::new(MirExpr::Name {
+                                name: "x".to_string(),
+                                ty: optional_float,
+                            }),
+                            Box::new(Ty::Float),
+                        ),
+                    }],
+                    orelse: vec![],
+                }),
+            ],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_optional_float_unwrap", &mir);
+        assert_eq!(
+            calls.len(),
+            0,
+            "a float payload must never reach the bigint refcount path: {calls:?}"
+        );
+    }
+
+    /// The `bool` counterpart of the test directly above: `x: bool | None =
+    /// True; if x is not None: y = x`. A `bool` payload is never `Scalar::
+    /// Int` either, so this must also emit zero bigint refcount calls.
+    #[test]
+    fn a_narrowed_optional_bool_unwrap_emits_no_bigint_refcount_calls() {
+        let optional_bool = Ty::Optional(Box::new(Ty::Bool));
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::OptionalWrap(
+                        Box::new(MirExpr::BoolLiteral(true)),
+                        Box::new(Ty::Bool),
+                    ),
+                }),
+                MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::Compare {
+                        op: pycc_mir::CmpOpKind::IsNot,
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: optional_bool.clone(),
+                        }),
+                        right: Box::new(MirExpr::NoneLiteral),
+                        ty: Ty::Bool,
+                    },
+                    body: vec![MirStmt::Assign {
+                        target: "y".to_string(),
+                        value: MirExpr::OptionalUnwrap(
+                            Box::new(MirExpr::Name {
+                                name: "x".to_string(),
+                                ty: optional_bool,
+                            }),
+                            Box::new(Ty::Bool),
+                        ),
+                    }],
+                    orelse: vec![],
+                }),
+            ],
+            class_defs: Vec::new(),
+        };
+        let calls = refcount_calls_in("bigint_rc_optional_bool_unwrap", &mir);
+        assert_eq!(
+            calls.len(),
+            0,
+            "a bool payload must never reach the bigint refcount path: {calls:?}"
+        );
     }
 }
