@@ -9,7 +9,12 @@
 # rungs below exercise both polarities, the early-return-narrows-the-
 # continuation shape, kill-on-reassignment inside a narrowed branch, and a
 # function-local narrowed read, alongside the original presence-only
-# checks this fixture already proved.
+# checks this fixture already proved. `Optional[T]`'s inner type `T` is
+# further widened from `int`-only to also accept `float` and `bool` (#809,
+# Part 3 of #747) -- the section below repeats the same presence, ordering,
+# truthiness, function-return, and function-local shapes for `float | None`
+# and `bool | None`. `Optional[str]` and general (non-`Optional`) unions
+# such as `int | str` remain out of scope.
 
 present: int | None = 5
 absent: int | None = None
@@ -98,3 +103,96 @@ if big is not None:
     duplicated = big
     print(big + 1)
     print(duplicated)
+
+# #809 (Part 3 of #747): `Optional[T]` widened from `T == int` only to
+# also accept `T == float` and `T == bool` -- the same presence checks,
+# truthiness, and narrowed-read shapes proven for `int | None` above,
+# now proven for `float | None` and `bool | None` too.
+
+present_float: float | None = 5.5
+absent_float: float | None = None
+print(present_float is None)
+print(present_float is not None)
+print(absent_float is None)
+print(absent_float is not None)
+
+if present_float is not None:
+    print(present_float + 1.0)
+
+if present_float is None:
+    pass
+else:
+    print(present_float * 2.0)
+
+reversed_order_float: None | float = 2.5
+print(reversed_order_float is None)
+if reversed_order_float is not None:
+    print(reversed_order_float + 1.0)
+
+present_bool: bool | None = True
+absent_bool: bool | None = None
+print(present_bool is None)
+print(present_bool is not None)
+print(absent_bool is None)
+print(absent_bool is not None)
+
+if present_bool is not None:
+    print(present_bool)
+
+reversed_order_bool: None | bool = False
+print(reversed_order_bool is None)
+if reversed_order_bool is not None:
+    print(reversed_order_bool)
+
+# Truthiness: `bool(x)` for `x: float | None`/`bool | None` is `False`
+# only for `None` or a present falsy payload (`0.0`/`False`).
+falsy_float: float | None = 0.0
+if falsy_float:
+    print("truthy")
+else:
+    print("falsy")
+
+falsy_bool: bool | None = False
+if falsy_bool:
+    print("truthy")
+else:
+    print("falsy")
+
+
+def maybe_float(x: float, present: bool) -> float | None:
+    if present:
+        return x * 2.0
+    return None
+
+
+def maybe_bool(x: bool, present: bool) -> bool | None:
+    if present:
+        return x
+    return None
+
+
+doubled_float = maybe_float(21.0, True)
+skipped_float = maybe_float(21.0, False)
+print(doubled_float is None)
+print(skipped_float is None)
+
+kept_bool = maybe_bool(True, True)
+skipped_bool = maybe_bool(True, False)
+print(kept_bool is None)
+print(skipped_bool is None)
+
+
+def local_optional_float_bool() -> None:
+    y: float | None = 9.5
+    print(y is not None)
+    z: float | None = None
+    print(z is not None)
+    if y is not None:
+        print(y + 1.0)
+    w: bool | None = True
+    print(w is not None)
+    if w is not None:
+        print(w)
+
+
+local_optional_float_bool()

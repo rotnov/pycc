@@ -51,6 +51,14 @@
         {
           "category": "flow-sensitive narrowing of an `Optional[int]` back to plain `int` inside a top-level `if name is not None:`/`if name is None: ... else:` branch, module-global and function-local, including kill-on-reassignment inside the narrowed branch and the early-return continuation shape (`if name is None: ...; return` narrowing every read after the `if`)",
           "evidence": "pep_0604_union.py"
+        },
+        {
+          "category": "`Optional[float]`/`Optional[bool]` (`T | None`, either operand order) declared, assigned, and read back with an `is`/`is not None` presence test, module-global and function-local, including truthiness and a function returning `float | None`/`bool | None` from both branches",
+          "evidence": "pep_0604_union.py"
+        },
+        {
+          "category": "flow-sensitive narrowing of an `Optional[float]`/`Optional[bool]` back to plain `float`/`bool` inside a top-level `if name is not None:`/`if name is None: ... else:` branch, the same mechanism proven above for `Optional[int]` (never `Ty::Int`-specific in its own implementation, confirmed by #809/D-204)",
+          "evidence": "pep_0604_union.py"
         }
       ],
       "not_proven": [
@@ -60,9 +68,9 @@
           "reason": "rejected pre-lowering with T0048; not implemented -- only the exact `T | None`/`None | T` 2-operand shape is recognized (D-197, #763, Part 1 of #747)."
         },
         {
-          "category": "`Optional[T]` for any `T` other than `int`",
+          "category": "`Optional[T]` for any `T` outside `{int, float, bool}`",
           "kind": "core",
-          "reason": "rejected with T0049; codegen's `{ inner, present }` representation is exercised and tested for `Optional[int]` only, mirroring the `list[int]`-only (T0034) and `dict[str, int]`-only (T0036) v0.2 scope cuts."
+          "reason": "rejected with T0049; codegen's `{ inner, present }` representation is exercised and tested for `Optional[int]`/`Optional[float]`/`Optional[bool]` only (widened from `Optional[int]`-only by #809, D-204, Part 3 of #747) -- `Optional[str]` and other refcounted/pointer inner types, and general containers, remain out of scope, mirroring the `list[int]`-only (T0034) and `dict[str, int]`-only (T0036) v0.2 scope cuts."
         },
         {
           "category": "narrowing through a compound `and`/`or` test (e.g. `if x is not None and y is not None:`), or through a non-top-level test embedded in a larger boolean expression",
