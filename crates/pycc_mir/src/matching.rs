@@ -69,6 +69,22 @@ fn lower_match_chain(
     for (name, val) in &bindings {
         let ty = val.ty();
         bind_variable(scopes, name.clone(), ty);
+        // D-068 re-review of #780 (fifth round): a pattern-capture binding
+        // (`case x:`, or a capture nested in `Sequence`/`SequenceStar`/
+        // `Mapping`/`Class`/`Or`/`As`) rebinds `name` exactly like `Assign`/
+        // `AnnAssign`/the `Try`-handler `as` binding do -- each of those
+        // pairs its own `bind_variable`/`bind` call with `kill_narrowing`
+        // (see `stmt.rs`'s `Assign`/`AnnAssign`/`Try` arms and `expr.rs`'s
+        // `pre_bind_named_expr_targets`), but this call site never did.
+        // Without this, a name narrowed by an enclosing `if name is not
+        // None:` kept its stale `$narrowed:{name}` sentinel after a `match`
+        // case captured the same name, so a later read of `name` -- even
+        // outside the `match` entirely, since this binding is applied
+        // directly to `scopes` rather than inside `case.body`'s isolated
+        // snapshot -- would still wrongly lower to `MirExpr::OptionalUnwrap`
+        // against the pre-match narrowed type instead of the pattern
+        // capture's real type.
+        super::kill_narrowing(scopes, name);
     }
     let binding_stmts: Vec<MirStmt> = bindings
         .iter()

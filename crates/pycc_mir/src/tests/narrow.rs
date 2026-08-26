@@ -1020,6 +1020,12 @@ fn an_except_as_binding_reusing_the_narrowed_name_does_not_unwrap_the_handler_re
     // message, not a direct instance read). The `Instance(ValueError)`
     // type on the wrapped `Name` is what matters here: it proves the read
     // was *not* unwrapped as a stale narrowed `Optional[int]`.
+    // A read of an exception-instance-typed name lowers to
+    // `MirExpr::ExceptionMessage` wrapping the bare `Name` (pre-existing
+    // behavior unrelated to this fix -- exception values render via their
+    // message, not a direct instance read). The `Instance(ValueError)`
+    // type on the wrapped `Name` is what matters here: it proves the read
+    // was *not* unwrapped as a stale narrowed `Optional[int]`.
     assert_eq!(
         handlers[0].body[0],
         MirStmt::ExprStmt(MirExpr::Call {
@@ -1028,6 +1034,67 @@ fn an_except_as_binding_reusing_the_narrowed_name_does_not_unwrap_the_handler_re
                 name: "x".to_string(),
                 ty: Ty::Instance(Box::new("ValueError".to_string())),
             }))],
+            ty: Ty::None,
+        })
+    );
+}
+
+/// D-068 re-review of #780 (fifth round): a `match` case's own capture
+/// pattern (`case x:`) reusing a narrowed name must kill that name's
+/// narrowing sentinel too, exactly like the `Try`-handler `as` binding
+/// fixed just above -- `lower_match_chain`'s binding loop
+/// (`matching.rs`) previously called `bind_variable` alone, never
+/// `kill_narrowing`, so a read of the same name *after* the `match`
+/// statement (not just inside a case body, which already has its own
+/// isolated snapshot/restore) would still wrongly see the pre-match
+/// narrowed sentinel and unwrap against the stale narrowed type.
+#[test]
+fn a_match_capture_pattern_reusing_a_narrowed_name_does_not_unwrap_a_later_read() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![
+            ("x".to_string(), Ty::Optional(Box::new(Ty::Int))),
+            ("y".to_string(), Ty::Optional(Box::new(Ty::Int))),
+        ],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![
+                HirStmt::Match {
+                    subject: HirExpr::Name("y".to_string()),
+                    cases: vec![pycc_hir::HirMatchCase {
+                        pattern: pycc_hir::HirPattern::Capture("x".to_string()),
+                        guard: None,
+                        body: vec![],
+                    }],
+                },
+                print_x("x"),
+            ],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: outer_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered outer `if`");
+    };
+    // `outer_body[0]` is the lowered `match`'s `Seq(assign, chain)`, and
+    // `outer_body[1]` is the `print(x)` statement after it -- the read
+    // that must see `x`'s real (pattern-capture, still `Optional[int]`)
+    // type rather than a stale `OptionalUnwrap`.
+    assert_eq!(
+        outer_body[1],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Optional(Box::new(Ty::Int)),
+            }],
             ty: Ty::None,
         })
     );
