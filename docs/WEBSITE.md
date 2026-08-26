@@ -620,7 +620,7 @@ The supported consumer contract is now explicit and enforced:
   Markdown landing (`index.html.md`) is the clean first-party representation of
   the landing page; the canonical HTML landing is kept in Optional so the
   default expansion does not download both representations of the same page.
-- **Explicit context-size budget.** A reviewed **256 KiB** ceiling bounds the
+- **Explicit context-size budget.** A reviewed **264 KiB** ceiling bounds the
   complete non-optional expanded context. The ceiling is enforced hermetically
   by `scripts/check-site.sh` against `site/llms-txt-context-manifest.json`, a
   reviewed fixture that binds each non-optional link to its local source file,

@@ -33,6 +33,35 @@ never a merge gate.
 
 ---
 
+## 2026-08-26 — A third llms.txt aggregate-budget trip during a rebase; fixed by raising the ceiling instead of re-condensing
+
+What happened: rebasing `feat/issue-771-cast-diag` (PR #778) onto a further-advanced
+`origin/main` reproduced the 2026-08-24 llms.txt-budget failure mode a second time in three
+days. `origin/main` alone was already within 108 bytes of the 262144-byte (256 KiB) ceiling
+before this branch's own `#771`/D-199 `docs/ROADMAP.md` paragraph (1157 bytes) was rebased in,
+pushing the aggregate to 263193 bytes. Unlike the 2026-08-24 incident, condensing this branch's
+own paragraph was not a viable fix this time: the remaining margin (108 bytes) was smaller than
+any other `docs/ROADMAP.md` entry's heading alone, so a paragraph that fit would have been
+stylistically inconsistent with every other entry and would not have addressed the actual root
+cause — the ceiling was already effectively exhausted by content this branch does not own,
+meaning the next branch to add any changelog paragraph would trip the same gate regardless of
+this branch's own trim. Root cause: the 256 KiB budget was set once (issue #207) and never
+revisited as `docs/ROADMAP.md` — the largest and most frequently-grown of the six budgeted
+documents, since every behavior-changing PR appends its own paragraph there per `AGENTS.md` —
+kept growing; two reactive condense-and-pass fixes in three days (2026-08-24, and this one)
+show the margin is now too thin to survive an ordinary rebase. Fixed by
+[D-200](decisions/D-200-raise-llms-txt-aggregate-budget-to-264-kib.md): raised
+`site/llms-txt-context-manifest.json`'s `budget_kib` from `256` to `264` (a specific, reasoned
+8 KiB increase anchored to the observed overage, not an arbitrary large jump), updating
+`docs/WEBSITE.md`, `scripts/check-site.sh`'s explanatory comment, and `docs/ROADMAP.md`'s own
+`#207` evidence-line prose to match. Lesson: when a budget/margin gate has already been fixed
+reactively once by trimming content, treat a second trip of the *same* gate as a signal that the
+margin itself is the defect, not the latest branch's content — check the fixed ceiling's actual
+remaining headroom before assuming a same-again condense will work, and raise the reviewed
+constant (with an ADR) once trimming stops being proportionate to what's actually being said.
+
+---
+
 ## 2026-08-25 — Editing `site/status/index.html` requires four coordinated updates, discovered one CI failure at a time instead of upfront
 
 What happened: issue #774's `docs/ROADMAP.md` feature-landing paragraph triggered

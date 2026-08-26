@@ -143,6 +143,20 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// unification for maybe-bound names — the validation pass's `T0041`
     /// diagnostic is the user-facing gate, not the solver's inferred type.
     pub(crate) maybe_bindings: HashSet<String>,
+    /// Issue #771: names whose binding is definite (unconditionally
+    /// assigned, unlike `maybe_bindings`) but whose right-hand-side
+    /// expression is one the solver cannot represent as a type term at all
+    /// (e.g. a class-target `cast`, a `.pop()`, an attribute read, a method
+    /// call, or a heterogeneous container literal — see the `Ok(None)`
+    /// arms throughout `collect_expr_constraints`). Without this set, such
+    /// a name is left out of `bindings` entirely, and a later read of it
+    /// falls through to the "not a solver-tracked local" case even though
+    /// it *is* a syntactic local — producing a misleading `unbound_local`
+    /// (`T0021`) diagnostic instead of `Ok(None)` (no term, but not an
+    /// error). `HirExpr::Name` consults this set after `maybe_bindings`
+    /// and after `bindings` itself, so a real term always takes priority
+    /// over a stale opaque marker for the same name.
+    pub(crate) opaque_bindings: HashSet<String>,
 }
 
 fn fresh_variable(parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>>) -> usize {
@@ -366,6 +380,12 @@ pub(crate) fn collect_expr_constraints(
             }
             match env.bindings.get(name).cloned() {
                 Some(term) => Ok(Some(term)),
+                // Issue #771: a definitely-assigned name whose initializer
+                // the solver couldn't represent as a term (see
+                // `opaque_bindings`'s doc comment) is not an unbound local
+                // — it just has no type term to offer. Return `Ok(None)`
+                // instead of falling through to `unbound_local` below.
+                None if env.opaque_bindings.contains(name.as_str()) => Ok(None),
                 None if is_local(env.local_names, name) => Err(unbound_local(name)),
                 None => Ok(None),
             }
@@ -876,9 +896,13 @@ pub(crate) fn collect_expr_constraints(
         // expression's own overall type, mirroring `HirExpr::Subscript`'s
         // own pre-D-146 "no unification term" default and `ListPop`'s own
         // doc comment's documented consequence (a private function
-        // assigning from one of these expressions registers no binding for
-        // the target -- a pre-existing, not novel, gap this project already
-        // accepts for every other container-shaped expression).
+        // assigning from one of these expressions registers no real type
+        // term for the target -- a pre-existing, not novel, gap this
+        // project already accepts for every other container-shaped
+        // expression). Issue #771/D-199: the target is still tracked as
+        // definitely-but-opaquely bound (`opaque_bindings`), so a later
+        // read of it no longer misfires as an unbound local; only the
+        // missing type term itself remains unchanged.
         HirExpr::AttrGet { base, .. } => {
             collect_expr_constraints(signatures, parents, concrete, binops, env, base)?;
             Ok(None)
@@ -972,12 +996,25 @@ fn bind_named_expr_targets(
     match expr {
         HirExpr::NamedExpr { name, value } => {
             bind_named_expr_targets(signatures, parents, concrete, binops, env, value)?;
+            // Issue #771 (D-199), mirrored here for the walrus operator: a
+            // `:=` target is unconditionally (re)bound wherever it is
+            // evaluated, so any earlier `def` shadow, maybe-bound marker, or
+            // stale opaque marker for `name` is cleared regardless of what
+            // the new value's term turns out to be below.
+            env.defs_rebound.remove(name.as_str());
+            env.maybe_bindings.remove(name.as_str());
+            env.opaque_bindings.remove(name.as_str());
             if let Some(term) =
                 collect_expr_constraints(signatures, parents, concrete, binops, env, value)?
             {
-                env.defs_rebound.remove(name.as_str());
-                env.maybe_bindings.remove(name.as_str());
                 env.bindings.entry(name.clone()).or_insert(term);
+            } else {
+                // The solver produced no term for the walrus value (e.g. a
+                // class-target `cast`, `.pop()`, an attribute read, a method
+                // call, or a heterogeneous container literal). Track `name`
+                // as opaquely-but-definitely bound so a later read reports
+                // "no term" instead of misreporting it as unbound.
+                env.opaque_bindings.insert(name.clone());
             }
             Ok(())
         }
@@ -1142,6 +1179,12 @@ pub(crate) fn collect_block_constraints(
                 // (mirrors the validation pass's contract: `if c: x = 1`
                 // followed by `x = 2` makes `x` readable).
                 env.maybe_bindings.remove(target.as_str());
+                // Issue #771: this is a fresh unconditional (re)assignment,
+                // so any previous opaque marker for `target` is stale
+                // regardless of what the new initializer's term turns out
+                // to be — it is either replaced by a real term below, or
+                // reinstated as opaque by the `else` arm.
+                env.opaque_bindings.remove(target.as_str());
                 if let Some(term) = collect_expr_constraints(
                     signatures,
                     parents,
@@ -1151,6 +1194,15 @@ pub(crate) fn collect_block_constraints(
                     value,
                 )? {
                     env.bindings.entry(target.clone()).or_insert(term);
+                } else {
+                    // The target is unconditionally assigned, but the
+                    // solver produced no term for the initializer (e.g. a
+                    // class-target `cast`, `.pop()`, an attribute read, a
+                    // method call, or a heterogeneous container literal).
+                    // Track it as opaquely-but-definitely bound so a later
+                    // read reports "no term" instead of the misleading
+                    // "not bound before this use".
+                    env.opaque_bindings.insert(target.clone());
                 }
             }
             HirStmt::AnnAssign {
@@ -1163,6 +1215,14 @@ pub(crate) fn collect_block_constraints(
                 // assignment upgrades a maybe-bound name back to definitely
                 // bound, same as a plain `Assign`.
                 env.maybe_bindings.remove(target.as_str());
+                // Issue #771: this arm always binds `target` into
+                // `env.bindings` below regardless of the initializer term
+                // (see the comment further down), so `target` is never
+                // opaque by the time this arm finishes. Clear any stale
+                // opaque marker for hygiene, mirroring the `maybe_bindings`
+                // removal above; `HirExpr::Name`'s lookup already prefers
+                // `bindings` over `opaque_bindings` either way.
+                env.opaque_bindings.remove(target.as_str());
                 if let Some(term) = collect_expr_constraints(
                     signatures,
                     parents,
@@ -1265,7 +1325,23 @@ pub(crate) fn collect_block_constraints(
                 // only one branch are tracked as maybe-bound in
                 // `maybe_bindings`; names introduced by both branches are
                 // definitely bound.
-                let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
+                // Issue #771 join-site follow-up: include `opaque_bindings`
+                // alongside `bindings` here. A name definitely-but-opaquely
+                // bound before this construct must count as pre-existing
+                // too -- otherwise a branch that reassigns it to a real,
+                // solver-representable term looks "newly introduced" to the
+                // join helper below, and when only one branch performs that
+                // reassignment the name is misclassified as bound in both
+                // branches (the other, untouched branch still carries the
+                // opaque marker), unmasking a term that only reflects one
+                // path as if it were unconditionally correct. Confirmed as a
+                // real gap by the pinned local reviewer's second pass.
+                let pre_existing: HashSet<String> = env
+                    .bindings
+                    .keys()
+                    .chain(env.opaque_bindings.iter())
+                    .cloned()
+                    .collect();
                 let mut body_env = env.clone();
                 collect_block_constraints(
                     signatures,
@@ -1314,7 +1390,23 @@ pub(crate) fn collect_block_constraints(
                 // may execute zero times, so every body-only binding is
                 // maybe-bound — mirroring the validation pass's
                 // `join_loop_body` (D-147).
-                let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
+                // Issue #771 join-site follow-up: include `opaque_bindings`
+                // alongside `bindings` here. A name definitely-but-opaquely
+                // bound before this construct must count as pre-existing
+                // too -- otherwise a branch that reassigns it to a real,
+                // solver-representable term looks "newly introduced" to the
+                // join helper below, and when only one branch performs that
+                // reassignment the name is misclassified as bound in both
+                // branches (the other, untouched branch still carries the
+                // opaque marker), unmasking a term that only reflects one
+                // path as if it were unconditionally correct. Confirmed as a
+                // real gap by the pinned local reviewer's second pass.
+                let pre_existing: HashSet<String> = env
+                    .bindings
+                    .keys()
+                    .chain(env.opaque_bindings.iter())
+                    .cloned()
+                    .collect();
                 let mut body_env = env.clone();
                 collect_block_constraints(
                     signatures,
@@ -1357,7 +1449,23 @@ pub(crate) fn collect_block_constraints(
                 // binding names so the loop variable and body-only
                 // bindings can be tracked as maybe-bound after the loop
                 // (a `for` loop may execute zero times).
-                let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
+                // Issue #771 join-site follow-up: include `opaque_bindings`
+                // alongside `bindings` here. A name definitely-but-opaquely
+                // bound before this construct must count as pre-existing
+                // too -- otherwise a branch that reassigns it to a real,
+                // solver-representable term looks "newly introduced" to the
+                // join helper below, and when only one branch performs that
+                // reassignment the name is misclassified as bound in both
+                // branches (the other, untouched branch still carries the
+                // opaque marker), unmasking a term that only reflects one
+                // path as if it were unconditionally correct. Confirmed as a
+                // real gap by the pinned local reviewer's second pass.
+                let pre_existing: HashSet<String> = env
+                    .bindings
+                    .keys()
+                    .chain(env.opaque_bindings.iter())
+                    .cloned()
+                    .collect();
                 if let Some(existing) = env.bindings.get(var).cloned() {
                     unify_terms(
                         existing,
@@ -1401,7 +1509,23 @@ pub(crate) fn collect_block_constraints(
                 // names so the loop variable and body-only bindings can be
                 // tracked as maybe-bound after the loop (a `for` loop may
                 // execute zero times).
-                let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
+                // Issue #771 join-site follow-up: include `opaque_bindings`
+                // alongside `bindings` here. A name definitely-but-opaquely
+                // bound before this construct must count as pre-existing
+                // too -- otherwise a branch that reassigns it to a real,
+                // solver-representable term looks "newly introduced" to the
+                // join helper below, and when only one branch performs that
+                // reassignment the name is misclassified as bound in both
+                // branches (the other, untouched branch still carries the
+                // opaque marker), unmasking a term that only reflects one
+                // path as if it were unconditionally correct. Confirmed as a
+                // real gap by the pinned local reviewer's second pass.
+                let pre_existing: HashSet<String> = env
+                    .bindings
+                    .keys()
+                    .chain(env.opaque_bindings.iter())
+                    .cloned()
+                    .collect();
                 if !env.bindings.contains_key(var) {
                     let term = fresh_term(parents, concrete);
                     env.bindings.insert(var.clone(), term);
@@ -1614,7 +1738,23 @@ pub(crate) fn collect_block_constraints(
                     subject,
                 )?;
                 for case in cases {
-                    let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
+                    // Issue #771 join-site follow-up: include `opaque_bindings`
+                // alongside `bindings` here. A name definitely-but-opaquely
+                // bound before this construct must count as pre-existing
+                // too -- otherwise a branch that reassigns it to a real,
+                // solver-representable term looks "newly introduced" to the
+                // join helper below, and when only one branch performs that
+                // reassignment the name is misclassified as bound in both
+                // branches (the other, untouched branch still carries the
+                // opaque marker), unmasking a term that only reflects one
+                // path as if it were unconditionally correct. Confirmed as a
+                // real gap by the pinned local reviewer's second pass.
+                let pre_existing: HashSet<String> = env
+                    .bindings
+                    .keys()
+                    .chain(env.opaque_bindings.iter())
+                    .cloned()
+                    .collect();
                     let mut case_env = env.clone();
                     collect_block_constraints(
                         signatures,
@@ -1638,7 +1778,23 @@ pub(crate) fn collect_block_constraints(
                 // body, each handler, the else body, and the finally body.
                 // The try body's bindings are joined back as `Maybe` (the
                 // body may raise before reaching an assignment).
-                let pre_existing: HashSet<String> = env.bindings.keys().cloned().collect();
+                // Issue #771 join-site follow-up: include `opaque_bindings`
+                // alongside `bindings` here. A name definitely-but-opaquely
+                // bound before this construct must count as pre-existing
+                // too -- otherwise a branch that reassigns it to a real,
+                // solver-representable term looks "newly introduced" to the
+                // join helper below, and when only one branch performs that
+                // reassignment the name is misclassified as bound in both
+                // branches (the other, untouched branch still carries the
+                // opaque marker), unmasking a term that only reflects one
+                // path as if it were unconditionally correct. Confirmed as a
+                // real gap by the pinned local reviewer's second pass.
+                let pre_existing: HashSet<String> = env
+                    .bindings
+                    .keys()
+                    .chain(env.opaque_bindings.iter())
+                    .cloned()
+                    .collect();
                 let mut body_env = env.clone();
                 collect_block_constraints(
                     signatures,
@@ -2110,6 +2266,7 @@ pub(crate) fn infer_function_signatures_with_solver(
         local_names: &[],
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
+        opaque_bindings: HashSet::new(),
     };
     for item in &hir.items {
         match item {
@@ -2147,6 +2304,7 @@ pub(crate) fn infer_function_signatures_with_solver(
             local_names,
             defs_rebound: globals.defs_rebound.clone(),
             maybe_bindings: globals.maybe_bindings.clone(),
+            opaque_bindings: globals.opaque_bindings.clone(),
         };
         for local_name in local_names.iter().copied() {
             env.bindings.remove(local_name);
@@ -2157,6 +2315,10 @@ pub(crate) fn infer_function_signatures_with_solver(
             // the mirror gate and be mislabeled "not bound before this use".
             env.defs_rebound.remove(local_name);
             env.maybe_bindings.remove(local_name);
+            // Issue #771: same reasoning as `maybe_bindings` above — a
+            // local name re-binds within this function body, so a stale
+            // module-level opaque marker must not survive for it either.
+            env.opaque_bindings.remove(local_name);
         }
         // Use the current item's own parameter names, not the last-inserted
         // signature's names (#386): a redefined method shares its mangled
