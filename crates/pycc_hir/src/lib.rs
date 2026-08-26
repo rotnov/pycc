@@ -924,6 +924,29 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
                 collect_killed_names(orelse, killed);
                 collect_killed_names(finalbody, killed);
             }
+            HirStmt::TryStar {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                // D-068 re-review of #780 (rebase onto #542's except* landing):
+                // mirrors the plain `Try` arm above -- each `except* T as
+                // name:` clause binds `name` to the caught `ExceptionGroup`
+                // before the handler body runs, exactly the same bare-name
+                // kill a plain `except ... as name:` performs (see the
+                // paired MIR-side `kill_narrowing` fix in
+                // `crates/pycc_mir/src/stmt.rs`'s `TryStar` handler arm).
+                collect_killed_names(body, killed);
+                for handler in handlers {
+                    if let Some(name) = &handler.name {
+                        killed.insert(name.clone());
+                    }
+                    collect_killed_names(&handler.body, killed);
+                }
+                collect_killed_names(orelse, killed);
+                collect_killed_names(finalbody, killed);
+            }
             HirStmt::ExprStmt(expr) => {
                 collect_named_expr_targets_in_expr(expr, killed);
             }

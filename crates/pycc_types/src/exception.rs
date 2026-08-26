@@ -149,13 +149,21 @@ pub(super) fn check_try_star_stmt(
     return_ty: Option<&Ty>,
 ) -> Result<(), Diagnostic> {
     let mut body_env = env.clone();
-    for stmt in body {
-        check_stmt_shared(&mut body_env, local_names, stmt, return_ty)?;
-    }
+    check_stmt_sequence_shared(&mut body_env, local_names, body, return_ty)?;
 
     let mut handler_envs = Vec::with_capacity(handlers.len());
     for handler in handlers {
         let mut handler_env = env.clone();
+        // D-068 re-review of #780 (rebase onto #542's except* landing):
+        // mirrors `check_try_stmt`'s identical prescan above -- `except*`
+        // dispatches subgroups the same way a plain `except` handler does,
+        // so a handler here can equally be entered after only some prefix
+        // of `body` executed. Without this, a name `body` reassigns to
+        // `None` right before raising could still read as narrowed inside
+        // a handler that runs after that reassignment. See
+        // `narrow::apply_kill_prescan`'s doc comment in
+        // `crates/pycc_types/src/narrow.rs` for the full rationale.
+        super::narrow::apply_kill_prescan(&mut handler_env, body);
         handler_env.in_except_handler = true;
         // A bare `except*:` is rejected by ruff's own parser as a syntax
         // error (PEP 654 requires every `except*` clause to name a type),
@@ -185,17 +193,21 @@ pub(super) fn check_try_star_stmt(
                 name.clone(),
                 Ty::Instance(Box::new("ExceptionGroup".to_string())),
             );
+            // D-068 re-review of #780 (rebase onto #542's except* landing):
+            // mirrors `check_try_stmt`'s identical fix above -- `bind`
+            // overwrites `bindings`, never `narrowed`, so a name previously
+            // narrowed by an enclosing `if <name> is not None:` would stay
+            // narrowed in `handler_env` even though `name` now names the
+            // caught `ExceptionGroup` instance, not its old Optional value.
+            // Kill it explicitly, the same way a plain reassignment does.
+            handler_env.narrowed.remove(name);
         }
-        for stmt in &handler.body {
-            check_stmt_shared(&mut handler_env, local_names, stmt, return_ty)?;
-        }
+        check_stmt_sequence_shared(&mut handler_env, local_names, &handler.body, return_ty)?;
         handler_envs.push(handler_env);
     }
 
     let mut else_env = body_env.clone();
-    for stmt in orelse {
-        check_stmt_shared(&mut else_env, local_names, stmt, return_ty)?;
-    }
+    check_stmt_sequence_shared(&mut else_env, local_names, orelse, return_ty)?;
 
     let mut joined = env.clone();
     join_loop_body(&mut joined, &body_env);
@@ -206,9 +218,7 @@ pub(super) fn check_try_star_stmt(
     let previous = joined.clone();
     let _ = join_if_branches(&mut joined, &previous, &else_env);
     *env = joined;
-    for stmt in finalbody {
-        check_stmt_shared(env, local_names, stmt, return_ty)?;
-    }
+    check_stmt_sequence_shared(env, local_names, finalbody, return_ty)?;
     Ok(())
 }
 

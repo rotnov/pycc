@@ -29365,3 +29365,38 @@ fn a_match_capture_pattern_that_reuses_a_narrowed_name_inside_a_while_loop_is_re
     );
     assert_eq!(err.code, "T0021");
 }
+
+#[test]
+fn a_try_star_except_as_binding_that_reuses_a_narrowed_name_kills_the_narrowing() {
+    // D-068 re-review of #780 (rebase onto #542's except* landing):
+    // mirrors `an_except_as_binding_that_reuses_a_narrowed_name_kills_the_narrowing`
+    // above for `except* ValueError as x:` -- `check_try_star_stmt` bound
+    // the caught `ExceptionGroup` into `handler_env` but never cleared
+    // `x`'s narrowing overlay entry, so a read of `x` inside the handler
+    // body was wrongly type-checked as the narrowed `int` instead of the
+    // real `Instance(ExceptionGroup)` the runtime actually holds.
+    let result = check_source(
+        "def f(x: int | None) -> int:\n    if x is not None:\n        try:\n            raise ValueError(\"boom\")\n        except* ValueError as x:\n            return x + 1\n    return -1\n",
+    );
+    let err = result.expect_err(
+        "an `except* ... as x:` binding must kill `x`'s narrowing overlay entry, since `x` now holds the caught `ExceptionGroup` rather than the narrowed `Optional`'s inner value",
+    );
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
+fn a_try_star_except_handler_reached_after_a_try_body_kill_is_rejected() {
+    // D-068 re-review of #780 (rebase onto #542's except* landing):
+    // mirrors `an_except_handler_reached_after_a_try_body_kill_is_rejected`
+    // above for `except*` -- `check_try_star_stmt` never called
+    // `apply_kill_prescan` on its handler bodies, so a handler reachable
+    // only after the `try` body's own kill would have wrongly kept seeing
+    // the pre-try narrowing.
+    let result = check_source(
+        "def f(x: int | None) -> int:\n    if x is not None:\n        try:\n            x = None\n            raise ValueError(\"boom\")\n        except* ValueError:\n            return x + 1\n    return -1\n",
+    );
+    let err = result.expect_err(
+        "an `except*` handler reachable only after the `try` body's own kill must not see the pre-try narrowing",
+    );
+    assert_eq!(err.code, "T0021");
+}

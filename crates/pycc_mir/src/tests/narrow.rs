@@ -1033,6 +1033,75 @@ fn an_except_as_binding_reusing_the_narrowed_name_does_not_unwrap_the_handler_re
     );
 }
 
+/// D-068 re-review of #780 (rebase onto #542's except* landing): mirrors
+/// `an_except_as_binding_reusing_the_narrowed_name_does_not_unwrap_the_handler_read`
+/// above for `TryStar` -- `except* ValueError as x:` reuses the narrowed
+/// name `x` as its own `as` binding exactly like a plain `except`, so the
+/// paired `kill_narrowing` fix in `stmt.rs`'s `TryStar` handler arm needs
+/// the same direct hand-built-HIR coverage as the plain `Try` arm it
+/// mirrors.
+#[test]
+fn a_try_star_except_as_binding_reusing_the_narrowed_name_does_not_unwrap_the_handler_read() {
+    let hir = module(vec![HirItem::Function {
+        name: "f".to_string(),
+        params: vec![("x".to_string(), Ty::Optional(Box::new(Ty::Int)))],
+        return_ty: Ty::None,
+        body: vec![HirStmt::If {
+            test: is_not_none("x"),
+            body: vec![HirStmt::TryStar {
+                body: vec![HirStmt::Raise {
+                    exc: Some(HirExpr::Call {
+                        callee: "ValueError".to_string(),
+                        args: vec![HirExpr::StringLiteral("boom".to_string())],
+                    }),
+                    cause: None,
+                }],
+                handlers: vec![pycc_hir::HirExceptHandler {
+                    exc_type: Some(vec!["ValueError".to_string()]),
+                    name: Some("x".to_string()),
+                    body: vec![print_x("x")],
+                }],
+                orelse: vec![],
+                finalbody: vec![],
+            }],
+            orelse: vec![],
+        }],
+    }]);
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[0] else {
+        panic!("expected the only item to be the lowered function");
+    };
+    let MirStmt::If {
+        body: outer_body, ..
+    } = &body[0]
+    else {
+        panic!("expected the only function statement to be the lowered outer `if`");
+    };
+    let MirStmt::TryStar { handlers, .. } = &outer_body[0] else {
+        panic!("expected the outer `if` body's only statement to be the lowered `try`/`except*`");
+    };
+    // Same reasoning as the plain-`Try` counterpart above, but `except*`
+    // always binds the caught value as `ExceptionGroup` (never the named
+    // handler type -- see `stmt.rs`'s `TryStar` handler arm comment). Unlike
+    // the builtin exception classes, `ExceptionGroup` is not a registered
+    // exception tag (`exception::resolve_exception_tag` doesn't list it),
+    // so `rewrite_exception_to_message` leaves the read as a bare `Name`
+    // rather than wrapping it in `ExceptionMessage`; what matters here is
+    // that the `ty` on that `Name` is the real `Instance(ExceptionGroup)`,
+    // not a stale narrowed `Optional[int]`.
+    assert_eq!(
+        handlers[0].body[0],
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Instance(Box::new("ExceptionGroup".to_string())),
+            }],
+            ty: Ty::None,
+        })
+    );
+}
+
 /// D-068 re-review of #780 (fifth round): a `match` case's own capture
 /// pattern (`case x:`) reusing a narrowed name must kill that name's
 /// narrowing sentinel too, exactly like the `Try`-handler `as` binding

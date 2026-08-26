@@ -784,6 +784,16 @@ pub(super) fn lower_stmt(
                             name.clone(),
                             Ty::Instance(Box::new("ExceptionGroup".to_string())),
                         );
+                        // D-068 re-review of #780 (rebase onto #542's
+                        // except* landing): mirrors the plain `Try` handler
+                        // arm's identical fix above -- `bind` only
+                        // overwrites the type scope, never the narrowing
+                        // sentinel, so a name narrowed before entering
+                        // `try` would keep emitting `MirExpr::OptionalUnwrap`
+                        // for reads inside this handler body even though
+                        // `name` now holds the caught `ExceptionGroup`, not
+                        // the narrowed `Optional`'s inner value.
+                        super::kill_narrowing(scopes, name);
                     }
                     let handler_body = h
                         .body

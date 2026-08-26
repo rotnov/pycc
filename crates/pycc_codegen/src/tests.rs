@@ -6416,7 +6416,7 @@ fn optional_int_narrowed_read_of_a_present_smallint_prints_the_payload() {
         ],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("optional_int_narrowed_smallint");
+    let dir = pycc_scratch::ScratchDir::new("optional_int_narrowed_smallint").expect("failed to create scratch dir");
     let obj_path = dir.join("optional_int_narrowed_smallint.o");
     compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     let bin_path = dir.join("optional_int_narrowed_smallint");
@@ -6466,7 +6466,7 @@ fn optional_int_narrowed_read_of_a_present_bigint_prints_the_payload() {
         ],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("optional_int_narrowed_bigint");
+    let dir = pycc_scratch::ScratchDir::new("optional_int_narrowed_bigint").expect("failed to create scratch dir");
     let obj_path = dir.join("optional_int_narrowed_bigint.o");
     compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     let bin_path = dir.join("optional_int_narrowed_bigint");
@@ -6535,7 +6535,7 @@ fn a_narrowed_bigint_duplicated_into_a_second_binding_survives_the_original_slot
         ],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("optional_int_narrowed_bigint_survives_reassign");
+    let dir = pycc_scratch::ScratchDir::new("optional_int_narrowed_bigint_survives_reassign").expect("failed to create scratch dir");
     let obj_path = dir.join("optional_int_narrowed_bigint_survives_reassign.o");
     compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     let bin_path = dir.join("optional_int_narrowed_bigint_survives_reassign");
@@ -6562,7 +6562,7 @@ fn optional_unwrap_on_a_non_optional_operand_panics_defensively_in_codegen() {
         )))],
         class_defs: Vec::new(),
     };
-    let dir = tempfile_dir("optional_unwrap_non_optional_operand");
+    let dir = pycc_scratch::ScratchDir::new("optional_unwrap_non_optional_operand").expect("failed to create scratch dir");
     let obj_path = dir.join("optional_unwrap_non_optional_operand.o");
     let _ = compile_to_object(&mir, &obj_path, None, false);
 }

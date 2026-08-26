@@ -5388,6 +5388,69 @@ fn killed_names_includes_an_except_handlers_own_as_binding_name() {
 }
 
 #[test]
+fn killed_names_recurses_into_every_part_of_a_try_star_statement() {
+    // D-068 re-review of #780 (rebase onto #542's except* landing):
+    // mirrors `killed_names_recurses_into_every_part_of_a_try_statement`
+    // above for `TryStar` -- #542 landed independently of #769/#780's
+    // narrowing overlay, so its own `HirStmt::TryStar` arm needs the same
+    // coverage as the plain `Try` arm it mirrors.
+    let body = [HirStmt::TryStar {
+        body: vec![HirStmt::Assign {
+            target: "a".to_string(),
+            value: HirExpr::NoneLiteral,
+        }],
+        handlers: vec![HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: None,
+            body: vec![HirStmt::Assign {
+                target: "b".to_string(),
+                value: HirExpr::NoneLiteral,
+            }],
+        }],
+        orelse: vec![HirStmt::Assign {
+            target: "c".to_string(),
+            value: HirExpr::NoneLiteral,
+        }],
+        finalbody: vec![HirStmt::Assign {
+            target: "d".to_string(),
+            value: HirExpr::NoneLiteral,
+        }],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(
+        killed,
+        HashSet::from([
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn killed_names_includes_a_try_star_handlers_own_as_binding_name() {
+    // D-068 re-review of #780 (rebase onto #542's except* landing):
+    // mirrors `killed_names_includes_an_except_handlers_own_as_binding_name`
+    // above for `except* ValueError as e:` -- binds `e` to the caught
+    // `ExceptionGroup` before the handler body runs, the same kill a plain
+    // `except ... as e:` performs, and must be visible even when the
+    // handler body itself kills nothing.
+    let body = [HirStmt::TryStar {
+        body: vec![],
+        handlers: vec![HirExceptHandler {
+            exc_type: Some(vec!["ValueError".to_string()]),
+            name: Some("e".to_string()),
+            body: vec![],
+        }],
+        orelse: vec![],
+        finalbody: vec![],
+    }];
+    let killed = killed_names(&body);
+    assert_eq!(killed, HashSet::from(["e".to_string()]));
+}
+
+#[test]
 fn killed_names_ignores_statement_kinds_that_do_not_rebind_a_bare_name() {
     // `ExprStmt`, `DictSet`, `AttrSet`, `Return`, and `Raise` all route
     // through the catch-all no-op arm: none of them ever passes a bare
