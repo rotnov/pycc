@@ -42,20 +42,23 @@ landing, status, architecture, comparison, Markdown, and `llms.txt` surfaces:
 `pycc check` owns the v0.1 parser → HIR → strict-type-checker path, including
 stable human and JSON frontend diagnostics, while `pycc build` and `pycc run`
 lower the same implemented language surface through MIR → LLVM → host linker →
-native executable. `docs/ROADMAP.md`'s v0.1 and v0.2 acceptance criteria are
-both met, and v0.3's class model core (#385) has landed; the project remains
-pre-alpha because the documented representation and lifetime gaps, the full
-multi-version conformance testkit, named demos, and the last of v0.3's class
-model (custom exceptions) remain unfinished. These facts must
+native executable. `docs/ROADMAP.md`'s v0.1, v0.2, and v0.3 acceptance
+criteria are all met — v0.3 (classes, pattern matching, and custom
+exceptions) as of 2026-08-26, released as the `v0.3.0` tag; v0.4
+(multi-file projects, imports, and incremental compilation) has not started —
+and the project remains pre-alpha because the documented representation and
+lifetime gaps, the full multi-version conformance testkit, and named demos
+remain unfinished. These facts must
 move with the authoritative roadmap whenever implementation depth changes; see
 "Status-page freshness enforcement" below for how a stale claim like this one
 is now caught mechanically instead of relying on a reviewer to notice.
 
 The status page's "Planned next" section states, in one sentence, that the
 `frontend-perf-gate`'s greater-than-7.0% regression floor (D-051/D-053/D-056/
-D-062/D-114) stays required through all of this remaining work (v0.3's
-class-model items plus the conformance-matrix, fuzzing, and corpus-testing
-work carried over from v0.1/v0.2), enforced by a paired predecessor/candidate
+D-062/D-114) stays required through all of this remaining work (v0.4's
+projects-and-incremental scope plus the conformance-matrix, fuzzing, and
+corpus-testing work carried over from earlier milestones), enforced by a
+paired predecessor/candidate
 measurement, and links to `docs/ROADMAP.md` for the gate's full mechanics
 instead of restating them on the page. The detailed mechanics themselves —
 same-runner sequencing, sealed predecessor timing, executable-input

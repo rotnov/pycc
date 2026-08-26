@@ -7,7 +7,7 @@
     <title>pycc status — what the Python AOT compiler can do today</title>
     <meta
       name="description"
-      content="See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete for v0.1 and what's planned next, and the CI evidence behind each claim."
+      content="See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete through v0.3 (released as v0.3.0) and what's planned next, and the CI evidence behind each claim."
     >
     <meta name="pycc:evidence-id" content="status-snapshot-v1">
     <meta name="pycc:evidence-kind" content="required-checks-snapshot">
@@ -28,7 +28,7 @@
     <meta property="og:title" content="pycc status — implemented now and planned next">
     <meta
       property="og:description"
-      content="A commit-relative account of the Python AOT compiler's implemented v0.1 surface, enforced quality gates, documented gaps, and remaining work."
+      content="A commit-relative account of the Python AOT compiler's implemented v0.1-v0.3 surface, enforced quality gates, documented gaps, and remaining work."
       data-evidence-id="status-snapshot-v1"
       data-evidence-kind="required-checks-snapshot"
       data-evidence-state="unavailable"
@@ -40,7 +40,7 @@
     <meta name="twitter:title" content="pycc status — implemented now and planned next">
     <meta
       name="twitter:description"
-      content="A commit-relative account of the Python AOT compiler's implemented v0.1 surface, enforced quality gates, documented gaps, and remaining work."
+      content="A commit-relative account of the Python AOT compiler's implemented v0.1-v0.3 surface, enforced quality gates, documented gaps, and remaining work."
       data-evidence-id="status-snapshot-v1"
       data-evidence-kind="required-checks-snapshot"
       data-evidence-state="unavailable"
@@ -57,9 +57,9 @@
             "@id": "https://rotnov.github.io/pycc/status/#webpage",
             "url": "https://rotnov.github.io/pycc/status/",
             "name": "pycc status — what the Python AOT compiler can do today",
-            "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete for v0.1 and what's planned next, and the CI evidence behind each claim.",
+            "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete through v0.3 (released as v0.3.0) and what's planned next, and the CI evidence behind each claim.",
             "inLanguage": "en",
-            "dateModified": "2026-08-25",
+            "dateModified": "2026-08-26",
             "additionalProperty": [
               {
                 "@type": "PropertyValue",
@@ -142,7 +142,7 @@
         data-evidence-kind="required-checks-snapshot"
         data-evidence-state="unavailable"
       >
-        <p class="eyebrow">Evidence page · Updated 2026-08-21</p>
+        <p class="eyebrow">Evidence page · Updated 2026-08-26</p>
         <h1>What pycc can do <span>today.</span></h1>
         <p class="page-lede">
           pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14.
@@ -155,8 +155,8 @@
             data-evidence-kind="required-checks-snapshot"
             data-evidence-state="unavailable"
           ><strong>Evidence hero</strong> unavailable · commit-bound snapshot tracked in <a href="https://github.com/rotnov/pycc/issues/566">#566</a></span>
-          <span><strong>Milestone</strong> v0.2 acceptance criteria met; v0.3 in progress</span>
-          <span><strong>Acceptance</strong> v0.1 and v0.2 both fully met</span>
+          <span><strong>Milestone</strong> v0.3 acceptance criteria met, released as v0.3.0; v0.4 not started</span>
+          <span><strong>Acceptance</strong> v0.1, v0.2, and v0.3 all fully met</span>
           <span><strong>Readiness</strong> pre-alpha</span>
         </div>
       </header>
@@ -173,7 +173,7 @@
         <article class="prose">
           <section id="implemented">
             <p class="section-kicker">Current implementation</p>
-            <h2>The frontend and native backend cover v0.1 and v0.2, with v0.3's class model core landed.</h2>
+            <h2>The frontend and native backend cover v0.1 through v0.3, released as v0.3.0.</h2>
             <p>
               <code>pycc check</code> runs the parser → HIR → strict type
               checker without entering code generation. The
@@ -249,17 +249,20 @@
                 </p>
               </div>
               <div class="evidence-card">
-                <span>Class model core</span>
-                <strong>v0.3 in progress</strong>
+                <span>Class model and pattern matching</span>
+                <strong>v0.3 acceptance criteria met</strong>
                 <p>
-                  <code>Ty::Instance</code>, HIR class definitions, and
-                  single-class instantiation, attribute access, and methods
-                  have landed, alongside inheritance, <code>@property</code>,
+                  <code>Ty::Instance</code>, HIR class definitions,
+                  single-class instantiation, attribute access, and methods,
+                  inheritance with C3 linearization, <code>@property</code>,
                   dataclasses, enums, protocols, and structural pattern
-                  matching. The seven builtin exception classes now have
-                  real class definitions, so a user class can inherit from
-                  them and be constructed; raising and catching a
-                  user-defined exception class remains planned.
+                  matching (<code>match</code>) with exhaustiveness all match
+                  pinned CPython output. Exceptions
+                  (<code>try</code>/<code>except</code>/<code>finally</code>,
+                  chained exceptions, <code>except*</code>, and
+                  parenthesis-free multi-type handlers) are implemented, and
+                  a user class can inherit from a builtin exception class,
+                  raise it, and have it caught.
                 </p>
               </div>
             </div>
@@ -371,45 +374,40 @@
 
           <section id="next">
             <p class="section-kicker">Planned next</p>
-            <h2>Custom exceptions and the full conformance matrix are next.</h2>
+            <h2>v0.4 — multi-file projects and incremental compilation — is next.</h2>
             <p>
-              v0.1 and v0.2's acceptance criteria are both met, and v0.3's
-              class model core has landed — see
+              v0.1, v0.2, and v0.3's acceptance criteria are all met, and
+              v0.3 is released as the <code>v0.3.0</code> tag — see
               <a href="#implemented">Implemented now</a> above for what that
-              covers today. Still ahead for v0.3: raising and catching a
-              user-defined exception class is the last remaining class-model
-              item — the builtin exception hierarchy is already a real part
-              of the class table, so a user class can inherit from it. Beyond
-              the class model, the
-              full multi-version conformance matrix, differential fuzzing,
-              and corpus testing remain planned test-depth work carried over
-              from v0.1 and v0.2. See the
-              <a href="https://github.com/rotnov/pycc/blob/main/docs/DELIVERY_PLAN.md">delivery plan</a>
-              for the exact sequence. The conformance matrix itself stands at
-              25 of the 37 rows v0.3 requires; three further PEP fixtures
-              (557 dataclasses, 698 <code>@override</code>, 3129 class
-              decorators) are now registered and run against the pinned
-              CPython oracle, and their rows flip once a completed green
-              <code>main</code> run records the evidence. Separately,
-              <code>typing.Final</code> and <code>typing.Annotated</code>
-              (PEP 591/593) are now registered stdlib imports too, so
-              <code>from typing import Final, Annotated</code> no longer
-              fails to compile — pycc already handled both as bare-name
-              annotation subscripts. <code>typing.cast(T, value)</code> is
-              supported as well: it type-checks as <code>T</code> and is
-              elided entirely before code generation, matching CPython, where
-              the call is a runtime no-op. The target must be a bare type name
-              in this version — <code>int</code>, <code>float</code>,
-              <code>bool</code>, <code>str</code>, or a class defined in the
-              same module. PEP 572 assignment expressions
-              (<code>:=</code>, the walrus operator) are also type-checked
-              now, in every position the grammar allows, though the row for
-              PEP 572 in the conformance matrix stays unchecked until CI
-              confirms it on all Tier-1 targets. Separately, a rejected
-              <code>cast(...)</code> bound to a plain local previously
-              reported a misleading "not bound" error instead of its real
-              diagnostic, a diagnostic-quality-only bug now fixed for that
-              construct and every other one sharing its underlying cause.
+              covers today. The conformance matrix clears 38 of the 37
+              <code>PYTHON_STANDARDS.md</code> rows v0.3 required (exceeding
+              the floor by one), encompassing all 39 required distinct PEP
+              numbers, with a 0-row and 0-PEP gap on both axes. The
+              previously-outstanding exception rows — PEP 3151
+              (<code>OSError</code> hierarchy), PEP 654
+              (<code>except*</code>), and PEP 758 (parenthesis-free
+              multi-type <code>except</code>) — flipped once their fixtures
+              were observed green on Tier-1 CI; see
+              <a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">the roadmap's v0.3 section</a>
+              for the itemized evidence.
+            </p>
+            <p>
+              v0.4 — multi-file projects, imports, namespace packages, an
+              incremental compilation cache, parallel codegen, and native
+              <code>os</code>/<code>pathlib</code>/<code>json</code>/<code>datetime</code>
+              support — is the next milestone on the
+              <a href="https://github.com/rotnov/pycc/blob/main/docs/DELIVERY_PLAN.md">delivery plan</a>.
+              It has not started: no issue has been selected, no branch
+              opened, and no implementation plan written. Its acceptance
+              criteria are a Tier-2 corpus (<code>black</code>,
+              <code>isort</code>, <code>attrs</code>, <code>click</code>)
+              compiling at 80% or more of files, an incremental rebuild of
+              10k LOC under 200 ms, and a cross-compile demo (mac to
+              Windows) in the README. The full multi-version conformance
+              matrix, differential fuzzing, and corpus testing beyond the
+              v0.3 floor remain planned test-depth work carried over from
+              earlier milestones, tracked alongside v0.4 in the delivery
+              plan.
             </p>
             <p>
               The 100% line/region coverage gate and the required
@@ -422,7 +420,7 @@
               thresholds by <code>scripts/check_readme_coverage_badge.rb</code>,
               which runs in both <code>ci.yml</code> and <code>pages.yml</code>.
               The implementation gaps listed above are accepted boundaries
-              the met v0.1/v0.2 milestones' acceptance criteria never
+              the met v0.1/v0.2/v0.3 milestones' acceptance criteria never
               required closing, not outstanding blockers.
             </p>
             <div class="page-links">

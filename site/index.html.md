@@ -135,7 +135,7 @@ From source file to machine code.
 
 ## Honest status
 
-The v0.1 and v0.2 frontend and native backend exist. The compiler is not
+v0.1 through v0.3 are met and released as `v0.3.0`. The compiler is not
 ready for production.
 
 pycc is pre-alpha and is not ready for production. The repository contains an
@@ -156,8 +156,9 @@ readiness remain roadmap work.
 - Strict v0.1 frontend and diagnostic snapshots
 - v0.1 native backend with documented gaps
 - v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)
-- v0.2 acceptance criteria also met; v0.3's class model core has landed
-- The full conformance matrix and the rest of v0.3 are next
+- v0.2 acceptance criteria also met (2026-08-04)
+- v0.3 acceptance criteria met and released as `v0.3.0` (2026-08-26): classes, inheritance, pattern matching, and exceptions, with conformance clearing 38 of 37 required matrix rows across all 39 required PEP numbers
+- v0.4 (multi-file projects, imports, incremental compilation) is next and has not started
 
 The landing page's code example uses only implemented v0.1 language features
 (statement-form `if`, `while`, recursive calls, `print`) and matches the
