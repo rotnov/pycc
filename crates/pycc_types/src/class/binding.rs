@@ -15,12 +15,15 @@
 //! name plus argument types into a `Ty::Instance` value by resolving
 //! `__init__` through the MRO (`resolve_instantiation`).
 //!
-//! Everything downstream of a *resolved* `HirClassDef` stays in `class.rs`:
-//! attribute reads and writes, method and `super()` call resolution,
-//! static/class-method dispatch, protocol conformance, and the `T00xx`
-//! diagnostic constructors they share. `check_call_args` also stays there --
-//! it is shared with method, static-method, and protocol call resolution and
-//! belongs to neither seam, so this module imports it back from its parent.
+//! Everything downstream of a *resolved* `HirClassDef` stays in `class.rs`
+//! or its own further seam: attribute reads and writes, `super()` call
+//! resolution, static/class-method dispatch, protocol conformance, and the
+//! `T00xx` diagnostic constructors they share stay in `class.rs` directly;
+//! method-call resolution has its own sibling seam in
+//! `class/method_call.rs` (#815, Part 1 of #737). `check_call_args` stays
+//! in `class.rs` -- it is shared across method, static-method, and
+//! protocol call resolution and belongs to neither seam, so this module
+//! and `method_call.rs` both import it back from their shared parent.
 
 use crate::Environment;
 use pycc_diag::{Diagnostic, Span};
