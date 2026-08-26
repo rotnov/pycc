@@ -33,6 +33,49 @@ never a merge gate.
 
 ---
 
+## 2026-08-26 — Assumed a root-package test file could take a new dev-dependency; D-091 makes that impossible for any root-package test
+
+What happened: while scoping #782 (Part 2 of #779, migrating raw
+`std::env::temp_dir()` call sites onto `pycc_scratch::ScratchDir`), Batch B
+(PR #793: `src/main.rs`, `src/project_config.rs`) added `pycc_scratch` to
+root `Cargo.toml`'s `[dev-dependencies]` so their `#[cfg(test)]` code could
+use it. That collided with D-091's `frontend-perf-measure` hard-abort on any
+byte-diff to the root manifest's `[dev-dependencies]`-onward tail — a
+permanent check with no re-baseline path. #780 hit the exact same collision
+independently (round 8 of its own D-068 review cycle, also adding
+`pycc_scratch` to root `[dev-dependencies]` while migrating
+`tests/issue_769_optional_narrowing.rs`) and resolved it the same way both
+times: revert the manifest change, keep the raw `temp_dir()` call, and add an
+`ALLOWLIST` entry in `scripts/check_scratch_dir_usage.py` instead (the same
+pattern already used for `tests/issue_150_zero_step_range.rs`).
+
+Root cause: #782's own batching (`docs/superpowers/plans` batch B/C/D scoping)
+assumed every raw-`temp_dir()` call site could migrate onto `ScratchDir`
+uniformly, without checking that root-package test targets (the `pycc`
+binary crate has no crate-level manifest) share a single `Cargo.toml` whose
+`[dev-dependencies]` tail D-091 pins exactly for this reason.
+
+What fixed it: narrowed #782's scope in an issue comment to crates with
+their own crate-level manifest (Batch A / `pycc_codegen`, already merged via
+#792) and closed #793 as out-of-scope-by-design rather than blocked. No
+change to D-091 or the checker script was needed or attempted — a new
+decision loosening a security-reviewed CI gate for one dependency class was
+considered and rejected as disproportionate to the problem (a cosmetically
+nicer scratch-dir helper for ~35 files that already work correctly with raw
+`temp_dir()` plus `ALLOWLIST`).
+
+Lesson: before scoping a mechanical migration issue by call-site inventory
+alone, check whether the target files share a manifest boundary that a
+standing CI gate pins byte-for-byte — a batch spanning "every file with
+pattern X" can silently span a gate the pattern-matched files don't all sit
+on the same side of. When a batch does hit this, the fix is almost always to
+narrow the issue's scope to the side of the boundary the gate doesn't pin,
+not to relax the gate.
+
+*(Relative order versus the entry below is not recoverable from either
+entry's content — both are dated 2026-08-26 from concurrent work; no
+sequence between them should be inferred.)*
+
 ## 2026-08-26 — `ci-watch.sh` reported BLOCKED "all checks completed" when GitHub Actions had dispatched zero check suites
 
 What happened: while delivering issue #800's PR-1 (PR #804) during the 2026-08-26 GitHub
