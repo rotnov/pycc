@@ -1,6 +1,6 @@
 # Session handoff: issue #781 — shared scratch-directory abstraction + repo lint gate
 
-Status: implementation complete on branch `feat/issue-781-scratch-dir`, PR opened against `main`, **not yet merged** — outstanding gate below.
+Status: implementation complete on branch `feat/issue-781-scratch-dir`, PR opened against `main`, **not yet merged**. A later session in this same overall task rebased the branch onto a refreshed `main` (new merge-base `af2384fa`, superseding the `7b3c4301` baseline this entry was originally planned against), re-ran every gate below against the rebased tip, and ran the previously-outstanding D-068 pinned reviewer pass — see the two new subsections below for what changed.
 
 ## What this session did
 
@@ -87,15 +87,47 @@ Delivered, faithfully following the plan:
 - `python3 scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md --check`
   — up to date.
 
-## Outstanding gate — needs a session with Agent-tool access
+## Rebase onto refreshed `main` (later session)
 
-The D-068 pinned local reviewer (`ievo:deep-reviewer`) has **not** run
-against this diff. This implementing session had no `Agent`/`Task` tool
-access (a known environment limitation, already logged from issue
-#763/PR #770's implementation). A session with that access must run the
-reviewer against this PR's diff and address actionable findings **before
-merge** — this is called out at the top of the PR body too, so it is not
-missed during review triage.
+`origin/main` moved after this PR opened; a later session in this same
+task rebased `feat/issue-781-scratch-dir` onto the new tip (`af2384fa`) and
+resolved the resulting conflicts, including a large hand-merge of
+`crates/pycc_codegen/src/tests.rs` and `bigint_rc.rs`. That conflict
+resolution retired `crates/pycc_codegen/src/tests_support.rs`'s
+`TempTestDir`/`tempfile_dir` wrapper directly onto `pycc_scratch::ScratchDir`
+rather than reconciling two divergent copies of code already slated for
+deletion — see D-201's updated text and `docs/TESTING.md`'s "Scratch
+directories" section for the resulting scope change. Two dangling
+`tempfile_dir(...)` calls left over from an incomplete first pass at that
+conflict resolution (in two walrus-operator test functions added
+independently on `main` by #774, which the original migration commit never
+saw) were found and fixed. Every gate in the section above was re-run
+against the rebased tip and passed again, including a fresh (non-cached)
+`cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
+(100.00%/100.00%, 0 missed).
+
+## D-068 pinned reviewer pass (later session)
+
+The reviewer ran against the rebased diff (merge-base `af2384fa` through
+tip) and returned 7 findings: 1 blocker (D-201 misstated Part 1's own scope
+as unchanged when the rebase-driven `tests_support.rs` retirement changed
+it), 2 warnings (`docs/TESTING.md` and this file both had gone stale
+relative to the rebased diff), 1 warning (the `ALLOWLIST` "never up" ratchet
+described as mechanically enforced when it is currently only a review
+convention — see `scripts/check_scratch_dir_usage.py`'s docstring), and 3
+notes (all confirmed non-issues: `ScratchDir::new`'s unvalidated `category`
+splice is deliberate caller-discipline already documented, `Drop`'s
+discarded `remove_dir_all` result is correct panic-safety behavior, and a
+scope note that the reviewer's own environment lacked shell access to
+directly diff the rebase). All four actionable findings (the blocker and
+three warnings) were addressed in this same pull request: D-201 and
+`docs/TESTING.md` were corrected to describe the `tests_support.rs`
+retirement and the `[dev-dependencies]` addition it required, the
+`ALLOWLIST` ratchet language in both D-201 and the script's own docstring
+was softened to describe it accurately as a review convention rather than
+a mechanically enforced property, and this file was updated in place
+(itself part of the unmerged diff, not a foreign prior session's file).
 
 ## What's still open (tracked, not this PR's scope)
 
@@ -118,8 +150,8 @@ missed during review triage.
 
 Once this PR merges, Parts 2/3/4 can each be planned (via `issue-to-plan`)
 and implemented independently and in parallel — none of them depend on each
-other, only on this PR's `pycc_scratch` crate. Part 2 in particular should
-retire `crates/pycc_codegen/src/tests_support.rs`'s own
-`TempTestDir`/`tempfile_dir` entirely in favor of
-`pycc_scratch::ScratchDir`, per the plan's own recommendation, rather than
-leaving two parallel patterns.
+other, only on this PR's `pycc_scratch` crate. `crates/pycc_codegen/src/tests_support.rs`'s
+own `TempTestDir`/`tempfile_dir` wrapper is already retired (a byproduct of
+this PR's own rebase conflict resolution, described above), so Part 2's
+remaining scope is exactly the `ALLOWLIST`-tracked raw call sites in other
+crates.

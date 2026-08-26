@@ -45,10 +45,21 @@ status: accepted
   is deliberately not `pycc_testkit`: that name is reserved for a materially
   different, deliberately deferred v1.0-scale conformance harness
   (D-018/D-037/D-085) and reusing it here would misrepresent scope. Part 1
-  registers `pycc_scratch` in the workspace `[members]` list only — it is
-  not yet a dependency of the `pycc` binary package, since `src/main.rs` has
-  no consumer of it until Part 3 (#783) rewrites `try_build`/`run` to use
-  it.
+  registers `pycc_scratch` in the workspace `[members]` list; it is not a
+  dependency of the `pycc` binary package itself, since `src/main.rs` has no
+  consumer of it until Part 3 (#783) rewrites `try_build`/`run` to use it.
+  It does become a `[dev-dependencies]` entry of `crates/pycc_codegen`,
+  incidentally: this pull request landed via a rebase onto a refreshed
+  `main`, and resolving that rebase's conflicts in `crates/pycc_codegen`'s
+  own test helper (`tests_support.rs`'s `TempTestDir`/`tempfile_dir`) meant
+  retiring it directly onto `ScratchDir` rather than reconciling two
+  divergent copies of code already slated for deletion. `tests_support.rs`
+  is removed entirely and every call site in `crates/pycc_codegen/src/tests.rs`
+  and `bigint_rc.rs` now calls `pycc_scratch::ScratchDir::new(...)`. This
+  narrows Part 2 (#782)'s remaining migration scope by one crate but does
+  not close it: the ~384-call-site count tracked by the `ALLOWLIST` below
+  covers other crates' raw `temp_dir().join(...)` sites, which
+  `crates/pycc_codegen` never used (it already had its own wrapper).
 
   Alongside the crate, `scripts/check_scratch_dir_usage.py` (self-tested by
   `scripts/test_check_scratch_dir_usage.py`, wired into the `governance` CI
@@ -61,8 +72,18 @@ status: accepted
   accumulate brand-new raw calls undetected, which defeats the actual goal
   of stopping the leak from getting worse. A file not in the allowlist is
   held to the new rule from day one (any occurrence is a violation); a
-  listed file's count may only stay the same or decrease on any later pull
-  request. The allowlist reaching empty is the completeness signal for
+  listed file's count is intended to only stay the same or decrease on any
+  later pull request. That intent is a review convention today, not a
+  mechanically enforced property: `check_scratch_dir_usage.py` compares the
+  current tree's occurrence count against the checked-in `ALLOWLIST` value,
+  but has no way to see a prior commit's `ALLOWLIST` entry, so a pull
+  request that both adds new raw call sites to an already-listed file and
+  raises that file's `ALLOWLIST` count to match would still pass. The D-068
+  pinned reviewer pass on every pull request is the intended backstop for
+  this gap, the same way it is for the textual-pattern-match limitation
+  noted below; a merge-base-comparison check may be added later if this
+  proves insufficient in practice. The allowlist reaching empty is the
+  completeness signal for
   closing out #779's Parts 2 (#782) and 3 (#783). `crates/pycc_scratch/src/lib.rs`
   itself is exempt unconditionally, as the one legitimate implementation
   site.
@@ -120,8 +141,12 @@ status: accepted
   stale-root cleanup needs to recover the owning `pid` (and use `nanos` to
   defeat PID reuse) from a directory name alone, without a live handle, so
   changing this format is a breaking change for that consumer. Part 1
-  itself changes zero existing call sites and zero `src/main.rs` behavior —
-  it only adds the crate and the lint; migrating the ~384 existing sites
+  changes zero `src/main.rs` behavior and, of the ~384 raw call sites
+  `ALLOWLIST` tracks, migrates none — it only adds the crate and the lint.
+  It does migrate `crates/pycc_codegen`'s separate, already-wrapped
+  `tests_support.rs` helper onto `ScratchDir`, as described above, since
+  that crate's own tests were never part of the raw-pattern backlog the
+  lint tracks. Migrating the ~384 `ALLOWLIST`-tracked sites in other crates
   (Part 2), fixing the two production leaks (Part 3), bounded stale-root
   cleanup (Part 4), and operational `TMPDIR` guidance (Part 5) are tracked
   as separate, dependency-ordered follow-up issues under the parent #779.

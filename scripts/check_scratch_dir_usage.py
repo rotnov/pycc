@@ -29,16 +29,26 @@ Two allowances, both narrow and deliberate:
   rule from the moment this check merges: any occurrence at all is a
   violation. A file that *is* in `ALLOWLIST` may keep its existing
   occurrences (migrating them off `temp_dir().join(...)` is Part 2's job,
-  tracked by https://github.com/rotnov/pycc/issues/779), but its count may
-  only stay the same or go down on any later pull request -- never up. A
-  bare filename allowlist would let an already-listed file accumulate
-  brand-new raw `temp_dir().join(...)` calls undetected, which defeats the
-  actual goal of requirement 7 (stop the leak from getting worse); the
-  per-file count closes that gap while still tolerating the pre-existing
-  backlog. `ALLOWLIST` reaching empty is the literal completeness signal for
-  closing out #779's requirements 4/5 (Parts 2/3).
+  tracked by https://github.com/rotnov/pycc/issues/779); its count is
+  intended to only stay the same or go down on any later pull request --
+  never up. That intent is a review convention, not something this script
+  mechanically enforces across commits: this check only compares the
+  current tree's occurrence count against `ALLOWLIST`'s recorded value for
+  the same commit, with no visibility into a prior commit's `ALLOWLIST`
+  entry -- so a pull request that both adds new raw call sites to an
+  already-listed file and raises that file's `ALLOWLIST` count to match
+  would still pass. The D-068 pinned reviewer pass on every pull request is
+  the intended backstop for this gap, same as for the textual-pattern-match
+  limitation below; a merge-base-comparison check may be added later if
+  this proves insufficient in practice. A bare filename allowlist would let
+  an already-listed file accumulate brand-new raw `temp_dir().join(...)`
+  calls undetected without even that backstop being triggered, which
+  defeats the actual goal of requirement 7 (stop the leak from getting
+  worse); the per-file count closes that gap while still tolerating the
+  pre-existing backlog. `ALLOWLIST` reaching empty is the literal
+  completeness signal for closing out #779's requirements 4/5 (Parts 2/3).
 
-**Known scope limitation, accepted deliberately** (recorded in the D-19X
+**Known scope limitation, accepted deliberately** (recorded in the D-201
 decision entry, not a silent gap): this is a textual pattern match, not a
 data-flow analysis. A caller that splits the expression across a binding --
 `let dir = std::env::temp_dir(); ... dir.join(...)` -- evades the pattern
