@@ -23,10 +23,14 @@
 //! post-type-check, post-monomorphization rewrite that expands every
 //! `HirStmt::ForList` over an enum class into its unrolled equivalent
 //! ([`unroll_enum_loops`], called once from
-//! [`check_and_resolve`](crate::check_and_resolve) -- see that function's
-//! own doc comment for why the ordering after `monomorphize` matters).
-//! `build_enum_member_table` and `unroll_enum_loops_in_stmts` are private
-//! helpers of `unroll_enum_loops` alone.
+//! [`check_and_resolve`](crate::check_and_resolve), after that function's
+//! own call to `monomorphize`: the unrolling only needs to run once the
+//! HIR is fully type-checked and every class's `enum_members` table is
+//! final, and it must not run before `monomorphize` resolves generic
+//! calls, or a generic function whose body iterates an enum would still
+//! carry unresolved `Ty::Param` positions when the unrolled copies are
+//! spliced in). `build_enum_member_table` and `unroll_enum_loops_in_stmts`
+//! are private helpers of `unroll_enum_loops` alone.
 //!
 //! Everything else in `lib.rs` that these functions call into --
 //! `check_assignment`, `join_loop_body`, the `narrow` module's
