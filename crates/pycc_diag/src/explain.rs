@@ -691,18 +691,29 @@ def h(x: int | None) -> None:  # OK -- T | None
         summary: "`Optional[T]` is not supported yet for this `T` (PEP 604)",
         explanation: "\
 T0049 fires when a `T | None` annotation matches the recognized 2-operand \
-`Optional` shape (see `T0048`) but its inner type `T` is not `int` (D-197, \
-issue #763, Part 1 of #747). This compiler version's `Optional`/`T | None` \
-codegen -- the `{ inner: i64, present: i8 }` runtime representation -- is \
-exercised and tested only for `Optional[int]`, mirroring the same v0.2 \
-scope cut `list[int]`-only (`T0034`) and `dict[str, int]`-only (`T0036`) \
-already make. This is a versioned capability gap: a future compiler version \
-extends `Optional`/`T | None` to more inner types.",
+`Optional` shape (see `T0048`) but its inner type `T` is not one of the \
+non-refcounted scalar types this compiler supports (D-197, issue #763, \
+Part 1 of #747; widened from `int`-only to also accept `float` and `bool` \
+by issue #809, Part 3 of #747). This compiler version's `Optional`/`T | \
+None` codegen -- the `{ payload, present: i8 }` runtime representation -- \
+is exercised and tested only for `Optional[int]`, `Optional[float]`, and \
+`Optional[bool]`; every other inner type (`str`, `list[...]`, a class \
+instance, or another `Optional[...]`) remains out of scope, mirroring the \
+same versioned scope cuts `list[int]`-only (`T0034`) and `dict[str, \
+int]`-only (`T0036`) already make. This is a versioned capability gap: a \
+future compiler version extends `Optional`/`T | None` to more inner \
+types.",
         example: "\
-def f(x: str | None) -> None:  # T0049 -- only Optional[int] is supported
+def f(x: str | None) -> None:  # T0049 -- str is not int/float/bool
     pass
 
 def g(x: int | None) -> None:  # OK -- Optional[int]
+    pass
+
+def h(x: float | None) -> None:  # OK -- Optional[float]
+    pass
+
+def i(x: bool | None) -> None:  # OK -- Optional[bool]
     pass
 ",
     },
