@@ -20,10 +20,12 @@
 //! call sites at the mangled specializations) -- plus the mangling helpers
 //! that give a specialization its deterministic name.
 //!
-//! Deliberately left in `lib.rs`: `enum_member_attr_type` and the
-//! `unroll_enum_loops` family (#379 / PR-19). They run *after*
-//! `monomorphize` and mention it in their own doc comments, but they are
-//! the enum-lowering pass, a separate seam with its own boundary.
+//! Deliberately left in `lib.rs` when this module was extracted, and later
+//! moved to its own sibling module [`enum_lower`](crate::enum_lower) (#544
+//! Part 6): `enum_member_attr_type` and the `unroll_enum_loops` family
+//! (#379 / PR-19). They run *after* `monomorphize` and mention it in
+//! their own doc comments, but they are the enum-lowering pass, a
+//! separate seam with its own boundary.
 //!
 //! [D-185]: https://github.com/rotnov/pycc/blob/main/docs/decisions/D-185-permit-a-dedicated-tracking-issue-per-oversized.md
 
