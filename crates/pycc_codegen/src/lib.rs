@@ -3935,20 +3935,19 @@ fn truthy<'ctx>(
                     .expect_basic("pycc_rt_int_truthy returns a non-void i8")
                     .into_int_value(),
                 // Deliberately printing the payload's *type* rather than the
-                // payload value itself (e.g. via `{other:?}`): inkwell's
-                // `Debug` impl for an LLVM value calls
-                // `LLVMPrintValueToString` on it, and printing a value
-                // freshly extracted from a constant struct inside a function
-                // whose block is not yet terminated crashed the Windows CI
-                // runner with a native `STATUS_ACCESS_VIOLATION` (see PR
-                // #812). Printing the type alone uses only
-                // `LLVMPrintTypeToString`, which describes context-owned
-                // static type data and does not touch the function's
-                // block/instruction state, so it does not carry the same
-                // risk.
+                // payload value itself (e.g. via `{other:?}`, which reaches
+                // inkwell's `Value::Debug` impl and calls
+                // `LLVMPrintValueToString`): either printer returns an
+                // `inkwell::support::LLVMString`, whose `Drop` impl calls
+                // `LLVMDisposeMessage` and crashes on Windows for this LLVM
+                // release (D-029) unless routed through
+                // `llvm_string_to_owned`. Printing the type instead of the
+                // value additionally avoids handing the printer a value
+                // freshly extracted from a constant struct inside a
+                // function whose block is not yet terminated (see PR #812).
                 other => panic!(
                     "pycc_codegen: internal error: an Optional[_] payload had an unsupported LLVM representation ({}) -- pycc_types::check (T0049) should have rejected this inner type before codegen",
-                    other.get_type().print_to_string()
+                    llvm_string_to_owned(other.get_type().print_to_string())
                 ),
             };
             builder
