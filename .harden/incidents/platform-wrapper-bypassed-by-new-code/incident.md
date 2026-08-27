@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-20
 **Topic:** platform-wrapper-bypassed-by-new-code
-**Verdict:** shipped (manual verify)
+**Verdict:** shipped (automated verify, see 2026-08-27 update)
 
 ## Symptom
 
@@ -76,8 +76,13 @@ directions, as `references/arena.md` prescribes for this artefact type.
 
 ## Verify
 
-`verify: manual`. Clean tree accepted, three deliberate violators
-rejected with a non-zero exit:
+`verify: manual` at the time this section was first written -- superseded
+by "## Update (2026-08-27): automated (#619)" below, which is now the
+actual verification path. Kept here as the historical record of the
+original hand-run proof.
+
+Clean tree accepted, three deliberate violators rejected with a
+non-zero exit:
 
 ```
 $ cargo test -p pycc_codegen every_inkwell_llvm_string_call_routes_through_a_d029_wrapper
@@ -136,3 +141,37 @@ split across lines, would evade it, and the third protection is pinned by
 a count rather than proven. That is accepted — the failure this guards
 against is a contributor reaching for the obvious raw API, not an
 adversary — and the test's own comment says so rather than implying more.
+
+## Update (2026-08-27): automated (#619)
+
+The five cases above were proven by hand once, then pasted here as a
+transcript with no fixture and no gate against the checking logic itself
+regressing — so `Fixture: None` and `verify: manual` were both quietly
+becoming false claims the moment anyone touched the guard again without
+re-running the same manual proof. #619 closed that gap:
+
+- The three checks inside
+  `tests::every_inkwell_llvm_string_call_routes_through_a_d029_wrapper`
+  were extracted into `tests::d029_guard::d029_violations(sources: &[(&str,
+  &str)], expected_triple_call_sites: usize) -> Vec<String>`, a pure
+  function with no filesystem access. The real test now calls it against
+  the crate's actual sources and asserts the result is empty; the
+  extraction preserves the run-time-assembled-needle trick that keeps the
+  function's own body (and any fixture built the same way) from tripping
+  the scan it performs on its own crate's `src/` directory. The guard and
+  its own tests live in `crates/pycc_codegen/src/tests/d029_guard.rs`, a
+  cohesion-driven submodule of `tests.rs` rather than more lines added
+  directly to that already far-over-threshold file (AGENTS.md's
+  decomposability rule).
+- A new `tests::d029_guard::d029_violations_tests` module drives that
+  same function against synthetic single- and multi-file sources, one
+  test per case A-E above plus a positive compliant baseline and one case
+  proving the tripwire's expected count is caller-supplied rather than
+  hardcoded. `cargo test -p pycc_codegen d029` runs all of it, and it
+  runs on every `cargo test` invocation like the guard itself, not only
+  when a contributor remembers to reproduce this file's shell transcript.
+
+**Fixture:** now exists — `tests::d029_guard::d029_violations_tests`.
+**Verify:** now `verify: automated` — `cargo test -p pycc_codegen d029`.
+The manual transcript above is kept as the historical record of the
+original proof; it is no longer the actual verification path.

@@ -12,6 +12,12 @@ use pycc_mir::{
 };
 use std::process::Command;
 
+// #619 / AGENTS.md decomposability rule: the D-029 mechanical guard's
+// checking logic and its automated synthetic-source tests live in their
+// own cohesion-driven submodule instead of growing this already
+// far-over-threshold file further. See that module's own doc comment.
+mod d029_guard;
+
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s
 /// `print` dispatch itself now handles any number of arguments of any
@@ -1356,52 +1362,38 @@ fn an_oversized_int_literal_materializes_a_runtime_bigint() {
 // The needles are assembled at run time so this test's own body is not
 // counted as a violation of itself. Comment lines are excluded, since
 // the crate discusses all three APIs at length in prose.
+//
+// The three checks live in `d029_guard::d029_violations`, extracted
+// from this test (#619) into that cohesion-driven submodule -- see
+// AGENTS.md's decomposability rule -- so the exact same logic can be
+// driven against synthetic sources instead of only the crate's real
+// ones. See that function's own doc comment for why the extraction
+// needs its own care, and `d029_guard::d029_violations_tests` for the
+// automated proof this test used to require running by hand
+// (`.harden/incidents/platform-wrapper-bypassed-by-new-code/incident.md`).
 #[test]
 fn every_inkwell_llvm_string_call_routes_through_a_d029_wrapper() {
     // Read the whole crate rather than this one file, so a module added
     // later is covered without anyone remembering to extend a list.
-    let sources: Vec<String> = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))
+    let sources: Vec<(String, String)> = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))
         .expect("the crate's own source directory should be readable")
         .map(|entry| entry.expect("a readable directory entry").path())
         .filter(|path| path.extension() == Some(std::ffi::OsStr::new("rs")))
-        .map(|path| std::fs::read_to_string(path).expect("a readable source file"))
+        .map(|path| {
+            let contents = std::fs::read_to_string(&path).expect("a readable source file");
+            (path.display().to_string(), contents)
+        })
         .collect();
-    let printer = format!(".{}()", "print_to_string");
-    let verifier = format!(".{}()", "verify");
-    let wrapper = format!("llvm_string_to_{}(", "owned");
-    let created = format!("TargetTriple::{}(", "create");
-    let defaulted = format!("TargetMachine::get_default_{}()", "triple");
-    let code_lines = || {
-        sources
-            .iter()
-            .flat_map(|source| source.lines())
-            .filter(|line| !line.trim_start().starts_with("//"))
-    };
+    let sources: Vec<(&str, &str)> = sources
+        .iter()
+        .map(|(path, contents)| (path.as_str(), contents.as_str()))
+        .collect();
 
-    // Deliberately not keyed on the receiver's name: a correctly
-    // wrapped call on some other inkwell value must pass too.
-    assert_eq!(
-        code_lines().filter(|line| line.contains(&printer)).count(),
-        code_lines()
-            .filter(|line| line.contains(&printer) && line.contains(&wrapper))
-            .count(),
-        "every inkwell print_to_string call must be an argument of \
-             llvm_string_to_owned, or its LLVMString drops and faults on Windows (D-029)"
-    );
-    assert_eq!(
-        code_lines().filter(|line| line.contains(&verifier)).count(),
-        1,
-        "the only direct inkwell verify call may be the one inside verify_module, \
-             which is skipped on Windows; everything else must go through that wrapper (D-029)"
-    );
-    assert_eq!(
-        code_lines()
-            .filter(|line| line.contains(&created) || line.contains(&defaulted))
-            .count(),
-        2,
-        "a TargetTriple owns an LLVMString and must be created inside a ManuallyDrop \
-             (D-029); this count is a tripwire, so if you added a call site, wrap it and \
-             raise the number -- if you removed one, lower it"
+    let violations = d029_guard::d029_violations(&sources, 2);
+    assert!(
+        violations.is_empty(),
+        "D-029 guard violation(s) found in the crate's own sources:\n{}",
+        violations.join("\n")
     );
 }
 
