@@ -45,7 +45,7 @@ fn main() -> ExitCode {
                 Err(code) => code,
             }
         }
-        Command::Run { path } => run(&path),
+        Command::Run { path, args } => run(&path, &args),
         Command::Version { verbose } => {
             // `pycc {version}` comes from the manifest (`CARGO_PKG_VERSION`),
             // so it can't silently rot when the crate bumps. `rustc
@@ -512,13 +512,25 @@ fn add_linux_system_libs(cmd: &mut std::process::Command) {
 #[cfg(not(target_os = "linux"))]
 fn add_linux_system_libs(_cmd: &mut std::process::Command) {}
 
+/// Builds the `std::process::Command` that launches the freshly built
+/// `binary`, forwarding `args` unchanged and in order as its process
+/// arguments (CLI_SPEC.md's `pycc run [PATH] [-- args]` contract, #23).
+/// Factored out of `run` so the forwarding itself -- not just the full
+/// build-and-execute pipeline -- has a direct test against a real child
+/// process.
+fn run_command(binary: &std::path::Path, args: &[String]) -> std::process::Command {
+    let mut command = std::process::Command::new(binary);
+    command.args(args);
+    command
+}
+
 /// `pycc run` has no `--release` flag (undocumented in CLI_SPEC.md) and
 /// always builds in the debug profile: the hardcoded `false` below reaches
 /// `try_build` directly, which -- unlike `main()`'s `Command::Build` arm --
 /// never consults a neighboring `pycc.toml`'s `[build] opt = "release"`
 /// default, so this stays unconditional regardless of what any nearby
 /// `pycc.toml` names.
-fn run(path: &str) -> ExitCode {
+fn run(path: &str, args: &[String]) -> ExitCode {
     let out = std::env::temp_dir().join(format!("pycc_run_{}", std::process::id()));
     if let Err(code) = try_build(
         path,
@@ -528,7 +540,7 @@ fn run(path: &str) -> ExitCode {
     ) {
         return code;
     }
-    let status = std::process::Command::new(&out)
+    let status = run_command(&out, args)
         .status()
         .expect("built binary should run");
     // Generated programs currently have no user-controlled non-zero exit
@@ -587,8 +599,7 @@ mod init_tests {
         // `create_dir_all` creates it -- see `project_config.rs`'s
         // `scaffold_creates_a_missing_target_directory`). The refusal
         // message flows through `init`'s io::Error -> String mapping.
-        let dir =
-            ScratchDir::new("main_init_existing_toml").expect("failed to create scratch dir");
+        let dir = ScratchDir::new("main_init_existing_toml").expect("failed to create scratch dir");
         std::fs::write(dir.join("pycc.toml"), "user content").unwrap();
 
         let err = init(Some("irrelevant"), &dir).unwrap_err();
@@ -684,6 +695,43 @@ mod release_flag_tests {
         let source_path = dir.join("main.py");
 
         assert!(resolve_release_flag(false, &source_path));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod run_command_tests {
+    use super::run_command;
+
+    /// Proves `run_command` actually forwards its `args` unchanged and in
+    /// order to the child process (#23), not merely that `pycc run` parses
+    /// them: the Python language surface has no `sys.argv` yet, so a
+    /// compiled program can't itself observe its own arguments, and this is
+    /// the only way to verify forwarding against a real process rather than
+    /// only the CLI parser. `/bin/echo` is POSIX-guaranteed, hence
+    /// `#[cfg(unix)]`; the multi-value, dash-prefixed, and Unicode cases are
+    /// already covered without a real process at the parser level in
+    /// `cli.rs`, so this single case only needs to prove forwarding, not
+    /// re-cover every value shape.
+    #[test]
+    fn forwards_args_unchanged_and_in_order_to_the_child_process() {
+        let args: Vec<String> = vec!["first".into(), "-x".into(), "héllo".into()];
+
+        let output = run_command(std::path::Path::new("/bin/echo"), &args)
+            .output()
+            .expect("/bin/echo should run");
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"first -x h\xc3\xa9llo\n");
+    }
+
+    #[test]
+    fn forwards_no_args_when_the_slice_is_empty() {
+        let output = run_command(std::path::Path::new("/bin/echo"), &[])
+            .output()
+            .expect("/bin/echo should run");
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"\n");
     }
 }
 

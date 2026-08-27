@@ -160,6 +160,75 @@ fn run_subcommand_normalizes_a_generated_runtime_failure_to_101() {
     assert_eq!(output.status.code(), Some(101));
 }
 
+/// #23: `pycc run app.py -- hello` used to fail to parse at all (clap
+/// rejected `hello` as an unexpected argument, exit 2), before the `Run`
+/// CLI variant gained a trailing-args field. This and the tests below prove
+/// the documented `pycc run [PATH] [-- args]` contract now parses and
+/// executes successfully for the argument shapes #23's completion criteria
+/// name (zero, multiple, Unicode, dash-prefixed); `run_command_tests` in
+/// `src/main.rs` proves the values are actually forwarded to the child
+/// process unchanged and in order, which isn't observable from stdout here
+/// since the Python language surface has no `sys.argv` yet.
+#[test]
+fn run_subcommand_accepts_zero_trailing_args_after_the_separator() {
+    let dir = ScratchDir::new("e2e_run_args_zero").expect("failed to create scratch dir");
+    let src = write_fixture(&dir, "args_zero.py", "print(42)\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap(), "--"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"42\n");
+}
+
+#[test]
+fn run_subcommand_accepts_multiple_trailing_args() {
+    let dir = ScratchDir::new("e2e_run_args_multi").expect("failed to create scratch dir");
+    let src = write_fixture(&dir, "args_multi.py", "print(42)\n");
+
+    let output = Command::new(pycc_bin())
+        .args([
+            "run",
+            src.to_str().unwrap(),
+            "--",
+            "first",
+            "second",
+            "third",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"42\n");
+}
+
+#[test]
+fn run_subcommand_accepts_unicode_trailing_args() {
+    let dir = ScratchDir::new("e2e_run_args_unicode").expect("failed to create scratch dir");
+    let src = write_fixture(&dir, "args_unicode.py", "print(42)\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap(), "--", "héllo", "世界", "🦀"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"42\n");
+}
+
+#[test]
+fn run_subcommand_accepts_dash_prefixed_trailing_args_without_a_cli_error() {
+    // The exact regression #23 reports.
+    let dir = ScratchDir::new("e2e_run_args_dash").expect("failed to create scratch dir");
+    let src = write_fixture(&dir, "args_dash.py", "print(42)\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap(), "--", "-x", "--flag", "hello"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"42\n");
+}
+
 #[test]
 fn run_subcommand_propagates_a_build_failure() {
     let dir = ScratchDir::new("e2e_run_fail").expect("failed to create scratch dir");
@@ -914,8 +983,8 @@ fn check_subcommand_infers_a_private_helper_signature() {
 
 #[test]
 fn check_subcommand_honors_an_annotated_private_local_without_widening_its_source() {
-    let dir = ScratchDir::new("e2e_check_annotated_private_local")
-        .expect("failed to create scratch dir");
+    let dir =
+        ScratchDir::new("e2e_check_annotated_private_local").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "annotated_private_local.py",
@@ -932,8 +1001,8 @@ fn check_subcommand_honors_an_annotated_private_local_without_widening_its_sourc
 
 #[test]
 fn build_accepts_an_annotated_private_local_with_a_bool_initializer() {
-    let dir = ScratchDir::new("e2e_build_annotated_private_local")
-        .expect("failed to create scratch dir");
+    let dir =
+        ScratchDir::new("e2e_build_annotated_private_local").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "annotated_private_local.py",
@@ -952,8 +1021,8 @@ fn build_accepts_an_annotated_private_local_with_a_bool_initializer() {
 
 #[test]
 fn annotated_private_local_does_not_widen_an_independently_returned_bool() {
-    let dir = ScratchDir::new("e2e_run_annotated_private_echo")
-        .expect("failed to create scratch dir");
+    let dir =
+        ScratchDir::new("e2e_run_annotated_private_echo").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "annotated_private_echo.py",
@@ -1042,8 +1111,8 @@ fn check_subcommand_rejects_true_division_with_an_int_result_annotation() {
 
 #[test]
 fn check_subcommand_rejects_known_string_operands_for_an_int_result() {
-    let dir = ScratchDir::new("e2e_check_private_string_binop")
-        .expect("failed to create scratch dir");
+    let dir =
+        ScratchDir::new("e2e_check_private_string_binop").expect("failed to create scratch dir");
 
     for (name, source) in [
         (

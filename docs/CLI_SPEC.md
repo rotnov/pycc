@@ -21,6 +21,17 @@ import instead use `OUT` as the deployment-artifact destination for an
 autonomous application bundle. D-128 deliberately defers the bundle's exact
 file layout until the v0.7 resolver and packaging plan is accepted.
 
+Every value after `pycc run`'s `--` is forwarded unchanged and in order as
+the generated program's own process arguments, including a value that
+itself starts with `-` (e.g. `-x`, `--flag`) -- once past `--`, nothing is
+interpreted as a `pycc` option (#23). Each forwarded value must be valid
+UTF-8: `pycc` parses its own argument vector as `String`, so a non-UTF-8
+value after `--` is rejected with a CLI parse error (exit 2) rather than
+forwarded as an opaque byte sequence; faithfully forwarding arbitrary
+non-UTF-8 process arguments is tracked separately and is not part of this
+contract. Omitting `-- args` entirely runs the program with no arguments,
+same as before this contract existed.
+
 `pycc init` inspects every scaffold destination before writing anything: an
 existing `pycc.toml`, a `src` that is not a directory, or an existing
 `src/main.py` is a refusal (exit 2) that leaves all existing paths

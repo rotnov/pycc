@@ -47,6 +47,14 @@ pub enum Command {
     },
     Run {
         path: String,
+        /// Every value after `--`, forwarded unchanged and in order as the
+        /// generated program's process arguments (CLI_SPEC.md's
+        /// `pycc run [PATH] [-- args]` contract, #23). `trailing_var_arg` +
+        /// `allow_hyphen_values` so a value that itself looks like a flag
+        /// (e.g. `-x`) is captured here instead of being rejected as an
+        /// unrecognized `pycc` option.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     Check {
         paths: Vec<PathBuf>,
@@ -166,5 +174,53 @@ mod tests {
         let cli =
             Cli::try_parse_from(["pycc", "build", "in.py", "-o", "out", "--release"]).unwrap();
         assert_eq!(parsed_build_release(cli.command), Some(true));
+    }
+
+    fn parsed_run(command: Command) -> Option<(String, Vec<String>)> {
+        match command {
+            Command::Run { path, args } => Some((path, args)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn run_with_no_trailing_args_captures_an_empty_vec() {
+        // Preserves `pycc run app.py` behavior with no arguments (#23).
+        let cli = Cli::try_parse_from(["pycc", "run", "app.py"]).unwrap();
+        let (path, args) = parsed_run(cli.command).unwrap();
+        assert_eq!(path, "app.py");
+        assert!(args.is_empty());
+        assert!(parsed_run(Command::Clean).is_none());
+    }
+
+    #[test]
+    fn run_captures_multiple_trailing_args_in_order() {
+        let cli = Cli::try_parse_from(["pycc", "run", "app.py", "--", "first", "second", "third"])
+            .unwrap();
+        let (path, args) = parsed_run(cli.command).unwrap();
+        assert_eq!(path, "app.py");
+        assert_eq!(args, vec!["first", "second", "third"]);
+    }
+
+    #[test]
+    fn run_captures_unicode_trailing_args_unchanged() {
+        let cli =
+            Cli::try_parse_from(["pycc", "run", "app.py", "--", "héllo", "世界", "🦀"]).unwrap();
+        let (_, args) = parsed_run(cli.command).unwrap();
+        assert_eq!(args, vec!["héllo", "世界", "🦀"]);
+    }
+
+    #[test]
+    fn run_captures_dash_prefixed_trailing_args_without_treating_them_as_pycc_options() {
+        // A value starting with `-` after `--` (e.g. `-x`, `--flag`) must be
+        // captured as a program argument, not rejected as an unrecognized
+        // `pycc` option (the exact regression #23 reports: `pycc run app.py
+        // -- hello` previously failed with "unexpected argument 'hello'
+        // found").
+        let cli =
+            Cli::try_parse_from(["pycc", "run", "app.py", "--", "-x", "--flag", "hello"]).unwrap();
+        let (path, args) = parsed_run(cli.command).unwrap();
+        assert_eq!(path, "app.py");
+        assert_eq!(args, vec!["-x", "--flag", "hello"]);
     }
 }
