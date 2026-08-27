@@ -152,22 +152,26 @@ re-running the same manual proof. #619 closed that gap:
 
 - The three checks inside
   `tests::every_inkwell_llvm_string_call_routes_through_a_d029_wrapper`
-  were extracted into `d029_violations(sources: &[(&str, &str)],
-  expected_triple_call_sites: usize) -> Vec<String>`, a pure function
-  with no filesystem access. The real test now calls it against the
-  crate's actual sources and asserts the result is empty; the extraction
-  preserves the run-time-assembled-needle trick that keeps the function's
-  own body (and any fixture built the same way) from tripping the scan
-  it performs on its own crate's `src/` directory.
-- A new `tests::d029_violations_tests` module drives that same function
-  against synthetic single- and multi-file sources, one test per case
-  A-E above plus a positive compliant baseline and one case proving the
-  tripwire's expected count is caller-supplied rather than hardcoded.
-  `cargo test -p pycc_codegen d029` runs all of it, and it runs on every
-  `cargo test` invocation like the guard itself, not only when a
-  contributor remembers to reproduce this file's shell transcript.
+  were extracted into `tests::d029_guard::d029_violations(sources: &[(&str,
+  &str)], expected_triple_call_sites: usize) -> Vec<String>`, a pure
+  function with no filesystem access. The real test now calls it against
+  the crate's actual sources and asserts the result is empty; the
+  extraction preserves the run-time-assembled-needle trick that keeps the
+  function's own body (and any fixture built the same way) from tripping
+  the scan it performs on its own crate's `src/` directory. The guard and
+  its own tests live in `crates/pycc_codegen/src/tests/d029_guard.rs`, a
+  cohesion-driven submodule of `tests.rs` rather than more lines added
+  directly to that already far-over-threshold file (AGENTS.md's
+  decomposability rule).
+- A new `tests::d029_guard::d029_violations_tests` module drives that
+  same function against synthetic single- and multi-file sources, one
+  test per case A-E above plus a positive compliant baseline and one case
+  proving the tripwire's expected count is caller-supplied rather than
+  hardcoded. `cargo test -p pycc_codegen d029` runs all of it, and it
+  runs on every `cargo test` invocation like the guard itself, not only
+  when a contributor remembers to reproduce this file's shell transcript.
 
-**Fixture:** now exists — `tests::d029_violations_tests`.
+**Fixture:** now exists — `tests::d029_guard::d029_violations_tests`.
 **Verify:** now `verify: automated` — `cargo test -p pycc_codegen d029`.
 The manual transcript above is kept as the historical record of the
 original proof; it is no longer the actual verification path.

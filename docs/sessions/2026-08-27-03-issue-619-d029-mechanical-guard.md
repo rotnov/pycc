@@ -29,24 +29,45 @@ its ability to recognize a real violation.
   conditions, same messages as the pre-extraction inline `assert_eq!`
   calls (verified via `git diff`, not just re-derived by hand). The real
   test now calls it against the crate's actual sources and asserts the
-  result is empty. Added `d029_violations_tests`, a new module with seven
-  tests: a compliant baseline, the five cases (A bare verify call, B
-  unwrapped printer call, C — the same A-shaped verify violation planted
-  in a second source entry, proving the scan isn't limited to one file, D
-  a new triple call site, E a correctly wrapped call on a different
-  receiver) previously proven only by hand in the incident file, plus one
-  proving the tripwire count is caller-supplied rather than hardcoded.
+  result is empty.
+- `crates/pycc_codegen/src/tests/d029_guard.rs` (new file): after the PR
+  was opened, GitHub's automated review flagged that adding the
+  extracted function plus ~130 lines of fixtures directly to `tests.rs`
+  (already 14,720+ lines) violated AGENTS.md's decomposability rule,
+  which requires decomposing the touched part into a cohesion-driven
+  submodule rather than growing an already far-over-threshold file
+  further. Moved `d029_violations` and the new `d029_violations_tests`
+  module into this dedicated submodule (`mod d029_guard;` declared in
+  `tests.rs`, `pub(super)` visibility on the function); the guard test
+  itself stays in `tests.rs` alongside this crate's other `#[test]`
+  functions and calls `d029_guard::d029_violations`. `d029_violations_tests`
+  has seven tests: a compliant baseline, the five cases (A bare verify
+  call, B unwrapped printer call, C — the same A-shaped verify violation
+  planted in a second source entry, proving the scan isn't limited to
+  one file, D a new triple call site, E a correctly wrapped call on a
+  different receiver) previously proven only by hand in the incident
+  file, plus one proving the tripwire count is caller-supplied rather
+  than hardcoded.
 - `docs/decisions/D-029-llvm-s-llvmdisposemessage-crashes-on-windows-for.md`:
   Consequences paragraph now points at the guard test and at #619's
   automated proof by name, instead of ending in prose-only obligation
-  language.
+  language. After the same automated review round flagged that the
+  paragraph's "no longer prose-only" claim overclaimed coverage of "any
+  future `LLVMString`-returning API" when the guard only recognizes the
+  three specific, already-used APIs by call spelling, narrowed the
+  wording to scope the claim to those three APIs and state explicitly
+  that a not-yet-used `LLVMString`-returning API would still evade the
+  guard and remains a prose-only obligation.
 - `.harden/incidents/platform-wrapper-bypassed-by-new-code/incident.md`:
   added an "Update (2026-08-27): automated (#619)" section recording that
   `Fixture: None` and `verify: manual` are both now false — the fixture
   and automated verify path exist as of this change — while keeping the
   original hand-run transcript as the historical record of the first
   proof. Forward-pointed the original `## Verify` section to the update
-  so a reader stopping there isn't misled.
+  so a reader stopping there isn't misled. Updated to reference the
+  guard's final `tests::d029_guard::d029_violations`/
+  `tests::d029_guard::d029_violations_tests` location after the
+  decomposition fix above.
 
 ## Verification
 
@@ -91,6 +112,15 @@ its ability to recognize a real violation.
   one docs addition, one new file), the reviewer was not re-run a second
   time; `cargo test -p pycc_codegen d029` was re-run after the case-C fix
   and still passes 8/8.
+- GitHub's own automated review on the opened PR (#826) raised two
+  further findings that blocked `mergeStateStatus` (unresolved
+  conversation threads) despite every CI check being green: a P1 for the
+  AGENTS.md decomposability violation and a P2 for the ADR's overclaimed
+  guard coverage, both described above under "What changed" and both
+  fixed in this same PR before merge. `cargo test -p pycc_codegen d029`
+  (8/8) and `cargo llvm-cov --workspace --fail-under-lines 100
+  --fail-under-regions 100` (100.00%/100.00%) were re-run after these
+  fixes and both still pass.
 
 ## Issue-select context (for the next session)
 
