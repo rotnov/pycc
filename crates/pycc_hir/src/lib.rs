@@ -7,6 +7,7 @@ mod exception;
 mod expr;
 mod func;
 mod import;
+mod int_boundary;
 mod stmt;
 mod typecheck;
 

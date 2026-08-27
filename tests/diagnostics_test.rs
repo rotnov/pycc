@@ -383,6 +383,23 @@ fn t0045_final_reassignment() {
     assert_diagnostic_matches_fixture("t0045_final_reassignment");
 }
 
+// Issue #618: an out-of-range `int` literal in a runtime `int`-boundary
+// position (D-141) is rejected at compile time with a spanned T0051
+// diagnostic instead of reaching `pycc_rt_int_untag_checked` and aborting at
+// run time (D-178's own knowingly-deferred consequence). This fixture
+// exercises the "list index" position; every other named position is
+// exercised without going through the CLI's exact `--error-format human`
+// rendering, by the position-specific unit tests in
+// `crates/pycc_hir/src/tests.rs` and `crates/pycc_hir/src/stmt.rs`'s own
+// test module, which is what D-014's coverage gate actually needs -- this
+// fixture's job is only to prove the diagnostic reaches the real `pycc
+// check` CLI end to end with a correct rendered span, not to duplicate all
+// 13 positions through the slower CLI harness.
+#[test]
+fn t0051_int_literal_boundary_list_index() {
+    assert_diagnostic_matches_fixture("t0051_int_literal_boundary_list_index");
+}
+
 #[test]
 fn d0021_float_wrong_arity() {
     assert_diagnostic_matches_fixture("d0021_float_wrong_arity");
