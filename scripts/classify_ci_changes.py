@@ -65,14 +65,18 @@ COMPILER_FILES = frozenset(
         "Cargo.lock",
         "build.rs",
         "docs/DIAGNOSTICS.md",
-        # Both of these documents are test inputs, not only prose.
-        # `docs/DIAGNOSTICS.md` is read by the diagnostics-registry tests, and
+        # All four of these documents are test inputs, not only prose.
+        # `docs/DIAGNOSTICS.md` is read by the diagnostics-registry tests,
         # `docs/PYTHON_STANDARDS.md` is read by `tests/conformance_matrix_guard.rs`
-        # (issue #591). Left in the `docs/` bucket below they would classify as
-        # EMPTY_SELECTION, so the one change most likely to break each guard --
-        # editing the document it asserts on -- would be the change that skips it,
-        # surfacing only on the later `main` push run.
+        # (issue #591), and `docs/ARCHITECTURE.md`/`docs/CLI_SPEC.md` are read by
+        # `tests/tier1_target_parity.rs` (issue #246). Left in the `docs/` bucket
+        # below they would classify as EMPTY_SELECTION, so the one change most
+        # likely to break each guard -- editing the document it asserts on --
+        # would be the change that skips it, surfacing only on the later `main`
+        # push run.
         "docs/PYTHON_STANDARDS.md",
+        "docs/ARCHITECTURE.md",
+        "docs/CLI_SPEC.md",
         "rust-toolchain",
         "rust-toolchain.toml",
     }

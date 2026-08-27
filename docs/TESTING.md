@@ -1103,6 +1103,40 @@ It is a lexical gate and makes no claim beyond that: it catches the literal
 shape that caused #629, not every conceivable way to reconstruct an
 artifact path.
 
+### Mechanical gate: Tier-1 target list stays consistent across the binary and docs
+
+`tests/tier1_target_parity.rs` closes #246: the Tier-1 target set/order
+(`src/main.rs::TIER1_TARGETS`) is independently duplicated in
+`docs/ARCHITECTURE.md`'s "Cross-platform (hard requirement)" table,
+`tests/slice0.rs`'s hardcoded snapshot of `pycc version --verbose`'s exact
+output, and `docs/CLI_SPEC.md`'s illustrative transcript. `slice0.rs`
+already pins the binary's real output against its own literal, but nothing
+tied that literal, or the binary's real output, back to either
+documentation source — a mutation that changed the code and the
+`slice0.rs` snapshot together, while leaving both docs untouched, passed
+every existing test.
+
+This test is a deterministic parity validator, not a generator: it
+re-derives the Tier-1 list from the binary's real `pycc version --verbose`
+stdout and from both documentation sources independently of `slice0.rs`'s
+hardcoded literal, and asserts all three name the same five targets in the
+same order. Both `include_str!`-loaded documentation texts are normalized
+with `.replace("\r\n", "\n")` before any marker search or line split,
+exactly as `tests/diagnostics_test.rs` normalizes its own fixture
+comparisons — a Windows checkout's `core.autocrlf` text conversion would
+otherwise turn a literal `\n`-terminated search marker into a byte
+sequence the raw checked-out text never contains, panicking the test on
+this repository's own required Windows CI leg.
+
+`docs/ARCHITECTURE.md` and `docs/CLI_SPEC.md` are test inputs for this
+guard, not only prose, so `scripts/classify_ci_changes.py`'s `COMPILER_FILES`
+lists both explicitly — the same treatment `docs/PYTHON_STANDARDS.md`
+already got for `tests/conformance_matrix_guard.rs` (issue #591). Without
+that entry, a pull request editing only one of these two documents to
+introduce a Tier-1 mismatch would classify as docs-only and skip the
+compiler jobs that run this guard, surfacing the mismatch only on the
+later `main` push instead of on the pull request itself.
+
 ## Scratch directories (issue #781, Part 1 of #779)
 
 #779 found ~384 ad hoc `std::env::temp_dir().join(...)` call sites across 36
