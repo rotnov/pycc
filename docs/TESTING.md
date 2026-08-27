@@ -1128,6 +1128,15 @@ otherwise turn a literal `\n`-terminated search marker into a byte
 sequence the raw checked-out text never contains, panicking the test on
 this repository's own required Windows CI leg.
 
+`docs/ARCHITECTURE.md` and `docs/CLI_SPEC.md` are test inputs for this
+guard, not only prose, so `scripts/classify_ci_changes.py`'s `COMPILER_FILES`
+lists both explicitly — the same treatment `docs/PYTHON_STANDARDS.md`
+already got for `tests/conformance_matrix_guard.rs` (issue #591). Without
+that entry, a pull request editing only one of these two documents to
+introduce a Tier-1 mismatch would classify as docs-only and skip the
+compiler jobs that run this guard, surfacing the mismatch only on the
+later `main` push instead of on the pull request itself.
+
 ## Scratch directories (issue #781, Part 1 of #779)
 
 #779 found ~384 ad hoc `std::env::temp_dir().join(...)` call sites across 36

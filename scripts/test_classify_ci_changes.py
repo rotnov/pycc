@@ -53,6 +53,8 @@ class ClassifyPathsTests(unittest.TestCase):
             "build.rs",
             "docs/DIAGNOSTICS.md",
             "docs/PYTHON_STANDARDS.md",
+            "docs/ARCHITECTURE.md",
+            "docs/CLI_SPEC.md",
             "tests/conformance.rs",
             "benches/check_bench.rs",
         ):
@@ -99,6 +101,33 @@ class ClassifyPathsTests(unittest.TestCase):
                 event_name="pull_request",
             ).compiler
         )
+
+    def test_every_input_the_tier1_target_parity_guard_reads_selects_compiler(self):
+        """`tests/tier1_target_parity.rs` (issue #246) needs itself,
+        `src/main.rs` (whose `pycc version --verbose` output it re-derives),
+        `docs/ARCHITECTURE.md`, and `docs/CLI_SPEC.md` to all select the
+        compiler jobs that run it. The first two were already covered by
+        `COMPILER_ROOTS`; the two documents sat in the `docs/` bucket and
+        classified as EMPTY_SELECTION until issue #246's `COMPILER_FILES`
+        entries were added -- so a pull request that edited only one of them
+        to introduce a Tier-1 mismatch would skip the compiler jobs that run
+        the guard, and the mismatch would surface only on the later `main`
+        push run instead. These assertions fail if any path is dropped back
+        into the cheap-docs bucket.
+        """
+        for path in (
+            "src/main.rs",
+            "tests/tier1_target_parity.rs",
+            "docs/ARCHITECTURE.md",
+            "docs/CLI_SPEC.md",
+        ):
+            with self.subTest(path=path):
+                selection = classify_paths([path], event_name="pull_request")
+                self.assertTrue(
+                    selection.compiler,
+                    f"{path} is a tests/tier1_target_parity.rs input, so it must"
+                    " select the compiler jobs that run the guard",
+                )
 
     def test_compiler_and_performance_gate_scripts_select_compiler(self):
         for path in (
