@@ -442,7 +442,7 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-old = "https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.py"
+old = "https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/fixtures/quick_start.py"
 new = "https://github.com/rotnov/pycc/blob/main/tests/fixtures/quick_start.py"
 assert old in content
 path.write_text(content.replace(old, new, 1))

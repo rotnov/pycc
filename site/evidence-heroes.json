@@ -21,7 +21,7 @@
       "test": {
         "path": "tests/quick_start.rs",
         "name": "quick_start_fixture_builds_and_prints_the_documented_sequence",
-        "sha256": "80f91b88d00598a8697c2988b64b2be60166c5067035c7ec57a295f10d9caadb"
+        "sha256": "cb7af27aab96bf468fea7ee973e00ae9d11c0054187e09f2e94e4d8b9199a766"
       },
       "command": {
         "build": "pycc build hello.py -o hello",
@@ -35,13 +35,13 @@
         "sha256": "668cec0e1f32369a43d6f74b1e795fe37f1e46bdb8eb0d7712b35c7e95e173e6"
       },
       "repository": {
-        "commit": "8ccc05b51477c23711d2cefce3eb9128aab1162a",
-        "url": "https://github.com/rotnov/pycc/commit/8ccc05b51477c23711d2cefce3eb9128aab1162a"
+        "commit": "8324332d5ea713bd8a56f4d08bf7e0120757d66b",
+        "url": "https://github.com/rotnov/pycc/commit/8324332d5ea713bd8a56f4d08bf7e0120757d66b"
       },
       "attestation": {
         "workflow": "CI",
-        "run_id": 32419646184,
-        "run_url": "https://github.com/rotnov/pycc/actions/runs/32419646184"
+        "run_id": 33198103510,
+        "run_url": "https://github.com/rotnov/pycc/actions/runs/33198103510"
       },
       "environment": {
         "python": "3.14.7",
@@ -52,38 +52,38 @@
           {
             "runner": "macos-14",
             "architecture": "aarch64-apple-darwin",
-            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686638"
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383105"
           },
           {
             "runner": "macos-15-intel",
             "architecture": "x86_64-apple-darwin",
-            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686654"
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383070"
           },
           {
             "runner": "ubuntu-latest",
             "architecture": "x86_64-unknown-linux-gnu",
-            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686701"
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940382966"
           },
           {
             "runner": "ubuntu-24.04-arm",
             "architecture": "aarch64-unknown-linux-gnu",
-            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686726"
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383014"
           },
           {
             "runner": "windows-latest",
             "architecture": "x86_64-pc-windows-msvc",
-            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588687208"
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940382973"
           }
         ]
       },
       "state": "all-Tier-1",
       "limitations": "This compiles only the implemented v0.1 subset: statement-form if and while, recursive calls, and print. It does not prove support for classes, exceptions, generators, or imports.",
       "stable_links": {
-        "fixture": "https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.py",
-        "test": "https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/quick_start.rs",
-        "snapshot": "https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.expected.txt",
-        "commit": "https://github.com/rotnov/pycc/commit/8ccc05b51477c23711d2cefce3eb9128aab1162a",
-        "run": "https://github.com/rotnov/pycc/actions/runs/32419646184"
+        "fixture": "https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/fixtures/quick_start.py",
+        "test": "https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/quick_start.rs",
+        "snapshot": "https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/fixtures/quick_start.expected.txt",
+        "commit": "https://github.com/rotnov/pycc/commit/8324332d5ea713bd8a56f4d08bf7e0120757d66b",
+        "run": "https://github.com/rotnov/pycc/actions/runs/33198103510"
       },
       "projections": {
         "html": "site/index.html",

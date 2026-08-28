@@ -442,8 +442,8 @@ The landing record is the only accepted evidence hero in version 1. It binds
 `tests/quick_start.rs::quick_start_fixture_builds_and_prints_the_documented_sequence`,
 and `tests/fixtures/quick_start.expected.txt` to their canonical LF SHA-256
 identities and to the same bytes at exact commit
-`8ccc05b51477c23711d2cefce3eb9128aab1162a`. Its accepted attestation is exact
-CI run `32419646184`: the coverage runner plus the four native matrix jobs
+`8324332d5ea713bd8a56f4d08bf7e0120757d66b`. Its accepted attestation is exact
+CI run `33198103510`: the coverage runner plus the four native matrix jobs
 cover Linux x64/arm64, macOS x64/arm64, and Windows x64 with CPython 3.14.7,
 Rust 1.97.1, LLVM 22, the debug profile, and no extra compiler flags. The hero
 links to the exact source, test, snapshot, commit, run, and five jobs, not to a

@@ -197,33 +197,33 @@ PAGE_ALLOWLIST = {
     },
 }
 LANDING_ALLOWLIST = {
-    "commit": "8ccc05b51477c23711d2cefce3eb9128aab1162a",
-    "run_id": 32419646184,
+    "commit": "8324332d5ea713bd8a56f4d08bf7e0120757d66b",
+    "run_id": 33198103510,
     "platforms": [
         {
             "runner": "macos-14",
             "architecture": "aarch64-apple-darwin",
-            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686638",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383105",
         },
         {
             "runner": "macos-15-intel",
             "architecture": "x86_64-apple-darwin",
-            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686654",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383070",
         },
         {
             "runner": "ubuntu-latest",
             "architecture": "x86_64-unknown-linux-gnu",
-            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686701",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940382966",
         },
         {
             "runner": "ubuntu-24.04-arm",
             "architecture": "aarch64-unknown-linux-gnu",
-            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686726",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383014",
         },
         {
             "runner": "windows-latest",
             "architecture": "x86_64-pc-windows-msvc",
-            "job_url": "https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588687208",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940382973",
         },
     ],
 }
