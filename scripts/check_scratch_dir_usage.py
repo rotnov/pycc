@@ -29,9 +29,8 @@ Two allowances, both narrow and deliberate:
   rule from the moment this check merges: any occurrence at all is a
   violation. A file that *is* in `ALLOWLIST` may keep its existing
   occurrences; Part 2 (#782) has since migrated every test-file entry off
-  the banned pattern except `tests/quick_start.rs`, whose exact bytes are
-  pinned by the site's versioned evidence-hero contract (see the entry's
-  own comment below), so the remaining entries are that pinned file and
+  the banned pattern (`tests/quick_start.rs` last, via the evidence-hero
+  re-attestation its byte pin required), so the one remaining entry is
   `src/main.rs`'s two production call sites, Part 3's job, tracked by
   https://github.com/rotnov/pycc/issues/783. An entry's count is
   intended to only stay the same or go down on any later pull request --
@@ -89,9 +88,8 @@ EXEMPT_FILES = frozenset({"crates/pycc_scratch/src/lib.rs"})
 # One-time snapshot generated mechanically at Part 1's (#781's) own merge
 # commit via `git ls-files '*.rs'` piped through a count of this script's own
 # pattern match per file (see the docstring above). Part 2 (#782) migrated
-# every test-file entry except `tests/quick_start.rs` (evidence-pinned, see
-# below), so the remaining entries are that file and `src/main.rs`, owned by
-# Part 3 (#783).
+# every test-file entry, so the one remaining entry is `src/main.rs`, owned
+# by Part 3 (#783).
 #
 # `src/main.rs`'s count of 2 (down from the snapshot's 7 after #782's
 # Batch B migrated all five of its test-only sites and removed
@@ -103,16 +101,6 @@ EXEMPT_FILES = frozenset({"crates/pycc_scratch/src/lib.rs"})
 # output path.
 ALLOWLIST: dict[str, int] = {
     "src/main.rs": 2,
-    # The one test-file site #782 could not migrate: the public site's
-    # versioned evidence-hero contract (docs/WEBSITE.md, enforced by
-    # `scripts/check-site.sh` via `site/evidence-heroes.json`) pins this
-    # file's exact canonical bytes -- both by SHA-256 and byte-for-byte
-    # against the reviewed evidence commit `8ccc05b5` -- so any edit,
-    # including this migration, fails the Pages `build` check until the
-    # landing hero is re-attested (new evidence commit, accepted CI run,
-    # updated allowlist and site projections). Migrate this site only as
-    # part of that re-attestation ceremony.
-    "tests/quick_start.rs": 1,
 }
 
 # Tolerant of whitespace/line breaks between `temp_dir()` and `.join(`, since
