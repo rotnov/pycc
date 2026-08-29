@@ -354,6 +354,20 @@ fn d0040_tuple_index_not_a_literal() {
     assert_diagnostic_matches_fixture("d0040_tuple_index_not_a_literal");
 }
 
+// PR #827 review finding: an oversized literal index into a *tuple* base
+// must keep reporting T0040 ("non-negative literal within range"), not
+// T0051 ("out of range for a list index") -- tuple indexing is resolved
+// entirely at compile time in `pycc_types`, with no D-141 runtime `int`
+// boundary at all, so `crates/pycc_hir/src/expr.rs`'s subscript-lowering
+// arm must defer to this check for a tuple-literal base instead of
+// preempting it. See `crates/pycc_hir/src/expr.rs`'s
+// `boundary_tuple_literal_index_is_not_t0051` unit test for the
+// HIR-lowering-level half of this coverage.
+#[test]
+fn d0040_tuple_index_oversized_literal_still_t0040() {
+    assert_diagnostic_matches_fixture("d0040_tuple_index_oversized_literal_still_t0040");
+}
+
 #[test]
 fn d0041_value_less_annotation_later_assignment_mismatch() {
     assert_diagnostic_matches_fixture("d0041_value_less_annotation_later_assignment_mismatch");
@@ -381,6 +395,23 @@ fn t0041_maybe_bound_for_range() {
 #[test]
 fn t0045_final_reassignment() {
     assert_diagnostic_matches_fixture("t0045_final_reassignment");
+}
+
+// Issue #618: an out-of-range `int` literal in a runtime `int`-boundary
+// position (D-141) is rejected at compile time with a spanned T0051
+// diagnostic instead of reaching `pycc_rt_int_untag_checked` and aborting at
+// run time (D-178's own knowingly-deferred consequence). This fixture
+// exercises the "list index" position; every other named position is
+// exercised without going through the CLI's exact `--error-format human`
+// rendering, by the position-specific unit tests in
+// `crates/pycc_hir/src/tests.rs` and `crates/pycc_hir/src/stmt.rs`'s own
+// test module, which is what D-014's coverage gate actually needs -- this
+// fixture's job is only to prove the diagnostic reaches the real `pycc
+// check` CLI end to end with a correct rendered span, not to duplicate all
+// 13 positions through the slower CLI harness.
+#[test]
+fn t0051_int_literal_boundary_list_index() {
+    assert_diagnostic_matches_fixture("t0051_int_literal_boundary_list_index");
 }
 
 #[test]

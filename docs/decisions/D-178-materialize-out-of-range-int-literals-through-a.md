@@ -8,8 +8,14 @@ status: accepted
 
 - Status: accepted; superseded in part by
   [D-179](./D-179-range-loops-drive-bigint-bounds-steps-and.md), which removes
-  the `range` operand from this decision's fourteen-boundary inventory. Every
-  other part of this decision stands.
+  the `range` operand from this decision's fourteen-boundary inventory, and by
+  [D-207](./D-207-compile-time-int-literal-boundary-check-is-a.md), which
+  closes this decision's own deferred compile-time diagnostic
+  ([#618](https://github.com/rotnov/pycc/issues/618)) for the literal case,
+  narrower than but far cheaper than this decision's own "three passes"
+  estimate for it (see D-207 for why that estimate was wrong). Every other
+  part of this decision stands, including the run-time abort for a bigint
+  reaching the same 13 positions through arithmetic rather than a literal.
 - Context:
   [D-061](./D-061-int-s-fast-path-i64-slot-is-a-low-bit-tagged-63.md) gives `int` a 63-bit tagged
   fast path, and [D-058](./D-058-int-overflow-to-bigint-d-001-is-a-minimal-hand.md) gives
@@ -73,7 +79,14 @@ status: accepted
   `tests/issue_148_oversized_int_literal.rs`, documented in
   [RUNTIME.md](../RUNTIME.md), [TYPE_SYSTEM.md](../TYPE_SYSTEM.md), and
   [ROADMAP.md](../ROADMAP.md), and a compile-time diagnostic for them is
-  deferred to its own issue.
+  deferred to its own issue. **Superseded for the literal case by
+  [D-207](./D-207-compile-time-int-literal-boundary-check-is-a.md):**
+  [#618](https://github.com/rotnov/pycc/issues/618) implemented that deferred
+  diagnostic (`T0051`) for a literal at 12 of these 13 positions plus a
+  deliberately narrowed 13th (`str * int` repeat count, caught only when the
+  string side is itself a literal); a bigint reaching any of them through
+  arithmetic still aborts at run time exactly as described above, which is
+  the case this decision always intended to accept.
 
 - Alternatives:
   - *Keep rejecting an out-of-range literal, as a `C0001` diagnostic instead of
@@ -93,7 +106,19 @@ status: accepted
   - *Add a compile-time "out-of-range literal in an `int`-boundary position"
     diagnostic in this change.* Rejected as scope: it needs a new HIR/MIR
     notion of boundary position spanning 14 sites across three passes, which
-    AGENTS.md's decomposition rule places in its own issue.
+    AGENTS.md's decomposition rule places in its own issue. **This "three
+    passes" estimate, carried into #618's own filing, was investigated at
+    implementation time and found inaccurate — see
+    [D-207](./D-207-compile-time-int-literal-boundary-check-is-a.md):**
+    `pycc check` only ever runs `pycc_hir::lower_checked` followed by
+    `pycc_types::check`; MIR and codegen never run during `check`. Of the 13
+    positions D-179 already left in this inventory (`range()` stays excluded,
+    per D-179, since it is fully bigint-capable), 12 resolve entirely
+    syntactically during HIR lowering, with no type information needed, and
+    the 13th (`str` repeat count) is handled by narrowing it to the
+    string-literal case rather than reaching into `pycc_types` for the
+    general case. The actual fix is a single new `pycc_hir` module touching
+    zero other passes.
 
 - Consequences:
   - `pycc_rt_int_from_i64` is a new public runtime ABI entry point. Like every

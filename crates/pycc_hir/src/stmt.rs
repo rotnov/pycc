@@ -89,6 +89,7 @@ use crate::expr::{
     contains_named_expr, is_zero_arg_super_call, lower_dict_comp_assign, lower_expr,
     lower_list_comp_assign, lower_range_call, lower_set_comp_assign,
 };
+use crate::int_boundary::check_boundary_literal;
 use crate::{
     CompIter, HirExpr, HirMatchCase, HirPattern, HirStmt, Ty, annotation_to_ty, context_invalid,
     unsupported,
@@ -210,10 +211,32 @@ pub(crate) fn lower_stmt(
                             pycc_ast::expr_range(target),
                         ));
                     };
+                    // Issue #618 (T0051): only the assigned `value` is a
+                    // checked boundary position here; the `key` slot is
+                    // deliberately left unchecked for the same reason a
+                    // dict-literal key is unchecked elsewhere in this module
+                    // -- this compiler never gives a dict key an `int`-typed,
+                    // boundary-sensitive representation, so a key literal has
+                    // no runtime `int`-untagging boundary to protect.
+                    let key = lower_expr(&sub.slice, in_function, class_name)?;
+                    let value = lower_expr(&assign.value, in_function, class_name)?;
+                    // This lowering step is type-blind (see the comment
+                    // above): `base_name` may turn out to be a `list[int]` at
+                    // `pycc_types` time, not a `dict`, in which case T0033
+                    // rejects the whole assignment downstream and this label
+                    // is never surfaced. The label is deliberately
+                    // base-neutral ("subscript-assign", not "dict
+                    // subscript-assign") so it does not imply a base type
+                    // this lowering step hasn't actually confirmed.
+                    check_boundary_literal(
+                        &value,
+                        pycc_ast::expr_range(&assign.value),
+                        "subscript-assign value",
+                    )?;
                     HirStmt::DictSet {
                         dict: base_name.id.as_str().to_string(),
-                        key: lower_expr(&sub.slice, in_function, class_name)?,
-                        value: lower_expr(&assign.value, in_function, class_name)?,
+                        key,
+                        value,
                     }
                 }
                 // `base.attr = value` (D-154, Part 1 of #375): structurally
