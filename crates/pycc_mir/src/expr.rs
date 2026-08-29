@@ -207,9 +207,13 @@ pub(super) fn lower_expr(
         }
         // #603 (Part 2 of #573): `-x`/`+x` over a non-literal operand is
         // rewritten into the equivalent binary expression rather than
-        // getting a `MirExpr` variant of its own, the same way `!=` between
-        // dataclass instances is lowered as a negated `__eq__` call below
-        // -- pycc's MIR deliberately has no unary node.
+        // getting a `MirExpr` variant of its own -- pycc's MIR deliberately
+        // has no `USub`/`UAdd`/`Invert` unary node (see the #604 comment
+        // below for `not x`'s own dedicated `MirExpr::Not` exception to
+        // that rule, which also supersedes the "negated `__eq__` call"
+        // comparison this comment used to draw to the dataclass `!=`
+        // lowering further below -- that lowering now itself uses
+        // `MirExpr::Not` rather than illustrating "no unary node exists").
         //
         // The rewrite is representation-sensitive, so it is not a single
         // uniform shape:
@@ -304,13 +308,19 @@ pub(super) fn lower_expr(
             // #378 (PR-18): `==`/`!=` between same-class dataclass instances
             // is rewritten to a `MirExpr::Call` to the class's
             // compiler-synthesized `__eq__` method. `!=` is lowered as
-            // `__eq__(left, right) != True` (the negation), since pycc's
-            // MIR has no `UnaryOp::Not` node. This mirrors how `@property`
-            // redirects attribute access to method calls -- a MIR-level
-            // rewrite, not a new MIR node. Only `Eq` and `NotEq` are
-            // rewritten, and only for dataclass classes (whose synthesized
-            // `__eq__` has a known-correct signature); other comparison
-            // operators (`<`, `<=`, `>`, `>=`) and non-dataclass classes
+            // `__eq__(left, right) != True` (a `MirExpr::Compare` against a
+            // `BoolLiteral`, predating #604's `MirExpr::Not`) rather than
+            // negating the call result with `MirExpr::Not` directly --
+            // `MirExpr::Not` computes truthiness (bool/int/float/str/
+            // None/Optional) via `pycc_codegen`'s `truthy` helper, but this
+            // call's result is already a `bool`, so an equality compare
+            // against `true` is the simpler, equally-correct rewrite. This
+            // mirrors how `@property` redirects attribute access to method
+            // calls -- a MIR-level rewrite, not a new MIR node. Only `Eq`
+            // and `NotEq` are rewritten, and only for dataclass classes
+            // (whose synthesized `__eq__` has a known-correct signature);
+            // other comparison operators (`<`, `<=`, `>`, `>=`) and
+            // non-dataclass classes
             // fall through to the default `MirExpr::Compare` (the type
             // checker rejects them with `T0021` before they reach MIR
             // lowering in normal compilation, but the MIR itself stays

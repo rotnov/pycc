@@ -21,12 +21,22 @@
 //!   is always `bool`, for every operand type this compiler can actually
 //!   compute a truth value for at codegen time --
 //!   [`truthy`](../../pycc_codegen/fn.truthy.html) in `pycc_codegen`
-//!   handles `bool`, `int`, `float`, `str`, and `Optional`, but panics on
-//!   `list`/`dict`/`set` (no `pycc_rt_*_truthy` entry point exists for
-//!   them yet). Accepting those container types here would let a `not`
-//!   expression reach that panic, so they are rejected with `T0021` instead
-//!   -- the same "every type pycc models a truth value for" reading the
-//!   issue's own completion criteria use, not a narrowing of them.
+//!   handles `bool`, `int`, `float`, `str`, `None`, `Optional`, and a class
+//!   instance, but panics on `list`/`dict`/`set` (no `pycc_rt_*_truthy`
+//!   entry point exists for them yet). Accepting those container types
+//!   here would let a `not` expression reach that panic, so they are
+//!   rejected with `T0021` instead -- the same "every type pycc models a
+//!   truth value for" reading the issue's own completion criteria use,
+//!   not a narrowing of them. `None` needs no runtime call at all: a
+//!   `Ty::None`-typed `MirExpr::Name` read lowers to `Scalar::Bool` backed
+//!   by an always-zero `i8` slot, and `MirExpr::NoneLiteral` lowers to
+//!   `Scalar::Optional`, so `truthy`'s existing `Bool`/`Optional` arms
+//!   already compute the correct (always-`False`) truth value for it.
+//!   `Ty::Instance(_)` needs no runtime call either (D-154, Part 1 of
+//!   #375): this compiler ships no `__bool__`/`__len__`, so every
+//!   instance is unconditionally truthy, and `truthy`'s `Scalar::Instance`
+//!   arm already returns the constant `1` for it -- `not <instance>` is
+//!   always `False`.
 //! * `~x` is `int -> int` only (`bool` included, since `pycc_types` treats
 //!   it as a numeric subtype of `int`); every other operand is `T0021`.
 
@@ -42,7 +52,13 @@ pub(crate) fn unary_result_type(op: UnaryOpKind, operand: Ty) -> Result<Ty, Diag
             _ => Err(unary_type_error(op, operand)),
         },
         UnaryOpKind::Not => match operand {
-            Ty::Bool | Ty::Int | Ty::Float | Ty::Str | Ty::Optional(_) => Ok(Ty::Bool),
+            Ty::Bool
+            | Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::None
+            | Ty::Optional(_)
+            | Ty::Instance(_) => Ok(Ty::Bool),
             _ => Err(unary_type_error(op, operand)),
         },
         UnaryOpKind::Invert => match operand {
@@ -118,5 +134,27 @@ mod tests {
         let err = unary_result_type(UnaryOpKind::UAdd, Ty::None).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(err.message.contains("UAdd") && err.message.contains("None"));
+    }
+
+    #[test]
+    fn logical_not_on_none_types_as_bool() {
+        // `not None` is always `True` in CPython; `truthy`'s existing
+        // `Bool`/`Optional` arms already compute the correct (always
+        // `False`) truthiness for both `Ty::None` representations, with no
+        // codegen change needed -- see this module's own doc comment.
+        assert_eq!(unary_result_type(UnaryOpKind::Not, Ty::None), Ok(Ty::Bool));
+    }
+
+    #[test]
+    fn logical_not_on_a_class_instance_types_as_bool() {
+        // D-154 (Part 1 of #375): this compiler ships no `__bool__`/
+        // `__len__`, so every instance is unconditionally truthy, and
+        // `truthy`'s `Scalar::Instance` arm already returns the constant
+        // `1` for it -- `not <instance>` type-checks and is always
+        // `False`.
+        assert_eq!(
+            unary_result_type(UnaryOpKind::Not, Ty::Instance(Box::new("C".to_string()))),
+            Ok(Ty::Bool)
+        );
     }
 }
