@@ -236,6 +236,7 @@ fn a_tuple_literal_elements_survives_a_later_siblings_raise() {
 // sides of that gap.
 // ---------------------------------------------------------------------------
 
+#[cfg(unix)]
 mod peak_rss {
     use super::{PROMOTED, pycc_bin, write_case};
     use std::process::Command;
