@@ -22,9 +22,11 @@ use exception::{
 };
 mod bigint_rc;
 use bigint_rc::{
-    BigIntRefcount, emit_bigint_refcount_call, int_temporary_word, release_if_int_temporary,
-    release_int_slot_before_store, release_optional_int_slot_before_store,
-    release_scalar_if_int_temporary, retain_if_int_duplicate,
+    BigIntRefcount, emit_bigint_refcount_call, int_temporary_word, pop_pending_int_release,
+    push_pending_int_release_if_scalar_temporary, push_pending_int_release_if_temporary,
+    release_if_int_temporary, release_int_slot_before_store,
+    release_optional_int_slot_before_store, release_scalar_if_int_temporary,
+    retain_if_int_duplicate,
 };
 mod int_const;
 use int_const::{emit_int_constant, tag_smallint_const};
@@ -1337,6 +1339,63 @@ fn range_operand_to_normalized_int<'ctx>(
     }
 }
 
+/// Evaluates a `range()`-shaped triple of bounds (`MirStmt::ForRange` and
+/// its three comprehension-tail copies all share this exact preheader
+/// shape) with #638 (D-208) exception-edge protection: `start`'s word is
+/// protected across `stop` and `step`'s own evaluation, and `stop`'s word is
+/// protected across `step`'s, mirroring the two-operand push/pop pattern
+/// `BinOp`/`Compare` use above but generalized to three operands evaluated
+/// in sequence. Per D-179, these bounds are legitimately owned, live
+/// `IntValue`s held across each other's evaluation (unlike `Slice`/
+/// `Subscript`/container-literal bounds, which abort the process on a
+/// bigint before a sibling is ever reached) -- see the #638 decision
+/// entry's affected-site inventory for the full boundary.
+///
+/// Returns the three normalized `IntValue`s; callers keep their own
+/// existing retain/release and `owned_range_operands` bookkeeping unchanged
+/// -- this helper only factors out the shared evaluation-with-protection
+/// step, not the ownership contract built on top of it.
+#[allow(clippy::too_many_arguments)]
+fn emit_range_operands_with_exception_safety<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    start: &MirExpr,
+    stop: &MirExpr,
+    step: &MirExpr,
+) -> (IntValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>) {
+    let start_v = range_operand_to_normalized_int(
+        context,
+        builder,
+        rt,
+        emit_expr(context, builder, module, rt, user_functions, locals, start),
+        "start",
+    );
+    let pending_start = push_pending_int_release_if_temporary(rt, start, start_v);
+    let stop_v = range_operand_to_normalized_int(
+        context,
+        builder,
+        rt,
+        emit_expr(context, builder, module, rt, user_functions, locals, stop),
+        "stop",
+    );
+    let pending_stop = push_pending_int_release_if_temporary(rt, stop, stop_v);
+    let step_v = range_operand_to_normalized_int(
+        context,
+        builder,
+        rt,
+        emit_expr(context, builder, module, rt, user_functions, locals, step),
+        "step",
+    );
+    // LIFO pop order, matching the LIFO push order above.
+    pop_pending_int_release(rt, pending_stop);
+    pop_pending_int_release(rt, pending_start);
+    (start_v, stop_v, step_v)
+}
+
 /// Promotes any numeric `Scalar` to `f64`: an existing `Float` passes
 /// through; `Int` goes through `pycc_rt_int_to_float` (never a raw LLVM
 /// cast -- the value is D-141 encoded, so only `pycc_rt` may interpret its
@@ -2081,7 +2140,18 @@ fn emit_expr_unchecked<'ctx>(
             // is the direct equivalent, panicking with `msg` if the callee
             // turned out to be void instead of returning a value.
             let l = emit_expr(context, builder, module, rt, user_functions, locals, left);
+            // #638 (D-208): `l` may already be an owned, not-yet-released
+            // `Ty::Int` birth reference (e.g. `x + x` promoting to a fresh
+            // heap word). Protect it across `right`'s evaluation, which may
+            // recurse into an exception-settable node and branch away
+            // before this arm's own `release_if_int_temporary(left, l)`
+            // call below is ever reached. The pop on the fallthrough path
+            // immediately precedes that unchanged release call, so at most
+            // one of {exception-edge release, fallthrough release} ever
+            // executes for this word.
+            let pending_l = push_pending_int_release_if_scalar_temporary(rt, left, &l);
             let r = emit_expr(context, builder, module, rt, user_functions, locals, right);
+            pop_pending_int_release(rt, pending_l);
             match ty {
                 Ty::Int => {
                     // `to_numeric_encoded_int` promotes a `bool` operand instead of
@@ -2263,7 +2333,14 @@ fn emit_expr_unchecked<'ctx>(
             let left_ty = left.ty();
             let right_ty = right.ty();
             let l = emit_expr(context, builder, module, rt, user_functions, locals, left);
+            // #638 (D-208): same protection as `BinOp`'s `Ty::Int` arm --
+            // `l` must survive `right`'s evaluation intact so the int
+            // branch's own `release_if_int_temporary(left, l)` call below
+            // is guaranteed to see it, even when `right`'s evaluation
+            // branches away on an exception.
+            let pending_l = push_pending_int_release_if_scalar_temporary(rt, left, &l);
             let r = emit_expr(context, builder, module, rt, user_functions, locals, right);
+            pop_pending_int_release(rt, pending_l);
             // `is`/`is not` (D-197, #763, Part 1 of #747). HIR lowering
             // (`crates/pycc_hir/src/expr.rs`'s `Expr::Compare` arm)
             // guarantees one operand is syntactically `Expr::NoneLiteral`
@@ -3662,6 +3739,19 @@ fn build_call_to_with_leading_args<'ctx>(
     args: &[MirExpr],
 ) -> inkwell::values::CallSiteValue<'ctx> {
     let mut arg_values: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = leading_args.to_vec();
+    // #638 (D-208): a fresh (non-duplicate) `Ty::Int` argument's ownership
+    // *transfers* to the callee's parameter slot on the normal path --
+    // there is no release call for it anywhere in this function, unlike
+    // every other affected site in the inventory. If a later sibling
+    // argument's own evaluation raises before `build_call`/
+    // `build_indirect_call` below is ever reached, that transfer never
+    // happens and the reference is orphaned. `mark` records the stack
+    // depth before this loop so the truncate below is recursion-safe: an
+    // argument expression can itself contain a nested call whose own
+    // marshalling loop pushes and pops its own arguments' words while
+    // evaluating this loop's own argument, and this loop's earlier
+    // pending entries must stay untouched by that nested truncation.
+    let mark = rt.exceptions.pending_int_releases.borrow().len();
     let marshalled_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = args
         .iter()
         .zip(&user_function.param_tys[leading_args.len()..])
@@ -3669,6 +3759,14 @@ fn build_call_to_with_leading_args<'ctx>(
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, a);
             let scalar = incref_if_str_duplicate(builder, rt, a, scalar);
             let scalar = retain_if_int_duplicate(context, builder, rt, a, scalar);
+            // Push *after* `retain_if_int_duplicate`: a duplicate
+            // reference's own extra retain is D-180 residual 3's separate,
+            // already-accepted concern, and `int_temporary_word` (via
+            // `push_pending_int_release_if_scalar_temporary`) already
+            // excludes a duplicate reference by construction, so this is
+            // a no-op for that case regardless of ordering -- placed here
+            // to match the plan's own stated call order.
+            push_pending_int_release_if_scalar_temporary(rt, a, &scalar);
             let scalar = coerce_scalar_to_type(context, builder, scalar, param_ty.clone());
             match scalar {
                 Scalar::Int(v) => v.into(),
@@ -3721,6 +3819,16 @@ fn build_call_to_with_leading_args<'ctx>(
             }
         })
         .collect();
+    // #638 (D-208): every argument above evaluated successfully -- this
+    // Rust-level line is reached unconditionally at codegen (emission)
+    // time regardless of what the *compiled* program's exception-edge
+    // control flow does, since `guard_statement_effects` only emits a
+    // runtime branch instruction, never diverts the emitter itself (see
+    // `guard_statement_effects`'s own doc comment). Truncate back to
+    // `mark` *without* releasing: ownership of every entry pushed above
+    // has now transferred to the callee's parameter slots via the
+    // `build_call`/`build_indirect_call` below.
+    rt.exceptions.pending_int_releases.borrow_mut().truncate(mark);
     arg_values.extend(marshalled_args);
     // Issue #22: dispatch indirectly through the function-pointer slot.
     // Load the current binding; if null, the function hasn't been defined
@@ -6108,26 +6216,16 @@ fn emit_stmt<'ctx>(
             body,
         } => {
             let function = builder.get_insert_block().unwrap().get_parent().unwrap();
-            let start_v = range_operand_to_normalized_int(
+            let (start_v, stop_v, step_v) = emit_range_operands_with_exception_safety(
                 context,
                 builder,
+                module,
                 rt,
-                emit_expr(context, builder, module, rt, user_functions, locals, start),
-                "start",
-            );
-            let stop_v = range_operand_to_normalized_int(
-                context,
-                builder,
-                rt,
-                emit_expr(context, builder, module, rt, user_functions, locals, stop),
-                "stop",
-            );
-            let step_v = range_operand_to_normalized_int(
-                context,
-                builder,
-                rt,
-                emit_expr(context, builder, module, rt, user_functions, locals, step),
-                "step",
+                user_functions,
+                locals,
+                start,
+                stop,
+                step,
             );
             // #146 Part 1, the `ForRange` ownership contract.
             //
@@ -7075,26 +7173,16 @@ fn emit_stmt<'ctx>(
             let (test_bb, after_bb, tail, owned_range_operands) = match source {
                 CompSource::Range { start, stop, step } => {
                     // Mirrors `MirStmt::ForRange`'s own shape exactly.
-                    let start_v = range_operand_to_normalized_int(
+                    let (start_v, stop_v, step_v) = emit_range_operands_with_exception_safety(
                         context,
                         builder,
+                        module,
                         rt,
-                        emit_expr(context, builder, module, rt, user_functions, locals, start),
-                        "start",
-                    );
-                    let stop_v = range_operand_to_normalized_int(
-                        context,
-                        builder,
-                        rt,
-                        emit_expr(context, builder, module, rt, user_functions, locals, stop),
-                        "stop",
-                    );
-                    let step_v = range_operand_to_normalized_int(
-                        context,
-                        builder,
-                        rt,
-                        emit_expr(context, builder, module, rt, user_functions, locals, step),
-                        "step",
+                        user_functions,
+                        locals,
+                        start,
+                        stop,
+                        step,
                     );
                     // #146 Part 1: same ownership contract as
                     // `MirStmt::ForRange`'s own arm (see the long comment
@@ -7587,26 +7675,16 @@ fn emit_stmt<'ctx>(
             //    mirrors).
             let (test_bb, after_bb, tail, owned_range_operands) = match source {
                 CompSource::Range { start, stop, step } => {
-                    let start_v = range_operand_to_normalized_int(
+                    let (start_v, stop_v, step_v) = emit_range_operands_with_exception_safety(
                         context,
                         builder,
+                        module,
                         rt,
-                        emit_expr(context, builder, module, rt, user_functions, locals, start),
-                        "start",
-                    );
-                    let stop_v = range_operand_to_normalized_int(
-                        context,
-                        builder,
-                        rt,
-                        emit_expr(context, builder, module, rt, user_functions, locals, stop),
-                        "stop",
-                    );
-                    let step_v = range_operand_to_normalized_int(
-                        context,
-                        builder,
-                        rt,
-                        emit_expr(context, builder, module, rt, user_functions, locals, step),
-                        "step",
+                        user_functions,
+                        locals,
+                        start,
+                        stop,
+                        step,
                     );
                     // #146 Part 1: same ownership contract as
                     // `MirStmt::ForRange`'s own arm (see the long comment
@@ -8067,26 +8145,16 @@ fn emit_stmt<'ctx>(
 
             let (test_bb, after_bb, tail, owned_range_operands) = match source {
                 CompSource::Range { start, stop, step } => {
-                    let start_v = range_operand_to_normalized_int(
+                    let (start_v, stop_v, step_v) = emit_range_operands_with_exception_safety(
                         context,
                         builder,
+                        module,
                         rt,
-                        emit_expr(context, builder, module, rt, user_functions, locals, start),
-                        "start",
-                    );
-                    let stop_v = range_operand_to_normalized_int(
-                        context,
-                        builder,
-                        rt,
-                        emit_expr(context, builder, module, rt, user_functions, locals, stop),
-                        "stop",
-                    );
-                    let step_v = range_operand_to_normalized_int(
-                        context,
-                        builder,
-                        rt,
-                        emit_expr(context, builder, module, rt, user_functions, locals, step),
-                        "step",
+                        user_functions,
+                        locals,
+                        start,
+                        stop,
+                        step,
                     );
                     // #146 Part 1: same ownership contract as
                     // `MirStmt::ForRange`'s own arm (see the long comment
