@@ -33,6 +33,32 @@ never a merge gate.
 
 ---
 
+## 2026-08-29 — Review fix round swept the reviewer's enumerated sites, not the defective phrase; cost one extra review round
+
+What happened: the #784 deep-review round 1 flagged that the
+`min_age_lockless` documentation named only "pre-Part-4 legacy roots" while
+the code covers a superset. The fix round broadened the wording at four
+sites (even more than the two the fix brief enumerated), but two further
+instances of the identical narrow phrasing survived — one eight lines above
+a corrected clause in the same doc block — and a second review round was
+needed to find and fix them (commits `3df0ffac`, `b9f09f77` on the #784
+branch). This event happened after the same-day CI-watch entry below.
+
+Root cause: the fix's extent was taken from the reviewer's (and the fix
+brief's) enumerated site list instead of being derived from the defect
+itself. The defect was a phrase-shaped claim; a repo-wide search for the
+phrase (`grep -rn "pre-Part-4"`) run before committing the round-1 fix
+would have surfaced all six instances at once — the identical search run
+after round 2 is what finally proved completeness.
+
+What fixed it: the round-2 fix plus the post-fix phrase grep.
+
+Lesson: when a review finding corrects a claim that exists as a repeated
+phrase or pattern, derive the fix's extent with a repo-wide search for that
+phrase before committing — the reviewer's cited sites are examples of the
+class, not its boundary. Declare such a fix complete only when the search
+returns corrected instances exclusively.
+
 ## 2026-08-29 — CI wait ran through a hand-rolled poll loop instead of the repository watcher; 13-hour silent stall
 
 What happened: while waiting on a pull request's CI, the session built an
