@@ -223,7 +223,13 @@ status: accepted
        between an operand's evaluation and its release branches away before the
        release, leaking that operand. Enumerated here rather than fixed:
        tying releases to D-173's exception edges is unwinding work, not
-       refcounting work.
+       refcounting work. **Closed by
+       [D-208](./D-208-release-a-bigint-temporary-on-the-exception-unwinding-edge.md):**
+       `guard_statement_effects` now threads a pending-release stack through
+       the operand sites decision 7 covers, releasing anything still owned
+       and pending when control branches to an installed exception target.
+       Residual item 1 above (the `TupleLiteral` element) is untouched and
+       remains open.
 
     D-180's other six residual accepted leaks are unchanged.
   - **A memory-safety defect that was known and unfixed when this decision
