@@ -214,3 +214,4 @@ current.
 | [D-205](./D-205-optional-t-flow-sensitive-narrowing-part2.md) | Optional[T] flow-sensitive is/is not None narrowing (Part 2 of #747) | accepted |
 | [D-206](./D-206-kill-prescan-for-re-enterable-narrowed-bodies.md) | Kill-prescan for re-enterable Optional[T] narrowed bodies (D-068 re-review of #780, third round) | accepted |
 | [D-207](./D-207-compile-time-int-literal-boundary-check-is-a.md) | A compile-time int-literal boundary check is a single-pass pycc_hir fix, not three | accepted |
+| [D-208](./D-208-release-a-bigint-temporary-on-the-exception-unwinding-edge.md) | Release a pending bigint temporary on the D-173 exception-unwinding edge | accepted |

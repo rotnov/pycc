@@ -512,6 +512,73 @@ pub(super) fn release_scalar_if_int_temporary<'ctx>(
     }
 }
 
+/// Pushes `source_expr`'s already-evaluated `word` onto
+/// `rt.exceptions.pending_int_releases` (#638, D-208) when it is a fresh,
+/// not-yet-released `Ty::Int` birth reference -- the same classification
+/// `release_if_int_temporary` uses, exposed here so a caller can protect an
+/// operand across a sibling's evaluation instead of releasing it
+/// immediately. Returns the pushed word (for the matching
+/// [`pop_pending_int_release`] call) or `None` when nothing was pushed
+/// (borrowed, non-`Ty::Int`, or a duplicate reference -- see
+/// [`int_temporary_word`]).
+///
+/// Every call site pushes right after the operand's own `emit_expr` (and,
+/// where applicable, `retain_if_int_duplicate`) call returns, before the
+/// next sibling is evaluated -- see `guard_statement_effects`'s own doc
+/// comment for why this ordering is what makes the exception-edge release
+/// correct for arbitrarily nested sibling evaluation.
+pub(super) fn push_pending_int_release_if_temporary<'ctx>(
+    rt: &RtFns<'ctx>,
+    source_expr: &MirExpr,
+    word: IntValue<'ctx>,
+) -> Option<IntValue<'ctx>> {
+    let pushed = int_temporary_word(source_expr, word);
+    if let Some(w) = pushed {
+        rt.exceptions.pending_int_releases.borrow_mut().push(w);
+    }
+    pushed
+}
+
+/// The `Scalar`-holding counterpart of
+/// [`push_pending_int_release_if_temporary`], mirroring how
+/// `release_scalar_if_int_temporary` relates to `release_if_int_temporary`:
+/// a non-`Scalar::Int` value owns no bigint reference by construction and is
+/// never pushed.
+pub(super) fn push_pending_int_release_if_scalar_temporary<'ctx>(
+    rt: &RtFns<'ctx>,
+    source_expr: &MirExpr,
+    scalar: &Scalar<'ctx>,
+) -> Option<IntValue<'ctx>> {
+    if let Scalar::Int(word) = scalar {
+        push_pending_int_release_if_temporary(rt, source_expr, *word)
+    } else {
+        None
+    }
+}
+
+/// Pops the word `push_pending_int_release_if_temporary`/
+/// `push_pending_int_release_if_scalar_temporary` pushed, once the sibling
+/// evaluation it was protecting against has completed on the normal
+/// (fallthrough) path. A `None` `pushed` value means the push was a no-op,
+/// so the pop is one too -- callers do not need their own `if let Some`
+/// guard around this call.
+///
+/// Asserts (debug-only, per `bigint_rc.rs`'s own established convention of
+/// `assert!`/`expect` over a `panic!`-in-a-closure shape) that the popped
+/// value is exactly the one that was pushed: any mismatch means a push/pop
+/// pair was nested incorrectly at some call site, which is a codegen bug
+/// this fix must not silently miscompile past.
+pub(super) fn pop_pending_int_release<'ctx>(rt: &RtFns<'ctx>, pushed: Option<IntValue<'ctx>>) {
+    if let Some(expected) = pushed {
+        let popped = rt.exceptions.pending_int_releases.borrow_mut().pop();
+        debug_assert_eq!(
+            popped,
+            Some(expected),
+            "push/pop mismatch on pending_int_releases"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -725,6 +792,374 @@ mod tests {
             name: name.to_string(),
             ty: Ty::Int,
         }
+    }
+
+    // -----------------------------------------------------------------
+    // #638 (D-208) codegen-depth: releasing a bigint temporary on the
+    // exception-unwinding edge.
+    //
+    // `tests/issue_638_bigint_exception_release.rs` proves the net effect
+    // through the real CLI (`pycc run`'s value-correctness assertions and
+    // `pycc build`'s peak-RSS marginal comparison), but neither can see the
+    // structural property `guard_statement_effects`'s own `#638` doc
+    // comment describes: an `effect_exc_unwind` block, guarded exactly like
+    // every other `guard_statement_effects` site, releasing the pending
+    // stack's snapshot before branching to the installed exception target
+    // -- and, symmetrically, that this extra block is never emitted at all
+    // when nothing is pending (the codegen-time check that keeps the
+    // D-084/D-140 nbody hot loop's own guard sites at their original
+    // two-block shape). These follow the refcount-call cluster's own
+    // `compile_to_object_with_observer` convention immediately above.
+    // -----------------------------------------------------------------
+
+    /// Compiles `mir` and returns the emitted module's textual IR.
+    ///
+    /// Skips `guarded_bigint_refcount_calls`'s own per-call guard-chain
+    /// proof (this cluster is checking for the presence/absence of an
+    /// entire extra block, not validating every call's guard) but keeps
+    /// its D-029 `LLVMString`-disposal discipline: route the IR through
+    /// `llvm_string_to_owned` rather than let `print_to_string`'s return
+    /// value drop on its own.
+    fn emitted_ir(label: &str, mir: &MirModule) -> String {
+        let dir = pycc_scratch::ScratchDir::new(label).expect("failed to create scratch dir");
+        let obj_path = dir.join(format!("{label}.o"));
+        let mut ir = String::new();
+        let mut observer = |module: &inkwell::module::Module<'_>, _| {
+            ir = llvm_string_to_owned(module.print_to_string());
+        };
+        compile_to_object_with_observer(mir, &obj_path, None, false, Some(&mut observer))
+            .expect("codegen should succeed");
+        ir
+    }
+
+    #[test]
+    fn an_outer_binops_owned_left_operand_is_released_on_the_inner_binops_exception_edge() {
+        // `(n + n) + (1 // n)`: the outer `+`'s left operand is a fresh,
+        // owned `BinOp` result -- `int_temporary_word` classifies it as a
+        // pending release candidate before the right operand (`1 // n`, a
+        // `FloorDiv`, one of `expression_can_set_exception`'s three
+        // exception-settable `BinOp`s) is evaluated. Reaching `1 // n`'s own
+        // `guard_statement_effects` call with that word still pending must
+        // emit an `effect_exc_unwind` block that releases it.
+        let owned_sum = MirExpr::BinOp {
+            op: pycc_mir::BinOpKind::Add,
+            left: Box::new(int_name("n")),
+            right: Box::new(int_name("n")),
+            ty: Ty::Int,
+        };
+        let raising_floordiv = MirExpr::BinOp {
+            op: pycc_mir::BinOpKind::FloorDiv,
+            left: Box::new(MirExpr::IntLiteral(1)),
+            right: Box::new(int_name("n")),
+            ty: Ty::Int,
+        };
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "outer_binop_exception_edge".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::BinOp {
+                    op: pycc_mir::BinOpKind::Add,
+                    left: Box::new(owned_sum),
+                    right: Box::new(raising_floordiv),
+                    ty: Ty::Int,
+                }))],
+            }],
+            class_defs: Vec::new(),
+        };
+        let ir = emitted_ir("bigint_rc_exc_unwind_present", &mir);
+        assert!(
+            ir.contains("effect_exc_unwind"),
+            "a pending owned operand at the exception guard must emit the \
+             #638 unwind block; got:\n{ir}"
+        );
+        // `contains()` above matches the branch instruction's own label
+        // reference (`label %effect_exc_unwind`) as readily as the block's
+        // definition, so isolate the block's own body by its label
+        // *definition* line specifically (an unindented `effect_exc_unwind:`
+        // line, per `guarded_bigint_refcount_calls_in_one_function`'s own
+        // convention for recognizing a block label).
+        //
+        // This cannot split on the next `\neffect_exc_cont` occurrence: in
+        // `guard_statement_effects`, `effect_exc_cont` is *created* before
+        // `effect_exc_unwind` (so it is appended, and therefore emitted in
+        // the IR text, first) whenever the pending-releases stack is
+        // non-empty -- exactly this test's fixture. For a single guard site
+        // that puts the only `effect_exc_cont` occurrence *before*
+        // `effect_exc_unwind:` in the string, so splitting the
+        // already-past-that-point substring on `\neffect_exc_cont` would
+        // never find a second occurrence and `.next()` would silently hand
+        // back the rest of the entire module -- including the fallthrough
+        // path's own D-181 release calls -- rather than failing loudly.
+        // Instead, treat `effect_exc_unwind` as the root of its own small
+        // control-flow subgraph and walk it structurally: the block itself
+        // ends in a *conditional* branch (`emit_bigint_refcount_call`'s own
+        // heap-tag guard, per its doc comment on `guarded_bigint_refcount_calls`
+        // above), whose taken arm (`bigint_rc_call*`) holds the actual
+        // release and whose not-taken arm (`bigint_rc_cont*`) re-joins to
+        // branch on to the exception target. Parse every basic block's body
+        // and outgoing edges once, then collect the closure reachable from
+        // `effect_exc_unwind` -- this follows exactly the blocks
+        // `guard_statement_effects`'s own snapshot loop emits, regardless of
+        // where in the text another guard site's blocks happen to land.
+        let mut block_bodies: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        let mut block_order: Vec<&str> = Vec::new();
+        let mut current_block: Option<&str> = None;
+        for raw in ir.lines() {
+            let line = raw.trim();
+            if !raw.starts_with([' ', '@', '%', '}', '!']) {
+                if let Some((label, _)) = line.split_once(':') {
+                    current_block = Some(label);
+                    block_order.push(label);
+                    block_bodies.entry(label).or_default();
+                }
+                continue;
+            }
+            if let Some(label) = current_block {
+                block_bodies.get_mut(label).unwrap().push(line);
+            }
+        }
+        assert!(
+            block_bodies.contains_key("effect_exc_unwind"),
+            "the block label was just found by contains() above, so it \
+             must parse as a block; got:\n{ir}"
+        );
+        // A block's outgoing edges, read off its own terminator line.
+        let successors = |label: &str| -> Vec<&str> {
+            let body = &block_bodies[label];
+            let terminator = body
+                .last()
+                .expect("every parsed block has a terminator line");
+            if let Some(rest) = terminator.strip_prefix("br i1 ") {
+                rest.split(", label ")
+                    .skip(1)
+                    .map(|s| s.trim_start_matches('%'))
+                    .collect()
+            } else if let Some(rest) = terminator.strip_prefix("br label ") {
+                vec![rest.trim_start_matches('%')]
+            } else {
+                Vec::new()
+            }
+        };
+        let mut visited: Vec<&str> = Vec::new();
+        let mut stack = vec!["effect_exc_unwind"];
+        while let Some(label) = stack.pop() {
+            if visited.contains(&label) {
+                continue;
+            }
+            visited.push(label);
+            stack.extend(successors(label));
+        }
+        // Report the reachable blocks in the order they appear in the IR so
+        // the assertion failure message below reads like a normal block
+        // listing rather than a BFS/DFS visitation order.
+        let unwind_block = block_order
+            .iter()
+            .filter(|label| visited.contains(label))
+            .flat_map(|label| block_bodies[label].iter().copied())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        assert!(
+            unwind_block.contains("call void @pycc_rt_bigint_release"),
+            "the #638 unwind block must release the pending operand before \
+             branching to the exception target; block body:\n{unwind_block}"
+        );
+    }
+
+    #[test]
+    fn a_lone_raising_binop_with_nothing_pending_emits_no_unwind_block() {
+        // `1 // n` alone: no sibling has already produced an owned `Ty::Int`
+        // temporary before this `FloorDiv`'s own `guard_statement_effects`
+        // call, so `rt.exceptions.pending_int_releases` is empty when that
+        // call runs. This is the codegen-time check
+        // `guard_statement_effects`'s own doc comment describes as what
+        // keeps the D-084/D-140 nbody hot loop's guard sites at their
+        // original two-block shape -- proven here directly rather than only
+        // by the nbody throughput gate, which this environment cannot run
+        // locally (no exact CPython 3.14.7 oracle available).
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "lone_raising_binop".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::BinOp {
+                    op: pycc_mir::BinOpKind::FloorDiv,
+                    left: Box::new(MirExpr::IntLiteral(1)),
+                    right: Box::new(int_name("n")),
+                    ty: Ty::Int,
+                }))],
+            }],
+            class_defs: Vec::new(),
+        };
+        let ir = emitted_ir("bigint_rc_exc_unwind_absent", &mir);
+        assert!(
+            !ir.contains("effect_exc_unwind"),
+            "a guard site with nothing pending must keep its original \
+             two-block shape, not gain an extra unwind block; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn an_early_tuple_elements_owned_word_is_released_on_a_later_elements_exception_edge() {
+        // `(n + n, n, 1 // n)`: the first element is a fresh, owned `BinOp`
+        // result -- `int_temporary_word` classifies it as a pending release
+        // candidate before the third element (`1 // n`, a `FloorDiv`, one of
+        // `expression_can_set_exception`'s three exception-settable
+        // `BinOp`s) is evaluated. The second element (a bare `Name` read) is
+        // a *borrowed* reference and must not itself be pushed. Reaching
+        // `1 // n`'s own `guard_statement_effects` call with the first
+        // element's word still pending must emit an `effect_exc_unwind`
+        // block that releases it -- exactly mirroring
+        // `an_outer_binops_owned_left_operand_is_released_on_the_inner_binops_exception_edge`
+        // above, but for `MirExpr::TupleLiteral`'s own element loop rather
+        // than `build_call_to_with_leading_args`'s or `BinOp`'s.
+        let owned_sum = MirExpr::BinOp {
+            op: pycc_mir::BinOpKind::Add,
+            left: Box::new(int_name("n")),
+            right: Box::new(int_name("n")),
+            ty: Ty::Int,
+        };
+        let raising_floordiv = MirExpr::BinOp {
+            op: pycc_mir::BinOpKind::FloorDiv,
+            left: Box::new(MirExpr::IntLiteral(1)),
+            right: Box::new(int_name("n")),
+            ty: Ty::Int,
+        };
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "tuple_literal_exception_edge".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::Subscript {
+                    base: Box::new(MirExpr::TupleLiteral(vec![
+                        owned_sum,
+                        int_name("n"),
+                        raising_floordiv,
+                    ])),
+                    index: Box::new(MirExpr::IntLiteral(0)),
+                }))],
+            }],
+            class_defs: Vec::new(),
+        };
+        let ir = emitted_ir("bigint_rc_tuple_exc_unwind_present", &mir);
+        assert!(
+            ir.contains("effect_exc_unwind"),
+            "a pending owned tuple element at a later element's exception \
+             guard must emit the #638 unwind block; got:\n{ir}"
+        );
+        // Same structural walk as
+        // `an_outer_binops_owned_left_operand_is_released_on_the_inner_binops_exception_edge`
+        // above: isolate `effect_exc_unwind`'s own reachable closure rather
+        // than splitting on the next `effect_exc_cont` occurrence, for the
+        // identical reason that test's own comment explains.
+        let mut block_bodies: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        let mut block_order: Vec<&str> = Vec::new();
+        let mut current_block: Option<&str> = None;
+        for raw in ir.lines() {
+            let line = raw.trim();
+            if !raw.starts_with([' ', '@', '%', '}', '!']) {
+                if let Some((label, _)) = line.split_once(':') {
+                    current_block = Some(label);
+                    block_order.push(label);
+                    block_bodies.entry(label).or_default();
+                }
+                continue;
+            }
+            if let Some(label) = current_block {
+                block_bodies.get_mut(label).unwrap().push(line);
+            }
+        }
+        assert!(
+            block_bodies.contains_key("effect_exc_unwind"),
+            "the block label was just found by contains() above, so it \
+             must parse as a block; got:\n{ir}"
+        );
+        let successors = |label: &str| -> Vec<&str> {
+            let body = &block_bodies[label];
+            let terminator = body
+                .last()
+                .expect("every parsed block has a terminator line");
+            if let Some(rest) = terminator.strip_prefix("br i1 ") {
+                rest.split(", label ")
+                    .skip(1)
+                    .map(|s| s.trim_start_matches('%'))
+                    .collect()
+            } else if let Some(rest) = terminator.strip_prefix("br label ") {
+                vec![rest.trim_start_matches('%')]
+            } else {
+                Vec::new()
+            }
+        };
+        let mut visited: Vec<&str> = Vec::new();
+        let mut stack = vec!["effect_exc_unwind"];
+        while let Some(label) = stack.pop() {
+            if visited.contains(&label) {
+                continue;
+            }
+            visited.push(label);
+            stack.extend(successors(label));
+        }
+        let unwind_block = block_order
+            .iter()
+            .filter(|label| visited.contains(label))
+            .flat_map(|label| block_bodies[label].iter().copied())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        assert!(
+            unwind_block.contains("call void @pycc_rt_bigint_release"),
+            "the #638 unwind block must release the pending tuple element \
+             before branching to the exception target; block body:\n{unwind_block}"
+        );
+    }
+
+    #[test]
+    fn a_successfully_completed_tuple_literal_truncates_without_releasing() {
+        // `(n + n, n)`: both elements complete evaluation successfully, so
+        // the tuple-literal element loop's own `pending_int_releases` entry
+        // for the first (owned) element must be truncated away -- never
+        // released -- because ownership of that word transferred into the
+        // aggregate's own field via `build_insert_value`. Releasing it here
+        // instead would double-free the word `Ty::Tuple`'s own D-124
+        // slot-death release (or the value's ordinary consumer) later
+        // releases again.
+        //
+        // There is no exception-settable sibling in this fixture, so no
+        // `effect_exc_unwind` block is emitted at all (mirroring
+        // `a_lone_raising_binop_with_nothing_pending_emits_no_unwind_block`
+        // above) -- the only way this test can fail is if a stray
+        // unconditional release call for the first element leaked into the
+        // normal fallthrough path.
+        let owned_sum = MirExpr::BinOp {
+            op: pycc_mir::BinOpKind::Add,
+            left: Box::new(int_name("n")),
+            right: Box::new(int_name("n")),
+            ty: Ty::Int,
+        };
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "tuple_literal_success_path".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::Subscript {
+                    base: Box::new(MirExpr::TupleLiteral(vec![owned_sum, int_name("n")])),
+                    index: Box::new(MirExpr::IntLiteral(0)),
+                }))],
+            }],
+            class_defs: Vec::new(),
+        };
+        let ir = emitted_ir("bigint_rc_tuple_success_path", &mir);
+        assert!(
+            !ir.contains("effect_exc_unwind"),
+            "no sibling element here can set D-173's pending-exception \
+             state, so no unwind block should be emitted; got:\n{ir}"
+        );
+        assert!(
+            !ir.contains("call void @pycc_rt_bigint_release"),
+            "the success path must truncate the pending entry for the \
+             first (owned) tuple element without ever releasing it; got:\n{ir}"
+        );
     }
 
     #[test]
