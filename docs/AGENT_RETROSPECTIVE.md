@@ -33,6 +33,53 @@ never a merge gate.
 
 ---
 
+## 2026-08-29 — A CI coverage miss reproduced identically three times before being reproduced locally with the right thread count
+
+What happened: PR #836's `build-test-coverage` job failed identically across
+three consecutive CI runs in `pycc_scratch`'s
+`a_failing_lock_file_creation_removes_the_directory_and_propagates_the_error`
+test (`crates/pycc_scratch/src/lib.rs`), reporting the same miss counts each
+time (228/5 regions, 20/2 functions, 132/2 lines). A first local
+reproduction attempt with default test parallelism came back 100% clean,
+which nearly got read as a branch-specific or environment-specific effect
+rather than a deterministic defect. Only running with `--test-threads=1`
+under an isolated `TMPDIR` reproduced the exact miss counts locally: the
+test's `read_dir`/`filter_map`/`any` closures scan `std::env::temp_dir()`
+for a leaked directory, and under serialized execution with no other test
+leaving anything behind, that scan runs over zero entries — the closures
+never execute their bodies, so the coverage instrumentation shows them as
+never hit and the test still passes (a vacuous pass), matching the CI
+sandbox's own serialized, freshly isolated environment. A sibling test in
+the same file already carried a fix for this exact pattern (an
+`_sentinel` `ScratchDir` created immediately before the scan, so `read_dir`
+always has ≥1 real entry) — applying the same fix to this test resolved it
+(commit `c9a8eff0`). Fixing it also required a first correction: the
+sentinel's category string collided with the test's own leak-detection
+prefix, so the test flagged its own sentinel as a leaked directory and
+failed a different assertion — renaming the sentinel category to something
+provably disjoint from the prefix fixed that.
+
+Root cause: identical failure counts across independent CI runs are the
+signature of a deterministic defect, not a flake, but the local
+reproduction attempt used default (parallel) test threading, which does not
+share the CI coverage job's serialized, freshly isolated `TMPDIR`
+environment — so the first local run gave a false "can't reproduce" signal
+and nearly sent the investigation toward treating this as
+branch-specific or non-reproducible.
+
+Lesson: when a coverage-gate miss reproduces with identical hit/miss counts
+across multiple independent CI runs, treat it as deterministic and
+reproduce the CI job's own distinguishing execution conditions locally
+(`--test-threads=1` and an isolated, empty `TMPDIR`, or whatever equivalent
+serialization/isolation the specific gate's sandbox applies) before
+concluding the defect doesn't reproduce or is environment-specific — a
+green result under default local parallelism is not evidence against a
+gate whose CI job runs serialized. Separately, when adding a sentinel
+resource solely to make an empty-directory scan see ≥1 entry, name it
+disjoint from any prefix the surrounding test's own assertions grep for —
+a sentinel whose name matches the leak-detection prefix under test becomes
+a false positive for that same test.
+
 ## 2026-08-29 — A `#[cfg]`-split test bound a variable only one platform's branch used; caught by CI's windows leg, not locally
 
 What happened: PR #835's `a_stale_locked_format_root_past_the_floor_is_deleted`
