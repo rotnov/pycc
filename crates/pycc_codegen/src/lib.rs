@@ -3207,13 +3207,17 @@ fn emit_expr_unchecked<'ctx>(
                 // element was evaluated in.
                 let scalar = retain_if_int_duplicate(context, builder, rt, element, scalar);
                 // Push *after* `retain_if_int_duplicate`, matching
-                // `build_call_to_with_leading_args`'s own call order: a
-                // duplicate reference's own extra retain is D-180 residual
-                // 3's separate, already-accepted concern, and
+                // `build_call_to_with_leading_args`'s own call order:
                 // `int_temporary_word` (via
-                // `push_pending_int_release_if_scalar_temporary`) already
-                // excludes a duplicate reference by construction, so this
-                // is a no-op for that case regardless of ordering.
+                // `push_pending_int_release_if_scalar_temporary`) excludes
+                // a duplicate reference by construction, so this is a
+                // no-op for that case regardless of ordering. That extra
+                // retain is therefore *not* protected on the exception
+                // edge here -- a distinct, tracked gap from this
+                // mechanism's own scope, not D-180 residual 3 (which
+                // covers a retain that eventually transfers to a real
+                // owner, not one abandoned before transfer completes). See
+                // https://github.com/rotnov/pycc/issues/834.
                 push_pending_int_release_if_scalar_temporary(rt, element, &scalar);
                 let field_value: inkwell::values::BasicValueEnum = match scalar {
                     Scalar::Int(v) => v.into(),
@@ -3796,13 +3800,17 @@ fn build_call_to_with_leading_args<'ctx>(
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, a);
             let scalar = incref_if_str_duplicate(builder, rt, a, scalar);
             let scalar = retain_if_int_duplicate(context, builder, rt, a, scalar);
-            // Push *after* `retain_if_int_duplicate`: a duplicate
-            // reference's own extra retain is D-180 residual 3's separate,
-            // already-accepted concern, and `int_temporary_word` (via
-            // `push_pending_int_release_if_scalar_temporary`) already
+            // Push *after* `retain_if_int_duplicate`: `int_temporary_word`
+            // (via `push_pending_int_release_if_scalar_temporary`)
             // excludes a duplicate reference by construction, so this is
             // a no-op for that case regardless of ordering -- placed here
-            // to match the plan's own stated call order.
+            // to match the plan's own stated call order. That extra
+            // retain is therefore *not* protected on the exception edge
+            // here -- a distinct, tracked gap from this mechanism's own
+            // scope, not D-180 residual 3 (which covers a retain that
+            // eventually transfers to a real owner, not one abandoned
+            // before transfer completes). See
+            // https://github.com/rotnov/pycc/issues/834.
             push_pending_int_release_if_scalar_temporary(rt, a, &scalar);
             let scalar = coerce_scalar_to_type(context, builder, scalar, param_ty.clone());
             match scalar {

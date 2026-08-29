@@ -138,6 +138,25 @@ status: accepted
     not touch it. `docs/RUNTIME.md` and `docs/ROADMAP.md` are updated in the
     same pull request to keep that distinction clear rather than conflating
     the two.
+  - **A new residual gap this decision's own review found and left open,
+    tracked as [#834](https://github.com/rotnov/pycc/issues/834):** at every
+    site above that pairs `retain_if_int_duplicate` with a
+    `push_pending_int_release_if_(scalar_)temporary` call, `int_temporary_word`
+    classifies only by the *source expression*, so a duplicate/borrowed
+    source's freshly created retain is never pushed onto
+    `pending_int_releases` even at a call site that just performed that
+    retain. If a later sibling operand/element raises before the retained
+    reference transfers to its real owner (a call's parameter slot, a
+    tuple's field), that reference is abandoned and leaked on every caught
+    exception. This is not D-180 residual item 3 (a retain that *does*
+    eventually transfer to a real owner, leaked only until that slot is
+    later overwritten) -- it is a retain abandoned *before* transfer ever
+    completes, which nothing else will ever release. Closing it needs
+    `retain_if_int_duplicate` to report whether it actually retained and an
+    audit of its other call sites (`MirStmt::Assign`/`Return`/`AttrSet`,
+    where a pending-release push would be wrong), which is why it is
+    tracked separately rather than folded into this decision's own six-site
+    scope.
   - The nbody hot loop's own comparison and arithmetic sites push nothing
     (D-084/D-140's floor scenario never raises across a bigint temporary's
     lifetime) and consequently still emit the original two-block guard
