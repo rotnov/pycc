@@ -48,7 +48,11 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 ///   `SystemTime::now().duration_since(UNIX_EPOCH)`'s `as_nanos()`), not just
 ///   the sub-second remainder — the field must span real time so that two
 ///   process restarts a few seconds apart that happen to reuse the same PID
-///   still get distinguishable names,
+///   still get distinguishable names. A wall clock set before the Unix
+///   epoch degrades this field to `0` rather than panicking — `build`/`run`
+///   promise an actionable exit-2 environment error, never a panic, and a
+///   real collision under a degraded clock still surfaces as
+///   `create_dir`'s `AlreadyExists` error through the fallible path below,
 /// - `seq` is [`SEQ`], a per-process atomic counter that rules out any
 ///   same-process collision even when two calls land on the same nanosecond.
 ///
@@ -91,7 +95,7 @@ impl ScratchDir {
         let pid = std::process::id();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system clock should be at or after the Unix epoch")
+            .unwrap_or_default()
             .as_nanos();
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
 
