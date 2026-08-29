@@ -194,12 +194,8 @@ pub enum CmpOpKind {
     IsNot,
 }
 
-/// The unary operators this compiler supports (#603, Part 2 of #573).
-///
-/// `not` and `~` are deliberately absent rather than present-but-rejected:
-/// they are #604 (Part 3), and leaving them out of this enum keeps every
-/// exhaustive match over it honest about what is actually lowerable today
-/// instead of carrying arms that only ever return an error.
+/// The unary operators this compiler supports (#603 Part 2, #604 Part 3, of
+/// #573).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOpKind {
     /// `-x`.
@@ -208,6 +204,14 @@ pub enum UnaryOpKind {
     /// `bool` operand crosses into `int` here (see
     /// `pycc_types::unop::unary_result_type`).
     UAdd,
+    /// `not x`. Defined by truthiness: the result is always `bool`, for
+    /// every operand type this compiler can evaluate a truth value for
+    /// (#604, Part 3 of #573).
+    Not,
+    /// `~x`. Bitwise complement, defined only for `int` (`bool` included,
+    /// since it is a numeric subtype); `~x == -x - 1` (#604, Part 3 of
+    /// #573).
+    Invert,
 }
 
 impl UnaryOpKind {
@@ -216,6 +220,8 @@ impl UnaryOpKind {
         match self {
             UnaryOpKind::USub => "-",
             UnaryOpKind::UAdd => "+",
+            UnaryOpKind::Not => "not",
+            UnaryOpKind::Invert => "~",
         }
     }
 }

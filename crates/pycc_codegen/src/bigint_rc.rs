@@ -440,7 +440,13 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // `.ty()` is *not* `Ty::Int` and the specific arm above did not
         // match -- a permanently-unreachable-for-Int case grouped here
         // purely so the match stays exhaustive.
-        | MirExpr::NamedExpr { .. } => false,
+        | MirExpr::NamedExpr { .. }
+        // `Not`'s own `.ty()` is always `Ty::Bool` (#604, Part 3 of #573),
+        // never `Ty::Int`, so like `OptionalWrap`/`ExceptionMessage` above
+        // it can never reach this function as the `Ty::Int`-classified
+        // expression `int_temporary_word` passes in; it joins the combined
+        // "owning" answer for the same reason.
+        | MirExpr::Not(_) => false,
     }
 }
 

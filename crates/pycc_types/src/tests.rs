@@ -27063,6 +27063,60 @@ _helper(1)
     parse_check_resolve(src).expect("check should succeed");
 }
 
+#[test]
+fn collect_block_constraints_propagates_an_error_from_a_logical_not_operand() {
+    // #604 (Part 3 of #573): `collect_expr_constraints`'s dedicated `Not`
+    // arm (`HirExpr::UnaryOp { op: UnaryOpKind::Not, operand }`) walks its
+    // operand with its own `collect_expr_constraints(..., operand)?` call,
+    // separate from the generic `UnaryOp` arm exercised elsewhere in this
+    // file (`Not` is peeled off before that arm ever runs, since its
+    // result is always `Ty::Bool` regardless of the operand's type). A
+    // parsed-source forward-reference walrus doesn't reach this specific
+    // `?`: `bind_named_expr_targets`'s own pre-pass (same file) rejects an
+    // unbound forward reference before `collect_expr_constraints` ever
+    // walks the `if` test, exactly like
+    // `collect_block_constraints_propagates_an_error_from_the_initializer_
+    // expression` above needed a direct `collect_block_constraints` call
+    // rather than parseable source for the same reason. `z` is declared
+    // local but never bound, so wrapping it in `not z` fails with
+    // `unbound_local` (T0021) from the recursive call, and the `?` here
+    // must propagate that unchanged.
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment {
+        defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
+
+        opaque_bindings: HashSet::new(),
+        bindings: HashMap::new(),
+        local_names: &["z"],
+    };
+    let body = vec![HirStmt::AnnAssign {
+        is_final: false,
+        target: "y".to_string(),
+        annotation: Ty::Bool,
+        value: Some(HirExpr::UnaryOp {
+            op: UnaryOpKind::Not,
+            operand: Box::new(HirExpr::Name("z".to_string())),
+        }),
+    }];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
 // PEP 572 (#774), deep-review follow-up (round 4), coverage closure: the
 // tests above close every *line* in `bind_named_expr_targets`, but 13 of
 // its recursive call sites still show an uncovered `?`-error-propagation
@@ -28733,6 +28787,33 @@ fn a_deferred_unary_constraint_still_rejects_a_non_numeric_operand() {
     assert!(
         result.is_err(),
         "a deferred unary constraint over `str` must be rejected: {result:?}"
+    );
+}
+
+// #604 (Part 3 of #573). `~` shares the same deferred `Sub`-shaped path as
+// `-`/`+` above (only the `matches!(op, UnaryOpKind::UAdd)` check tells them
+// apart), so this is the `Invert` counterpart of
+// `a_negated_inferred_parameter_defers_to_a_subtraction_constraint`.
+#[test]
+fn a_bitwise_invert_inferred_parameter_defers_to_a_subtraction_constraint() {
+    let result = check_source("def _inv(n):\n    return ~n\n\n\nx: int = 4\nprint(_inv(x))\n");
+    assert!(
+        result.is_ok(),
+        "an inverted inferred parameter must resolve through the deferred constraint: {result:?}"
+    );
+}
+
+// #604: `not` has its own dedicated arm in `collect_expr_constraints`
+// (unlike `-`/`+`/`~`, it never defers to a binary constraint at all -- its
+// result is always `Ty::Bool` regardless of the operand's resolved type),
+// exercised here through an inferred parameter specifically so the operand
+// is still an unresolved inference variable when this arm runs.
+#[test]
+fn a_logical_not_inferred_parameter_always_resolves_to_bool() {
+    let result = check_source("def _not(n):\n    return not n\n\n\nx: int = 4\nprint(_not(x))\n");
+    assert!(
+        result.is_ok(),
+        "a logical-not inferred parameter must resolve to bool: {result:?}"
     );
 }
 

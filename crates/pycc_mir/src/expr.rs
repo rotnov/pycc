@@ -228,29 +228,63 @@ pub(super) fn lower_expr(
         // `0 + x` / `x * 1.0` shapes deliver through the same typing rules
         // as `USub`. Any non-numeric operand is already rejected by
         // `pycc_types::unop::unary_result_type` and never reaches here.
+        //
+        // #604 (Part 3 of #573) adds `not x` and `~x`. `~x` follows the
+        // exact same "rewrite into a `BinOp`, no new MIR node" strategy as
+        // `USub`/`UAdd`: `~x == -x - 1` for every `int`/`bool` operand (the
+        // only operands `pycc_types::unop::unary_result_type` accepts for
+        // `Invert`), so it reuses the identical `0 - x` shape and its
+        // bigint-precision guarantee, then subtracts a further literal
+        // `1` -- both legs going through `int_sub`. `not x` genuinely has
+        // no binary-expression equivalent (its truthiness rule spans
+        // types `BinOp`'s own typing has no notion of), so it is the one
+        // case that *does* need a dedicated `MirExpr::Not` node, built
+        // directly on `pycc_codegen`'s existing `truthy` helper (the same
+        // one `if`/`while` conditions already call).
         HirExpr::UnaryOp { op, operand } => {
             let operand = lower_expr(operand, scopes, classes, current_class);
-            let (op, left, right) = if operand.ty() == Ty::Float {
-                let factor = if matches!(op, UnaryOpKind::USub) {
-                    -1.0
-                } else {
-                    1.0
-                };
-                (BinOpKind::Mul, operand, MirExpr::FloatLiteral(factor))
-            } else {
-                let op = if matches!(op, UnaryOpKind::USub) {
-                    BinOpKind::Sub
-                } else {
-                    BinOpKind::Add
-                };
-                (op, MirExpr::IntLiteral(0), operand)
-            };
-            let ty = binop_result_ty(op, left.ty(), right.ty());
-            MirExpr::BinOp {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
-                ty,
+            match op {
+                UnaryOpKind::USub | UnaryOpKind::UAdd => {
+                    let (bin_op, left, right) = if operand.ty() == Ty::Float {
+                        let factor = if matches!(op, UnaryOpKind::USub) {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+                        (BinOpKind::Mul, operand, MirExpr::FloatLiteral(factor))
+                    } else {
+                        let bin_op = if matches!(op, UnaryOpKind::USub) {
+                            BinOpKind::Sub
+                        } else {
+                            BinOpKind::Add
+                        };
+                        (bin_op, MirExpr::IntLiteral(0), operand)
+                    };
+                    let ty = binop_result_ty(bin_op, left.ty(), right.ty());
+                    MirExpr::BinOp {
+                        op: bin_op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                        ty,
+                    }
+                }
+                UnaryOpKind::Invert => {
+                    let negated_ty = binop_result_ty(BinOpKind::Sub, Ty::Int, operand.ty());
+                    let negated = MirExpr::BinOp {
+                        op: BinOpKind::Sub,
+                        left: Box::new(MirExpr::IntLiteral(0)),
+                        right: Box::new(operand),
+                        ty: negated_ty.clone(),
+                    };
+                    let ty = binop_result_ty(BinOpKind::Sub, negated_ty, Ty::Int);
+                    MirExpr::BinOp {
+                        op: BinOpKind::Sub,
+                        left: Box::new(negated),
+                        right: Box::new(MirExpr::IntLiteral(1)),
+                        ty,
+                    }
+                }
+                UnaryOpKind::Not => MirExpr::Not(Box::new(operand)),
             }
         }
         HirExpr::BinOp { op, left, right } => {

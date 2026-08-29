@@ -1239,6 +1239,28 @@ fn unary_general_operand_matches_cpython_3_14_7_byte_for_byte() {
     );
 }
 
+// #604 (Part 3 of #573): `not x` and `~x`. `not` is defined by truthiness and
+// spans every operand type this compiler computes a truth value for; `~` is
+// `int -> int` only and decomposes into `-x - 1` at the MIR level, inheriting
+// bigint promotion from `int_sub` the same way plain negation does.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn unary_not_invert_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unary_not_invert.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("unary_not_invert_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/unary_not_invert.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("unary_not_invert_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/unary_not_invert.py"
+    );
+}
+
 // #610 (PEP 560): value-position `C[x]` dispatches to
 // `C.__class_getitem__(x)`. Covers both the `@staticmethod` and the
 // `@classmethod` spelling of the hook, inheritance of the hook through the

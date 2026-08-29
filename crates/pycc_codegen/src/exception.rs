@@ -96,7 +96,14 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // is infallible, so it cannot itself set D-173's pending-exception
         // state. The wrapped sub-expression is not re-inspected here either,
         // mirroring every other arm in this match.
-        | MirExpr::OptionalUnwrap(_, _) => false,
+        | MirExpr::OptionalUnwrap(_, _)
+        // #604 (Part 3 of #573): `not x` computes the same `truthy` check
+        // an `if`/`while` condition already evaluates (see `pycc_codegen`'s
+        // `truthy` helper), then inverts the resulting `i1` -- a compare
+        // and an xor, both infallible. The wrapped operand is not
+        // re-inspected here either, matching every other arm's own
+        // "classify only this node's operation" rule.
+        | MirExpr::Not(_) => false,
     }
 }
 
