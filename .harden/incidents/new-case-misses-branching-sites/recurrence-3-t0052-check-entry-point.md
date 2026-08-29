@@ -13,7 +13,7 @@ class's continued recurrence, not a new arena result
 
 ## Symptom
 
-`T0052` (cross-MRO attribute redeclaration, #676/D-209) is wired into both of
+`T0052` (cross-MRO attribute redeclaration, #676/D-210) is wired into both of
 `pycc_types`'s public entry points, `check` and `check_and_resolve` — the
 same dispatch shape `incident.md`'s class describes ("an existing document
 already branches on" the general rule, here: every diagnostic is expected to

@@ -814,7 +814,7 @@ which declaration a given instance was actually built with. Left \
 unrejected, this produced either a silently mis-decoded value (D-141's \
 tagged representation reads back the wrong Python value) or an outright \
 runtime abort/segfault -- entirely undiagnosed at `pycc check` time \
-(issue #676, D-209). The rule is symmetric: it does not matter which \
+(issue #676, D-210). The rule is symmetric: it does not matter which \
 class's declaration is 'wider', and it also rejects a diamond conflict \
 between two sibling base classes that neither is the other's ancestor, \
 through their common descendant's own MRO, even when that descendant \

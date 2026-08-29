@@ -17914,7 +17914,7 @@ fn checked_function_signatures_rejects_the_issue_402_reproduction_fixture() {
     );
 }
 
-// -- #676 (D-209): cross-MRO attribute redeclaration with a differing
+// -- #676 (D-210): cross-MRO attribute redeclaration with a differing
 // declared type ------------------------------------------------------
 
 /// Helper for the `check_incompatible_attribute_redeclarations` tests
@@ -18173,7 +18173,7 @@ fn check_rejects_the_issue_676_bool_reproduction_fixture_via_the_pycc_check_path
 
 #[test]
 fn a_bare_base_instance_with_no_derived_redeclaration_still_widens_bool_into_int() {
-    // The decisive counter-example against "coerce" (D-209's own
+    // The decisive counter-example against "coerce" (D-210's own
     // rationale), pinned as a regression: with no conflicting
     // redeclaration anywhere in the module, a bare `Base()` instance
     // calling a method that assigns a `bool` into its own `int`-declared
@@ -18192,7 +18192,7 @@ fn a_bare_base_instance_with_no_derived_redeclaration_still_widens_bool_into_int
 
 #[test]
 fn subclassing_a_monomorphized_generic_specialization_is_already_rejected_pre_existing() {
-    // D-209's own false-positive sweep (section 3) flagged this as an
+    // D-210's own false-positive sweep (section 3) flagged this as an
     // unverified residual: whether a non-generic class can subclass an
     // already-monomorphized generic specialization (`class
     // Derived(C[int]):`). Verified here: it is already rejected with

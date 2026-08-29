@@ -3430,7 +3430,7 @@ fn check_incompatible_redefinitions(hir: &HirModule) -> Result<(), Diagnostic> {
     Ok(())
 }
 
-/// #676 (D-209): rejects a cross-MRO attribute redeclaration whose declared
+/// #676 (D-210): rejects a cross-MRO attribute redeclaration whose declared
 /// type differs from another class's own declaration of the same attribute
 /// name, anywhere in one class's own linearized MRO.
 ///
@@ -3445,7 +3445,7 @@ fn check_incompatible_redefinitions(hir: &HirModule) -> Result<(), Diagnostic> {
 /// way to coerce at the assignment site. Left unrejected, this produces an
 /// undiagnosed mis-decoded read (D-141's tagged representation reads back
 /// the wrong Python value) or an outright runtime abort/segfault, entirely
-/// silently at `pycc check` time. See D-209 for the full rationale,
+/// silently at `pycc check` time. See D-210 for the full rationale,
 /// including why "coerce" is unsound in general (a bare, non-derived
 /// instance's own correctly-typed slot would be corrupted by any
 /// unconditional coercion inserted at the shared compiled call site).
@@ -3651,7 +3651,7 @@ pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     // ensures the error is returned directly rather than being masked by
     // the concrete-path fallback to the solver path.
     check_incompatible_redefinitions(hir)?;
-    // #676 (D-209): reject a cross-MRO attribute redeclaration with a
+    // #676 (D-210): reject a cross-MRO attribute redeclaration with a
     // differing declared type before any expression using that attribute
     // is type-checked -- see the function's own doc comment for why this
     // must be a class-definition-time rejection rather than a coercion.

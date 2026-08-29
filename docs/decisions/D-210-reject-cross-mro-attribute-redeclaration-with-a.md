@@ -1,10 +1,10 @@
 ---
-id: D-209
+id: D-210
 title: "Reject a cross-MRO attribute redeclaration with a differing declared type"
 status: accepted
 ---
 
-## D-209: Reject a cross-MRO attribute redeclaration with a differing declared type
+## D-210: Reject a cross-MRO attribute redeclaration with a differing declared type
 
 - Status: accepted (issue [#676](https://github.com/rotnov/pycc/issues/676)).
 - Context:

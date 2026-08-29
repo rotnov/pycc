@@ -117,7 +117,7 @@ status: accepted
     while `False` aborted the next read with `pycc_rt: invalid encoded int
     word 0x0` (exit 134). This was unchanged by this decision, not a
     regression it introduced, and has since been resolved by
-    [D-209](./D-209-reject-cross-mro-attribute-redeclaration-with-a.md)
+    [D-210](./D-210-reject-cross-mro-attribute-redeclaration-with-a.md)
     (issue [#676](https://github.com/rotnov/pycc/issues/676)): a conflicting
     cross-MRO attribute redeclaration is now diagnosed with `T0052` at
     class-definition time rather than coerced silently, closing both this

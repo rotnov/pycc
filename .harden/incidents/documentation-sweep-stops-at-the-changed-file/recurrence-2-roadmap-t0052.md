@@ -12,12 +12,12 @@ itself change the recommended action
 
 `docs/ROADMAP.md`'s "Language surface" row documents the D-187/#627
 bool-into-int attribute-boundary history and an existing #618/T0051/D-207
-sentence in the same row, but had no mention of #676/T0052/D-209 — a new
+sentence in the same row, but had no mention of #676/T0052/D-210 — a new
 compile-time rejection that closes D-187's own residual gap — even though the
 row is exactly the kind of enumeration `incident.md`'s root cause describes:
 "a reference or an enumeration elsewhere in the tree was left describing the
 pre-change world, while the file the change was *about* was updated
-correctly." The change's own documentation duty (D-209's decision record,
+correctly." The change's own documentation duty (D-210's decision record,
 the diagnostic registration) was discharged; the roadmap's cross-reference
 enumeration, sitting outside that frame, was not.
 

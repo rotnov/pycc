@@ -2471,7 +2471,7 @@ pub(crate) fn checked_function_signatures(
     // Issue #22: reject incompatible redefinitions before trying either the
     // concrete or solver path (same rationale as `check`'s own call).
     check_incompatible_redefinitions(hir)?;
-    // #676 (D-209): same rationale and call-site timing as `check`'s own
+    // #676 (D-210): same rationale and call-site timing as `check`'s own
     // call -- this entry point (via `check_and_resolve`) is also reachable
     // from `pycc build` without an earlier `pycc check`/`check` call, so it
     // needs its own guard against a cross-MRO attribute redeclaration.
