@@ -39,7 +39,7 @@ fn main() -> ExitCode {
             // user doesn't want that default applied. Resolving it here,
             // before `try_build` ever runs, is what keeps `run`'s own
             // hardcoded `false` (below) actually final.
-            let release = resolve_release_flag(release, Path::new(&path));
+            let release = resolve_release_flag(release, &path);
             // Caller-owned scratch (#783): the temp object `try_build` emits
             // lives inside this `ScratchDir`, so every exit from this arm --
             // success and each error path alike -- removes it on drop. The
@@ -249,13 +249,12 @@ fn create_scratch(category: &str) -> Result<pycc_scratch::ScratchDir, ExitCode> 
 /// so the path's owner must outlive the call, which only injection (the
 /// same DI convention as `init`'s `dir` parameter) provides.
 fn try_build(
-    path: &str,
-    out: &str,
+    path: &Path,
+    out: &Path,
     target: Option<&str>,
     release: bool,
     obj_path: &Path,
 ) -> Result<(), ExitCode> {
-    let path = Path::new(path);
     let typed_hir = resolve_frontend(path)
         .map_err(|failure| ExitCode::from(report_build_failure(path, failure)))?;
     let mir = pycc_mir::build(&typed_hir);
@@ -582,34 +581,58 @@ fn run_command(binary: &std::path::Path, args: &[String]) -> std::process::Comma
 /// all the uniqueness the old `pycc_run_{pid}` file name provided, so plain
 /// `out`/`main.o` file names inside it are enough. Binding order is
 /// load-bearing: `scratch` stays alive across `try_build` (the linker reads
-/// the object and writes `out`) *and* across `run_command(..).status()`
+/// the object and writes `out`) *and* across the call to
+/// `run_built_binary` below, which itself calls `run_command(..).status()`
 /// (the child executes from inside the scratch directory; `status()` waits
 /// for it to exit), so `Drop` removes the directory only after the child
-/// has terminated -- do not restructure this to return before the wait.
-fn run(path: &str, args: &[String]) -> ExitCode {
+/// has terminated -- do not restructure this to return before that wait.
+fn run(path: &Path, args: &[String]) -> ExitCode {
     let scratch = match create_scratch("run") {
         Ok(scratch) => scratch,
         Err(code) => return code,
     };
     let out = scratch.join("out");
-    if let Err(code) = try_build(
-        path,
-        out.to_str().expect("scratch dir path should be valid UTF-8"),
-        None,
-        false,
-        &scratch.join("main.o"),
-    ) {
+    if let Err(code) = try_build(path, &out, None, false, &scratch.join("main.o")) {
         return code;
     }
-    let status = run_command(&out, args)
-        .status()
-        .expect("built binary should run");
+    ExitCode::from(run_built_binary(&out, args))
+}
+
+/// Spawns the just-linked binary at `out` and waits for it, mapping the
+/// result to `pycc run`'s exit code. Factored out of `run` (#249) so the
+/// exec-failure path -- `Command::status()` failing to even start the
+/// child, e.g. a permissions error or the binary having vanished between
+/// link and spawn -- has a direct seam to test: calling this function with
+/// a path that cannot be executed reaches the `Err` arm deterministically,
+/// without needing `run`'s own scratch-directory and build machinery to
+/// manufacture that failure. Returns a plain `u8` rather than `ExitCode`
+/// (mirroring `report_check_failure`/`report_build_failure` above) so a
+/// test can assert the exact numeric value instead of only "did not
+/// panic" -- `ExitCode` itself has no `PartialEq` (see
+/// `create_scratch_tests`'s own note on this).
+fn run_built_binary(out: &Path, args: &[String]) -> u8 {
+    let status = match run_command(out, args).status() {
+        Ok(status) => status,
+        // Failing to *start* the built binary (permission denied, the file
+        // vanishing between link and spawn) is an ordinary environment
+        // failure, not a pycc invariant -- report it like the linker's own
+        // spawn failure in `try_build` above (CLI_SPEC.md's exit-2
+        // invocation/environment class) instead of panicking with a raw
+        // backtrace.
+        Err(e) => {
+            eprintln!(
+                "error: could not run the built program `{}`: {e}",
+                pycc_diag::display_path(&out.to_string_lossy())
+            );
+            return 2;
+        }
+    };
     // Generated programs currently have no user-controlled non-zero exit
     // status. Any unsuccessful termination is therefore a runtime panic,
     // trap, or uncaught failure and maps to CLI_SPEC.md's stable 101 on
     // every platform, including Unix signal termination where `code()` is
     // `None` and Windows abort statuses that do not fit in a u8.
-    ExitCode::from(if status.success() { 0 } else { 101 })
+    if status.success() { 0 } else { 101 }
 }
 
 /// Locates `pycc_rt`'s static library for the requested target and
@@ -834,6 +857,48 @@ mod run_command_tests {
     }
 }
 
+#[cfg(all(test, unix))]
+mod run_built_binary_tests {
+    use super::run_built_binary;
+
+    /// #249: `run_built_binary` (factored out of `run`) used to
+    /// `.status().expect("built binary should run")`, so a spawn failure --
+    /// the built binary missing or unexecutable between link and spawn --
+    /// panicked with a raw backtrace instead of reporting CLI_SPEC.md's
+    /// exit-2 invocation/environment class, the same class
+    /// `try_build`'s own linker-spawn-failure arm already uses. A
+    /// nonexistent path makes `Command::status()` fail with `ENOENT`
+    /// portably, reaching the `Err` arm directly -- no scratch directory or
+    /// real build needed to manufacture the failure. `run_built_binary`
+    /// returns a plain `u8` (not `ExitCode`, which has no `PartialEq` --
+    /// see `create_scratch_tests`'s own note on this) specifically so this
+    /// exact exit-2 value can be asserted directly.
+    #[test]
+    fn a_binary_that_cannot_be_spawned_reports_exit_code_2() {
+        let out = std::path::Path::new("/nonexistent/pycc_249_test_binary");
+        assert_eq!(run_built_binary(out, &[]), 2);
+    }
+
+    /// A binary that spawns and exits `0` reports exit code `0`. Exercises
+    /// the `Ok` arm's success branch, which the spawn-failure test above
+    /// never reaches.
+    #[test]
+    fn a_successfully_run_binary_reports_exit_code_0() {
+        let out = std::path::Path::new("/usr/bin/true");
+        assert_eq!(run_built_binary(out, &[]), 0);
+    }
+
+    /// A binary that spawns but exits non-zero reports the stable `101`
+    /// (CLI_SPEC.md's "compiled program panicked/uncaught exception" exit
+    /// code, reused here for any unsuccessful child termination). Exercises
+    /// the `Ok` arm's failure branch.
+    #[test]
+    fn a_binary_that_exits_non_zero_reports_exit_code_101() {
+        let out = std::path::Path::new("/usr/bin/false");
+        assert_eq!(run_built_binary(out, &[]), 101);
+    }
+}
+
 #[cfg(test)]
 mod try_build_release_isolation_tests {
     use super::*;
@@ -879,14 +944,7 @@ mod try_build_release_isolation_tests {
         let obj_path = dir.join("obj.o");
 
         // Exactly what `run()` does: `release: false` straight through.
-        try_build(
-            src.to_str().unwrap(),
-            out.to_str().unwrap(),
-            None,
-            false,
-            &obj_path,
-        )
-        .expect("try_build should succeed");
+        try_build(&src, &out, None, false, &obj_path).expect("try_build should succeed");
 
         let obj_bytes = std::fs::read(&obj_path).expect("try_build's temp object should exist");
 
