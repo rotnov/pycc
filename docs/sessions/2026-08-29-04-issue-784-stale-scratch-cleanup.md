@@ -25,7 +25,10 @@ Implemented exactly per the plan published verbatim at
   lock-file-name seam).
 - `crates/pycc_scratch/src/sweep.rs` (new): `SweepConfig`, `SweepReport`,
   `sweep_stale_roots()` and the injectable `sweep_stale_roots_in(root,
-  config, now)`. Deletes an entry only if it fully parses as
+  config, now)` — after the review round below, only `sweep_stale_roots`
+  and `SweepReport` are `pub`; the seam items are `pub(crate)`, consumed
+  solely by the crate's own unit tests. Deletes an entry only if it fully
+  parses as
   `pycc_{category}_{pid}_{nanos}_{seq}` with non-empty category, is a real
   directory, exceeds its class's age floor (1 h locked / 24 h lockless, by
   dir mtime), and holds no live lock; budgets 10,000 entries / 512
@@ -69,6 +72,23 @@ exists (verified by grep across `tests/`, `src/`, `crates/*/src`).
   `cargo doc --workspace --no-deps`: all exit 0.
 - llms.txt aggregate budget untouched (no manifest document edited):
   270332 ≤ 270336.
+
+## Review loop and findings batch
+
+The D-068 pinned deep review of the committed range ran two rounds after
+the snapshot above was first written. Round 1: 3 findings (0 P0/P1 — a
+CLI_SPEC paragraph-placement warning and two notes: narrow
+lockless-floor wording, over-broad `pub` on the test seam), fixed in
+`3df0ffac`. Round 2 (verification): confirmed #1/#3 closed and found the
+narrow wording surviving in two more spots (`sweep.rs` module doc, D-209),
+fixed in `b9f09f77`; a post-fix repo-wide `pre-Part-4` grep proved
+completeness. All five findings and dispositions are in
+`.harden/findings/issue-784.jsonl`; the `/harden batch` pass recorded two
+recurrence counters and one new counter under `.harden/incidents/` plus a
+fix-extent lesson in `docs/AGENT_RETROSPECTIVE.md` (`16a7cd1d`), shipping
+no mechanical artefact — review-tier was confirmed as the catching rung.
+Every gate above was re-run green on the final tree after each fix
+commit.
 
 ## Follow-ups
 
