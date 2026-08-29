@@ -1,0 +1,1 @@
+{"tool_name": "Bash", "tool_input": {"command": "until grep -q 'Ready in' dev.log; do sleep 1; done"}}
