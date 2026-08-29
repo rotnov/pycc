@@ -559,10 +559,13 @@ fn add_linux_system_libs(_cmd: &mut std::process::Command) {}
 /// Builds the `std::process::Command` that launches the freshly built
 /// `binary`, forwarding `args` unchanged and in order as its process
 /// arguments (CLI_SPEC.md's `pycc run [PATH] [-- args]` contract, #23).
+/// `args` is `OsString`, not `String` (#824 item 2): a forwarded value can
+/// be a non-UTF-8 byte sequence, and `Command::args` accepts `OsStr`
+/// directly, so nothing here needs to re-validate or lossily convert it.
 /// Factored out of `run` so the forwarding itself -- not just the full
 /// build-and-execute pipeline -- has a direct test against a real child
 /// process.
-fn run_command(binary: &std::path::Path, args: &[String]) -> std::process::Command {
+fn run_command(binary: &std::path::Path, args: &[std::ffi::OsString]) -> std::process::Command {
     let mut command = std::process::Command::new(binary);
     command.args(args);
     command
@@ -586,7 +589,7 @@ fn run_command(binary: &std::path::Path, args: &[String]) -> std::process::Comma
 /// (the child executes from inside the scratch directory; `status()` waits
 /// for it to exit), so `Drop` removes the directory only after the child
 /// has terminated -- do not restructure this to return before that wait.
-fn run(path: &Path, args: &[String]) -> ExitCode {
+fn run(path: &Path, args: &[std::ffi::OsString]) -> ExitCode {
     let scratch = match create_scratch("run") {
         Ok(scratch) => scratch,
         Err(code) => return code,
@@ -610,7 +613,7 @@ fn run(path: &Path, args: &[String]) -> ExitCode {
 /// test can assert the exact numeric value instead of only "did not
 /// panic" -- `ExitCode` itself has no `PartialEq` (see
 /// `create_scratch_tests`'s own note on this).
-fn run_built_binary(out: &Path, args: &[String]) -> u8 {
+fn run_built_binary(out: &Path, args: &[std::ffi::OsString]) -> u8 {
     let status = match run_command(out, args).status() {
         Ok(status) => status,
         // Failing to *start* the built binary (permission denied, the file
@@ -823,6 +826,7 @@ mod create_scratch_tests {
 #[cfg(all(test, unix))]
 mod run_command_tests {
     use super::run_command;
+    use std::ffi::OsString;
 
     /// Proves `run_command` actually forwards its `args` unchanged and in
     /// order to the child process (#23), not merely that `pycc run` parses
@@ -836,7 +840,7 @@ mod run_command_tests {
     /// re-cover every value shape.
     #[test]
     fn forwards_args_unchanged_and_in_order_to_the_child_process() {
-        let args: Vec<String> = vec!["first".into(), "-x".into(), "héllo".into()];
+        let args: Vec<OsString> = vec!["first".into(), "-x".into(), "héllo".into()];
 
         let output = run_command(std::path::Path::new("/bin/echo"), &args)
             .output()
@@ -854,6 +858,27 @@ mod run_command_tests {
 
         assert!(output.status.success());
         assert_eq!(output.stdout, b"\n");
+    }
+
+    /// #824 item 2: a forwarded value that is not valid UTF-8 must reach
+    /// the child process as the same opaque bytes, not get lossily
+    /// replaced or rejected. `/bin/echo`'s own stdout is a byte stream, so
+    /// this proves the forwarding survives all the way through a real
+    /// child process, matching `cli.rs`'s parser-level
+    /// `run_captures_non_utf8_trailing_args_as_opaque_bytes` proving the
+    /// parse side alone.
+    #[test]
+    fn forwards_non_utf8_args_as_opaque_bytes_to_the_child_process() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let args: Vec<OsString> = vec![OsString::from_vec(b"arg_\xff".to_vec())];
+
+        let output = run_command(std::path::Path::new("/bin/echo"), &args)
+            .output()
+            .expect("/bin/echo should run");
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"arg_\xff\n");
     }
 }
 

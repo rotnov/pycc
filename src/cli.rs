@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -53,8 +54,31 @@ pub enum Command {
         /// `allow_hyphen_values` so a value that itself looks like a flag
         /// (e.g. `-x`) is captured here instead of being rejected as an
         /// unrecognized `pycc` option.
+        ///
+        /// `OsString`, not `String` (#824 item 2): unlike a `String`
+        /// positional, clap does not UTF-8-validate an `OsString` one, so a
+        /// non-UTF-8 forwarded value (e.g. a byte sequence a shell can
+        /// still pass through `$@`) is captured as an opaque byte sequence
+        /// and forwarded to the child process unchanged, the same
+        /// preserve-native-bytes treatment `PATH`/`OUT` already get via
+        /// `PathBuf` (#249), instead of being rejected with a CLI parse
+        /// error. `std::process::Command::args` accepts `OsStr`/`OsString`
+        /// directly, so nothing downstream needs to re-decode these.
+        ///
+        /// #824 item 1 also asked whether `trailing_var_arg` should require
+        /// an explicit `--` before capturing anything (so a bare `pycc run
+        /// app.py extra` would need to become `pycc run app.py -- extra`).
+        /// Deliberately kept as-is: `pycc run` has no flags of its own
+        /// today, `trailing_var_arg` only captures a value once `path` (the
+        /// one preceding positional) is already filled, and
+        /// `allow_hyphen_values` guarantees this arm accepts a value that
+        /// looks like a flag either way -- there is no `pycc`-recognized
+        /// flag a bare trailing value could accidentally shadow. Requiring
+        /// `--` here would add ceremony without preventing any actual
+        /// ambiguity; if `run` ever gains its own flags, this call should
+        /// be revisited.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        args: Vec<OsString>,
     },
     Check {
         paths: Vec<PathBuf>,
@@ -82,7 +106,7 @@ pub enum Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, ErrorFormat, OutputFormat};
+    use super::{Cli, Command, ErrorFormat, OsString, OutputFormat};
     use clap::Parser;
 
     #[cfg(unix)]
@@ -237,7 +261,7 @@ mod tests {
         assert_eq!(parsed_build_release(cli.command), Some(true));
     }
 
-    fn parsed_run(command: Command) -> Option<(std::path::PathBuf, Vec<String>)> {
+    fn parsed_run(command: Command) -> Option<(std::path::PathBuf, Vec<OsString>)> {
         match command {
             Command::Run { path, args } => Some((path, args)),
             _ => None,
@@ -260,7 +284,14 @@ mod tests {
             .unwrap();
         let (path, args) = parsed_run(cli.command).unwrap();
         assert_eq!(path, std::path::PathBuf::from("app.py"));
-        assert_eq!(args, vec!["first", "second", "third"]);
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("first"),
+                OsString::from("second"),
+                OsString::from("third"),
+            ]
+        );
     }
 
     #[test]
@@ -268,7 +299,14 @@ mod tests {
         let cli =
             Cli::try_parse_from(["pycc", "run", "app.py", "--", "héllo", "世界", "🦀"]).unwrap();
         let (_, args) = parsed_run(cli.command).unwrap();
-        assert_eq!(args, vec!["héllo", "世界", "🦀"]);
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("héllo"),
+                OsString::from("世界"),
+                OsString::from("🦀"),
+            ]
+        );
     }
 
     #[test]
@@ -282,6 +320,50 @@ mod tests {
             Cli::try_parse_from(["pycc", "run", "app.py", "--", "-x", "--flag", "hello"]).unwrap();
         let (path, args) = parsed_run(cli.command).unwrap();
         assert_eq!(path, std::path::PathBuf::from("app.py"));
-        assert_eq!(args, vec!["-x", "--flag", "hello"]);
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("-x"),
+                OsString::from("--flag"),
+                OsString::from("hello"),
+            ]
+        );
+    }
+
+    #[test]
+    fn run_captures_a_trailing_arg_without_requiring_an_explicit_separator() {
+        // CLI_SPEC.md's #824 note: `pycc run` has no flags of its own, so
+        // `trailing_var_arg` captures a value that follows `path` whether
+        // or not `--` precedes it -- `--` documents the always-safe form,
+        // it is not required today.
+        let cli = Cli::try_parse_from(["pycc", "run", "app.py", "extra"]).unwrap();
+        let (path, args) = parsed_run(cli.command).unwrap();
+        assert_eq!(path, std::path::PathBuf::from("app.py"));
+        assert_eq!(args, vec![OsString::from("extra")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_captures_non_utf8_trailing_args_as_opaque_bytes() {
+        // #824 item 2: a forwarded value after `--` used to be parsed as
+        // `String`, so a non-UTF-8 byte sequence (still a value a shell can
+        // pass through `$@`) was rejected with a CLI parse error instead of
+        // being forwarded like `PATH`/`OUT` already are (#249). `OsString`
+        // accepts it losslessly.
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let bad_arg = OsString::from_vec(b"arg_\xff".to_vec());
+        let cli = Cli::try_parse_from([
+            OsString::from("pycc"),
+            OsString::from("run"),
+            OsString::from("app.py"),
+            OsString::from("--"),
+            bad_arg.clone(),
+        ])
+        .unwrap();
+        let (_, args) = parsed_run(cli.command).unwrap();
+
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0].as_bytes(), bad_arg.as_bytes());
     }
 }
