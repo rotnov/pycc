@@ -137,3 +137,22 @@ status: accepted
   - This is the second D-178 boundary-inventory update after D-179 (which
     removed the `range` operand): the inventory this decision covers is the
     13 non-`range` positions D-179 left, plus the narrowed repeat-count case.
+  - PR #827 review found that the "list index" position, as originally
+    implemented, fired unconditionally on any subscript's index, before the
+    subscript's base type was known -- including a *tuple* base, which has
+    no D-141 runtime `int`-boundary position at all (tuple indexing is
+    resolved entirely at compile time in `pycc_types`'s own `Ty::Tuple` arm,
+    which already rejects an out-of-range literal index with `T0040`,
+    "non-negative literal within range"). `T0051` preempting that check for
+    `(1, 2)[4611686018427387904]` was both redundant with `T0040` and
+    mislabeled the position as a "list index" for a base that plainly is not
+    a list. The fix, applied in the same pull request the finding was raised
+    on, skips the `T0051` check when the subscript base is syntactically a
+    tuple *literal* -- the one case `pycc_hir` can recognize without type
+    information, mirroring the `str * int` repeat-count narrowing above. A
+    tuple value held in a variable (`t = (1, 2)`; `t[huge]`) is
+    indistinguishable from a list at HIR-lowering time and keeps hitting
+    `T0051` incorrectly; closing that residual gap would need the same
+    type-information plumbing into `pycc_hir` this decision already declined
+    to build for the repeat-count case, so it is accepted as the same kind
+    of documented, narrower scope cut.

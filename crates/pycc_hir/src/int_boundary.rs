@@ -87,7 +87,11 @@ fn int_literal_boundary_diagnostic(n: i64, span: std::ops::Range<u32>, position:
         ),
         Span::new(span.start, span.end),
     )
-    .with_help("use a literal within the tagged smallint range, or compute the value through arithmetic instead of writing it as a literal here")
+    .with_help(
+        "use a literal within the tagged smallint range -- this position has no safe compile-time \
+         workaround for a larger value: an out-of-range value reaching it through arithmetic \
+         instead of a literal still compiles, but aborts at run time (exit 101) exactly as before",
+    )
 }
 
 /// Checks one already-lowered boundary-position sub-expression: if it is an

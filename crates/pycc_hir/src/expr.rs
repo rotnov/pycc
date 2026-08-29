@@ -268,7 +268,26 @@ pub(crate) fn lower_expr(
             _ => {
                 let base = Box::new(lower_expr(&sub.value, in_function, class_name)?);
                 let index = lower_expr(&sub.slice, in_function, class_name)?;
-                check_boundary_literal(&index, pycc_ast::expr_range(&sub.slice), "list index")?;
+                // #618/D-207 (finding from PR #827 review): a tuple base has
+                // no D-141 runtime `int`-boundary position at all -- tuple
+                // indexing is resolved entirely at compile time in
+                // `pycc_types::check_expr`'s own `Ty::Tuple` arm, which
+                // already rejects an out-of-range literal index with T0040
+                // ("non-negative literal within range"). Emitting T0051
+                // unconditionally here, before the base's type is known,
+                // would preempt that existing T0040 check and mislabel the
+                // position as a "list index" for a tuple. HIR lowering can
+                // only recognize a tuple base syntactically when it is
+                // itself a tuple *literal* (`(1, 2)[huge]`); a tuple value
+                // held in a variable is indistinguishable from a list at
+                // this stage without type information `pycc_hir` does not
+                // have, so that case is an accepted, documented gap
+                // mirroring the `str * int` repeat-count narrowing
+                // elsewhere in this module -- see `crate::int_boundary`'s
+                // doc comment.
+                if !matches!(sub.value.as_ref(), Expr::Tuple(_)) {
+                    check_boundary_literal(&index, pycc_ast::expr_range(&sub.slice), "list index")?;
+                }
                 HirExpr::Subscript {
                     base,
                     index: Box::new(index),
@@ -1675,6 +1694,26 @@ mod tests {
         assert_t0051(
             &format!("xs = [1, 2, 3]\ny = xs[{OOR}]\n"),
             "list index",
+        );
+    }
+
+    #[test]
+    fn boundary_tuple_literal_index_is_not_t0051() {
+        // PR #827 review finding: a tuple base has no D-141 runtime
+        // `int`-boundary position at all -- `pycc_types` resolves tuple
+        // indexing entirely at compile time and already rejects an
+        // out-of-range literal index with its own T0040 ("non-negative
+        // literal within range"). Emitting T0051 here for a tuple literal
+        // base would preempt that check and mislabel the position as a
+        // "list index", so HIR lowering must succeed and defer to
+        // `pycc_types`.
+        let source = format!("y = (1, 2)[{OOR}]\n");
+        let module = pycc_parser::parse(&source).expect("test fixture must parse");
+        let result = crate::lower_checked(&module);
+        assert!(
+            result.is_ok(),
+            "a tuple-literal base's out-of-range index must not be rejected by T0051 in HIR, \
+             got {result:?}"
         );
     }
 

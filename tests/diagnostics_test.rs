@@ -354,6 +354,20 @@ fn d0040_tuple_index_not_a_literal() {
     assert_diagnostic_matches_fixture("d0040_tuple_index_not_a_literal");
 }
 
+// PR #827 review finding: an oversized literal index into a *tuple* base
+// must keep reporting T0040 ("non-negative literal within range"), not
+// T0051 ("out of range for a list index") -- tuple indexing is resolved
+// entirely at compile time in `pycc_types`, with no D-141 runtime `int`
+// boundary at all, so `crates/pycc_hir/src/expr.rs`'s subscript-lowering
+// arm must defer to this check for a tuple-literal base instead of
+// preempting it. See `crates/pycc_hir/src/expr.rs`'s
+// `boundary_tuple_literal_index_is_not_t0051` unit test for the
+// HIR-lowering-level half of this coverage.
+#[test]
+fn d0040_tuple_index_oversized_literal_still_t0040() {
+    assert_diagnostic_matches_fixture("d0040_tuple_index_oversized_literal_still_t0040");
+}
+
 #[test]
 fn d0041_value_less_annotation_later_assignment_mismatch() {
     assert_diagnostic_matches_fixture("d0041_value_less_annotation_later_assignment_mismatch");
