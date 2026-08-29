@@ -81,6 +81,12 @@ production temp-file leaks (`try_build`'s `pycc_obj_<pid>.o`, `run`'s
 - After merge: comment on #779 that Part 3 is complete, requirement 5 is
   covered, and the allowlist is empty (the parent's per-part narration
   convention).
+- `docs/ROADMAP.md` sits 4 bytes under the website's 264 KiB llms.txt
+  non-optional aggregate budget (`scripts/check-site.sh`, issue #207) after
+  this PR's D-203 note was trimmed to fit — the first CI round failed the
+  Pages `build` check on a 158-byte overrun. Parts 4/5 will edit ROADMAP
+  again: budget the prose (or trim elsewhere in the same edit) and check
+  the aggregate locally before pushing.
 
 ## Where a fresh session should look to resume
 
