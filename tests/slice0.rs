@@ -601,15 +601,21 @@ fn init_succeeds_on_retry_after_a_late_write_failure_is_fixed() {
 #[test]
 fn init_reports_an_unavailable_cwd_without_panicking() {
     let dir = ScratchDir::new("e2e_init_no_cwd").expect("failed to create scratch dir");
+    // The deleted-out-from-under cwd is an empty *subdirectory* of the
+    // scratch root, not the root itself: since #784 every root contains
+    // the `.pycc-scratch.lock` liveness marker, so `rmdir` on the root
+    // would fail with "Directory not empty" before `exec` ever ran.
+    let cwd = dir.join("cwd");
+    std::fs::create_dir(&cwd).expect("failed to create the doomed cwd");
     let pycc = pycc_bin();
 
-    // `sh -c '...' sh "$dir" "$pycc"` — positional args ($1, $2) avoid
+    // `sh -c '...' sh "$cwd" "$pycc"` — positional args ($1, $2) avoid
     // shell-escaping issues with temp paths that may contain spaces.
     let output = Command::new("sh")
         .arg("-c")
         .arg("cd \"$1\" && rmdir \"$1\" && exec \"$2\" init")
         .arg("sh")
-        .arg(&*dir)
+        .arg(&cwd)
         .arg(&pycc)
         .output()
         .unwrap();
@@ -1610,6 +1616,96 @@ fn successful_build_and_run_leave_no_temporary_files_behind() {
         leftovers.is_empty(),
         "a successful build + run must leave the temp directory empty, found: {leftovers:?}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_sweeps_a_provably_stale_scratch_root_and_spares_everything_else() {
+    // #784 (Part 4 of #779): `pycc build`/`pycc run` opportunistically
+    // sweep provably-stale pycc scratch roots before creating their own.
+    // This exercises the production wiring end to end through a spawned
+    // `pycc build` against a redirected temp directory holding one of each
+    // kind of entry. The sweep's own semantics are pinned by
+    // `crates/pycc_scratch/src/sweep.rs`'s portable unit tests (with an
+    // injected `now`); this test instead needs real past-the-floor ages,
+    // which it fakes by rewinding each fixture directory's mtime through
+    // an `File::open(dir)` + `set_modified` (a directory opens read-only
+    // on unix -- one of the reasons for the `#[cfg(unix)]` gate, alongside
+    // the Windows delete-contention flake class the previous test
+    // documents; the sweep unit tests still run on the windows-latest leg).
+    use pycc_scratch::LOCK_FILE_NAME;
+
+    fn rewind_mtime(dir: &std::path::Path, hours: u64) {
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(hours * 60 * 60);
+        std::fs::File::open(dir)
+            .expect("a directory should open read-only on unix")
+            .set_modified(past)
+            .expect("rewinding a directory mtime should succeed");
+    }
+
+    let dir = ScratchDir::new("e2e_stale_sweep").expect("failed to create scratch dir");
+    let tmp = dir.join("tmp");
+    std::fs::create_dir(&tmp).unwrap();
+
+    // A stale root: full-format name, unheld lock file (the shape a
+    // SIGKILLed pycc leaves behind), aged past the 1 h locked floor.
+    let stale = tmp.join("pycc_stale_11111_22222_0");
+    std::fs::create_dir(&stale).unwrap();
+    std::fs::File::create(stale.join(LOCK_FILE_NAME)).unwrap();
+    rewind_mtime(&stale, 2);
+
+    // A live root: also aged past the floor -- otherwise it would survive
+    // as merely young and prove nothing about the lock -- but this test
+    // holds its lock, exactly as a live pycc process would.
+    let live = tmp.join("pycc_live_33333_44444_0");
+    std::fs::create_dir(&live).unwrap();
+    let held_lock = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(live.join(LOCK_FILE_NAME))
+        .unwrap();
+    held_lock.lock().unwrap();
+    rewind_mtime(&live, 2);
+
+    // A directory without the parseable pid/nanos/seq fields, and a
+    // full-format-named plain file: neither is pycc-owned per the sweep's
+    // safety bar, so both must survive even when old.
+    let non_matching = tmp.join("pycc_notaroot");
+    std::fs::create_dir(&non_matching).unwrap();
+    rewind_mtime(&non_matching, 30);
+    let plain_file = tmp.join("pycc_file_55555_66666_0");
+    std::fs::write(&plain_file, b"not a directory").unwrap();
+
+    let src = write_fixture(&dir, "hello_sweep.py", "print(7)\n");
+    let out = dir.join("hello_sweep");
+    let build_status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .env("TMPDIR", &tmp)
+        .env("TMP", &tmp)
+        .env("TEMP", &tmp)
+        .status()
+        .unwrap();
+    assert!(build_status.success(), "the sweeping build must still succeed");
+
+    assert!(
+        !stale.exists(),
+        "the provably-stale root must have been swept"
+    );
+    assert!(live.is_dir(), "the lock-held root must survive");
+    assert!(
+        live.join(LOCK_FILE_NAME).is_file(),
+        "the held lock file itself must survive"
+    );
+    assert!(
+        non_matching.is_dir(),
+        "a non-matching directory must survive"
+    );
+    assert!(
+        plain_file.is_file(),
+        "a full-format-named plain file must survive"
+    );
+    drop(held_lock);
 }
 
 #[test]

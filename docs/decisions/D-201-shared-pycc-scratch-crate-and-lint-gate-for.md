@@ -144,6 +144,23 @@ status: accepted
   for #779's Parts 2/3. Parts 4 (#784, bounded stale-root cleanup) and 5
   (#785, `TMPDIR` operational guidance) remain open under #779.
 
+  Update (2026-08-29, later the same day): Part 4 (#784) is complete —
+  D-209 holds the design. One correction to this entry's consequences
+  note: the anticipated pid/nanos liveness heuristic ("recover the owning
+  `pid` and use `nanos` to defeat PID reuse") is superseded. `nanos` is no
+  longer a trustworthy timestamp (`f761a42a` degrades it to `0` under a
+  pre-epoch clock), and the PID-reuse comparison would need a live
+  process's start time, which `std` cannot portably provide — while
+  `std::fs::File::{lock, try_lock}` (stabilized in 1.89, available under
+  the 1.97.1 toolchain pin) gives exact kernel-backed liveness that is
+  immune to PID reuse and released even on SIGKILL. Every root now
+  carries a locked `.pycc-scratch.lock` marker, and the sweep
+  (`crates/pycc_scratch/src/sweep.rs`) parses the name format for
+  *ownership validation only*, taking staleness from filesystem mtime and
+  liveness from the lock. The naming-format stability commitment stands
+  unchanged — the sweep is exactly the anticipated parsing consumer, and
+  the crate remains std-only. Part 5 (#785) remains open under #779.
+
   **Known, accepted scope limitation**: the lint is a textual pattern match,
   not a data-flow analysis. A caller that splits the expression across a
   binding (`let dir = std::env::temp_dir(); ... dir.join(...)`) evades it
