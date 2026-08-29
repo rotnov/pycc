@@ -358,11 +358,16 @@ mod tests {
             assert!(!root.exists(), "the stale root must be gone");
         }
         #[cfg(windows)]
-        assert_eq!(
-            report.deleted + report.errors,
-            1,
-            "the stale root must at least be claimed for deletion"
-        );
+        {
+            assert_eq!(
+                report.deleted + report.errors,
+                1,
+                "the stale root must at least be claimed for deletion"
+            );
+            // `root`'s existence is unassertable under the contention class
+            // above; keep the binding used on this side too.
+            let _ = &root;
+        }
     }
 
     #[test]
