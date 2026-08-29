@@ -15,9 +15,9 @@
 //!
 //! Part 4 of #779 (issue #784) adds the second half of the lifecycle story:
 //! every root carries a [`LOCK_FILE_NAME`] liveness marker held under an OS
-//! advisory lock for the handle's lifetime, and the [`sweep`] module's
+//! advisory lock for the handle's lifetime, and [`sweep_stale_roots`]'s
 //! bounded, best-effort sweep removes roots whose creating process is
-//! provably dead (see that module's docs for the exact safety bar).
+//! provably dead (see the sweep module's docs for the exact safety bar).
 
 mod sweep;
 
@@ -31,8 +31,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Name of the liveness-marker file [`ScratchDir::new`] creates inside every
-/// fresh scratch root, shared with the [`sweep`] module's probe and with
-/// tests that build sweep fixtures by hand.
+/// fresh scratch root, shared with [`sweep_stale_roots_in`]'s probe and
+/// with tests that build sweep fixtures by hand.
 ///
 /// The creating process holds an exclusive OS advisory lock
 /// ([`File::lock`]) on this file for the lifetime of the [`ScratchDir`]
@@ -77,13 +77,13 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 ///   promise an actionable exit-2 environment error, never a panic, and a
 ///   real collision under a degraded clock still surfaces as
 ///   `create_dir`'s `AlreadyExists` error through the fallible path below,
-/// - `seq` is [`SEQ`], a per-process atomic counter that rules out any
+/// - `seq` is `SEQ`, a private per-process atomic counter that rules out any
 ///   same-process collision even when two calls land on the same nanosecond.
 ///
 /// This field order and format are a stability commitment with a real
-/// consumer since Part 4 (#784): the [`sweep`] module parses a directory
-/// name back into its fields without a live handle and treats a full-format
-/// match as proof of pycc ownership. Changing the format is a breaking
+/// consumer since Part 4 (#784): [`sweep_stale_roots_in`] parses a
+/// directory name back into its fields without a live handle and treats a
+/// full-format match as proof of pycc ownership. Changing the format is a breaking
 /// change for that consumer. Note the parsed numbers are used for
 /// *validation only* — a pre-epoch clock degrades `nanos` to `0`, so the
 /// sweep never treats it as a plausible creation time; staleness comes from
