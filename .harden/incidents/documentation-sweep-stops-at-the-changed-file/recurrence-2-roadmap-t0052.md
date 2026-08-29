@@ -27,11 +27,10 @@ Same shape as the original three findings (test doc comments naming stale
 symbol homes, a decision record's unfounded tracker claim, a spec's
 under-extended enumeration): a plain-text cross-reference or enumeration that
 compiles, tests, and passes coverage identically whether it is current or
-stale. Fixed on the branch (`docs/ROADMAP.md`, restated compactly in a
-follow-up commit to also fit issue #207's llms.txt aggregate byte budget —
-see the sibling `incident.md` topic `subagent-fabricated-evidence` is
-unrelated; no new incident needed for the budget trim itself, it is ordinary
-editorial tightening, not a new failure class).
+stale. Fixed on the branch (`docs/ROADMAP.md`, in `cfea9c72`, then restated more
+compactly in `821eade8` to also fit issue #207's llms.txt aggregate byte
+budget). The budget trim itself gets no incident of its own — it is ordinary
+editorial tightening, not a new failure class.
 
 ## Effect on the termination point
 
