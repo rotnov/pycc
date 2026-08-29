@@ -376,6 +376,14 @@ mod tests {
             "a failing lock-file creation must propagate its io::Error"
         );
 
+        // A sentinel entry keeps the `read_dir` scan below from ever running
+        // over zero entries: under a freshly isolated `TMPDIR` (e.g. this
+        // repository's sandboxed CI coverage job, or any run with
+        // `--test-threads=1`), `std::env::temp_dir()` can otherwise be empty
+        // at this point, which would make the closures below never execute
+        // and vacuously pass without ever comparing a real entry against
+        // `prefix`.
+        let _sentinel = ScratchDir::new("lib_lock_scan_sentinel").expect("sentinel scratch dir");
         let temp_dir = std::env::temp_dir();
         let prefix = "pycc_lib_lock_create_fail_";
         let leaked = std::fs::read_dir(&temp_dir)

@@ -84,6 +84,50 @@ phrase before committing — the reviewer's cited sites are examples of the
 class, not its boundary. Declare such a fix complete only when the search
 returns corrected instances exclusively.
 
+## 2026-08-29 — Added a ROADMAP.md sentence without checking the llms.txt aggregate byte budget it is gated on
+
+What happened: while addressing a deep-reviewer finding on the #676/T0052
+branch (`feat/issue-676-bool-widen-mro`), added a new sentence to
+`docs/ROADMAP.md`'s "Language surface" row naming the new diagnostic, then
+committed and moved on to the next finding. Only afterward — prompted by an
+advisor consultation, not by a locally run gate — was it discovered that
+`docs/ROADMAP.md` is a non-optional document expanded verbatim into
+`site/llms.txt` under issue #207's 264 KiB aggregate byte budget, that the
+budget is enforced by `sh scripts/check-site.sh` (triggered by the
+`pages.yml` workflow on any push touching `docs/ROADMAP.md`), and that the
+commit immediately before this branch's base
+(`e8c05e4e`, "Shorten the #834 residual note ... to fit the llms.txt
+budget") had already trimmed the same row to leave `main` only ~30 bytes
+under the ceiling. The new sentence pushed the aggregate to 526 bytes over
+budget, requiring five successive rounds of manual byte-counting and
+re-editing (the sentence itself, then an adjacent unrelated parenthetical)
+before `sh scripts/check-site.sh` passed again.
+
+Root cause: absence gap. Nothing in this session's own workflow, and
+nothing in `AGENTS.md`'s "Keep documentation current" section, names
+`docs/ROADMAP.md`'s participation in the llms.txt byte budget or points at
+`sh scripts/check-site.sh` as a gate to run after editing it — the
+connection is discoverable only by reading `scripts/check-site.sh`'s Python
+validator or noticing the immediately preceding commit's own message. A
+roadmap edit otherwise looks like an ordinary prose change with no numeric
+constraint attached.
+
+What fixed it: shortened the new sentence to a minimal form and trimmed an
+unrelated illustrative parenthetical in the same row to recover the
+remaining margin, verified with `sh scripts/check-site.sh` ("Website checks
+passed") and `RUBYOPT="-E utf-8" ruby scripts/check_roadmap_evidence.rb`
+("Roadmap evidence policy passed"), then committed the fix as its own
+commit rather than folding it into the finding's original commit.
+
+Lesson: before committing a change to `docs/ROADMAP.md`, run
+`sh scripts/check-site.sh` locally (it validates the file against the site
+build without needing a live network fetch) whenever the edit adds text
+rather than only correcting or trimming it — the aggregate llms.txt budget
+this file shares with `README.md`, `docs/SPEC.md`, `docs/ARCHITECTURE.md`,
+`docs/PYTHON_STANDARDS.md`, and `site/index.html.md` has repeatedly sat
+within a few dozen bytes of its ceiling, so an addition of any real size is
+more likely than not to require a compensating trim in the same commit.
+
 ## 2026-08-29 — CI wait ran through a hand-rolled poll loop instead of the repository watcher; 13-hour silent stall
 
 What happened: while waiting on a pull request's CI, the session built an

@@ -111,15 +111,17 @@ status: accepted
     ~1.92 before this change and passes its `< 1.35` bound after.
   - The widening keys off the base expression's **static** type. A
     base-class method assigning a `bool` into an attribute a derived class
-    re-declares as `int` still misses it, and reaches the same unencoded-word
+    re-declares as `int` still missed it, and reached the same unencoded-word
     path this decision fixes for the direct case -- with the same asymmetry
-    the *Context* section describes: `True` reads back as the smallint `0`,
-    while `False` aborts the next read with `pycc_rt: invalid encoded int
-    word 0x0` (exit 134). This is unchanged by this decision, not a
-    regression it introduces, and is left for its own diagnosis in
-    [#676](https://github.com/rotnov/pycc/issues/676): a conflicting attribute
-    re-declaration across an MRO is arguably a type error rather than something
-    to coerce silently.
+    the *Context* section describes: `True` read back as the smallint `0`,
+    while `False` aborted the next read with `pycc_rt: invalid encoded int
+    word 0x0` (exit 134). This was unchanged by this decision, not a
+    regression it introduced, and has since been resolved by
+    [D-210](./D-210-reject-cross-mro-attribute-redeclaration-with-a.md)
+    (issue [#676](https://github.com/rotnov/pycc/issues/676)): a conflicting
+    cross-MRO attribute redeclaration is now diagnosed with `T0052` at
+    class-definition time rather than coerced silently, closing both this
+    direct symptom and its read-side twin.
   - Every other `scalar_to_slot_word` caller is unaffected, since the
     function is untouched. `emit_enum_member_inits`, its only other caller,
     passes statically known `Int` and `Str` scalars.

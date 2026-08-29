@@ -1755,14 +1755,41 @@ pub(crate) fn lower_class(
                 .find(|(name, _)| name == mro_class)
                 .expect("MRO class must be defined before the derived class");
             for (name, ty) in &base_def.dataclass_fields {
-                if !field_name_present(&merged_fields, name) {
-                    merged_fields.push((name.clone(), ty.clone()));
+                match merged_fields.iter().find(|(n, _)| n == name) {
+                    Some((_, existing_ty)) if existing_ty != ty => {
+                        return Err(Diagnostic::error(
+                            "T0052",
+                            format!(
+                                "attribute `{name}` is declared as `{}` and as `{}` by different dataclasses in the method resolution order of class `{class_name}`",
+                                existing_ty.name(),
+                                ty.name(),
+                            ),
+                            Span::new(
+                                u32::from(def.range.start()),
+                                u32::from(def.range.end()),
+                            ),
+                        ));
+                    }
+                    Some(_) => {}
+                    None => merged_fields.push((name.clone(), ty.clone())),
                 }
             }
         }
         for (name, ty) in &dataclass_fields {
-            if !field_name_present(&merged_fields, name) {
-                merged_fields.push((name.clone(), ty.clone()));
+            match merged_fields.iter().find(|(n, _)| n == name) {
+                Some((_, existing_ty)) if existing_ty != ty => {
+                    return Err(Diagnostic::error(
+                        "T0052",
+                        format!(
+                            "attribute `{name}` is declared as `{}` in a base class and as `{}` in dataclass `{class_name}`, both in the same method resolution order",
+                            existing_ty.name(),
+                            ty.name(),
+                        ),
+                        Span::new(u32::from(def.range.start()), u32::from(def.range.end())),
+                    ));
+                }
+                Some(_) => {}
+                None => merged_fields.push((name.clone(), ty.clone())),
             }
         }
         // Populate `attrs` from the merged field list (the dataclass's
@@ -2218,21 +2245,6 @@ fn lower_method(
         },
         params,
     ))
-}
-
-/// #378 (PR-18): Returns `true` if a field named `name` already exists in
-/// `fields`. Used during dataclass inheritance field merging to avoid
-/// duplicate entries. Extracted as a standalone function (rather than an
-/// inline `.any(|(n, _)| n == name)` closure) so that the dedup check
-/// is always covered by the line-coverage gate regardless of whether
-/// `fields` is empty when the check runs.
-fn field_name_present(fields: &[(String, Ty)], name: &str) -> bool {
-    for (n, _) in fields {
-        if n == name {
-            return true;
-        }
-    }
-    false
 }
 
 /// #378 (PR-18): Returns `true` if `ty` is a scalar slot type -- one that
@@ -4529,9 +4541,9 @@ mod tests {
     #[test]
     fn a_dataclass_child_redeclaring_a_parent_field_deduplicates() {
         // When a child dataclass redeclares a field already present in a
-        // parent, the merge keeps the parent's field and skips the child's
-        // duplicate. This exercises the `true` return path of
-        // `field_name_present`.
+        // parent with the *same* type, the merge keeps the parent's field
+        // and skips the child's duplicate rather than treating it as a
+        // conflict (see the differing-type case rejected as T0052 below).
         let hir = lower_ok(
             "@dataclass\nclass Base:\n    a: int\n@dataclass\nclass Derived(Base):\n    a: int\n",
         );
@@ -4548,12 +4560,12 @@ mod tests {
     #[test]
     fn a_dataclass_grandchild_merges_parent_and_grandparent_fields_with_dedup() {
         // A 3-level inheritance chain where the middle class redeclares a
-        // grandparent field. When processing the grandchild, the MRO-based
-        // merge iterates over the grandparent's fields first (adding `x`),
-        // then the middle class's fields. The middle class's `x` is already
-        // in `merged_fields`, so `field_name_present` returns `true` and
-        // the `if` body is skipped in the parent-fields loop. This covers
-        // the `if`'s "else" (false) branch in the MRO-based parent-fields
+        // grandparent field with the *same* type. When processing the
+        // grandchild, the MRO-based merge iterates over the grandparent's
+        // fields first (adding `x`), then the middle class's fields. The
+        // middle class's `x` is already in `merged_fields` with a matching
+        // type, so it is deduplicated rather than rejected. This covers the
+        // same-type "already present" branch in the MRO-based parent-fields
         // merge loop.
         let hir = lower_ok(
             "@dataclass\nclass A:\n    x: int\n@dataclass\nclass B(A):\n    x: int\n\
@@ -4567,6 +4579,51 @@ mod tests {
         assert_eq!(
             c_def.dataclass_fields,
             vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int),]
+        );
+    }
+
+    #[test]
+    fn a_dataclass_field_type_conflict_across_mro_is_rejected_via_unit_test() {
+        // Mirrors `pycc_types::tests::dataclass_field_type_conflict_across_mro_is_rejected_during_hir_lowering`
+        // inside this crate's own unit-test binary, working around
+        // cargo-llvm-cov issue #276 (instantiation-merge gap between
+        // the library and integration-test binaries): a dataclass field
+        // redeclared with a *differing* type across the MRO must be
+        // rejected with T0052, exercising the second merge loop's
+        // conflicting-type arm.
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "@dataclass\nclass Base:\n    v: int\n@dataclass\nclass Derived(Base):\n    v: str\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "T0052");
+        assert!(
+            diagnostic.message.contains('v')
+                && diagnostic.message.contains("int")
+                && diagnostic.message.contains("str"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_dataclass_field_type_conflict_between_two_bases_is_rejected_via_unit_test() {
+        // Mirrors `pycc_types::tests::dataclass_field_type_conflict_between_two_bases_is_rejected_during_hir_lowering`
+        // inside this crate's own unit-test binary, for the same
+        // cargo-llvm-cov instantiation-merge reason as the sibling test
+        // above: two independent dataclass bases declaring the same
+        // field with differing types must be rejected with T0052,
+        // exercising the first merge loop's conflicting-type arm.
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "@dataclass\nclass A:\n    v: int\n@dataclass\nclass B:\n    v: str\n@dataclass\nclass Derived(A, B):\n    pass\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "T0052");
+        assert!(
+            diagnostic.message.contains('v')
+                && diagnostic.message.contains("int")
+                && diagnostic.message.contains("str"),
+            "unexpected message: {}",
+            diagnostic.message
         );
     }
 

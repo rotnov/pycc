@@ -7,6 +7,7 @@ mod exception;
 mod expr;
 mod monomorphize;
 mod narrow;
+mod redeclaration;
 mod solver;
 #[cfg(test)]
 mod tests;
@@ -23,6 +24,9 @@ use exception::{
 };
 pub use expr::infer_expr;
 pub(crate) use expr::infer_expr_in;
+pub(crate) use redeclaration::{
+    check_incompatible_attribute_redeclarations, check_incompatible_redefinitions,
+};
 
 pub(crate) use constraints::*;
 pub use monomorphize::*;
@@ -3360,88 +3364,6 @@ fn check_with_signatures(
     check_with_environment(hir, env, function_local_names)
 }
 
-/// Issue #22: reject a redefinition of the same function name with an
-/// incompatible signature. The codegen uses the first definition's LLVM
-/// function type for indirect calls through the per-name function-pointer
-/// slot, so all definitions of the same name must share one signature.
-/// CPython allows arbitrary redefinition, but pycc's v0.1/v0.2 scope does
-/// not need to support it, and the pre-#22 behavior was already broken
-/// (a compile-time LLVM verification failure or silent runtime UB). This
-/// check makes the "one signature per name" invariant the codegen already
-/// assumes actually true.
-///
-/// Compares each definition's raw, pre-resolution `(param_tys, return_ty)`
-/// shape via `Ty`'s derived structural `PartialEq` -- including any
-/// `Ty::Infer` position. `Ty::Infer` is an ordinary unit variant under that
-/// derive, so it only ever equals another `Ty::Infer` at the same position,
-/// never a concrete type: comparing it unconditionally is correct by
-/// construction, not a false positive. An earlier version of this function
-/// skipped any function whose signature contained `Ty::Infer`, reasoning
-/// that comparing an unresolved `Infer` against a concrete type would be
-/// unsound -- that reasoning was wrong (the derived `PartialEq` already
-/// handles it correctly) and the skip instead let a same-named,
-/// same-arity, `Ty::Infer`-vs-concrete redefinition collapse onto one
-/// shared signature and pass silently (issue #402). Do not reintroduce a
-/// skip for `Ty::Infer` positions.
-///
-/// Called from `check` and `checked_function_signatures` (catches the
-/// concrete path before the concrete/solver split), both pre-resolution.
-/// `check_and_resolve` no longer needs its own post-resolution recheck:
-/// since this function now rejects every raw-shape mismatch up front
-/// (arity or `Infer`-vs-concrete), any redefinition pair it accepts is
-/// already raw-shape-identical, and `infer_function_signatures_with_solver`
-/// resolves same-named items through one shared, name-keyed signature
-/// entry -- so raw-shape-identical items are guaranteed to resolve to the
-/// same concrete signature too. A post-resolution recheck would therefore
-/// never observe a case this pre-resolution check didn't already reject.
-fn check_incompatible_redefinitions(hir: &HirModule) -> Result<(), Diagnostic> {
-    let mut seen: HashMap<String, (Vec<Ty>, Ty)> = HashMap::new();
-    for item in &hir.items {
-        let HirItem::Function {
-            name,
-            params,
-            return_ty,
-            ..
-        } = item
-        else {
-            continue;
-        };
-        let current = (
-            params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>(),
-            return_ty.clone(),
-        );
-        if let Some(prev) = seen.get(name) {
-            if prev != &current {
-                return Err(Diagnostic::error(
-                    "T0021",
-                    format!(
-                        "cannot redefine function `{name}` with a different signature \
-                         (previous: {}, current: {})",
-                        format_function_signature(prev),
-                        format_function_signature(&current),
-                    ),
-                    Span::new(0, 0),
-                ));
-            }
-        } else {
-            seen.insert(name.clone(), current);
-        }
-    }
-    Ok(())
-}
-
-/// Formats a `(param_tys, return_ty)` pair as `def name(params) -> return`
-/// for diagnostic messages.
-fn format_function_signature(sig: &(Vec<Ty>, Ty)) -> String {
-    let params = sig
-        .0
-        .iter()
-        .map(|ty| ty.name())
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("({params}) -> {}", sig.1.name())
-}
-
 fn check_with_environment(
     hir: &HirModule,
     mut env: Environment,
@@ -3535,6 +3457,11 @@ pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     // ensures the error is returned directly rather than being masked by
     // the concrete-path fallback to the solver path.
     check_incompatible_redefinitions(hir)?;
+    // #676 (D-210): reject a cross-MRO attribute redeclaration with a
+    // differing declared type before any expression using that attribute
+    // is type-checked -- see the function's own doc comment for why this
+    // must be a class-definition-time rejection rather than a coercion.
+    check_incompatible_attribute_redeclarations(hir)?;
     // The public validation-only API has no resolved-signature result to
     // return. Avoid building a temporary concrete signature map and then
     // cloning it into an `Environment`: construct that environment directly.
