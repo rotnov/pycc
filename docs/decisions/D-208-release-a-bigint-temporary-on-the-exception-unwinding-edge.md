@@ -105,11 +105,39 @@ status: accepted
     uses the identical `push_pending_int_release_if_temporary`/
     `guard_statement_effects` mechanism to protect each already-evaluated
     bound across the next one's evaluation.
+    A second-round independent review found a sixth site the original
+    inventory missed: `MirExpr::TupleLiteral`'s own element-evaluation loop
+    (`crates/pycc_codegen/src/lib.rs`). A fresh, owning `Ty::Int` element's
+    word is meant to transfer into the aggregate's own field via
+    `build_insert_value` -- the identical "ownership transfer" shape
+    `build_call_to_with_leading_args`'s argument-marshalling loop already
+    used, not a "materialize then release" shape -- so if a *later* sibling
+    element's own evaluation raises before the loop completes, an earlier
+    element's birth reference was orphaned the same way an earlier call
+    argument's would be. The fix mirrors `build_call_to_with_leading_args`
+    exactly: a `mark` recorded before the loop, each owning (non-duplicate)
+    element's word pushed via `push_pending_int_release_if_scalar_temporary`
+    right after `retain_if_int_duplicate` runs, and the stack truncated back
+    to `mark` -- never released -- once every element has legitimately
+    transferred ownership into the aggregate on the normal path. No change
+    to `expression_can_set_exception` was needed: each element is evaluated
+    through the ordinary recursive `emit_expr` call, so a later element that
+    is itself a `Call`/`Div`/`FloorDiv`/`Mod`/etc. already trips its own
+    `guard_statement_effects` call before the next element is reached,
+    exactly like a `BinOp`'s right operand or a call's later argument.
+    This is now the sixth (and, per this review round, final) site closed
+    by this decision.
+
     D-181's residual item 1 (the `TupleLiteral` element, tracked separately
-    as [#636](https://github.com/rotnov/pycc/issues/636)) is untouched and
-    stays open; `docs/RUNTIME.md` and `docs/ROADMAP.md` are updated in the
-    same pull request to narrow their "two temporary shapes still leak"
-    language down to that one remaining case.
+    as [#636](https://github.com/rotnov/pycc/issues/636)) is a genuinely
+    different, still-open defect from the one above: #636 is about a
+    *borrowed* element's ingress-retain having no matching release at the
+    tuple's own slot-death, blocked on D-124's container release
+    infrastructure -- it does not involve an owning temporary or the
+    exception-unwinding edge at all, and this decision's sixth-site fix does
+    not touch it. `docs/RUNTIME.md` and `docs/ROADMAP.md` are updated in the
+    same pull request to keep that distinction clear rather than conflating
+    the two.
   - The nbody hot loop's own comparison and arithmetic sites push nothing
     (D-084/D-140's floor scenario never raises across a bigint temporary's
     lifetime) and consequently still emit the original two-block guard
@@ -137,9 +165,14 @@ status: accepted
     exception-object leak and isolating the bigint-specific effect this
     decision fixes. This was verified empirically in both directions before
     being trusted: with the fix applied, `leak_marginal / control_marginal
-    ≈ 0.9995` for all three repro flavors (`BinOp`, `Compare`, `Call`
+    ≈ 0.9995` for the original three repro flavors (`BinOp`, `Compare`, `Call`
     argument); with the fix reverted (via a direct `git stash` A/B rebuild
-    of the same repro shapes), the ratio widens to `≈ 1.333`. The exception-
+    of the same repro shapes), the ratio widens to `≈ 1.333`. This round adds
+    a fourth flavor, `TupleLiteral`, exercising the sixth site described
+    above; it passes the same `< 1.15` marginal-ratio assertion
+    (`a_tuple_literal_element_orphaned_on_the_exception_edge_does_not_grow_with_the_iteration_count`
+    in `tests/issue_638_bigint_exception_release.rs`) and was verified the
+    same way -- confirmed to fail without the fix applied. The exception-
     object leak itself remains out of this decision's scope -- it is a
     pre-existing, already-documented defect in `pycc_rt::exception`, not a
     bigint refcounting defect -- and is left for its own future issue.

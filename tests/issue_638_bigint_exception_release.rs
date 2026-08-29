@@ -14,7 +14,13 @@
 //!    ownership is meant to *transfer* to the callee rather than being
 //!    released at all -- if a later argument's evaluation raises before the
 //!    call is reached, the transfer never happens and the earlier argument's
-//!    reference is orphaned the same way.
+//!    reference is orphaned the same way. `MirExpr::TupleLiteral`'s own
+//!    element-evaluation loop is this same "ownership transfer" flavor: a
+//!    fresh element's word is meant to transfer into the aggregate's own
+//!    field via `build_insert_value` rather than being released, so a later
+//!    sibling element's raising evaluation orphans an earlier element's
+//!    reference the identical way a later call argument's raise orphans an
+//!    earlier one.
 //!
 //! Follows `tests/issue_146_bigint_release.rs`'s own `peak_rss` module
 //! convention (duplicated helpers, per that file's own stated rationale)
@@ -161,6 +167,32 @@ fn a_call_argument_survives_a_later_sibling_argument_that_raises() {
     let expected_total = 1 + per_trip * 2;
     assert_runs_and_prints(
         "call_argument_exception_edge",
+        &source,
+        &format!("{expected_total}\n{PROMOTED}\n"),
+    );
+}
+
+#[test]
+fn a_tuple_literal_elements_survives_a_later_siblings_raise() {
+    // `(x + x, 1 // z)`: the tuple's first element is a fresh heap bigint
+    // that must survive the second element's raising evaluation -- the
+    // sixth site closed by this fix (D-208), `MirExpr::TupleLiteral`'s own
+    // element-evaluation loop, mirroring `f(x + x, 1 // z)`'s call-argument
+    // shape immediately above but with ownership transferring into the
+    // aggregate's own field via `build_insert_value` rather than into a
+    // callee's parameter slot.
+    let source = format!(
+        "x: int = {PROMOTED}\nz: int = 0\ntotal: int = 0\nfor i in range(0, 3):\n    \
+         try:\n        pair = (x + x, 1 // z)\n        total = total + pair[0]\n    except ZeroDivisionError:\n        \
+         z = 1\n        total = total + 1\nprint(total)\nprint(x)\n"
+    );
+    // Trip 0 raises evaluating `1 // z` (the tuple's second element) before
+    // the tuple is ever fully built -> total += 1, z becomes 1.
+    // Trips 1-2: `(x + x, 1)[0] == 2*PROMOTED`, added twice.
+    let per_trip: u128 = 2 * 4_611_686_018_427_387_904u128;
+    let expected_total = 1 + per_trip * 2;
+    assert_runs_and_prints(
+        "tuple_literal_exception_edge",
         &source,
         &format!("{expected_total}\n{PROMOTED}\n"),
     );
@@ -360,6 +392,44 @@ mod peak_rss {
             marginal_rss("rss_exc_call", call_argument_exception_edge_repro, 250_000);
         let control_marginal =
             marginal_rss("rss_ctl_call", call_argument_control_repro, 250_000);
+        assert!(
+            (leak_marginal as f64) < (control_marginal as f64) * 1.15,
+            "leak-shape marginal RSS growth must track the same-exception-rate \
+             control's, not scale by an extra `BigIntObj` release per trip: \
+             leak_marginal={leak_marginal} control_marginal={control_marginal}"
+        );
+    }
+
+    /// The `TupleLiteral` element-transfer flavor (this fix's own sixth
+    /// site): `(x + x, 1 // z)`, where the first element's fresh word must
+    /// survive the second element's raising evaluation, mirroring
+    /// [`call_argument_exception_edge_repro`]'s shape but with the
+    /// aggregate's own field taking ownership instead of a callee's
+    /// parameter slot.
+    fn tuple_literal_exception_edge_repro(iterations: u32) -> String {
+        format!(
+            "x: int = {PROMOTED}\nz: int = 0\ny: int = 0\nfor i in range({iterations}):\n    \
+             try:\n        pair = (x + x, 1 // z)\n        y = pair[0]\n    except ZeroDivisionError:\n        z = 0\nprint(x)\n"
+        )
+    }
+
+    /// Control for the `TupleLiteral` flavor: `(x, 1 // z)` -- the first
+    /// element is a plain `Name` read of `x`, transferring no fresh
+    /// temporary.
+    fn tuple_literal_control_repro(iterations: u32) -> String {
+        format!(
+            "x: int = {PROMOTED}\nz: int = 0\ny: int = 0\nfor i in range({iterations}):\n    \
+             try:\n        pair = (x, 1 // z)\n        y = pair[0]\n    except ZeroDivisionError:\n        z = 0\nprint(x)\n"
+        )
+    }
+
+    #[test]
+    fn a_tuple_literal_element_orphaned_on_the_exception_edge_does_not_grow_with_the_iteration_count()
+     {
+        let leak_marginal =
+            marginal_rss("rss_exc_tuple", tuple_literal_exception_edge_repro, 250_000);
+        let control_marginal =
+            marginal_rss("rss_ctl_tuple", tuple_literal_control_repro, 250_000);
         assert!(
             (leak_marginal as f64) < (control_marginal as f64) * 1.15,
             "leak-shape marginal RSS growth must track the same-exception-rate \

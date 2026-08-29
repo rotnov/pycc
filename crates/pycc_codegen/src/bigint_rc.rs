@@ -1001,6 +1001,168 @@ mod tests {
     }
 
     #[test]
+    fn an_early_tuple_elements_owned_word_is_released_on_a_later_elements_exception_edge() {
+        // `(n + n, n, 1 // n)`: the first element is a fresh, owned `BinOp`
+        // result -- `int_temporary_word` classifies it as a pending release
+        // candidate before the third element (`1 // n`, a `FloorDiv`, one of
+        // `expression_can_set_exception`'s three exception-settable
+        // `BinOp`s) is evaluated. The second element (a bare `Name` read) is
+        // a *borrowed* reference and must not itself be pushed. Reaching
+        // `1 // n`'s own `guard_statement_effects` call with the first
+        // element's word still pending must emit an `effect_exc_unwind`
+        // block that releases it -- exactly mirroring
+        // `an_outer_binops_owned_left_operand_is_released_on_the_inner_binops_exception_edge`
+        // above, but for `MirExpr::TupleLiteral`'s own element loop rather
+        // than `build_call_to_with_leading_args`'s or `BinOp`'s.
+        let owned_sum = MirExpr::BinOp {
+            op: pycc_mir::BinOpKind::Add,
+            left: Box::new(int_name("n")),
+            right: Box::new(int_name("n")),
+            ty: Ty::Int,
+        };
+        let raising_floordiv = MirExpr::BinOp {
+            op: pycc_mir::BinOpKind::FloorDiv,
+            left: Box::new(MirExpr::IntLiteral(1)),
+            right: Box::new(int_name("n")),
+            ty: Ty::Int,
+        };
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "tuple_literal_exception_edge".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::Subscript {
+                    base: Box::new(MirExpr::TupleLiteral(vec![
+                        owned_sum,
+                        int_name("n"),
+                        raising_floordiv,
+                    ])),
+                    index: Box::new(MirExpr::IntLiteral(0)),
+                }))],
+            }],
+            class_defs: Vec::new(),
+        };
+        let ir = emitted_ir("bigint_rc_tuple_exc_unwind_present", &mir);
+        assert!(
+            ir.contains("effect_exc_unwind"),
+            "a pending owned tuple element at a later element's exception \
+             guard must emit the #638 unwind block; got:\n{ir}"
+        );
+        // Same structural walk as
+        // `an_outer_binops_owned_left_operand_is_released_on_the_inner_binops_exception_edge`
+        // above: isolate `effect_exc_unwind`'s own reachable closure rather
+        // than splitting on the next `effect_exc_cont` occurrence, for the
+        // identical reason that test's own comment explains.
+        let mut block_bodies: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        let mut block_order: Vec<&str> = Vec::new();
+        let mut current_block: Option<&str> = None;
+        for raw in ir.lines() {
+            let line = raw.trim();
+            if !raw.starts_with([' ', '@', '%', '}', '!']) {
+                if let Some((label, _)) = line.split_once(':') {
+                    current_block = Some(label);
+                    block_order.push(label);
+                    block_bodies.entry(label).or_default();
+                }
+                continue;
+            }
+            if let Some(label) = current_block {
+                block_bodies.get_mut(label).unwrap().push(line);
+            }
+        }
+        assert!(
+            block_bodies.contains_key("effect_exc_unwind"),
+            "the block label was just found by contains() above, so it \
+             must parse as a block; got:\n{ir}"
+        );
+        let successors = |label: &str| -> Vec<&str> {
+            let body = &block_bodies[label];
+            let terminator = body
+                .last()
+                .expect("every parsed block has a terminator line");
+            if let Some(rest) = terminator.strip_prefix("br i1 ") {
+                rest.split(", label ")
+                    .skip(1)
+                    .map(|s| s.trim_start_matches('%'))
+                    .collect()
+            } else if let Some(rest) = terminator.strip_prefix("br label ") {
+                vec![rest.trim_start_matches('%')]
+            } else {
+                Vec::new()
+            }
+        };
+        let mut visited: Vec<&str> = Vec::new();
+        let mut stack = vec!["effect_exc_unwind"];
+        while let Some(label) = stack.pop() {
+            if visited.contains(&label) {
+                continue;
+            }
+            visited.push(label);
+            stack.extend(successors(label));
+        }
+        let unwind_block = block_order
+            .iter()
+            .filter(|label| visited.contains(label))
+            .flat_map(|label| block_bodies[label].iter().copied())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        assert!(
+            unwind_block.contains("call void @pycc_rt_bigint_release"),
+            "the #638 unwind block must release the pending tuple element \
+             before branching to the exception target; block body:\n{unwind_block}"
+        );
+    }
+
+    #[test]
+    fn a_successfully_completed_tuple_literal_truncates_without_releasing() {
+        // `(n + n, n)`: both elements complete evaluation successfully, so
+        // the tuple-literal element loop's own `pending_int_releases` entry
+        // for the first (owned) element must be truncated away -- never
+        // released -- because ownership of that word transferred into the
+        // aggregate's own field via `build_insert_value`. Releasing it here
+        // instead would double-free the word `Ty::Tuple`'s own D-124
+        // slot-death release (or the value's ordinary consumer) later
+        // releases again.
+        //
+        // There is no exception-settable sibling in this fixture, so no
+        // `effect_exc_unwind` block is emitted at all (mirroring
+        // `a_lone_raising_binop_with_nothing_pending_emits_no_unwind_block`
+        // above) -- the only way this test can fail is if a stray
+        // unconditional release call for the first element leaked into the
+        // normal fallthrough path.
+        let owned_sum = MirExpr::BinOp {
+            op: pycc_mir::BinOpKind::Add,
+            left: Box::new(int_name("n")),
+            right: Box::new(int_name("n")),
+            ty: Ty::Int,
+        };
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "tuple_literal_success_path".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::Subscript {
+                    base: Box::new(MirExpr::TupleLiteral(vec![owned_sum, int_name("n")])),
+                    index: Box::new(MirExpr::IntLiteral(0)),
+                }))],
+            }],
+            class_defs: Vec::new(),
+        };
+        let ir = emitted_ir("bigint_rc_tuple_success_path", &mir);
+        assert!(
+            !ir.contains("effect_exc_unwind"),
+            "no sibling element here can set D-173's pending-exception \
+             state, so no unwind block should be emitted; got:\n{ir}"
+        );
+        assert!(
+            !ir.contains("call void @pycc_rt_bigint_release"),
+            "the success path must truncate the pending entry for the \
+             first (owned) tuple element without ever releasing it; got:\n{ir}"
+        );
+    }
+
+    #[test]
     fn an_int_slot_store_emits_a_guarded_release_of_the_word_it_overwrites() {
         // `v = v` is the minimal named-storage shape: `emit_assign` must
         // release whatever the slot already held *before* storing, and

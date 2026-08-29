@@ -3164,6 +3164,21 @@ fn emit_expr_unchecked<'ctx>(
             let struct_ty = ty_to_basic_type(context, pycc_mir::Ty::Tuple(Box::new(elem_tys)))
                 .into_struct_type();
             let mut aggregate = struct_ty.get_undef();
+            // #638 (D-208), sixth site: a fresh (non-duplicate) `Ty::Int`
+            // element's ownership transfers into the aggregate's own field
+            // on the normal path -- there is no release call for it
+            // anywhere in this arm, exactly like `build_call_to_with_leading_args`'s
+            // argument-marshalling loop. If a *later* sibling element's own
+            // evaluation raises before the loop below completes, that
+            // transfer never happens and an earlier element's birth
+            // reference would otherwise be orphaned. `mark` records the
+            // stack depth before this loop so the truncate below is
+            // recursion-safe: an element expression can itself contain a
+            // nested call or tuple literal whose own loop pushes and pops
+            // its own entries while evaluating this loop's own element,
+            // and this loop's earlier pending entries must stay untouched
+            // by that nested truncation.
+            let mark = rt.exceptions.pending_int_releases.borrow().len();
             for (index, element) in elements.iter().enumerate() {
                 let scalar = emit_expr(
                     context,
@@ -3191,6 +3206,15 @@ fn emit_expr_unchecked<'ctx>(
                 // part in no phi, so nothing here depends on the block the
                 // element was evaluated in.
                 let scalar = retain_if_int_duplicate(context, builder, rt, element, scalar);
+                // Push *after* `retain_if_int_duplicate`, matching
+                // `build_call_to_with_leading_args`'s own call order: a
+                // duplicate reference's own extra retain is D-180 residual
+                // 3's separate, already-accepted concern, and
+                // `int_temporary_word` (via
+                // `push_pending_int_release_if_scalar_temporary`) already
+                // excludes a duplicate reference by construction, so this
+                // is a no-op for that case regardless of ordering.
+                push_pending_int_release_if_scalar_temporary(rt, element, &scalar);
                 let field_value: inkwell::values::BasicValueEnum = match scalar {
                     Scalar::Int(v) => v.into(),
                     Scalar::Bool(v) => v.into(),
@@ -3213,6 +3237,19 @@ fn emit_expr_unchecked<'ctx>(
                     .expect("build_insert_value should not fail for an in-range tuple field")
                     .into_struct_value();
             }
+            // #638 (D-208): every element above evaluated successfully --
+            // this Rust-level line is reached unconditionally at codegen
+            // (emission) time regardless of what the *compiled* program's
+            // exception-edge control flow does, since `guard_statement_effects`
+            // only emits a runtime branch instruction, never diverts the
+            // emitter itself (see `guard_statement_effects`'s own doc
+            // comment). Truncate back to `mark` *without* releasing:
+            // ownership of every entry pushed above has now transferred to
+            // the aggregate's own fields via `build_insert_value`. Getting
+            // this backwards (releasing instead of truncating) would
+            // double-free every owning element on this normal,
+            // non-exception path.
+            rt.exceptions.pending_int_releases.borrow_mut().truncate(mark);
             Scalar::Tuple(aggregate)
         }
         // `base[start:stop:step]` (PR-12 Task 9, D-118). Evaluates `base`,
