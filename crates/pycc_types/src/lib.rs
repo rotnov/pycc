@@ -3467,6 +3467,22 @@ fn check_incompatible_redefinitions(hir: &HirModule) -> Result<(), Diagnostic> {
 /// classes' own declared attribute types, never a single class's
 /// attribute against a mere assignment.
 ///
+/// This does not reach a `@dataclass` hierarchy's own field-name
+/// conflicts: `pycc_hir::class`'s dataclass lowering (see its own
+/// `merged_fields`/`field_name_present` construction) already merges a
+/// dataclass's inherited fields with its own by name -- keeping
+/// whichever declaration is encountered first while walking the MRO
+/// least-derived-first, silently discarding a differing type on a later
+/// (more-derived) redeclaration of the same field name -- before this
+/// check ever runs. That HIR-lowering-time merge, not `T0052`, is
+/// therefore the only mechanism that resolves a dataclass field-name
+/// conflict; a `@dataclass` class's own `HirClassDef::attrs` never
+/// contains two entries for the same name by the time `check` sees it,
+/// so this function's own MRO walk cannot observe a divergent pair for
+/// it. A conflict between an ordinary (non-dataclass) class and any
+/// other class in its MRO is unaffected by this and is still caught
+/// here.
+///
 /// Called from `check`, mirroring `check_incompatible_redefinitions`'s
 /// early-return-on-first-conflict shape and call-site timing (before any
 /// `Environment`/signature-inference work), since it only needs each
@@ -3488,14 +3504,20 @@ fn check_incompatible_attribute_redeclarations(hir: &HirModule) -> Result<(), Di
         // reported pair deterministic and tied to MRO order.
         let mut declared: Vec<(&str, &str, &Ty)> = Vec::new();
         for mro_name in &class_def.mro {
-            let Some(mro_def) = classes.get(mro_name.as_str()) else {
-                // Defensive: every name in a well-formed MRO has a
-                // registered class def. Skip rather than panic here --
-                // this function runs before any other HIR-shape
-                // validation, so it must not be the place a malformed
-                // MRO first surfaces as a crash.
-                continue;
-            };
+            // `.expect()`, not a hand-rolled `if let Some ... else {
+            // continue }`, per this crate's own established
+            // coverage-gate convention for a provably-unreachable shape
+            // (`pycc_hir::class`'s own `.expect(...)` precedent at its
+            // `collect_init_attrs`/dataclass-field-merge MRO lookups):
+            // `class_def.mro` is C3-linearized from `hir.class_defs`
+            // itself, so every name in it already has a registered
+            // class def by construction; a hand-rolled skip branch here
+            // could never be reached by real compiler input and would
+            // otherwise demand a synthetic-only test purely to satisfy
+            // D-014's 100%-region gate.
+            let mro_def = classes
+                .get(mro_name.as_str())
+                .expect("every name in a well-formed MRO has a registered class def");
             for (attr_name, ty) in &mro_def.attrs {
                 if let Some(&(_, prev_owner, prev_ty)) = declared
                     .iter()

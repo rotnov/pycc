@@ -18077,30 +18077,6 @@ fn a_base_class_only_attribute_with_no_redeclaration_is_not_rejected() {
 }
 
 #[test]
-fn a_mro_entry_with_no_registered_class_def_is_skipped_defensively() {
-    // Exercises `check_incompatible_attribute_redeclarations`'s own
-    // defensive branch: a name in `class_def.mro` that has no entry in
-    // `hir.class_defs` (a malformed MRO -- HIR lowering is expected to
-    // keep `mro` and `class_defs` in sync, but this function must not be
-    // the place that assumption first surfaces as a crash). The unknown
-    // name is skipped rather than panicking, and since `Derived`'s own
-    // only real ancestor (`Base`) doesn't redeclare `v`, the module is
-    // still accepted.
-    let base = minimal_class_def("Base", &[], &["Base"], &[("v", Ty::Int)]);
-    let derived = minimal_class_def(
-        "Derived",
-        &["Base"],
-        &["Derived", "Ghost", "Base"],
-        &[],
-    );
-    let hir = module_with_class_defs(vec![
-        ("Base".to_string(), base),
-        ("Derived".to_string(), derived),
-    ]);
-    assert!(check(&hir).is_ok());
-}
-
-#[test]
 fn diamond_sibling_base_classes_with_differing_types_are_rejected() {
     // Section 3/7's corrected comparison rule: two sibling base classes
     // `B1`/`B2` (neither an ancestor of the other) each declare the same
@@ -18175,6 +18151,23 @@ fn check_and_resolve_rejects_the_issue_676_float_int_generalization_fixture() {
         "class Base:\n    def __init__(self) -> None:\n        self.v = 1.0\n    def set_it(self) -> None:\n        self.v = 2.5\nclass Derived(Base):\n    def __init__(self) -> None:\n        self.v = 1\nd = Derived()\nd.set_it()\nprint(d.v)\n",
     )
     .unwrap_err();
+    assert_eq!(err.code, "T0052");
+}
+
+#[test]
+fn check_rejects_the_issue_676_bool_reproduction_fixture_via_the_pycc_check_path() {
+    // The two `check_and_resolve_rejects_the_issue_676_*` tests above
+    // exercise `pycc build`'s own entry point end-to-end; this mirrors
+    // the issue's own bool reproduction through `check` directly (the
+    // `pycc check` CLI path, which validates without resolving/
+    // monomorphizing), confirming both public entry points reject the
+    // same real-source module rather than only one.
+    let module = pycc_parser::parse(
+        "class Base:\n    def __init__(self) -> None:\n        self.v = False\n    def set_true(self) -> None:\n        self.v = True\nclass Derived(Base):\n    def __init__(self) -> None:\n        self.v = 0\nd = Derived()\nd.set_true()\nprint(d.v)\n",
+    )
+    .expect("test fixture must parse");
+    let hir = pycc_hir::lower_checked(&module).expect("test fixture must lower");
+    let err = check(&hir).unwrap_err();
     assert_eq!(err.code, "T0052");
 }
 
