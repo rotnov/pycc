@@ -143,6 +143,7 @@
 - Every behavior change must include tests for its success, failure, and relevant edge paths so the gate is satisfied by meaningful execution rather than incidental line hits.
 - Never lower either threshold, remove either flag, disable the job, narrow the measured workspace, or exclude code merely to make a pull request pass.
 - The only permitted exemption is a whole-file `--ignore-filename-regex` entry justified by an accepted design constraint and recorded in the exemption table in `docs/TESTING.md`. An undocumented exemption is a review-blocking defect.
+- Run high-volume or repeated local test loops under an isolated, freshly created, automatically cleaned `TMPDIR`, and never rely on periodic global `/tmp` deletion. `docs/TESTING.md`'s "Scratch directories" section carries the exact commands and the guidance for temp directories the automatic sweep cannot serve.
 
 ## CI and deployment privilege boundaries
 
