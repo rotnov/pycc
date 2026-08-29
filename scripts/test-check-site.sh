@@ -2029,7 +2029,7 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-26</lastmod>"""
+    <lastmod>2026-08-29</lastmod>"""
 assert entry in content
 path.write_text(content.replace(entry, entry + "\n    <lastmod>2026-07-30</lastmod>", 1))
 PY
@@ -2051,9 +2051,9 @@ content = path.read_text()
 # a lastmod, so replacing a bare date literal would silently mutate whichever
 # entry comes first in document order instead of the one named here.
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-26</lastmod>"""
+    <lastmod>2026-08-29</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-26", "not-a-date"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-08-29", "not-a-date"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -2070,9 +2070,9 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-26</lastmod>"""
+    <lastmod>2026-08-29</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-26", "9999-12-31"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-08-29", "9999-12-31"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then

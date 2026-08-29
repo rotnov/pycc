@@ -42,6 +42,17 @@ the migrated bytes in the same pull request.
   to the completed state; a dated 2026-08-28 addendum appended to D-201;
   no ROADMAP change (test-infrastructure migration, no behavior/milestone
   change, and the D-200 llms.txt headroom forbids ROADMAP growth anyway).
+- Commit C (post-CI fix round): commit B's CI run surfaced three landing
+  date/identity pins outside the gate set run locally for commit B —
+  `site/sitemap.xml`'s home `lastmod` plus `scripts/check-site.sh`'s
+  hardcoded landing `dateModified` (with `scripts/test-check-site.sh`'s
+  three home-entry fixtures and their two mutation-replace targets), and
+  `tests/fixtures/pages-performance-manifest.json`'s home
+  `source_artifact_sha256` (consumed by the `pages-accessibility` and
+  `pages-performance` jobs). All rotated to the commit-C state
+  (`dateModified`/`lastmod` 2026-08-29, the recomputed `site/index.html`
+  digest), and the full `pages.yml` "Validate website" block now runs
+  locally as the gate list for any future landing-page byte change.
 
 ## Gates (all green at this snapshot, macOS local run)
 

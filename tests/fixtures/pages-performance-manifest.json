@@ -9,7 +9,7 @@
       "local_route": "/pycc/",
       "expected_http_status": 200,
       "source_artifact": "site/index.html",
-      "source_artifact_sha256": "16e3c4dfdf49012788b9bf34cc2ebfed19d72e4ab833e22c01cb5ede0f3c1d8f",
+      "source_artifact_sha256": "8988ecfdb2eee7f25c95037a97e8c53d687deb8014923d0d45e677e92624afe9",
       "expected_title": "pycc — AOT compiler for typed Python to native binaries",
       "expected_h1": "Typed Python in. Autonomous artifacts out.",
       "canonical_url": "https://rotnov.github.io/pycc/",
