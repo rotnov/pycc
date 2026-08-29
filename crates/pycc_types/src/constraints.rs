@@ -62,7 +62,8 @@ use crate::binop::numeric_result_type;
 use crate::unop::unary_result_type;
 use crate::{
     Environment, annotation_marker_is_not_a_value, cast_marker_is_not_a_value,
-    check_incompatible_redefinitions, check_with_signatures, enum_marker_is_not_a_value,
+    check_incompatible_attribute_redeclarations, check_incompatible_redefinitions,
+    check_with_signatures, enum_marker_is_not_a_value,
     is_assignable, is_generic_signature, is_known_callable_builtin, is_local, is_marker_kind,
     marker_is_not_a_value, non_callable_binding, solver, std_constant_is_not_callable,
     std_function_used_as_a_value, std_qualified_symbol, std_receiver_name, std_receiver_shadowed,
@@ -2470,6 +2471,11 @@ pub(crate) fn checked_function_signatures(
     // Issue #22: reject incompatible redefinitions before trying either the
     // concrete or solver path (same rationale as `check`'s own call).
     check_incompatible_redefinitions(hir)?;
+    // #676 (D-209): same rationale and call-site timing as `check`'s own
+    // call -- this entry point (via `check_and_resolve`) is also reachable
+    // from `pycc build` without an earlier `pycc check`/`check` call, so it
+    // needs its own guard against a cross-MRO attribute redeclaration.
+    check_incompatible_attribute_redeclarations(hir)?;
     // Fully annotated valid modules have no inference variables to constrain.
     // Validate them once and avoid the preceding constraint-collection walk.
     // If validation fails, deliberately fall back to the historical

@@ -796,6 +796,63 @@ y = xs[5]  # OK -- an ordinary in-range literal
 ",
     },
     DiagnosticExplanation {
+        code: "T0052",
+        severity: Severity::Error,
+        summary: "cross-MRO attribute redeclaration with a differing declared type",
+        explanation: "\
+T0052 fires when two distinct classes in one class's own C3-linearized MRO \
+each declare an instance attribute of the same name (via `self.<attr> = ...` \
+in their own body) but with a different type. This is a class-definition-\
+time rejection, not a coercion: pycc compiles each method body exactly \
+once (static dispatch, no vtable, no per-subclass monomorphization -- \
+see docs/TYPE_SYSTEM.md), so a base-class method's attribute assignment \
+resolves the target slot's declared type once, from that base class's own \
+declaration. A derived class redeclaring the same attribute with an \
+incompatible type cannot be safely coerced at that one shared call site: \
+pycc has no per-instance runtime type tag to distinguish, at run time, \
+which declaration a given instance was actually built with. Left \
+unrejected, this produced either a silently mis-decoded value (D-141's \
+tagged representation reads back the wrong Python value) or an outright \
+runtime abort/segfault -- entirely undiagnosed at `pycc check` time \
+(issue #676, D-209). The rule is symmetric: it does not matter which \
+class's declaration is 'wider', and it also rejects a diamond conflict \
+between two sibling base classes that neither is the other's ancestor, \
+through their common descendant's own MRO, even when that descendant \
+never redeclares the attribute itself. An identical redeclaration (same \
+type on every class that declares it) is unaffected, and so is an \
+ordinary same-class assignment of an admissible narrower value (e.g. a \
+`bool` value assigned into that same class's own `int`-declared \
+attribute, D-187) -- T0052 only ever compares two distinct classes' own \
+declared attribute types, never a single class's declared type against a \
+mere assigned value.",
+        example: "\
+class Base:
+    def __init__(self) -> None:
+        self.v = 0  # declared int
+
+class Derived(Base):
+    def __init__(self) -> None:
+        self.v = False  # T0052 -- redeclared bool, conflicts with Base's int
+
+class B1:
+    def __init__(self) -> None:
+        self.v = 0  # declared int
+
+class B2:
+    def __init__(self) -> None:
+        self.v = 0.0  # declared float
+
+class D(B1, B2):  # T0052 -- diamond conflict via D's own MRO, even though
+    pass          # D itself never redeclares `v`
+
+class C:
+    def __init__(self) -> None:
+        self.n = 0  # declared int
+    def set_true(self) -> None:
+        self.n = True  # OK -- same class, bool widens into its own int slot (D-187)
+",
+    },
+    DiagnosticExplanation {
         code: "O0201",
         severity: Severity::Error,
         summary: "value used after move across scope boundary",

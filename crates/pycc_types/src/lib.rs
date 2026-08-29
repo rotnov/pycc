@@ -3430,6 +3430,100 @@ fn check_incompatible_redefinitions(hir: &HirModule) -> Result<(), Diagnostic> {
     Ok(())
 }
 
+/// #676 (D-209): rejects a cross-MRO attribute redeclaration whose declared
+/// type differs from another class's own declaration of the same attribute
+/// name, anywhere in one class's own linearized MRO.
+///
+/// Two symptoms motivate this, both stemming from the same root cause: a
+/// base-class method resolves an attribute's declared slot type from its
+/// *own* MRO-attribute entry (`pycc_mir`'s `mro_attrs`/`class_def_of`), but
+/// a derived class can redeclare that same attribute with an incompatible
+/// type. pycc has no per-instance runtime type tag and does not
+/// monomorphize a method per subclass (static dispatch, one compiled body
+/// per method, `docs/TYPE_SYSTEM.md`), so the one compiled call site cannot
+/// distinguish, at run time, which declaration applies -- there is no sound
+/// way to coerce at the assignment site. Left unrejected, this produces an
+/// undiagnosed mis-decoded read (D-141's tagged representation reads back
+/// the wrong Python value) or an outright runtime abort/segfault, entirely
+/// silently at `pycc check` time. See D-209 for the full rationale,
+/// including why "coerce" is unsound in general (a bare, non-derived
+/// instance's own correctly-typed slot would be corrupted by any
+/// unconditional coercion inserted at the shared compiled call site).
+///
+/// The comparison is symmetric and direction-independent: for each class
+/// `C`, walk `C`'s own C3-linearized MRO (`HirClassDef::mro`, which
+/// includes `C` itself and every ancestor) and compare every attribute
+/// name's declaring classes' own (non-inherited) `attrs` entries
+/// pairwise. This also catches a diamond conflict between two sibling
+/// base classes that neither is the other's ancestor, through their
+/// common descendant's own MRO, even when that descendant never
+/// redeclares the attribute itself.
+///
+/// Only a *differing* declared `Ty` triggers `T0052` -- an identical
+/// redeclaration across the MRO (the existing `mro_attrs` dedup case) and
+/// a same-class attribute assigned a *value* of a different (but
+/// admissible, e.g. `bool` into `int`) type at a single declaration site
+/// are both unaffected: this check only ever compares two distinct
+/// classes' own declared attribute types, never a single class's
+/// attribute against a mere assignment.
+///
+/// Called from `check`, mirroring `check_incompatible_redefinitions`'s
+/// early-return-on-first-conflict shape and call-site timing (before any
+/// `Environment`/signature-inference work), since it only needs each
+/// class's own already-lowered `attrs` and `mro`, both populated at
+/// HIR-lowering time (`pycc_hir::class`) before `pycc_types::check` ever
+/// runs.
+fn check_incompatible_attribute_redeclarations(hir: &HirModule) -> Result<(), Diagnostic> {
+    let classes: HashMap<&str, &HirClassDef> = hir
+        .class_defs
+        .iter()
+        .map(|(name, def)| (name.as_str(), def))
+        .collect();
+
+    for (_, class_def) in &hir.class_defs {
+        // First-seen order within this class's own MRO: (attr_name,
+        // owner_class_name, declared_ty). A HashMap would make which
+        // conflicting pair gets reported (when several attribute names
+        // conflict) depend on hash-iteration order; a Vec keeps the
+        // reported pair deterministic and tied to MRO order.
+        let mut declared: Vec<(&str, &str, &Ty)> = Vec::new();
+        for mro_name in &class_def.mro {
+            let Some(mro_def) = classes.get(mro_name.as_str()) else {
+                // Defensive: every name in a well-formed MRO has a
+                // registered class def. Skip rather than panic here --
+                // this function runs before any other HIR-shape
+                // validation, so it must not be the place a malformed
+                // MRO first surfaces as a crash.
+                continue;
+            };
+            for (attr_name, ty) in &mro_def.attrs {
+                if let Some(&(_, prev_owner, prev_ty)) = declared
+                    .iter()
+                    .find(|(name, _, _)| *name == attr_name.as_str())
+                {
+                    if prev_ty != ty {
+                        return Err(Diagnostic::error(
+                            "T0052",
+                            format!(
+                                "attribute `{attr_name}` is declared as `{}` in class \
+                                 `{prev_owner}` and as `{}` in class `{mro_name}`, both in \
+                                 the method resolution order of class `{}`",
+                                prev_ty.name(),
+                                ty.name(),
+                                class_def.name,
+                            ),
+                            Span::new(0, 0),
+                        ));
+                    }
+                } else {
+                    declared.push((attr_name.as_str(), mro_name.as_str(), ty));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Formats a `(param_tys, return_ty)` pair as `def name(params) -> return`
 /// for diagnostic messages.
 fn format_function_signature(sig: &(Vec<Ty>, Ty)) -> String {
@@ -3535,6 +3629,11 @@ pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     // ensures the error is returned directly rather than being masked by
     // the concrete-path fallback to the solver path.
     check_incompatible_redefinitions(hir)?;
+    // #676 (D-209): reject a cross-MRO attribute redeclaration with a
+    // differing declared type before any expression using that attribute
+    // is type-checked -- see the function's own doc comment for why this
+    // must be a class-definition-time rejection rather than a coercion.
+    check_incompatible_attribute_redeclarations(hir)?;
     // The public validation-only API has no resolved-signature result to
     // return. Avoid building a temporary concrete signature map and then
     // cloning it into an `Environment`: construct that environment directly.
