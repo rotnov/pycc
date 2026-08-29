@@ -1238,6 +1238,141 @@ and `tests/slice0.rs`'s
 (`#[cfg(unix)]`-gated) proves the production wiring end to end through a
 spawned `pycc build` against a redirected temp directory.
 
+### Operational TMPDIR guidance (issue #785, Part 5 of #779)
+
+Part 5 ([#785](https://github.com/rotnov/pycc/issues/785)) is the
+operational complement to Parts 1–4: guidance for the runs and directories
+the in-tree mechanisms cannot reach on their own. It is operational
+practice, not a CI gate — the behavior underneath it is enforced by
+`crates/pycc_scratch/src/lib.rs`'s unit tests (normal-`Drop` and
+panic-unwind removal, parallel-creation uniqueness, lock-file lifecycle),
+`crates/pycc_scratch/src/sweep.rs`'s keep/delete-class and budget tests,
+and `tests/slice0.rs`'s two `#[cfg(unix)]` e2e tests named above.
+
+**Run high-volume test loops under an isolated, auto-cleaned `TMPDIR`.**
+High-volume or repeated full-suite test runs — and any agent-driven fix
+loop that runs `cargo test` many times — should run under an isolated,
+freshly created, automatically cleaned temp directory (#779 requirement
+8's own wording; the `trap` below is what makes an interrupted loop still
+clean up). The block fails closed: a failed test run or any `pycc_*`
+entry in the isolated root preserves the directory as evidence and ends
+with a non-zero status instead of deleting it. The recipe is for Unix,
+where `std::env::temp_dir()` resolves `TMPDIR`; on native Windows set
+`TMP` and `TEMP` to the fresh directory instead and remove it afterward
+the same way (derived from the standard library's documentation, not
+locally observed):
+
+```sh
+iso="$(mktemp -d)"                       # never name it with a pycc_ prefix
+trap 'rm -rf "$iso"' EXIT                # interrupt safety net (requirement 8: auto-cleaned)
+ok=1
+TMPDIR="$iso" cargo test --workspace || ok=0
+[ "$(find "$iso" -maxdepth 1 -name 'pycc_*' | wc -l)" -eq 0 ] || ok=0    # pycc leak check: any hit fails
+ls -A "$iso"                             # informational: toolchain leftovers are not pycc leaks
+if [ "$ok" -eq 1 ]; then
+  rm -rf "$iso"; trap - EXIT             # clean up now; don't rely on the trap in an interactive shell
+else
+  echo "test failure or pycc leak -- preserving $iso for inspection"
+  trap - EXIT; false                     # keep the evidence and propagate a non-zero status
+fi
+```
+
+This works because every pycc scratch root is created via
+`pycc_scratch::ScratchDir` under `std::env::temp_dir()`, which on Unix
+resolves `TMPDIR` (observed: the `#[cfg(unix)]` e2e tests in
+`tests/slice0.rs` drive spawned `pycc` binaries under a redirected
+`TMPDIR`) and on Windows resolves `TMP`/`TEMP` (derived from the standard
+library's documentation, not locally observed). Never give the isolated
+directory itself a `pycc_*` name: a directory whose name fully parses as
+`pycc_{category}_{pid}_{nanos}_{seq}` inside a shared temp directory is,
+by the D-201/D-209 contract, pycc property and eligible for sweeping.
+
+**What the automatic sweep cannot serve.** Two cases are permanently
+outside the Part 4 sweep's reach, and this guidance is their remedy:
+
+- *Entry-budget starvation*: a temp directory holding ≥ 10,000 persistent
+  foreign entries can exhaust the sweep's 10,000-entry budget on every
+  pass before it reaches any stale pycc root (a D-209 accepted edge
+  case). The remedy is exactly the isolated-`TMPDIR` rule above, which
+  also keeps new pycc roots out of the crowded directory in the first
+  place.
+- *Pre-Part-1 legacy roots*: names that do not fully parse as
+  `pycc_{category}_{pid}_{nanos}_{seq}` (e.g. the retired
+  `pycc_codegen_test_{label}_{pid}` format) are never deleted by the
+  sweep — D-209 deliberately treats them as unattributable, so manual
+  cleanup must not assume every `pycc_*` name is this repository's
+  either. One-time manual cleanup: after confirming no pycc,
+  `cargo test`, or CI process is running on the machine, list the
+  candidates first
+  (`find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'pycc_*' -mtime +1`),
+  review the listing, and delete only the entries matching this
+  repository's known retired formats — `pycc_codegen_test_{label}_{pid}`
+  directories, `pycc_obj_{pid}.o` files, and `pycc_run_{pid}`
+  directories — leaving anything else (another tool's `pycc_*` name) in
+  place. Never a blanket temp-directory wipe, and never an unreviewed
+  `rm -rf` over the whole `pycc_*` glob.
+
+**The anti-pattern, named.** Periodic global `/tmp` deletion is not the
+fix and must not be relied on as one. Creation-site RAII (Parts 1–3) plus
+the bounded sweep (Part 4) are the fix; this section is the operational
+complement for the cases they cannot reach.
+
+**The reusable verification protocol** (#779's closing "Verification"
+section, restated as a repeatable procedure — under the isolated-`TMPDIR`
+protocol, "no new pycc-owned temp roots remain" becomes "the isolated
+root contains zero `pycc_*` entries after each run"; toolchain
+intermediates under `TMPDIR` are recorded as informational, never
+failed on):
+
+```sh
+# 1. Baseline: the set, count, and size of pycc-owned roots in the default
+#    temp dir (keep the listing itself — the report records the set, not
+#    only the count).
+tmp="${TMPDIR:-/tmp}"
+find "$tmp" -maxdepth 1 -name 'pycc_*'
+find "$tmp" -maxdepth 1 -name 'pycc_*' | wc -l
+find "$tmp" -maxdepth 1 -name 'pycc_*' -exec du -sk {} + 2>/dev/null \
+  | awk '{s+=$1} END {print s+0 " KiB"}'
+# 2-3. Three consecutive full-suite runs, each asserted free of pycc-owned
+#      leftovers (toolchain intermediates are recorded, not failed on).
+iso="$(mktemp -d)"
+trap 'rm -rf "$iso"' EXIT                # interrupt safety net only
+leaked=0
+for i in 1 2 3; do
+  TMPDIR="$iso" cargo test --workspace \
+    || { echo "run $i: cargo test FAILED -- preserving $iso for inspection"; trap - EXIT; leaked=1; break; }
+  if [ "$(find "$iso" -maxdepth 1 -name 'pycc_*' | wc -l)" -eq 0 ]; then
+    echo "run $i: clean (non-pycc entries, informational: $(ls -A "$iso" | wc -l))"
+  else
+    # Keep the evidence: disarm cleanup and preserve the directory.
+    echo "run $i: PYCC LEAK -- preserving $iso"; ls -la "$iso"
+    trap - EXIT; leaked=1; break
+  fi
+done
+[ "$leaked" -eq 0 ] && { rm -rf "$iso"; trap - EXIT; }
+# 4. Re-run the repository-required gates (coverage, clippy, the scripts
+#    unittest suite, and the governance checkers) — #779's Verification
+#    step 4 is part of the protocol, not an extra.
+# 5. Repeat the baseline commands: set, count, and size must be unchanged
+#    (or lower).
+```
+
+A `pycc_*` entry left in the isolated root by any run is a live
+regression of Parts 1–4: stop, preserve the evidence, and file it against
+#779's area rather than working around it.
+
+The #779-closing verification was executed on 2026-08-29 at the commit
+delivering this section (macOS arm64): all three consecutive
+`cargo test --workspace` runs under one fresh isolated `TMPDIR` exited 0
+with 69/69 green `test result:` blocks each and zero entries of any kind
+left in the isolated root after every run; the default per-user temp
+directory's `pycc_*` set, count, and size (14,677 entries, 5,135,936
+KiB — all but 19 of them pre-Parts 1–3 legacy-format leftovers outside
+the sweep's authority, a live instance of both sweep-unreachable cases
+above) were unchanged afterward. The full measured report lives in the
+`docs/sessions/` entry for issue #785 and in the closing comment on
+#779.
+
 ## Meta
 
 Every bug that reaches `main` gets a permanent regression test named after the issue (`tests/regress/issue_1234.py`). Coverage gate: conformance suite must touch 100% of implemented grammar productions (grammar-coverage instrumentation in the parser).
