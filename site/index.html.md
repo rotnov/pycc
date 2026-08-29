@@ -45,10 +45,10 @@ accepted; it never means a zero or a failed measurement.
 ### Accepted landing evidence
 
 - Evidence ID/kind/state: `landing-quick-start-v1` / `native-build-output` / `all-Tier-1`.
-- Fixture: [`tests/fixtures/quick_start.py`](https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.py).
-- Test: [`tests/quick_start.rs::quick_start_fixture_builds_and_prints_the_documented_sequence`](https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/quick_start.rs).
+- Fixture: [`tests/fixtures/quick_start.py`](https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/fixtures/quick_start.py).
+- Test: [`tests/quick_start.rs::quick_start_fixture_builds_and_prints_the_documented_sequence`](https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/quick_start.rs).
 - Commands: `pycc build hello.py -o hello`, then `./hello`; debug profile, no extra compiler flags.
-- Exact stdout: [`tests/fixtures/quick_start.expected.txt`](https://github.com/rotnov/pycc/blob/8ccc05b51477c23711d2cefce3eb9128aab1162a/tests/fixtures/quick_start.expected.txt).
+- Exact stdout: [`tests/fixtures/quick_start.expected.txt`](https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/fixtures/quick_start.expected.txt).
 
 ```text
 0
@@ -64,10 +64,10 @@ accepted; it never means a zero or a failed measurement.
 55
 ```
 
-- Canonical LF SHA-256: source `09f7f6732d6837a0e7a91298eea549b0bdcba77d4908839ce1878955f4a0f043`; test `80f91b88d00598a8697c2988b64b2be60166c5067035c7ec57a295f10d9caadb`; stdout `668cec0e1f32369a43d6f74b1e795fe37f1e46bdb8eb0d7712b35c7e95e173e6`.
-- Revision/attestation: commit [`8ccc05b`](https://github.com/rotnov/pycc/commit/8ccc05b51477c23711d2cefce3eb9128aab1162a), [CI run 32419646184](https://github.com/rotnov/pycc/actions/runs/32419646184).
+- Canonical LF SHA-256: source `09f7f6732d6837a0e7a91298eea549b0bdcba77d4908839ce1878955f4a0f043`; test `cb7af27aab96bf468fea7ee973e00ae9d11c0054187e09f2e94e4d8b9199a766`; stdout `668cec0e1f32369a43d6f74b1e795fe37f1e46bdb8eb0d7712b35c7e95e173e6`.
+- Revision/attestation: commit [`8324332`](https://github.com/rotnov/pycc/commit/8324332d5ea713bd8a56f4d08bf7e0120757d66b), [CI run 33198103510](https://github.com/rotnov/pycc/actions/runs/33198103510).
 - Environment: all five Tier-1 targets (Linux x64/arm64, macOS x64/arm64, Windows x64), CPython 3.14.7, Rust 1.97.1, LLVM 22.
-- Tier-1 jobs: [`macos-14 · aarch64-apple-darwin`](https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686638); [`macos-15-intel · x86_64-apple-darwin`](https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686654); [`ubuntu-latest · x86_64-unknown-linux-gnu`](https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686701); [`ubuntu-24.04-arm · aarch64-unknown-linux-gnu`](https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588686726); [`windows-latest · x86_64-pc-windows-msvc`](https://github.com/rotnov/pycc/actions/runs/32419646184/job/96588687208).
+- Tier-1 jobs: [`macos-14 · aarch64-apple-darwin`](https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383105); [`macos-15-intel · x86_64-apple-darwin`](https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383070); [`ubuntu-latest · x86_64-unknown-linux-gnu`](https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940382966); [`ubuntu-24.04-arm · aarch64-unknown-linux-gnu`](https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383014); [`windows-latest · x86_64-pc-windows-msvc`](https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940382973).
 - Limitations: This compiles only the implemented v0.1 subset: statement-form `if` and `while`, recursive calls, and `print`. It does not prove support for classes, exceptions, generators, or imports.
 
 ## Design contract

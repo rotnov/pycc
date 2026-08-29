@@ -124,6 +124,14 @@ status: accepted
   evidence-pinned site, and `src/main.rs`'s two production call sites,
   owned by Part 3 (#783). #782 stays open for the pinned site.
 
+  Update (2026-08-28): Part 2 (#782) is complete. The pinned
+  `tests/quick_start.rs` site migrated via the evidence-hero
+  re-attestation its byte pin required — a new evidence commit, its green
+  CI run recorded as the accepted attestation, and the reviewed
+  `LANDING_ALLOWLIST`, manifest, and site projections rotated together in
+  the same pull request. The allowlist now holds exactly one entry:
+  `src/main.rs`'s two production call sites, owned by Part 3 (#783).
+
   **Known, accepted scope limitation**: the lint is a textual pattern match,
   not a data-flow analysis. A caller that splits the expression across a
   binding (`let dir = std::env::temp_dir(); ... dir.join(...)`) evades it
