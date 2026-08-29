@@ -30,7 +30,11 @@ typically an unresolved required review), or `READY` (all green + CLEAN).
 consecutive polls, and — when the base branch's required status contexts
 are readable — only once every required context is present and completed
 in the rollup, so a gap between chained workflows cannot resolve the watch
-early however long the next workflow takes to register; a head change
+early however long the next workflow takes to register; a required context
+that stays missing for `$REQ_MISS_POLLS` consecutive polls (default 30)
+drops the binding with one non-terminal `NOTE` and the confirmation alone
+remains, so a name-mismatched context cannot suppress the verdict
+forever; a head change
 (new push) resets the confirmation. An empty `statusCheckRollup`
 (Actions not started yet) is never terminal — after `$EMPTY_NOTE_POLLS`
 consecutive empty polls (default 30) the script emits one non-terminal

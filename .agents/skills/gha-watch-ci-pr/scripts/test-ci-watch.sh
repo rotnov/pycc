@@ -165,6 +165,7 @@ esac
 mkdir -p "$work_dir/fixture-blocked-clean-checks/bin"
 cat >"$work_dir/fixture-blocked-clean-checks/bin/gh" <<'EOF'
 #!/usr/bin/env sh
+if [ "$1" = "api" ]; then exit 1; fi
 cat <<'JSON'
 {"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"ci-gate","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"audit","status":"COMPLETED","conclusion":"SUCCESS"}]}
 JSON
@@ -401,5 +402,70 @@ case "$output" in
 esac
 poll_count=$(cat "$counter_file_14")
 [ "$poll_count" = "3" ] || fail "expected 3 polls (head change on poll 2 resets confirmation), got $poll_count"
+
+# --- Fixture 15: a malformed (non-JSON) required-contexts response must
+# fall back to an empty cache -- binding skipped, verdict still reached
+# via the two-consecutive-poll confirmation alone ------------------------
+mkdir -p "$work_dir/fixture-malformed-api/bin"
+counter_file_15="$work_dir/fixture-malformed-api/counter"
+echo 0 >"$counter_file_15"
+cat >"$work_dir/fixture-malformed-api/bin/gh" <<EOF
+#!/usr/bin/env sh
+if [ "\$1" = "api" ]; then
+  echo 'not json at all'
+  exit 0
+fi
+n=\$(cat "$counter_file_15")
+n=\$((n + 1))
+echo "\$n" >"$counter_file_15"
+cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"CLEAN","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"audit","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+EOF
+chmod +x "$work_dir/fixture-malformed-api/bin/gh"
+
+output=$(PATH="$work_dir/fixture-malformed-api/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 57)
+case "$output" in
+  *"PR #57: READY"*) ;;
+  *) fail "expected READY despite a malformed required-contexts body, got: $output" ;;
+esac
+poll_count=$(cat "$counter_file_15")
+[ "$poll_count" = "2" ] || fail "expected exactly 2 polls (malformed api body disables the binding; 2-poll confirmation alone), got $poll_count"
+
+# --- Fixture 16: a readable required context that never matches the rollup
+# (e.g. reported as a legacy commit-status entry) must not suppress the
+# verdict forever -- after REQ_MISS_POLLS consecutive missing polls the
+# binding is dropped with one NOTE and the 2-poll confirmation resolves --
+mkdir -p "$work_dir/fixture-req-never-match/bin"
+counter_file_16="$work_dir/fixture-req-never-match/counter"
+echo 0 >"$counter_file_16"
+cat >"$work_dir/fixture-req-never-match/bin/gh" <<EOF
+#!/usr/bin/env sh
+if [ "\$1" = "api" ]; then
+  echo '["ci-gate","legacy-status"]'
+  exit 0
+fi
+n=\$(cat "$counter_file_16")
+n=\$((n + 1))
+echo "\$n" >"$counter_file_16"
+cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"CLEAN","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"ci-gate","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+EOF
+chmod +x "$work_dir/fixture-req-never-match/bin/gh"
+
+output=$(PATH="$work_dir/fixture-req-never-match/bin:$PATH" POLL_INTERVAL=1 REQ_MISS_POLLS=3 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 58)
+case "$output" in
+  *"PR #58: NOTE -- required context 'legacy-status' still not completed in the rollup after 3 polls"*) ;;
+  *) fail "expected a NOTE naming the never-matching required context, got: $output" ;;
+esac
+note_count=$(printf '%s\n' "$output" | grep -c "NOTE --" || true)
+[ "$note_count" = "1" ] || fail "expected exactly one required-context NOTE, got $note_count: $output"
+case "$output" in
+  *"PR #58: READY"*) ;;
+  *) fail "expected READY after the binding is dropped, got: $output" ;;
+esac
+poll_count=$(cat "$counter_file_16")
+[ "$poll_count" = "5" ] || fail "expected exactly 5 polls (3 missing, then 2-poll confirmation), got $poll_count"
 
 echo "ci-watch.sh: valid"

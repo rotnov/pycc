@@ -23,11 +23,18 @@ and the loop died silently. Two artefact halves:
    consecutive polls — additionally bound, when the base branch's required
    status contexts are readable, to every required context being present
    and completed in the rollup, with a head change resetting the
-   confirmation. `CHECK FAILED`, `MERGED`/`CLOSED`, `CONFLICTS`, and
-   `STALE` stay immediate. `test-ci-watch.sh` gains fixtures 9–14
+   confirmation. The binding is itself bounded: a required context that
+   stays missing for `REQ_MISS_POLLS` consecutive polls (default 30) is
+   dropped with one non-terminal NOTE, falling back to the confirmation
+   alone, so a name-mismatched context (e.g. a legacy commit-status
+   entry) cannot suppress the verdict forever. `CHECK FAILED`,
+   `MERGED`/`CLOSED`, `CONFLICTS`, and
+   `STALE` stay immediate. `test-ci-watch.sh` gains fixtures 9–16
    (empty-rollup regression, between-workflow gap, one-time NOTE,
    per-streak NOTE re-fire, required-context binding across a multi-poll
-   gap, head-change reset) and fixture 4's expected poll count moves
+   gap, head-change reset, malformed required-contexts body fallback,
+   never-matching required context dropped after the bound) and fixture
+   4's expected poll count moves
    2 → 3 for the confirmation. Both scripts are mirrored byte-identically
    to `.agents/skills/gha-watch-ci-pr/scripts/` (the Codex copies are real
    files, not forwarding stubs — a review finding). Semantics prose
@@ -53,8 +60,9 @@ the #828 gate-inventory lesson the D-068 review of #828 asked to record).
 ## Verification
 
 - `sh .claude/skills/gha-watch-ci-pr/scripts/test-ci-watch.sh` →
-  `ci-watch.sh: valid` (11 fixtures).
-- Hook fixture replay: 2 violators → exit 2, 5 clean payloads → exit 0;
+  `ci-watch.sh: valid` (16 fixtures; the `.agents` mirror runs green too).
+- Hook fixture replay: 3 violators (including a comment-evasion variant
+  against the tightened allowlist) → exit 2, 5 clean payloads → exit 0;
   wiring proven live (the first in-session smoke test after installation
   was itself intercepted).
 - `python3 scripts/validate_agent_assets.py` clean at commit time.

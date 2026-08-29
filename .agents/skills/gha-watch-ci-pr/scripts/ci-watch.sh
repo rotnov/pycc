@@ -28,7 +28,15 @@ set -eu
 # push access or branch protection), the verdicts are further bound to
 # them: no READY/BLOCKED while any required context is still absent from
 # the rollup, which closes the gap even when a chained workflow takes
-# longer than two polls to register. A head change (new push) resets the
+# longer than two polls to register. The binding is itself bounded: a
+# required context that stays missing for $REQ_MISS_POLLS consecutive
+# polls (default 30) is more likely one the rollup reports under a shape
+# this script does not match (e.g. a legacy commit-status context) than a
+# workflow still registering, so the script emits one non-terminal NOTE,
+# disables the binding for the rest of the watch, and falls back to the
+# two-consecutive-poll confirmation alone -- a silent, permanent verdict
+# suppression is exactly the failure mode this watcher exists to avoid.
+# A head change (new push) resets the
 # confirmation state, since everything observed so far described the old
 # head. CHECK FAILED, MERGED/CLOSED,
 # CONFLICTS, and STALE remain immediate -- those states do not regress on
@@ -60,6 +68,7 @@ shift
 prs="$*"
 poll_interval=${POLL_INTERVAL:-10}
 empty_note_polls=${EMPTY_NOTE_POLLS:-30}
+req_miss_polls=${REQ_MISS_POLLS:-30}
 
 state_dir=$(mktemp -d "${TMPDIR:-/tmp}/pycc-ci-watch.XXXXXX")
 trap 'rm -rf "$state_dir"' EXIT HUP INT TERM
@@ -100,8 +109,9 @@ poll_once() {
     prev_head=$(cat "$state_dir/head_$pr" 2>/dev/null || echo "")
     if [ -n "$prev_head" ] && [ "$head_oid" != "$prev_head" ]; then
       # New push: every observation so far described the old head, so the
-      # verdict confirmation and empty-streak counters start over.
-      rm -f "$state_dir/cand_$pr" "$state_dir/empty_$pr"
+      # verdict confirmation, empty-streak, and required-context-missing
+      # counters start over.
+      rm -f "$state_dir/cand_$pr" "$state_dir/empty_$pr" "$state_dir/reqmiss_$pr"
     fi
     echo "$head_oid" >"$state_dir/head_$pr"
 
@@ -168,18 +178,35 @@ poll_once() {
         jq -r 'if type=="array" then .[] | strings else empty end' 2>/dev/null >"$state_dir/req_$pr" || : >"$state_dir/req_$pr"
     fi
     missing=0
+    missing_ctx=""
     while IFS= read -r ctx; do
       [ -n "$ctx" ] || continue
       present=$(echo "$data" | jq -r --arg n "$ctx" '[.statusCheckRollup[]? | select(.name==$n and .status=="COMPLETED")] | length')
       if [ "$present" = "0" ]; then
         missing=1
+        missing_ctx=$ctx
         break
       fi
     done <"$state_dir/req_$pr"
     if [ "$missing" = "1" ]; then
+      # Bound the binding itself: a required context that never matches
+      # (e.g. one the rollup reports as a legacy commit-status entry
+      # rather than a check run) would otherwise suppress READY/BLOCKED
+      # forever -- the silent-stall failure mode this watcher exists to
+      # avoid. After $REQ_MISS_POLLS consecutive missing polls, note it
+      # once, drop the binding for this watch, and rely on the
+      # two-consecutive-poll confirmation alone.
+      reqmiss=$(cat "$state_dir/reqmiss_$pr" 2>/dev/null || echo 0)
+      reqmiss=$((reqmiss + 1))
+      echo "$reqmiss" >"$state_dir/reqmiss_$pr"
+      if [ "$reqmiss" = "$req_miss_polls" ]; then
+        echo "PR #$pr: NOTE -- required context '$missing_ctx' still not completed in the rollup after $reqmiss polls; disabling the required-context binding for this watch and relying on the two-consecutive-poll confirmation (not a terminal state, still watching)"
+        : >"$state_dir/req_$pr"
+      fi
       rm -f "$state_dir/cand_$pr"
       continue
     fi
+    rm -f "$state_dir/reqmiss_$pr"
 
     if [ "$merge_state" = "CLEAN" ]; then
       verdict=READY

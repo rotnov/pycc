@@ -70,7 +70,13 @@ to bypass in place.
    early. When the base branch's required status contexts are readable,
    the verdicts additionally require every required context to be present
    and completed in the rollup (closing gaps longer than two polls), and a
-   head change (new push) resets the confirmation state. `CHECK FAILED`,
+   head change (new push) resets the confirmation state. The binding is
+   itself bounded: a readable required context that never matches the
+   rollup (e.g. one reported as a legacy commit-status entry) is dropped
+   after `REQ_MISS_POLLS` consecutive missing polls (default 30) with one
+   non-terminal NOTE, falling back to the two-poll confirmation — a
+   silent permanent verdict suppression would recreate the very stall
+   this entry exists to prevent. `CHECK FAILED`,
    `MERGED`/`CLOSED`, `CONFLICTS`, and `STALE` stay
    immediate — those states do not regress on their own. The fix lands
    identically in both platform copies
@@ -89,8 +95,12 @@ The watcher repair's fixture is the skill's own CI-run regression harness,
 `.claude/skills/gha-watch-ci-pr/scripts/test-ci-watch.sh` (executed by the
 `agent-assets` workflow), extended in this commit with the incident's
 reproduction cases: empty-rollup-never-terminal, the between-workflow gap,
-the one-time NOTE, and the two-consecutive-poll confirmation (the existing
-pending-then-green fixture's expected poll count moves 2 → 3 accordingly).
+the one-time NOTE and its per-streak re-fire, the two-consecutive-poll
+confirmation (the existing pending-then-green fixture's expected poll
+count moves 2 → 3 accordingly), the required-context binding across a
+multi-poll gap, the head-change confirmation reset, the malformed
+required-contexts-body fallback, and the never-matching required context
+dropped after the `REQ_MISS_POLLS` bound.
 The hook's fixture is the violator/clean payload set recorded under
 `fixture/` beside this entry. Not applicable as an arena fixture — both
 artefacts are deterministic binary gates, not agent-behaviour artefacts the
@@ -128,9 +138,12 @@ itself — the sanctioned one. No other artefact re-implements it; the
 
 - `.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh` — false-terminal fix
   (empty rollup never terminal + NOTE; 2-consecutive-poll confirmation for
-  READY/BLOCKED)
+  READY/BLOCKED; required-context binding when readable, bounded by
+  `REQ_MISS_POLLS`; head-change confirmation reset)
 - `.claude/skills/gha-watch-ci-pr/scripts/test-ci-watch.sh` — fixture 4
-  poll count updated; incident fixtures added
+  poll count updated; incident fixtures added (16 total)
+- `.agents/skills/gha-watch-ci-pr/scripts/` — both files re-mirrored
+  byte-identical (real copies, not forwarding stubs)
 - `.claude/skills/gha-watch-ci-pr/SKILL.md` and
   `.claude/skills/autopilot-async-monitoring/SKILL.md` — the two lines
   describing BLOCKED/READY semantics updated (confirmation + NOTE)
