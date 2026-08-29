@@ -96,6 +96,15 @@ status: accepted
   - D-181's residual item 2 (the exception-path skip) is closed for every
     site `expression_can_set_exception` recognizes: `BinOp` operands,
     `Compare` operands, and `Call`/`Instantiate` argument transfer sites.
+    It is also closed for one further site outside that classifier's own
+    scope: `emit_range_operands_with_exception_safety`'s `range()`-shaped
+    start/stop/step preheader, shared by `MirStmt::ForRange` and its three
+    comprehension-tail copies. That site is reached through statement-level
+    lowering, not through `expression_can_set_exception` (which classifies
+    `MirExpr` nodes only and has no `MirStmt::ForRange` case at all), but it
+    uses the identical `push_pending_int_release_if_temporary`/
+    `guard_statement_effects` mechanism to protect each already-evaluated
+    bound across the next one's evaluation.
     D-181's residual item 1 (the `TupleLiteral` element, tracked separately
     as [#636](https://github.com/rotnov/pycc/issues/636)) is untouched and
     stays open; `docs/RUNTIME.md` and `docs/ROADMAP.md` are updated in the

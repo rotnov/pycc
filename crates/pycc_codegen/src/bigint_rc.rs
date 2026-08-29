@@ -875,17 +875,91 @@ mod tests {
         );
         // `contains()` above matches the branch instruction's own label
         // reference (`label %effect_exc_unwind`) as readily as the block's
-        // definition, so split on the label-definition form specifically
-        // (`\neffect_exc_unwind:`, an unindented line ending in `:`, per
-        // `guarded_bigint_refcount_calls_in_one_function`'s own convention
-        // for recognizing a block label) to isolate the block's body.
-        let unwind_block = ir
-            .split("\neffect_exc_unwind:")
-            .nth(1)
-            .expect("the block label was just found by contains() above")
-            .split("\neffect_exc_cont")
-            .next()
-            .expect("every guard site's own continuation block always follows");
+        // definition, so isolate the block's own body by its label
+        // *definition* line specifically (an unindented `effect_exc_unwind:`
+        // line, per `guarded_bigint_refcount_calls_in_one_function`'s own
+        // convention for recognizing a block label).
+        //
+        // This cannot split on the next `\neffect_exc_cont` occurrence: in
+        // `guard_statement_effects`, `effect_exc_cont` is *created* before
+        // `effect_exc_unwind` (so it is appended, and therefore emitted in
+        // the IR text, first) whenever the pending-releases stack is
+        // non-empty -- exactly this test's fixture. For a single guard site
+        // that puts the only `effect_exc_cont` occurrence *before*
+        // `effect_exc_unwind:` in the string, so splitting the
+        // already-past-that-point substring on `\neffect_exc_cont` would
+        // never find a second occurrence and `.next()` would silently hand
+        // back the rest of the entire module -- including the fallthrough
+        // path's own D-181 release calls -- rather than failing loudly.
+        // Instead, treat `effect_exc_unwind` as the root of its own small
+        // control-flow subgraph and walk it structurally: the block itself
+        // ends in a *conditional* branch (`emit_bigint_refcount_call`'s own
+        // heap-tag guard, per its doc comment on `guarded_bigint_refcount_calls`
+        // above), whose taken arm (`bigint_rc_call*`) holds the actual
+        // release and whose not-taken arm (`bigint_rc_cont*`) re-joins to
+        // branch on to the exception target. Parse every basic block's body
+        // and outgoing edges once, then collect the closure reachable from
+        // `effect_exc_unwind` -- this follows exactly the blocks
+        // `guard_statement_effects`'s own snapshot loop emits, regardless of
+        // where in the text another guard site's blocks happen to land.
+        let mut block_bodies: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        let mut block_order: Vec<&str> = Vec::new();
+        let mut current_block: Option<&str> = None;
+        for raw in ir.lines() {
+            let line = raw.trim();
+            if !raw.starts_with([' ', '@', '%', '}', '!']) {
+                if let Some((label, _)) = line.split_once(':') {
+                    current_block = Some(label);
+                    block_order.push(label);
+                    block_bodies.entry(label).or_default();
+                }
+                continue;
+            }
+            if let Some(label) = current_block {
+                block_bodies.get_mut(label).unwrap().push(line);
+            }
+        }
+        assert!(
+            block_bodies.contains_key("effect_exc_unwind"),
+            "the block label was just found by contains() above, so it \
+             must parse as a block; got:\n{ir}"
+        );
+        // A block's outgoing edges, read off its own terminator line.
+        let successors = |label: &str| -> Vec<&str> {
+            let body = &block_bodies[label];
+            let terminator = body
+                .last()
+                .expect("every parsed block has a terminator line");
+            if let Some(rest) = terminator.strip_prefix("br i1 ") {
+                rest.split(", label ")
+                    .skip(1)
+                    .map(|s| s.trim_start_matches('%'))
+                    .collect()
+            } else if let Some(rest) = terminator.strip_prefix("br label ") {
+                vec![rest.trim_start_matches('%')]
+            } else {
+                Vec::new()
+            }
+        };
+        let mut visited: Vec<&str> = Vec::new();
+        let mut stack = vec!["effect_exc_unwind"];
+        while let Some(label) = stack.pop() {
+            if visited.contains(&label) {
+                continue;
+            }
+            visited.push(label);
+            stack.extend(successors(label));
+        }
+        // Report the reachable blocks in the order they appear in the IR so
+        // the assertion failure message below reads like a normal block
+        // listing rather than a BFS/DFS visitation order.
+        let unwind_block = block_order
+            .iter()
+            .filter(|label| visited.contains(label))
+            .flat_map(|label| block_bodies[label].iter().copied())
+            .collect::<Vec<&str>>()
+            .join("\n");
         assert!(
             unwind_block.contains("call void @pycc_rt_bigint_release"),
             "the #638 unwind block must release the pending operand before \
