@@ -28,9 +28,9 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Command {
     Build {
-        path: String,
+        path: PathBuf,
         #[arg(short = 'o')]
-        out: String,
+        out: PathBuf,
         /// Cross-compile for a different Tier-1 target triple (e.g.
         /// x86_64-apple-darwin). Omit to build for the host's own default
         /// target -- the common case.
@@ -46,7 +46,7 @@ pub enum Command {
         release: bool,
     },
     Run {
-        path: String,
+        path: PathBuf,
         /// Every value after `--`, forwarded unchanged and in order as the
         /// generated program's process arguments (CLI_SPEC.md's
         /// `pycc run [PATH] [-- args]` contract, #23). `trailing_var_arg` +
@@ -110,6 +110,67 @@ mod tests {
 
         assert_eq!(paths[0].as_os_str().as_bytes(), b"staged_\xff.py");
         assert!(parsed_check_paths(Command::Clean).is_none());
+    }
+
+    #[cfg(unix)]
+    fn parsed_build_path_and_out(command: Command) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+        match command {
+            Command::Build { path, out, .. } => Some((path, out)),
+            _ => None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_path_and_out_preserve_non_utf8_bytes() {
+        // Extends `check_paths_preserve_non_utf8_bytes`'s invariant to
+        // `build` (#249): both the input path and the `-o` output path are
+        // native filesystem paths, not text, so neither may be forced
+        // through UTF-8 (CLI_SPEC.md's path contract).
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let path = std::ffi::OsString::from_vec(b"staged_\xff.py".to_vec());
+        let out = std::ffi::OsString::from_vec(b"out_\xff".to_vec());
+        let cli = Cli::try_parse_from([
+            std::ffi::OsString::from("pycc"),
+            std::ffi::OsString::from("build"),
+            path,
+            std::ffi::OsString::from("-o"),
+            out,
+        ])
+        .unwrap();
+        let (path, out) = parsed_build_path_and_out(cli.command).unwrap();
+
+        assert_eq!(path.as_os_str().as_bytes(), b"staged_\xff.py");
+        assert_eq!(out.as_os_str().as_bytes(), b"out_\xff");
+        assert!(parsed_build_path_and_out(Command::Clean).is_none());
+    }
+
+    #[cfg(unix)]
+    fn parsed_run_path(command: Command) -> Option<std::path::PathBuf> {
+        match command {
+            Command::Run { path, .. } => Some(path),
+            _ => None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_path_preserves_non_utf8_bytes() {
+        // Extends the same invariant to `run` (#249).
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let path = std::ffi::OsString::from_vec(b"staged_\xff.py".to_vec());
+        let cli = Cli::try_parse_from([
+            std::ffi::OsString::from("pycc"),
+            std::ffi::OsString::from("run"),
+            path,
+        ])
+        .unwrap();
+        let path = parsed_run_path(cli.command).unwrap();
+
+        assert_eq!(path.as_os_str().as_bytes(), b"staged_\xff.py");
+        assert!(parsed_run_path(Command::Clean).is_none());
     }
 
     #[test]
@@ -176,7 +237,7 @@ mod tests {
         assert_eq!(parsed_build_release(cli.command), Some(true));
     }
 
-    fn parsed_run(command: Command) -> Option<(String, Vec<String>)> {
+    fn parsed_run(command: Command) -> Option<(std::path::PathBuf, Vec<String>)> {
         match command {
             Command::Run { path, args } => Some((path, args)),
             _ => None,
@@ -188,7 +249,7 @@ mod tests {
         // Preserves `pycc run app.py` behavior with no arguments (#23).
         let cli = Cli::try_parse_from(["pycc", "run", "app.py"]).unwrap();
         let (path, args) = parsed_run(cli.command).unwrap();
-        assert_eq!(path, "app.py");
+        assert_eq!(path, std::path::PathBuf::from("app.py"));
         assert!(args.is_empty());
         assert!(parsed_run(Command::Clean).is_none());
     }
@@ -198,7 +259,7 @@ mod tests {
         let cli = Cli::try_parse_from(["pycc", "run", "app.py", "--", "first", "second", "third"])
             .unwrap();
         let (path, args) = parsed_run(cli.command).unwrap();
-        assert_eq!(path, "app.py");
+        assert_eq!(path, std::path::PathBuf::from("app.py"));
         assert_eq!(args, vec!["first", "second", "third"]);
     }
 
@@ -220,7 +281,7 @@ mod tests {
         let cli =
             Cli::try_parse_from(["pycc", "run", "app.py", "--", "-x", "--flag", "hello"]).unwrap();
         let (path, args) = parsed_run(cli.command).unwrap();
-        assert_eq!(path, "app.py");
+        assert_eq!(path, std::path::PathBuf::from("app.py"));
         assert_eq!(args, vec!["-x", "--flag", "hello"]);
     }
 }

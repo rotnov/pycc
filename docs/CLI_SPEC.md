@@ -25,7 +25,9 @@ Every value after `pycc run`'s `--` is forwarded unchanged and in order as
 the generated program's own process arguments, including a value that
 itself starts with `-` (e.g. `-x`, `--flag`) -- once past `--`, nothing is
 interpreted as a `pycc` option (#23). Each forwarded value must be valid
-UTF-8: `pycc` parses its own argument vector as `String`, so a non-UTF-8
+UTF-8: `pycc` parses these trailing forwarded arguments as `String` (unlike
+the `PATH`/`OUT` filesystem-path arguments on `build`/`run`/`check`, which
+are native `PathBuf`s and preserve non-UTF-8 bytes, #249), so a non-UTF-8
 value after `--` is rejected with a CLI parse error (exit 2) rather than
 forwarded as an opaque byte sequence; faithfully forwarding arbitrary
 non-UTF-8 process arguments is tracked separately and is not part of this
@@ -238,7 +240,11 @@ as a host linker driver that cannot be started or an unusable system temp
 directory in which `build`/`run` cannot create their scratch directory —
 checked before any frontend work, so a bad temp directory fails fast
 (reported as an actionable
-`error:` diagnostic, never a panic), or an unrecognized `pycc explain` code
+`error:` diagnostic, never a panic), `pycc run`'s just-linked binary failing
+to spawn (permission denied, or the file vanishing between link and spawn —
+an ordinary environment failure reported as `error: could not run the built
+program \`<path>\`: <OS error>`, never a panic), or an unrecognized `pycc
+explain` code
 (always a plain stderr message, regardless of `--format` -- see below)
 · `101` compiled program panicked/uncaught
 exception, or `build`/`run` hit one of `pycc_codegen`'s own explicit,

@@ -1934,6 +1934,60 @@ fn check_accepts_a_non_utf8_staged_path_losslessly() {
     assert!(stdout.contains("invalid_\u{fffd}.py"));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn build_accepts_a_non_utf8_source_and_output_path_losslessly() {
+    // #249: `build`'s `path` and `-o` operands used to be `String`, forcing
+    // both through UTF-8 before `pycc` ever saw them -- clap rejects a
+    // non-UTF-8 `String` argument outright, so a staged path with invalid
+    // UTF-8 bytes (a real possibility: any upstream tool that stages files
+    // by raw byte name, not just a hostile input) could never be named at
+    // all. Extends `check_accepts_a_non_utf8_staged_path_losslessly`'s same
+    // invariant to `build`; `#[cfg(target_os = "linux")]` for the same
+    // reason that test is Linux-only: APFS (macOS) normalizes/rejects
+    // invalid UTF-8 in filenames, so this scenario is only constructible on
+    // Linux's byte-oriented filesystems.
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = ScratchDir::new("e2e_build_non_utf8").expect("failed to create scratch dir");
+    let src_name = std::ffi::OsString::from_vec(b"invalid_\xff.py".to_vec());
+    let src = dir.join(src_name);
+    std::fs::write(&src, b"print(42)\n").unwrap();
+    let out_name = std::ffi::OsString::from_vec(b"out_\xff".to_vec());
+    let out = dir.join(out_name);
+
+    let build_status = Command::new(pycc_bin())
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(&out)
+        .status()
+        .unwrap();
+    assert!(build_status.success());
+    assert!(out.exists(), "the non-UTF-8-named output path must exist");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn run_accepts_a_non_utf8_source_path_losslessly() {
+    // #249's `run` counterpart of the `build` test above.
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = ScratchDir::new("e2e_run_non_utf8").expect("failed to create scratch dir");
+    let src_name = std::ffi::OsString::from_vec(b"invalid_\xff.py".to_vec());
+    let src = dir.join(src_name);
+    std::fs::write(&src, b"print(42)\n").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("run")
+        .arg(&src)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"42\n");
+}
+
 #[test]
 fn check_reports_every_failure_and_io_errors_take_exit_code_precedence() {
     let dir = ScratchDir::new("e2e_check_errors").expect("failed to create scratch dir");

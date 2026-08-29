@@ -33,6 +33,49 @@ never a merge gate.
 
 ---
 
+## 2026-08-29 — Chased a phantom coverage gap in a package-scoped summary instead of running the actual gate command
+
+What happened: while implementing #249 (non-UTF-8 native paths in
+`build`/`run`), `cargo llvm-cov --package pycc`'s human-readable summary
+table reported `src/main.rs` stuck at 99.19% region / 99.46% line coverage
+(5 missed regions, 2 missed lines) after the diff, against a confirmed
+100%/100% pre-diff baseline. Several independent diagnostic techniques —
+the JSON `segments` export, the JSON per-function `regions` export,
+`--show-missing-lines` (a documented no-op for this subcommand), and two
+separate `llvm-cov show -format=text` renderings generated from a
+confirmed-fresh `cargo llvm-cov clean --workspace` rebuild — all failed to
+locate any actual zero-count line or region anywhere in the file. This
+consumed a large fraction of the session across two work segments before
+the actual D-014 gate command was ever run.
+
+Root cause: the D-014 merge gate AGENTS.md specifies is workspace-scoped
+(`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions
+100`), not package-scoped. The `--package pycc` human summary and the
+`--workspace` gate command evidently merge/dedupe coverage differently for
+a file with multiple compiled instantiations (here, `main.rs`'s normal
+binary compilation vs. its own `#[cfg(test)]` unit-test recompilation) —
+the workspace-scoped gate command passed (`EXIT=0`) even while the
+narrower summary still showed the "5 missed regions" discrepancy.
+
+What fixed it: an advisor consultation reframed the problem correctly —
+"the gate is a command, not a table" — and running the actual gate command
+first would have settled the question in one step instead of many. The
+session then closed the gap for real (not just administratively) by adding
+two more `run_built_binary` unit tests exercising the function's success
+and non-zero-exit branches directly (`/usr/bin/true`, `/usr/bin/false`),
+after which even the package-scoped summary reports a clean 100% for
+`src/main.rs`.
+
+Lesson: when a per-file coverage summary shows a small, stubborn gap that
+no per-line/per-region annotation tool can locate, run the actual
+CI-equivalent gate command (with the exact scope flag CI uses, e.g.
+`--workspace`, and both `--fail-under-*` flags) *before* spending further
+time hunting for phantom lines in a narrower or differently-scoped view.
+The gate command's own exit code is authoritative; a human-readable
+summary computed at a different scope is not guaranteed to agree with it
+line-for-line, especially for a file with multiple compiled
+instantiations.
+
 ## 2026-08-29 — A CI coverage miss reproduced identically three times before being reproduced locally with the right thread count
 
 What happened: PR #836's `build-test-coverage` job failed identically across
