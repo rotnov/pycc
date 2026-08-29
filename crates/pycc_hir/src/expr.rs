@@ -34,6 +34,7 @@
 //! all -- they never forward the ambient `in_function` value, only the one
 //! literal that reproduces current behavior.
 
+use crate::int_boundary::check_boundary_literal;
 use crate::{
     BinOpKind, CmpOpKind, CompIter, FStringPart, HirExpr, HirStmt, Ty, UnaryOpKind,
     context_invalid, unsupported,
@@ -199,7 +200,11 @@ pub(crate) fn lower_expr(
         Expr::List(list) => HirExpr::ListLiteral(
             list.elts
                 .iter()
-                .map(|e| lower_expr(e, in_function, class_name))
+                .map(|e| {
+                    let lowered = lower_expr(e, in_function, class_name)?;
+                    check_boundary_literal(&lowered, pycc_ast::expr_range(e), "list-literal element")?;
+                    Ok(lowered)
+                })
                 .collect::<Result<Vec<_>, _>>()?,
         ),
         Expr::Dict(dict) => HirExpr::DictLiteral(
@@ -212,17 +217,25 @@ pub(crate) fn lower_expr(
                             pycc_ast::expr_range(&item.value),
                         ));
                     };
-                    Ok((
-                        lower_expr(key, in_function, class_name)?,
-                        lower_expr(&item.value, in_function, class_name)?,
-                    ))
+                    let key = lower_expr(key, in_function, class_name)?;
+                    let value = lower_expr(&item.value, in_function, class_name)?;
+                    check_boundary_literal(
+                        &value,
+                        pycc_ast::expr_range(&item.value),
+                        "dict-literal value",
+                    )?;
+                    Ok((key, value))
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         ),
         Expr::Set(set) => HirExpr::SetLiteral(
             set.elts
                 .iter()
-                .map(|e| lower_expr(e, in_function, class_name))
+                .map(|e| {
+                    let lowered = lower_expr(e, in_function, class_name)?;
+                    check_boundary_literal(&lowered, pycc_ast::expr_range(e), "set-literal element")?;
+                    Ok(lowered)
+                })
                 .collect::<Result<Vec<_>, _>>()?,
         ),
         Expr::Tuple(tuple) => HirExpr::TupleLiteral(
@@ -239,31 +252,47 @@ pub(crate) fn lower_expr(
             // (PR-12, D-118). Each bound is independently optional in real
             // Python's own grammar, so each is lowered through
             // `Option::map`/`.transpose()` rather than assumed present.
-            Expr::Slice(slice) => HirExpr::Slice {
-                base: Box::new(lower_expr(&sub.value, in_function, class_name)?),
-                start: slice
-                    .lower
-                    .as_deref()
-                    .map(|e| lower_expr(e, in_function, class_name))
-                    .transpose()?
-                    .map(Box::new),
-                stop: slice
-                    .upper
-                    .as_deref()
-                    .map(|e| lower_expr(e, in_function, class_name))
-                    .transpose()?
-                    .map(Box::new),
-                step: slice
-                    .step
-                    .as_deref()
-                    .map(|e| lower_expr(e, in_function, class_name))
-                    .transpose()?
-                    .map(Box::new),
-            },
-            _ => HirExpr::Subscript {
-                base: Box::new(lower_expr(&sub.value, in_function, class_name)?),
-                index: Box::new(lower_expr(&sub.slice, in_function, class_name)?),
-            },
+            Expr::Slice(slice) => {
+                let lower_bound = |e: &Expr| -> Result<HirExpr, Diagnostic> {
+                    let lowered = lower_expr(e, in_function, class_name)?;
+                    check_boundary_literal(&lowered, pycc_ast::expr_range(e), "slice bound")?;
+                    Ok(lowered)
+                };
+                HirExpr::Slice {
+                    base: Box::new(lower_expr(&sub.value, in_function, class_name)?),
+                    start: slice.lower.as_deref().map(lower_bound).transpose()?.map(Box::new),
+                    stop: slice.upper.as_deref().map(lower_bound).transpose()?.map(Box::new),
+                    step: slice.step.as_deref().map(lower_bound).transpose()?.map(Box::new),
+                }
+            }
+            _ => {
+                let base = Box::new(lower_expr(&sub.value, in_function, class_name)?);
+                let index = lower_expr(&sub.slice, in_function, class_name)?;
+                // #618/D-207 (finding from PR #827 review): a tuple base has
+                // no D-141 runtime `int`-boundary position at all -- tuple
+                // indexing is resolved entirely at compile time in
+                // `pycc_types::check_expr`'s own `Ty::Tuple` arm, which
+                // already rejects an out-of-range literal index with T0040
+                // ("non-negative literal within range"). Emitting T0051
+                // unconditionally here, before the base's type is known,
+                // would preempt that existing T0040 check and mislabel the
+                // position as a "list index" for a tuple. HIR lowering can
+                // only recognize a tuple base syntactically when it is
+                // itself a tuple *literal* (`(1, 2)[huge]`); a tuple value
+                // held in a variable is indistinguishable from a list at
+                // this stage without type information `pycc_hir` does not
+                // have, so that case is an accepted, documented gap
+                // mirroring the `str * int` repeat-count narrowing
+                // elsewhere in this module -- see `crate::int_boundary`'s
+                // doc comment.
+                if !matches!(sub.value.as_ref(), Expr::Tuple(_)) {
+                    check_boundary_literal(&index, pycc_ast::expr_range(&sub.slice), "list index")?;
+                }
+                HirExpr::Subscript {
+                    base,
+                    index: Box::new(index),
+                }
+            }
         },
         Expr::Call(call) => {
             if !call.arguments.keywords.is_empty() {
@@ -318,9 +347,12 @@ pub(crate) fn lower_expr(
                             call.range,
                         ));
                     };
+                    let value_span = pycc_ast::expr_range(value);
+                    let value = lower_expr(value, in_function, class_name)?;
+                    check_boundary_literal(&value, value_span, "`list.append()` value")?;
                     return Ok(HirExpr::ListAppend {
                         list: list_name.id.as_str().to_string(),
-                        value: Box::new(lower_expr(value, in_function, class_name)?),
+                        value: Box::new(value),
                     });
                 }
                 if attr.attr.as_str() == "pop" {
@@ -359,10 +391,14 @@ pub(crate) fn lower_expr(
                             call.range,
                         ));
                     };
+                    let default_span = pycc_ast::expr_range(default);
+                    let key = lower_expr(key, in_function, class_name)?;
+                    let default = lower_expr(default, in_function, class_name)?;
+                    check_boundary_literal(&default, default_span, "`dict.get()` default")?;
                     return Ok(HirExpr::DictGetOrDefault {
                         dict: dict_name.id.as_str().to_string(),
-                        key: Box::new(lower_expr(key, in_function, class_name)?),
-                        default: Box::new(lower_expr(default, in_function, class_name)?),
+                        key: Box::new(key),
+                        default: Box::new(default),
                     });
                 }
                 if attr.attr.as_str() == "add" {
@@ -381,9 +417,12 @@ pub(crate) fn lower_expr(
                             call.range,
                         ));
                     };
+                    let value_span = pycc_ast::expr_range(value);
+                    let value = lower_expr(value, in_function, class_name)?;
+                    check_boundary_literal(&value, value_span, "`set.add()` value")?;
                     return Ok(HirExpr::SetAdd {
                         set: set_name.id.as_str().to_string(),
-                        value: Box::new(lower_expr(value, in_function, class_name)?),
+                        value: Box::new(value),
                     });
                 }
                 // `math.sqrt(x)`-shaped stdlib intrinsic call (D-136/D-137).
@@ -543,10 +582,32 @@ pub(crate) fn lower_expr(
                     ));
                 }
             };
+            let left = lower_expr(&bin_op.left, in_function, class_name)?;
+            let right = lower_expr(&bin_op.right, in_function, class_name)?;
+            // #618: `str` repeat count. Only the case where the *string*
+            // side is itself a string literal is recognized here -- see
+            // `crate::int_boundary`'s doc comment for why a `str`-typed
+            // variable multiplied by an oversized literal is a documented,
+            // narrower out-of-scope gap rather than a missed case.
+            if op == BinOpKind::Mul {
+                if matches!(bin_op.left.as_ref(), Expr::StringLiteral(_)) {
+                    check_boundary_literal(
+                        &right,
+                        pycc_ast::expr_range(&bin_op.right),
+                        "`str` repeat count",
+                    )?;
+                } else if matches!(bin_op.right.as_ref(), Expr::StringLiteral(_)) {
+                    check_boundary_literal(
+                        &left,
+                        pycc_ast::expr_range(&bin_op.left),
+                        "`str` repeat count",
+                    )?;
+                }
+            }
             HirExpr::BinOp {
                 op,
-                left: Box::new(lower_expr(&bin_op.left, in_function, class_name)?),
-                right: Box::new(lower_expr(&bin_op.right, in_function, class_name)?),
+                left: Box::new(left),
+                right: Box::new(right),
             }
         }
         Expr::BooleanLiteral(lit) => HirExpr::BoolLiteral(lit.value),
@@ -995,22 +1056,20 @@ pub(crate) fn lower_range_call(
     in_function: bool,
     class_name: Option<&str>,
 ) -> Result<(HirExpr, HirExpr, HirExpr), Diagnostic> {
+    // Issue #618 (T0051) deliberately does NOT check a `range()` argument:
+    // D-179 already removed `range` from D-141's runtime `int`-boundary
+    // inventory. `range()` is fully bigint-capable (bounds, step, and a
+    // mid-loop-promoting induction variable all work via
+    // `pycc_rt_range_normalize_operand`/`pycc_rt_range_continue`), so an
+    // out-of-range literal here is not a capability gap at all -- it is
+    // ordinary, supported behavior, not a candidate for a boundary
+    // diagnostic. See D-207 for why this position was wrongly included in
+    // #618's own filed inventory (copied from D-178's pre-D-179 fourteen).
+    let lower_arg = |e: &Expr| -> Result<HirExpr, Diagnostic> { lower_expr(e, in_function, class_name) };
     match &*call.arguments.args {
-        [stop] => Ok((
-            HirExpr::IntLiteral(0),
-            lower_expr(stop, in_function, class_name)?,
-            HirExpr::IntLiteral(1),
-        )),
-        [start, stop] => Ok((
-            lower_expr(start, in_function, class_name)?,
-            lower_expr(stop, in_function, class_name)?,
-            HirExpr::IntLiteral(1),
-        )),
-        [start, stop, step] => Ok((
-            lower_expr(start, in_function, class_name)?,
-            lower_expr(stop, in_function, class_name)?,
-            lower_expr(step, in_function, class_name)?,
-        )),
+        [stop] => Ok((HirExpr::IntLiteral(0), lower_arg(stop)?, HirExpr::IntLiteral(1))),
+        [start, stop] => Ok((lower_arg(start)?, lower_arg(stop)?, HirExpr::IntLiteral(1))),
+        [start, stop, step] => Ok((lower_arg(start)?, lower_arg(stop)?, lower_arg(step)?)),
         other => Err(unsupported(
             format!("range() with {} arguments is not supported", other.len()),
             call.range,
@@ -1169,11 +1228,9 @@ pub(crate) fn lower_list_comp_assign(
     // above (D-149 correction 5) -- preserves today's `C0001` classification
     // for a comprehension-internal `yield`/`yield from` in both enclosing
     // scopes.
-    let elt = rename_name_in_expr(
-        lower_expr(&comp.elt, true, class_name)?,
-        &source_name,
-        &synth_var,
-    );
+    let elt_hir = lower_expr(&comp.elt, true, class_name)?;
+    check_boundary_literal(&elt_hir, pycc_ast::expr_range(&comp.elt), "listcomp element")?;
+    let elt = rename_name_in_expr(elt_hir, &source_name, &synth_var);
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
     Ok(HirStmt::ListCompAssign {
         target: target.to_string(),
@@ -1193,11 +1250,9 @@ pub(crate) fn lower_set_comp_assign(
         lower_comprehension_header(&comp.generators, class_name)?;
     // Literal `true`: same reasoning as `lower_list_comp_assign`'s `elt`
     // above (D-149 correction 5).
-    let elt = rename_name_in_expr(
-        lower_expr(&comp.elt, true, class_name)?,
-        &source_name,
-        &synth_var,
-    );
+    let elt_hir = lower_expr(&comp.elt, true, class_name)?;
+    check_boundary_literal(&elt_hir, pycc_ast::expr_range(&comp.elt), "setcomp element")?;
+    let elt = rename_name_in_expr(elt_hir, &source_name, &synth_var);
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
     Ok(HirStmt::SetCompAssign {
         target: target.to_string(),
@@ -1241,11 +1296,9 @@ pub(crate) fn lower_dict_comp_assign(
         &source_name,
         &synth_var,
     );
-    let value = rename_name_in_expr(
-        lower_expr(&comp.value, true, class_name)?,
-        &source_name,
-        &synth_var,
-    );
+    let value_hir = lower_expr(&comp.value, true, class_name)?;
+    check_boundary_literal(&value_hir, pycc_ast::expr_range(&comp.value), "dictcomp value")?;
+    let value = rename_name_in_expr(value_hir, &source_name, &synth_var);
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
     Ok(HirStmt::DictCompAssign {
         target: target.to_string(),
@@ -1600,5 +1653,203 @@ mod tests {
             value: Box::new(HirExpr::IntLiteral(1)),
         };
         assert!(super::contains_named_expr(&expr));
+    }
+
+    // Issue #618: an out-of-range `int` literal in a runtime int-boundary
+    // position (D-141) is rejected at compile time with a spanned T0051
+    // diagnostic, restoring `pycc check` as the catch point D-178 (#148)
+    // knowingly moved to run time. Every named position below is exercised
+    // once with `i64::MAX` (always out of D-061's tagged-smallint range,
+    // and always a valid `i64` literal on its own).
+    const OOR: &str = "9223372036854775807";
+
+    fn assert_t0051(source: &str, expected_position: &str) {
+        let module = pycc_parser::parse(source).expect("test fixture must parse");
+        let err = crate::lower_checked(&module).expect_err("fixture must be rejected");
+        assert_eq!(err.code, "T0051", "source: {source:?}");
+        assert!(
+            err.message.contains(expected_position),
+            "expected message to mention {expected_position:?}, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn boundary_list_literal_element_is_t0051() {
+        assert_t0051(&format!("xs = [{OOR}]\n"), "list-literal element");
+    }
+
+    #[test]
+    fn boundary_set_literal_element_is_t0051() {
+        assert_t0051(&format!("s = {{{OOR}}}\n"), "set-literal element");
+    }
+
+    #[test]
+    fn boundary_dict_literal_value_is_t0051() {
+        assert_t0051(&format!("d = {{\"a\": {OOR}}}\n"), "dict-literal value");
+    }
+
+    #[test]
+    fn boundary_list_index_is_t0051() {
+        assert_t0051(
+            &format!("xs = [1, 2, 3]\ny = xs[{OOR}]\n"),
+            "list index",
+        );
+    }
+
+    #[test]
+    fn boundary_tuple_literal_index_is_not_t0051() {
+        // PR #827 review finding: a tuple base has no D-141 runtime
+        // `int`-boundary position at all -- `pycc_types` resolves tuple
+        // indexing entirely at compile time and already rejects an
+        // out-of-range literal index with its own T0040 ("non-negative
+        // literal within range"). Emitting T0051 here for a tuple literal
+        // base would preempt that check and mislabel the position as a
+        // "list index", so HIR lowering must succeed and defer to
+        // `pycc_types`.
+        let source = format!("y = (1, 2)[{OOR}]\n");
+        let module = pycc_parser::parse(&source).expect("test fixture must parse");
+        let result = crate::lower_checked(&module);
+        assert!(
+            result.is_ok(),
+            "a tuple-literal base's out-of-range index must not be rejected by T0051 in HIR, \
+             got {result:?}"
+        );
+    }
+
+    #[test]
+    fn boundary_slice_start_is_t0051() {
+        assert_t0051(&format!("xs = [1, 2, 3]\ny = xs[{OOR}:2]\n"), "slice bound");
+    }
+
+    #[test]
+    fn boundary_slice_stop_is_t0051() {
+        assert_t0051(&format!("xs = [1, 2, 3]\ny = xs[0:{OOR}]\n"), "slice bound");
+    }
+
+    #[test]
+    fn boundary_slice_step_is_t0051() {
+        assert_t0051(
+            &format!("xs = [1, 2, 3]\ny = xs[0:2:{OOR}]\n"),
+            "slice bound",
+        );
+    }
+
+    #[test]
+    fn boundary_list_append_value_is_t0051() {
+        assert_t0051(
+            &format!("xs = [1]\nxs.append({OOR})\n"),
+            "`list.append()` value",
+        );
+    }
+
+    #[test]
+    fn boundary_dict_get_default_is_t0051() {
+        assert_t0051(
+            &format!("d = {{\"a\": 1}}\nprint(d.get(\"z\", {OOR}))\n"),
+            "`dict.get()` default",
+        );
+    }
+
+    #[test]
+    fn boundary_set_add_value_is_t0051() {
+        assert_t0051(&format!("s = {{1}}\ns.add({OOR})\n"), "`set.add()` value");
+    }
+
+    #[test]
+    fn boundary_dict_subscript_assign_value_is_t0051() {
+        assert_t0051(
+            &format!("d = {{\"a\": 1}}\nd[\"a\"] = {OOR}\n"),
+            "subscript-assign value",
+        );
+    }
+
+    #[test]
+    fn range_argument_out_of_range_is_not_t0051() {
+        // D-179 already removed `range` from D-141's runtime int-boundary
+        // inventory: range() is fully bigint-capable (bounds, step, and a
+        // mid-loop-promoting induction variable), so an out-of-range literal
+        // here is ordinary supported behavior, not a T0051 candidate --
+        // unlike the other 13 positions this module checks. D-207 records
+        // that #618's own filed inventory wrongly copied this position
+        // forward from before D-179 excluded it.
+        let source = format!("for i in range({OOR}):\n    print(i)\n");
+        let module = pycc_parser::parse(&source).expect("test fixture must parse");
+        let result = crate::lower_checked(&module);
+        assert!(
+            result.is_ok(),
+            "range() with an out-of-range literal must still lower successfully, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn range_argument_out_of_range_in_a_comprehension_is_not_t0051() {
+        let source = format!("xs = [x for x in range({OOR})]\n");
+        let module = pycc_parser::parse(&source).expect("test fixture must parse");
+        let result = crate::lower_checked(&module);
+        assert!(
+            result.is_ok(),
+            "range() with an out-of-range literal must still lower successfully, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn boundary_listcomp_element_is_t0051() {
+        assert_t0051(
+            &format!("xs = [1, 2]\nys = [{OOR} for x in xs]\n"),
+            "listcomp element",
+        );
+    }
+
+    #[test]
+    fn boundary_setcomp_element_is_t0051() {
+        assert_t0051(
+            &format!("xs = [1, 2]\nys = {{{OOR} for x in xs}}\n"),
+            "setcomp element",
+        );
+    }
+
+    #[test]
+    fn boundary_dictcomp_value_is_t0051() {
+        assert_t0051(
+            &format!("xs = [1, 2]\nys = {{x: {OOR} for x in xs}}\n"),
+            "dictcomp value",
+        );
+    }
+
+    #[test]
+    fn boundary_str_repeat_count_with_literal_string_on_the_left_is_t0051() {
+        assert_t0051(&format!("s = \"ab\" * {OOR}\n"), "`str` repeat count");
+    }
+
+    #[test]
+    fn boundary_str_repeat_count_with_literal_string_on_the_right_is_t0051() {
+        assert_t0051(&format!("s = {OOR} * \"ab\"\n"), "`str` repeat count");
+    }
+
+    // #618 criterion 2: `int * int` multiplication (no string operand at
+    // all) is completely unaffected -- an out-of-range literal there is
+    // still valid Python that D-178 materializes as a heap bigint, not a
+    // boundary position.
+    #[test]
+    fn plain_int_multiplication_with_an_out_of_range_literal_still_lowers() {
+        let module =
+            pycc_parser::parse(&format!("x = 2\ny = x * {OOR}\n")).expect("must parse");
+        crate::lower_checked(&module).expect("plain int*int multiplication must not be rejected");
+    }
+
+    // #618 criterion 2: a `str`-typed *variable* multiplied by an
+    // out-of-range literal is the documented, narrower out-of-scope gap
+    // (see `crate::int_boundary`'s module doc comment) -- `pycc_hir` has no
+    // type information at this lowering step to tell it apart from
+    // ordinary `int * int` multiplication, so it still lowers successfully
+    // today (and keeps aborting at run time, unchanged from before this
+    // issue).
+    #[test]
+    fn str_typed_variable_repeat_count_out_of_range_is_not_yet_caught_here() {
+        let module = pycc_parser::parse(&format!("s = \"ab\"\nt = s * {OOR}\n"))
+            .expect("must parse");
+        crate::lower_checked(&module)
+            .expect("a str-typed variable's repeat count is a documented out-of-scope gap, not yet rejected at HIR-lowering time");
     }
 }

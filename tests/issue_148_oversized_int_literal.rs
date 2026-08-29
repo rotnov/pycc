@@ -4,18 +4,29 @@
 //! Two families live here, both deliberately kept out of
 //! `tests/fixtures/oversized_int_literal.py`'s differential fixture:
 //!
-//! * **Newly reachable runtime `int` boundaries.** Making an out-of-range
-//!   literal compile means it can now flow into the D-141 runtime `int`
-//!   boundaries that the retired codegen panic used to shadow. CPython
-//!   accepts the value in most of these positions, so a differential fixture
-//!   containing one would fail by construction -- they are pinned here
-//!   instead, by exit code and exact message. One member of this family, the
-//!   `range` operand, left it in #147 (D-179) and is now pinned as a success
-//!   case; see `tests/issue_147_bigint_range.rs`.
+//! * **D-141 runtime `int`-boundary positions.** Making an out-of-range
+//!   literal compile at all (D-178) meant it could flow into the D-141
+//!   runtime `int` boundaries that the retired codegen panic used to shadow.
+//!   [#618](https://github.com/rotnov/pycc/issues/618) (`T0051`, D-207) later
+//!   closed that gap for the literal case specifically at every position
+//!   that resolves syntactically during HIR lowering: a literal at one of
+//!   them is now rejected by `pycc check` itself, not merely by a run-time
+//!   abort, and the cases below were rewritten from "accepted, aborts at run
+//!   time" to "rejected at check time" to match. `list.append()`, a
+//!   container-literal element, `set.add()`, a comprehension element, and a
+//!   list index are all `T0051` now; `str * int` repeat count is `T0051`
+//!   only when the string side is itself a literal (`"ab" * <huge int>`), a
+//!   `str`-typed *variable* operand still hits the runtime abort pinned
+//!   below (D-207's documented, narrower scope). The one member of this
+//!   family that stays an accepted run-time success rather than a boundary
+//!   failure at all, the `range` operand, left the inventory in #147
+//!   (D-179) and was never a `T0051` candidate; see
+//!   `tests/issue_147_bigint_range.rs` for its own success-path coverage.
 //! * **Still-open bigint operations.** `*`, `//`, `%`, `**`, `/`, `int`->`float`
 //!   conversion, and comparison remain accepted failure boundaries; before
 //!   #148 they were unreachable from a literal, so their current behavior is
-//!   pinned here too.
+//!   pinned here too. None of these are D-141 boundary *positions* (they are
+//!   ordinary arithmetic/comparison operators), so #618 does not touch them.
 
 use pycc_scratch::ScratchDir;
 use std::io::Write;
@@ -77,63 +88,105 @@ fn assert_runtime_abort(case: &str, source: &str, message: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// Newly reachable D-141 runtime `int` boundaries.
+// D-141 runtime `int` boundaries -- now caught at compile time by #618
+// (T0051, D-207) for every position that resolves syntactically in
+// `pycc_hir`.
 // ---------------------------------------------------------------------------
 
+/// Compiles `source` through `pycc check` and asserts it is rejected with a
+/// spanned `T0051` diagnostic and a non-zero exit -- the #618 (D-207)
+/// compile-time catch point that replaced the run-time
+/// `pycc_rt_int_untag_checked` abort these same fixtures used to hit before
+/// #618. `tests/int_literal_boundary_check.rs` covers the complementary
+/// end-to-end `check`+`build` shape and the still-unaffected arithmetic
+/// case; this helper stays scoped to `check`'s own exit code and message,
+/// mirroring `assert_runtime_abort` above.
+fn assert_compile_time_boundary_rejection(case: &str, source: &str) {
+    let dir = ScratchDir::new(&format!("issue148_{case}")).expect("failed to create scratch dir");
+    let src = dir.join("case.py");
+    std::fs::File::create(&src)
+        .unwrap()
+        .write_all(source.as_bytes())
+        .unwrap();
+
+    let check = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !check.status.success(),
+        "pycc check should reject {case} at compile time (#618/T0051)"
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(
+        text.contains("T0051"),
+        "{case} should report T0051, got: {text}"
+    );
+}
+
 #[test]
-fn an_oversized_literal_as_a_container_value_hits_the_runtime_int_boundary() {
+fn an_oversized_literal_as_a_container_value_is_rejected_at_compile_time() {
     // `list_validate_element` -- the container-value guard family.
-    assert_runtime_abort(
+    assert_compile_time_boundary_rejection(
         "list_element",
         &format!("x = [{OVERSIZED}]\nprint(len(x))\n"),
-        BOUNDARY_MESSAGE,
     );
 }
 
 #[test]
-fn an_oversized_literal_appended_to_a_list_hits_the_runtime_int_boundary() {
-    assert_runtime_abort(
+fn an_oversized_literal_appended_to_a_list_is_rejected_at_compile_time() {
+    assert_compile_time_boundary_rejection(
         "list_append",
         &format!("x = [1]\nx.append({OVERSIZED})\nprint(len(x))\n"),
-        BOUNDARY_MESSAGE,
     );
 }
 
 #[test]
-fn an_oversized_literal_added_to_a_set_hits_the_runtime_int_boundary() {
-    assert_runtime_abort(
+fn an_oversized_literal_added_to_a_set_is_rejected_at_compile_time() {
+    assert_compile_time_boundary_rejection(
         "set_add",
         &format!("x = {{1}}\nx.add({OVERSIZED})\nprint(len(x))\n"),
-        BOUNDARY_MESSAGE,
     );
 }
 
 #[test]
-fn an_oversized_literal_as_a_comprehension_element_hits_the_runtime_int_boundary() {
-    assert_runtime_abort(
+fn an_oversized_literal_as_a_comprehension_element_is_rejected_at_compile_time() {
+    assert_compile_time_boundary_rejection(
         "listcomp_element",
         &format!("x = [{OVERSIZED} for i in range(2)]\nprint(len(x))\n"),
-        BOUNDARY_MESSAGE,
     );
 }
 
 #[test]
-fn an_oversized_literal_as_a_list_index_hits_the_runtime_int_boundary() {
+fn an_oversized_literal_as_a_list_index_is_rejected_at_compile_time() {
     // `list_untag_index` -- the index/count guard family. CPython raises
-    // `IndexError` here, so this is a divergence in kind, not a lost
-    // capability.
-    assert_runtime_abort(
+    // `IndexError` here, so this remains a divergence in kind from CPython,
+    // just caught one phase earlier than before #618.
+    assert_compile_time_boundary_rejection(
         "list_index",
         &format!("x = [1, 2, 3]\nprint(x[{OVERSIZED}])\n"),
-        BOUNDARY_MESSAGE,
     );
 }
 
 #[test]
-fn an_oversized_literal_as_a_str_repeat_count_hits_the_runtime_int_boundary() {
+fn an_oversized_literal_as_a_str_literal_repeat_count_is_rejected_at_compile_time() {
+    assert_compile_time_boundary_rejection("str_repeat_count", &format!("print(\"ab\" * {OVERSIZED})\n"));
+}
+
+#[test]
+fn an_oversized_literal_as_a_str_variable_repeat_count_still_hits_the_runtime_int_boundary() {
+    // D-207's deliberately narrowed 13th position: `pycc_hir` has no type
+    // information at lowering time, so it cannot tell a `str`-typed
+    // *variable* operand from any other operand here. Unlike the string
+    // *literal* case just above, this one still compiles and hits the same
+    // run-time abort D-178 always described -- an accepted, documented gap.
     assert_runtime_abort(
-        "str_repeat_count",
-        &format!("print(\"ab\" * {OVERSIZED})\n"),
+        "str_repeat_count_variable",
+        &format!("s = \"ab\"\nprint(s * {OVERSIZED})\n"),
         BOUNDARY_MESSAGE,
     );
 }
