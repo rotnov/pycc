@@ -453,20 +453,33 @@ mod tests {
         let lock_path = root.join(LOCK_FILE_NAME);
         std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o000))
             .expect("chmod 000 should succeed");
+        // uid 0 (e.g. a root container) bypasses permission checks, so the
+        // mode-000 fixture cannot produce the denial there — the root then
+        // legitimately reads as stale-and-dead and is deleted. Probe once
+        // and *derive* the expected counts from it, branch-free: an `if`
+        // on privilege would leave its never-taken edge as a permanently
+        // uncovered region on the (single-uid, non-root) coverage platform.
+        let privileged = File::open(&lock_path).is_ok();
 
         let report = sweep_stale_roots_in(&arena, &roomy_config(), now_plus_hours(2));
 
         assert_eq!(report.matched, 1);
         assert_eq!(
-            report.errors, 1,
+            report.errors,
+            usize::from(!privileged),
             "an unopenable lock file must be a conservative skip"
         );
-        assert_eq!(report.deleted, 0);
-        assert!(root.is_dir(), "the root must survive the skip");
+        assert_eq!(report.deleted, usize::from(privileged));
+        assert_eq!(
+            root.is_dir(),
+            !privileged,
+            "the root must survive the skip"
+        );
 
-        // Restore permissions so the arena's own Drop can clean up.
-        std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o644))
-            .expect("restoring permissions should succeed");
+        // Restore permissions so the arena's own Drop can clean up. Under
+        // uid 0 the root is already gone and this fails; that is fine —
+        // there is nothing left to restore.
+        let _ = std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o644));
     }
 
     #[cfg(unix)]
@@ -637,16 +650,26 @@ mod tests {
         std::fs::create_dir(blocker.join("child")).expect("blocker child should be creatable");
         std::fs::set_permissions(&blocker, std::fs::Permissions::from_mode(0o000))
             .expect("chmod 000 should succeed");
+        // uid 0 bypasses permission checks, so the mode-000 blocker cannot
+        // make `remove_dir_all` fail there — the deletion then legitimately
+        // succeeds. Same branch-free probe-and-derive shape as the
+        // probe-error test above.
+        let privileged = std::fs::read_dir(&blocker).is_ok();
 
         let mut report = SweepReport::default();
         delete_root(&root, &mut report);
 
-        assert_eq!(report.errors, 1, "an undeletable tree must count as an error");
-        assert_eq!(report.deleted, 0);
+        assert_eq!(
+            report.errors,
+            usize::from(!privileged),
+            "an undeletable tree must count as an error"
+        );
+        assert_eq!(report.deleted, usize::from(privileged));
 
-        // Restore permissions so the arena's own Drop can clean up.
-        std::fs::set_permissions(&blocker, std::fs::Permissions::from_mode(0o755))
-            .expect("restoring permissions should succeed");
+        // Restore permissions so the arena's own Drop can clean up. Under
+        // uid 0 the whole root is already gone and this fails; that is
+        // fine — there is nothing left to restore.
+        let _ = std::fs::set_permissions(&blocker, std::fs::Permissions::from_mode(0o755));
     }
 
     #[test]

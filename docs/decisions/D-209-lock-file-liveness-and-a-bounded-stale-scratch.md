@@ -113,6 +113,26 @@ status: accepted
     filesystem could lose its scratch root to another pycc process
     sweeping the same temp directory. Accepted: the consequence is bounded
     to one build's temp artifacts and the probability is compound-low.
+  - *Entry-budget starvation in a foreign-crowded temp directory.* Each
+    pass examines only the first `entry_budget` (10,000) `read_dir`
+    entries, so ≥ 10,000 persistent non-pycc entries that all enumerate
+    ahead of every pycc root would starve those roots permanently — the
+    sweep no-ops there, including for pycc's own future leaks. Accepted
+    without a cursor or a randomized start: a persistent cursor is the
+    same shared-mutable-state mechanism as the stamp file rejected in the
+    alternatives below; counting only matched candidates against the
+    budget merely moves the threshold (to the ~130k entries the 250 ms
+    cap covers) while raising the recurring worst-case latency from
+    ~20 ms to the full cap on every `build`/`run` in exactly the
+    directories the sweep helps least; and on the dominant filesystems
+    `read_dir` order is hash-/B-tree-derived, so pycc roots interleave
+    with foreign entries rather than clustering behind them — any
+    deletable root inside the scanned prefix drains, and its deletion
+    migrates later entries forward across passes, making stable
+    whole-directory starvation compound-low. The failure mode is the
+    pre-sweep baseline (nothing deleted, never a wrong deletion), and
+    Part 5 (#785) owns the operational guidance for temp directories the
+    automatic sweep cannot serve.
   - *Pre-Part-1 ad hoc names* (e.g. `pycc_codegen_test_{label}_{pid}`) do
     not match the full format and are never deleted — unattributable
     entries are out of the sweep's authority; Part 5 (#785) owns the

@@ -33,6 +33,31 @@ never a merge gate.
 
 ---
 
+## 2026-08-29 — A `#[cfg]`-split test bound a variable only one platform's branch used; caught by CI's windows leg, not locally
+
+What happened: PR #835's `a_stale_locked_format_root_past_the_floor_is_deleted`
+bound `root` but used it only inside the `#[cfg(not(windows))]` assertion
+block, so the `windows-latest` CI leg failed the whole run with
+`unused_variables` under `-D warnings` (fixed in `86f8cb0e`) — a full CI
+round trip for a defect a local check catches in seconds. This event
+happened after the events of the review-fix-round entry below.
+
+Root cause: the local gate list exercised only the host target. Code whose
+platform halves differ (`#[cfg(windows)]`/`#[cfg(not(windows))]`) compiles
+to a different binding-usage set per target, and lints like
+`unused_variables` are per-target verdicts a host-only build cannot render.
+
+What fixed it: `RUSTFLAGS="-D warnings" cargo check --tests -p pycc_scratch
+--target x86_64-pc-windows-msvc` locally (the target is installed here; the
+*workspace-wide* windows check fails environmentally in `alloca`'s C build
+script with no MSVC C compiler on a mac host, so scope the check to the
+touched crates), then the one-line fix.
+
+Lesson: when a change adds or edits `#[cfg(windows)]`/`#[cfg(not(windows))]`
+branches, run a `-D warnings` `cargo check --tests` for the touched crates
+against `x86_64-pc-windows-msvc` before pushing — a host-only green gate
+list does not cover per-target lint verdicts.
+
 ## 2026-08-29 — Review fix round swept the reviewer's enumerated sites, not the defective phrase; cost one extra review round
 
 What happened: the #784 deep-review round 1 flagged that the

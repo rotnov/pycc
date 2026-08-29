@@ -4,8 +4,10 @@
 
 Implementation of issue #784 is complete on branch
 `issue-784-stale-scratch-cleanup`, based on `origin/main` at `ffe6fe7f`
-(the Part 3 merge). This entry lands in the pull request that delivers the
-work (D-192). At snapshot time the only other open pull request was #833
+(the Part 3 merge); `origin/main`'s later `bad27d1c` was merged into the
+branch in `ad04b252` with the full gate set re-run green on the merged
+tree. This entry lands in the pull request that delivers the work
+(D-192). At snapshot time the only other open pull request was #833
 (bigint temporary on the exception-unwinding edge) — no file overlap, but
 it claims decision number D-208, which is why this work's entry is D-209.
 
@@ -89,6 +91,24 @@ fix-extent lesson in `docs/AGENT_RETROSPECTIVE.md` (`16a7cd1d`), shipping
 no mechanical artefact — review-tier was confirmed as the catching rung.
 Every gate above was re-run green on the final tree after each fix
 commit.
+
+Round 3 (external, PR #835): after CI went green on `86f8cb0e` (a
+one-line windows `unused_variables` fix — lesson recorded in
+`docs/AGENT_RETROSPECTIVE.md`), the Codex reviewer bot left three
+threads. P1 "record the sweep in the roadmap" — verified against the
+CLI row's granularity convention and fixed: a sweep sentence added to
+`docs/ROADMAP.md`'s CLI row, offset for the llms.txt aggregate budget
+by condensing the row's D-183 `--target-dir` deferral note to its
+conclusion plus pointers (#639, CLI_SPEC's Environment section). P2
+"rotate scans beyond the entry-budget prefix" — resolved as a recorded
+accepted limitation after an independent design-review consultation
+(D-127): a new foreign-crowded-directory starvation bullet in D-209's
+accepted-edge-cases section records the reasoning; no code change. P2
+"permission-denial tests fail under uid 0" — fixed with a
+probe-and-derive pattern in both tests: expected counts are computed
+from the probe (`usize::from(!privileged)`), branch-free, because a
+conditional on privilege leaves a permanently uncovered region on the
+single-uid coverage platform.
 
 ## Follow-ups
 
