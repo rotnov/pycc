@@ -21,7 +21,7 @@
 
 mod sweep;
 
-pub use sweep::{sweep_stale_roots, sweep_stale_roots_in, SweepConfig, SweepReport};
+pub use sweep::{sweep_stale_roots, SweepReport};
 
 use std::fs::File;
 use std::io;
@@ -31,8 +31,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Name of the liveness-marker file [`ScratchDir::new`] creates inside every
-/// fresh scratch root, shared with [`sweep_stale_roots_in`]'s probe and
-/// with tests that build sweep fixtures by hand.
+/// fresh scratch root, shared with the probe behind [`sweep_stale_roots`]
+/// and with tests that build sweep fixtures by hand.
 ///
 /// The creating process holds an exclusive OS advisory lock
 /// ([`File::lock`]) on this file for the lifetime of the [`ScratchDir`]
@@ -81,7 +81,7 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 ///   same-process collision even when two calls land on the same nanosecond.
 ///
 /// This field order and format are a stability commitment with a real
-/// consumer since Part 4 (#784): [`sweep_stale_roots_in`] parses a
+/// consumer since Part 4 (#784): [`sweep_stale_roots`] parses a
 /// directory name back into its fields without a live handle and treats a
 /// full-format match as proof of pycc ownership. Changing the format is a breaking
 /// change for that consumer. Note the parsed numbers are used for

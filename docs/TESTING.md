@@ -1220,8 +1220,9 @@ own root, `pycc build`/`pycc run` (via `src/main.rs::create_scratch`) run
 OS temp directory that deletes only entries which fully parse as
 `pycc_{category}_{pid}_{nanos}_{seq}`, are real directories (not
 symlinks), exceed the age floor for their class (1 h for lock-bearing
-roots, 24 h for pre-Part-4 lockless ones, measured against the
-directory's mtime), and hold no live lock — under budgets (10,000
+roots, 24 h for roots without an observable marker: pre-Part-4 legacy
+ones, or a root killed before its lock file was created; both measured
+against the directory's mtime), and hold no live lock — under budgets (10,000
 entries / 512 deletions / 250 ms) that bound the caller's added latency.
 The sweep's regression tests live in three places:
 `crates/pycc_scratch/src/sweep.rs`'s unit tests cover the ownership-parse

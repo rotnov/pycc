@@ -19,7 +19,9 @@
 //!     remove the link anyway),
 //! (c) exceeds the age floor for its class ([`SweepConfig::min_age_locked`]
 //!     for roots carrying a [`LOCK_FILE_NAME`] marker,
-//!     [`SweepConfig::min_age_lockless`] for legacy roots without one), and
+//!     [`SweepConfig::min_age_lockless`] for roots without an observable
+//!     one — pre-Part-4 legacy roots, or a Part-4 root whose creator was
+//!     killed before its lock file was created), and
 //! (d) holds no live lock: a successful [`File::try_lock`] on the marker is
 //!     kernel-backed proof the creator is dead, immune to PID reuse and
 //!     released even on SIGKILL.
@@ -51,7 +53,7 @@ use crate::LOCK_FILE_NAME;
 /// pass around the [`SweepConfig::time_budget`] cap and a typical pass on a
 /// clean temp directory in the low milliseconds.
 #[derive(Debug, Clone)]
-pub struct SweepConfig {
+pub(crate) struct SweepConfig {
     /// Maximum directory entries examined before the pass stops
     /// (~1.9 µs/entry measured, so the default scans in ~20 ms).
     pub entry_budget: usize,
@@ -66,8 +68,9 @@ pub struct SweepConfig {
     /// lock is the liveness source; this floor only covers the microsecond
     /// create-dir-to-lock window and mid-`Drop` races.
     pub min_age_locked: Duration,
-    /// Minimum age for legacy roots without a marker (produced by
-    /// pre-Part-4 build artifacts), whose liveness cannot be probed.
+    /// Minimum age for roots without an observable marker, whose liveness
+    /// cannot be probed: pre-Part-4 legacy roots, or a Part-4 root whose
+    /// creator was killed between `create_dir` and lock-file creation.
     pub min_age_lockless: Duration,
 }
 
@@ -107,7 +110,7 @@ pub struct SweepReport {
     pub budget_exhausted: bool,
 }
 
-/// Sweeps the OS temp directory with [`SweepConfig::default`] and the
+/// Sweeps the OS temp directory with `SweepConfig::default` and the
 /// current time. This is the production entry point, called (and its report
 /// discarded) by `pycc build`/`pycc run` before they create their own
 /// scratch root. Silent and best-effort by design: it never affects the
@@ -128,7 +131,11 @@ pub fn sweep_stale_roots() -> SweepReport {
 ///
 /// Never errors: an unreadable `root` is reported as `errors: 1` in the
 /// returned [`SweepReport`], matching the best-effort contract.
-pub fn sweep_stale_roots_in(root: &Path, config: &SweepConfig, now: SystemTime) -> SweepReport {
+pub(crate) fn sweep_stale_roots_in(
+    root: &Path,
+    config: &SweepConfig,
+    now: SystemTime,
+) -> SweepReport {
     let start = Instant::now();
     let mut report = SweepReport::default();
     let entries = match std::fs::read_dir(root) {
@@ -197,8 +204,9 @@ pub fn sweep_stale_roots_in(root: &Path, config: &SweepConfig, now: SystemTime) 
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // Lockless legacy root (pre-Part-4 binaries): liveness
-                // cannot be probed, so only the longer age floor applies.
+                // No observable marker (a pre-Part-4 legacy root, or a
+                // Part-4 root killed before its lock file was created):
+                // liveness cannot be probed, so the longer floor applies.
                 if age >= config.min_age_lockless {
                     delete_root(&path, &mut report);
                 } else {

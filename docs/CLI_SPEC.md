@@ -248,13 +248,6 @@ this row used to name is closed for good as of PR-5 -- see D-072's own
 Context) (matches process exit conventions per-OS). Unsupported HIR input
 to `check` is a normal exit-1 diagnostic, not exit 101.
 
-Before creating that scratch directory, `build` and `run` also
-opportunistically remove provably-stale pycc-owned scratch roots left in
-the same temp directory by dead pycc processes — silently, bounded, and
-best-effort: the sweep never changes a command's output, diagnostics, or
-exit code (#784; see `pycc_scratch`'s `sweep` module documentation for the
-exact staleness conditions and budgets).
-
 Named D-072 boundaries include, each recognizable by its exact message.
 This list is maintained by hand and is **not** guaranteed exhaustive -- a
 `pycc_codegen: ... is not supported yet` panic that names a construct is a
@@ -291,6 +284,13 @@ part of the CLI contract.
 `pycc check` reports all supplied-file failures. If different files produce
 both compile errors and unreadable-input errors, it exits `2`; otherwise any
 compile error exits `1`.
+
+Before `build` and `run` create their per-invocation scratch directory in
+the system temp directory, they also opportunistically remove
+provably-stale pycc-owned scratch roots left there by dead pycc processes
+— silently, bounded, and best-effort: the sweep never changes a command's
+output, diagnostics, or exit code (#784; see `pycc_scratch`'s `sweep`
+module documentation for the exact staleness conditions and budgets).
 
 ## Diagnostics output contract
 
