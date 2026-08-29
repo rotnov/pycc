@@ -234,7 +234,10 @@ rejected as an invalid invocation when combined with any explicit
 `0` ok (including `pycc explain` on a recognized code, in either
 `--format`) · `1` compile errors (including `C0001` version-capability gaps)
 · `2` bad invocation, unreadable input, a toolchain/environment failure such
-as a host linker driver that cannot be started (reported as an actionable
+as a host linker driver that cannot be started or an unusable system temp
+directory in which `build`/`run` cannot create their scratch directory —
+checked before any frontend work, so a bad temp directory fails fast
+(reported as an actionable
 `error:` diagnostic, never a panic), or an unrecognized `pycc explain` code
 (always a plain stderr message, regardless of `--format` -- see below)
 · `101` compiled program panicked/uncaught

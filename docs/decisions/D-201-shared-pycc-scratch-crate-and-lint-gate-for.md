@@ -132,6 +132,18 @@ status: accepted
   the same pull request. The allowlist now holds exactly one entry:
   `src/main.rs`'s two production call sites, owned by Part 3 (#783).
 
+  Update (2026-08-29): Part 3 (#783) is complete. `pycc_scratch` moved
+  from the root manifest's `[dev-dependencies]` to `[dependencies]` (the
+  root dependency this decision anticipated Part 3 adding; D-203's tail
+  filter tolerates the removal symmetrically), and `src/main.rs`'s two
+  production call sites now place their artifacts inside caller-owned
+  `ScratchDir`s — `main()`'s `Command::Build` arm and `run()` each create
+  one and inject the temp-object path into `try_build`, and an unusable
+  temp directory fails fast as a CLI_SPEC.md exit-2 environment error.
+  The `ALLOWLIST` is now **empty**, this decision's completeness signal
+  for #779's Parts 2/3. Parts 4 (#784, bounded stale-root cleanup) and 5
+  (#785, `TMPDIR` operational guidance) remain open under #779.
+
   **Known, accepted scope limitation**: the lint is a textual pattern match,
   not a data-flow analysis. A caller that splits the expression across a
   binding (`let dir = std::env::temp_dir(); ... dir.join(...)`) evades it
