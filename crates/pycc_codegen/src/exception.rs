@@ -6,6 +6,18 @@ use std::cell::RefCell;
 pub(super) struct ExceptionCodegenState<'ctx> {
     pub(super) reraise_values: RefCell<Vec<PointerValue<'ctx>>>,
     pub(super) targets: RefCell<Vec<inkwell::basic_block::BasicBlock<'ctx>>>,
+    /// Stack of already-evaluated, not-yet-released `Ty::Int` birth
+    /// references that a sibling expression's evaluation might orphan by
+    /// raising before the owning node's own release call is reached
+    /// (#638, D-208). `guard_statement_effects` walks a snapshot of this
+    /// stack when it routes an exception edge away from the normal
+    /// fallthrough, releasing each entry exactly once. Every push has a
+    /// matching pop on the fallthrough path (see each call site's own
+    /// comment); the stack is otherwise empty, in particular at every
+    /// statement boundary and at every guard site the D-084/D-140 nbody
+    /// hot loop reaches, which is what keeps that loop's codegen
+    /// unchanged (see `guard_statement_effects`'s own doc comment).
+    pub(super) pending_int_releases: RefCell<Vec<IntValue<'ctx>>>,
 }
 
 impl ExceptionCodegenState<'_> {
@@ -13,6 +25,7 @@ impl ExceptionCodegenState<'_> {
         Self {
             reraise_values: RefCell::new(Vec::new()),
             targets: RefCell::new(Vec::new()),
+            pending_int_releases: RefCell::new(Vec::new()),
         }
     }
 }
@@ -154,6 +167,29 @@ pub(super) fn block_always_terminates(body: &[MirStmt]) -> bool {
 
 /// Stops expression/statement evaluation before another effect can be
 /// committed when a Python exception is pending.
+///
+/// #638 (D-208): when `rt.exceptions.pending_int_releases` is non-empty, an
+/// enclosing node (never this call site's own operand -- see each push
+/// site's own comment) has already evaluated a fresh `Ty::Int` birth
+/// reference that a sibling's evaluation, reached from here, might orphan by
+/// raising before the enclosing node's own release call is textually
+/// reached. In that case the exception edge is routed through an
+/// intermediate `effect_exc_unwind` block that releases a *snapshot* of the
+/// stack before branching to `exception_target`, instead of branching there
+/// directly.
+///
+/// The `is_empty()` check below is a codegen-time (Rust-side) read of the
+/// `RefCell`'s current length while walking the MIR tree -- it costs nothing
+/// in the emitted binary either way, and it is what keeps this change from
+/// affecting the D-084/D-140 nbody hot loop's own codegen: that loop's
+/// arithmetic is entirely smallint, so it never pushes onto this stack, and
+/// every guard site it reaches takes the empty-stack branch below, emitting
+/// exactly the same two-block shape this function has always emitted. Do
+/// not simplify this to unconditionally emit `effect_exc_unwind`: doing so
+/// would add an extra empty block and an extra unconditional branch to
+/// every guard site in the program, including every one in that hot loop,
+/// which is precisely the throughput regression `bigint_rc.rs`'s own guard
+/// design exists to avoid.
 pub(super) fn guard_statement_effects<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -182,9 +218,32 @@ pub(super) fn guard_statement_effects<'ctx>(
         .expect("build_int_compare should not fail");
     let function = builder.get_insert_block().unwrap().get_parent().unwrap();
     let continuation = context.append_basic_block(function, "effect_exc_cont");
+    let pending = rt.exceptions.pending_int_releases.borrow();
+    if pending.is_empty() {
+        drop(pending);
+        builder
+            .build_conditional_branch(has_exc, exception_target, continuation)
+            .expect("build_conditional_branch should guard a statement effect");
+        builder.position_at_end(continuation);
+        return;
+    }
+    // Snapshot rather than borrow across block emission: nothing below
+    // mutates the stack, but cloning up front keeps the borrow scoped to
+    // this one line, matching this file's existing style for `targets`/
+    // `reraise_values` snapshots elsewhere.
+    let snapshot: Vec<IntValue<'ctx>> = pending.clone();
+    drop(pending);
+    let unwind_bb = context.append_basic_block(function, "effect_exc_unwind");
     builder
-        .build_conditional_branch(has_exc, exception_target, continuation)
+        .build_conditional_branch(has_exc, unwind_bb, continuation)
         .expect("build_conditional_branch should guard a statement effect");
+    builder.position_at_end(unwind_bb);
+    for word in snapshot {
+        emit_bigint_refcount_call(context, builder, rt, word, BigIntRefcount::Release);
+    }
+    builder
+        .build_unconditional_branch(exception_target)
+        .expect("build_unconditional_branch should not fail for a fresh unwind block");
     builder.position_at_end(continuation);
 }
 

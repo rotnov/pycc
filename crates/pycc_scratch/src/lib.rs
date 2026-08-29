@@ -313,6 +313,14 @@ mod tests {
         // created at all, but assert the specific prefix is absent too, so
         // a future implementation change that silently swallowed the error
         // and created a sanitized directory anyway would also be caught.
+        //
+        // A sentinel entry keeps the `read_dir` scan below from ever running
+        // over zero entries: under a freshly isolated `TMPDIR` (e.g. this
+        // repository's sandboxed CI coverage job), `std::env::temp_dir()` can
+        // otherwise be empty at this point, which would make the closures
+        // below never execute and vacuously pass without ever comparing a
+        // real entry against `prefix`.
+        let _sentinel = ScratchDir::new("lib_scan_sentinel").expect("sentinel scratch dir");
         let temp_dir = std::env::temp_dir();
         let prefix = format!("pycc_{category}_");
         let leaked = std::fs::read_dir(&temp_dir)
