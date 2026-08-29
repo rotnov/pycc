@@ -18211,6 +18211,42 @@ fn subclassing_a_monomorphized_generic_specialization_is_already_rejected_pre_ex
 }
 
 #[test]
+fn dataclass_field_type_conflict_across_mro_is_resolved_by_hir_lowering_not_t0052() {
+    // Round-2 deep-review finding on this change: the doc comment on
+    // `check_incompatible_attribute_redeclarations` asserts that a
+    // `@dataclass` hierarchy's own field-name conflicts are already
+    // resolved by `pycc_hir::class`'s `merged_fields`/`field_name_present`
+    // dedup (keeping the least-derived declaration while walking the MRO
+    // least-derived-first) before this check ever runs, so its own MRO
+    // walk can never observe a divergent pair for a dataclass. This test
+    // pins that claim against the real parse/lower/`check_and_resolve`
+    // pipeline rather than resting on the doc comment's citation alone:
+    // Base and Derived each declare a field `v` with a *different* type,
+    // so if `check_incompatible_attribute_redeclarations` ran against
+    // each class's own un-merged declaration this would be rejected as
+    // T0052 -- but it must type-check, keeping Base's (least-derived)
+    // `int` type on both.
+    let hir = check_source(
+        "from dataclasses import dataclass\n@dataclass\nclass Base:\n    v: int\n@dataclass\nclass Derived(Base):\n    v: str\nd = Derived(1)\nprint(d.v)\n",
+    )
+    .expect("a dataclass field-name conflict must be resolved by HIR merge, not rejected by T0052");
+    let (_, derived_def) = hir
+        .class_defs
+        .iter()
+        .find(|(name, _)| name == "Derived")
+        .expect("Derived must be a registered class");
+    assert_eq!(
+        derived_def
+            .attrs
+            .iter()
+            .find(|(name, _)| name == "v")
+            .map(|(_, ty)| ty.clone()),
+        Some(Ty::Int),
+        "the merge must keep Base's least-derived `int` type for `v`, discarding Derived's own `str` redeclaration"
+    );
+}
+
+#[test]
 fn infer_signature_redefinition_is_rejected_regardless_of_body_evidence() {
     // Issue #402: the rejection is structural, based on each
     // definition's raw pre-resolution shape -- not on what the solver
