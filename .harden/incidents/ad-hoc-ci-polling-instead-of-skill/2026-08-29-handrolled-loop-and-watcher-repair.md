@@ -52,7 +52,9 @@ to bypass in place.
    feeds back to the model, per this topic's first entry) any Bash command
    combining a `gh` CI query (`gh pr checks|view`,
    `gh run/api ...watch|runs|check-runs|status`) with a `while`/`until`
-   loop and a `sleep`; anything invoking `ci-watch.sh` is allowlisted.
+   loop and a `sleep`; a genuine `ci-watch.sh` invocation is allowlisted
+   (matched at a command position after comment stripping, so a loop
+   cannot self-allowlist by mentioning the name in a comment).
    Deliberately not repo-committed: D-023/D-025 make shared hook wiring a
    registered-contract affair with a security review — the repo-side fix
    that travels with the project is the watcher repair below. Complements
@@ -65,8 +67,16 @@ to bypass in place.
    keeps polling), and the `READY`/`BLOCKED` verdicts require the same
    qualifying observation on two consecutive polls, so a momentary
    all-complete gap between chained workflows cannot resolve the watch
-   early. `CHECK FAILED`, `MERGED`/`CLOSED`, `CONFLICTS`, and `STALE` stay
-   immediate — those states do not regress on their own.
+   early. When the base branch's required status contexts are readable,
+   the verdicts additionally require every required context to be present
+   and completed in the rollup (closing gaps longer than two polls), and a
+   head change (new push) resets the confirmation state. `CHECK FAILED`,
+   `MERGED`/`CLOSED`, `CONFLICTS`, and `STALE` stay
+   immediate — those states do not regress on their own. The fix lands
+   identically in both platform copies
+   (`.claude/skills/gha-watch-ci-pr/scripts/` and
+   `.agents/skills/gha-watch-ci-pr/scripts/`), byte-identical mirrors by
+   convention.
 
 Discovery ran before building: external skills covering this class
 (wait-for-ci / watch-ci variants) were found and rejected — the class is
@@ -91,10 +101,11 @@ first entry).
 
 `verify: manual`, both artefacts, both directions:
 
-- **Hook:** 2 violator payloads (including the exact incident loop) →
-  exit 2 with the redirect message; 5 clean payloads (one-shot
-  `gh pr checks`, the sanctioned `ci-watch.sh` invocation, a log-file
-  `until` loop, a non-Bash tool call, malformed JSON) → exit 0. Wiring
+- **Hook:** 3 violator payloads (including the exact incident loop and a
+  comment-evasion variant) → exit 2 with the redirect message; 5 clean
+  payloads (one-shot `gh pr checks`, the sanctioned `ci-watch.sh`
+  invocation, a log-file `until` loop, a non-Bash tool call, malformed
+  JSON) → exit 0. Wiring
   proven end-to-end live: the first in-session Bash smoke test after
   installation was itself intercepted and denied by the hook.
 - **Watcher:** stub-`gh` sequences through `test-ci-watch.sh`

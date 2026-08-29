@@ -1,0 +1,1 @@
+{"tool_name": "Bash", "tool_input": {"command": "while true; do gh pr checks 831 -R rotnov/pycc; sleep 30; done # ci-watch.sh"}}

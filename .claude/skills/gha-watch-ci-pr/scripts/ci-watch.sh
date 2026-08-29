@@ -23,7 +23,14 @@ set -eu
 # it can recur if the rollup empties again later. The READY and BLOCKED verdicts
 # additionally require the same qualifying observation on two consecutive
 # polls, so a momentary all-complete gap before the next workflow's checks
-# are created cannot resolve the watch early. CHECK FAILED, MERGED/CLOSED,
+# are created cannot resolve the watch early. When the base branch's
+# required status contexts are readable (they may not be, e.g. without
+# push access or branch protection), the verdicts are further bound to
+# them: no READY/BLOCKED while any required context is still absent from
+# the rollup, which closes the gap even when a chained workflow takes
+# longer than two polls to register. A head change (new push) resets the
+# confirmation state, since everything observed so far described the old
+# head. CHECK FAILED, MERGED/CLOSED,
 # CONFLICTS, and STALE remain immediate -- those states do not regress on
 # their own.
 #
@@ -77,7 +84,7 @@ poll_once() {
   for pr in $prs; do
     is_resolved "$pr" && continue
 
-    data=$(gh pr view "$pr" -R "$repo" --json state,mergeStateStatus,mergeable,statusCheckRollup 2>&1) || {
+    data=$(gh pr view "$pr" -R "$repo" --json state,mergeStateStatus,mergeable,statusCheckRollup,baseRefName,headRefOid 2>&1) || {
       echo "PR #$pr: gh pr view failed: $data"
       continue
     }
@@ -88,6 +95,15 @@ poll_once() {
       mark_resolved "$pr"
       continue
     fi
+
+    head_oid=$(echo "$data" | jq -r '.headRefOid // ""')
+    prev_head=$(cat "$state_dir/head_$pr" 2>/dev/null || echo "")
+    if [ -n "$prev_head" ] && [ "$head_oid" != "$prev_head" ]; then
+      # New push: every observation so far described the old head, so the
+      # verdict confirmation and empty-streak counters start over.
+      rm -f "$state_dir/cand_$pr" "$state_dir/empty_$pr"
+    fi
+    echo "$head_oid" >"$state_dir/head_$pr"
 
     mergeable=$(echo "$data" | jq -r '.mergeable')
     if [ "$mergeable" = "CONFLICTING" ]; then
@@ -136,6 +152,31 @@ poll_once() {
 
     pending=$(echo "$data" | jq -r '[.statusCheckRollup[]? | select(.status!="COMPLETED")] | length')
     if [ "$pending" != "0" ]; then
+      rm -f "$state_dir/cand_$pr"
+      continue
+    fi
+
+    # Bind the verdict to the base branch's required status contexts when
+    # they are readable: during a between-workflow gap a required check can
+    # be "expected" by GitHub but absent from the rollup entirely, and two
+    # consecutive polls of that state look complete. Unreadable protection
+    # (no push access, no branch protection) leaves the cache empty and
+    # skips the binding.
+    if [ ! -f "$state_dir/req_$pr" ]; then
+      base=$(echo "$data" | jq -r '.baseRefName // ""')
+      gh api "repos/$repo/branches/$base/protection/required_status_checks/contexts" 2>/dev/null |
+        jq -r 'if type=="array" then .[] | strings else empty end' 2>/dev/null >"$state_dir/req_$pr" || : >"$state_dir/req_$pr"
+    fi
+    missing=0
+    while IFS= read -r ctx; do
+      [ -n "$ctx" ] || continue
+      present=$(echo "$data" | jq -r --arg n "$ctx" '[.statusCheckRollup[]? | select(.name==$n and .status=="COMPLETED")] | length')
+      if [ "$present" = "0" ]; then
+        missing=1
+        break
+      fi
+    done <"$state_dir/req_$pr"
+    if [ "$missing" = "1" ]; then
       rm -f "$state_dir/cand_$pr"
       continue
     fi

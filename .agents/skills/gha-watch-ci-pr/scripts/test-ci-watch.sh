@@ -67,12 +67,15 @@ case "$output" in
   *) fail "expected stale line, got: $output" ;;
 esac
 
-# --- Fixture 4: a PR that is pending on poll 1, then green+CLEAN on poll 2
+# --- Fixture 4: a PR that is pending on poll 1, then green+CLEAN from
+# poll 2 on -- READY needs the same verdict on two consecutive polls, so it
+# resolves on poll 3
 mkdir -p "$work_dir/fixture-ready/bin"
 counter_file="$work_dir/fixture-ready/counter"
 echo 0 >"$counter_file"
 cat >"$work_dir/fixture-ready/bin/gh" <<EOF
 #!/usr/bin/env sh
+if [ "\$1" = "api" ]; then exit 1; fi
 n=\$(cat "$counter_file")
 n=\$((n + 1))
 echo "\$n" >"$counter_file"
@@ -94,7 +97,7 @@ case "$output" in
   *) fail "expected ready line after two polls, got: $output" ;;
 esac
 poll_count=$(cat "$work_dir/fixture-ready/counter")
-[ "$poll_count" = "2" ] || fail "expected exactly 2 polls before READY, got $poll_count"
+[ "$poll_count" = "3" ] || fail "expected exactly 3 polls before READY (green verdict confirmed on 2 consecutive polls), got $poll_count"
 
 # --- Fixture 5: a merged PR is reported immediately and only once ---------
 mkdir -p "$work_dir/fixture-merged/bin"
@@ -173,5 +176,230 @@ case "$output" in
   *"PR #50: BLOCKED -- all checks completed with no failures, but mergeStateStatus=BLOCKED"*) ;;
   *) fail "expected a terminal BLOCKED line for all-green-but-not-CLEAN checks, got: $output" ;;
 esac
+
+# --- Fixture 9: an empty statusCheckRollup (Actions not started yet) must
+# never be terminal -- regression for the 2026-08-29 false-BLOCKED incident
+# (the pre-fix script resolved BLOCKED on the very first empty poll). The
+# watch must ride through empty and pending polls to READY. --------------
+mkdir -p "$work_dir/fixture-empty-rollup/bin"
+counter_file_9="$work_dir/fixture-empty-rollup/counter"
+echo 0 >"$counter_file_9"
+cat >"$work_dir/fixture-empty-rollup/bin/gh" <<EOF
+#!/usr/bin/env sh
+if [ "\$1" = "api" ]; then exit 1; fi
+n=\$(cat "$counter_file_9")
+n=\$((n + 1))
+echo "\$n" >"$counter_file_9"
+if [ "\$n" -le 2 ]; then
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[]}
+JSON
+elif [ "\$n" = "3" ]; then
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"audit","status":"IN_PROGRESS","conclusion":null}]}
+JSON
+else
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"CLEAN","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"audit","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+fi
+EOF
+chmod +x "$work_dir/fixture-empty-rollup/bin/gh"
+
+output=$(PATH="$work_dir/fixture-empty-rollup/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 51)
+case "$output" in
+  *"PR #51: READY"*) ;;
+  *) fail "expected READY after empty-rollup polls, got: $output" ;;
+esac
+case "$output" in
+  *"BLOCKED --"*) fail "empty statusCheckRollup must never produce a terminal BLOCKED, got: $output" ;;
+  *) ;;
+esac
+poll_count=$(cat "$counter_file_9")
+[ "$poll_count" = "5" ] || fail "expected exactly 5 polls (2 empty, 1 pending, 2 green) before READY, got $poll_count"
+
+# --- Fixture 10: a momentary between-workflow gap (every enumerated check
+# COMPLETED, but the next chained workflow's checks are not created yet and
+# mergeStateStatus is still BLOCKED) must not emit a terminal BLOCKED -----
+mkdir -p "$work_dir/fixture-workflow-gap/bin"
+counter_file_10="$work_dir/fixture-workflow-gap/counter"
+echo 0 >"$counter_file_10"
+cat >"$work_dir/fixture-workflow-gap/bin/gh" <<EOF
+#!/usr/bin/env sh
+if [ "\$1" = "api" ]; then exit 1; fi
+n=\$(cat "$counter_file_10")
+n=\$((n + 1))
+echo "\$n" >"$counter_file_10"
+if [ "\$n" = "1" ]; then
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"ci-gate","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+elif [ "\$n" = "2" ]; then
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"ci-gate","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"audit","status":"IN_PROGRESS","conclusion":null}]}
+JSON
+else
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"CLEAN","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"ci-gate","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"audit","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+fi
+EOF
+chmod +x "$work_dir/fixture-workflow-gap/bin/gh"
+
+output=$(PATH="$work_dir/fixture-workflow-gap/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 52)
+case "$output" in
+  *"PR #52: READY"*) ;;
+  *) fail "expected READY after the between-workflow gap, got: $output" ;;
+esac
+case "$output" in
+  *"BLOCKED --"*) fail "a single-poll all-complete gap must not produce a terminal BLOCKED, got: $output" ;;
+  *) ;;
+esac
+
+# --- Fixture 11: a persistently empty statusCheckRollup surfaces exactly
+# one non-terminal NOTE (after EMPTY_NOTE_POLLS consecutive empty polls),
+# then the watch continues to a real terminal state ----------------------
+mkdir -p "$work_dir/fixture-empty-note/bin"
+counter_file_11="$work_dir/fixture-empty-note/counter"
+echo 0 >"$counter_file_11"
+cat >"$work_dir/fixture-empty-note/bin/gh" <<EOF
+#!/usr/bin/env sh
+if [ "\$1" = "api" ]; then exit 1; fi
+n=\$(cat "$counter_file_11")
+n=\$((n + 1))
+echo "\$n" >"$counter_file_11"
+if [ "\$n" -le 4 ]; then
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[]}
+JSON
+else
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"CLEAN","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"audit","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+fi
+EOF
+chmod +x "$work_dir/fixture-empty-note/bin/gh"
+
+output=$(PATH="$work_dir/fixture-empty-note/bin:$PATH" POLL_INTERVAL=1 EMPTY_NOTE_POLLS=3 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 53)
+case "$output" in
+  *"PR #53: NOTE -- statusCheckRollup still empty after 3 polls"*) ;;
+  *) fail "expected one non-terminal NOTE after 3 empty polls, got: $output" ;;
+esac
+note_count=$(printf '%s\n' "$output" | grep -c "NOTE --" || true)
+[ "$note_count" = "1" ] || fail "expected exactly one NOTE line, got $note_count: $output"
+case "$output" in
+  *"PR #53: READY"*) ;;
+  *) fail "expected the watch to continue past the NOTE to READY, got: $output" ;;
+esac
+
+# --- Fixture 12: the NOTE fires once per consecutive-empty streak -- a
+# second streak after an intervening non-empty poll re-fires it ----------
+mkdir -p "$work_dir/fixture-two-streaks/bin"
+counter_file_12="$work_dir/fixture-two-streaks/counter"
+echo 0 >"$counter_file_12"
+cat >"$work_dir/fixture-two-streaks/bin/gh" <<EOF
+#!/usr/bin/env sh
+if [ "\$1" = "api" ]; then exit 1; fi
+n=\$(cat "$counter_file_12")
+n=\$((n + 1))
+echo "\$n" >"$counter_file_12"
+if [ "\$n" -le 2 ] || { [ "\$n" -ge 4 ] && [ "\$n" -le 5 ]; }; then
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[]}
+JSON
+elif [ "\$n" = "3" ]; then
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"audit","status":"IN_PROGRESS","conclusion":null}]}
+JSON
+else
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"CLEAN","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"audit","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+fi
+EOF
+chmod +x "$work_dir/fixture-two-streaks/bin/gh"
+
+output=$(PATH="$work_dir/fixture-two-streaks/bin:$PATH" POLL_INTERVAL=1 EMPTY_NOTE_POLLS=2 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 54)
+note_count=$(printf '%s\n' "$output" | grep -c "NOTE --" || true)
+[ "$note_count" = "2" ] || fail "expected one NOTE per consecutive-empty streak (2 streaks -> 2 NOTEs), got $note_count: $output"
+case "$output" in
+  *"PR #54: READY"*) ;;
+  *) fail "expected the watch to continue past both streaks to READY, got: $output" ;;
+esac
+
+# --- Fixture 13: verdicts bind to the base branch's required contexts
+# when readable -- a chained required workflow that takes MORE than two
+# polls to register must not let two same-looking completed polls
+# terminate the watch (the two-consecutive-poll rule alone would) --------
+mkdir -p "$work_dir/fixture-required-gap/bin"
+counter_file_13="$work_dir/fixture-required-gap/counter"
+echo 0 >"$counter_file_13"
+cat >"$work_dir/fixture-required-gap/bin/gh" <<EOF
+#!/usr/bin/env sh
+if [ "\$1" = "api" ]; then
+  echo '["ci-gate","audit"]'
+  exit 0
+fi
+n=\$(cat "$counter_file_13")
+n=\$((n + 1))
+echo "\$n" >"$counter_file_13"
+if [ "\$n" -le 2 ]; then
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"ci-gate","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+elif [ "\$n" = "3" ]; then
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"ci-gate","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"audit","status":"IN_PROGRESS","conclusion":null}]}
+JSON
+else
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"CLEAN","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"ci-gate","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"audit","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+fi
+EOF
+chmod +x "$work_dir/fixture-required-gap/bin/gh"
+
+output=$(PATH="$work_dir/fixture-required-gap/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 55)
+case "$output" in
+  *"PR #55: READY"*) ;;
+  *) fail "expected READY once every required context completed, got: $output" ;;
+esac
+case "$output" in
+  *"BLOCKED --"*) fail "a multi-poll gap with a required context still absent must not produce a terminal BLOCKED, got: $output" ;;
+  *) ;;
+esac
+poll_count=$(cat "$counter_file_13")
+[ "$poll_count" = "5" ] || fail "expected exactly 5 polls (2 gap, 1 pending, 2 green) before READY, got $poll_count"
+
+# --- Fixture 14: a head change (new push) resets the verdict confirmation
+# -- the first poll of the new head must not pair with the old head's ----
+mkdir -p "$work_dir/fixture-head-change/bin"
+counter_file_14="$work_dir/fixture-head-change/counter"
+echo 0 >"$counter_file_14"
+cat >"$work_dir/fixture-head-change/bin/gh" <<EOF
+#!/usr/bin/env sh
+if [ "\$1" = "api" ]; then exit 1; fi
+n=\$(cat "$counter_file_14")
+n=\$((n + 1))
+echo "\$n" >"$counter_file_14"
+if [ "\$n" = "1" ]; then
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","headRefOid":"aaa111","statusCheckRollup":[{"name":"ci-gate","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+else
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","headRefOid":"bbb222","statusCheckRollup":[{"name":"ci-gate","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+fi
+EOF
+chmod +x "$work_dir/fixture-head-change/bin/gh"
+
+output=$(PATH="$work_dir/fixture-head-change/bin:$PATH" POLL_INTERVAL=1 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 56)
+case "$output" in
+  *"PR #56: BLOCKED --"*) ;;
+  *) fail "expected a genuine BLOCKED confirmed on the new head, got: $output" ;;
+esac
+poll_count=$(cat "$counter_file_14")
+[ "$poll_count" = "3" ] || fail "expected 3 polls (head change on poll 2 resets confirmation), got $poll_count"
 
 echo "ci-watch.sh: valid"

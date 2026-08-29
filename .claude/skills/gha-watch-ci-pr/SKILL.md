@@ -27,8 +27,11 @@ Emits exactly one line per PR when it reaches a terminal state:
 named), `BLOCKED` (all checks completed with no failures but not CLEAN —
 typically an unresolved required review), or `READY` (all green + CLEAN).
 `READY` and `BLOCKED` are only reported after the same verdict holds on two
-consecutive polls, so a momentary all-complete gap between chained
-workflows cannot resolve the watch early; an empty `statusCheckRollup`
+consecutive polls, and — when the base branch's required status contexts
+are readable — only once every required context is present and completed
+in the rollup, so a gap between chained workflows cannot resolve the watch
+early however long the next workflow takes to register; a head change
+(new push) resets the confirmation. An empty `statusCheckRollup`
 (Actions not started yet) is never terminal — after `$EMPTY_NOTE_POLLS`
 consecutive empty polls (default 30) the script emits one non-terminal
 `NOTE` line (once per consecutive-empty streak, so it can recur after a

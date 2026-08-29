@@ -20,13 +20,20 @@ and the loop died silently. Two artefact halves:
    empty `statusCheckRollup` as terminal (one non-terminal NOTE after
    `EMPTY_NOTE_POLLS` consecutive empty polls, default 30, then keeps
    watching), and `READY`/`BLOCKED` require the same verdict on two
-   consecutive polls. `CHECK FAILED`, `MERGED`/`CLOSED`, `CONFLICTS`, and
-   `STALE` stay immediate. `test-ci-watch.sh` gains fixtures 9–11
-   (empty-rollup regression, between-workflow gap, one-time NOTE) and
-   fixture 4's expected poll count moves 2 → 3 for the confirmation.
-   Semantics prose updated in `gha-watch-ci-pr/SKILL.md` and
+   consecutive polls — additionally bound, when the base branch's required
+   status contexts are readable, to every required context being present
+   and completed in the rollup, with a head change resetting the
+   confirmation. `CHECK FAILED`, `MERGED`/`CLOSED`, `CONFLICTS`, and
+   `STALE` stay immediate. `test-ci-watch.sh` gains fixtures 9–14
+   (empty-rollup regression, between-workflow gap, one-time NOTE,
+   per-streak NOTE re-fire, required-context binding across a multi-poll
+   gap, head-change reset) and fixture 4's expected poll count moves
+   2 → 3 for the confirmation. Both scripts are mirrored byte-identically
+   to `.agents/skills/gha-watch-ci-pr/scripts/` (the Codex copies are real
+   files, not forwarding stubs — a review finding). Semantics prose
+   updated in `gha-watch-ci-pr/SKILL.md` and
    `autopilot-async-monitoring/SKILL.md` (frontmatter descriptions
-   unchanged, so the Codex forwarding stubs are untouched).
+   unchanged).
 2. **Deny hook (machine-local, not in this PR):**
    `~/.claude/hooks/deny-handrolled-ci-poll.py` wired as a
    `PreToolUse`/`Bash` hook in `~/.claude/settings.json` denies commands

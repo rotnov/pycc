@@ -29,13 +29,21 @@ def main() -> int:
     if data.get("tool_name") != "Bash":
         return 0
     cmd = (data.get("tool_input") or {}).get("command") or ""
-    if "ci-watch.sh" in cmd:
-        return 0  # the sanctioned watcher itself (or its tests)
-    polls_ci = re.search(r"\bgh\s+pr\s+(checks|view)\b", cmd) or re.search(
-        r"\bgh\s+(run|api)\s+\S*(watch|runs|check-runs|status)\b", cmd
+    # Sanction only an actual watcher invocation: the token must survive
+    # comment stripping and sit at a command position, so a prohibited loop
+    # cannot self-allowlist by mentioning "ci-watch.sh" in a comment or
+    # argument. Comment stripping is crude (a quoted "#" is treated as a
+    # comment start too), which errs toward denial -- acceptable here.
+    code_only = "\n".join(
+        re.split(r"(?:^|\s)#", line, maxsplit=1)[0] for line in cmd.splitlines()
     )
-    loops = re.search(r"\b(while|until)\b", cmd)
-    sleeps = re.search(r"\bsleep\b", cmd)
+    if re.search(r"(?:^|[\s;&|(`])[\w./~-]*ci-watch\.sh(?=[\s;&|)`\"']|$)", code_only):
+        return 0  # the sanctioned watcher itself (or its tests)
+    polls_ci = re.search(r"\bgh\s+pr\s+(checks|view)\b", code_only) or re.search(
+        r"\bgh\s+(run|api)\s+\S*(watch|runs|check-runs|status)\b", code_only
+    )
+    loops = re.search(r"\b(while|until)\b", code_only)
+    sleeps = re.search(r"\bsleep\b", code_only)
     if polls_ci and loops and sleeps:
         sys.stderr.write(
             "Blocked: hand-rolled CI polling loop. Use the ready-made watcher "
@@ -43,7 +51,7 @@ def main() -> int:
             "`.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh <repo> <pr-number> ...` "
             "(see the autopilot-async-monitoring skill). If the watcher misbehaves, "
             "fix the watcher script in its own change; do not re-implement its loop "
-            "inline. (harden incident: background-child-stop-and-wait)"
+            "inline. (harden incident: ad-hoc-ci-polling-instead-of-skill)"
         )
         return 2
     return 0

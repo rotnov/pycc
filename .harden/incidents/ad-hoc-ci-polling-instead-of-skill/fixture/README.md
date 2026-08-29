@@ -21,6 +21,9 @@ done
 - `violator-1-incident-loop.json` — the exact loop shape from the incident
   (background `while true; gh pr checks; sleep`).
 - `violator-2-until-view.json` — `until gh pr view ...; sleep` variant.
+- `violator-3-comment-evasion.json` — the incident loop with `# ci-watch.sh`
+  appended as a comment; the allowlist matches only a real invocation at a
+  command position after comment stripping, so this is still denied.
 - `clean-1-oneshot-checks.json` — a one-shot status check (legitimate; the
   advisory nudge from this topic's first entry covers it instead).
 - `clean-2-sanctioned-watcher.json` — the sanctioned `ci-watch.sh`
