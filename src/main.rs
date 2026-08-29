@@ -40,7 +40,25 @@ fn main() -> ExitCode {
             // before `try_build` ever runs, is what keeps `run`'s own
             // hardcoded `false` (below) actually final.
             let release = resolve_release_flag(release, Path::new(&path));
-            match try_build(&path, &out, target.as_deref(), release) {
+            // Caller-owned scratch (#783): the temp object `try_build` emits
+            // lives inside this `ScratchDir`, so every exit from this arm --
+            // success and each error path alike -- removes it on drop. The
+            // user's `-o` output is untouched (it is the explicitly
+            // requested persistent output #779 carves out). Created before
+            // any frontend work runs: an unusable system temp directory is
+            // an environment failure that fails fast here (exit 2, like
+            // `init`'s unreadable cwd), before the source is even read.
+            let scratch = match create_scratch("build") {
+                Ok(scratch) => scratch,
+                Err(code) => return code,
+            };
+            match try_build(
+                &path,
+                &out,
+                target.as_deref(),
+                release,
+                &scratch.join("main.o"),
+            ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(code) => code,
             }
@@ -175,18 +193,23 @@ fn check_paths(paths: &[std::path::PathBuf], error_format: ErrorFormat) -> ExitC
     ExitCode::from(exit_code)
 }
 
-/// The process-keyed temporary object path `try_build` emits codegen output
-/// into before linking. Deliberately still a raw `std::env::temp_dir()`
-/// path rather than a `pycc_scratch::ScratchDir`: it is one of this file's
-/// two production scratch sites owned by Part 3 of #779 (#783), together
-/// with `run`'s output path below. A named function (instead of an inline
-/// expression in `try_build`) so that
-/// `try_build_ignores_a_neighboring_release_pycc_toml_when_given_release_false`
-/// can read back the exact object `try_build` wrote without duplicating
-/// this formula as a second raw call site -- and so #783 has exactly one
-/// place to change it.
-fn try_build_obj_path() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()))
+/// Creates the `pycc_scratch::ScratchDir` that holds a command's temporary
+/// build artifacts (#783, Part 3 of #779), mapping a creation failure to
+/// CLI_SPEC.md's exit-2 invocation/environment class -- an unusable system
+/// temp directory is controlled outside pycc, exactly like the unstartable
+/// linker driver below and `init`'s unreadable cwd, and is reported as an
+/// actionable `error:` diagnostic rather than a panic. The returned handle
+/// is caller-owned: `Drop` removes the directory tree (success, error, and
+/// panic-unwind paths alike), so the caller must keep it alive until every
+/// consumer of the files placed inside it -- the linker reading the temp
+/// object, `run`'s child executing from inside it -- has finished.
+fn create_scratch(category: &str) -> Result<pycc_scratch::ScratchDir, ExitCode> {
+    pycc_scratch::ScratchDir::new(category).map_err(|e| {
+        eprintln!(
+            "error: could not create a scratch directory under the system temp directory: {e}"
+        );
+        ExitCode::from(2)
+    })
 }
 
 /// `Ok(())` on success, `Err(code)` carrying the exit code to use on
@@ -208,14 +231,29 @@ fn try_build_obj_path() -> std::path::PathBuf {
 /// `run` has no `--release` flag yet (CLI_SPEC.md doesn't document one for
 /// it), so a neighboring release-profile `pycc.toml` must not silently
 /// change what `pycc run` does with no way for the user to override it.
-fn try_build(path: &str, out: &str, target: Option<&str>, release: bool) -> Result<(), ExitCode> {
+///
+/// `obj_path`: where codegen's temporary object file is emitted before
+/// linking. Caller-supplied (#783) rather than computed here, for two
+/// reasons: the production callers (`main()`'s `Command::Build` arm and
+/// `run`) place it inside a `create_scratch` `ScratchDir` whose `Drop`
+/// removes it on every exit path, and
+/// `try_build_ignores_a_neighboring_release_pycc_toml_when_given_release_false`
+/// needs to read the emitted object back *after* this function returns --
+/// so the path's owner must outlive the call, which only injection (the
+/// same DI convention as `init`'s `dir` parameter) provides.
+fn try_build(
+    path: &str,
+    out: &str,
+    target: Option<&str>,
+    release: bool,
+    obj_path: &Path,
+) -> Result<(), ExitCode> {
     let path = Path::new(path);
     let typed_hir = resolve_frontend(path)
         .map_err(|failure| ExitCode::from(report_build_failure(path, failure)))?;
     let mir = pycc_mir::build(&typed_hir);
 
-    let obj_path = try_build_obj_path();
-    pycc_codegen::compile_to_object(&mir, &obj_path, target, release).map_err(|e| {
+    pycc_codegen::compile_to_object(&mir, obj_path, target, release).map_err(|e| {
         eprintln!("error: codegen failed: {e}");
         ExitCode::from(1)
     })?;
@@ -228,7 +266,7 @@ fn try_build(path: &str, out: &str, target: Option<&str>, release: bool) -> Resu
     if let Some(triple) = effective_link_target(target) {
         cmd.arg("-target").arg(triple);
     }
-    cmd.arg(&obj_path)
+    cmd.arg(obj_path)
         .arg("-L")
         .arg(&rt_lib_dir)
         .arg("-lpycc_rt")
@@ -530,13 +568,29 @@ fn run_command(binary: &std::path::Path, args: &[String]) -> std::process::Comma
 /// never consults a neighboring `pycc.toml`'s `[build] opt = "release"`
 /// default, so this stays unconditional regardless of what any nearby
 /// `pycc.toml` names.
+///
+/// Both temporary artifacts -- the codegen object and the linked
+/// executable -- live inside one caller-owned `create_scratch` directory
+/// (#783). The `ScratchDir`'s own `pid`/`nanos`/`seq` name already carries
+/// all the uniqueness the old `pycc_run_{pid}` file name provided, so plain
+/// `out`/`main.o` file names inside it are enough. Binding order is
+/// load-bearing: `scratch` stays alive across `try_build` (the linker reads
+/// the object and writes `out`) *and* across `run_command(..).status()`
+/// (the child executes from inside the scratch directory; `status()` waits
+/// for it to exit), so `Drop` removes the directory only after the child
+/// has terminated -- do not restructure this to return before the wait.
 fn run(path: &str, args: &[String]) -> ExitCode {
-    let out = std::env::temp_dir().join(format!("pycc_run_{}", std::process::id()));
+    let scratch = match create_scratch("run") {
+        Ok(scratch) => scratch,
+        Err(code) => return code,
+    };
+    let out = scratch.join("out");
     if let Err(code) = try_build(
         path,
-        out.to_str().expect("temp dir path should be valid UTF-8"),
+        out.to_str().expect("scratch dir path should be valid UTF-8"),
         None,
         false,
+        &scratch.join("main.o"),
     ) {
         return code;
     }
@@ -698,6 +752,44 @@ mod release_flag_tests {
     }
 }
 
+#[cfg(test)]
+mod create_scratch_tests {
+    use super::*;
+
+    #[test]
+    fn returns_a_live_directory_that_drop_removes() {
+        let scratch =
+            create_scratch("main_create_scratch_ok").expect("create_scratch should succeed");
+        let path = scratch.to_path_buf();
+        assert!(
+            path.is_dir(),
+            "create_scratch must hand back an already-created directory"
+        );
+        drop(scratch);
+        assert!(
+            !path.exists(),
+            "dropping the handle must remove the scratch directory"
+        );
+    }
+
+    #[test]
+    fn maps_a_creation_failure_to_an_error() {
+        // A NUL byte is invalid in a path component on every platform this
+        // repo targets, so `create_dir` fails portably -- mirroring
+        // `pycc_scratch`'s own
+        // `a_category_that_produces_an_invalid_path_component_propagates_the_create_dir_error`.
+        // This exercises the `map_err` closure (its own coverage region)
+        // inside this single `--cfg test` instantiation; `ExitCode` has no
+        // `PartialEq`, so the *value* 2 is asserted at the e2e level
+        // (tests/slice0.rs's bad-temp-dir tests), not here.
+        let result = create_scratch("bad\0category");
+        assert!(
+            result.is_err(),
+            "a NUL byte in the category should make create_scratch fail"
+        );
+    }
+}
+
 #[cfg(all(test, unix))]
 mod run_command_tests {
     use super::run_command;
@@ -760,11 +852,11 @@ mod try_build_release_isolation_tests {
     /// relevant code-size delta, and embedded path-string lengths
     /// independently perturb it). Calling `try_build` directly (rather than
     /// spawning `pycc` as a subprocess) is what makes this reliable:
-    /// `try_build`'s own `std::process::id()`-keyed temp object path is
-    /// this same test process's id, not an unpredictable child's, so it's
-    /// locatable here without reaching into any uncontracted external
-    /// path -- and safe from cross-test races since no other test in this
-    /// crate writes to that same path.
+    /// since #783, `try_build` takes `obj_path` by injection, so this test
+    /// supplies a path inside its own `ScratchDir` -- which outlives the
+    /// call, exactly the ownership contract `try_build`'s doc comment
+    /// states -- and reads the emitted object back from a location it
+    /// controls, with no shared process-global path to race on.
     #[test]
     fn try_build_ignores_a_neighboring_release_pycc_toml_when_given_release_false() {
         let dir = ScratchDir::new("release_isolation").expect("failed to create scratch dir");
@@ -777,16 +869,18 @@ mod try_build_release_isolation_tests {
         )
         .unwrap();
         let out = dir.join("out");
+        let obj_path = dir.join("obj.o");
 
         // Exactly what `run()` does: `release: false` straight through.
-        try_build(src.to_str().unwrap(), out.to_str().unwrap(), None, false)
-            .expect("try_build should succeed");
+        try_build(
+            src.to_str().unwrap(),
+            out.to_str().unwrap(),
+            None,
+            false,
+            &obj_path,
+        )
+        .expect("try_build should succeed");
 
-        // Deliberately `try_build_obj_path()` and not a `ScratchDir`: this
-        // must resolve to the exact path `try_build`'s own production code
-        // (out of scope for issue #782's Batch B -- owned by #783) emits
-        // its temp object file to, keyed only by this test process's pid.
-        let obj_path = try_build_obj_path();
         let obj_bytes = std::fs::read(&obj_path).expect("try_build's temp object should exist");
 
         // Independently compiled reference: the same source's MIR, built

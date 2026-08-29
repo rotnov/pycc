@@ -1494,7 +1494,23 @@ fn a_bad_output_path_is_a_link_error_exit_code_1() {
 }
 
 #[test]
-fn a_bad_temporary_directory_is_a_codegen_error_exit_code_1() {
+fn a_bad_temporary_directory_is_an_environment_error_exit_code_2() {
+    // Exit-class change (#783): before Part 3 of #779, an unusable temp
+    // directory only surfaced deep inside codegen's object write, as an
+    // exit-1 "codegen failed" error. `pycc build` now creates its
+    // `ScratchDir` up front, so the same scenario fails fast at scratch
+    // creation -- before any frontend work -- and is reported as
+    // CLI_SPEC.md's exit-2 invocation/environment class (like the
+    // unstartable linker driver and `init`'s unreadable cwd), since a
+    // missing/unwritable temp directory is controlled outside pycc.
+    //
+    // Coverage note: `try_build`'s "codegen failed" `map_err` closure used
+    // to get its only trigger from this scenario. Its coverage now rests on
+    // `an_unknown_target_triple_is_a_clean_build_error` above (an invalid
+    // `--target` makes `compile_to_object` fail into the same closure) --
+    // if that test is ever changed away from the exit-1 codegen path, that
+    // closure's region is orphaned and the D-014 gate reports the deficit
+    // there.
     let dir = ScratchDir::new("e2e_badtmp").expect("failed to create scratch dir");
     let src = write_fixture(&dir, "hello_badtmp.py", "print(42)\n");
     let out = dir.join("hello");
@@ -1508,8 +1524,92 @@ fn a_bad_temporary_directory_is_a_codegen_error_exit_code_1() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("codegen failed"));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("could not create a scratch directory")
+    );
+}
+
+#[test]
+fn a_bad_temporary_directory_makes_run_an_environment_error_exit_code_2() {
+    // `pycc run`'s sibling of the `pycc build` case above: `run()` creates
+    // its own `ScratchDir` (holding both the temp object and the linked
+    // executable) before building, so an unusable temp directory is the
+    // same fail-fast exit-2 environment error there. This spawned-binary
+    // test is also what covers `run()`'s scratch-failure arm in the plain
+    // (non-`--cfg test`) instantiation for the D-014 coverage gate.
+    let dir = ScratchDir::new("e2e_badtmp_run").expect("failed to create scratch dir");
+    let src = write_fixture(&dir, "hello_badtmp_run.py", "print(42)\n");
+    let missing_tmp = dir.join("does_not_exist");
+
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .env("TMPDIR", &missing_tmp)
+        .env("TMP", &missing_tmp)
+        .env("TEMP", &missing_tmp)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("could not create a scratch directory")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn successful_build_and_run_leave_no_temporary_files_behind() {
+    // #779's "roots return to baseline" proof for `src/main.rs`'s two
+    // production scratch sites (#783): point the OS temp directory at a
+    // controlled, initially-empty directory, run one successful
+    // `pycc build` and one successful `pycc run`, and require that
+    // directory to be empty again afterward -- the `ScratchDir`s (holding
+    // the temp objects and `run`'s executable) must all have been removed
+    // on drop. Before #783 this failed: `pycc_obj_<pid>.o` and
+    // `pycc_run_<pid>` were left behind unconditionally.
+    //
+    // The `#[cfg(unix)]` gate is load-bearing, not cosmetic: the required
+    // `native-build-test` matrix includes `windows-latest` and runs
+    // `cargo test --workspace` there, and on Windows deleting a
+    // just-exited executable can transiently fail (AV/handle contention).
+    // `ScratchDir::drop` deliberately ignores removal errors, so an
+    // unconditional emptiness assertion would convert that accepted rare
+    // leak into a required-check flake. Nothing is lost for the D-014
+    // coverage gate: it runs on `macos-14`, and test code under `tests/`
+    // is excluded from the coverage denominator anyway (docs/TESTING.md).
+    let dir = ScratchDir::new("e2e_leak_regression").expect("failed to create scratch dir");
+    let tmp = dir.join("tmp");
+    std::fs::create_dir(&tmp).unwrap();
+    let src = write_fixture(&dir, "hello_leak.py", "print(42)\n");
+    let out = dir.join("hello_leak");
+
+    let build_status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .env("TMPDIR", &tmp)
+        .env("TMP", &tmp)
+        .env("TEMP", &tmp)
+        .status()
+        .unwrap();
+    assert!(build_status.success());
+
+    let run_output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .env("TMPDIR", &tmp)
+        .env("TMP", &tmp)
+        .env("TEMP", &tmp)
+        .output()
+        .unwrap();
+    assert!(run_output.status.success());
+    assert_eq!(run_output.stdout, b"42\n");
+
+    let leftovers: Vec<_> = std::fs::read_dir(&tmp)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "a successful build + run must leave the temp directory empty, found: {leftovers:?}"
+    );
 }
 
 #[test]

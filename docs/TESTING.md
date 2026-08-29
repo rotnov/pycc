@@ -1171,9 +1171,9 @@ when Part 1 merged. It is a textual pattern match, not a data-flow
 analysis — see the script's own docstring for the accepted scope
 limitation.
 
-**This section describes the state of the tree's test code, not just the
-pattern going forward.** Part 1 (#781) added `pycc_scratch` and the lint
-above, and retired `crates/pycc_codegen/src/tests_support.rs`'s
+**This section describes the state of the tree, not just the pattern going
+forward.** Part 1 (#781) added `pycc_scratch` and the lint above, and
+retired `crates/pycc_codegen/src/tests_support.rs`'s
 `TempTestDir`/`tempfile_dir` wrapper (never part of the `ALLOWLIST`
 backlog — it already wrapped the raw pattern behind its own helper, so the
 lint never saw it) directly onto `ScratchDir`; `tests_support.rs` no longer
@@ -1184,13 +1184,29 @@ exists in the tree. Part 2
 evidence-hero contract (`docs/WEBSITE.md`, enforced by
 `scripts/check-site.sh` via `site/evidence-heroes.json`) pinned that
 file's exact bytes and its migration therefore rode a full re-attestation
-of the landing hero. The snapshot allowlist in
-`scripts/check_scratch_dir_usage.py` now holds exactly one entry:
-`src/main.rs`'s two production call sites (`try_build`'s `pycc_obj_*`
-object file, `run`'s `pycc_run_*` executable), which stay raw until Part 3
-([#783](https://github.com/rotnov/pycc/issues/783)) rewrites them — tracked,
-like the rest, under the parent
-[#779](https://github.com/rotnov/pycc/issues/779).
+of the landing hero. Part 3
+([#783](https://github.com/rotnov/pycc/issues/783)) finished the job by
+migrating `src/main.rs`'s two production call sites — the temp object
+`try_build` emits before linking and `run`'s built executable — onto
+caller-owned `ScratchDir`s (`pycc_scratch` moved from the root manifest's
+`[dev-dependencies]` to `[dependencies]`): `main()`'s `Command::Build` arm
+and `run()` each create one via `src/main.rs::create_scratch`, inject the
+object path into `try_build`, and drop the directory — removing its
+contents — on every exit path once the linker (and, for `run`, the awaited
+child process) is done with the files inside. An unusable system temp
+directory now fails fast at scratch creation as a CLI_SPEC.md exit-2
+environment error, before any frontend work. The snapshot allowlist in
+`scripts/check_scratch_dir_usage.py` is now **empty** — its terminal
+state, and #779's completeness signal for Parts 2/3: every tracked `.rs`
+file except the `pycc_scratch` implementation itself is held to zero raw
+occurrences. `tests/slice0.rs`'s
+`successful_build_and_run_leave_no_temporary_files_behind`
+(`#[cfg(unix)]`-gated; Windows can transiently fail to delete a
+just-exited executable, and `ScratchDir::drop` deliberately ignores
+removal errors, so an unconditional assertion would flake the required
+`windows-latest` leg) is the leak-regression proof that one successful
+`pycc build` plus one successful `pycc run` return a controlled temp
+directory to empty.
 
 ## Meta
 

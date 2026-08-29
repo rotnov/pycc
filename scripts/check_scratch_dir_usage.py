@@ -22,34 +22,22 @@ Two allowances, both narrow and deliberate:
 
 * `crates/pycc_scratch/src/lib.rs` is exempt unconditionally -- it is the one
   legitimate implementation site `ScratchDir::new` itself lives in.
-* `ALLOWLIST` is a one-time snapshot, generated mechanically at Part 1's own
-  merge commit, mapping every other file that already contained the banned
-  pattern to its exact occurrence count at that commit (**not** a bare
-  filename list -- see below). A file not in `ALLOWLIST` is held to the new
-  rule from the moment this check merges: any occurrence at all is a
-  violation. A file that *is* in `ALLOWLIST` may keep its existing
-  occurrences; Part 2 (#782) has since migrated every test-file entry off
-  the banned pattern (`tests/quick_start.rs` last, via the evidence-hero
-  re-attestation its byte pin required), so the one remaining entry is
-  `src/main.rs`'s two production call sites, Part 3's job, tracked by
-  https://github.com/rotnov/pycc/issues/783. An entry's count is
-  intended to only stay the same or go down on any later pull request --
-  never up. That intent is a review convention, not something this script
-  mechanically enforces across commits: this check only compares the
-  current tree's occurrence count against `ALLOWLIST`'s recorded value for
-  the same commit, with no visibility into a prior commit's `ALLOWLIST`
-  entry -- so a pull request that both adds new raw call sites to an
-  already-listed file and raises that file's `ALLOWLIST` count to match
-  would still pass. The D-068 pinned reviewer pass on every pull request is
-  the intended backstop for this gap, same as for the textual-pattern-match
-  limitation below; a merge-base-comparison check may be added later if
-  this proves insufficient in practice. A bare filename allowlist would let
-  an already-listed file accumulate brand-new raw `temp_dir().join(...)`
-  calls undetected without even that backstop being triggered, which
-  defeats the actual goal of requirement 7 (stop the leak from getting
-  worse); the per-file count closes that gap while still tolerating the
-  pre-existing backlog. `ALLOWLIST` reaching empty is the literal
-  completeness signal for closing out #779's requirements 4/5 (Parts 2/3).
+* `ALLOWLIST` was a one-time snapshot, generated mechanically at Part 1's
+  own merge commit, mapping every other file that already contained the
+  banned pattern to its exact occurrence count at that commit (**not** a
+  bare filename list: a per-file count kept an already-listed file from
+  accumulating brand-new raw call sites while the pre-existing backlog was
+  tolerated; the count was only ever allowed to stay the same or go down,
+  a review convention backstopped by the D-068 pinned reviewer pass, since
+  this script only ever sees the current tree's `ALLOWLIST`). The backlog
+  has since been fully burned down: Part 2 (#782) migrated every test-file
+  entry off the banned pattern (`tests/quick_start.rs` last, via the
+  evidence-hero re-attestation its byte pin required), and Part 3 (#783)
+  migrated `src/main.rs`'s two production call sites -- the last entry --
+  onto caller-owned `ScratchDir`s. `ALLOWLIST` is now empty, which is the
+  literal completeness signal for #779's requirements 4/5 (Parts 2/3), and
+  its terminal state: every tracked `.rs` file outside `EXEMPT_FILES` is
+  held to the new rule, so any occurrence at all is a violation.
 
 **Known scope limitation, accepted deliberately** (recorded in the D-201
 decision entry, not a silent gap): this is a textual pattern match, not a
@@ -85,23 +73,16 @@ ROOT = Path(__file__).resolve().parent.parent
 # in ALLOWLIST.
 EXEMPT_FILES = frozenset({"crates/pycc_scratch/src/lib.rs"})
 
-# One-time snapshot generated mechanically at Part 1's (#781's) own merge
-# commit via `git ls-files '*.rs'` piped through a count of this script's own
-# pattern match per file (see the docstring above). Part 2 (#782) migrated
-# every test-file entry, so the one remaining entry is `src/main.rs`, owned
-# by Part 3 (#783).
-#
-# `src/main.rs`'s count of 2 (down from the snapshot's 7 after #782's
-# Batch B migrated all five of its test-only sites and removed
-# `src/project_config.rs`'s entry outright, its 26 sites all migrated) is
-# exactly its two production call sites, owned by Part 3 (#783): the
-# `try_build_obj_path` helper carrying `try_build`'s temp object path --
-# which the release-isolation test also calls, so reading back the exact
-# object `try_build` wrote needs no second raw call site -- and `run`'s
-# output path.
-ALLOWLIST: dict[str, int] = {
-    "src/main.rs": 2,
-}
+# Originally a one-time snapshot generated mechanically at Part 1's (#781's)
+# own merge commit via `git ls-files '*.rs'` piped through a count of this
+# script's own pattern match per file (see the docstring above). Part 2
+# (#782) migrated every test-file entry, and Part 3 (#783) migrated the last
+# entry -- `src/main.rs`'s two production call sites (`try_build`'s temp
+# object, `run`'s output executable) -- onto caller-owned
+# `pycc_scratch::ScratchDir`s. Empty is this dict's terminal state: any raw
+# occurrence in any tracked `.rs` file outside `EXEMPT_FILES` is now a
+# violation, and nothing should ever be added back here.
+ALLOWLIST: dict[str, int] = {}
 
 # Tolerant of whitespace/line breaks between `temp_dir()` and `.join(`, since
 # some existing call sites wrap the expression across lines.
