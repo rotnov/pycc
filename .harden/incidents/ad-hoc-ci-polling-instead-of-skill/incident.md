@@ -46,10 +46,39 @@ machine/session's future runs, not the repository.
 New `PreToolUse` hook on `Bash`, wired from `.claude/settings.local.json`
 (gitignored) to `.claude/hooks/ci_watch_nudge.py` (tracked, since the script
 itself is inert without local wiring and contains no secrets). It pattern-matches
-`gh pr (view|checks|list)` in the command string and writes a stderr
-reminder pointing at `ci-watch.sh` run via `Monitor`. It does not block the
+`gh pr (view|checks|list)` in the command string and returns a reminder
+pointing at `ci-watch.sh` run via `Monitor`. It does not block the
 call -- a single one-off status check is legitimate; the reminder targets
 the ad-hoc *polling loop* pattern the incident actually exhibited.
+
+**Revision (same day, post-review):** the D-068 pinned reviewer (via a
+GitHub-side automated pass on the delivering pull request) flagged two P2
+gaps, both fixed in place rather than reworded:
+
+1. The hook originally wrote the reminder to stderr on a successful (exit 0)
+   run. Claude Code only feeds a hook's stderr back to the model on a
+   *blocking* (non-zero exit) result -- a successful advisory hook's stderr
+   is discarded, so the reminder never actually reached the agent. Fixed by
+   emitting `{"hookSpecificOutput": {"hookEventName": "PreToolUse",
+   "additionalContext": "..."}}` as stdout JSON instead, which Claude Code
+   does surface to the model on every run regardless of exit code. Confirmed
+   live: the fixed hook fired on the very next `gh pr checks` call made
+   while fixing this incident, and its `additionalContext` appeared in the
+   session as a `PreToolUse:Bash hook additional context` system reminder.
+2. Per AGENTS.md's "Support Codex and Claude Code" section, a new agent/skill
+   surface needs an equivalent Codex entrypoint or a documented fallback.
+   Codex CLI has no per-tool-call hook event comparable to Claude Code's
+   `PreToolUse` with context injection (its `.codex/hooks.json` surface, per
+   `docs/AGENT_TOOLING.md`, is used for session-lifecycle/notification hooks
+   such as iEvo's, not per-command advisory injection) -- there is no
+   equivalent capability to add. The documented fallback is the project
+   skill itself: `.claude/skills/gha-watch-ci-pr/SKILL.md` already has a thin
+   `.agents/skills/gha-watch-ci-pr/SKILL.md` Codex wrapper (this repo's
+   standard cross-platform pattern, see `docs/AGENT_TOOLING.md`), so a Codex
+   session reads the same `ci-watch.sh` guidance this hook enforces
+   mechanically for Claude Code -- textual there, mechanical here, per
+   AGENTS.md's explicit "provide the equivalent Codex capability or a safe
+   documented fallback" clause.
 
 ## Fixture
 
@@ -66,8 +95,11 @@ proven differently" carve-out.
 `verify: manual` -- ran the hook directly against two payloads:
 
 - violator: `{"tool_name":"Bash","tool_input":{"command":"gh pr checks 827 --repo rotnov/pycc"}}`
-  -> emits the ci-watch.sh reminder to stderr, exit 0 (advisory, not
-  blocking).
+  -> emits `{"hookSpecificOutput": {"hookEventName": "PreToolUse",
+  "additionalContext": "..."}}` on stdout, exit 0 (advisory, not blocking).
+  Also confirmed live in-session (not just via direct stdin replay): a
+  subsequent real `gh pr checks` call surfaced the reminder as a
+  `PreToolUse:Bash hook additional context` system reminder.
 - clean: `{"tool_name":"Bash","tool_input":{"command":"cargo build --workspace"}}`
   -> silent, exit 0.
 

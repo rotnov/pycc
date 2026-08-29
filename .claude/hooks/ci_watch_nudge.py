@@ -29,12 +29,25 @@ def main() -> int:
     if not PATTERN.search(command):
         return 0
 
-    sys.stderr.write(
+    reminder = (
         "Reminder: for repeated PR/CI status polling, prefer "
         ".claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh via Monitor "
         "instead of hand-rolled gh pr view/checks loops -- it exits on "
         "terminal state (MERGED/CLOSED/CONFLICTS/STALE/CHECK FAILED/BLOCKED/"
-        "READY) so the session isn't left polling by hand.\n"
+        "READY) so the session isn't left polling by hand."
+    )
+    # A non-blocking PreToolUse hook's stderr is not fed back to the model
+    # on a successful (exit 0) run -- only a blocking hook's stderr is.
+    # Deliver the reminder through the documented advisory channel instead:
+    # stdout JSON with hookSpecificOutput.additionalContext.
+    json.dump(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": reminder,
+            }
+        },
+        sys.stdout,
     )
     return 0
 
