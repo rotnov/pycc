@@ -18211,38 +18211,55 @@ fn subclassing_a_monomorphized_generic_specialization_is_already_rejected_pre_ex
 }
 
 #[test]
-fn dataclass_field_type_conflict_across_mro_is_resolved_by_hir_lowering_not_t0052() {
-    // Round-2 deep-review finding on this change: the doc comment on
-    // `check_incompatible_attribute_redeclarations` asserts that a
-    // `@dataclass` hierarchy's own field-name conflicts are already
-    // resolved by `pycc_hir::class`'s `merged_fields`/`field_name_present`
-    // dedup (keeping the least-derived declaration while walking the MRO
-    // least-derived-first) before this check ever runs, so its own MRO
-    // walk can never observe a divergent pair for a dataclass. This test
-    // pins that claim against the real parse/lower/`check_and_resolve`
-    // pipeline rather than resting on the doc comment's citation alone:
-    // Base and Derived each declare a field `v` with a *different* type,
-    // so if `check_incompatible_attribute_redeclarations` ran against
-    // each class's own un-merged declaration this would be rejected as
-    // T0052 -- but it must type-check, keeping Base's (least-derived)
-    // `int` type on both.
-    let hir = check_source(
+fn dataclass_field_type_conflict_across_mro_is_rejected_during_hir_lowering() {
+    // Round-2 deep review pinned the pre-fix behavior (a dataclass
+    // field-name conflict was silently discarded by `pycc_hir::class`'s
+    // merge/dedup before `check_incompatible_attribute_redeclarations`
+    // ever ran) as "expected". A later external bot review (round 4,
+    // chatgpt-codex-connector) correctly flagged that as the same class of
+    // silent cross-type bug issue #676 itself was filed about, just
+    // reached through dataclass field merging instead of a base-class
+    // method's attribute assignment: Base and Derived each declare a
+    // field `v` with a *different* type, and merging must not silently
+    // keep the least-derived type -- it must reject the conflict, exactly
+    // as a non-dataclass cross-MRO redeclaration is rejected.
+    // The conflict is now caught during HIR lowering itself (not by
+    // `check_and_resolve`), since dataclass field merging happens in
+    // `pycc_hir::class::lower_class` -- so this goes through
+    // `pycc_hir::lower_checked` directly rather than `check_source`,
+    // which `.expect()`s lowering to succeed.
+    let module = pycc_parser::parse(
         "from dataclasses import dataclass\n@dataclass\nclass Base:\n    v: int\n@dataclass\nclass Derived(Base):\n    v: str\nd = Derived(1)\nprint(d.v)\n",
     )
-    .expect("a dataclass field-name conflict must be resolved by HIR merge, not rejected by T0052");
-    let (_, derived_def) = hir
-        .class_defs
-        .iter()
-        .find(|(name, _)| name == "Derived")
-        .expect("Derived must be a registered class");
-    assert_eq!(
-        derived_def
-            .attrs
-            .iter()
-            .find(|(name, _)| name == "v")
-            .map(|(_, ty)| ty.clone()),
-        Some(Ty::Int),
-        "the merge must keep Base's least-derived `int` type for `v`, discarding Derived's own `str` redeclaration"
+    .expect("test fixture must parse");
+    let err = pycc_hir::lower_checked(&module)
+        .expect_err("a dataclass field redeclared with a differing type across the MRO must be rejected");
+    assert_eq!(err.code, "T0052");
+    assert!(
+        err.message.contains('v') && err.message.contains("int") && err.message.contains("str"),
+        "got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn dataclass_field_type_conflict_between_two_bases_is_rejected_during_hir_lowering() {
+    // The diamond case: two independent dataclass bases each declare the
+    // same field name with a different type, and a derived dataclass
+    // inherits from both. The merge must reject this exactly as the
+    // base-vs-own-declaration case above, not only when the conflict
+    // involves the derived class's own redeclaration.
+    let module = pycc_parser::parse(
+        "from dataclasses import dataclass\n@dataclass\nclass A:\n    v: int\n@dataclass\nclass B:\n    v: str\n@dataclass\nclass Derived(A, B):\n    pass\n",
+    )
+    .expect("test fixture must parse");
+    let err = pycc_hir::lower_checked(&module)
+        .expect_err("two dataclass bases redeclaring the same field with different types must be rejected");
+    assert_eq!(err.code, "T0052");
+    assert!(
+        err.message.contains('v') && err.message.contains("int") && err.message.contains("str"),
+        "got: {}",
+        err.message
     );
 }
 
