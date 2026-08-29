@@ -285,6 +285,13 @@ part of the CLI contract.
 both compile errors and unreadable-input errors, it exits `2`; otherwise any
 compile error exits `1`.
 
+Before `build` and `run` create their per-invocation scratch directory in
+the system temp directory, they also opportunistically remove
+provably-stale pycc-owned scratch roots left there by dead pycc processes
+— silently, bounded, and best-effort: the sweep never changes a command's
+output, diagnostics, or exit code (#784; see `pycc_scratch`'s `sweep`
+module documentation for the exact staleness conditions and budgets).
+
 ## Diagnostics output contract
 
 Human format (stable enough to screenshot, not to parse):

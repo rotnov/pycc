@@ -12,12 +12,36 @@
 //!
 //! This crate intentionally has no dependencies beyond `std`. See the
 //! decision record for why `tempfile`/`rand` were not added instead.
+//!
+//! Part 4 of #779 (issue #784) adds the second half of the lifecycle story:
+//! every root carries a [`LOCK_FILE_NAME`] liveness marker held under an OS
+//! advisory lock for the handle's lifetime, and [`sweep_stale_roots`]'s
+//! bounded, best-effort sweep removes roots whose creating process is
+//! provably dead (see the sweep module's docs for the exact safety bar).
 
+mod sweep;
+
+pub use sweep::{sweep_stale_roots, SweepReport};
+
+use std::fs::File;
 use std::io;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Name of the liveness-marker file [`ScratchDir::new`] creates inside every
+/// fresh scratch root, shared with the probe behind [`sweep_stale_roots`]
+/// and with tests that build sweep fixtures by hand.
+///
+/// The creating process holds an exclusive OS advisory lock
+/// ([`File::lock`]) on this file for the lifetime of the [`ScratchDir`]
+/// handle. The kernel releases the lock when the owning process exits by
+/// *any* means — including `SIGKILL`, where no `Drop` runs — so a
+/// successful [`File::try_lock`] on this file from another process is exact
+/// proof that the creator is dead, immune to PID reuse by construction
+/// (the lock belongs to the open file description, not to the PID).
+pub const LOCK_FILE_NAME: &str = ".pycc-scratch.lock";
 
 /// Per-process counter that disambiguates two [`ScratchDir::new`] calls that
 /// land on the same nanosecond tick (possible on platforms where
@@ -53,15 +77,33 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 ///   promise an actionable exit-2 environment error, never a panic, and a
 ///   real collision under a degraded clock still surfaces as
 ///   `create_dir`'s `AlreadyExists` error through the fallible path below,
-/// - `seq` is [`SEQ`], a per-process atomic counter that rules out any
+/// - `seq` is `SEQ`, a private per-process atomic counter that rules out any
 ///   same-process collision even when two calls land on the same nanosecond.
 ///
-/// This field order and format are a stability commitment: other tooling
-/// (e.g. a later stale-scratch-root sweep) may need to parse a directory
-/// name back into its `pid`/`nanos` fields without a live handle. Changing
-/// the format is a breaking change for any such consumer.
+/// This field order and format are a stability commitment with a real
+/// consumer since Part 4 (#784): [`sweep_stale_roots`] parses a
+/// directory name back into its fields without a live handle and treats a
+/// full-format match as proof of pycc ownership. Changing the format is a breaking
+/// change for that consumer. Note the parsed numbers are used for
+/// *validation only* — a pre-epoch clock degrades `nanos` to `0`, so the
+/// sweep never treats it as a plausible creation time; staleness comes from
+/// filesystem mtime and liveness from the lock file below.
+///
+/// # Liveness marker
+///
+/// Every fresh root also contains a [`LOCK_FILE_NAME`] file on which the
+/// handle holds an exclusive advisory lock (see that constant's docs).
+/// Lock *acquisition* failure is deliberately ignored: on a filesystem
+/// without advisory-lock support the root simply degrades to the sweep's
+/// age-floor-only protection instead of failing the user's build — failing
+/// a build to protect a janitor would invert priorities.
 pub struct ScratchDir {
     path: PathBuf,
+    /// Keeps the lock-file handle — and with it the advisory lock — alive
+    /// exactly as long as the directory itself. `Option` so `Drop` can
+    /// close the handle *before* `remove_dir_all`: on Windows an open
+    /// handle inside the tree can block removal of its parent.
+    lock: Option<File>,
 }
 
 impl ScratchDir {
@@ -91,7 +133,19 @@ impl ScratchDir {
     /// `pid`/`nanos`/`seq` combination makes a same-process collision
     /// impossible and a cross-process collision unreachable in practice, so
     /// there is no genuine collision case for a retry loop to handle.
+    /// Failing to create the [`LOCK_FILE_NAME`] liveness marker inside the
+    /// fresh directory is also an error: the just-created directory is
+    /// removed again (best-effort) and the creation error propagates.
     pub fn new(category: &str) -> io::Result<Self> {
+        Self::new_with_lock_file_name(category, LOCK_FILE_NAME)
+    }
+
+    /// The one shared creation path. `lock_file_name` is injectable only so
+    /// a test can force the lock-file creation to fail portably (a name
+    /// under a nonexistent subdirectory fails with `NotFound` on every
+    /// target) — production code always passes [`LOCK_FILE_NAME`] via
+    /// [`ScratchDir::new`].
+    fn new_with_lock_file_name(category: &str, lock_file_name: &str) -> io::Result<Self> {
         let pid = std::process::id();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -101,7 +155,30 @@ impl ScratchDir {
 
         let path = std::env::temp_dir().join(format!("pycc_{category}_{pid}_{nanos}_{seq}"));
         std::fs::create_dir(&path)?;
-        Ok(ScratchDir { path })
+        let lock = match File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(path.join(lock_file_name))
+        {
+            Ok(file) => file,
+            Err(e) => {
+                // Don't leave a fresh, markerless root behind on the error
+                // path; it holds nothing yet, so plain `remove_dir`
+                // suffices and its own failure is deliberately ignored
+                // (the propagated creation error is the actionable one).
+                let _ = std::fs::remove_dir(&path);
+                return Err(e);
+            }
+        };
+        // Acquisition failure deliberately ignored — see the type-level
+        // "Liveness marker" docs. A single always-executed statement, so no
+        // untestable error arm exists under the coverage gate.
+        let _ = lock.lock();
+        Ok(ScratchDir {
+            path,
+            lock: Some(lock),
+        })
     }
 }
 
@@ -115,6 +192,13 @@ impl Deref for ScratchDir {
 
 impl Drop for ScratchDir {
     fn drop(&mut self) {
+        // Close the lock handle *before* removing the tree: on Windows an
+        // open handle to a file inside the directory can make removal of
+        // the parent fail; on unix the ordering is free. Closing also
+        // releases the advisory lock, which is harmless mid-`Drop` — the
+        // sweep's 1 h age floor covers the window, and a sweeper racing
+        // this removal is deleting the same root anyway.
+        drop(self.lock.take());
         let _ = std::fs::remove_dir_all(&self.path);
     }
 }
@@ -246,6 +330,61 @@ mod tests {
         assert!(
             !leaked,
             "a failed ScratchDir::new must not leave a directory behind"
+        );
+    }
+
+    #[test]
+    fn the_lock_is_held_while_the_handle_is_alive_and_released_by_drop() {
+        let dir = ScratchDir::new("lib_lock_liveness").expect("ScratchDir::new should succeed");
+        let lock_path = dir.join(LOCK_FILE_NAME);
+        assert!(
+            lock_path.is_file(),
+            "ScratchDir::new must create the liveness-marker lock file"
+        );
+        // A second fd on the same file gets its own open file description,
+        // so this probe observes the handle's exclusive lock even from the
+        // same process (verified against flock/LockFileEx semantics).
+        let probe = File::open(&lock_path).expect("the lock file should be openable read-only");
+        assert!(
+            probe.try_lock().is_err(),
+            "a probe must not acquire the lock while the creating handle is alive"
+        );
+        // The release half needs the unlinked-but-open probe fd to stay
+        // usable after `Drop` removed the file, which unix guarantees and
+        // Windows delete-pending semantics do not; the coverage platform
+        // (macOS) runs it.
+        #[cfg(unix)]
+        {
+            drop(dir);
+            assert!(
+                probe.try_lock().is_ok(),
+                "dropping the handle must release the advisory lock"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failing_lock_file_creation_removes_the_directory_and_propagates_the_error() {
+        // A lock-file name under a nonexistent subdirectory makes the
+        // marker creation fail with NotFound on every target, after
+        // `create_dir` already succeeded — exercising both the error
+        // propagation and the just-created directory's cleanup.
+        let result =
+            ScratchDir::new_with_lock_file_name("lib_lock_create_fail", "missing_subdir/lock");
+        assert!(
+            result.is_err(),
+            "a failing lock-file creation must propagate its io::Error"
+        );
+
+        let temp_dir = std::env::temp_dir();
+        let prefix = "pycc_lib_lock_create_fail_";
+        let leaked = std::fs::read_dir(&temp_dir)
+            .expect("temp dir should be readable")
+            .filter_map(|entry| entry.ok())
+            .any(|entry| entry.file_name().to_string_lossy().starts_with(prefix));
+        assert!(
+            !leaked,
+            "a failed lock-file creation must remove the just-created directory"
         );
     }
 }

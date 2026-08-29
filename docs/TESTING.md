@@ -1208,6 +1208,36 @@ removal errors, so an unconditional assertion would flake the required
 `pycc build` plus one successful `pycc run` return a controlled temp
 directory to empty.
 
+Part 4 ([#784](https://github.com/rotnov/pycc/issues/784), design in
+D-209) adds the defense-in-depth half `Drop` cannot provide — cleanup
+after a process that died without unwinding. Every root now contains a
+`pycc_scratch::LOCK_FILE_NAME` marker held under an exclusive OS advisory
+lock (`std::fs::File::lock`) for the handle's lifetime — kernel-released
+even on SIGKILL, so a successful `try_lock` probe from another process is
+exact, PID-reuse-immune proof the creator is dead. Before creating their
+own root, `pycc build`/`pycc run` (via `src/main.rs::create_scratch`) run
+`pycc_scratch::sweep_stale_roots()`: a silent, best-effort pass over the
+OS temp directory that deletes only entries which fully parse as
+`pycc_{category}_{pid}_{nanos}_{seq}`, are real directories (not
+symlinks), exceed the age floor for their class (1 h for lock-bearing
+roots, 24 h for roots without an observable marker: pre-Part-4 legacy
+ones, or a root killed before its lock file was created; both measured
+against the directory's mtime), and hold no live lock — under budgets (10,000
+entries / 512 deletions / 250 ms) that bound the caller's added latency.
+The sweep's regression tests live in three places:
+`crates/pycc_scratch/src/sweep.rs`'s unit tests cover the ownership-parse
+accept/reject table, every keep/delete class, each budget, and the error
+folds hermetically (an injected sweep root and `now` — portable to the
+`windows-latest` leg, with deletion-success assertions
+`#[cfg(not(windows))]`-gated per the same Windows delete-contention
+class the previous paragraph documents);
+`crates/pycc_scratch/src/lib.rs`'s unit tests pin the lock-file
+lifecycle (held while alive, released by drop, creation-failure cleanup);
+and `tests/slice0.rs`'s
+`build_sweeps_a_provably_stale_scratch_root_and_spares_everything_else`
+(`#[cfg(unix)]`-gated) proves the production wiring end to end through a
+spawned `pycc build` against a redirected temp directory.
+
 ## Meta
 
 Every bug that reaches `main` gets a permanent regression test named after the issue (`tests/regress/issue_1234.py`). Coverage gate: conformance suite must touch 100% of implemented grammar productions (grammar-coverage instrumentation in the parser).

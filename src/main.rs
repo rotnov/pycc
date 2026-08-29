@@ -203,7 +203,14 @@ fn check_paths(paths: &[std::path::PathBuf], error_format: ErrorFormat) -> ExitC
 /// panic-unwind paths alike), so the caller must keep it alive until every
 /// consumer of the files placed inside it -- the linker reading the temp
 /// object, `run`'s child executing from inside it -- has finished.
+///
+/// Before creating the new root, this opportunistically sweeps
+/// provably-stale pycc scratch roots left in the temp directory by dead
+/// pycc processes (#784, Part 4 of #779) -- silent, bounded, and
+/// best-effort, so the report is deliberately discarded and the sweep can
+/// never change this command's output or exit code.
 fn create_scratch(category: &str) -> Result<pycc_scratch::ScratchDir, ExitCode> {
+    let _ = pycc_scratch::sweep_stale_roots();
     pycc_scratch::ScratchDir::new(category).map_err(|e| {
         eprintln!(
             "error: could not create a scratch directory under the system temp directory: {e}"

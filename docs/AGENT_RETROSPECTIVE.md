@@ -33,6 +33,57 @@ never a merge gate.
 
 ---
 
+## 2026-08-29 — A `#[cfg]`-split test bound a variable only one platform's branch used; caught by CI's windows leg, not locally
+
+What happened: PR #835's `a_stale_locked_format_root_past_the_floor_is_deleted`
+bound `root` but used it only inside the `#[cfg(not(windows))]` assertion
+block, so the `windows-latest` CI leg failed the whole run with
+`unused_variables` under `-D warnings` (fixed in `86f8cb0e`) — a full CI
+round trip for a defect a local check catches in seconds. This event
+happened after the events of the review-fix-round entry below.
+
+Root cause: the local gate list exercised only the host target. Code whose
+platform halves differ (`#[cfg(windows)]`/`#[cfg(not(windows))]`) compiles
+to a different binding-usage set per target, and lints like
+`unused_variables` are per-target verdicts a host-only build cannot render.
+
+What fixed it: `RUSTFLAGS="-D warnings" cargo check --tests -p pycc_scratch
+--target x86_64-pc-windows-msvc` locally (the target is installed here; the
+*workspace-wide* windows check fails environmentally in `alloca`'s C build
+script with no MSVC C compiler on a mac host, so scope the check to the
+touched crates), then the one-line fix.
+
+Lesson: when a change adds or edits `#[cfg(windows)]`/`#[cfg(not(windows))]`
+branches, run a `-D warnings` `cargo check --tests` for the touched crates
+against `x86_64-pc-windows-msvc` before pushing — a host-only green gate
+list does not cover per-target lint verdicts.
+
+## 2026-08-29 — Review fix round swept the reviewer's enumerated sites, not the defective phrase; cost one extra review round
+
+What happened: the #784 deep-review round 1 flagged that the
+`min_age_lockless` documentation named only "pre-Part-4 legacy roots" while
+the code covers a superset. The fix round broadened the wording at four
+sites (even more than the two the fix brief enumerated), but two further
+instances of the identical narrow phrasing survived — one eight lines above
+a corrected clause in the same doc block — and a second review round was
+needed to find and fix them (commits `3df0ffac`, `b9f09f77` on the #784
+branch). This event happened after the same-day CI-watch entry below.
+
+Root cause: the fix's extent was taken from the reviewer's (and the fix
+brief's) enumerated site list instead of being derived from the defect
+itself. The defect was a phrase-shaped claim; a repo-wide search for the
+phrase (`grep -rn "pre-Part-4"`) run before committing the round-1 fix
+would have surfaced all six instances at once — the identical search run
+after round 2 is what finally proved completeness.
+
+What fixed it: the round-2 fix plus the post-fix phrase grep.
+
+Lesson: when a review finding corrects a claim that exists as a repeated
+phrase or pattern, derive the fix's extent with a repo-wide search for that
+phrase before committing — the reviewer's cited sites are examples of the
+class, not its boundary. Declare such a fix complete only when the search
+returns corrected instances exclusively.
+
 ## 2026-08-29 — CI wait ran through a hand-rolled poll loop instead of the repository watcher; 13-hour silent stall
 
 What happened: while waiting on a pull request's CI, the session built an
