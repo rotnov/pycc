@@ -1,0 +1,1 @@
+{"tool_name": "Bash", "tool_input": {"command": "until gh pr view 828 --json mergeStateStatus --jq .mergeStateStatus | grep -q CLEAN; do sleep 20; done; echo ready"}}

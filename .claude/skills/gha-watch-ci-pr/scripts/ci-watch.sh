@@ -13,6 +13,18 @@ set -eu
 # Exits once every PR passed on the command line has reached a terminal
 # state.
 #
+# False-terminal protection: an empty statusCheckRollup (GitHub Actions
+# has not started yet, or a gap between two chained workflows) looks
+# exactly like "all checks completed", so it is never treated as terminal;
+# after $EMPTY_NOTE_POLLS consecutive empty polls (default 30) one
+# non-terminal NOTE line surfaces the possibility that Actions never
+# started, and polling continues. The READY and BLOCKED verdicts
+# additionally require the same qualifying observation on two consecutive
+# polls, so a momentary all-complete gap before the next workflow's checks
+# are created cannot resolve the watch early. CHECK FAILED, MERGED/CLOSED,
+# CONFLICTS, and STALE remain immediate -- those states do not regress on
+# their own.
+#
 # When every reported failing check is CANCELLED (no genuine FAILURE,
 # TIMED_OUT, or STARTUP_FAILURE among them), the line adds a hint that this
 # is often a
@@ -38,9 +50,11 @@ repo=$1
 shift
 prs="$*"
 poll_interval=${POLL_INTERVAL:-10}
+empty_note_polls=${EMPTY_NOTE_POLLS:-30}
 
-resolved_file=$(mktemp "${TMPDIR:-/tmp}/pycc-ci-watch.XXXXXX")
-trap 'rm -f "$resolved_file"' EXIT HUP INT TERM
+state_dir=$(mktemp -d "${TMPDIR:-/tmp}/pycc-ci-watch.XXXXXX")
+trap 'rm -rf "$state_dir"' EXIT HUP INT TERM
+resolved_file="$state_dir/resolved"
 
 is_resolved() {
   grep -qx "$1" "$resolved_file" 2>/dev/null
@@ -101,18 +115,48 @@ poll_once() {
       continue
     fi
 
+    total=$(echo "$data" | jq -r '[.statusCheckRollup[]?] | length')
+    if [ "$total" = "0" ]; then
+      # No checks reported at all: Actions has not started, or the rollup
+      # is momentarily empty between chained workflows. Indistinguishable
+      # from "all checks passed", so never a terminal verdict. Surface a
+      # one-time non-terminal NOTE if it persists, then keep polling.
+      empties=$(cat "$state_dir/empty_$pr" 2>/dev/null || echo 0)
+      empties=$((empties + 1))
+      echo "$empties" >"$state_dir/empty_$pr"
+      if [ "$empties" = "$empty_note_polls" ]; then
+        echo "PR #$pr: NOTE -- statusCheckRollup still empty after $empties polls; GitHub Actions may not have started for this head (not a terminal state, still watching)"
+      fi
+      rm -f "$state_dir/cand_$pr"
+      continue
+    fi
+    rm -f "$state_dir/empty_$pr"
+
     pending=$(echo "$data" | jq -r '[.statusCheckRollup[]? | select(.status!="COMPLETED")] | length')
-    if [ "$pending" = "0" ] && [ "$merge_state" = "CLEAN" ]; then
-      echo "PR #$pr: READY -- all checks green, CLEAN, mergeable"
-      mark_resolved "$pr"
+    if [ "$pending" != "0" ]; then
+      rm -f "$state_dir/cand_$pr"
       continue
     fi
 
-    if [ "$pending" = "0" ] && [ "$merge_state" != "CLEAN" ]; then
-      echo "PR #$pr: BLOCKED -- all checks completed with no failures, but mergeStateStatus=$merge_state (not CLEAN) -- often an unresolved required review or conversation thread; check the PR directly for the reason"
-      mark_resolved "$pr"
+    if [ "$merge_state" = "CLEAN" ]; then
+      verdict=READY
+    else
+      verdict=BLOCKED
+    fi
+    prev=$(cat "$state_dir/cand_$pr" 2>/dev/null || echo "")
+    if [ "$prev" != "$verdict" ]; then
+      # First qualifying observation: a completed-but-momentary gap before
+      # the next workflow's checks are created looks identical, so require
+      # the same verdict on two consecutive polls before reporting it.
+      echo "$verdict" >"$state_dir/cand_$pr"
       continue
     fi
+    if [ "$verdict" = "READY" ]; then
+      echo "PR #$pr: READY -- all checks green, CLEAN, mergeable"
+    else
+      echo "PR #$pr: BLOCKED -- all checks completed with no failures, but mergeStateStatus=$merge_state (not CLEAN) -- often an unresolved required review or conversation thread; check the PR directly for the reason"
+    fi
+    mark_resolved "$pr"
   done
 }
 

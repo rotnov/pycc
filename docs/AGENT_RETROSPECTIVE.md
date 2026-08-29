@@ -33,6 +33,66 @@ never a merge gate.
 
 ---
 
+## 2026-08-29 — CI wait ran through a hand-rolled poll loop instead of the repository watcher; 13-hour silent stall
+
+What happened: while waiting on a pull request's CI, the session built an
+inline `while`/`sleep` polling loop over `gh pr checks` in a background
+Bash call instead of running
+`.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh` under the `Monitor`
+tool as `autopilot-async-monitoring` mandates. The loop died silently
+(empty output file, no notification) while the PR's CI was red; the stall
+lasted about 13 hours and ended only by owner intervention (`/harden`).
+
+Root cause: a known false-terminal defect in the watcher — an empty
+`statusCheckRollup` (GitHub Actions not started yet, or a momentary gap
+between chained workflows) read as "all checks completed", emitting a
+false `BLOCKED` — made the ready-made tool look untrustworthy, and the
+session responded by substituting its transport instead of fixing the
+tool. The mandating rule was loaded in this very session's context and was
+still bypassed — a textual rule's second failure in this class (see
+`.harden/incidents/ad-hoc-ci-polling-instead-of-skill/`).
+
+What fixed it: the watcher itself was repaired in place (an empty rollup
+is never terminal, with one non-terminal NOTE after `EMPTY_NOTE_POLLS`
+consecutive empty polls; `READY`/`BLOCKED` require the same verdict on two
+consecutive polls), its CI-run harness `test-ci-watch.sh` gained the
+incident's reproduction fixtures, and a machine-local `PreToolUse` hook
+now denies Bash commands that combine a `gh` CI query with a poll loop and
+a `sleep`.
+
+Lesson: when a ready-made tool misbehaves, fix the tool in its own change
+and keep using its transport — never re-implement its loop inline. A
+substitute poll loop removes the notification path that makes background
+waiting safe, and its silent death costs more than the defect it dodged.
+
+## 2026-08-29 — Evidence-identity rotation shipped without running the target workflow's full local gate list
+
+What happened: a pull request rotating a landing-page evidence identity
+passed the gates run locally for that commit, then failed CI three
+separate ways: a stale sitemap `lastmod`, a hardcoded landing
+`dateModified` pin inside the site validator (plus its self-test
+fixtures), and a stale page-body hash in the performance manifest. A
+post-hoc fix round had to map the full pin constraint graph before the
+branch went green (PR #828, fix commit rounds on the
+`feat/issue-782-quickstart-reattest` branch).
+
+Root cause: the local gate set was assembled from the checks the change
+was *known* to touch, not from the workflow that would actually judge it.
+Date- and digest-pinned constants live in several checkers the diff never
+opened, so "the checks I ran are green" did not imply "the workflow is
+green".
+
+What fixed it: extracting the Pages workflow's complete "Validate website"
+command block and running it locally as one unit before pushing; the
+delivery PR's session log records that block as the gate list for any
+landing-page byte change.
+
+Lesson: for any change that rotates a pinned identity (a date, a digest, a
+run id), derive the local gate list from the target workflow's own step
+list — run every check the workflow runs, not the subset the diff
+suggests. Pinned constants make unrelated-looking checkers into
+stakeholders of the change.
+
 ## 2026-08-26 — A "next free D-NNN number" picked from a stale `main` collided with a concurrently-merged decision on the same number
 
 What happened: PR #820 (issue #803) renumbered two decision files that

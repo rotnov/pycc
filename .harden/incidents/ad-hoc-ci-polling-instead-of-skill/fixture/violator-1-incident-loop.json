@@ -1,0 +1,1 @@
+{"tool_name": "Bash", "tool_input": {"command": "sleep 180\nwhile true; do out=$(gh pr checks 828 --repo rotnov/pycc 2>&1); echo \"$out\" > /tmp/watch.out; sleep 30; done"}}

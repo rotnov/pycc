@@ -54,7 +54,13 @@ first), `CHECK FAILED -- <name> (<conclusion>)[, <name>
 unresolved required review or conversation thread under branch protection),
 or `READY` (every check green and `mergeStateStatus: CLEAN`). It is silent
 between polls — no per-poll spam, only real terminal events reach the
-conversation as `Monitor` notifications.
+conversation as `Monitor` notifications. The `READY` and `BLOCKED` verdicts
+are reported only after the same verdict holds on two consecutive polls, so
+a momentary all-complete gap between chained workflows cannot resolve the
+watch early; an empty `statusCheckRollup` (GitHub Actions not started yet)
+is never terminal — after `EMPTY_NOTE_POLLS` consecutive empty polls
+(default 30) the script emits one non-terminal `NOTE` line and keeps
+watching.
 
 When every listed failing check in a `CHECK FAILED` line is `CANCELLED`
 (no genuine `FAILURE`/`TIMED_OUT`/`STARTUP_FAILURE` among them), the script

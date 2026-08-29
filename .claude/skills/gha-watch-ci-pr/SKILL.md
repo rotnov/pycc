@@ -26,6 +26,12 @@ Emits exactly one line per PR when it reaches a terminal state:
 `CHECK FAILED -- <name> (<conclusion>)[, ...]` (every non-passing check
 named), `BLOCKED` (all checks completed with no failures but not CLEAN —
 typically an unresolved required review), or `READY` (all green + CLEAN).
+`READY` and `BLOCKED` are only reported after the same verdict holds on two
+consecutive polls, so a momentary all-complete gap between chained
+workflows cannot resolve the watch early; an empty `statusCheckRollup`
+(Actions not started yet) is never terminal — after `$EMPTY_NOTE_POLLS`
+consecutive empty polls (default 30) the script emits one non-terminal
+`NOTE` line and keeps watching.
 
 When every failing check is `CANCELLED` (no genuine `FAILURE`/`TIMED_OUT`
 among them), the line adds a hint that this is often a partial-rerun or

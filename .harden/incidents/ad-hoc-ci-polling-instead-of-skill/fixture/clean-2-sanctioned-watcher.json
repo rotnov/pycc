@@ -1,0 +1,1 @@
+{"tool_name": "Bash", "tool_input": {"command": "POLL_INTERVAL=20 sh .claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh rotnov/pycc 828"}}
