@@ -2524,6 +2524,30 @@ fn emit_expr_unchecked<'ctx>(
             Scalar::Bool(as_bool)
         }
         MirExpr::BoolLiteral(b) => Scalar::Bool(context.i8_type().const_int(u64::from(*b), false)),
+        // #604 (Part 3 of #573): `not x`. Reuses `truthy`, the exact same
+        // helper an `if`/`while` condition's own test already calls (see
+        // `MirStmt::If` above), then inverts the resulting `i1` -- so a
+        // `not` over any operand `truthy` can classify (`bool`/`int`/
+        // `float`/`str`/`Optional`; `pycc_types::unop::unary_result_type`
+        // rejects every other operand before this ever runs) gets
+        // `if`/`while`'s exact truthiness semantics for free, including
+        // the `float`'s `UNE`-not-`ONE` NaN handling and `Optional`'s
+        // present/payload AND. Every other truthy-call site releases any
+        // int temporary the operand produced *after* `truthy` reads it
+        // (#146 Part 2, D-181) -- this one follows the identical sequence.
+        MirExpr::Not(operand) => {
+            let operand_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, operand);
+            let truthy_cond = truthy(context, builder, rt, operand_scalar);
+            release_scalar_if_int_temporary(context, builder, rt, operand, &operand_scalar);
+            let inverted = builder
+                .build_not(truthy_cond, "not_truthy")
+                .expect("build_not should not fail inverting a well-formed i1");
+            let as_bool = builder
+                .build_int_z_extend(inverted, context.i8_type(), "bool_from_not")
+                .expect("build_int_z_extend should not fail widening i1 to i8");
+            Scalar::Bool(as_bool)
+        }
         MirExpr::Call { callee, args, ty } => {
             if callee == "print" {
                 panic!(

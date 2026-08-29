@@ -174,4 +174,10 @@ fn mir_expr_ty_covers_every_variant() {
         MirExpr::OptionalWrap(Box::new(MirExpr::NoneLiteral), Box::new(Ty::Int)).ty(),
         Ty::Optional(Box::new(Ty::Int))
     );
+    // `Not` (#604, Part 3 of #573): always `bool`, regardless of the
+    // operand's own type -- truthiness always produces a boolean result.
+    assert_eq!(
+        MirExpr::Not(Box::new(MirExpr::IntLiteral(0))).ty(),
+        Ty::Bool
+    );
 }

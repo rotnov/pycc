@@ -1,41 +1,82 @@
 //! Unary-operator result typing.
 //!
 //! Issue #603 (Part 2 of #573) lowers `-x` and `+x` over non-literal
-//! operands. This submodule holds [`unary_result_type`], a direct sibling
-//! of [`binop`](crate::binop) placed here for the same reason that one was
-//! extracted from [`lib.rs`](crate): the repository's source-file
-//! decomposition rule (AGENTS.md "Keep source files decomposable").
+//! operands; issue #604 (Part 3) adds `not x` and `~x`. This submodule
+//! holds [`unary_result_type`], a direct sibling of [`binop`](crate::binop)
+//! placed here for the same reason that one was extracted from
+//! [`lib.rs`](crate): the repository's source-file decomposition rule
+//! (AGENTS.md "Keep source files decomposable").
 //!
-//! The rules are deliberately the *unary projection* of
+//! `USub`/`UAdd` share one rule, the *unary projection* of
 //! [`numeric_result_type`](crate::binop::numeric_result_type)'s numeric
-//! mapper, not an independent policy: `bool` and `int` both yield `int`
-//! (`-True` is `-1` in Python, so the operand crosses into `int`), `float`
-//! yields `float`, and everything else is `T0021`. `str` has no unary
-//! form at all -- unlike `str * int`, there is no `-"ab"` -- so it needs
-//! no guard clause and falls through to the error arm with every other
-//! non-numeric type.
+//! mapper: `bool` and `int` both yield `int` (`-True` is `-1` in Python, so
+//! the operand crosses into `int`), `float` yields `float`, and everything
+//! else is `T0021`. `str` has no unary form at all -- unlike `str * int`,
+//! there is no `-"ab"` -- so it needs no guard clause and falls through to
+//! the error arm with every other non-numeric type.
+//!
+//! `Not` and `Invert` each need their own rule instead of sharing that one:
+//!
+//! * `not x` is defined by truthiness, not by numeric promotion. Its result
+//!   is always `bool`, for every operand type this compiler can actually
+//!   compute a truth value for at codegen time --
+//!   [`truthy`](../../pycc_codegen/fn.truthy.html) in `pycc_codegen`
+//!   handles `bool`, `int`, `float`, `str`, `None`, `Optional`, and a class
+//!   instance, but panics on `list`/`dict`/`set` (no `pycc_rt_*_truthy`
+//!   entry point exists for them yet). Accepting those container types
+//!   here would let a `not` expression reach that panic, so they are
+//!   rejected with `T0021` instead -- the same "every type pycc models a
+//!   truth value for" reading the issue's own completion criteria use,
+//!   not a narrowing of them. `None` needs no runtime call at all: a
+//!   `Ty::None`-typed `MirExpr::Name` read lowers to `Scalar::Bool` backed
+//!   by an always-zero `i8` slot, and `MirExpr::NoneLiteral` lowers to
+//!   `Scalar::Optional`, so `truthy`'s existing `Bool`/`Optional` arms
+//!   already compute the correct (always-`False`) truth value for it.
+//!   `Ty::Instance(_)` needs no runtime call either (D-154, Part 1 of
+//!   #375): this compiler ships no `__bool__`/`__len__`, so every
+//!   instance is unconditionally truthy, and `truthy`'s `Scalar::Instance`
+//!   arm already returns the constant `1` for it -- `not <instance>` is
+//!   always `False`.
+//! * `~x` is `int -> int` only (`bool` included, since `pycc_types` treats
+//!   it as a numeric subtype of `int`); every other operand is `T0021`.
 
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{Ty, UnaryOpKind};
 
 /// Types a unary expression from its operator and its operand type.
-///
-/// `USub` and `UAdd` share this typing exactly: `+x` is not the identity
-/// on `bool`, so it promotes to `int` just as `-x` does, and neither
-/// operator narrows a `float`.
 pub(crate) fn unary_result_type(op: UnaryOpKind, operand: Ty) -> Result<Ty, Diagnostic> {
-    match operand {
-        Ty::Bool | Ty::Int => Ok(Ty::Int),
-        Ty::Float => Ok(Ty::Float),
-        _ => Err(Diagnostic::error(
-            "T0021",
-            format!(
-                "unary operator {op:?} is not defined for `{}`",
-                operand.name()
-            ),
-            Span::new(0, 0),
-        )),
+    match op {
+        UnaryOpKind::USub | UnaryOpKind::UAdd => match operand {
+            Ty::Bool | Ty::Int => Ok(Ty::Int),
+            Ty::Float => Ok(Ty::Float),
+            _ => Err(unary_type_error(op, operand)),
+        },
+        UnaryOpKind::Not => match operand {
+            Ty::Bool
+            | Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::None
+            | Ty::Optional(_)
+            | Ty::Instance(_) => Ok(Ty::Bool),
+            _ => Err(unary_type_error(op, operand)),
+        },
+        UnaryOpKind::Invert => match operand {
+            Ty::Bool | Ty::Int => Ok(Ty::Int),
+            _ => Err(unary_type_error(op, operand)),
+        },
     }
+}
+
+fn unary_type_error(op: UnaryOpKind, operand: Ty) -> Diagnostic {
+    Diagnostic::error(
+        "T0021",
+        format!(
+            "unary operator {op:?} is not defined for `{}`",
+            operand.name()
+        ),
+        Span::new(0, 0),
+    )
 }
 
 #[cfg(test)]
@@ -93,5 +134,27 @@ mod tests {
         let err = unary_result_type(UnaryOpKind::UAdd, Ty::None).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(err.message.contains("UAdd") && err.message.contains("None"));
+    }
+
+    #[test]
+    fn logical_not_on_none_types_as_bool() {
+        // `not None` is always `True` in CPython; `truthy`'s existing
+        // `Bool`/`Optional` arms already compute the correct (always
+        // `False`) truthiness for both `Ty::None` representations, with no
+        // codegen change needed -- see this module's own doc comment.
+        assert_eq!(unary_result_type(UnaryOpKind::Not, Ty::None), Ok(Ty::Bool));
+    }
+
+    #[test]
+    fn logical_not_on_a_class_instance_types_as_bool() {
+        // D-154 (Part 1 of #375): this compiler ships no `__bool__`/
+        // `__len__`, so every instance is unconditionally truthy, and
+        // `truthy`'s `Scalar::Instance` arm already returns the constant
+        // `1` for it -- `not <instance>` type-checks and is always
+        // `False`.
+        assert_eq!(
+            unary_result_type(UnaryOpKind::Not, Ty::Instance(Box::new("C".to_string()))),
+            Ok(Ty::Bool)
+        );
     }
 }

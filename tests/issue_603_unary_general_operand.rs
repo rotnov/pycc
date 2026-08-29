@@ -442,12 +442,7 @@ fn negating_a_maybe_bound_operand_leaves_the_helper_uninferable() {
     );
 }
 
-/// `not` and `~` are Part 3 (#604) and are still rejected by name, so this
-/// part's enum staying two-valued is observable from the CLI.
-#[test]
-fn logical_not_and_bitwise_invert_still_name_issue_604() {
-    let message = check_err("not_operand", "x = 5\nprint(not x)\n");
-    assert!(message.contains("#604"), "unexpected diagnostic: {message}");
-    let message = check_err("invert_operand", "x = 5\nprint(~x)\n");
-    assert!(message.contains("#604"), "unexpected diagnostic: {message}");
-}
+// `not` and `~` were Part 3 (#604): they are now implemented, with their own
+// dedicated public-CLI differential coverage in
+// `tests/issue_604_unary_not_invert.rs` (mirroring this file's own style),
+// rather than a rejection test living here.

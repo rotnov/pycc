@@ -2174,6 +2174,57 @@ fn compiles_a_while_loop_using_a_bare_int_condition_via_truthy() {
 }
 
 #[test]
+fn emit_expr_evaluates_not_over_a_non_literal_int_operand() {
+    // `i = 0; print(not i)` then `j = 5; print(not j)` -- prints `True`
+    // then `False`. #604 (Part 3 of #573) adds `MirExpr::Not` as its own
+    // dedicated `emit_expr` arm rather than folding into an existing
+    // `BinOp`/`Compare` arm (unlike `~`, which rewrites to `-x - 1` at the
+    // MIR level and so never needs a codegen arm of its own). The D-014
+    // region gate scores every compilation of this crate separately, and
+    // this arm was previously exercised only through the `pycc` binary and
+    // the `tests/issue_604_unary_not_invert.rs` integration suite, never
+    // through this crate's own `cfg(test)` build -- so this test, built
+    // directly against `emit_expr`/`compile_to_object` the same way every
+    // other test in this file is, is what actually reaches it there.
+    let mir = MirModule {
+        items: vec![
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "i".to_string(),
+                value: MirExpr::IntLiteral(0),
+            }),
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::Not(Box::new(MirExpr::Name {
+                    name: "i".to_string(),
+                    ty: Ty::Int,
+                }))],
+                ty: Ty::None,
+            })),
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "j".to_string(),
+                value: MirExpr::IntLiteral(5),
+            }),
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::Not(Box::new(MirExpr::Name {
+                    name: "j".to_string(),
+                    ty: Ty::Int,
+                }))],
+                ty: Ty::None,
+            })),
+        ],
+        class_defs: Vec::new(),
+    };
+    let dir = pycc_scratch::ScratchDir::new("not_over_int_name").expect("failed to create scratch dir");
+    let obj_path = dir.join("not_over_int_name.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("not_over_int_name");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"True\nFalse\n");
+}
+
+#[test]
 fn a_while_loop_body_that_always_returns_skips_its_own_trailing_branch() {
     // `def f() -> int:\n    while True:\n        return 1\n    return 2`
     // ; `print(f())` -- must print `1`. The trailing `return 2` is

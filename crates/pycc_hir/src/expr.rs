@@ -154,7 +154,8 @@ pub(crate) fn lower_expr(
         // `pycc_types`, `pycc_mir`, or `pycc_codegen`. Only a *literal*
         // operand folds: `-x` for a variable needs a real `HirExpr` variant
         // and downstream arms, which the next arm supplies (#603, Part 2);
-        // `not`/`~` are still #604 (Part 3).
+        // `not x` and `~x` (#604, Part 3) get no such fold either, since
+        // neither is part of Python's numeric-literal grammar.
         Expr::UnaryOp(unary) => match (unary.op, unary.operand.as_ref()) {
             (UnaryOp::USub | UnaryOp::UAdd, Expr::NumberLiteral(lit)) => {
                 let negate = matches!(unary.op, UnaryOp::USub);
@@ -186,15 +187,20 @@ pub(crate) fn lower_expr(
                 },
                 operand: Box::new(lower_expr(operand, in_function, class_name)?),
             },
-            (UnaryOp::Not | UnaryOp::Invert, _) => {
-                return Err(unsupported(
-                    format!(
-                        "unary `{}` is not supported yet (issue #604)",
-                        unary.op.as_str()
-                    ),
-                    unary.range,
-                ));
-            }
+            // #604 (Part 3 of #573): `not x` and `~x`. Neither operator has
+            // a literal-folding arm the way `USub`/`UAdd` do above --
+            // `not 5` and `~5` are not part of Python's numeric-literal
+            // grammar the way a source-level `-5` is, so every operand
+            // (literal or not) lowers into the same `HirExpr::UnaryOp` node
+            // and is typed/rewritten downstream.
+            (UnaryOp::Not, operand) => HirExpr::UnaryOp {
+                op: UnaryOpKind::Not,
+                operand: Box::new(lower_expr(operand, in_function, class_name)?),
+            },
+            (UnaryOp::Invert, operand) => HirExpr::UnaryOp {
+                op: UnaryOpKind::Invert,
+                operand: Box::new(lower_expr(operand, in_function, class_name)?),
+            },
         },
         Expr::Name(name) => HirExpr::Name(name.id.as_str().to_string()),
         Expr::List(list) => HirExpr::ListLiteral(
@@ -1458,22 +1464,56 @@ mod tests {
     fn unary_operator_kinds_render_their_source_spelling() {
         assert_eq!(UnaryOpKind::USub.as_str(), "-");
         assert_eq!(UnaryOpKind::UAdd.as_str(), "+");
+        assert_eq!(UnaryOpKind::Not.as_str(), "not");
+        assert_eq!(UnaryOpKind::Invert.as_str(), "~");
     }
 
     #[test]
-    fn logical_not_names_issue_604() {
-        let message = lower_err_message("y = True\nx = not y\n");
+    fn logical_not_on_a_non_literal_builds_a_unary_node() {
+        // #604, Part 3 of #573: `not` has no literal-folding arm (unlike
+        // `-`/`+`), so it always lowers through this same generic path.
+        assert_second_assign(
+            "y = True\nx = not y\n",
+            HirExpr::UnaryOp {
+                op: UnaryOpKind::Not,
+                operand: Box::new(HirExpr::Name("y".to_string())),
+            },
+        );
+    }
+
+    #[test]
+    fn bitwise_invert_on_a_non_literal_builds_a_unary_node() {
+        // #604, Part 3 of #573.
+        assert_second_assign(
+            "y = 1\nx = ~y\n",
+            HirExpr::UnaryOp {
+                op: UnaryOpKind::Invert,
+                operand: Box::new(HirExpr::Name("y".to_string())),
+            },
+        );
+    }
+
+    #[test]
+    fn a_lowering_error_inside_a_logical_not_operand_propagates() {
+        // #604, Part 3 of #573: `not`'s own `(UnaryOp::Not, operand) =>`
+        // arm lowers its operand through the same recursive `lower_expr(operand,
+        // ..)?` call every other unary arm uses, so a rejection inside the
+        // operand must surface unchanged instead of being masked here --
+        // mirrors `a_lowering_error_inside_a_unary_operand_propagates` above,
+        // which only exercises `USub`/`UAdd`'s own non-literal arm.
+        let message = lower_err_message("x = not 1j\n");
         assert!(
-            message.contains("unary `not`") && message.contains("issue #604"),
+            message.contains("numeric literal kind not supported yet"),
             "unexpected message: {message}"
         );
     }
 
     #[test]
-    fn bitwise_invert_names_issue_604() {
-        let message = lower_err_message("y = 1\nx = ~y\n");
+    fn a_lowering_error_inside_a_bitwise_invert_operand_propagates() {
+        // #604, Part 3 of #573: same as the `not` case above, for `~`'s arm.
+        let message = lower_err_message("x = ~1j\n");
         assert!(
-            message.contains("unary `~`") && message.contains("issue #604"),
+            message.contains("numeric literal kind not supported yet"),
             "unexpected message: {message}"
         );
     }

@@ -560,6 +560,52 @@ fn unary_plus_on_a_float_operand_lowers_to_a_multiply_by_one() {
     );
 }
 
+// #604 (Part 3 of #573): `~x` rewrites into the same `0 - x` shape `USub`
+// uses, chained twice (`~x == -x - 1`), inheriting `int_sub`'s bigint
+// handling. This is a dedicated inline unit test (not just the integration
+// coverage in `tests/issue_604_unary_not_invert.rs`) because #603's own
+// build-test-coverage failure (see `docs/TESTING.md`'s "Practical notes")
+// showed that a crate's plain-vs-`--cfg test` compilations of the same
+// function are scored by the *maximum* covered-region count per
+// instantiation, not their union -- an arm reached only by an integration
+// test through the `pycc` binary does not count toward the unit-test
+// binary's own instantiation of `lower_expr`.
+#[test]
+fn bitwise_invert_on_an_int_operand_lowers_to_double_subtraction() {
+    assert_unary_over_param_lowers_to(
+        UnaryOpKind::Invert,
+        Ty::Int,
+        MirExpr::BinOp {
+            op: BinOpKind::Sub,
+            left: Box::new(MirExpr::BinOp {
+                op: BinOpKind::Sub,
+                left: Box::new(MirExpr::IntLiteral(0)),
+                right: Box::new(MirExpr::Name {
+                    name: "p".to_string(),
+                    ty: Ty::Int,
+                }),
+                ty: Ty::Int,
+            }),
+            right: Box::new(MirExpr::IntLiteral(1)),
+            ty: Ty::Int,
+        },
+    );
+}
+
+// #604: `not x` lowers to a dedicated `MirExpr::Not` node rather than a
+// `BinOp` rewrite, since truthiness has no binary-expression equivalent.
+#[test]
+fn logical_not_on_an_int_operand_lowers_to_a_dedicated_not_node() {
+    assert_unary_over_param_lowers_to(
+        UnaryOpKind::Not,
+        Ty::Int,
+        MirExpr::Not(Box::new(MirExpr::Name {
+            name: "p".to_string(),
+            ty: Ty::Int,
+        })),
+    );
+}
+
 // PEP 572 (#774): a walrus inside an `if` test binds the name into `scopes`
 // *before* the body is lowered (`pycc_mir::stmt::lower_stmt`'s `If` arm),
 // exercising both `expr::lower_expr`'s own `HirExpr::NamedExpr` arm and
@@ -818,6 +864,25 @@ fn collect_named_expr_bindings_walks_into_int_boundary_and_optional_wrap() {
     let mut out = Vec::new();
     MirExpr::OptionalWrap(Box::new(named), Box::new(Ty::Int)).collect_named_expr_bindings(&mut out);
     assert_eq!(out, vec![("z".to_string(), Ty::Int)]);
+}
+
+// #604 (Part 3 of #573): `collect_named_expr_bindings`'s `Not` arm shares its
+// match pattern with `ExceptionMessage` (both are simple single-field
+// wrappers), exercised directly for the same reason as the `IntBoundary`/
+// `OptionalWrap` pair above -- a walrus cannot actually nest inside a real
+// `not` expression's operand via the HIR-to-MIR pipeline used by `build`
+// (only a bare `if`/`while` test or expression statement admits one), so
+// this arm needs its own direct call against the public method.
+#[test]
+fn collect_named_expr_bindings_walks_into_a_logical_not_operand() {
+    let mir = MirExpr::Not(Box::new(MirExpr::NamedExpr {
+        name: "w".to_string(),
+        value: Box::new(MirExpr::IntLiteral(0)),
+        ty: Ty::Int,
+    }));
+    let mut out = Vec::new();
+    mir.collect_named_expr_bindings(&mut out);
+    assert_eq!(out, vec![("w".to_string(), Ty::Int)]);
 }
 
 #[test]

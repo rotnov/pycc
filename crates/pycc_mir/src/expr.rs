@@ -207,9 +207,13 @@ pub(super) fn lower_expr(
         }
         // #603 (Part 2 of #573): `-x`/`+x` over a non-literal operand is
         // rewritten into the equivalent binary expression rather than
-        // getting a `MirExpr` variant of its own, the same way `!=` between
-        // dataclass instances is lowered as a negated `__eq__` call below
-        // -- pycc's MIR deliberately has no unary node.
+        // getting a `MirExpr` variant of its own -- pycc's MIR deliberately
+        // has no `USub`/`UAdd`/`Invert` unary node (see the #604 comment
+        // below for `not x`'s own dedicated `MirExpr::Not` exception to
+        // that rule, which also supersedes the "negated `__eq__` call"
+        // comparison this comment used to draw to the dataclass `!=`
+        // lowering further below -- that lowering now itself uses
+        // `MirExpr::Not` rather than illustrating "no unary node exists").
         //
         // The rewrite is representation-sensitive, so it is not a single
         // uniform shape:
@@ -228,29 +232,63 @@ pub(super) fn lower_expr(
         // `0 + x` / `x * 1.0` shapes deliver through the same typing rules
         // as `USub`. Any non-numeric operand is already rejected by
         // `pycc_types::unop::unary_result_type` and never reaches here.
+        //
+        // #604 (Part 3 of #573) adds `not x` and `~x`. `~x` follows the
+        // exact same "rewrite into a `BinOp`, no new MIR node" strategy as
+        // `USub`/`UAdd`: `~x == -x - 1` for every `int`/`bool` operand (the
+        // only operands `pycc_types::unop::unary_result_type` accepts for
+        // `Invert`), so it reuses the identical `0 - x` shape and its
+        // bigint-precision guarantee, then subtracts a further literal
+        // `1` -- both legs going through `int_sub`. `not x` genuinely has
+        // no binary-expression equivalent (its truthiness rule spans
+        // types `BinOp`'s own typing has no notion of), so it is the one
+        // case that *does* need a dedicated `MirExpr::Not` node, built
+        // directly on `pycc_codegen`'s existing `truthy` helper (the same
+        // one `if`/`while` conditions already call).
         HirExpr::UnaryOp { op, operand } => {
             let operand = lower_expr(operand, scopes, classes, current_class);
-            let (op, left, right) = if operand.ty() == Ty::Float {
-                let factor = if matches!(op, UnaryOpKind::USub) {
-                    -1.0
-                } else {
-                    1.0
-                };
-                (BinOpKind::Mul, operand, MirExpr::FloatLiteral(factor))
-            } else {
-                let op = if matches!(op, UnaryOpKind::USub) {
-                    BinOpKind::Sub
-                } else {
-                    BinOpKind::Add
-                };
-                (op, MirExpr::IntLiteral(0), operand)
-            };
-            let ty = binop_result_ty(op, left.ty(), right.ty());
-            MirExpr::BinOp {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
-                ty,
+            match op {
+                UnaryOpKind::USub | UnaryOpKind::UAdd => {
+                    let (bin_op, left, right) = if operand.ty() == Ty::Float {
+                        let factor = if matches!(op, UnaryOpKind::USub) {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+                        (BinOpKind::Mul, operand, MirExpr::FloatLiteral(factor))
+                    } else {
+                        let bin_op = if matches!(op, UnaryOpKind::USub) {
+                            BinOpKind::Sub
+                        } else {
+                            BinOpKind::Add
+                        };
+                        (bin_op, MirExpr::IntLiteral(0), operand)
+                    };
+                    let ty = binop_result_ty(bin_op, left.ty(), right.ty());
+                    MirExpr::BinOp {
+                        op: bin_op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                        ty,
+                    }
+                }
+                UnaryOpKind::Invert => {
+                    let negated_ty = binop_result_ty(BinOpKind::Sub, Ty::Int, operand.ty());
+                    let negated = MirExpr::BinOp {
+                        op: BinOpKind::Sub,
+                        left: Box::new(MirExpr::IntLiteral(0)),
+                        right: Box::new(operand),
+                        ty: negated_ty.clone(),
+                    };
+                    let ty = binop_result_ty(BinOpKind::Sub, negated_ty, Ty::Int);
+                    MirExpr::BinOp {
+                        op: BinOpKind::Sub,
+                        left: Box::new(negated),
+                        right: Box::new(MirExpr::IntLiteral(1)),
+                        ty,
+                    }
+                }
+                UnaryOpKind::Not => MirExpr::Not(Box::new(operand)),
             }
         }
         HirExpr::BinOp { op, left, right } => {
@@ -270,13 +308,19 @@ pub(super) fn lower_expr(
             // #378 (PR-18): `==`/`!=` between same-class dataclass instances
             // is rewritten to a `MirExpr::Call` to the class's
             // compiler-synthesized `__eq__` method. `!=` is lowered as
-            // `__eq__(left, right) != True` (the negation), since pycc's
-            // MIR has no `UnaryOp::Not` node. This mirrors how `@property`
-            // redirects attribute access to method calls -- a MIR-level
-            // rewrite, not a new MIR node. Only `Eq` and `NotEq` are
-            // rewritten, and only for dataclass classes (whose synthesized
-            // `__eq__` has a known-correct signature); other comparison
-            // operators (`<`, `<=`, `>`, `>=`) and non-dataclass classes
+            // `__eq__(left, right) != True` (a `MirExpr::Compare` against a
+            // `BoolLiteral`, predating #604's `MirExpr::Not`) rather than
+            // negating the call result with `MirExpr::Not` directly --
+            // `MirExpr::Not` computes truthiness (bool/int/float/str/
+            // None/Optional) via `pycc_codegen`'s `truthy` helper, but this
+            // call's result is already a `bool`, so an equality compare
+            // against `true` is the simpler, equally-correct rewrite. This
+            // mirrors how `@property` redirects attribute access to method
+            // calls -- a MIR-level rewrite, not a new MIR node. Only `Eq`
+            // and `NotEq` are rewritten, and only for dataclass classes
+            // (whose synthesized `__eq__` has a known-correct signature);
+            // other comparison operators (`<`, `<=`, `>`, `>=`) and
+            // non-dataclass classes
             // fall through to the default `MirExpr::Compare` (the type
             // checker rejects them with `T0021` before they reach MIR
             // lowering in normal compilation, but the MIR itself stays

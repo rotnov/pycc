@@ -121,6 +121,14 @@ pub enum MirExpr {
         right: Box<MirExpr>,
         ty: Ty,
     },
+    /// `not x` (#604, Part 3 of #573). Unlike `USub`/`UAdd`/`Invert`, `not`
+    /// has no equivalent `BinOp` shape to rewrite into -- its truthiness
+    /// rule spans operand types (`int`, `float`, `str`, `Optional`) that
+    /// `BinOp`'s own typing has no notion of -- so it is MIR's one
+    /// dedicated unary node. Always `Ty::Bool`; `pycc_codegen` computes it
+    /// with the same `truthy` helper an `if`/`while` condition already
+    /// calls, then inverts the result.
+    Not(Box<MirExpr>),
     FString(Vec<MirFStringPart>),
     /// `[e1, e2, ...]`. No `ty` field: `ty()` below derives
     /// `Ty::List(Box::new(elements[0].ty()))` from the first element,
@@ -352,6 +360,7 @@ impl MirExpr {
             | MirExpr::Call { ty, .. }
             | MirExpr::BinOp { ty, .. }
             | MirExpr::Compare { ty, .. } => ty.clone(),
+            MirExpr::Not(_) => Ty::Bool,
             MirExpr::ListLiteral(elements) => {
                 let elem_ty = elements.first().map(|e| e.ty()).unwrap_or_else(|| {
                     panic!(
@@ -566,7 +575,9 @@ impl MirExpr {
                 }
             }
             MirExpr::AttrGet { base, .. } => base.collect_named_expr_bindings(out),
-            MirExpr::ExceptionMessage(inner) => inner.collect_named_expr_bindings(out),
+            MirExpr::ExceptionMessage(inner) | MirExpr::Not(inner) => {
+                inner.collect_named_expr_bindings(out)
+            }
             MirExpr::NamedExpr { name, value, ty } => {
                 value.collect_named_expr_bindings(out);
                 out.push((name.clone(), ty.clone()));

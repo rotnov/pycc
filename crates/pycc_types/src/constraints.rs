@@ -416,13 +416,38 @@ pub(crate) fn collect_expr_constraints(
         // a type for, which is the overwhelming majority.
         //
         // An operand that is still an inference variable has no type to
-        // check yet, so it is deferred as the exact binary constraint
-        // `pycc_mir` will lower the expression to -- `0 - x` / `0 + x`.
+        // check yet, so `USub`/`UAdd`/`Invert` defer to the exact binary
+        // constraint `pycc_mir` will lower the expression to -- `0 - x`,
+        // `0 + x`, or (for `Invert`) the first leg of `0 - x - 1`.
         // `numeric_result_type(Sub | Add, Int, operand)` *is* the unary
         // rule (`Int`/`Bool` give `Int` since `-True == -1`, `Float` gives
         // `Float`, anything else is `T0021`), so reusing it keeps the
         // solver's view of the expression identical to MIR's own rewrite
-        // and the two cannot drift apart.
+        // and the two cannot drift apart. `Invert` shares that same `Sub`
+        // shape rather than getting a distinct one: it happens to accept
+        // exactly the same concrete types (`Int`/`Bool`) `unary_result_type`
+        // gives it, so the one place this deferred path is looser than
+        // `unary_result_type` -- permitting a still-unresolved `Float`
+        // operand, which `Invert`'s own concrete rule at line 430 above
+        // rejects with `T0021` -- is unreachable from any HIR this
+        // compiler's own generic-inference lowering produces today (no
+        // generic-context construct here yields a `Float`-typed inference
+        // variable feeding `~x`).
+        //
+        // #604 (Part 3 of #573): `not x` needs none of this. Its result is
+        // `Ty::Bool` regardless of the operand's type -- `Compare` just
+        // above hardcodes its own `Ty::Bool` result the exact same way,
+        // without ever inspecting `left`/`right`'s resolved types either --
+        // so `Not` only has to walk the operand for its own nested
+        // constraints (a walrus inside `not (n := f())`, say) and never
+        // needs a `binops` entry at all.
+        HirExpr::UnaryOp {
+            op: UnaryOpKind::Not,
+            operand,
+        } => {
+            collect_expr_constraints(signatures, parents, concrete, binops, env, operand)?;
+            Ok(Some(Ok(Ty::Bool)))
+        }
         HirExpr::UnaryOp { op, operand } => {
             let operand =
                 collect_expr_constraints(signatures, parents, concrete, binops, env, operand)?;
@@ -430,11 +455,20 @@ pub(crate) fn collect_expr_constraints(
                 Some(Ok(operand_ty)) => Ok(Some(Ok(unary_result_type(*op, operand_ty)?))),
                 Some(operand) => {
                     let result = fresh_term(parents, concrete);
-                    let op = match op {
-                        UnaryOpKind::USub => BinOpKind::Sub,
-                        UnaryOpKind::UAdd => BinOpKind::Add,
+                    // Only `USub`/`UAdd`/`Invert` ever reach this arm --
+                    // `Not` is peeled off by its own dedicated arm above,
+                    // before `collect_expr_constraints` recurses into this
+                    // one -- and `USub`/`Invert` share the same `Sub`
+                    // shape, so a plain `UAdd` check (rather than an
+                    // exhaustive match that would need a structurally
+                    // unreachable `Not` arm the coverage gate could never
+                    // exercise) is enough to pick the right one.
+                    let bin_op = if matches!(op, UnaryOpKind::UAdd) {
+                        BinOpKind::Add
+                    } else {
+                        BinOpKind::Sub
                     };
-                    binops.push((op, Ok(Ty::Int), operand, result.clone()));
+                    binops.push((bin_op, Ok(Ty::Int), operand, result.clone()));
                     Ok(Some(result))
                 }
                 None => Ok(None),
