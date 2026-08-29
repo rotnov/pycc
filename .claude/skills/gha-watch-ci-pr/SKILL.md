@@ -31,7 +31,8 @@ consecutive polls, so a momentary all-complete gap between chained
 workflows cannot resolve the watch early; an empty `statusCheckRollup`
 (Actions not started yet) is never terminal — after `$EMPTY_NOTE_POLLS`
 consecutive empty polls (default 30) the script emits one non-terminal
-`NOTE` line and keeps watching.
+`NOTE` line (once per consecutive-empty streak, so it can recur after a
+later non-empty poll) and keeps watching.
 
 When every failing check is `CANCELLED` (no genuine `FAILURE`/`TIMED_OUT`
 among them), the line adds a hint that this is often a partial-rerun or

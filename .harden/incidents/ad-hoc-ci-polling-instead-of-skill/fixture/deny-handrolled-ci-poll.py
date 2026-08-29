@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deny hand-rolled CI polling loops in Bash tool calls.
 
-Installed by /harden (incident topic: background-child-stop-and-wait,
+Installed by /harden (incident topic: ad-hoc-ci-polling-instead-of-skill,
 2026-08-29 entry, recurrence #2). A session waiting on CI must use the
 repository's ready-made watcher (in pycc:
 `.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh`) run through the

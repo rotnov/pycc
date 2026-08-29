@@ -288,4 +288,38 @@ case "$output" in
   *) fail "expected the watch to continue past the NOTE to READY, got: $output" ;;
 esac
 
+# --- Fixture 12: the NOTE fires once per consecutive-empty streak -- a
+# second streak after an intervening non-empty poll re-fires it ----------
+mkdir -p "$work_dir/fixture-two-streaks/bin"
+counter_file_12="$work_dir/fixture-two-streaks/counter"
+echo 0 >"$counter_file_12"
+cat >"$work_dir/fixture-two-streaks/bin/gh" <<EOF
+#!/usr/bin/env sh
+n=\$(cat "$counter_file_12")
+n=\$((n + 1))
+echo "\$n" >"$counter_file_12"
+if [ "\$n" -le 2 ] || { [ "\$n" -ge 4 ] && [ "\$n" -le 5 ]; }; then
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[]}
+JSON
+elif [ "\$n" = "3" ]; then
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"audit","status":"IN_PROGRESS","conclusion":null}]}
+JSON
+else
+  cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"CLEAN","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"audit","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+fi
+EOF
+chmod +x "$work_dir/fixture-two-streaks/bin/gh"
+
+output=$(PATH="$work_dir/fixture-two-streaks/bin:$PATH" POLL_INTERVAL=1 EMPTY_NOTE_POLLS=2 "$repo_root/.claude/skills/gha-watch-ci-pr/scripts/ci-watch.sh" owner/repo 54)
+note_count=$(printf '%s\n' "$output" | grep -c "NOTE --" || true)
+[ "$note_count" = "2" ] || fail "expected one NOTE per consecutive-empty streak (2 streaks -> 2 NOTEs), got $note_count: $output"
+case "$output" in
+  *"PR #54: READY"*) ;;
+  *) fail "expected the watch to continue past both streaks to READY, got: $output" ;;
+esac
+
 echo "ci-watch.sh: valid"

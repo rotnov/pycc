@@ -59,8 +59,9 @@ are reported only after the same verdict holds on two consecutive polls, so
 a momentary all-complete gap between chained workflows cannot resolve the
 watch early; an empty `statusCheckRollup` (GitHub Actions not started yet)
 is never terminal — after `EMPTY_NOTE_POLLS` consecutive empty polls
-(default 30) the script emits one non-terminal `NOTE` line and keeps
-watching.
+(default 30) the script emits one non-terminal `NOTE` line (once per
+consecutive-empty streak, so it can recur after a later non-empty poll)
+and keeps watching.
 
 When every listed failing check in a `CHECK FAILED` line is `CANCELLED`
 (no genuine `FAILURE`/`TIMED_OUT`/`STARTUP_FAILURE` among them), the script

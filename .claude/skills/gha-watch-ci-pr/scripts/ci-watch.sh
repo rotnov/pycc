@@ -18,7 +18,9 @@ set -eu
 # exactly like "all checks completed", so it is never treated as terminal;
 # after $EMPTY_NOTE_POLLS consecutive empty polls (default 30) one
 # non-terminal NOTE line surfaces the possibility that Actions never
-# started, and polling continues. The READY and BLOCKED verdicts
+# started, and polling continues. The NOTE fires once per
+# consecutive-empty streak (the counter resets on any non-empty poll), so
+# it can recur if the rollup empties again later. The READY and BLOCKED verdicts
 # additionally require the same qualifying observation on two consecutive
 # polls, so a momentary all-complete gap before the next workflow's checks
 # are created cannot resolve the watch early. CHECK FAILED, MERGED/CLOSED,
