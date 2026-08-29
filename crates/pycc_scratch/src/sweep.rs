@@ -29,7 +29,8 @@
 //! The floors measure the directory's mtime, which tracks entry churn
 //! (create/remove/rename inside the root), not last IO — good enough for
 //! their purpose (covering the create-to-lock window, mid-`Drop` races, and
-//! the pre-Part-4 lockless transition), and stated plainly rather than
+//! the marker-less population: pre-Part-4 legacy roots, or a Part-4 root
+//! killed before its lock file was created), and stated plainly rather than
 //! glossed as "activity". Every fallible step folds conservatively into a
 //! skip; a concurrent sweep winning a deletion race is tolerated
 //! (`NotFound` from `remove_dir_all` counts as already-deleted).

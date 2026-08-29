@@ -56,7 +56,9 @@ status: accepted
   floor (`min_age_locked`) covers the microsecond create-dir-to-lock
   window and mid-`Drop` races (both harmless anyway — the creator is
   deleting too); the 24 h lockless floor (`min_age_lockless`) covers roots
-  from stale pre-Part-4 build artifacts during the transition. Parsed
+  without an observable marker — stale pre-Part-4 build artifacts during
+  the transition, or a Part-4 root whose creator was killed before its
+  lock file was created. Parsed
   `pid`/`nanos`/`seq` are format validation only, never trusted as data;
   age comes from the directory's filesystem mtime — which tracks entry
   churn (create/remove/rename inside the root), not last IO (verified:
@@ -139,8 +141,10 @@ status: accepted
   (rejected — undocumented surface, no demonstrated need).
 - Consequences: every post-Part-4 root carries a lock file, so its
   liveness is exactly probeable and stale roots drain automatically at the
-  1 h floor; pre-Part-4 format-matching lockless backlogs drain at the
-  24 h floor; `build`/`run` pay at most `time_budget` (250 ms) extra only
+  1 h floor; format-matching roots without an observable marker
+  (pre-Part-4 backlogs, or a Part-4 root killed before its lock file was
+  created) drain at the 24 h floor; `build`/`run` pay at most
+  `time_budget` (250 ms) extra only
   when a large stale backlog exists. The D-201 naming commitment now has
   its real parser, making the format doubly frozen. The pid/nanos
   liveness design D-201's consequences note anticipated is superseded by
