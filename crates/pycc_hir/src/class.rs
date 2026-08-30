@@ -4477,8 +4477,10 @@ mod tests {
     #[test]
     fn init_subclass_without_base_having_init_subclass_is_not_validated() {
         // A class defines `__init_subclass__` but no base class has it.
-        // The validation should NOT run (no base_has_init_subclass), so even
-        // a non-trivial body is accepted (it's just a regular method).
+        // The unconditional nearest-MRO-ancestor `find_map` walk finds no
+        // ancestor defining the hook and returns `None`, so validation does
+        // NOT run and even a non-trivial body is accepted (it's just a
+        // regular method).
         let module = crate::pycc_parser_test_helper::parse(
             "class D:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        print(1)\n",
         );
@@ -4520,8 +4522,7 @@ mod tests {
         // B's `__init_subclass__` is deliberately followed by `__init__`
         // (not the last statement in the body) so the reverse walk over
         // `base_ast.body` also exercises its `_ => {}` catch-all arm before
-        // finding the match, mirroring `init_subclass_before_init_in_body_validates_correctly`
-        // below for the analogous walk over the subclass's own body.
+        // finding the match.
         let module = crate::pycc_parser_test_helper::parse(
             "class B:\n    def __init_subclass__(self) -> None:\n        print(1)\n    def __init__(self) -> None:\n        return\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n",
         );
@@ -4707,6 +4708,36 @@ mod tests {
             hir.is_ok(),
             "the nearer ancestor in MRO order (M) must be validated, not the farther one (B), \
              even though both define the hook"
+        );
+    }
+
+    #[test]
+    fn multiple_inheritance_skips_hookless_ancestor_to_reject_farther_side_effecting_one() {
+        // Reject-direction sibling of
+        // `multiple_inheritance_nearest_mro_hook_wins_over_farther_side_effecting_one`.
+        // That test only proves the nearest hook-defining ancestor wins
+        // when it happens to also be the immediate base -- every existing
+        // fixture's `skip(1)` MRO candidate (position 1) either already
+        // defines `__init_subclass__` or terminates the search entirely, so
+        // a hypothetical regression that narrowed the lookup to just
+        // `mro.get(1)` instead of a real "walk the whole MRO, skipping
+        // classes that don't define the hook" search would still pass every
+        // other test in this suite. This fixture closes that gap: `class M`
+        // defines `__init__` only (introspectable, but no
+        // `__init_subclass__` of its own -- the search must skip past it),
+        // `class B` defines a side-effecting `__init_subclass__`, and
+        // `class D(M, B)` linearizes via C3 to `[D, M, B, object]` with no
+        // override of its own. The nearest-MRO-ancestor search must skip
+        // hookless M and match B, rejecting on B's side-effecting body.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class M:\n    def __init__(self) -> None:\n        return\nclass B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        print(1)\nclass D(M, B):\n    def __init__(self) -> None:\n        super().__init__()\n",
+        );
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message.contains("__init_subclass__"),
+            "unexpected message: {}",
+            err.message
         );
     }
 
