@@ -3443,6 +3443,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
                      .map { |step| step["run"] }
                      .compact
                      .flat_map { |run| run.lines.map(&:strip) }
+    native_commands = jobs
+                       .fetch("native-build-test")
+                       .fetch("steps")
+                       .map { |step| step["run"] }
+                       .compact
+                       .flat_map { |run| run.lines.map(&:strip) }
 
     assert_includes governance_commands,
                     "ruby scripts/test_check_roadmap_evidence.rb"
@@ -3458,9 +3464,20 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes commands,
                     'run_isolated "$TRUSTED_CARGO" build ' \
                     "--target x86_64-apple-darwin -p pycc_rt"
-    assert_operator commands.index("cargo build --workspace"),
-                    :<,
-                    commands.index("cargo test --workspace -- --include-ignored")
+    # Issue #631 (Part 3 of #20) removed the standalone "cargo build
+    # --workspace" step that used to order the runtime artifact before
+    # "cargo test --workspace" in both build-test-coverage and
+    # native-build-test: pycc_codegen/build.rs now builds pycc_rt itself
+    # as a real Cargo build dependency, so the plain "cargo test
+    # --workspace" command below already triggers the full workspace
+    # build before it links and runs anything, and a reintroduced
+    # missing build dependency fails these jobs directly instead of
+    # hiding behind a pre-built artifact. Guarded on both jobs so the
+    # step cannot quietly come back on just one of them.
+    refute_includes commands, "cargo build --workspace"
+    assert_includes commands, "cargo test --workspace -- --include-ignored"
+    refute_includes native_commands, "cargo build --workspace"
+    assert_includes native_commands, "cargo test --workspace -- --include-ignored"
   end
 
   # Issue #229 (Phase 3 activation): tests for validate_pages_performance_lifecycle.
