@@ -552,6 +552,90 @@ class AlphaSkillEvalTests(unittest.TestCase):
             )
         )
 
+    def test_issue_select_critical_path_escape_outranks_higher_marked_peer(
+        self,
+    ) -> None:
+        # #733 (D-211, narrowing D-191's in-scope ordering clause): an
+        # unmarked in-scope issue that gates the active milestone's own
+        # Accept criterion outranks an in-scope P1 that does not, even
+        # though marker-then-size would otherwise put the P1 first.
+        self.assertTrue(
+            evals.issue_select_higher_ranked(
+                priority=None,
+                effort=50,
+                other_priority="P1",
+                other_effort=1,
+                milestone_scope_in_effect=True,
+                active_milestone=True,
+                other_active_milestone=True,
+                gates_milestone_accept=True,
+                other_gates_milestone_accept=False,
+            )
+        )
+        # Without the evidence flag set on either side, the escape is inert
+        # and the ordinary in-scope marker-then-size order applies -- the P1
+        # wins, exactly as D-191 left it.
+        self.assertFalse(
+            evals.issue_select_higher_ranked(
+                priority=None,
+                effort=50,
+                other_priority="P1",
+                other_effort=1,
+                milestone_scope_in_effect=True,
+                active_milestone=True,
+                other_active_milestone=True,
+            )
+        )
+        # The escape never reaches outside the scope: an out-of-scope issue
+        # that gates the criterion still sorts behind every in-scope survivor,
+        # because the scope-membership component is compared first.
+        self.assertFalse(
+            evals.issue_select_higher_ranked(
+                priority=None,
+                effort=50,
+                other_priority="P3",
+                other_effort=1,
+                milestone_scope_in_effect=True,
+                active_milestone=False,
+                other_active_milestone=True,
+                gates_milestone_accept=True,
+                other_gates_milestone_accept=False,
+            )
+        )
+        # With no milestone scope in effect the escape flags are inert too,
+        # and the ordering degenerates to exactly the priority-then-size rule.
+        self.assertFalse(
+            evals.issue_select_higher_ranked(
+                priority=None,
+                effort=50,
+                other_priority="P1",
+                other_effort=1,
+                gates_milestone_accept=True,
+                other_gates_milestone_accept=False,
+            )
+        )
+
+    def test_issue_select_eval_fails_when_the_critical_path_escape_text_is_missing(
+        self,
+    ) -> None:
+        # #733 (D-211): the critical-path escape is the newest part of step 5
+        # and needs its own pin -- a reword back to something vague (e.g.
+        # "let sufficiently important issues jump the queue") must fail the
+        # eval even though the older membership/priority sentences survive
+        # untouched.
+        raw = evals.canonical_skill("claude", "issue-select")
+        normalized = " ".join(raw.split())
+        case = next(
+            case
+            for case in evals.load_cases("issue-select")
+            if case["runner"]
+            == "critical-path-escape-outranks-higher-marked-in-scope-peer"
+        )
+        phrase = "gates the active milestone's own Accept criterion"
+        self.assertIn(phrase, normalized)
+        with self.assertRaisesRegex(evals.EvalError, "is missing"):
+            evals.run_issue_select_case(case, normalized.replace(phrase, ""))
+
     def test_next_milestone_loop_continues(self) -> None:
         # Open-ended directive loops back to step 1 after milestone completion.
         self.assertTrue(

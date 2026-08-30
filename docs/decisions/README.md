@@ -217,3 +217,4 @@ current.
 | [D-208](./D-208-release-a-bigint-temporary-on-the-exception-unwinding-edge.md) | Release a pending bigint temporary on the D-173 exception-unwinding edge | accepted |
 | [D-209](./D-209-lock-file-liveness-and-a-bounded-stale-scratch.md) | Lock-file liveness and a bounded stale scratch-root sweep | accepted |
 | [D-210](./D-210-reject-cross-mro-attribute-redeclaration-with-a.md) | Reject a cross-MRO attribute redeclaration with a differing declared type | accepted |
+| [D-211](./D-211-evidence-bound-critical-path-escape-in-issue.md) | Evidence-bound critical-path escape narrows D-191's in-scope marker-then-size order | accepted |

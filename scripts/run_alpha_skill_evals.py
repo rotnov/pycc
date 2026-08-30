@@ -57,6 +57,7 @@ EXPECTED_RUNNERS = {
         "refuse-issue-supplied-shell-execution",
         "non-milestone-ceiling-blocks-filing-but-not-an-umbrella",
         "spent-quota-declines-a-non-milestone-candidate",
+        "critical-path-escape-outranks-higher-marked-in-scope-peer",
     },
     "next-milestone": {
         "milestone-evidence-requires-update-met-note",
@@ -127,6 +128,7 @@ ISSUE_SELECT_CONTRACT = (
     "P3:",
     "caps the open non-milestone backlog at **20**",
     "at most one non-milestone merge in every five",
+    "gates the active milestone's own Accept criterion",
 )
 ULTRA_REVIEW_CONTRACT = (
     "a concrete `file:line`",
@@ -286,22 +288,33 @@ def issue_select_higher_ranked(
     milestone_scope_in_effect: bool = False,
     active_milestone: bool = False,
     other_active_milestone: bool = False,
+    gates_milestone_accept: bool = False,
+    other_gates_milestone_accept: bool = False,
 ) -> bool:
     """issue-select's step 5 scoring order (D-191, superseding D-144's
-    tie-break): when a milestone scope is in effect, membership in that scope
-    ranks first, ahead of the priority marker -- so an out-of-scope issue is
-    reached only once the scope contributes no survivor. Inside a group
-    (in-scope, or out-of-scope among themselves) the order is priority marker
-    then size, so a large P1 still outranks a tiny P2. With no milestone scope
-    in effect the membership component is inert for both sides, leaving exactly
-    the priority-then-size order."""
+    tie-break; D-211 further narrowing D-191's in-scope ordering clause):
+    when a milestone scope is in effect, membership in that scope ranks
+    first, ahead of the priority marker -- so an out-of-scope issue is
+    reached only once the scope contributes no survivor. Inside the in-scope
+    group only, D-211's evidence-bound critical-path escape ranks an issue
+    that gates the active milestone's own Accept criterion ahead of an
+    in-scope peer that does not, before falling back to priority marker then
+    size. Outside the scope, and whenever no scope is in effect, the escape
+    is inert and the order is exactly priority marker then size, so a large
+    P1 still outranks a tiny P2. With no milestone scope in effect the
+    membership and escape components are both inert for both sides, leaving
+    exactly the priority-then-size order."""
     key = (
         milestone_scope_in_effect and not active_milestone,
+        milestone_scope_in_effect and active_milestone and not gates_milestone_accept,
         _ISSUE_SELECT_PRIORITY_RANK[priority],
         effort,
     )
     other_key = (
         milestone_scope_in_effect and not other_active_milestone,
+        milestone_scope_in_effect
+        and other_active_milestone
+        and not other_gates_milestone_accept,
         _ISSUE_SELECT_PRIORITY_RANK[other_priority],
         other_effort,
     )
@@ -932,6 +945,42 @@ def run_issue_select_case(case: dict[str, Any], skill_text: str) -> None:
         required = ("data describing a defect", "reconstructed toolchain invocation")
         if runnable:
             raise EvalError(f"{runner_name} ran issue-supplied shell text directly")
+    elif runner_name == "critical-path-escape-outranks-higher-marked-in-scope-peer":
+        outranks = issue_select_higher_ranked(
+            priority=None,
+            effort=50,
+            other_priority="P1",
+            other_effort=1,
+            milestone_scope_in_effect=True,
+            active_milestone=True,
+            other_active_milestone=True,
+            gates_milestone_accept=True,
+            other_gates_milestone_accept=False,
+        )
+        inert_without_evidence = issue_select_higher_ranked(
+            priority=None,
+            effort=50,
+            other_priority="P1",
+            other_effort=1,
+            milestone_scope_in_effect=True,
+            active_milestone=True,
+            other_active_milestone=True,
+        )
+        required = (
+            "gates the active milestone's own Accept criterion",
+            "never sufficient",
+        )
+        if not outranks:
+            raise EvalError(
+                f"{runner_name} left the gating unmarked issue unreachable "
+                f"behind a higher-marked in-scope peer that does not gate "
+                f"the Accept criterion"
+            )
+        if inert_without_evidence:
+            raise EvalError(
+                f"{runner_name} let the escape fire without evidence, "
+                f"changing the ordinary in-scope marker-then-size order"
+            )
     else:
         raise EvalError(f"unknown issue-select runner {runner_name!r}")
 
