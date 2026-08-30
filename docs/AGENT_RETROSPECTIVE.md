@@ -33,6 +33,37 @@ never a merge gate.
 
 ---
 
+## 2026-08-30 — A session-doc `## PR and merge` section was committed as a placeholder and never filled in because the owner's merge preempted the finalization step
+
+What happened: while delivering #733/D-211 in PR #845, the session handoff
+doc `docs/sessions/2026-08-30-02-issue-733-critical-path-escape.md` was
+committed with its `## PR and merge` section left as an explicit
+placeholder ("filled in immediately before commit, once the PR exists and
+its outcome is known"), on the plan that this session would fill it in as
+its own last step before self-merging. The repository owner (`rotnov`)
+merged PR #845 directly before this session reached that step — a
+legitimate D-127 intervention — so the placeholder shipped to `main`
+unfilled. The automated `chatgpt-codex-connector` review caught it as an
+unresolved P1 thread on the now-closed PR, requiring a second,
+documentation-only follow-up PR (#846) to correct.
+
+Root cause: the plan treated "fill in the PR/merge outcome" as a step this
+session fully controlled the timing of, when D-127 explicitly allows the
+owner to merge at any time without warning. A promissory placeholder in a
+file that is about to be committed is only safe if nothing else can
+observe or act on the commit before the placeholder is resolved — untrue
+here, since the commit was pushed and the PR was open and mergeable.
+
+Lesson: never commit a session-doc section as a literal "fill in later"
+placeholder once the PR it depends on is open — either hold that commit
+locally until the real outcome is known, or write the section in a form
+that is already correct regardless of who merges the PR or when (e.g.
+state the PR number and note that outcome will be appended by whoever
+finalizes it), rather than a placeholder that reads as an oversight if it
+ships unfilled.
+
+---
+
 ## 2026-08-29 — Chased a phantom coverage gap in a package-scoped summary instead of running the actual gate command
 
 What happened: while implementing #249 (non-UTF-8 native paths in

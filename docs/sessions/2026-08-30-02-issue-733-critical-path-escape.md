@@ -207,14 +207,17 @@ unresolved P1 threads on the now-closed PR:
   inside a milestone, a granularity that file is expressly forbidden to
   carry; `docs/ROADMAP.md`'s existing "Agent tooling" paragraph already
   describes the skill family generically and needs no D-211-specific detail.
-  Separately, AGENTS.md's review-loop section states that external GitHub
-  reviews (including `@codex review`-style bot comments) are not a required
-  gate. No documentation update was made in response to this thread.
+  Separately, AGENTS.md's review-loop section states that asynchronous
+  external review (including `@codex review`-style bot comments) is not a
+  blocking gate under that section — it does not override branch
+  protection's own required-conversation-resolution rule. No documentation
+  update was made in response to this thread.
 - One confirming that this file's own `## PR and merge` section still held
   stale placeholder text at merge time. That finding was correct; this
-  paragraph is the correction, landed via a small follow-up documentation-only
-  PR against `main` (no `Fixes` keyword — it does not close any issue) since
-  PR #845 was already closed and this file cannot be amended in place.
+  paragraph is the correction, recorded in follow-up PR #846 — a
+  documentation-only change against `main` carrying no `Fixes` keyword
+  (`closingIssuesReferences.totalCount: 0`, verified) — since PR #845 was
+  already closed and this file cannot be amended in place.
 
 ## Known follow-ups for the next session
 
