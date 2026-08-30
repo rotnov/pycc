@@ -924,20 +924,95 @@ pub(crate) struct ClassAnnotationInfo {
     /// which CPython makes implicitly subscriptable through `Generic`
     /// without any explicit hook of its own.
     pub(crate) subscriptable: bool,
+    /// Issue #693 (PEP 560, extending #611): the declared return type of
+    /// `__class_getitem__`, found by walking the MRO in order (most-derived
+    /// first) exactly as `subscriptable`'s own hook search does. `Some` only
+    /// when an explicit hook exists somewhere in the MRO -- never set for
+    /// subscriptability granted purely by a PEP 695 type parameter with no
+    /// hook of its own, since that case is deliberately still handled by
+    /// `GenericClassInstantiate`, not by this field. `annotation_to_ty`'s
+    /// `Subscript` arm routes `ClassName[type_arg]` through this return type
+    /// instead of falling back to `Ty::Instance(ClassName)` when it is
+    /// `Some`. Always `None` for the self-referential entry `lower_class`
+    /// pushes for the class it is currently lowering (see that call site's
+    /// own comment) -- the hook's return type is not yet resolvable at that
+    /// point, so a `__class_getitem__`-typed annotation used *inside* the
+    /// defining class's own body still falls back to `Ty::Instance`, same as
+    /// before this field existed.
+    pub(crate) class_getitem_return: Option<Ty>,
 }
 
 /// Projects the full class table down to the [`ClassAnnotationInfo`] slice
 /// `annotation_to_ty` consults. Both of this crate's own projection sites
 /// (`lower_checked`'s per-statement rebuild and `lower_class`'s own
 /// `defined_classes` view) go through here, so the two agree on every flag.
-pub(crate) fn class_annotation_infos(defs: &[(String, HirClassDef)]) -> Vec<ClassAnnotationInfo> {
+/// `items` is the module's `HirItem::Function` list accumulated so far (in
+/// source order) -- it carries the resolved `return_ty` for every already-
+/// lowered method, including any `__class_getitem__` hook, which `defs`
+/// alone does not (`HirClassDef::static_methods`/`class_methods` store only
+/// mangled names).
+pub(crate) fn class_annotation_infos(
+    defs: &[(String, HirClassDef)],
+    items: &[HirItem],
+) -> Vec<ClassAnnotationInfo> {
     defs.iter()
-        .map(|(name, def)| ClassAnnotationInfo {
-            name: name.clone(),
-            is_protocol: def.is_protocol,
-            subscriptable: def.type_param.is_some() || defines_class_getitem(defs, &def.mro),
+        .map(|(name, def)| {
+            let class_getitem_return = class_getitem_return_ty(defs, &def.mro, items);
+            ClassAnnotationInfo {
+                name: name.clone(),
+                is_protocol: def.is_protocol,
+                subscriptable: def.type_param.is_some() || class_getitem_return.is_some(),
+                class_getitem_return,
+            }
         })
         .collect()
+}
+
+/// Issue #693: walks `mro` in order (most-derived first, matching
+/// `resolve_static_or_class_method_call`'s own MRO walk in `pycc_types`) to
+/// find the first class that declares `__class_getitem__` as a
+/// `@staticmethod` or `@classmethod`, then resolves its mangled name's
+/// `return_ty` from `items`. Returns `None` when no class in the MRO
+/// declares the hook, or (structurally unreachable in practice, since every
+/// `static_methods`/`class_methods` entry is pushed alongside a matching
+/// `items.push(item)` in the same `lower_class` call) when the mangled name
+/// has no corresponding `HirItem::Function` yet.
+fn class_getitem_return_ty(
+    defs: &[(String, HirClassDef)],
+    mro: &[String],
+    items: &[HirItem],
+) -> Option<Ty> {
+    for mro_class in mro {
+        // Unlike most other MRO walks in this crate, a class here is not
+        // guaranteed to be present in `defs`: `class_annotation_infos` also
+        // runs (via `lower_class`'s own pre-method-loop projection) against
+        // a hand-built `defined_classes` slice that
+        // `class::mro::tests::circular_inheritance_in_mro_is_rejected`
+        // deliberately leaves incomplete to exercise the *defensive*
+        // circular-inheritance check downstream in `resolve_mro` -- that
+        // check, not this function, is the one responsible for rejecting
+        // such an MRO. Skip a class this function cannot resolve rather
+        // than panicking; the loop naturally continues to the next
+        // ancestor, and no hook is found through this leg either way.
+        let Some((_, mro_def)) = defs.iter().find(|(name, _)| name == mro_class) else {
+            continue;
+        };
+        let Some((_, mangled)) = mro_def
+            .static_methods
+            .iter()
+            .chain(&mro_def.class_methods)
+            .find(|(method, _)| method == "__class_getitem__")
+        else {
+            continue;
+        };
+        return items.iter().find_map(|item| match item {
+            HirItem::Function {
+                name, return_ty, ..
+            } if name == mangled => Some(return_ty.clone()),
+            _ => None,
+        });
+    }
+    None
 }
 
 /// PEP 560 (#611): whether `def` declares `__class_getitem__` anywhere in
@@ -966,11 +1041,15 @@ pub(crate) fn lower_class(
     def: &pycc_ast::StmtClassDef,
     aliases: &[(String, Ty)],
     defined_classes: &[(String, HirClassDef)],
+    module_items: &[HirItem],
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
     // #380 (PR-20): build the projected class slice `annotation_to_ty` uses
     // to resolve cross-class annotations (including protocol-typed ones);
-    // #611 (PEP 560) added the per-class subscriptability flag it carries.
-    let mut class_name_defs = class_annotation_infos(defined_classes);
+    // #611 (PEP 560) added the per-class subscriptability flag it carries;
+    // #693 added `class_getitem_return`, resolved from `module_items` (every
+    // `HirItem::Function` lowered by an earlier class or top-level `def` in
+    // this module, in source order).
+    let mut class_name_defs = class_annotation_infos(defined_classes, module_items);
     // PEP 3129/557/681/544 (#378/#380, PR-18/PR-20): classify the class's
     // decorator list. `@dataclass`/`@dataclass_transform(...)` and
     // `@runtime_checkable` are recognized; any other class decorator is
@@ -1185,6 +1264,15 @@ pub(crate) fn lower_class(
         subscriptable: type_param.is_some()
             || declares_own_class_getitem
             || defines_class_getitem(defined_classes, &mro),
+        // #693: the hook's return type is not resolvable yet at this
+        // point -- an own hook (`declares_own_class_getitem`) has not been
+        // lowered into an `HirItem::Function` yet, and this self-referential
+        // entry exists specifically to keep a same-body annotation from
+        // hitting the "not subscriptable" rejection, not to type it
+        // precisely. Such an annotation (rare: `ClassName[x]` referring to
+        // the very class whose body it appears in) falls back to
+        // `Ty::Instance`, exactly as it did before this field existed.
+        class_getitem_return: None,
     });
     let mut methods: Vec<(String, String)> = Vec::new();
     let mut items: Vec<HirItem> = Vec::new();

@@ -1298,7 +1298,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
         // #380 (PR-20): build the projected class slice `annotation_to_ty`
         // uses to resolve cross-class annotations; #611 (PEP 560) added the
         // per-class subscriptability flag it carries.
-        let class_name_defs = class::class_annotation_infos(&class_defs);
+        let class_name_defs = class::class_annotation_infos(&class_defs, &items);
         if let Some((name, ty)) = lower_type_alias_stmt(stmt, &aliases, &class_name_defs)? {
             // D-068 review finding on #385, second round: the class-vs-alias
             // check below (at the `Stmt::ClassDef` arm) only ever catches a
@@ -1358,7 +1358,8 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
             continue;
         }
         if let Stmt::ClassDef(def) = stmt {
-            let (class_def, mut method_items) = class::lower_class(def, &aliases, &class_defs)?;
+            let (class_def, mut method_items) =
+                class::lower_class(def, &aliases, &class_defs, &items)?;
             // D-154 Part 1's own post-merge review finding: two module-level
             // classes sharing a name would each lower their own `__init__`
             // (and any other same-named method) to the identical mangled

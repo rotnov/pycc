@@ -148,6 +148,12 @@ For each newly observed upstream release:
    gap ([#693](https://github.com/rotnov/pycc/issues/693)), and a `core` gap forces
    `◐` under
    [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
+   **Update (2026-08-30, #693):** the annotation-position resolution described
+   above is now fixed at the code level and the fixture gained annotation-
+   position cases, but the row stays `◐` here too — rule 5's CI-observed-green
+   requirement has not yet been met for the extended fixture, so this entry is
+   left describing the pre-fix state as the historical record of the
+   `82d63301` flip, and no twelfth rule is added until that observation exists.
 10. PEP 701 (formalized f-string grammar) was flipped to `◐` on the same
     rule 5 basis against run
     [32566309109](https://github.com/rotnov/pycc/actions/runs/32566309109), the

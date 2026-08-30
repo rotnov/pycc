@@ -420,23 +420,37 @@ pub(crate) fn annotation_to_ty(
                 // the recursion below, which reports it exactly as it does
                 // today.
                 _ => {
-                    if let Some(info) = class_defs
-                        .iter()
-                        .find(|info| info.name == base_name.id.as_str())
-                        && !info.subscriptable
-                    {
-                        return Err(Diagnostic::error(
-                            "T0044",
-                            format!(
-                                "class `{}` does not define `__class_getitem__`, so \
-                                 `{}[...]` is not a valid type annotation",
-                                info.name, info.name
-                            ),
-                            {
-                                let range = pycc_ast::expr_range(annotation);
-                                Span::new(range.start, range.end)
-                            },
-                        ));
+                    if let Some(info) = class_defs.iter().find(|info| info.name == base_name.id.as_str()) {
+                        if !info.subscriptable {
+                            return Err(Diagnostic::error(
+                                "T0044",
+                                format!(
+                                    "class `{}` does not define `__class_getitem__`, so \
+                                     `{}[...]` is not a valid type annotation",
+                                    info.name, info.name
+                                ),
+                                {
+                                    let range = pycc_ast::expr_range(annotation);
+                                    Span::new(range.start, range.end)
+                                },
+                            ));
+                        }
+                        // Issue #693 (PEP 560): when the class's `__class_getitem__`
+                        // hook has a resolvable declared return type, the
+                        // annotation resolves to *that* type -- matching
+                        // `pycc_types::resolve_static_or_class_method_call`'s
+                        // identical use of the hook's declared return type for
+                        // value-position `C[x]` (#610) -- rather than to
+                        // `Ty::Instance(ClassName)`. `class_getitem_return` is
+                        // `None` when subscriptability comes only from a PEP 695
+                        // type parameter with no explicit hook (that case is
+                        // handled by `GenericClassInstantiate`, not here) or from
+                        // the self-referential entry `lower_class` pushes for the
+                        // class it is currently lowering, in which case the
+                        // fallback below is unchanged from before this issue.
+                        if let Some(return_ty) = &info.class_getitem_return {
+                            return Ok(return_ty.clone());
+                        }
                     }
                     annotation_to_ty(
                         &Expr::Name(base_name.clone()),

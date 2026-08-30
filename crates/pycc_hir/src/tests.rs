@@ -2323,6 +2323,103 @@ fn an_undecorated_class_getitem_does_not_make_a_class_subscriptable() {
     );
 }
 
+/// Issue #693: lowers `src` (expected to be exactly one top-level
+/// `AnnAssign`) and returns the `Ty` it resolved the annotation to, panicking
+/// with the full module on any other shape -- mirroring this file's other
+/// single-purpose lowering-result extractors.
+fn annassign_ty(src: &str) -> Ty {
+    let module = pycc_parser_test_helper::parse(src);
+    let hir = lower_checked(&module).unwrap_or_else(|e| {
+        panic!("expected `{src}` to lower successfully, got {e:?}");
+    });
+    hir.items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::TopLevelStmt(HirStmt::AnnAssign { annotation, .. }) => {
+                Some(annotation.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected exactly one top-level `AnnAssign` in `{src}`"))
+}
+
+#[test]
+fn an_annotation_subscript_on_a_class_defining_the_hook_resolves_to_the_hook_s_return_type() {
+    // Issue #693 (PEP 560): `ClassName[type_arg]` in annotation position
+    // used to resolve to `Ty::Instance(ClassName)` unconditionally,
+    // discarding the type argument. It must instead route through
+    // `__class_getitem__`'s declared return type -- `-> int` here -- exactly
+    // as `pycc_types::resolve_static_or_class_method_call` already does for
+    // the value-position spelling `C[3]` (#610).
+    let src = format!("{}\nv: C[3] = 1\n", class_with_hook("@staticmethod"));
+    assert_eq!(annassign_ty(&src), Ty::Int);
+}
+
+#[test]
+fn an_annotation_subscript_on_a_classmethod_hook_also_resolves_to_the_return_type() {
+    // Issue #693: the `@classmethod` spelling of the hook (`cls` as the
+    // first parameter) must resolve identically to the `@staticmethod`
+    // spelling above -- the two decorator forms are equally valid PEP 560
+    // hooks and must not diverge in annotation position.
+    let src = format!("{}\nv: C[3] = 1\n", class_with_hook("@classmethod"));
+    assert_eq!(annassign_ty(&src), Ty::Int);
+}
+
+#[test]
+fn an_annotation_subscript_on_an_inherited_hook_resolves_through_the_mro() {
+    // Issue #693: `D` defines no `__class_getitem__` of its own but
+    // inherits `C`'s through the MRO -- the same inheritance
+    // `a_subscripted_annotation_on_a_class_inheriting_the_hook_is_accepted`
+    // already proves is *subscriptable*; this proves the *resolved type*
+    // also correctly follows the MRO to `C`'s hook, not just the
+    // subscriptability bit.
+    let src = format!(
+        "{}\nclass D(C):\n    def value(self) -> int:\n        return self.x\n\nv: D[3] = 1\n",
+        class_with_hook("@staticmethod")
+    );
+    assert_eq!(annassign_ty(&src), Ty::Int);
+}
+
+#[test]
+fn a_generic_class_s_annotation_subscript_is_unaffected_by_the_hook_return_type_field() {
+    // Issue #693: a PEP 695 generic class (`class G[T]:`) is subscriptable
+    // through `Generic`, not through an explicit `__class_getitem__` hook,
+    // so `class_getitem_return` must stay `None` for it and `G[int]` must
+    // keep resolving to `Ty::Instance(G)` -- the `GenericClassInstantiate`
+    // mechanism, not this issue's field, owns actual generic instantiation.
+    // Guards against a regression where `type_param.is_some()` alone would
+    // be mistaken for "has a resolvable hook return type".
+    let src = "class G[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\nv: G[int] = G[int](1)\n";
+    assert_eq!(annassign_ty(src), Ty::Instance(Box::new("G".to_string())));
+}
+
+#[test]
+fn a_self_referential_annotation_inside_the_hook_s_own_class_body_still_falls_back_to_instance() {
+    // Issue #693: `lower_class`'s self-referential `ClassAnnotationInfo`
+    // entry (pushed before the class's own methods are lowered) cannot yet
+    // know `__class_getitem__`'s return type, so a `C[int]` annotation used
+    // *inside* `C`'s own body -- the same shape
+    // `a_subscripted_annotation_inside_a_hooked_class_s_own_body_is_accepted`
+    // already proves is accepted -- keeps resolving to `Ty::Instance(C)`,
+    // exactly as it did before this issue. This documents the accepted
+    // narrow limitation rather than silently losing coverage of it.
+    let module = pycc_parser_test_helper::parse(
+        "class C:\n    @staticmethod\n    def __class_getitem__(key: int) -> int:\n        return key\n\n    def __init__(self) -> None:\n        self.x = 1\n\n    def me(self) -> C[int]:\n        return self\n",
+    );
+    let hir = lower_checked(&module).expect("self-referential annotation must still lower");
+    let return_ty = hir
+        .items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::Function {
+                name, return_ty, ..
+            } if name == "C.me" => Some(return_ty.clone()),
+            _ => None,
+        })
+        .expect("expected `C.me` to lower to an `HirItem::Function`");
+    assert_eq!(return_ty, Ty::Instance(Box::new("C".to_string())));
+}
+
 #[test]
 fn subscripted_type_annotation_with_non_name_base_is_rejected() {
     // #435 (Part D): a subscripted annotation whose base is not a bare
