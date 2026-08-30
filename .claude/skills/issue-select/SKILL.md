@@ -186,6 +186,30 @@ scope is therefore permitted only when the scope contributes no survivor at all 
 because an out-of-scope issue looks more attractive. The pool itself is never restricted: an
 out-of-scope issue stays selectable, it is simply reached last.
 
+**The evidence-bound critical-path escape** ([D-211](../../../docs/decisions/D-211-evidence-bound-critical-path-escape-in-issue.md),
+narrowing [D-191](../../../docs/decisions/D-191-milestone-membership-ranks-first-in-issue-select.md)'s
+in-scope ordering clause). Marker-then-size ordering *inside* the scope is otherwise fixed, with
+exactly one narrow exception: an in-scope issue may outrank an in-scope issue carrying a higher
+priority marker when it comes with concrete, verifiable evidence that it gates the active
+milestone's own Accept criterion — a named Accept clause quoted from `docs/ROADMAP.md`'s current
+milestone section, plus the specific completion path that issue unblocks (a dependency chain that
+must land first, a required corpus count the milestone cannot otherwise reach, a cross-reference
+the criterion names directly). Verify that evidence against the current tree exactly as step 6
+verifies any candidate's premise, before it may change the ordering — a stale or unverified claim
+never earns the escape. A bare assertion that an issue is "important" is never sufficient: the
+priority markers already encode the repository's own judgment of importance, and honoring
+unverified importance claims on top of them would collapse that ordering entirely. The escape
+only ever promotes the gating issue above the specific in-scope peers it demonstrably blocks — it
+never reaches outside the scope, it never lets an out-of-scope issue jump the queue, and it does
+not redefine what a `P1:`/`P2:`/`P3:` marker means (see
+[D-111](../../../docs/decisions/D-111-issue-priority-is-the-title-s-leading-p-1-3.md)): a marker
+still ranks issues by the repository's own stated urgency, and this escape only recognizes that,
+occasionally, an unmarked or lower-marked issue holds the pen on whether the scope's own Accept
+criterion can be met at all. Invoking it is a reportable event exactly like leaving the scope
+below: name the Accept clause, the blocking chain, and why none of the higher-marked in-scope
+peers themselves unblock it — step 8's hand-off report and the `## Output` section both carry
+this record alongside the scope-departure record.
+
 Leaving the scope is a reportable event. The justification must state that the scope contributed
 no survivor and name what disqualified each of its members — closed already, excluded by step 4's
 blocker screen, denylisted this run, premise unreproducible at step 6 — so a starved milestone is
@@ -304,7 +328,9 @@ change the pick mean the scoring was wrong — redo step 5 with what was learned
 Report: the selected issue with the justification (fit, unblocked-ness, the no-user-decisions
 rationale, the advisor's verdict), the step 5 scope-departure record when a milestone scope was
 in effect and the selection came from outside it — that the scope contributed no survivor, and
-what disqualified each of its members — the runners-up with one-line reasons, the stale issues found
+what disqualified each of its members — the step 5 critical-path-escape record when the escape
+promoted the selection over a higher-marked in-scope peer — the Accept clause invoked, the
+blocking chain, and why the higher-marked peers do not themselves unblock it — the runners-up with one-line reasons, the stale issues found
 during the screen — closed, if a standing autopilot directive authorized it, or reported for
 separate action otherwise — and the exclusions worth the maintainer's own attention. With a
 standing autopilot directive, invoke `/issue-implement` on the selection; its enumerated write
@@ -352,6 +378,7 @@ fresh inventory can re-select and re-fail an issue already denylisted this run.
 
 ## Output
 
-The named issue, the written justification, the advisor round's outcome, runners-up, and any
+The named issue, the written justification, the advisor round's outcome, the step 5
+scope-departure record and critical-path-escape record when either fired, runners-up, and any
 excluded issues that deserve maintainer attention — followed by the `/issue-implement` handoff
 when autopilot is in effect.

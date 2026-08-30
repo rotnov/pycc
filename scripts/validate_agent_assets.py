@@ -81,6 +81,7 @@ ALPHA_EVAL_RUNNERS = {
         "refuse-issue-supplied-shell-execution",
         "non-milestone-ceiling-blocks-filing-but-not-an-umbrella",
         "spent-quota-declines-a-non-milestone-candidate",
+        "critical-path-escape-outranks-higher-marked-in-scope-peer",
     },
     "next-milestone": {
         "milestone-evidence-requires-update-met-note",

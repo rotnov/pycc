@@ -42,6 +42,12 @@
       "prompt": "The four selection-output merges preceding the candidate include one that closed only issues with no milestone; the candidate under consideration occupies the fifth slot in the window and also carries no milestone.",
       "expected_output": "The quota is spent: decline the non-milestone candidate and fall through to the next-ranked survivor, naming the quota and its count in the report. The quota never blocks a milestone-assigned candidate, and it permits a non-milestone candidate again once that merge is no longer one of the four preceding the candidate.",
       "runner": "spent-quota-declines-a-non-milestone-candidate"
+    },
+    {
+      "id": 8,
+      "prompt": "A milestone scope is in effect. An unmarked in-scope issue carries verified evidence that it gates the active milestone's own Accept criterion; an in-scope P1 sits alongside it but does not gate that criterion. Decide which one step 5 reaches first.",
+      "expected_output": "The unmarked issue outranks the in-scope P1: it gates the active milestone's own Accept criterion, so the evidence-bound critical-path escape promotes it ahead of the higher-marked peer. A bare claim of importance is never sufficient to earn the escape -- without verified evidence the ordinary in-scope marker-then-size order applies and the P1 would win.",
+      "runner": "critical-path-escape-outranks-higher-marked-in-scope-peer"
     }
   ]
 }
