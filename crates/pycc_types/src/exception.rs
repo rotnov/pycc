@@ -445,6 +445,39 @@ fn check_raise_operand(
     if let HirExpr::Call { callee, args } = expr
         && let Some(def) = user_exception_class(env, local_names, callee)
     {
+        // #714: this branch used to reach `class::resolve_instantiation`
+        // (via the `infer_expr_in` call this replaced), which rejects an
+        // abstract (#380, PEP 3119) class before ever resolving its
+        // constructor. Bypassing that function for the argument-validation
+        // shortcut below must not silently drop that pre-existing guard for
+        // the one path that still needs it -- a `class MyError(Exception,
+        // ABC):` with an unimplemented `@abstractmethod` and no `__init__`
+        // override must stay rejected for `raise MyError("boom")` exactly
+        // as it was before this diff.
+        //
+        // `resolve_instantiation`'s sibling `is_protocol` guard has no
+        // equivalent here: `is_protocol` is true only for `class X(Protocol):`
+        // with `Protocol` as the class's *sole* base (`pycc_hir::class`'s own
+        // lowering requires `bases.len() == 1`), which structurally precludes
+        // also inheriting `Exception` -- so `def.is_protocol` can never be
+        // true for a `def` this branch reaches (`user_exception_class`
+        // already filtered on `exception_type_tag.is_some()`). Duplicating
+        // that dead branch here would need a synthetic-only test to satisfy
+        // D-014's 100%-region gate for a shape no real compiler input can
+        // produce, exactly the pattern this crate's own established
+        // convention (see `redeclaration.rs`'s MRO-lookup `.expect()`
+        // precedent) avoids.
+        if def.is_abstract {
+            return Err(Diagnostic::error(
+                "C0001",
+                format!(
+                    "cannot instantiate abstract class `{callee}` -- \
+                     it has unimplemented abstract methods; subclass it and \
+                     override all `@abstractmethod`-decorated methods first"
+                ),
+                Span::new(0, 0),
+            ));
+        }
         reject_own_constructor(env, def)?;
         // #714: argument validation is done directly here, against the
         // synthetic `Exception.__init__` placeholder's own registered
@@ -453,14 +486,16 @@ fn check_raise_operand(
         // everywhere else a `Call` is type-checked. `resolve_instantiation`
         // rejects *any* instantiation whose resolved constructor is still
         // that placeholder, precisely to stop `e = MyError("boom")` (an
-        // ordinary value binding) from compiling into a call to a
-        // synthetic function codegen never defines a body for -- but a
-        // fresh `raise MyError("boom")` is the one shape that placeholder
-        // exists to support, and MIR's `lower_exception_value` constructs
-        // the raised `PyExceptionObj` directly from the message argument
-        // without ever calling through `Exception.__init__` at runtime.
-        // Reusing `resolve_instantiation` here would reject this valid
-        // raise the same way it now rejects the bound-value form.
+        // ordinary value binding) from compiling into a call through a
+        // function-pointer slot that is bound too late in module-execution
+        // order (see `class::binding::resolve_instantiation`'s own comment
+        // on this) -- but a fresh `raise MyError("boom")` is the one shape
+        // that placeholder exists to support, and MIR's
+        // `lower_exception_value` constructs the raised `PyExceptionObj`
+        // directly from the message argument without ever calling through
+        // `Exception.__init__` at runtime. Reusing `resolve_instantiation`
+        // here would reject this valid raise the same way it now rejects
+        // the bound-value form.
         // `reject_own_constructor` just confirmed the resolved `__init__`
         // *is* `EXCEPTION_INIT_MANGLED_NAME`, so it is guaranteed
         // registered -- matching `resolve_instantiation`'s own

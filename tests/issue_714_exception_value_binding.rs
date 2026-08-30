@@ -1,8 +1,9 @@
 //! End-to-end coverage for issue #714: binding a user-declared exception
 //! subclass as an ordinary value used to compile cleanly and then abort at
 //! **runtime** with a `NameError` naming the synthetic `Exception.__init__`
-//! placeholder -- the generated code called a global function pointer that
-//! codegen declared but never defined a body for.
+//! placeholder -- the generated code called that placeholder's global
+//! function-pointer slot before codegen's always-last module-position
+//! binding for it had run, so the call observed a null pointer.
 //!
 //! Everything here goes through the public `pycc` CLI, exactly like
 //! `tests/issue_702_user_exceptions.rs`: the point is that the whole

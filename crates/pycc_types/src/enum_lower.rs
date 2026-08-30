@@ -36,7 +36,8 @@
 //! `check_assignment`, `join_loop_body`, the `narrow` module's
 //! re-entrant-loop helpers -- stays where it was; this module reaches them
 //! as an ordinary descendant of the crate root, exactly like
-//! `class::binding` reaches `class`'s own private `check_call_args`.
+//! `class::binding` and `exception` reach `class`'s own `pub(crate)`
+//! `check_call_args`.
 
 use crate::narrow;
 use crate::{BindingState, Environment};

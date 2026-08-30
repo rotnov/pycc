@@ -175,17 +175,24 @@ pub(crate) fn resolve_instantiation(
     // above already excluded a directly seeded builtin) whose MRO reaches a
     // builtin exception without overriding its constructor -- exactly the
     // shape `exception::reject_own_constructor` permits for a *raise*
-    // operand. `pycc_hir::lower_checked` emits a HIR body for that
-    // synthetic placeholder only so the exception's own raise-path type
-    // checking has a real `env.lookup_function` entry to resolve against;
-    // codegen never materializes a callable definition for it, so a
-    // generic instantiation call here (`e = MyError("boom")`, `MyError()`
-    // as a default argument, etc.) would compile cleanly and then abort at
-    // runtime on a `NameError` naming a symbol the user never wrote.
-    // `exception::check_raise_operand` validates the one shape that *is*
-    // supported (a fresh `raise MyError("boom")`) itself, directly against
-    // this same single-`str`-argument signature, without ever reaching this
-    // function -- see that function's own comment on its `user_exception_class`
+    // operand. `pycc_hir::lower_checked` always appends the synthetic
+    // placeholder's HIR item after every real module-level statement
+    // (regardless of source position) so the exception's own raise-path
+    // type checking has a real `env.lookup_function` entry to resolve
+    // against; codegen does emit a real, callable body for it like any
+    // other `MirItem::Function`, but binds its function-pointer slot at
+    // that same always-last module position, so any earlier call through
+    // the slot -- which is effectively every real program, since the item
+    // is always last -- observes a null pointer and aborts via the
+    // runtime's name-error path. A generic instantiation call here
+    // (`e = MyError("boom")`, `MyError()` as a default argument, etc.)
+    // would therefore compile cleanly and abort at runtime on a
+    // `NameError` naming a symbol the user never wrote -- a call-ordering
+    // artifact, not a missing body. `exception::check_raise_operand`
+    // validates the one shape that *is* supported (a fresh
+    // `raise MyError("boom")`) itself, directly against this same
+    // single-`str`-argument signature, without ever reaching this function
+    // -- see that function's own comment on its `user_exception_class`
     // branch.
     if init_owner_is_synthetic {
         return Err(Diagnostic::error(

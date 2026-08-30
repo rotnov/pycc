@@ -38,6 +38,31 @@ fn catching_a_user_exception_class_is_accepted() {
 }
 
 #[test]
+fn raising_an_abstract_exception_subclass_stays_rejected() {
+    // #714 review finding: `check_raise_operand`'s `user_exception_class`
+    // branch validates a raise operand's constructor arguments directly
+    // against the synthetic `Exception.__init__` placeholder's signature,
+    // instead of routing through `class::resolve_instantiation` as it did
+    // before #714. `resolve_instantiation` also rejects an abstract (#380,
+    // PEP 3119) class before ever resolving its constructor -- that guard
+    // must survive the #714 shortcut for the one path that still needs it.
+    let err = expect_error(
+        "from abc import ABC, abstractmethod\n\n\n\
+         class AbstractError(Exception, ABC):\n\
+         \x20   @abstractmethod\n\
+         \x20   def explain(self) -> str: ...\n\n\n\
+         def main() -> None:\n\
+         \x20   raise AbstractError(\"boom\")\n",
+    );
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message.contains("cannot instantiate abstract class"),
+        "unexpected message: {}",
+        err.message
+    );
+}
+
+#[test]
 fn a_user_exception_class_is_accepted_as_a_raise_cause() {
     check_source(&format!(
         "{HIERARCHY}def main() -> None:\n\
