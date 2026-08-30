@@ -145,11 +145,25 @@ all three outputs — byte-for-byte identical.
 
 ## Local pinned reviewer (`ievo:deep-reviewer`)
 
-To be dispatched synchronously against the committed diff before pushing;
-see the PR itself (or a follow-up note here if this file is amended before
-merge — though per this repository's own rule this file is not edited
-after being superseded by a later dated entry, so check the PR discussion
-directly if this section is stale).
+**Not run — reported unavailable, not silently skipped.** This session
+attempted to dispatch it via `Skill(skill="deep-review", ...)` and the tool
+itself refused: `deep-review` is registered with
+`disable-model-invocation` and its own error text says plainly "Ask the
+user to run `/deep-review` themselves — it cannot be invoked via the Skill
+tool. Do not replicate this skill's workflow by other means." Two
+`ToolSearch` queries for an alternative dispatch path (a generic
+Agent/Task-launch tool) found none available in this session. Per
+AGENTS.md's own fallback for a reviewer this session cannot bind or
+invoke ("report the local review as unavailable instead of silently
+weakening the gate"), no substitute review was run and none of the
+skill's workflow was replicated by other means.
+
+This does not block *opening* this pull request — AGENTS.md's D-068
+gate is phrased as a **merge** precondition ("Before completing
+significant work or merging a pull request…", "Merge only when … no
+unresolved actionable review finding … remains"), and this task's scope is
+to open, not merge. The PR body carries this same disclosure and asks
+for `/deep-review` to be run against this branch before it is merged.
 
 ## Intent: this PR should close #693
 
