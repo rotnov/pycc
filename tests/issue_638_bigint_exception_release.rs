@@ -2,7 +2,18 @@
 //! birth reference on the D-173 exception-unwinding edge.
 //!
 //! D-181 (#625) closed the normal-path leak of a nested `int` arithmetic
-//! temporary but left two residual leak flavors, both closed by this issue:
+//! temporary but left two residual leak flavors, both closed by this issue.
+//! [#834](https://github.com/rotnov/pycc/issues/834) (D-212) later extends
+//! this same file with a third, distinct flavor: not an owning temporary at
+//! all, but `retain_if_int_duplicate`'s own extra retain of a
+//! *duplicate/borrowed* `int` at the `TupleLiteral`-element and `Call`
+//! -argument sites below, abandoned the same way when a later sibling's
+//! evaluation raises before that retained reference transfers. See
+//! `a_tuple_literal_borrowed_element_survives_a_later_siblings_raise` and
+//! `a_call_argument_borrowed_value_survives_the_calls_own_raising_argument`
+//! below for that flavor's correctness tests, and
+//! `tuple_literal_borrowed_element_leak_repro`/`call_argument_borrowed_value_leak_repro`
+//! (in `mod peak_rss`) for its peak-RSS proofs.
 //!
 //! 1. A multi-child MIR node (`BinOp`, `Compare`, a `range()` preheader)
 //!    whose earlier child already produced an owned `int` word, and whose
@@ -195,6 +206,51 @@ fn a_tuple_literal_elements_survives_a_later_siblings_raise() {
         "tuple_literal_exception_edge",
         &source,
         &format!("{expected_total}\n{PROMOTED}\n"),
+    );
+}
+
+#[test]
+fn a_tuple_literal_borrowed_element_survives_a_later_siblings_raise() {
+    // Issue #834: `(x, 1 // z)` -- `x` is a pre-existing bigint *name*, a
+    // borrowed/duplicate reference (`retain_if_int_duplicate`'s own
+    // classification), not the fresh/owning shape
+    // `a_tuple_literal_elements_survives_a_later_siblings_raise` above
+    // already covers. The tuple's second element raises before the
+    // aggregate is ever built, so the extra retain this fix now tracks on
+    // the exception edge must be released without touching `x`'s own
+    // reference -- proven by `x` (and `x + 1`, a fresh use of it) printing
+    // correctly after the catch, on both the exception-edge release and a
+    // subsequent normal-path read of the same name.
+    let source = format!(
+        "x: int = {PROMOTED}\nz: int = 0\ntry:\n    pair = (x, 1 // z)\n    \
+         print(pair[0])\nexcept ZeroDivisionError:\n    print(\"caught\")\nprint(x)\nprint(x + 1)\n"
+    );
+    let x_plus_one: u128 = 4_611_686_018_427_387_904u128 + 1;
+    assert_runs_and_prints(
+        "tuple_literal_borrowed_element_exception_edge",
+        &source,
+        &format!("caught\n{PROMOTED}\n{x_plus_one}\n"),
+    );
+}
+
+#[test]
+fn a_call_argument_borrowed_value_survives_the_calls_own_raising_argument() {
+    // Issue #834's own named double-release-safety proof (see the issue's
+    // published implementation plan, section 5): `f(x, 1 // z)` -- `x` is a
+    // borrowed/duplicate `Ty::Int` argument, and the second argument's
+    // raising evaluation means `build_call` is never reached, so the
+    // callee's own parameter-slot release machinery can never fire for
+    // this call. If the exception-edge release this fix adds instead fired
+    // on a word the callee-side path also released, `x` would come back
+    // corrupted (wrong value, or a debug/ASan abort) after the catch --
+    // this test's whole point is proving that does not happen.
+    let source = "def f(a: int, b: int) -> int:\n    return a + b\n\nz: int = 0\n\
+                  x: int = 9223372036854775807 + 5\ntry:\n    r = f(x, 1 // z)\n\
+                  except ZeroDivisionError:\n    print(\"caught\")\nprint(x)\nprint(x + 1)\n";
+    assert_runs_and_prints(
+        "call_argument_borrowed_value_exception_edge",
+        source,
+        "caught\n9223372036854775812\n9223372036854775813\n",
     );
 }
 
@@ -435,6 +491,96 @@ mod peak_rss {
             (leak_marginal as f64) < (control_marginal as f64) * 1.15,
             "leak-shape marginal RSS growth must track the same-exception-rate \
              control's, not scale by an extra `BigIntObj` release per trip: \
+             leak_marginal={leak_marginal} control_marginal={control_marginal}"
+        );
+    }
+
+    /// Issue #834's own repro shape: a *borrowed* tuple element (`x`, a
+    /// bare `Name` read, `retain_if_int_duplicate`'s duplicate-reference
+    /// classification), freshly rebound to a new bigint every trip so each
+    /// iteration's extra retain -- when leaked -- contributes its own
+    /// `BigIntObj`'s worth of marginal growth. `x`'s own per-iteration
+    /// allocation happens identically in the leak and control scripts
+    /// below (holding allocation/release cost fixed); only whether `x`
+    /// (leak) or a plain literal `1` (control) is placed into the tuple
+    /// differs, isolating the retain itself from tuple-construction cost.
+    fn tuple_literal_borrowed_element_leak_repro(iterations: u32) -> String {
+        format!(
+            "z: int = 0\nfor i in range({iterations}):\n    x: int = 9223372036854775807 + i\n    \
+             try:\n        pair = (x, 1 // z)\n    except ZeroDivisionError:\n        pass\nprint(1)\n"
+        )
+    }
+
+    /// Control for [`tuple_literal_borrowed_element_leak_repro`]: the same
+    /// per-iteration fresh-bigint allocation into `x`, but the tuple's
+    /// first element is a plain literal `1` -- `x` is computed but never
+    /// placed anywhere `retain_if_int_duplicate` would see it, so this
+    /// repro's marginal growth reflects only `x`'s own allocation/release
+    /// cost and the pre-existing exception-object leak-only model.
+    fn tuple_literal_borrowed_element_control_repro(iterations: u32) -> String {
+        format!(
+            "z: int = 0\nfor i in range({iterations}):\n    x: int = 9223372036854775807 + i\n    \
+             try:\n        pair = (1, 1 // z)\n    except ZeroDivisionError:\n        pass\nprint(1)\n"
+        )
+    }
+
+    #[test]
+    fn a_tuple_literal_borrowed_element_marginal_rss_is_flat() {
+        let leak_marginal = marginal_rss(
+            "rss_exc_tuple_borrowed",
+            tuple_literal_borrowed_element_leak_repro,
+            250_000,
+        );
+        let control_marginal = marginal_rss(
+            "rss_ctl_tuple_borrowed",
+            tuple_literal_borrowed_element_control_repro,
+            250_000,
+        );
+        assert!(
+            (leak_marginal as f64) < (control_marginal as f64) * 1.15,
+            "borrowed-element marginal RSS growth must track the same-allocation-rate \
+             control's, not scale by an extra `BigIntObj` retain-and-leak per trip: \
+             leak_marginal={leak_marginal} control_marginal={control_marginal}"
+        );
+    }
+
+    /// Issue #834's call-argument counterpart to
+    /// [`tuple_literal_borrowed_element_leak_repro`]: the same per-iteration
+    /// fresh-bigint `x`, passed as a borrowed call argument instead of a
+    /// tuple element.
+    fn call_argument_borrowed_value_leak_repro(iterations: u32) -> String {
+        format!(
+            "def f(a: int, b: int) -> int:\n    return a + b\n\nz: int = 0\nfor i in range({iterations}):\n    \
+             x: int = 9223372036854775807 + i\n    try:\n        y = f(x, 1 // z)\n    except ZeroDivisionError:\n        pass\nprint(1)\n"
+        )
+    }
+
+    /// Control for [`call_argument_borrowed_value_leak_repro`]: same
+    /// per-iteration fresh-bigint allocation into `x`, but the call's first
+    /// argument is a plain literal `1`.
+    fn call_argument_borrowed_value_control_repro(iterations: u32) -> String {
+        format!(
+            "def f(a: int, b: int) -> int:\n    return a + b\n\nz: int = 0\nfor i in range({iterations}):\n    \
+             x: int = 9223372036854775807 + i\n    try:\n        y = f(1, 1 // z)\n    except ZeroDivisionError:\n        pass\nprint(1)\n"
+        )
+    }
+
+    #[test]
+    fn a_call_argument_borrowed_value_marginal_rss_is_flat() {
+        let leak_marginal = marginal_rss(
+            "rss_exc_call_borrowed",
+            call_argument_borrowed_value_leak_repro,
+            250_000,
+        );
+        let control_marginal = marginal_rss(
+            "rss_ctl_call_borrowed",
+            call_argument_borrowed_value_control_repro,
+            250_000,
+        );
+        assert!(
+            (leak_marginal as f64) < (control_marginal as f64) * 1.15,
+            "borrowed-argument marginal RSS growth must track the same-allocation-rate \
+             control's, not scale by an extra `BigIntObj` retain-and-leak per trip: \
              leak_marginal={leak_marginal} control_marginal={control_marginal}"
         );
     }
