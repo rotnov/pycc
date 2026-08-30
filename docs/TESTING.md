@@ -1095,9 +1095,14 @@ because the tree is, and must stay, clean — and would read as a missed
 region.
 
 A CI step would have been the more obvious home, but `.github/workflows/ci.yml`
-is a manifest-protected path under D-103's staging rules, so adding one
-forces a two-PR stage-then-activate cycle for a check a workspace test
-enforces identically.
+edits that need new checker knowledge of the changed shape hit D-172's
+base-owned `audit` job, which validates the PR head's `ci.yml` against the
+pre-PR (`main`) checker script rather than the PR's own updated one (D-103's
+manifest-hash staging is retired; this is a narrower, still-live constraint
+identified by [D-203](decisions/D-203-narrow-the-d-091-bench-manifest-tail-check-to.md)).
+Adding a step that a frozen checker constant must recognize would force the
+same D-203-precedented two-PR coexist-then-retire cycle for a check a
+workspace test enforces identically.
 
 It is a lexical gate and makes no claim beyond that: it catches the literal
 shape that caused #629, not every conceivable way to reconstruct an

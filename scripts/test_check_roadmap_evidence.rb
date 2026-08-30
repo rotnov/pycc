@@ -322,6 +322,26 @@ class RoadmapEvidenceCliTest < Minitest::Test
     { "jobs" => jobs }.to_yaml
   end
 
+  # Issue #614: same shape as d203_scratch_devdep_frontend_perf_workflow,
+  # but with the measure job's LLVM-install step carrying the
+  # timeout-hardened run body; the gate job is unchanged by #614, so
+  # either reviewed gate shape may pair with it (mirroring the D112
+  # branch's D-114 widening, and D-203's own analogous helper).
+  def issue614_llvm_timeout_frontend_perf_workflow(
+    gate_job: D112_UBUNTU_FRONTEND_PERF_GATE_JOB
+  )
+    jobs = {
+      "frontend-perf-measure" =>
+        Marshal.load(Marshal.dump(ISSUE614_LLVM_TIMEOUT_FRONTEND_PERF_MEASURE_JOB)),
+      "frontend-perf-gate" =>
+        Marshal.load(Marshal.dump(gate_job)),
+      "ci-gate" =>
+        Marshal.load(Marshal.dump(PAIRED_PERF_CI_GATE_JOB))
+    }
+    yield jobs if block_given?
+    { "jobs" => jobs }.to_yaml
+  end
+
   def without_workflow_jobs(workflow, *job_names)
     skipping = false
     workflow.lines.reject do |line|
@@ -2104,6 +2124,44 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes error.message, "reviewed source-aware measurement job"
   end
 
+  # Issue #614: a measure job carrying the timeout-hardened LLVM-install
+  # step is accepted by the lifecycle validator, paired with either
+  # reviewed gate shape (the gate job is unchanged by #614, mirroring the
+  # D112 branch's D-114 widening and D-203's own precedent). This is the
+  # coexist half of the D-203-precedented coexist-then-retire lifecycle:
+  # this pull request only teaches the checker the new shape; a follow-up
+  # pull request activates it in the live ci.yml (see docs/decisions/
+  # D-172's update note and D-203 for why the two cannot land together).
+  def test_issue614_lifecycle_accepts_llvm_timeout_measure_job
+    assert validate_source_aware_perf_gate_lifecycle(
+      issue614_llvm_timeout_frontend_perf_workflow, "ci.yml"
+    )
+    assert validate_source_aware_perf_gate_lifecycle(
+      issue614_llvm_timeout_frontend_perf_workflow(
+        gate_job: D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB
+      ),
+      "ci.yml"
+    )
+  end
+
+  # The lifecycle equality guards the whole step shape, not just the
+  # timeout key -- dropping just the `timeout-minutes` key (while keeping
+  # the hardened run body) still fails to match any reviewed measure-job
+  # shape, since no reviewed shape pairs the hardened body without the key.
+  def test_issue614_lifecycle_rejects_measure_job_missing_the_timeout_key
+    workflow = issue614_llvm_timeout_frontend_perf_workflow do |jobs|
+      llvm_step = jobs.fetch("frontend-perf-measure").fetch("steps").find do |step|
+        step["name"] == "Install LLVM 22 (Linux, via apt.llvm.org)"
+      end
+      llvm_step.delete("timeout-minutes")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed source-aware measurement job"
+  end
+
   # Issue #229 (Phase 2): validate_source_aware_perf_gate_lifecycle must
   # accept either the pre-D229 six-element ci-gate shape
   # (PAIRED_PERF_CI_GATE_JOB, without pages-performance) or the D229
@@ -3755,6 +3813,84 @@ class RoadmapEvidenceCliTest < Minitest::Test
       "steps" => [{ "run" => "true" }]
     }
     assert_d171_routing_accepted(workflow, "informational-job")
+  end
+
+  # Issue #614: the LLVM-install governance agent step may now carry a
+  # `timeout-minutes: "5"` key and the wget-hardened run script, coexisting
+  # with the pre-#614 shape kept in D171_GOVERNANCE_AGENT_STEPS until PR-2
+  # of #614 activates it in the live ci.yml (the D-203-precedented
+  # coexist-then-retire lifecycle -- see D-172's update note and D-203).
+  def test_d171_accepts_issue614_governance_llvm_step_with_timeout
+    workflow = d171_workflow
+    step = workflow.dig("jobs", "governance", "steps").find do |s|
+      s["name"] == "Install LLVM 22 for offline alpha skill contract evals"
+    end
+    refute_nil step
+    step["timeout-minutes"] = "5"
+    step["run"] = ISSUE614_LLVM_INSTALL_RUN_SCRIPT
+    assert_d171_routing_accepted(workflow, "issue614-governance-llvm-timeout")
+  end
+
+  # The extra key is validated, not merely permitted: a wrong value must
+  # still be rejected.
+  def test_d171_rejects_issue614_governance_llvm_step_wrong_timeout_value
+    workflow = d171_workflow
+    step = workflow.dig("jobs", "governance", "steps").find do |s|
+      s["name"] == "Install LLVM 22 for offline alpha skill contract evals"
+    end
+    step["timeout-minutes"] = "3"
+    step["run"] = ISSUE614_LLVM_INSTALL_RUN_SCRIPT
+    assert_d171_routing_rejected(
+      workflow,
+      "issue614-governance-llvm-wrong-timeout",
+      expected_context: "\"timeout-minutes\""
+    )
+  end
+
+  # Only the one documented extra key (`timeout-minutes`) is accepted; any
+  # other unexpected key on this step is still rejected.
+  def test_d171_rejects_issue614_governance_llvm_step_unexpected_extra_key
+    workflow = d171_workflow
+    step = workflow.dig("jobs", "governance", "steps").find do |s|
+      s["name"] == "Install LLVM 22 for offline alpha skill contract evals"
+    end
+    step["working-directory"] = "."
+    assert_d171_routing_rejected(
+      workflow,
+      "issue614-governance-llvm-unexpected-key",
+      expected_context: "keys"
+    )
+  end
+
+  # The hardened run text and the `timeout-minutes` key are one reviewed
+  # unit, not two independently optional checks -- the old run text paired
+  # with the new key is a hybrid nobody reviewed and must be rejected.
+  def test_d171_rejects_issue614_governance_llvm_step_old_run_text_with_new_timeout_key
+    workflow = d171_workflow
+    step = workflow.dig("jobs", "governance", "steps").find do |s|
+      s["name"] == "Install LLVM 22 for offline alpha skill contract evals"
+    end
+    step["timeout-minutes"] = "5"
+    assert_d171_routing_rejected(
+      workflow,
+      "issue614-governance-old-run-new-timeout-key",
+      expected_context: "keys"
+    )
+  end
+
+  # The reverse hybrid -- the new hardened run text without the paired
+  # `timeout-minutes` key -- must also be rejected.
+  def test_d171_rejects_issue614_governance_llvm_step_new_run_text_without_timeout_key
+    workflow = d171_workflow
+    step = workflow.dig("jobs", "governance", "steps").find do |s|
+      s["name"] == "Install LLVM 22 for offline alpha skill contract evals"
+    end
+    step["run"] = ISSUE614_LLVM_INSTALL_RUN_SCRIPT
+    assert_d171_routing_rejected(
+      workflow,
+      "issue614-governance-new-run-missing-timeout-key",
+      expected_context: "\"timeout-minutes\""
+    )
   end
 
   def test_d171_checker_keeps_the_current_live_workflow_compatible

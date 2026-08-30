@@ -1000,6 +1000,42 @@ D203_SCRATCH_DEVDEP_FRONTEND_PERF_MEASURE_STEPS =
 D203_SCRATCH_DEVDEP_FRONTEND_PERF_MEASURE_JOB = D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB.merge(
   "steps" => D203_SCRATCH_DEVDEP_FRONTEND_PERF_MEASURE_STEPS
 ).freeze
+# Issue #614: apt.llvm.org has been observed to wedge ubuntu-latest (x86_64)
+# runners for hours with no failure signal. Bound the download and the whole
+# step so a stalled mirror fails fast instead of consuming CI capacity for
+# hours. This step's own text and its sibling copies in the live ci.yml
+# (governance, native-build-test) carry the identical comment and flags.
+ISSUE614_LLVM_INSTALL_RUN_SCRIPT = <<~'SHELL'.strip
+  # apt.llvm.org has been observed to wedge ubuntu-latest (x86_64)
+  # runners for hours with no failure signal (issue #614). Bound
+  # both the download itself and the whole step so a stalled mirror
+  # fails fast and the job can simply be re-run, instead of
+  # consuming CI capacity for hours.
+  wget --timeout=30 --tries=3 https://apt.llvm.org/llvm.sh
+  chmod +x llvm.sh
+  sudo ./llvm.sh 22
+  # llvm.sh's own packages don't pull in Polly's static lib; llvm-sys
+  # links it explicitly, so it must be installed separately here.
+  sudo apt-get install -y libpolly-22-dev
+  echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+SHELL
+ISSUE614_LLVM_TIMEOUT_FRONTEND_PERF_MEASURE_STEPS =
+  Marshal.load(Marshal.dump(D203_SCRATCH_DEVDEP_FRONTEND_PERF_MEASURE_STEPS)).tap do |steps|
+    llvm_index = steps.index do |step|
+      step["name"] == "Install LLVM 22 (Linux, via apt.llvm.org)"
+    end
+    raise "expected an existing Linux LLVM-install step to replace" unless llvm_index
+
+    steps[llvm_index] = {
+      "name" => "Install LLVM 22 (Linux, via apt.llvm.org)",
+      "timeout-minutes" => "5",
+      "run" => ISSUE614_LLVM_INSTALL_RUN_SCRIPT
+    }
+  end.freeze
+ISSUE614_LLVM_TIMEOUT_FRONTEND_PERF_MEASURE_JOB =
+  D203_SCRATCH_DEVDEP_FRONTEND_PERF_MEASURE_JOB.merge(
+    "steps" => ISSUE614_LLVM_TIMEOUT_FRONTEND_PERF_MEASURE_STEPS
+  ).freeze
 D112_UBUNTU_FRONTEND_PERF_GATE_JOB = REPLICATED_PERF_GATE_JOB.merge(
   "runs-on" => "ubuntu-latest"
 ).freeze
@@ -1264,6 +1300,18 @@ D171_GOVERNANCE_AGENT_STEPS = {
     python3 scripts/run_alpha_skill_evals.py \
       --client claude --pycc-bin target/debug/pycc
   SHELL
+}.freeze
+# Issue #614: apt.llvm.org has been observed to wedge ubuntu-latest (x86_64)
+# runners for hours with no failure signal, so the LLVM-install agent step
+# may also carry a `timeout-minutes` key and the wget-hardened run script
+# below. Both the pre-#614 shape kept above (older reviewed fixtures) and
+# this post-#614 shape (the live workflow) are accepted, so neither the
+# key nor the updated command text is required.
+D171_GOVERNANCE_AGENT_STEP_EXTRA_KEYS = {
+  "Install LLVM 22 for offline alpha skill contract evals" => { "timeout-minutes" => "5" }
+}.freeze
+D171_GOVERNANCE_AGENT_STEPS_ISSUE614_RUN = {
+  "Install LLVM 22 for offline alpha skill contract evals" => ISSUE614_LLVM_INSTALL_RUN_SCRIPT
 }.freeze
 D171_PINNED_SETUP_PYTHON_ACTION =
   "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
@@ -1797,21 +1845,52 @@ def validate_d171_ci_routing(workflow_text, source)
   )
   agent_steps.each do |step|
     name = step["name"]
+    old_run = D171_GOVERNANCE_AGENT_STEPS.fetch(name)
+    new_run = D171_GOVERNANCE_AGENT_STEPS_ISSUE614_RUN[name]
+    extra_keys = D171_GOVERNANCE_AGENT_STEP_EXTRA_KEYS.fetch(name, {})
+    # Issue #614: the hardened run text and its `timeout-minutes` key are one
+    # reviewed unit, not two independently optional checks. A step must
+    # carry either the pre-#614 run text with none of the extra keys, or
+    # the post-#614 run text with every extra key present and correct.
+    # A hybrid (old text with the new key, or new text missing the key) is
+    # not a reviewed shape and is rejected below.
+    issue614_shape = !new_run.nil? && step["run"] == new_run
+
+    accepted_keys = %w[if name run] + (issue614_shape ? extra_keys.keys : [])
+    unexpected_keys = step.keys - accepted_keys
     d171_require_equal(
-      step.keys.sort,
-      %w[if name run].sort,
+      unexpected_keys,
+      [],
       "#{source} governance agent step #{name.inspect} keys"
+    )
+    missing_keys = %w[if name run] - step.keys
+    d171_require_equal(
+      missing_keys,
+      [],
+      "#{source} governance agent step #{name.inspect} required keys"
     )
     d171_require_equal(
       step["if"],
       "needs.classify-changes.outputs.agent == 'true'",
       "#{source} governance agent condition"
     )
-    d171_require_equal(
-      step["run"],
-      D171_GOVERNANCE_AGENT_STEPS.fetch(name),
-      "#{source} governance agent command"
-    )
+    if issue614_shape
+      extra_keys.each do |key, value|
+        unless step.key?(key)
+          raise RoadmapEvidenceError,
+                "#{source} governance agent step #{name.inspect} is missing " \
+                "#{key.inspect}, required alongside the post-#614 run text"
+        end
+        d171_require_equal(
+          step[key],
+          value,
+          "#{source} governance agent step #{name.inspect} #{key.inspect}"
+        )
+      end
+    elsif step["run"] != old_run
+      raise RoadmapEvidenceError,
+            "#{source} governance agent command does not match the reviewed D-171 routing"
+    end
   end
   D171_OPTIONAL_ROUTING.each do |job_name, (output, expected_needs)|
     job = d171_mapping(jobs[job_name], "#{source} #{job_name}")
@@ -2223,6 +2302,11 @@ def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
       # more than one gate-job shape without a parallel measure-job branch.
       [D112_UBUNTU_FRONTEND_PERF_GATE_JOB, D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB]
     elsif measure_job == D203_SCRATCH_DEVDEP_FRONTEND_PERF_MEASURE_JOB
+      [D112_UBUNTU_FRONTEND_PERF_GATE_JOB, D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB]
+    elsif measure_job == ISSUE614_LLVM_TIMEOUT_FRONTEND_PERF_MEASURE_JOB
+      # Issue #614 only bounds the LLVM install step (timeout-minutes plus
+      # wget retry/timeout flags); it does not change the measurement
+      # design, so the same gate-job shapes as D203/D112 remain accepted.
       [D112_UBUNTU_FRONTEND_PERF_GATE_JOB, D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB]
     end
   unless expected_perf_job
