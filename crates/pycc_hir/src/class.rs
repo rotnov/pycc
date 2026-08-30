@@ -925,20 +925,36 @@ pub(crate) struct ClassAnnotationInfo {
     /// without any explicit hook of its own.
     pub(crate) subscriptable: bool,
     /// Issue #693 (PEP 560, extending #611): the declared return type of
-    /// `__class_getitem__`, found by walking the MRO in order (most-derived
-    /// first) exactly as `subscriptable`'s own hook search does. `Some` only
-    /// when an explicit hook exists somewhere in the MRO -- never set for
-    /// subscriptability granted purely by a PEP 695 type parameter with no
-    /// hook of its own, since that case is deliberately still handled by
-    /// `GenericClassInstantiate`, not by this field. `annotation_to_ty`'s
-    /// `Subscript` arm routes `ClassName[type_arg]` through this return type
-    /// instead of falling back to `Ty::Instance(ClassName)` when it is
-    /// `Some`. Always `None` for the self-referential entry `lower_class`
-    /// pushes for the class it is currently lowering (see that call site's
-    /// own comment) -- the hook's return type is not yet resolvable at that
-    /// point, so a `__class_getitem__`-typed annotation used *inside* the
-    /// defining class's own body still falls back to `Ty::Instance`, same as
-    /// before this field existed.
+    /// whichever `__class_getitem__` hook `pycc_types`'
+    /// `resolve_static_or_class_method_call` would itself dispatch to for a
+    /// value-position `ClassName[type_arg]` call on this MRO -- found by
+    /// `class_getitem_return_ty`'s own two-pass MRO walk (every MRO entry's
+    /// `static_methods` first, then, only if none declared the hook, every
+    /// MRO entry's `class_methods`), which is deliberately the *same*
+    /// two-pass order and not the single combined pass `subscriptable`'s own
+    /// hook-existence search (`defines_class_getitem`) uses -- existence
+    /// doesn't care which table wins, so that search can check both tables
+    /// together at each MRO entry, but the winning declaration used to
+    /// resolve a *return type* must be the exact same one value position
+    /// would pick. `Some` only when an explicit hook exists somewhere in the
+    /// MRO -- never set for subscriptability granted purely by a PEP 695
+    /// type parameter with no hook of its own, since that case is
+    /// deliberately still handled by `GenericClassInstantiate`, not by this
+    /// field. `annotation_to_ty`'s `Subscript` arm routes
+    /// `ClassName[type_arg]` through this return type instead of falling
+    /// back to `Ty::Instance(ClassName)` when it is `Some`, and takes that
+    /// same `Ty::Instance` fallback when it is `None` -- including the
+    /// structurally-unreachable-in-practice case where `subscriptable` is
+    /// true (the hook exists) but `class_getitem_return_ty`'s `items` lookup
+    /// still comes back empty, since `subscriptable` is deliberately keyed
+    /// on hook existence alone and never on this field's own resolution
+    /// outcome (issue #693 deep-review, Finding 2). Always `None` for the
+    /// self-referential entry `lower_class` pushes for the class it is
+    /// currently lowering (see that call site's own comment) -- the hook's
+    /// return type is not yet resolvable at that point, so a
+    /// `__class_getitem__`-typed annotation used *inside* the defining
+    /// class's own body still falls back to `Ty::Instance`, same as before
+    /// this field existed.
     pub(crate) class_getitem_return: Option<Ty>,
 }
 
@@ -961,56 +977,96 @@ pub(crate) fn class_annotation_infos(
             ClassAnnotationInfo {
                 name: name.clone(),
                 is_protocol: def.is_protocol,
-                subscriptable: def.type_param.is_some() || class_getitem_return.is_some(),
+                // Subscriptability is gated purely on hook *existence*
+                // (`defines_class_getitem`), never on `class_getitem_return`'s
+                // own success at resolving a return type. This is
+                // deliberately decoupled: `class_getitem_return_ty`'s
+                // `items` lookup is documented as unreachable-in-practice
+                // when the hook exists, but that is an invariant of the
+                // current call graph, not something this type enforces. If
+                // that invariant were ever violated, coupling
+                // `subscriptable` to the resolution outcome would silently
+                // flip a previously-accepted class to a T0044 rejection
+                // instead of degrading to the pre-#693
+                // `Ty::Instance(ClassName)` fallback that
+                // `annotation_to_ty`'s `Subscript` arm already provides for
+                // a `None` `class_getitem_return`.
+                subscriptable: def.type_param.is_some()
+                    || defines_class_getitem(defs, &def.mro),
                 class_getitem_return,
             }
         })
         .collect()
 }
 
-/// Issue #693: walks `mro` in order (most-derived first, matching
-/// `resolve_static_or_class_method_call`'s own MRO walk in `pycc_types`) to
-/// find the first class that declares `__class_getitem__` as a
-/// `@staticmethod` or `@classmethod`, then resolves its mangled name's
-/// `return_ty` from `items`. Returns `None` when no class in the MRO
-/// declares the hook, or (structurally unreachable in practice, since every
-/// `static_methods`/`class_methods` entry is pushed alongside a matching
-/// `items.push(item)` in the same `lower_class` call) when the mangled name
-/// has no corresponding `HirItem::Function` yet.
+/// Issue #693: resolves the declared return type of whichever
+/// `__class_getitem__` hook `resolve_static_or_class_method_call` (in
+/// `pycc_types`) would itself dispatch to for a value-position `C[x]` call on
+/// this MRO, so that annotation-position `C[x]` and value-position `C[x]`
+/// always resolve through the exact same MRO entry.
+///
+/// Deliberately replicates that function's two-pass order rather than a
+/// single combined pass: first walk the full MRO (most-derived first)
+/// checking only `static_methods`; only if no class in the MRO declares the
+/// hook as a `@staticmethod` does a second full MRO walk check
+/// `class_methods`. A single pass that checks both tables together at each
+/// MRO entry would let a derived class's `@classmethod` override win over a
+/// base class's `@staticmethod` declaration merely because the derived class
+/// comes first in the MRO -- `resolve_static_or_class_method_call` instead
+/// lets *any* static-method declaration anywhere in the MRO outrank *every*
+/// class-method declaration, regardless of MRO position. Returns `None` when
+/// no class in the MRO declares the hook in either form, or (structurally
+/// unreachable in practice, since every `static_methods`/`class_methods`
+/// entry is pushed alongside a matching `items.push(item)` in the same
+/// `lower_class` call) when the mangled name has no corresponding
+/// `HirItem::Function` yet.
 fn class_getitem_return_ty(
     defs: &[(String, HirClassDef)],
     mro: &[String],
     items: &[HirItem],
 ) -> Option<Ty> {
-    for mro_class in mro {
-        // Unlike most other MRO walks in this crate, a class here is not
-        // guaranteed to be present in `defs`: `class_annotation_infos` also
-        // runs (via `lower_class`'s own pre-method-loop projection) against
-        // a hand-built `defined_classes` slice that
-        // `class::mro::tests::circular_inheritance_in_mro_is_rejected`
-        // deliberately leaves incomplete to exercise the *defensive*
-        // circular-inheritance check downstream in `resolve_mro` -- that
-        // check, not this function, is the one responsible for rejecting
-        // such an MRO. Skip a class this function cannot resolve rather
-        // than panicking; the loop naturally continues to the next
-        // ancestor, and no hook is found through this leg either way.
-        let Some((_, mro_def)) = defs.iter().find(|(name, _)| name == mro_class) else {
-            continue;
-        };
-        let Some((_, mangled)) = mro_def
-            .static_methods
-            .iter()
-            .chain(&mro_def.class_methods)
-            .find(|(method, _)| method == "__class_getitem__")
-        else {
-            continue;
-        };
-        return items.iter().find_map(|item| match item {
+    let resolve = |mangled: &str| -> Option<Ty> {
+        items.iter().find_map(|item| match item {
             HirItem::Function {
                 name, return_ty, ..
             } if name == mangled => Some(return_ty.clone()),
             _ => None,
-        });
+        })
+    };
+    // Unlike most other MRO walks in this crate, a class here is not
+    // guaranteed to be present in `defs`: `class_annotation_infos` also runs
+    // (via `lower_class`'s own pre-method-loop projection) against a
+    // hand-built `defined_classes` slice that
+    // `class::mro::tests::circular_inheritance_in_mro_is_rejected`
+    // deliberately leaves incomplete to exercise the *defensive*
+    // circular-inheritance check downstream in `resolve_mro` -- that check,
+    // not this function, is the one responsible for rejecting such an MRO.
+    // Skip a class this function cannot resolve rather than panicking; each
+    // loop naturally continues to the next ancestor, and no hook is found
+    // through this leg either way.
+    for mro_class in mro {
+        let Some((_, mro_def)) = defs.iter().find(|(name, _)| name == mro_class) else {
+            continue;
+        };
+        if let Some((_, mangled)) = mro_def
+            .static_methods
+            .iter()
+            .find(|(method, _)| method == "__class_getitem__")
+        {
+            return resolve(mangled);
+        }
+    }
+    for mro_class in mro {
+        let Some((_, mro_def)) = defs.iter().find(|(name, _)| name == mro_class) else {
+            continue;
+        };
+        if let Some((_, mangled)) = mro_def
+            .class_methods
+            .iter()
+            .find(|(method, _)| method == "__class_getitem__")
+        {
+            return resolve(mangled);
+        }
     }
     None
 }
@@ -1020,12 +1076,26 @@ fn class_getitem_return_ty(
 /// tables, for the same reason, that `pycc_types`' own value-position
 /// `resolve_static_or_class_method_call` walks when it dispatches `C[x]`.
 /// The two crates must agree on which classes are subscriptable, so the
-/// lookups are deliberately kept parallel.
+/// lookups are deliberately kept parallel. `class_annotation_infos` calls
+/// this to compute `ClassAnnotationInfo::subscriptable` independently of
+/// whether `class_getitem_return_ty`'s own resolution of the hook's return
+/// type succeeds (issue #693 deep-review, Finding 2): a class can be
+/// subscriptable purely by declaring the hook, even in the
+/// structurally-unreachable-in-practice case where the return-type lookup
+/// comes back empty.
 ///
-/// Iterates the class table and tests MRO membership, rather than looking
-/// each MRO entry up in the table: every MRO entry is present in `defs` by
-/// construction (a base class is always lowered before the class that
-/// inherits it), so a lookup would carry a `None` arm no test could reach.
+/// Iterates the class table and tests MRO membership, rather than iterating
+/// `mro` and looking each entry up in `defs` (the shape `class_getitem_return_ty`
+/// uses, since it also needs the mangled name for a *specific* MRO entry
+/// once found). The two shapes handle a `mro` entry absent from `defs` --
+/// deliberately exercised by `class::mro::tests::circular_inheritance_in_mro_is_rejected`
+/// via an incomplete `defined_classes` slice -- differently but equivalently
+/// safely: `class_getitem_return_ty` walks `mro` and defensively `continue`s
+/// past an entry it cannot look up, while this function walks `defs` and
+/// filters by `mro.contains`, so an entry missing from `defs` is simply
+/// never visited by the iteration at all. Neither shape panics or needs an
+/// `Option`/`unwrap` for the missing case; this one just never constructs
+/// the "look it up and get `None`" arm in the first place.
 fn defines_class_getitem(defs: &[(String, HirClassDef)], mro: &[String]) -> bool {
     defs.iter().any(|(name, mro_def)| {
         mro.contains(name)

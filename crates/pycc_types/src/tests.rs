@@ -28622,6 +28622,44 @@ fn class_getitem_argument_type_is_checked_against_the_hook() {
 }
 
 #[test]
+fn class_getitem_value_position_prefers_a_base_s_staticmethod_hook_over_a_derived_classmethod_override(
+) {
+    // Issue #693 deep-review, Finding 1: `resolve_static_or_class_method_call`
+    // walks the full MRO checking `static_methods` first, and only if none
+    // of the MRO's classes declare the hook there does it walk the full MRO
+    // a second time checking `class_methods` -- so a base class's
+    // `@staticmethod` hook always outranks a derived class's `@classmethod`
+    // override, regardless of MRO order. `pycc_hir`'s annotation-position
+    // resolver (`class_getitem_return_ty`) must replicate this exact
+    // two-pass order rather than combining both tables into one MRO pass;
+    // see `pycc_hir::tests::an_annotation_subscript_prefers_a_base_s_staticmethod_hook_over_a_derived_classmethod_override`
+    // for the annotation-position half of this regression pair -- both
+    // must resolve `D[3]` to `int` (the base's hook), never `str` (the
+    // derived override).
+    let src = "\
+class C:
+    @staticmethod
+    def __class_getitem__(key: int) -> int:
+        return key
+    def __init__(self) -> None:
+        self.x = 1
+
+class D(C):
+    @classmethod
+    def __class_getitem__(cls, key: int) -> str:
+        return \"overridden\"
+
+value: int = D[3]
+";
+    assert!(
+        parse_check(src).is_ok(),
+        "`D[3]` must resolve through the base class `C`'s `@staticmethod` \
+         hook (return type `int`), not `D`'s own `@classmethod` override \
+         (return type `str`)"
+    );
+}
+
+#[test]
 fn subscripting_a_class_without_the_hook_is_rejected() {
     // CPython raises `TypeError: type 'C' is not subscriptable` here.
     let src = "\

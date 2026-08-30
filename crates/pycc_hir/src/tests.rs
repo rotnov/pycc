@@ -2381,6 +2381,43 @@ fn an_annotation_subscript_on_an_inherited_hook_resolves_through_the_mro() {
 }
 
 #[test]
+fn an_annotation_subscript_prefers_a_base_s_staticmethod_hook_over_a_derived_classmethod_override() {
+    // Issue #693 deep-review, Finding 1: `class_getitem_return_ty` must walk
+    // the MRO in the exact same two-pass order as `pycc_types`'
+    // `resolve_static_or_class_method_call` (every MRO entry's
+    // `static_methods` first, then, only if none declare the hook, every
+    // MRO entry's `class_methods`) -- not a single combined pass that lets
+    // whichever MRO entry comes first win regardless of decorator kind.
+    //
+    // `C` declares `__class_getitem__` as a `@staticmethod` returning `int`;
+    // `D(C)` overrides it as a `@classmethod` returning `str`. A single
+    // combined pass over the MRO (most-derived first: `D`, then `C`) would
+    // find `D`'s classmethod entry first and resolve `D[3]` to `str`. The
+    // correct two-pass order finds no `static_methods` entry on `D`, then
+    // finds `C`'s on the *second* pass over the full MRO -- resolving to
+    // `int`, exactly as `pycc_types::resolve_static_or_class_method_call`
+    // resolves the value-position `D[3]` for the same hierarchy (see
+    // `pycc_types::tests::class_getitem_value_position_prefers_a_base_s_staticmethod_hook_over_a_derived_classmethod_override`).
+    let src = "\
+class C:
+    @staticmethod
+    def __class_getitem__(key: int) -> int:
+        return key
+
+    def __init__(self) -> None:
+        self.x = 1
+
+class D(C):
+    @classmethod
+    def __class_getitem__(cls, key: int) -> str:
+        return \"overridden\"
+
+v: D[3] = 1
+";
+    assert_eq!(annassign_ty(src), Ty::Int);
+}
+
+#[test]
 fn a_generic_class_s_annotation_subscript_is_unaffected_by_the_hook_return_type_field() {
     // Issue #693: a PEP 695 generic class (`class G[T]:`) is subscriptable
     // through `Generic`, not through an explicit `__class_getitem__` hook,

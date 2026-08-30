@@ -1,6 +1,73 @@
 # Session handoff: #693 PEP 560 annotation-position `__class_getitem__` routing
 
-## Status: implementation complete, local gates green, PR about to open (carries `Fixes #693`)
+## Status: implementation complete, deep-review fix round applied, local gates green
+
+## Deep-review fix round (this update)
+
+After this PR opened, the D-068 mandated `ievo:deep-reviewer` pass — run
+independently against PR #853's diff, superseding this session's earlier
+"not run — reported unavailable" note above (a fresh dispatch context did
+have a working invocation path) — returned three findings, all addressed in
+a follow-up commit on the same branch before merge:
+
+- **Finding 1 (warning) — MRO walk-order divergence from value-position
+  resolver.** `class_getitem_return_ty` originally walked the MRO once,
+  checking `static_methods.iter().chain(&mro_def.class_methods)` together at
+  each candidate — the first MRO entry declaring the hook in *either* form
+  won. `pycc_types::resolve_static_or_class_method_call` instead does two
+  separate full-MRO passes (every entry's `static_methods` first, then,
+  only if none matched, every entry's `class_methods`), so a base class's
+  `@staticmethod` hook always outranks a derived class's `@classmethod`
+  override regardless of MRO position. The single-pass shape let a
+  mixed-decorator-kind override diverge value position from annotation
+  position for the same subscript. Fixed by rewriting
+  `class_getitem_return_ty` to the identical two-pass order. Regression
+  tests added on both sides of the crate boundary: `pycc_hir::tests::an_annotation_subscript_prefers_a_base_s_staticmethod_hook_over_a_derived_classmethod_override`
+  and `pycc_types::tests::class_getitem_value_position_prefers_a_base_s_staticmethod_hook_over_a_derived_classmethod_override`,
+  both proving `D[3]` resolves to the base's `int` return, not the
+  derived override's `str`.
+- **Finding 2 (warning) — subscriptability gate coupled to full
+  return-type resolution.** `class_annotation_infos` computed
+  `subscriptable` as `def.type_param.is_some() || class_getitem_return.is_some()`,
+  keying subscriptability on `class_getitem_return_ty`'s full `items`-lookup
+  succeeding rather than on the hook merely existing. Reverted to
+  `def.type_param.is_some() || defines_class_getitem(defs, &def.mro)` (the
+  pre-#693 existence-only check, already used elsewhere in the file for a
+  different subscriptability check), decoupling `subscriptable` from
+  `class_getitem_return`'s own resolution outcome. `annotation_to_ty`'s
+  existing fallback (already present before this fix, in
+  `crates/pycc_hir/src/func.rs`) means a hook-exists-but-resolution-misses
+  class now degrades to the pre-#693 `Ty::Instance(ClassName)` instead of a
+  `T0044` rejection. No new test was added specifically for that
+  degradation path: constructing it requires hand-built HIR bypassing
+  `lower_class`'s real construction (every `static_methods`/`class_methods`
+  entry is pushed alongside a matching `items.push(item)` in the same call),
+  which the existing doc comments already document as
+  structurally-unreachable-in-practice; the fix itself (removing the
+  coupling) is what matters for correctness, and is covered by the full
+  existing annotation/value-position test suite passing unchanged.
+- **Finding 3 (note) — doc contradiction between two adjacent functions.**
+  `defines_class_getitem`'s doc comment claimed an MRO-entry-not-found-in-`defs`
+  scenario was unreachable, while `class_getitem_return_ty`'s doc comment
+  (right above it) said the opposite for a structurally similar lookup and
+  named the exact test reaching that `None` arm. Reconciled: both doc
+  comments now explain why the two functions handle a `mro` entry absent
+  from `defs` differently but equivalently safely — `class_getitem_return_ty`
+  walks `mro` and defensively `continue`s past an unresolvable entry, while
+  `defines_class_getitem` walks `defs` and filters by `mro.contains`, so a
+  missing entry is simply never visited by that iteration in the first
+  place, and neither shape needs a `None`-arm `unwrap`.
+
+All local gates re-run after the fix round: `cargo build --workspace`,
+`cargo test --workspace` (1466 passed in `pycc_hir`/`pycc_types`'s
+respective full runs, 0 failed anywhere), `cargo clippy --workspace
+--all-targets -- -D warnings` (exit 0, only pre-existing unrelated
+`escaped newline` warnings), `cargo doc --workspace --no-deps` (clean, only
+the pre-existing unrelated `pycc_types` private-link warning), and
+`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions
+100`: **100.00% lines and 100.00% regions across every crate**, all green.
+
+## Status (original entry, superseded above): implementation complete, local gates green, PR about to open (carries `Fixes #693`)
 
 This session ran the project's own autopilot pipeline
 (`issue-select` → `issue-implement`) synchronously end to end inside the
