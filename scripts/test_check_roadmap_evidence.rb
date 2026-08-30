@@ -3862,6 +3862,37 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
+  # The hardened run text and the `timeout-minutes` key are one reviewed
+  # unit, not two independently optional checks -- the old run text paired
+  # with the new key is a hybrid nobody reviewed and must be rejected.
+  def test_d171_rejects_issue614_governance_llvm_step_old_run_text_with_new_timeout_key
+    workflow = d171_workflow
+    step = workflow.dig("jobs", "governance", "steps").find do |s|
+      s["name"] == "Install LLVM 22 for offline alpha skill contract evals"
+    end
+    step["timeout-minutes"] = "5"
+    assert_d171_routing_rejected(
+      workflow,
+      "issue614-governance-old-run-new-timeout-key",
+      expected_context: "keys"
+    )
+  end
+
+  # The reverse hybrid -- the new hardened run text without the paired
+  # `timeout-minutes` key -- must also be rejected.
+  def test_d171_rejects_issue614_governance_llvm_step_new_run_text_without_timeout_key
+    workflow = d171_workflow
+    step = workflow.dig("jobs", "governance", "steps").find do |s|
+      s["name"] == "Install LLVM 22 for offline alpha skill contract evals"
+    end
+    step["run"] = ISSUE614_LLVM_INSTALL_RUN_SCRIPT
+    assert_d171_routing_rejected(
+      workflow,
+      "issue614-governance-new-run-missing-timeout-key",
+      expected_context: "\"timeout-minutes\""
+    )
+  end
+
   def test_d171_checker_keeps_the_current_live_workflow_compatible
     stdout, stderr, status = run_checker(
       roadmap: "# pycc Roadmap\n",

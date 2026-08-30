@@ -1845,12 +1845,19 @@ def validate_d171_ci_routing(workflow_text, source)
   )
   agent_steps.each do |step|
     name = step["name"]
-    # Issue #614: the LLVM-install agent step may carry one additional
-    # `timeout-minutes` key beyond the historically required `if`/`name`/
-    # `run` trio. Older reviewed fixtures (predating #614) never had this
-    # key, so it is accepted but not required, keeping both shapes valid.
+    old_run = D171_GOVERNANCE_AGENT_STEPS.fetch(name)
+    new_run = D171_GOVERNANCE_AGENT_STEPS_ISSUE614_RUN[name]
     extra_keys = D171_GOVERNANCE_AGENT_STEP_EXTRA_KEYS.fetch(name, {})
-    unexpected_keys = step.keys - (%w[if name run] + extra_keys.keys)
+    # Issue #614: the hardened run text and its `timeout-minutes` key are one
+    # reviewed unit, not two independently optional checks. A step must
+    # carry either the pre-#614 run text with none of the extra keys, or
+    # the post-#614 run text with every extra key present and correct.
+    # A hybrid (old text with the new key, or new text missing the key) is
+    # not a reviewed shape and is rejected below.
+    issue614_shape = !new_run.nil? && step["run"] == new_run
+
+    accepted_keys = %w[if name run] + (issue614_shape ? extra_keys.keys : [])
+    unexpected_keys = step.keys - accepted_keys
     d171_require_equal(
       unexpected_keys,
       [],
@@ -1867,22 +1874,22 @@ def validate_d171_ci_routing(workflow_text, source)
       "needs.classify-changes.outputs.agent == 'true'",
       "#{source} governance agent condition"
     )
-    accepted_runs = [D171_GOVERNANCE_AGENT_STEPS.fetch(name)]
-    if D171_GOVERNANCE_AGENT_STEPS_ISSUE614_RUN.key?(name)
-      accepted_runs << D171_GOVERNANCE_AGENT_STEPS_ISSUE614_RUN.fetch(name)
-    end
-    unless accepted_runs.include?(step["run"])
+    if issue614_shape
+      extra_keys.each do |key, value|
+        unless step.key?(key)
+          raise RoadmapEvidenceError,
+                "#{source} governance agent step #{name.inspect} is missing " \
+                "#{key.inspect}, required alongside the post-#614 run text"
+        end
+        d171_require_equal(
+          step[key],
+          value,
+          "#{source} governance agent step #{name.inspect} #{key.inspect}"
+        )
+      end
+    elsif step["run"] != old_run
       raise RoadmapEvidenceError,
             "#{source} governance agent command does not match the reviewed D-171 routing"
-    end
-    extra_keys.each do |key, value|
-      next unless step.key?(key)
-
-      d171_require_equal(
-        step[key],
-        value,
-        "#{source} governance agent step #{name.inspect} #{key.inspect}"
-      )
     end
   end
   D171_OPTIONAL_ROUTING.each do |job_name, (output, expected_needs)|
