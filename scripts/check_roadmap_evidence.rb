@@ -1321,9 +1321,6 @@ D171_NATIVE_REQUIRED_RUN_STEPS = {
     "if" => "runner.os == 'Linux'",
     "run" => "cargo build --target ${{ matrix.target }} -p pycc_rt"
   },
-  "cargo build --workspace" => {
-    "run" => "cargo build --workspace"
-  },
   "Build pycc_rt (release, for tests/nbody_bench.rs's --release build)" => {
     "run" => "cargo build --release -p pycc_rt"
   },
