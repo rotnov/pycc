@@ -442,14 +442,45 @@ fn check_raise_operand(
     // `pycc_rt_exception_raise` as a `*mut PyExceptionObj` while the value is
     // really a `*mut PyInstanceObj`. That is memory corruption, not a
     // diagnostic. `raise <bound value>` therefore stays `T0021`.
-    if let HirExpr::Call { callee, .. } = expr
+    if let HirExpr::Call { callee, args } = expr
         && let Some(def) = user_exception_class(env, local_names, callee)
     {
-        // Inference runs first so a malformed constructor call reports its own
-        // argument diagnostic (`T0021` from `check_call_args`) rather than the
-        // generic "can only raise exception instances" message.
-        infer_expr_in(env, local_names, expr)?;
         reject_own_constructor(env, def)?;
+        // #714: argument validation is done directly here, against the
+        // synthetic `Exception.__init__` placeholder's own registered
+        // signature, instead of routing through the generic
+        // `infer_expr_in` -> `class::resolve_instantiation` path used
+        // everywhere else a `Call` is type-checked. `resolve_instantiation`
+        // rejects *any* instantiation whose resolved constructor is still
+        // that placeholder, precisely to stop `e = MyError("boom")` (an
+        // ordinary value binding) from compiling into a call to a
+        // synthetic function codegen never defines a body for -- but a
+        // fresh `raise MyError("boom")` is the one shape that placeholder
+        // exists to support, and MIR's `lower_exception_value` constructs
+        // the raised `PyExceptionObj` directly from the message argument
+        // without ever calling through `Exception.__init__` at runtime.
+        // Reusing `resolve_instantiation` here would reject this valid
+        // raise the same way it now rejects the bound-value form.
+        // `reject_own_constructor` just confirmed the resolved `__init__`
+        // *is* `EXCEPTION_INIT_MANGLED_NAME`, so it is guaranteed
+        // registered -- matching `resolve_instantiation`'s own
+        // "internal error" panic precondition, never actually reachable
+        // here.
+        let (param_tys, _return_ty) =
+            env.lookup_function(EXCEPTION_INIT_MANGLED_NAME).unwrap_or_else(|| {
+                panic!(
+                    "pycc_types: internal error: `{EXCEPTION_INIT_MANGLED_NAME}` was not \
+                     registered as an ordinary function -- `pycc_hir::lower_checked` seeds \
+                     it whenever it seeds the builtin exception classes"
+                )
+            });
+        let arg_tys = args
+            .iter()
+            .map(|arg| infer_expr_in(env, local_names, arg))
+            .collect::<Result<Vec<_>, _>>()?;
+        // `param_tys[0]` is always `self`, never part of the caller-supplied
+        // argument list -- mirrors `resolve_instantiation`'s identical slice.
+        super::class::check_call_args(callee, &arg_tys, &param_tys[1..])?;
         return Ok(());
     }
 

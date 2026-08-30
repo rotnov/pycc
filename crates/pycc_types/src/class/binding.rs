@@ -143,13 +143,23 @@ pub(crate) fn resolve_instantiation(
         ));
     }
     // #432: walk the MRO to find the first class with an `__init__` method.
-    let mangled = class_def
+    // #714: also record whether that ancestor is itself a *synthetic*
+    // (seeded) class -- see the check just below, which must not key on the
+    // mangled name string alone: a user-authored class can be named
+    // `Exception` and declare its own `__init__`, mangling to the identical
+    // `"Exception.__init__"` string as the synthetic placeholder without
+    // being it (`is_synthetic_class` is provenance-based, D-188; shape and
+    // name never decide it).
+    let (mangled, init_owner_is_synthetic) = class_def
         .mro
         .iter()
         .find_map(|mro_class| {
             let mro_def = env.lookup_class(mro_class)?;
             if mro_def.methods.iter().any(|(mn, _)| mn == "__init__") {
-                Some(format!("{mro_class}.__init__"))
+                Some((
+                    format!("{mro_class}.__init__"),
+                    env.is_synthetic_class(mro_class),
+                ))
             } else {
                 None
             }
@@ -160,6 +170,36 @@ pub(crate) fn resolve_instantiation(
              pycc_hir::lower_class should have rejected this before it reached pycc_types"
             )
         });
+    // The resolved `__init__` coming from a *synthetic* ancestor means
+    // `class_name` is a user-declared class (the `is_synthetic_class` check
+    // above already excluded a directly seeded builtin) whose MRO reaches a
+    // builtin exception without overriding its constructor -- exactly the
+    // shape `exception::reject_own_constructor` permits for a *raise*
+    // operand. `pycc_hir::lower_checked` emits a HIR body for that
+    // synthetic placeholder only so the exception's own raise-path type
+    // checking has a real `env.lookup_function` entry to resolve against;
+    // codegen never materializes a callable definition for it, so a
+    // generic instantiation call here (`e = MyError("boom")`, `MyError()`
+    // as a default argument, etc.) would compile cleanly and then abort at
+    // runtime on a `NameError` naming a symbol the user never wrote.
+    // `exception::check_raise_operand` validates the one shape that *is*
+    // supported (a fresh `raise MyError("boom")`) itself, directly against
+    // this same single-`str`-argument signature, without ever reaching this
+    // function -- see that function's own comment on its `user_exception_class`
+    // branch.
+    if init_owner_is_synthetic {
+        return Err(Diagnostic::error(
+            "C0001",
+            format!(
+                "cannot instantiate exception class `{class_name}` as a value -- \
+                 pycc does not materialize an exception instance for a class that \
+                 inherits `Exception`'s constructor without overriding it; \
+                 `raise {class_name}(\"message\")` is supported, binding the result \
+                 to a name is not (Part 3 of #541)"
+            ),
+            Span::new(0, 0),
+        ));
+    }
     let (param_tys, _return_ty) = env.lookup_function(&mangled).unwrap_or_else(|| {
         panic!(
             "pycc_types: internal error: `{mangled}` was not registered as an ordinary \

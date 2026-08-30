@@ -359,7 +359,11 @@ fn t0047_super_instance_attr(attr: &str, declaring_class: &str) -> Diagnostic {
 /// mismatch code -- an instantiation call and a method call are both, at
 /// their core, "call this mangled function with these arguments," the same
 /// shape an ordinary function call already validates.
-fn check_call_args(callee: &str, arg_tys: &[Ty], param_tys: &[Ty]) -> Result<(), Diagnostic> {
+pub(crate) fn check_call_args(
+    callee: &str,
+    arg_tys: &[Ty],
+    param_tys: &[Ty],
+) -> Result<(), Diagnostic> {
     if arg_tys.len() != param_tys.len() {
         return Err(Diagnostic::error(
             "T0021",

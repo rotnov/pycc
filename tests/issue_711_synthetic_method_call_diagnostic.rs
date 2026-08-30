@@ -69,13 +69,20 @@ fn calling_a_dunder_directly_on_a_caught_builtin_exception_is_a_clean_diagnostic
 /// class that actually owns the resolved method (`Exception`, found via
 /// the MRO walk), not on `MyError` (the call's own receiver class), which
 /// is why this must produce the identical `C0001` diagnostic named above.
+///
+/// The receiver is obtained through a parameter annotation rather than
+/// `e = MyError("x")`: #714 made that instantiation itself a `C0001`
+/// (binding the inherited, synthetic-placeholder constructor's result to a
+/// name), which would otherwise fire first and mask the dunder-call
+/// diagnostic this test exists to pin. A parameter of type `MyError` still
+/// produces the exact `Ty::Instance("MyError")` receiver the dunder call
+/// needs, without ever going through `resolve_instantiation`.
 #[test]
 fn calling_a_dunder_on_an_instance_of_a_user_subclass_with_no_own_method_is_the_same_diagnostic() {
     let text = check_error(
         "inherited",
         "class MyError(Exception):\n    pass\n\n\n\
-         def main() -> None:\n\
-         \x20   e = MyError(\"x\")\n\
+         def main(e: MyError) -> None:\n\
          \x20   e.__init__(\"y\")\n",
     );
     assert!(text.contains("C0001"), "unexpected diagnostic: {text}");
