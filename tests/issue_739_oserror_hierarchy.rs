@@ -251,7 +251,11 @@ fn an_uncaught_file_not_found_error_prints_its_own_class_name() {
     );
     assert!(!ok, "an uncaught exception must exit non-zero");
     assert_eq!(stdout, "");
-    assert_eq!(stderr, "FileNotFoundError: missing\n");
+    // #707 added a traceback-frame header naming the enclosing function.
+    assert_eq!(
+        stderr,
+        "Traceback (most recent call last):\n  File \"<compiled>\", in main\nFileNotFoundError: missing\n"
+    );
 }
 
 #[test]
@@ -262,7 +266,11 @@ fn an_uncaught_broken_pipe_error_prints_its_own_class_name() {
     );
     assert!(!ok, "an uncaught exception must exit non-zero");
     assert_eq!(stdout, "");
-    assert_eq!(stderr, "BrokenPipeError: pipe\n");
+    // #707 added a traceback-frame header naming the enclosing function.
+    assert_eq!(
+        stderr,
+        "Traceback (most recent call last):\n  File \"<compiled>\", in main\nBrokenPipeError: pipe\n"
+    );
 }
 
 // -- C0001 no longer fires for the 16 names on raise/except; still fires for

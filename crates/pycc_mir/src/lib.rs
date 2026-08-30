@@ -745,11 +745,30 @@ pub enum MirStmt {
     /// `raise <exception>` (PEP 3110, #382).
     Raise {
         exception: MirExceptionValue,
+        /// The enclosing function's source name (`"<module>"` at top level),
+        /// identifying where this `raise` executes for traceback rendering
+        /// (#707). Populated by [`set_frame_function`] as a post-pass over
+        /// the body [`lower_item`] just finished lowering, rather than
+        /// threaded as a parameter through `lower_stmt`'s whole recursive
+        /// descent: the value is constant for an entire function body, and
+        /// every statement-lowering function between `lower_item` and
+        /// `lower_raise` would otherwise need a new parameter purely to pass
+        /// it through unchanged. `lower_raise` itself always leaves this
+        /// empty; only the post-pass fills it in.
+        frame_function: String,
     },
     /// `raise <exception> from <cause>` (PEP 409, #382).
     RaiseFrom {
         exception: MirExceptionValue,
         cause: MirExceptionValue,
+        /// See [`MirStmt::Raise::frame_function`] -- identifies where this
+        /// `raise ... from ...` executes. Only `exception` (the raised
+        /// effect) carries a frame; `cause` keeps whatever frame it already
+        /// had (empty, if freshly constructed, since this compiler does not
+        /// track cause objects raised elsewhere), matching CPython's
+        /// distinction between an exception's own traceback and an
+        /// explicitly chained cause's.
+        frame_function: String,
     },
     /// Bare `raise` (re-raise, #382). Only valid inside an except handler.
     Reraise,
@@ -878,8 +897,9 @@ fn lower_item(
             let current_class: Option<&str> =
                 name.split('.').next().filter(|prefix| *prefix != name);
             scopes.push(params.iter().cloned().collect());
-            let body = lower_stmt_sequence(body, scopes, classes, current_class);
+            let mut body = lower_stmt_sequence(body, scopes, classes, current_class);
             scopes.pop();
+            set_frame_function(&mut body, name);
             MirItem::Function {
                 name: name.clone(),
                 params: params.clone(),
@@ -888,7 +908,80 @@ fn lower_item(
             }
         }
         HirItem::TopLevelStmt(stmt) => {
-            MirItem::TopLevelStmt(lower_stmt(stmt, scopes, classes, None))
+            let mut stmt = lower_stmt(stmt, scopes, classes, None);
+            set_frame_function(std::slice::from_mut(&mut stmt), "<module>");
+            MirItem::TopLevelStmt(stmt)
+        }
+    }
+}
+
+/// Fills every [`MirStmt::Raise`]/[`MirStmt::RaiseFrom`] reachable from
+/// `body` with `frame_name` -- the enclosing function's source name, or
+/// `"<module>"` for a top-level statement (#707). Run once per item by
+/// [`lower_item`] after lowering completes, rather than threading
+/// `frame_name` as a parameter through every statement-lowering function's
+/// own recursive descent (see [`MirStmt::Raise::frame_function`]'s doc
+/// comment for why): `frame_name` never varies within one item, so a single
+/// post-order walk over the already-built tree is strictly cheaper and
+/// cannot desynchronize from `lower_stmt`'s own call graph the way a
+/// parallel threaded parameter could.
+///
+/// Recurses into every `MirStmt` variant that nests further statements --
+/// `If`, `While`, every `For*` loop, `Try`/`TryStar` (body, each handler's
+/// body, `orelse`, `finalbody`), and `Seq` -- so a `raise` anywhere inside a
+/// loop body, a handler, or a `match`'s lowered `if` chain (`Seq`/`If`) is
+/// reached, not only a top-level statement in `body` itself.
+fn set_frame_function(body: &mut [MirStmt], frame_name: &str) {
+    for stmt in body {
+        match stmt {
+            MirStmt::Raise { frame_function, .. } => {
+                frame_function.clear();
+                frame_function.push_str(frame_name);
+            }
+            MirStmt::RaiseFrom { frame_function, .. } => {
+                frame_function.clear();
+                frame_function.push_str(frame_name);
+            }
+            MirStmt::If { body, orelse, .. } => {
+                set_frame_function(body, frame_name);
+                set_frame_function(orelse, frame_name);
+            }
+            MirStmt::While { body, .. }
+            | MirStmt::ForRange { body, .. }
+            | MirStmt::ForList { body, .. }
+            | MirStmt::ForDict { body, .. }
+            | MirStmt::ForSet { body, .. } => set_frame_function(body, frame_name),
+            MirStmt::Seq(stmts) => set_frame_function(stmts, frame_name),
+            MirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            }
+            | MirStmt::TryStar {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                set_frame_function(body, frame_name);
+                for handler in handlers {
+                    set_frame_function(&mut handler.body, frame_name);
+                }
+                set_frame_function(orelse, frame_name);
+                set_frame_function(finalbody, frame_name);
+            }
+            MirStmt::ExprStmt(_)
+            | MirStmt::Assign { .. }
+            | MirStmt::NoOp
+            | MirStmt::Unreachable
+            | MirStmt::DictSet { .. }
+            | MirStmt::ListCompAssign { .. }
+            | MirStmt::DictCompAssign { .. }
+            | MirStmt::SetCompAssign { .. }
+            | MirStmt::Return(_)
+            | MirStmt::AttrSet { .. }
+            | MirStmt::Reraise => {}
         }
     }
 }

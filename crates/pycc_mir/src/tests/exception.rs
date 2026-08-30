@@ -91,7 +91,7 @@ fn expect_top_level_try_star(
 /// `expect_top_level_raise_panics_on_non_raise`.
 fn expect_top_level_raise(item: &MirItem) -> &MirExceptionValue {
     match item {
-        MirItem::TopLevelStmt(MirStmt::Raise { exception }) => exception,
+        MirItem::TopLevelStmt(MirStmt::Raise { exception, .. }) => exception,
         _ => panic!("expected Raise"),
     }
 }
@@ -101,7 +101,7 @@ fn expect_top_level_raise(item: &MirItem) -> &MirExceptionValue {
 /// by `expect_top_level_raise_from_panics_on_non_raise_from`.
 fn expect_top_level_raise_from(item: &MirItem) -> (&MirExceptionValue, &MirExceptionValue) {
     match item {
-        MirItem::TopLevelStmt(MirStmt::RaiseFrom { exception, cause }) => (exception, cause),
+        MirItem::TopLevelStmt(MirStmt::RaiseFrom { exception, cause, .. }) => (exception, cause),
         _ => panic!("expected RaiseFrom"),
     }
 }

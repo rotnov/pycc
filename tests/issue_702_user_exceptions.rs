@@ -190,7 +190,11 @@ fn an_uncaught_user_exception_prints_its_own_class_name() {
     );
     assert!(!ok, "an uncaught exception must exit non-zero");
     assert_eq!(stdout, "");
-    assert_eq!(stderr, "ConfigError: missing\n");
+    // #707 added a traceback-frame header naming the enclosing function.
+    assert_eq!(
+        stderr,
+        "Traceback (most recent call last):\n  File \"<compiled>\", in main\nConfigError: missing\n"
+    );
 }
 
 #[test]
@@ -201,7 +205,11 @@ fn an_uncaught_builtin_exception_still_prints_its_own_class_name() {
     );
     assert!(!ok, "an uncaught exception must exit non-zero");
     assert_eq!(stdout, "");
-    assert_eq!(stderr, "KeyError: nope\n");
+    // #707 added a traceback-frame header naming the enclosing function.
+    assert_eq!(
+        stderr,
+        "Traceback (most recent call last):\n  File \"<compiled>\", in main\nKeyError: nope\n"
+    );
 }
 
 #[test]

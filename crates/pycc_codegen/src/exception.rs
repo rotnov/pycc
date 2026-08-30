@@ -279,6 +279,31 @@ fn emit_class_name_constant<'ctx>(
     )
 }
 
+/// Records `frame_function` (the enclosing function's source name, or
+/// `"<module>"` at top level) on `exc_obj` via `pycc_rt_exception_set_frame`
+/// (#707): the frame identifying where this `raise` executed, for
+/// `exception_print_and_exit`'s traceback rendering. Called once per
+/// `Raise`/`RaiseFrom` on the raised exception only -- never on a `from`
+/// clause's cause -- immediately after `emit_exception_value` produces
+/// `exc_obj`, before the runtime's pending-exception state is set.
+pub(super) fn emit_exception_set_frame<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    exc_obj: PointerValue<'ctx>,
+    frame_function: &str,
+) {
+    let (frame_ptr, frame_len) = emit_class_name_constant(context, module, frame_function);
+    builder
+        .build_call(
+            rt.exception_set_frame,
+            &[exc_obj.into(), frame_ptr.into(), frame_len.into()],
+            "",
+        )
+        .expect("build_call should not fail for exception_set_frame");
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_exception_value<'ctx>(
     context: &'ctx Context,
