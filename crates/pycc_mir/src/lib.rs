@@ -745,13 +745,17 @@ pub enum MirStmt {
     /// `raise <exception>` (PEP 3110, #382).
     Raise {
         exception: MirExceptionValue,
-        /// The enclosing function's source name (`"<module>"` at top level),
-        /// identifying where this `raise` executes for traceback rendering
-        /// (#707). Populated by [`set_frame_function`] as a post-pass over
-        /// the body [`lower_item`] just finished lowering, rather than
-        /// threaded as a parameter through `lower_stmt`'s whole recursive
-        /// descent: the value is constant for an entire function body, and
-        /// every statement-lowering function between `lower_item` and
+        /// The enclosing function's plain Python source name (`"<module>"`
+        /// at top level, e.g. `create` rather than `pycc_hir`'s mangled
+        /// `C.create.classmethod` for a classmethod -- see
+        /// [`source_frame_name`]), identifying where this `raise` executes
+        /// for traceback rendering (#707), matching what CPython's own
+        /// traceback shows for the frame. Populated by
+        /// [`set_frame_function`] as a post-pass over the body
+        /// [`lower_item`] just finished lowering, rather than threaded as a
+        /// parameter through `lower_stmt`'s whole recursive descent: the
+        /// value is constant for an entire function body, and every
+        /// statement-lowering function between `lower_item` and
         /// `lower_raise` would otherwise need a new parameter purely to pass
         /// it through unchanged. `lower_raise` itself always leaves this
         /// empty; only the post-pass fills it in.
@@ -899,7 +903,8 @@ fn lower_item(
             scopes.push(params.iter().cloned().collect());
             let mut body = lower_stmt_sequence(body, scopes, classes, current_class);
             scopes.pop();
-            set_frame_function(&mut body, name);
+            let frame_name = source_frame_name(name);
+            set_frame_function(&mut body, &frame_name);
             MirItem::Function {
                 name: name.clone(),
                 params: params.clone(),
@@ -912,6 +917,34 @@ fn lower_item(
             set_frame_function(std::slice::from_mut(&mut stmt), "<module>");
             MirItem::TopLevelStmt(stmt)
         }
+    }
+}
+
+/// Recovers the plain Python source name of a function from
+/// `pycc_hir`'s internal mangled identifier, for traceback rendering
+/// (#707). `HirItem::Function::name` is `"<module>"` for the module's own
+/// top-level statements, a bare identifier for a top-level `def`, or
+/// `"<ClassName>.<method_name>"` for a method -- with a further
+/// `.classmethod`/`.static`/`.setter` suffix appended for a classmethod,
+/// staticmethod, or property setter (see `pycc_hir::class`'s
+/// `mangled_method_name`, around line 2439). None of that mangling is
+/// meaningful to a Python programmer reading a traceback: CPython's own
+/// traceback frames print a method's plain `co_name` (e.g. `create`), never
+/// the qualified `Class.method` form and never an implementation-internal
+/// suffix. This strips both layers -- the trailing mangling suffix, then
+/// the `<ClassName>.` prefix -- so `pycc_rt_exception_set_frame` receives
+/// the same name CPython would show, while a top-level function name or
+/// `"<module>"` (which contain no `.` after suffix stripping, since
+/// identifiers cannot contain `.`) pass through unchanged.
+fn source_frame_name(mangled: &str) -> String {
+    let without_suffix = mangled
+        .strip_suffix(".classmethod")
+        .or_else(|| mangled.strip_suffix(".static"))
+        .or_else(|| mangled.strip_suffix(".setter"))
+        .unwrap_or(mangled);
+    match without_suffix.split_once('.') {
+        Some((_class_name, method_name)) => method_name.to_string(),
+        None => without_suffix.to_string(),
     }
 }
 

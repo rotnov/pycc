@@ -2,8 +2,9 @@
 
 Date: 2026-08-30
 Branch: `claude/issue-autopilot-0830`
-Base commit at task start: `53456405` (default-branch tip at the time, "Unify the
-`__init_subclass__` guard into a single nearest-MRO-ancestor check (#854) (#856)")
+Base commit at task start: `f0d7bd63` (default-branch tip at the time, "Add session
+handoff entry for the merged #854 PR (#856) (#857)") -- the merge-base this PR's diff
+is actually computed against (`git merge-base origin/main HEAD`).
 
 ## Status: implementation complete, PR opened, NOT merged
 

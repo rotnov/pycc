@@ -254,21 +254,28 @@ pub(super) fn guard_statement_effects<'ctx>(
     builder.position_at_end(continuation);
 }
 
-/// Emits a private constant holding an exception class's name, and returns a
-/// pointer to its bytes plus its length -- the pair `pycc_rt_exception_alloc`
-/// stores on the exception object so an uncaught exception can be printed with
-/// its real class name (Part 2 of #541, D-189). The bytes are not
-/// NUL-terminated; the runtime reads exactly `len` of them.
-fn emit_class_name_constant<'ctx>(
+/// Emits a private constant holding a fixed byte string, and returns a
+/// pointer to its bytes plus its length. Used for every string value a
+/// caller needs to hand the runtime as a `(ptr, len)` pair baked in at
+/// compile time -- an exception class's name, stored on the exception
+/// object so an uncaught exception can be printed with its real class name
+/// (Part 2 of #541, D-189), and a `raise`'s enclosing-frame function name,
+/// stored via `pycc_rt_exception_set_frame` (#707). The bytes are not
+/// NUL-terminated; the runtime reads exactly `len` of them. `global_name`
+/// names the emitted LLVM global so each call site's IR reflects which
+/// value it actually holds (e.g. `"exc_class_name"` or
+/// `"exc_frame_function"`), rather than a name fixed for every caller.
+fn emit_str_bytes_constant<'ctx>(
     context: &'ctx Context,
     module: &inkwell::module::Module<'ctx>,
-    class_name: &str,
+    value: &str,
+    global_name: &str,
 ) -> (PointerValue<'ctx>, inkwell::values::IntValue<'ctx>) {
-    let bytes = class_name.as_bytes();
+    let bytes = value.as_bytes();
     let global = module.add_global(
         context.i8_type().array_type(bytes.len() as u32),
         None,
-        "exc_class_name",
+        global_name,
     );
     global.set_initializer(&context.const_string(bytes, false));
     global.set_constant(true);
@@ -294,7 +301,8 @@ pub(super) fn emit_exception_set_frame<'ctx>(
     exc_obj: PointerValue<'ctx>,
     frame_function: &str,
 ) {
-    let (frame_ptr, frame_len) = emit_class_name_constant(context, module, frame_function);
+    let (frame_ptr, frame_len) =
+        emit_str_bytes_constant(context, module, frame_function, "exc_frame_function");
     builder
         .build_call(
             rt.exception_set_frame,
@@ -340,7 +348,7 @@ pub(super) fn emit_exception_value<'ctx>(
             };
             let type_tag = context.i8_type().const_int(*type_tag as u64, false);
             let (class_name_ptr, class_name_len) =
-                emit_class_name_constant(context, module, class_name);
+                emit_str_bytes_constant(context, module, class_name, "exc_class_name");
             Ok(builder
                 .build_call(
                     rt.exception_alloc,
@@ -415,7 +423,7 @@ pub(super) fn emit_exception_value<'ctx>(
             }
             let type_tag = context.i8_type().const_int(*type_tag as u64, false);
             let (class_name_ptr, class_name_len) =
-                emit_class_name_constant(context, module, class_name);
+                emit_str_bytes_constant(context, module, class_name, "exc_class_name");
             let members_len = context
                 .i64_type()
                 .const_int(members.len() as u64, false);
@@ -1162,7 +1170,7 @@ pub(super) fn emit_try_star<'ctx>(
         .expect("build_unconditional_branch should not fail");
 
     let (group_name_ptr, group_name_len) =
-        emit_class_name_constant(context, module, "ExceptionGroup");
+        emit_str_bytes_constant(context, module, "ExceptionGroup", "exc_class_name");
     let group_type_tag = context
         .i8_type()
         .const_int(u64::from(EXCEPTION_GROUP_TYPE_TAG), false);

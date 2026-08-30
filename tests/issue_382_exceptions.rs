@@ -1192,9 +1192,18 @@ fn uncaught_failed_left_operand_skips_the_right_operand_at_top_level() {
         out.is_empty(),
         "right operand ran after the exception: {out:?}"
     );
-    assert!(
-        err.contains("ZeroDivisionError"),
-        "unexpected stderr: {err}"
+    // #707: `pycc_rt::exception::raise_builtin` (the path a runtime-raised
+    // builtin error like this `1 // 0` takes) never calls
+    // `pycc_rt_exception_set_frame`, so it carries no recorded frame and
+    // must render as a bare one-line message with no `Traceback` header --
+    // exactly like the pre-#707 format, and exactly like the unframed
+    // `render_single_exception_with_no_frame_omits_traceback_header` unit
+    // case in `crates/pycc_rt/src/exception.rs`. Assert the exact stderr
+    // rather than only `contains`, so a regression that starts (incorrectly)
+    // attaching a frame to this path is caught here.
+    assert_eq!(
+        err, "ZeroDivisionError: integer division by zero\n",
+        "an uncaught runtime-raised builtin error must render without a Traceback header"
     );
 }
 

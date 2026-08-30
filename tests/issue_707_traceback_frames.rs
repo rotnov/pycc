@@ -143,3 +143,75 @@ The above exception was the direct cause of the following exception:\n\n\
 Traceback (most recent call last):\n  File \"<compiled>\", in <module>\nValueError: outer\n"
     );
 }
+
+// -- A `raise` inside a class method, classmethod, staticmethod, or property
+// -- setter names the plain Python source name of that method -- never
+// -- `pycc_hir`'s mangled internal identifier (`ClassName.method_name`, with
+// -- a further `.classmethod`/`.static`/`.setter` suffix), which would leak
+// -- an implementation detail into a compiled program's stderr and does not
+// -- match what CPython's own traceback shows for the frame (CPython prints
+// -- a method's plain `co_name`, e.g. `create`, never `C.create`).
+
+#[test]
+fn a_raise_inside_a_plain_method_names_the_plain_method() {
+    let dir = ScratchDir::new("707_method_frame").expect("failed to create scratch dir");
+    let (ok, _out, err) = build_and_run(
+        &dir,
+        "method_frame.py",
+        "class C:\n    def __init__(self) -> None:\n        return\n    def boom(self) -> None:\n        raise ValueError(\"bad\")\n\nC().boom()\n",
+    );
+    assert!(!ok, "expected non-zero exit for uncaught exception");
+    assert_eq!(
+        err,
+        "Traceback (most recent call last):\n  File \"<compiled>\", in boom\nValueError: bad\n",
+        "a method frame must show the plain method name, not the mangled `C.boom`"
+    );
+}
+
+#[test]
+fn a_raise_inside_a_classmethod_names_the_plain_method_not_the_mangled_name() {
+    let dir = ScratchDir::new("707_classmethod_frame").expect("failed to create scratch dir");
+    let (ok, _out, err) = build_and_run(
+        &dir,
+        "classmethod_frame.py",
+        "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def create(cls) -> None:\n        raise ValueError(\"bad\")\n\nC.create()\n",
+    );
+    assert!(!ok, "expected non-zero exit for uncaught exception");
+    assert_eq!(
+        err,
+        "Traceback (most recent call last):\n  File \"<compiled>\", in create\nValueError: bad\n",
+        "a classmethod frame must show `create`, not the mangled `C.create.classmethod`"
+    );
+}
+
+#[test]
+fn a_raise_inside_a_staticmethod_names_the_plain_method_not_the_mangled_name() {
+    let dir = ScratchDir::new("707_staticmethod_frame").expect("failed to create scratch dir");
+    let (ok, _out, err) = build_and_run(
+        &dir,
+        "staticmethod_frame.py",
+        "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def make() -> None:\n        raise ValueError(\"bad\")\n\nC.make()\n",
+    );
+    assert!(!ok, "expected non-zero exit for uncaught exception");
+    assert_eq!(
+        err,
+        "Traceback (most recent call last):\n  File \"<compiled>\", in make\nValueError: bad\n",
+        "a staticmethod frame must show `make`, not the mangled `C.make.static`"
+    );
+}
+
+#[test]
+fn a_raise_inside_a_property_setter_names_the_plain_property_not_the_mangled_name() {
+    let dir = ScratchDir::new("707_setter_frame").expect("failed to create scratch dir");
+    let (ok, _out, err) = build_and_run(
+        &dir,
+        "setter_frame.py",
+        "class C:\n    def __init__(self) -> None:\n        self._x = 0\n    @property\n    def x(self) -> int:\n        return self._x\n    @x.setter\n    def x(self, v: int) -> None:\n        raise ValueError(\"bad\")\n\nc = C()\nc.x = 1\n",
+    );
+    assert!(!ok, "expected non-zero exit for uncaught exception");
+    assert_eq!(
+        err,
+        "Traceback (most recent call last):\n  File \"<compiled>\", in x\nValueError: bad\n",
+        "a property-setter frame must show `x`, not the mangled `C.x.setter`"
+    );
+}
