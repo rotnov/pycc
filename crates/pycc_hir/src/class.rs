@@ -1025,11 +1025,25 @@ fn class_getitem_return_ty(
     mro: &[String],
     items: &[HirItem],
 ) -> Option<Ty> {
+    // `return_ty` here is read straight off the `HirItem::Function` this
+    // crate's own lowering produced -- before `pycc_types::check_and_resolve`
+    // ever runs (see `lower_method`'s doc comment on `Ty::Infer`). An
+    // unannotated `__class_getitem__` hook therefore still carries the raw
+    // `Ty::Infer` placeholder at this point, even though value-position
+    // `C[x]` dispatch (`pycc_types::resolve_static_or_class_method_call`)
+    // only ever observes the hook's *post-inference* signature via the
+    // `Environment`. Treat `Ty::Infer` as unresolved here too, so
+    // `func.rs`'s `annotation_to_ty` falls back to `Ty::Instance(ClassName)`
+    // instead of propagating an internal placeholder into a resolved
+    // annotation type (issue #693 review, codex finding).
     let resolve = |mangled: &str| -> Option<Ty> {
         items.iter().find_map(|item| match item {
             HirItem::Function {
                 name, return_ty, ..
-            } if name == mangled => Some(return_ty.clone()),
+            } if name == mangled => match return_ty {
+                Ty::Infer => None,
+                other => Some(other.clone()),
+            },
             _ => None,
         })
     };

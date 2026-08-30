@@ -444,9 +444,14 @@ pub(crate) fn annotation_to_ty(
                         // `Ty::Instance(ClassName)`. `class_getitem_return` is
                         // `None` when subscriptability comes only from a PEP 695
                         // type parameter with no explicit hook (that case is
-                        // handled by `GenericClassInstantiate`, not here) or from
+                        // handled by `GenericClassInstantiate`, not here), from
                         // the self-referential entry `lower_class` pushes for the
-                        // class it is currently lowering, in which case the
+                        // class it is currently lowering, or when the hook has no
+                        // explicit return annotation -- `class_getitem_return_ty`
+                        // deliberately treats a raw, pre-inference `Ty::Infer` as
+                        // unresolved rather than propagating it here, since this
+                        // crate never runs its own inference pass (see
+                        // `lower_method`'s doc comment). In every such case the
                         // fallback below is unchanged from before this issue.
                         if let Some(return_ty) = &info.class_getitem_return {
                             return Ok(return_ty.clone());

@@ -2458,6 +2458,23 @@ fn a_self_referential_annotation_inside_the_hook_s_own_class_body_still_falls_ba
 }
 
 #[test]
+fn an_annotation_subscript_on_a_class_with_an_unannotated_hook_falls_back_to_instance() {
+    // Issue #693 review (codex finding): `__class_getitem__` with no
+    // explicit return annotation lowers, at this crate's own HIR-lowering
+    // time, to a raw `Ty::Infer` placeholder -- this crate never runs its
+    // own type-inference pass (see `lower_method`'s doc comment), so the
+    // hook's return type is only resolved later, by
+    // `pycc_types::check_and_resolve`. `class_getitem_return_ty` must treat
+    // that `Ty::Infer` as unresolved rather than propagating the internal
+    // placeholder into a resolved annotation type (which previously caused
+    // a spurious `T0025` on `x: C[3]`), falling back to
+    // `Ty::Instance(ClassName)` exactly as the self-referential and
+    // PEP-695-generic cases above already do.
+    let src = "class C:\n    @staticmethod\n    def __class_getitem__(key: int):\n        return key\n\n    def __init__(self) -> None:\n        self.x = 1\n\nv: C[3] = C()\n";
+    assert_eq!(annassign_ty(src), Ty::Instance(Box::new("C".to_string())));
+}
+
+#[test]
 fn subscripted_type_annotation_with_non_name_base_is_rejected() {
     // #435 (Part D): a subscripted annotation whose base is not a bare
     // name (e.g. `a.b[int]`) is rejected — only a bare class name is
