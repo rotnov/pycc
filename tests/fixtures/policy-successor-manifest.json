@@ -29,7 +29,7 @@
     {
       "path": "scripts/check_roadmap_evidence.rb",
       "source_path": "scripts/check_roadmap_evidence.rb",
-      "sha256": "15b028b62a67ca81be96ce1bdb92c2bf5cdc8fcfb4e3df6f8a09b1fd57dea12d"
+      "sha256": "ba31980061e547386e02ab8bf78544a50ef41932711e3eccb91b0ec5d967f99b"
     },
     {
       "path": "scripts/check_search_visibility_audit.py",
