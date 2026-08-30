@@ -4,7 +4,7 @@
     {
       "path": ".github/workflows/ci.yml",
       "source_path": ".github/workflows/ci.yml",
-      "sha256": "6c5385dd021cb7f63d9e1c8e0c9a0bbc09456d5df841f35c952b92b5ed942756"
+      "sha256": "84cafa5849db0691cbf05261275140b46cb63a27a5a00482f1c05d912b54ad45"
     },
     {
       "path": "scripts/classify_ci_changes.py",
@@ -29,7 +29,7 @@
     {
       "path": "scripts/check_roadmap_evidence.rb",
       "source_path": "scripts/check_roadmap_evidence.rb",
-      "sha256": "15b028b62a67ca81be96ce1bdb92c2bf5cdc8fcfb4e3df6f8a09b1fd57dea12d"
+      "sha256": "ba31980061e547386e02ab8bf78544a50ef41932711e3eccb91b0ec5d967f99b"
     },
     {
       "path": "scripts/check_search_visibility_audit.py",
@@ -94,7 +94,7 @@
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
       "source_path": "scripts/test_check_roadmap_evidence.rb",
-      "sha256": "8ba6988b754341d351b93d6a525cec869f05081d7bc70bf6953d5f8d0599753a"
+      "sha256": "56c28d43f55de380e392e0d10cdf7209ffd00a51b6c0ddde6936225c8e5af3ca"
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",

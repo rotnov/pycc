@@ -216,8 +216,13 @@ jobs:
       - name: Build pycc_rt for x86_64-apple-darwin
         run: cargo build --target x86_64-apple-darwin -p pycc_rt
 
-      - name: cargo build --workspace
-        run: cargo build --workspace
+      # No separate `cargo build --workspace` step here (removed by #631,
+      # part 3 of #20): pycc_codegen/build.rs now runs `cargo build -p
+      # pycc_rt` itself as a real build dependency, so the plain `cargo
+      # test --workspace` below already triggers the full workspace build
+      # before it links and runs anything. A reintroduced missing build
+      # dependency would fail this job again instead of hiding behind a
+      # pre-built artifact.
 
       # tests/nbody_bench.rs's `#[ignore]`d benchmark builds its fixture with
       # `pycc build --release` (no `--target`), which links whatever
@@ -465,8 +470,11 @@ jobs:
             exit 1
           }
 
-      - name: cargo build --workspace
-        run: cargo build --workspace
+      # No separate `cargo build --workspace` step here (removed by #631,
+      # part 3 of #20): pycc_codegen/build.rs now runs `cargo build -p
+      # pycc_rt` itself as a real build dependency, so the plain `cargo
+      # test --workspace` below already triggers the full workspace build
+      # before it links and runs anything.
 
       # Same D-091 need as build-test-coverage's own identically-named step
       # above: tests/nbody_bench.rs's `pycc build --release` (no `--target`)
