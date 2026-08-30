@@ -9,7 +9,10 @@ exactly, on branch `session-20260830-autopilot`
 opened a pull request. Per the dispatching instructions for this task, this
 session did not watch CI or merge -- the coordinating session does that.
 
-## What changed (commit `16b394e4`)
+## What changed (commit `16b394e4`, later amended by follow-up commit
+`107a1863` -- PR #847's actual head -- addressing a CI llms.txt budget
+failure and four `ievo:deep-reviewer` findings; see the "Local gates"
+section below for evidence re-run against that head)
 
 `retain_if_int_duplicate`'s own extra retain of a *borrowed* `int` (at the
 `MirExpr::TupleLiteral` element loop and `build_call_to_with_leading_args`'s
@@ -95,18 +98,62 @@ structural guarantee the two functions being separate provides for free --
 worth re-checking if either classifier's arms are ever extended
 independently.
 
-## Local gates (commit `16b394e4`)
+## Local gates (commit `107a1863`, PR #847's actual head)
+
+Re-run in full against the follow-up commit (the ROADMAP.md budget trim
+plus the visibility/return-type/doc-comment changes from the
+deep-reviewer findings below), not just the original `16b394e4`:
 
 - `cargo build --workspace`: pass.
-- `cargo test --workspace`: pass, every suite `test result: ok`, `0 failed`.
+- `cargo test --workspace`: pass, every suite `test result: ok`, `0 failed`
+  (1465 unit tests plus the full integration suite).
 - `cargo clippy --workspace --all-targets -- -D warnings`: pass, clean.
 - D-014 coverage gate (`cargo llvm-cov --workspace --fail-under-lines 100
-  --fail-under-regions 100`, isolated `TMPDIR`): pass -- TOTAL 49012/49012
-  lines (100.00%), 2116/2116 functions (100.00%), 31655/31655 regions
+  --fail-under-regions 100`, isolated `TMPDIR`): pass -- TOTAL 49013/49013
+  regions (100.00%), 2116/2116 functions (100.00%), 31653/31653 lines
   (100.00%).
 - `cargo doc --workspace --no-deps`: pass; one pre-existing, unrelated
   warning (private intra-doc link in `crates/pycc_types/src/env.rs:308`,
   untouched by this change).
+- `scripts/check-site.sh`: pass ("Website checks passed."); the llms.txt
+  non-optional aggregate is 270331 bytes, 5 bytes under the
+  270336-byte (264 KiB) budget (issue #207).
+- `ruby scripts/check_roadmap_evidence.rb`: pass, unaffected by the
+  ROADMAP.md trim.
+
+### Follow-up: CI failure and deep-review findings addressed on the same head
+
+CI's Pages `build` job failed on the original `5903d876` head: the
+#834/D-212 ROADMAP.md sentence pushed the llms.txt aggregate to 270747
+bytes, over the 270336-byte budget. Fixed by trimming several redundant
+or now-superseded phrases in the same "Language surface" table row (plus
+one cross-reference in the "Type system" row, mirroring the file's
+existing "see the X row" convention) without losing information.
+
+The pinned `ievo:deep-reviewer` pass on `5903d876`'s diff (run from the
+coordinating session, since this session's environment has no
+Agent/Task dispatch tool to invoke the reviewer directly) returned 4
+findings, addressed in the same follow-up commit:
+
+1. **[warning, actionable]** These commit citations in this file were
+   stale (`16b394e4` instead of the real PR head) -- fixed above.
+2. **[warning, actionable]** `tests/issue_638_bigint_exception_release.rs`'s
+   module doc comment said D-181 left exactly two residual leak flavors
+   closed by #638, without mentioning the third flavor this PR's own
+   diff adds (#834/D-212). Added a paragraph documenting it.
+3. **[note, optional]** `crates/pycc_codegen/src/bigint_rc.rs`:
+   `retain_if_int_duplicate_reporting` and
+   `push_word_onto_pending_int_releases` were `pub(super)` with no
+   caller outside the file. Narrowed both to private.
+4. **[note, optional]** Same file: the redundant
+   `if retained && let Scalar::Int(word) = scalar` guard in
+   `retain_if_int_duplicate_and_track_for_exception_edge`. Fixed by
+   changing `retain_if_int_duplicate_reporting`'s return type from
+   `(Scalar<'ctx>, bool)` to `(Scalar<'ctx>, Option<IntValue<'ctx>>)`,
+   so the one caller that needs the word receives it directly instead of
+   re-destructuring `scalar`. Both of the function's two call sites
+   (both within this file) were updated; the signature change stayed
+   within this fix's scope since both sites were trivial to update.
 - `RUBYOPT="-E UTF-8" ruby scripts/check_roadmap_evidence.rb`: pass.
 - `RUBYOPT="-E UTF-8" ruby scripts/test_check_roadmap_evidence.rb`: pass,
   237 runs / 1222 assertions / 0 failures / 0 errors.
