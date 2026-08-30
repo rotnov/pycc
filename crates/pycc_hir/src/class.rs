@@ -4532,7 +4532,7 @@ mod tests {
     }
 
     #[test]
-    fn subclass_without_own_init_subclass_inherits_from_base_without_validation() {
+    fn subclass_without_own_init_subclass_inherits_statically_evaluable_base_hook() {
         // A base class B defines `__init_subclass__` with a `pass` body,
         // and a subclass D does NOT define its own `__init_subclass__`.
         // D's methods don't include `__init_subclass__`, so this takes the

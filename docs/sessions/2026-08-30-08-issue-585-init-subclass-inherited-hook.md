@@ -8,10 +8,11 @@
 
 ## Status
 
-Delivered and merged (see PR number/URL and merge commit recorded at merge
-time below). Issue #585 is **narrowed, not closed**: completion criteria 1-2
-are checked off with an accurate note that criterion 2 is only *partially*
-satisfied (see below); criteria 3-4 remain open, gated on a future
+Delivered on branch `claude/issue-585-init-subclass-inherited-hook`
+(commits `297c2e45`, `646e1596`); PR not yet opened as of this writing.
+Issue #585 is **narrowed, not closed**: completion criteria 1-2 are checked
+off with an accurate note that criterion 2 is only *partially* satisfied
+(see below); criteria 3-4 remain open, gated on a future
 full-invocation-semantics issue.
 
 ## What was built
