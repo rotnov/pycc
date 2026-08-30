@@ -140,20 +140,11 @@ For each newly observed upstream release:
    `pep_0560_class_getitem_matches_cpython_3_14_7_byte_for_byte` test calls
    `run_conformance_fixture_with_profile` twice, once with the release flag
    clear and once set, so one test run exercises debug and release. The mark is
-   `◐` and not `✅` because the fixture only covers value-position
-   `C[x]` dispatch. Annotation-position subscripts are gated on the hook's
-   existence ([#611](https://github.com/rotnov/pycc/issues/611)) but are then
-   resolved as `Ty::Instance(ClassName)` with the type argument discarded
-   rather than routed through the hook, which is the row's recorded `core`
-   gap ([#693](https://github.com/rotnov/pycc/issues/693)), and a `core` gap forces
-   `◐` under
-   [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md).
-   **Update (2026-08-30, #693):** the annotation-position resolution described
-   above is now fixed at the code level and the fixture gained annotation-
-   position cases, but the row stays `◐` here too — rule 5's CI-observed-green
-   requirement has not yet been met for the extended fixture, so this entry is
-   left describing the pre-fix state as the historical record of the
-   `82d63301` flip, and no twelfth rule is added until that observation exists.
+   `◐` and not `✅` because the fixture only covered value-position
+   `C[x]` dispatch before [#693](https://github.com/rotnov/pycc/issues/693)
+   (see `docs/ROADMAP.md`'s #693 update); `◐` per
+   [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md)
+   until rule 5's green bar is met for the extended fixture.
 10. PEP 701 (formalized f-string grammar) was flipped to `◐` on the same
     rule 5 basis against run
     [32566309109](https://github.com/rotnov/pycc/actions/runs/32566309109), the
