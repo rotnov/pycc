@@ -137,6 +137,25 @@ status: accepted
   - #585 is narrowed (not closed): criteria 1-2 (this ADR, the soundness
     fix) are done; criteria 3-4 (fixture, `PYTHON_STANDARDS.md` row flip)
     remain open, gated on a future full-invocation-semantics issue.
+  - This fix intentionally covers only the case where the subclass does
+    **not** define its own `__init_subclass__`. A separate, still-open gap
+    ([#854](https://github.com/rotnov/pycc/issues/854), found by the D-068
+    pinned reviewer's pass on this change) is not covered: when a subclass
+    *does* define its own `__init_subclass__` override, CPython's actual
+    invocation target at that subclass's own creation is still the nearest
+    ancestor's hook, never the subclass's own definition --
+    `super(new_cls, new_cls).__init_subclass__(...)` in CPython's
+    `type_new_init_subclass` starts its MRO lookup immediately after
+    `new_cls`, so `new_cls`'s own `__init_subclass__` is never the one
+    invoked at its own creation (it only matters later, when something
+    subclasses `new_cls`). `crates/pycc_hir/src/class.rs`'s pre-existing
+    (pre-#585) own-body check does not reflect this, so a subclass with a
+    trivial override and a side-effecting ancestor hook is still silently
+    accepted. #854 also tracks a related gap where a `@classmethod`-decorated
+    `__init_subclass__` is invisible to this guard entirely. Both are left
+    for a follow-up change since fixing them changes #435's existing test
+    contract in both directions and needs its own test-fixture pass, not a
+    mechanical extension of this one.
   - `docs/ROADMAP.md` and `docs/TYPE_SYSTEM.md`'s PEP 487 descriptions are
     updated in the same pull request: the inherited-side-effecting-hook case
     is no longer "silently ignored" -- it is now rejected at compile time
