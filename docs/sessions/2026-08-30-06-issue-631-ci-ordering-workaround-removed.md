@@ -127,12 +127,17 @@ no roadmap/plan prose describing this specific CI-ordering detail.
   handful of pre-existing `escaped newline` warnings in
   `tests/slice1_codegen_depth.rs` print but do not fail the build (not
   introduced by this diff, which touches no Rust source).
-- No Rust source file changed by this diff (`git diff --stat` against the
-  branch base shows only `.github/workflows/ci.yml`,
-  `scripts/test_check_roadmap_evidence.rb`, and
-  `tests/fixtures/policy-successor-manifest.json`), so the D-014
-  100%-line/region-coverage gate does not apply — verified directly from
-  the diff's file list rather than assumed.
+- `scripts/classify_ci_changes.py`'s `_selection_for_path` special-cases
+  `.github/workflows/ci.yml` itself to `compiler=true` regardless of what
+  else changed, and `build-test-coverage` in `ci.yml` runs on
+  `needs.classify-changes.outputs.compiler == 'true'` — so touching
+  `ci.yml` does **not** skip the D-014 100%-line/region-coverage gate for
+  this PR; the coverage job still runs. It passes trivially because this
+  diff changes no Rust source line (`git diff --stat` against the branch
+  base shows only `.github/workflows/ci.yml`,
+  `scripts/test_check_roadmap_evidence.rb`,
+  `tests/fixtures/policy-successor-manifest.json`, and this handoff doc),
+  so there is no new line or region for the gate to demand coverage of.
 - Empirically re-verified the underlying premise (that the removed step
   is genuinely redundant) from a clean, isolated `CARGO_TARGET_DIR` with
   no prior `cargo build --workspace` invocation:
@@ -151,12 +156,22 @@ no roadmap/plan prose describing this specific CI-ordering detail.
 
 ## Local pinned reviewer (`ievo:deep-reviewer`)
 
-Dispatched and awaited synchronously in this session. See the PR
-description / coordinating report for the exact verdict; any actionable
-finding was addressed before push.
+Dispatched and awaited synchronously in this session against the diff's
+first commit. Verdict: 3 `warning` findings, all doc drift in this
+handoff file's own initial draft (an incorrect claim about why the D-014
+gate doesn't apply — corrected above to note the gate does run and passes
+trivially; and two sections asserting review/confirmation as already
+complete before those steps had actually happened). No `P0`/`P1` and no
+correctness, test/impl-drift, or security findings against the
+`ci.yml`/checker/test changes themselves — the reviewer traced the full
+`scripts/check_roadmap_evidence.rb` validation chain and confirmed no
+pinned-step list, aggregate digest, or ordering check still references
+the removed steps. Fixed all three doc-drift findings in this file (this
+section and the one below) after the review, before any further push.
 
-## Confirmed: this PR closes #631 and #20
+## Intent: this PR should close #631 and #20
 
-`gh api graphql` confirmation of `closingIssuesReferences` (expected
-`totalCount: 2`, nodes `{20, 631}`) is run after opening the PR — see the
-PR itself for the exact query result.
+The PR body carries `Fixes #631` and `Fixes #20`. `gh api graphql`
+confirmation of `closingIssuesReferences` (expected `totalCount: 2`,
+nodes `{20, 631}`) is run after opening the PR — see the PR itself or the
+coordinating session's report for the exact query result.
