@@ -26,7 +26,7 @@ use bigint_rc::{
     push_pending_int_release_if_scalar_temporary, push_pending_int_release_if_temporary,
     release_if_int_temporary, release_int_slot_before_store,
     release_optional_int_slot_before_store, release_scalar_if_int_temporary,
-    retain_if_int_duplicate,
+    retain_if_int_duplicate, retain_if_int_duplicate_and_track_for_exception_edge,
 };
 mod int_const;
 use int_const::{emit_int_constant, tag_smallint_const};
@@ -3215,12 +3215,13 @@ fn emit_expr_unchecked<'ctx>(
                 );
                 // D-182: a tuple field takes its own reference at ingress.
                 // Only a *borrowed* element word is retained here -- that is
-                // what `retain_if_int_duplicate` classifies -- because an
-                // owning element (a fresh `BinOp` result, an out-of-range
-                // literal) already arrives with the single reference this
-                // field will hold. Retaining unconditionally would leave rc
-                // at 2 with only one owner, which a future `Ty::Tuple`
-                // slot-death release under D-124 could never balance.
+                // what `retain_if_int_duplicate_and_track_for_exception_edge`
+                // classifies -- because an owning element (a fresh `BinOp`
+                // result, an out-of-range literal) already arrives with the
+                // single reference this field will hold. Retaining
+                // unconditionally would leave rc at 2 with only one owner,
+                // which a future `Ty::Tuple` slot-death release under D-124
+                // could never balance.
                 //
                 // `emit_bigint_refcount_call`'s documented postcondition:
                 // on the non-constant path it leaves the builder positioned
@@ -3229,18 +3230,24 @@ fn emit_expr_unchecked<'ctx>(
                 // `build_insert_value` below is block-agnostic and takes
                 // part in no phi, so nothing here depends on the block the
                 // element was evaluated in.
-                let scalar = retain_if_int_duplicate(context, builder, rt, element, scalar);
-                // Push *after* `retain_if_int_duplicate`, matching
+                let scalar =
+                    retain_if_int_duplicate_and_track_for_exception_edge(
+                        context, builder, rt, element, scalar,
+                    );
+                // Push *after* the retain-and-track call, matching
                 // `build_call_to_with_leading_args`'s own call order:
                 // `int_temporary_word` (via
                 // `push_pending_int_release_if_scalar_temporary`) excludes
                 // a duplicate reference by construction, so this is a
-                // no-op for that case regardless of ordering. That extra
-                // retain is therefore *not* protected on the exception
-                // edge here -- a distinct, tracked gap from this
-                // mechanism's own scope, not D-180 residual 3 (which
-                // covers a retain that eventually transfers to a real
-                // owner, not one abandoned before transfer completes). See
+                // no-op for that case regardless of ordering -- the
+                // retain-and-track call above already pushed a *duplicate*
+                // element's retained word itself, if any. #834 is closed:
+                // a borrowed/duplicate element's extra retain is now
+                // protected on this exception edge exactly like an owning
+                // element's own word already was, not merely D-180
+                // residual 3 (which covers a retain that eventually
+                // transfers to a real owner, not one abandoned before
+                // transfer completes). See
                 // https://github.com/rotnov/pycc/issues/834.
                 push_pending_int_release_if_scalar_temporary(rt, element, &scalar);
                 let field_value: inkwell::values::BasicValueEnum = match scalar {
@@ -3823,17 +3830,20 @@ fn build_call_to_with_leading_args<'ctx>(
         .map(|(a, param_ty)| {
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, a);
             let scalar = incref_if_str_duplicate(builder, rt, a, scalar);
-            let scalar = retain_if_int_duplicate(context, builder, rt, a, scalar);
-            // Push *after* `retain_if_int_duplicate`: `int_temporary_word`
+            let scalar = retain_if_int_duplicate_and_track_for_exception_edge(
+                context, builder, rt, a, scalar,
+            );
+            // Push *after* the retain-and-track call: `int_temporary_word`
             // (via `push_pending_int_release_if_scalar_temporary`)
             // excludes a duplicate reference by construction, so this is
-            // a no-op for that case regardless of ordering -- placed here
-            // to match the plan's own stated call order. That extra
-            // retain is therefore *not* protected on the exception edge
-            // here -- a distinct, tracked gap from this mechanism's own
-            // scope, not D-180 residual 3 (which covers a retain that
-            // eventually transfers to a real owner, not one abandoned
-            // before transfer completes). See
+            // a no-op for that case regardless of ordering -- the
+            // retain-and-track call above already pushed a *duplicate*
+            // argument's retained word itself, if any. #834 is closed: a
+            // borrowed/duplicate argument's extra retain is now protected
+            // on this exception edge exactly like an owning argument's own
+            // word already was, not merely D-180 residual 3 (which covers
+            // a retain that eventually transfers to a real owner, not one
+            // abandoned before transfer completes). See
             // https://github.com/rotnov/pycc/issues/834.
             push_pending_int_release_if_scalar_temporary(rt, a, &scalar);
             let scalar = coerce_scalar_to_type(context, builder, scalar, param_ty.clone());

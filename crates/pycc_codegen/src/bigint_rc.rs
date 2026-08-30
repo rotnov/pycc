@@ -231,23 +231,33 @@ pub(super) fn release_optional_int_slot_before_store<'ctx>(
 /// every future ownership refinement a simultaneous edit to both an
 /// over-approximating and an under-approximating consumer.
 ///
-/// The tuple arm is balanced at four of this helper's five call sites:
-/// `MirStmt::Assign` is matched by the slot's own release-before-store,
-/// `MirStmt::Return` is matched by the caller's D-181 release of the
-/// `Call { ty: Int }` result, and the call-argument and `MirStmt::AttrSet`
-/// sites are unmatched -- exactly D-180 residual 3's existing shape, not a
-/// new leak class.
+/// `retain_if_int_duplicate` has 7 call sites in the current tree
+/// (`lib.rs`: `MirExpr::OptionalWrap`, `MirExpr::TupleLiteral`'s element
+/// loop, `MirExpr::NamedExpr`, `build_call_to_with_leading_args`'s argument
+/// loop, `MirStmt::Assign`, `MirStmt::Return`, `MirStmt::AttrSet`). Every one
+/// of them is assign-shaped -- the retained reference's new home is a slot,
+/// a parameter, a field, or a return value -- except two, which additionally
+/// bracket the call with a `mark`/`truncate` pair on
+/// `rt.exceptions.pending_int_releases` (#638, D-208) because a *later*
+/// sibling's raising evaluation can abandon the retain before the transfer
+/// it is staged for ever completes:
 ///
-/// The fifth site, D-182's `MirExpr::TupleLiteral` ingress, is a
-/// **deliberate** imbalance: nothing releases a `Ty::Tuple` slot's fields
-/// when the slot is overwritten or dies, so a tuple's ingress reference is
-/// never retired. That is a new leak class -- a rebound supplier inside a
-/// loop leaks once per trip -- accepted knowingly under D-182 as the price
-/// of closing the #633 direction-B use-after-free. Only a *borrowed*
-/// element is retained: an owning element already arrives holding the one
-/// reference the field will keep, and retaining it too would leave rc at 2
-/// with a single owner, which a future `Ty::Tuple` slot-death release
-/// under D-124's container refcounting could never balance.
+/// - `MirExpr::TupleLiteral`'s element loop (retain, then a field transfer
+///   via `build_insert_value`)
+/// - `build_call_to_with_leading_args`'s argument loop (retain, then a
+///   transfer into the callee's parameter slot)
+///
+/// Those two call the exception-edge-aware
+/// [`retain_if_int_duplicate_and_track_for_exception_edge`] instead of this
+/// function directly, closing
+/// [#834](https://github.com/rotnov/pycc/issues/834): a duplicate/borrowed
+/// operand's extra retain used to go untracked on that edge, the one gap
+/// D-208's own release mechanism left open for a *retained* (as opposed to
+/// owning) reference. The other five call sites have no such bracket and no
+/// exception edge to protect (`MirStmt::Assign`/`Return`/`AttrSet` release
+/// or hand off their slot synchronously; `MirExpr::NamedExpr`/`OptionalWrap`
+/// are themselves assign-shaped reads with no staged transfer at all), so
+/// they keep calling this function unchanged.
 pub(super) fn retain_if_int_duplicate<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -255,8 +265,54 @@ pub(super) fn retain_if_int_duplicate<'ctx>(
     source_expr: &MirExpr,
     scalar: Scalar<'ctx>,
 ) -> Scalar<'ctx> {
-    if let Scalar::Int(word) = scalar
-        && match source_expr {
+    retain_if_int_duplicate_reporting(context, builder, rt, source_expr, scalar).0
+}
+
+/// The classification behind [`retain_if_int_duplicate`], extracted so a
+/// caller can learn whether the retain actually happened -- needed by
+/// [`retain_if_int_duplicate_and_track_for_exception_edge`], which must push
+/// the retained word onto `rt.exceptions.pending_int_releases` only when a
+/// retain occurred (a plain `bool`-returning match, following this module's
+/// own `Option`/`bool`-classifier idiom elsewhere).
+///
+/// Whether `source_expr` is a *duplicate* (borrowed) `Ty::Int`-producing
+/// shape: a bare `Name`/`AttrGet` read yields a second reference to a word
+/// something else already owns, whereas every other int-producing
+/// expression (`IntLiteral`, arithmetic, a call result) freshly constructs
+/// its value already owning exactly one reference. A `Ty::Int` element read
+/// out of a *tuple* is a third borrowed shape (D-182): a
+/// `MirExpr::TupleLiteral` element goes through this function at ingress, so
+/// a tuple field holds a reference of its own, but `MirExpr::Subscript`'s
+/// tuple branch hands the stored word straight back out **without
+/// transferring** that reference, which stays with the field -- the reader
+/// therefore owns nothing and must take its own reference here.
+///
+/// D-181 shipped this arm under the opposite premise (the field was a pure
+/// alias, retaining nothing) and recorded the converse direction --
+/// overwriting the supplying name before the tuple is read -- as a known,
+/// unfixed use-after-free tracked by
+/// [#633](https://github.com/rotnov/pycc/issues/633). D-182 closes that
+/// direction by adding the ingress retain, and in doing so replaces the
+/// arm's old **unenforced precondition** (sound only while the supplying
+/// name is still bound) with a real reference. The classification itself
+/// is unchanged; only its justification is.
+///
+/// Deliberately **not** shared with `int_value_is_a_duplicate_reference`
+/// even though the two predicates agree on today's three borrowed shapes.
+/// The two sides fail in opposite directions and must be free to diverge:
+/// a missing retain here leaks, while a missing "borrowed" classification
+/// on the release side frees a live word. Sharing one predicate would make
+/// every future ownership refinement a simultaneous edit to both an
+/// over-approximating and an under-approximating consumer.
+pub(super) fn retain_if_int_duplicate_reporting<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    source_expr: &MirExpr,
+    scalar: Scalar<'ctx>,
+) -> (Scalar<'ctx>, bool) {
+    let retained = if let Scalar::Int(word) = scalar {
+        let is_duplicate = match source_expr {
             MirExpr::Name {
                 ty: pycc_mir::Ty::Int,
                 ..
@@ -284,14 +340,59 @@ pub(super) fn retain_if_int_duplicate<'ctx>(
             // `int_value_is_a_duplicate_reference`'s own `OptionalUnwrap`
             // arm (`bigint_rc.rs`) for the full reasoning this mirrors. No
             // `Ty::Int` guard needed here either, for the identical reason
-            // the tuple arm omits one: `retain_if_int_duplicate`'s enclosing
+            // the tuple arm omits one: this function's enclosing
             // `if let Scalar::Int` has already established the payload word
             // this arm is deciding whether to retain.
             MirExpr::OptionalUnwrap(_, _) => true,
             _ => false,
+        };
+        if is_duplicate {
+            emit_bigint_refcount_call(context, builder, rt, word, BigIntRefcount::Retain);
         }
+        is_duplicate
+    } else {
+        false
+    };
+    (scalar, retained)
+}
+
+/// The exception-edge-aware counterpart of [`retain_if_int_duplicate`], used
+/// only at the two call sites that bracket the retain with a
+/// `mark`/`truncate` pair on `rt.exceptions.pending_int_releases` (#638,
+/// D-208): `MirExpr::TupleLiteral`'s element loop and
+/// `build_call_to_with_leading_args`'s argument loop. See
+/// [`retain_if_int_duplicate`]'s own doc comment for why exactly these two,
+/// and no other, call site needs this form.
+///
+/// Closes [#834](https://github.com/rotnov/pycc/issues/834): before this
+/// function existed, a duplicate/borrowed operand's extra retain at these
+/// two sites was invisible to the exception-edge release mechanism -- a
+/// later sibling's raising evaluation would abandon the retained reference
+/// with nothing to release it, a pure leak (never a use-after-free, since
+/// the original owner's own reference is untouched). When
+/// [`retain_if_int_duplicate_reporting`] reports a retain happened, this
+/// pushes the word onto `rt.exceptions.pending_int_releases` via
+/// [`push_word_onto_pending_int_releases`] so the caller's existing
+/// `mark`/`truncate`/exception-unwind machinery covers it exactly like an
+/// owning temporary's own push already does at that same site: on the
+/// normal path the caller truncates back to `mark` without releasing
+/// (ownership has transferred to the aggregate field / parameter slot,
+/// mirroring the owning-temporary case at that exact site), and on the
+/// exception path the installed unwind target releases every pending entry,
+/// including this one.
+pub(super) fn retain_if_int_duplicate_and_track_for_exception_edge<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    source_expr: &MirExpr,
+    scalar: Scalar<'ctx>,
+) -> Scalar<'ctx> {
+    let (scalar, retained) =
+        retain_if_int_duplicate_reporting(context, builder, rt, source_expr, scalar);
+    if retained
+        && let Scalar::Int(word) = scalar
     {
-        emit_bigint_refcount_call(context, builder, rt, word, BigIntRefcount::Retain);
+        push_word_onto_pending_int_releases(rt, word);
     }
     scalar
 }
@@ -540,9 +641,21 @@ pub(super) fn push_pending_int_release_if_temporary<'ctx>(
 ) -> Option<IntValue<'ctx>> {
     let pushed = int_temporary_word(source_expr, word);
     if let Some(w) = pushed {
-        rt.exceptions.pending_int_releases.borrow_mut().push(w);
+        push_word_onto_pending_int_releases(rt, w);
     }
     pushed
+}
+
+/// The innermost primitive both
+/// [`push_pending_int_release_if_temporary`] and
+/// [`retain_if_int_duplicate_and_track_for_exception_edge`] share: pushes an
+/// already-classified `word` onto `rt.exceptions.pending_int_releases`
+/// unconditionally. Extracted rather than duplicated so the two callers'
+/// classification logic stays free to diverge (an owning temporary's word
+/// vs. a duplicate's retained word) while the actual stack mutation has one
+/// definition.
+pub(super) fn push_word_onto_pending_int_releases<'ctx>(rt: &RtFns<'ctx>, word: IntValue<'ctx>) {
+    rt.exceptions.pending_int_releases.borrow_mut().push(word);
 }
 
 /// The `Scalar`-holding counterpart of
