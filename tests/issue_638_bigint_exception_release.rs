@@ -2,7 +2,18 @@
 //! birth reference on the D-173 exception-unwinding edge.
 //!
 //! D-181 (#625) closed the normal-path leak of a nested `int` arithmetic
-//! temporary but left two residual leak flavors, both closed by this issue:
+//! temporary but left two residual leak flavors, both closed by this issue.
+//! [#834](https://github.com/rotnov/pycc/issues/834) (D-212) later extends
+//! this same file with a third, distinct flavor: not an owning temporary at
+//! all, but `retain_if_int_duplicate`'s own extra retain of a
+//! *duplicate/borrowed* `int` at the `TupleLiteral`-element and `Call`
+//! -argument sites below, abandoned the same way when a later sibling's
+//! evaluation raises before that retained reference transfers. See
+//! `a_tuple_literal_borrowed_element_survives_a_later_siblings_raise` and
+//! `a_call_argument_borrowed_value_survives_the_calls_own_raising_argument`
+//! below for that flavor's correctness tests, and
+//! `tuple_literal_borrowed_element_leak_repro`/`call_argument_borrowed_value_leak_repro`
+//! (in `mod peak_rss`) for its peak-RSS proofs.
 //!
 //! 1. A multi-child MIR node (`BinOp`, `Compare`, a `range()` preheader)
 //!    whose earlier child already produced an owned `int` word, and whose

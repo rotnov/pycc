@@ -272,8 +272,10 @@ pub(super) fn retain_if_int_duplicate<'ctx>(
 /// caller can learn whether the retain actually happened -- needed by
 /// [`retain_if_int_duplicate_and_track_for_exception_edge`], which must push
 /// the retained word onto `rt.exceptions.pending_int_releases` only when a
-/// retain occurred (a plain `bool`-returning match, following this module's
-/// own `Option`/`bool`-classifier idiom elsewhere).
+/// retain occurred. Returns the retained word itself (`Some`) rather than a
+/// separate `bool`, so a caller that only cares about the word never needs
+/// to re-destructure `scalar` to recover it -- the "was it an `int`, and did
+/// it retain" question and "here is the word" answer are the same value.
 ///
 /// Whether `source_expr` is a *duplicate* (borrowed) `Ty::Int`-producing
 /// shape: a bare `Name`/`AttrGet` read yields a second reference to a word
@@ -304,14 +306,14 @@ pub(super) fn retain_if_int_duplicate<'ctx>(
 /// on the release side frees a live word. Sharing one predicate would make
 /// every future ownership refinement a simultaneous edit to both an
 /// over-approximating and an under-approximating consumer.
-pub(super) fn retain_if_int_duplicate_reporting<'ctx>(
+fn retain_if_int_duplicate_reporting<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     rt: &RtFns<'ctx>,
     source_expr: &MirExpr,
     scalar: Scalar<'ctx>,
-) -> (Scalar<'ctx>, bool) {
-    let retained = if let Scalar::Int(word) = scalar {
+) -> (Scalar<'ctx>, Option<IntValue<'ctx>>) {
+    let retained_word = if let Scalar::Int(word) = scalar {
         let is_duplicate = match source_expr {
             MirExpr::Name {
                 ty: pycc_mir::Ty::Int,
@@ -349,11 +351,11 @@ pub(super) fn retain_if_int_duplicate_reporting<'ctx>(
         if is_duplicate {
             emit_bigint_refcount_call(context, builder, rt, word, BigIntRefcount::Retain);
         }
-        is_duplicate
+        is_duplicate.then_some(word)
     } else {
-        false
+        None
     };
-    (scalar, retained)
+    (scalar, retained_word)
 }
 
 /// The exception-edge-aware counterpart of [`retain_if_int_duplicate`], used
@@ -380,6 +382,10 @@ pub(super) fn retain_if_int_duplicate_reporting<'ctx>(
 /// mirroring the owning-temporary case at that exact site), and on the
 /// exception path the installed unwind target releases every pending entry,
 /// including this one.
+///
+/// [`retain_if_int_duplicate_reporting`]'s `Some(word)` return already *is*
+/// the "a retain happened" fact together with the word to push, so this
+/// function needs no separate `Ty::Int` re-check of `scalar` to recover it.
 pub(super) fn retain_if_int_duplicate_and_track_for_exception_edge<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -387,11 +393,9 @@ pub(super) fn retain_if_int_duplicate_and_track_for_exception_edge<'ctx>(
     source_expr: &MirExpr,
     scalar: Scalar<'ctx>,
 ) -> Scalar<'ctx> {
-    let (scalar, retained) =
+    let (scalar, retained_word) =
         retain_if_int_duplicate_reporting(context, builder, rt, source_expr, scalar);
-    if retained
-        && let Scalar::Int(word) = scalar
-    {
+    if let Some(word) = retained_word {
         push_word_onto_pending_int_releases(rt, word);
     }
     scalar
@@ -654,7 +658,7 @@ pub(super) fn push_pending_int_release_if_temporary<'ctx>(
 /// classification logic stays free to diverge (an owning temporary's word
 /// vs. a duplicate's retained word) while the actual stack mutation has one
 /// definition.
-pub(super) fn push_word_onto_pending_int_releases<'ctx>(rt: &RtFns<'ctx>, word: IntValue<'ctx>) {
+fn push_word_onto_pending_int_releases<'ctx>(rt: &RtFns<'ctx>, word: IntValue<'ctx>) {
     rt.exceptions.pending_int_releases.borrow_mut().push(word);
 }
 
