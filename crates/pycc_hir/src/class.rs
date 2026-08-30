@@ -2062,59 +2062,43 @@ pub(crate) fn lower_class(
             ));
         }
     }
-    // #435 (Part B, __init_subclass__): PEP 487's `__init_subclass__` hook
-    // is recognized as a valid method name. In CPython, `__init_subclass__`
-    // is called automatically when a class is subclassed. In pycc's
-    // compile-time model, class creation happens at HIR-lowering time, so
-    // the hook has no runtime effect — it is accepted as a regular method
-    // (it can be called explicitly by user code). However, if a base class
-    // in the MRO defines `__init_subclass__`, the current class's own
-    // `__init_subclass__` (if any) must be statically evaluable: only a
-    // `pass` body (or a body consisting solely of a docstring expression
-    // statement) is accepted, since any side-effecting statement would need
-    // to run at class-creation time, which pycc does not support.
-    if methods.iter().any(|(name, _)| name == "__init_subclass__") {
-        // Check if any base class in the MRO (excluding the current class)
-        // defines `__init_subclass__`.
-        let base_has_init_subclass = mro.iter().skip(1).any(|mro_class| {
-            defined_classes
-                .iter()
-                .find(|(name, _)| name == mro_class)
-                .map(|(_, cd)| cd.methods.iter().any(|(mn, _)| mn == "__init_subclass__"))
-                .unwrap_or(false)
-        });
-        if base_has_init_subclass {
-            // The current class's `__init_subclass__` must be statically
-            // evaluable. Find the last `__init_subclass__` def in the body
-            // (rebind semantics: the last definition is the one in the
-            // methods table) and validate its body.
-            for stmt in def.body.iter().rev() {
-                match stmt {
-                    Stmt::FunctionDef(fd) if fd.name.as_str() == "__init_subclass__" => {
-                        validate_init_subclass_body(&fd.body, fd.range, false)?;
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    } else if let Some(base_ast) = mro.iter().skip(1).find_map(|mro_class| {
-        // #585: the current class does not define its own
-        // `__init_subclass__`, but a base in its MRO does. CPython invokes
-        // that inherited hook automatically at this very subclass's
-        // creation, so -- unlike a base class that is merely defined and
-        // never subclassed, which must stay legal to compile -- this
-        // subclass statement is the point where an unsupported, side-
-        // effecting inherited hook must be rejected. Only a base this crate
-        // can still see the original source of (an earlier class in this
-        // same module, per `base_class_asts`) can be re-validated; a base
-        // this crate cannot introspect (e.g. a synthetic builtin-exception
-        // class, which is never in `base_class_asts`) is left unrestricted,
-        // matching this file's existing posture elsewhere. Looking the base
-        // up directly in `base_class_asts` (rather than via `defined_classes`
-        // first) means a base this crate cannot introspect is filtered out
-        // by the same `?` that filters out one lacking `__init_subclass__`,
-        // instead of needing a second, separately-unreachable fallback path.
+    // #435 (Part B, __init_subclass__) / #585 / #854: PEP 487's
+    // `__init_subclass__` hook is recognized as a valid method name. In
+    // CPython, the hook is invoked via
+    // `super(new_cls, new_cls).__init_subclass__(**kwargs)` at class-creation
+    // time -- an MRO lookup that starts immediately *after* the class being
+    // created, so it is always the *nearest ancestor's* definition that
+    // runs, never the class's own definition (a class's own override only
+    // matters later, if and when something else subclasses *it*). This
+    // lookup is therefore unconditional: it runs regardless of whether the
+    // current class also defines its own `__init_subclass__`, and it always
+    // validates the nearest ancestor's body, never the current class's own.
+    //
+    // (#854 fixed two bugs in an earlier `if`/`else if` version of this
+    // guard that instead validated the *current* class's own body whenever
+    // the current class also defined an override: doing so (a) let a
+    // side-effecting ancestor hook slip through unrejected whenever the
+    // subclass added any override at all, however trivial, and (b) as a
+    // consequence, missed detecting a `@classmethod`-decorated ancestor
+    // hook, since a decorated `__init_subclass__` is registered in a
+    // class's `class_methods` table, not `methods`, and the old own-hook
+    // check queried only `methods`. The ancestor lookup below scans raw AST
+    // `Stmt::FunctionDef` nodes by name -- decorators live on
+    // `StmtFunctionDef.decorator_list` and never change the AST variant, so
+    // this lookup was already decorator-agnostic; unifying to a single
+    // unconditional ancestor lookup closes both gaps as one structural
+    // change rather than two independent fixes. See D-214.)
+    if let Some(base_ast) = mro.iter().skip(1).find_map(|mro_class| {
+        // Only a base this crate can still see the original source of (an
+        // earlier class in this same module, per `base_class_asts`) can be
+        // re-validated; a base this crate cannot introspect (e.g. a
+        // synthetic builtin-exception class, which is never in
+        // `base_class_asts`) is left unrestricted, matching this file's
+        // existing posture elsewhere. Looking the base up directly in
+        // `base_class_asts` (rather than via `defined_classes` first) means
+        // a base this crate cannot introspect is filtered out by the same
+        // `?` that filters out one lacking `__init_subclass__`, instead of
+        // needing a second, separately-unreachable fallback path.
         let (_, base_ast) = base_class_asts.iter().find(|(name, _)| name == mro_class)?;
         base_ast
             .body
@@ -2122,10 +2106,19 @@ pub(crate) fn lower_class(
             .any(|s| matches!(s, Stmt::FunctionDef(fd) if fd.name.as_str() == "__init_subclass__"))
             .then_some(*base_ast)
     }) {
+        // #585 / #854: the nearest ancestor's `__init_subclass__` must be
+        // statically evaluable, since CPython invokes it automatically at
+        // *this* subclass's creation -- unlike a base class that is merely
+        // defined and never subclassed, which must stay legal to compile.
+        // Find the last `__init_subclass__` def in the ancestor's body
+        // (rebind semantics: the last definition is the one actually bound)
+        // and validate its body against this subclass's own creation site
+        // (`def.range`), matching D-213's "Alternatives" reasoning that the
+        // diagnostic belongs where CPython actually invokes the hook.
         for stmt in base_ast.body.iter().rev() {
             match stmt {
                 Stmt::FunctionDef(fd) if fd.name.as_str() == "__init_subclass__" => {
-                    validate_init_subclass_body(&fd.body, def.range, true)?;
+                    validate_init_subclass_body(&fd.body, def.range.into())?;
                     break;
                 }
                 _ => {}
@@ -2655,34 +2648,35 @@ fn collect_init_attrs(
     Ok(attrs)
 }
 
-/// #435 (Part B), extended by #585: Validates that an `__init_subclass__`
-/// method body is statically evaluable — only a `pass` body, an empty body,
-/// or a body consisting solely of a docstring (a bare string-literal
-/// expression statement) is accepted. Any other statement (a `print` call,
-/// an assignment, a return, etc.) is rejected with `C0001`, since pycc's
-/// compile-time class-creation model has no mechanism to run side-effecting
-/// statements at class-definition time.
+/// #435 (Part B), extended by #585 and unified by #854: Validates that an
+/// `__init_subclass__` method body is statically evaluable — only a `pass`
+/// body, an empty body, or a body consisting solely of a docstring (a bare
+/// string-literal expression statement) is accepted. Any other statement (a
+/// `print` call, an assignment, a return, etc.) is rejected with `C0001`,
+/// since pycc's compile-time class-creation model has no mechanism to run
+/// side-effecting statements at class-definition time.
 ///
-/// `inherited` selects the diagnostic wording: `false` for a class's own
-/// `__init_subclass__` (rejected at its own definition, per #435), `true`
-/// for a hook inherited unchanged from a base class (rejected at the
-/// *subclass's* creation site instead, per #585 — CPython invokes the
-/// inherited hook there, so that is the point pycc's compile-time model
-/// cannot honor).
-fn validate_init_subclass_body<R>(body: &[Stmt], range: R, inherited: bool) -> Result<(), Diagnostic>
-where
-    std::ops::Range<u32>: From<R>,
-{
-    let message = if inherited {
-        "a base class's `__init_subclass__`, inherited unchanged by this subclass, must be \
-         statically evaluable (only `pass` or a docstring is supported in this version) — \
-         CPython invokes the inherited hook when this subclass is created, and pycc cannot run \
-         its side-effecting statements at that point yet"
-    } else {
-        "`__init_subclass__` must be statically evaluable (only `pass` \
-         or a docstring is supported in this version) — \
-         side-effecting statements are not supported yet"
-    };
+/// After #854's unification of the call site's own guard (see its comment),
+/// the body validated here is always the nearest MRO ancestor's, never the
+/// current class's own, and `range` is always the subclass's own creation
+/// site (`def.range`) — the point at which CPython actually invokes the
+/// inherited hook, matching D-213's "Alternatives" reasoning.
+fn validate_init_subclass_body(
+    body: &[Stmt],
+    range: std::ops::Range<u32>,
+) -> Result<(), Diagnostic> {
+    // After #854's unification (see the call site's own comment), the body
+    // validated here is always the nearest MRO ancestor's, never the
+    // current class's own -- so there is exactly one message variant
+    // needed. The wording keeps the "inherited" word (an existing test,
+    // `subclass_without_own_init_subclass_rejects_side_effecting_inherited_body`,
+    // asserts on it), but no longer implies the subclass itself has no
+    // override of its own, since this guard now also fires when the
+    // subclass *does* override the hook.
+    let message = "the nearest `__init_subclass__` hook in this class's MRO must be statically \
+         evaluable (only `pass` or a docstring is supported in this version) — CPython invokes \
+         that inherited hook when this subclass is created, and pycc cannot run its \
+         side-effecting statements at that point yet";
     for stmt in body {
         match stmt {
             Stmt::Pass(_) => continue,
@@ -4452,9 +4446,13 @@ mod tests {
     #[test]
     fn init_subclass_with_pass_body_in_subclass_of_base_with_init_subclass_is_accepted() {
         // A base class B defines `__init_subclass__` with `pass`, and a
-        // subclass D also defines `__init_subclass__` with `pass`. This
-        // exercises the `validate_init_subclass_body` path with a `pass`
-        // body (the `Stmt::Pass` arm).
+        // subclass D also defines its own `__init_subclass__` (also
+        // `pass`). #854: the unified guard never inspects D's own
+        // override -- it validates B's (the nearest ancestor's) body,
+        // which exercises the `Stmt::Pass` arm of
+        // `validate_init_subclass_body`. Kept as `pass`/`pass` so this
+        // fixture continues to demonstrate "D's own override, whatever its
+        // shape, plays no role" as directly as possible.
         let module = crate::pycc_parser_test_helper::parse(
             "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        pass\n",
         );
@@ -4464,63 +4462,25 @@ mod tests {
 
     #[test]
     fn init_subclass_with_docstring_in_subclass_of_base_with_init_subclass_is_accepted() {
-        // A subclass D defines `__init_subclass__` with a docstring body.
-        // This exercises the `Stmt::Expr` + `StringLiteral` arm.
+        // #854: the unified guard validates the nearest ancestor's body,
+        // never the subclass's own -- so the docstring is now placed on
+        // B's `__init_subclass__` to exercise the `Stmt::Expr` +
+        // `StringLiteral` arm; D's own docstring override is never
+        // inspected by this guard at all.
         let module = crate::pycc_parser_test_helper::parse(
-            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        \"docstring\"\n",
+            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        \"docstring\"\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        pass\n",
         );
         let hir = lower_checked(&module);
         assert!(hir.is_ok(), "docstring body should be accepted");
     }
 
     #[test]
-    fn init_subclass_with_non_string_expr_in_subclass_of_base_with_init_subclass_is_rejected() {
-        // A subclass D defines `__init_subclass__` with a non-string
-        // expression statement (e.g. `42`). This exercises the
-        // `Stmt::Expr` + non-`StringLiteral` error path.
-        let module = crate::pycc_parser_test_helper::parse(
-            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        42\n",
-        );
-        let err = lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-        assert!(err.message.contains("__init_subclass__"));
-    }
-
-    #[test]
-    fn init_subclass_with_return_in_subclass_of_base_with_init_subclass_is_rejected() {
-        // A subclass D defines `__init_subclass__` with a `return`
-        // statement. This exercises the `_ =>` catch-all error path.
-        let module = crate::pycc_parser_test_helper::parse(
-            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        return\n",
-        );
-        let err = lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-        assert!(err.message.contains("__init_subclass__"));
-    }
-
-    #[test]
-    fn init_subclass_with_empty_body_in_subclass_of_base_is_accepted() {
-        // A subclass D defines `__init_subclass__` with an empty body
-        // (just a docstring at the parser level, but the body after
-        // docstring extraction is empty). This exercises the `Ok(())`
-        // return from `validate_init_subclass_body`.
-        // Actually, Python requires at least one statement in a body, so
-        // we use `pass` which is filtered by `lower_body` but still
-        // present in the AST for `validate_init_subclass_body`.
-        // The `pass` body exercises both `Stmt::Pass` continue and the
-        // final `Ok(())`.
-        let module = crate::pycc_parser_test_helper::parse(
-            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        pass\n",
-        );
-        let hir = lower_checked(&module);
-        assert!(hir.is_ok(), "pass body should be accepted");
-    }
-
-    #[test]
     fn init_subclass_without_base_having_init_subclass_is_not_validated() {
         // A class defines `__init_subclass__` but no base class has it.
-        // The validation should NOT run (no base_has_init_subclass), so even
-        // a non-trivial body is accepted (it's just a regular method).
+        // The unconditional nearest-MRO-ancestor `find_map` walk finds no
+        // ancestor defining the hook and returns `None`, so validation does
+        // NOT run and even a non-trivial body is accepted (it's just a
+        // regular method).
         let module = crate::pycc_parser_test_helper::parse(
             "class D:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        print(1)\n",
         );
@@ -4562,8 +4522,7 @@ mod tests {
         // B's `__init_subclass__` is deliberately followed by `__init__`
         // (not the last statement in the body) so the reverse walk over
         // `base_ast.body` also exercises its `_ => {}` catch-all arm before
-        // finding the match, mirroring `init_subclass_before_init_in_body_validates_correctly`
-        // below for the analogous walk over the subclass's own body.
+        // finding the match.
         let module = crate::pycc_parser_test_helper::parse(
             "class B:\n    def __init_subclass__(self) -> None:\n        print(1)\n    def __init__(self) -> None:\n        return\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n",
         );
@@ -4598,17 +4557,188 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // #854: unified nearest-ancestor guard -- new regression tests.
+    //
+    // Truth table for the four B/D triviality combinations (B = base's
+    // `__init_subclass__`, D = subclass's own override, if any):
+    //   B trivial   / D absent     -> accept (existing:
+    //     `subclass_without_own_init_subclass_inherits_statically_evaluable_base_hook`)
+    //   B side-effecting / D absent -> reject (existing:
+    //     `subclass_without_own_init_subclass_rejects_side_effecting_inherited_body`)
+    //   B trivial   / D trivial    -> accept (existing, above)
+    //   B trivial   / D side-effecting -> accept (D's own override is never
+    //     checked) -- Test D
+    //   B side-effecting / D trivial    -> reject (D's trivial override does
+    //     not save it -- B's body is still the one CPython invokes) -- Tests
+    //     A and B
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn init_subclass_before_init_in_body_validates_correctly() {
-        // A subclass D defines `__init_subclass__` BEFORE `__init__` in
-        // the body. The reverse iteration checks `__init__` first (not
-        // `__init_subclass__`), hitting the `_ => {}` branch, then finds
-        // `__init_subclass__` and validates it.
+    fn side_effecting_base_hook_with_trivial_subclass_override_is_rejected() {
+        // Test A: B's `__init_subclass__` does `return` (a `Stmt::Return`,
+        // caught only by the `_ =>` catch-all arm in
+        // `validate_init_subclass_body` -- every other rejecting test in
+        // this suite uses a non-string `Stmt::Expr` such as `print(...)`,
+        // which exercises a different arm). D(B) defines its own plain,
+        // trivial override (`pass`). #854's bug: before the fix, D's own
+        // trivial override made the (buggy) `if` branch validate D's body
+        // instead of B's, silently accepting a program CPython would
+        // reject at D's creation (B's side-effecting hook is the one
+        // actually invoked). After the fix, B's body is what's validated
+        // regardless of D's own override, so this is rejected.
         let module = crate::pycc_parser_test_helper::parse(
-            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init_subclass__(self) -> None:\n        pass\n    def __init__(self) -> None:\n        super().__init__()\n",
+            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        return\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        pass\n",
+        );
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("__init_subclass__"));
+    }
+
+    #[test]
+    fn classmethod_decorated_ancestor_hook_with_trivial_subclass_override_is_rejected() {
+        // Test B: the genuine #854 Gap-2 bug. B's `__init_subclass__` is
+        // `@classmethod`-decorated and side-effecting (`print(1)`); D(B)
+        // defines its own plain, trivial override (`pass`). Before the
+        // fix, this was silently *accepted*: D's own hook is found in
+        // `methods` (own-hook check true) -> enters the `if` branch ->
+        // the `base_has_init_subclass` gate queries `cd.methods` on B,
+        // finds nothing (a `@classmethod`-decorated hook lives in
+        // `class_methods`, not `methods`) -> validation is skipped
+        // entirely. CPython would invoke B's side-effecting hook at D's
+        // creation. The unified guard scans B's raw AST by statement shape
+        // (decorator-agnostic), so it now correctly finds and validates
+        // B's body, rejecting this program.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def __init_subclass__(cls) -> None:\n        print(1)\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        pass\n",
+        );
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("__init_subclass__"));
+    }
+
+    #[test]
+    fn classmethod_decorated_ancestor_hook_with_no_subclass_override_is_rejected() {
+        // Test C: regression lock for classmethod-ancestor detection when
+        // the subclass defines no override at all. B's `__init_subclass__`
+        // is `@classmethod`-decorated and side-effecting; D(B) defines no
+        // `__init_subclass__`. This shape was already correctly rejected
+        // before #854 (the pre-existing `else if`/#585 ancestor-lookup
+        // path was always decorator-agnostic, since it scans raw AST by
+        // statement shape); this test locks that behavior through the
+        // refactor.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def __init_subclass__(cls) -> None:\n        print(1)\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n",
+        );
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("__init_subclass__"));
+    }
+
+    #[test]
+    fn trivial_base_hook_with_classmethod_decorated_subclass_override_is_accepted() {
+        // Test D: regression lock -- a subclass's own `@classmethod`-
+        // decorated override is correctly ignored. B's `__init_subclass__`
+        // is trivial (`pass`); D(B)'s own override is `@classmethod`-
+        // decorated and side-effecting. D's own override, decorated or
+        // not, is never the hook CPython invokes at D's own creation (only
+        // relevant if something later subclasses D), so this must be
+        // accepted -- B's trivial body is the one validated. This shape
+        // was already correctly accepted before #854, for an unrelated,
+        // accidental reason (D's own hook lives in `class_methods`, which
+        // bypassed the old `methods`-table own-hook check entirely,
+        // routing into the ancestor-lookup path that validates B's
+        // trivial body); this test locks in the now-*intentional* correct
+        // behavior through the refactor.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    @classmethod\n    def __init_subclass__(cls) -> None:\n        print(1)\n",
         );
         let hir = lower_checked(&module);
-        assert!(hir.is_ok(), "init_subclass before init should be accepted");
+        assert!(
+            hir.is_ok(),
+            "a subclass's own classmethod-decorated __init_subclass__ override must never be \
+             the body validated at its own creation"
+        );
+    }
+
+    #[test]
+    fn grandchild_validates_parents_own_override_not_grandparents_hook() {
+        // Test E (revised from the posted plan -- see the D-214 write-up and
+        // the session's own retrospective entry for the full reasoning):
+        // the guard runs unconditionally at *every* class's own creation
+        // against *that class's own* nearest ancestor, so a class sitting
+        // under a side-effecting, introspectable hook is illegal at its own
+        // creation regardless of what it overrides -- there is no way for a
+        // legally-created three-level chain to have a side-effecting
+        // grandparent shadowed by a trivial parent, since the parent's own
+        // creation would already have been rejected by the grandparent's
+        // hook. B's `__init_subclass__` is trivial (`pass`, satisfying D's
+        // own creation, whose nearest ancestor is B); D(B)'s own override is
+        // side-effecting (`print(1)`); Grandchild(D) defines no override.
+        // Grandchild's ancestor lookup must hit D first (nearest ancestor
+        // that defines the hook) and validate *D's own* body, not skip past
+        // it to B's trivial one -- this locks in that a parent's own
+        // override, not a grandparent's, is what a child's creation is
+        // checked against.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        print(1)\nclass Grandchild(D):\n    def __init__(self) -> None:\n        super().__init__()\n",
+        );
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("__init_subclass__"));
+    }
+
+    #[test]
+    fn multiple_inheritance_nearest_mro_hook_wins_over_farther_side_effecting_one() {
+        // Test E2: nearest-ancestor-in-MRO-order, not "any ancestor",
+        // discriminated via multiple inheritance rather than a linear
+        // chain (a linear chain cannot produce this shape -- see the
+        // previous test's comment). `class D(M, B)` linearizes via C3 to
+        // `[D, M, B, object]`. M's `__init_subclass__` is trivial (`pass`);
+        // B's is side-effecting (`print(1)`); D defines no override of its
+        // own. `skip(1)` must hit M first (nearer in D's own MRO) and
+        // validate M's trivial body, never reaching B's side-effecting one
+        // -- exactly the lookup CPython performs (`super(D, D)` searches
+        // the MRO in order and stops at the first hit).
+        let module = crate::pycc_parser_test_helper::parse(
+            "class M:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        print(1)\nclass D(M, B):\n    def __init__(self) -> None:\n        super().__init__()\n",
+        );
+        let hir = lower_checked(&module);
+        assert!(
+            hir.is_ok(),
+            "the nearer ancestor in MRO order (M) must be validated, not the farther one (B), \
+             even though both define the hook"
+        );
+    }
+
+    #[test]
+    fn multiple_inheritance_skips_hookless_ancestor_to_reject_farther_side_effecting_one() {
+        // Reject-direction sibling of
+        // `multiple_inheritance_nearest_mro_hook_wins_over_farther_side_effecting_one`.
+        // That test only proves the nearest hook-defining ancestor wins
+        // when it happens to also be the immediate base -- every existing
+        // fixture's `skip(1)` MRO candidate (position 1) either already
+        // defines `__init_subclass__` or terminates the search entirely, so
+        // a hypothetical regression that narrowed the lookup to just
+        // `mro.get(1)` instead of a real "walk the whole MRO, skipping
+        // classes that don't define the hook" search would still pass every
+        // other test in this suite. This fixture closes that gap: `class M`
+        // defines `__init__` only (introspectable, but no
+        // `__init_subclass__` of its own -- the search must skip past it),
+        // `class B` defines a side-effecting `__init_subclass__`, and
+        // `class D(M, B)` linearizes via C3 to `[D, M, B, object]` with no
+        // override of its own. The nearest-MRO-ancestor search must skip
+        // hookless M and match B, rejecting on B's side-effecting body.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class M:\n    def __init__(self) -> None:\n        return\nclass B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        print(1)\nclass D(M, B):\n    def __init__(self) -> None:\n        super().__init__()\n",
+        );
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message.contains("__init_subclass__"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     // -- #379 (PR-19): PEP 435 enum class lowering ------------------------

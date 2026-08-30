@@ -595,7 +595,9 @@ fn issubclass_unknown_class() {
 /// #435 (Part B): a class with `__init_subclass__` that just has `pass`
 /// compiles and runs. In pycc's static-dispatch model, `__init_subclass__`
 /// is a regular method (the `cls` parameter from CPython's implicit
-/// classmethod protocol is not modeled — `self` is used instead).
+/// classmethod protocol is not modeled — `self` is used instead). `D`'s own
+/// creation is validated against its nearest ancestor's (`B`'s) body, which
+/// is trivial here (see #854/D-214), so this stays accepted.
 #[test]
 fn init_subclass_with_pass_body_is_accepted() {
     let dir = ScratchDir::new("435_init_subclass_pass").expect("failed to create scratch dir");
@@ -617,16 +619,20 @@ fn init_subclass_with_pass_body_is_accepted() {
     assert_eq!(output.stdout, b"1\n", "program should run correctly");
 }
 
-/// #435 (Part B): `__init_subclass__` with a non-trivial body (a print
-/// statement) is rejected with C0001 when a base class also defines
-/// `__init_subclass__`.
+/// #435 (Part B): `__init_subclass__` with a non-trivial (side-effecting)
+/// body on the *ancestor* is rejected with C0001 at the subclass's own
+/// creation, regardless of what the subclass itself overrides the hook
+/// with. Per #854/D-214, `D`'s own creation is always validated against its
+/// nearest ancestor's body (`B`'s, here side-effecting) — `D`'s own trivial
+/// override is never the body checked at `D`'s own creation site (only a
+/// further subclass of `D` would see it).
 #[test]
 fn init_subclass_with_non_trivial_body_is_rejected() {
     let dir = ScratchDir::new("435_init_subclass_reject").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "reject.py",
-        "class B:\n    def __init__(self) -> None:\n        self.x = 1\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        print(\"hello\")\n",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\n    def __init_subclass__(self) -> None:\n        print(\"hello\")\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n    def __init_subclass__(self) -> None:\n        pass\n",
     );
     let out = dir.join("reject");
     let output = Command::new(pycc_bin())
@@ -649,7 +655,9 @@ fn init_subclass_with_non_trivial_body_is_rejected() {
 }
 
 /// #435 (Part B): a subclass of a class with `__init_subclass__` that does
-/// NOT redefine `__init_subclass__` compiles without re-defining it.
+/// NOT redefine `__init_subclass__` compiles without re-defining it. `D`
+/// has no override at all, so its own creation is validated directly
+/// against `B`'s trivial body.
 #[test]
 fn init_subclass_inherited_from_base() {
     let dir = ScratchDir::new("435_init_subclass_inherit").expect("failed to create scratch dir");
@@ -673,7 +681,8 @@ fn init_subclass_inherited_from_base() {
 
 /// #435 (Part B): `__init_subclass__` with a docstring body is accepted
 /// (a docstring is a bare string-literal expression statement, which has
-/// no side effects).
+/// no side effects). The docstring lives on `B`'s hook, since `D` has no
+/// override and its own creation is validated against `B`'s body directly.
 #[test]
 fn init_subclass_with_docstring_body_is_accepted() {
     let dir = ScratchDir::new("435_init_subclass_doc").expect("failed to create scratch dir");
