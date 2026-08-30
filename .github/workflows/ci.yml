@@ -110,8 +110,14 @@ jobs:
 
       - name: Install LLVM 22 for offline alpha skill contract evals
         if: needs.classify-changes.outputs.agent == 'true'
+        timeout-minutes: 5
         run: |
-          wget https://apt.llvm.org/llvm.sh
+          # apt.llvm.org has been observed to wedge ubuntu-latest (x86_64)
+          # runners for hours with no failure signal (issue #614). Bound
+          # both the download itself and the whole step so a stalled mirror
+          # fails fast and the job can simply be re-run, instead of
+          # consuming CI capacity for hours.
+          wget --timeout=30 --tries=3 https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 22
           # llvm.sh's own packages don't pull in Polly's static lib; llvm-sys
@@ -305,8 +311,14 @@ jobs:
 
       - name: Install LLVM 22 (Linux, via apt.llvm.org)
         if: runner.os == 'Linux'
+        timeout-minutes: 5
         run: |
-          wget https://apt.llvm.org/llvm.sh
+          # apt.llvm.org has been observed to wedge ubuntu-latest (x86_64)
+          # runners for hours with no failure signal (issue #614). Bound
+          # both the download itself and the whole step so a stalled mirror
+          # fails fast and the job can simply be re-run, instead of
+          # consuming CI capacity for hours.
+          wget --timeout=30 --tries=3 https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 22
           # llvm.sh's own packages don't pull in Polly's static lib; llvm-sys
@@ -755,8 +767,14 @@ jobs:
         run: rustup show
 
       - name: Install LLVM 22 (Linux, via apt.llvm.org)
+        timeout-minutes: 5
         run: |-
-          wget https://apt.llvm.org/llvm.sh
+          # apt.llvm.org has been observed to wedge ubuntu-latest (x86_64)
+          # runners for hours with no failure signal (issue #614). Bound
+          # both the download itself and the whole step so a stalled mirror
+          # fails fast and the job can simply be re-run, instead of
+          # consuming CI capacity for hours.
+          wget --timeout=30 --tries=3 https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 22
           # llvm.sh's own packages don't pull in Polly's static lib; llvm-sys

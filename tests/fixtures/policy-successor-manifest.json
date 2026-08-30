@@ -4,7 +4,7 @@
     {
       "path": ".github/workflows/ci.yml",
       "source_path": ".github/workflows/ci.yml",
-      "sha256": "38c9d59632cd2a50e378acc162d71762ec084b14a1a4ceb610075da77925ab1c"
+      "sha256": "6c5385dd021cb7f63d9e1c8e0c9a0bbc09456d5df841f35c952b92b5ed942756"
     },
     {
       "path": "scripts/classify_ci_changes.py",
