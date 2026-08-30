@@ -1121,11 +1121,21 @@ fn defines_class_getitem(defs: &[(String, HirClassDef)], mro: &[String]) -> bool
     })
 }
 
+/// `base_class_asts` (#585) pairs every already-lowered class name in this
+/// module with its original `StmtClassDef`, so this call can re-inspect an
+/// *earlier* class's own `__init_subclass__` body when the class being
+/// lowered here inherits, rather than overrides, that hook -- `defined_classes`
+/// alone only carries the already-lowered `HirClassDef`, which has no method
+/// bodies left to re-validate. A base absent from this slice (a synthetic
+/// builtin-exception class, or any base this crate cannot introspect) is
+/// simply treated as not defining a validatable inherited hook, matching
+/// this file's existing "unintrospectable -> unrestricted" posture elsewhere.
 pub(crate) fn lower_class(
     def: &pycc_ast::StmtClassDef,
     aliases: &[(String, Ty)],
     defined_classes: &[(String, HirClassDef)],
     module_items: &[HirItem],
+    base_class_asts: &[(String, &pycc_ast::StmtClassDef)],
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
     // #380 (PR-20): build the projected class slice `annotation_to_ty` uses
     // to resolve cross-class annotations (including protocol-typed ones);
@@ -2081,11 +2091,44 @@ pub(crate) fn lower_class(
             for stmt in def.body.iter().rev() {
                 match stmt {
                     Stmt::FunctionDef(fd) if fd.name.as_str() == "__init_subclass__" => {
-                        validate_init_subclass_body(&fd.body, fd.range)?;
+                        validate_init_subclass_body(&fd.body, fd.range, false)?;
                         break;
                     }
                     _ => {}
                 }
+            }
+        }
+    } else if let Some(base_ast) = mro.iter().skip(1).find_map(|mro_class| {
+        // #585: the current class does not define its own
+        // `__init_subclass__`, but a base in its MRO does. CPython invokes
+        // that inherited hook automatically at this very subclass's
+        // creation, so -- unlike a base class that is merely defined and
+        // never subclassed, which must stay legal to compile -- this
+        // subclass statement is the point where an unsupported, side-
+        // effecting inherited hook must be rejected. Only a base this crate
+        // can still see the original source of (an earlier class in this
+        // same module, per `base_class_asts`) can be re-validated; a base
+        // this crate cannot introspect (e.g. a synthetic builtin-exception
+        // class, which is never in `base_class_asts`) is left unrestricted,
+        // matching this file's existing posture elsewhere. Looking the base
+        // up directly in `base_class_asts` (rather than via `defined_classes`
+        // first) means a base this crate cannot introspect is filtered out
+        // by the same `?` that filters out one lacking `__init_subclass__`,
+        // instead of needing a second, separately-unreachable fallback path.
+        let (_, base_ast) = base_class_asts.iter().find(|(name, _)| name == mro_class)?;
+        base_ast
+            .body
+            .iter()
+            .any(|s| matches!(s, Stmt::FunctionDef(fd) if fd.name.as_str() == "__init_subclass__"))
+            .then_some(*base_ast)
+    }) {
+        for stmt in base_ast.body.iter().rev() {
+            match stmt {
+                Stmt::FunctionDef(fd) if fd.name.as_str() == "__init_subclass__" => {
+                    validate_init_subclass_body(&fd.body, def.range, true)?;
+                    break;
+                }
+                _ => {}
             }
         }
     }
@@ -2612,17 +2655,34 @@ fn collect_init_attrs(
     Ok(attrs)
 }
 
-/// #435 (Part B): Validates that an `__init_subclass__` method body is
-/// statically evaluable — only a `pass` body, an empty body, or a body
-/// consisting solely of a docstring (a bare string-literal expression
-/// statement) is accepted. Any other statement (a `print` call, an
-/// assignment, a return, etc.) is rejected with `C0001`, since pycc's
+/// #435 (Part B), extended by #585: Validates that an `__init_subclass__`
+/// method body is statically evaluable — only a `pass` body, an empty body,
+/// or a body consisting solely of a docstring (a bare string-literal
+/// expression statement) is accepted. Any other statement (a `print` call,
+/// an assignment, a return, etc.) is rejected with `C0001`, since pycc's
 /// compile-time class-creation model has no mechanism to run side-effecting
 /// statements at class-definition time.
-fn validate_init_subclass_body<R>(body: &[Stmt], range: R) -> Result<(), Diagnostic>
+///
+/// `inherited` selects the diagnostic wording: `false` for a class's own
+/// `__init_subclass__` (rejected at its own definition, per #435), `true`
+/// for a hook inherited unchanged from a base class (rejected at the
+/// *subclass's* creation site instead, per #585 — CPython invokes the
+/// inherited hook there, so that is the point pycc's compile-time model
+/// cannot honor).
+fn validate_init_subclass_body<R>(body: &[Stmt], range: R, inherited: bool) -> Result<(), Diagnostic>
 where
     std::ops::Range<u32>: From<R>,
 {
+    let message = if inherited {
+        "a base class's `__init_subclass__`, inherited unchanged by this subclass, must be \
+         statically evaluable (only `pass` or a docstring is supported in this version) — \
+         CPython invokes the inherited hook when this subclass is created, and pycc cannot run \
+         its side-effecting statements at that point yet"
+    } else {
+        "`__init_subclass__` must be statically evaluable (only `pass` \
+         or a docstring is supported in this version) — \
+         side-effecting statements are not supported yet"
+    };
     for stmt in body {
         match stmt {
             Stmt::Pass(_) => continue,
@@ -2633,20 +2693,10 @@ where
                 if matches!(*expr_stmt.value, Expr::StringLiteral(_)) {
                     continue;
                 }
-                return Err(unsupported(
-                    "`__init_subclass__` must be statically evaluable (only `pass` \
-                     or a docstring is supported in this version) — \
-                     side-effecting statements are not supported yet",
-                    range,
-                ));
+                return Err(unsupported(message, range));
             }
             _ => {
-                return Err(unsupported(
-                    "`__init_subclass__` must be statically evaluable (only `pass` \
-                     or a docstring is supported in this version) — \
-                     side-effecting statements are not supported yet",
-                    range,
-                ));
+                return Err(unsupported(message, range));
             }
         }
     }
@@ -4483,17 +4533,68 @@ mod tests {
 
     #[test]
     fn subclass_without_own_init_subclass_inherits_from_base_without_validation() {
-        // A base class B defines `__init_subclass__`, and a subclass D
-        // does NOT define its own `__init_subclass__`. The outer `if` on
-        // line 831 is false (D's methods don't include `__init_subclass__`),
-        // so the validation block is skipped entirely.
+        // A base class B defines `__init_subclass__` with a `pass` body,
+        // and a subclass D does NOT define its own `__init_subclass__`.
+        // D's methods don't include `__init_subclass__`, so this takes the
+        // #585 inherited-hook path (re-validating B's body against D's
+        // creation site) rather than the #435 own-hook path -- but since
+        // B's body is statically evaluable, that re-validation still
+        // succeeds.
         let module = crate::pycc_parser_test_helper::parse(
             "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        pass\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n",
         );
         let hir = lower_checked(&module);
         assert!(
             hir.is_ok(),
-            "subclass without own __init_subclass should be accepted"
+            "subclass inheriting a statically-evaluable __init_subclass__ should be accepted"
+        );
+    }
+
+    #[test]
+    fn subclass_without_own_init_subclass_rejects_side_effecting_inherited_body() {
+        // #585: a base class B defines `__init_subclass__` with a
+        // side-effecting body, and a subclass D inherits it unchanged
+        // (does not override it). CPython would invoke B's hook when D is
+        // created; pycc cannot run that side-effecting body at
+        // class-creation time, so this must now be rejected at D's
+        // creation site -- unlike `init_subclass_without_base_having_init_subclass_is_not_validated`,
+        // where B is never subclassed and therefore stays legal.
+        // B's `__init_subclass__` is deliberately followed by `__init__`
+        // (not the last statement in the body) so the reverse walk over
+        // `base_ast.body` also exercises its `_ => {}` catch-all arm before
+        // finding the match, mirroring `init_subclass_before_init_in_body_validates_correctly`
+        // below for the analogous walk over the subclass's own body.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init_subclass__(self) -> None:\n        print(1)\n    def __init__(self) -> None:\n        return\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\n",
+        );
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message.contains("inherited"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn base_alone_never_subclassed_with_side_effecting_init_subclass_stays_legal() {
+        // #585's boundary case, restated explicitly: a base class defining
+        // `__init_subclass__` with a side-effecting body must still compile
+        // when it is never subclassed in this module -- CPython never
+        // invokes the hook until a subclass actually exists, so rejecting
+        // it here (at the base's own definition) would over-reject a
+        // legal, standalone class. This is the same program shape as
+        // `init_subclass_without_base_having_init_subclass_is_not_validated`
+        // above; kept as its own #585-focused test for direct traceability
+        // to the issue's own boundary requirement.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class B:\n    def __init__(self) -> None:\n        return\n    def __init_subclass__(self) -> None:\n        print(1)\n",
+        );
+        let hir = lower_checked(&module);
+        assert!(
+            hir.is_ok(),
+            "a base class's own side-effecting __init_subclass__ must stay legal when it is \
+             never subclassed"
         );
     }
 

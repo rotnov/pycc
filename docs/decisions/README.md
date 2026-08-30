@@ -219,3 +219,4 @@ current.
 | [D-210](./D-210-reject-cross-mro-attribute-redeclaration-with-a.md) | Reject a cross-MRO attribute redeclaration with a differing declared type | accepted |
 | [D-211](./D-211-evidence-bound-critical-path-escape-in-issue.md) | Evidence-bound critical-path escape narrows D-191's in-scope marker-then-size order | accepted |
 | [D-212](./D-212-track-a-duplicate-int-s-retain-on-the.md) | Track a duplicate int's exception-edge retain, and correct D-208's site count | accepted |
+| [D-213](./D-213-defer-pep-487-full-invocation-reject-the.md) | Defer PEP 487 full invocation; reject the inherited-__init_subclass__ soundness gap | accepted |

@@ -1266,6 +1266,14 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     let mut aliases: Vec<(String, Ty)> = Vec::new();
     let mut imports: Vec<ImportBinding> = Vec::new();
     let mut class_defs: Vec<(String, HirClassDef)> = Vec::new();
+    // #585: parallel to `class_defs`, but keeps each user-authored class's
+    // original `StmtClassDef` (borrowed from `module`, so it outlives this
+    // whole pass) instead of its already-lowered `HirClassDef`. A synthetic
+    // builtin-exception class seeded into `class_defs` above has no such
+    // AST node and is simply never present here -- `class::lower_class`
+    // treats that absence as "nothing further to validate", matching how
+    // this crate already handles bases it cannot introspect elsewhere.
+    let mut class_asts: Vec<(String, &pycc_ast::StmtClassDef)> = Vec::new();
     let mut items = Vec::with_capacity(module.body.len());
     // Part 1 of #541 (extending D-173): give the builtin exception
     // hierarchy a real presence in the class table, seeded *before* any
@@ -1359,7 +1367,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
         }
         if let Stmt::ClassDef(def) = stmt {
             let (class_def, mut method_items) =
-                class::lower_class(def, &aliases, &class_defs, &items)?;
+                class::lower_class(def, &aliases, &class_defs, &items, &class_asts)?;
             // D-154 Part 1's own post-merge review finding: two module-level
             // classes sharing a name would each lower their own `__init__`
             // (and any other same-named method) to the identical mangled
@@ -1430,6 +1438,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
                     def.range,
                 ));
             }
+            class_asts.push((class_def.name.clone(), def));
             class_defs.push((class_def.name.clone(), class_def));
             items.append(&mut method_items);
             continue;
