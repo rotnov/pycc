@@ -110,7 +110,13 @@ through a user subclass that inherits the method without overriding it
 (issue #714) -- because a synthetic class's method-table entry does not
 correspond to a real, callable function (D-173 propagates a raised
 exception through global runtime state rather than a real allocated
-instance); Part 1 of issue #737, issue #711.
+instance); Part 1 of issue #737, issue #711. The same issue #714 also
+covers a *construction*, not a dunder call: binding a fresh instantiation
+of such a class to a name (`e = MyError("boom")`, for a user subclass
+whose MRO reaches a builtin exception without overriding its inherited
+constructor) reports `cannot instantiate exception class \`...\` as a
+value` -- `raise MyError("boom")` stays the one supported construction
+(Part 3 of issue #541).
 
 ## Quality bar
 

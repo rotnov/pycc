@@ -223,9 +223,16 @@ fn raise_from_accepts_a_user_exception_cause() {
 
 #[test]
 fn raising_a_bound_user_exception_value_is_rejected() {
+    // #714 closed the route this test used to reach a bound
+    // `Ty::Instance("AppError")` value (`e = AppError("x")`) at an even
+    // earlier point -- that instantiation is now itself a `C0001`, since
+    // codegen has no real `__init__` body for a class that only inherits
+    // the synthetic `Exception.__init__` placeholder -- so the bound value
+    // here comes from a parameter annotation instead, which type-checks a
+    // `Ty::Instance("AppError")` binding without instantiating anything.
     let text = check_error(
         "bound",
-        &format!("{HIERARCHY}def main() -> None:\n    e = AppError(\"x\")\n    raise e\n"),
+        &format!("{HIERARCHY}def main(e: AppError) -> None:\n    raise e\n"),
     );
     assert!(text.contains("T0021"), "unexpected diagnostic: {text}");
     assert!(

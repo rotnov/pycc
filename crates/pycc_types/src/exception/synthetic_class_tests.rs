@@ -240,18 +240,41 @@ fn attribute_access_on_a_bare_builtin_exception_class_name_reports_t0044() {
 // -- the new surface a real class table unlocks ------------------------
 
 #[test]
-fn a_user_subclass_of_a_builtin_exception_class_is_instantiable() {
-    // Part 1 of #541's headline gain: `MyError` inherits the synthetic
-    // `Exception.__init__` through its MRO, so this resolves instead of
-    // reaching `resolve_instantiation`'s internal-error panic.
-    resolve_source("class MyError(ValueError):\n    pass\n\nx = MyError(\"boom\")\nprint(1)\n")
-        .expect("a user subclass must inherit the synthetic constructor");
+fn a_user_subclass_of_a_builtin_exception_class_is_raisable_but_not_a_bound_value() {
+    // Part 1 of #541's headline gain -- `MyError` inherits the synthetic
+    // `Exception.__init__` through its MRO instead of reaching
+    // `resolve_instantiation`'s internal-error panic -- but #714 found
+    // that `resolve_instantiation`'s generic instantiation path resolved
+    // this to a real, successful call all the way through: codegen has no
+    // actual function body for the inherited placeholder, so the produced
+    // binary aborted at runtime with a `NameError` naming a symbol the
+    // user never wrote. `raise MyError("boom")` stays accepted (MIR
+    // constructs the raised value directly, never calling through
+    // `Exception.__init__`); binding the same construction to a name is
+    // now a `C0001` at compile time instead.
+    resolve_source(
+        "class MyError(ValueError):\n    pass\n\ndef main() -> None:\n    raise MyError(\"boom\")\n\nmain()\n",
+    )
+    .expect("raising a user subclass of a builtin exception must stay accepted");
+
+    let err = resolve_source("class MyError(ValueError):\n    pass\n\nx = MyError(\"boom\")\nprint(1)\n")
+        .expect_err("binding the inherited constructor's result to a name must be rejected");
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message.contains("cannot instantiate exception class"),
+        "unexpected message: {}",
+        err.message
+    );
 }
 
 #[test]
 fn a_user_subclass_constructor_still_checks_its_arguments() {
-    let err = resolve_source("class MyError(ValueError):\n    pass\n\nx = MyError(1)\nprint(1)\n")
-        .expect_err("the inherited constructor's `str` parameter must be enforced");
+    // The inherited constructor's `str` parameter is enforced on the one
+    // shape that reaches it post-#714: a fresh `raise` operand.
+    let err = resolve_source(
+        "class MyError(ValueError):\n    pass\n\ndef main() -> None:\n    raise MyError(1)\n\nmain()\n",
+    )
+    .expect_err("the inherited constructor's `str` parameter must be enforced");
     assert_eq!(err.code, "T0021");
 }
 
