@@ -342,7 +342,7 @@ mod tests {
             is_abstract: false,
         };
         let defined_classes = vec![("A".to_string(), fake_a)];
-        let diagnostic = crate::class::lower_class(def, &[], &defined_classes).unwrap_err();
+        let diagnostic = crate::class::lower_class(def, &[], &defined_classes, &[]).unwrap_err();
         assert_eq!(diagnostic.code, "C0001");
         assert!(
             diagnostic
