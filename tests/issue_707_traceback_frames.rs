@@ -210,8 +210,7 @@ fn a_raise_inside_a_property_setter_names_the_plain_property_not_the_mangled_nam
     );
     assert!(!ok, "expected non-zero exit for uncaught exception");
     assert_eq!(
-        err,
-        "Traceback (most recent call last):\n  File \"<compiled>\", in x\nValueError: bad\n",
+        err, "Traceback (most recent call last):\n  File \"<compiled>\", in x\nValueError: bad\n",
         "a property-setter frame must show `x`, not the mangled `C.x.setter`"
     );
 }

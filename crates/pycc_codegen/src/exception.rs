@@ -389,7 +389,11 @@ pub(super) fn emit_exception_value<'ctx>(
             let Scalar::Str(message_scalar) = message_scalar else {
                 return Err(format!(
                     "{} message must be a string",
-                    if role == "cause" { "raise cause" } else { "raise" }
+                    if role == "cause" {
+                        "raise cause"
+                    } else {
+                        "raise"
+                    }
                 ));
             };
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
@@ -403,9 +407,7 @@ pub(super) fn emit_exception_value<'ctx>(
                 let member_scalar =
                     emit_expr(context, builder, module, rt, user_functions, locals, member);
                 let Scalar::Instance(member_ptr) = member_scalar else {
-                    return Err(format!(
-                        "{role} group member must be an exception instance"
-                    ));
+                    return Err(format!("{role} group member must be an exception instance"));
                 };
                 let slot = unsafe {
                     builder
@@ -424,9 +426,7 @@ pub(super) fn emit_exception_value<'ctx>(
             let type_tag = context.i8_type().const_int(*type_tag as u64, false);
             let (class_name_ptr, class_name_len) =
                 emit_str_bytes_constant(context, module, class_name, "exc_class_name");
-            let members_len = context
-                .i64_type()
-                .const_int(members.len() as u64, false);
+            let members_len = context.i64_type().const_int(members.len() as u64, false);
             Ok(builder
                 .build_call(
                     rt.exception_group_alloc,

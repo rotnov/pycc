@@ -840,8 +840,7 @@ paths = ["tests/"]
 
     #[test]
     fn roll_back_after_toml_failure_never_removes_a_preexisting_src_dir() {
-        let parent =
-            ScratchDir::new("rollback_preexisting").expect("failed to create scratch dir");
+        let parent = ScratchDir::new("rollback_preexisting").expect("failed to create scratch dir");
         let src_dir = parent.join("src");
         std::fs::create_dir_all(&src_dir).unwrap();
         std::fs::write(src_dir.join("sibling.py"), "user file").unwrap();

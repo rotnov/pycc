@@ -204,11 +204,7 @@ fn single_bare_name_handler_still_works() {
 
 #[test]
 fn three_type_handler_catches_each_independently() {
-    for (raised, tag) in [
-        ("ValueError", "a"),
-        ("TypeError", "b"),
-        ("KeyError", "c"),
-    ] {
+    for (raised, tag) in [("ValueError", "a"), ("TypeError", "b"), ("KeyError", "c")] {
         let full_tag = format!("three_type_{tag}");
         let (ok, stdout, stderr) = build_and_run(
             &full_tag,

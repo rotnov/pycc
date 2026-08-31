@@ -17985,7 +17985,9 @@ fn cross_mro_attribute_redeclaration_of_int_as_bool_is_rejected() {
     let err = check(&hir).unwrap_err();
     assert_eq!(err.code, "T0052");
     assert!(
-        err.message.contains('v') && err.message.contains("Base") && err.message.contains("Derived"),
+        err.message.contains('v')
+            && err.message.contains("Base")
+            && err.message.contains("Derived"),
         "got: {}",
         err.message
     );
@@ -18232,8 +18234,9 @@ fn dataclass_field_type_conflict_across_mro_is_rejected_during_hir_lowering() {
         "from dataclasses import dataclass\n@dataclass\nclass Base:\n    v: int\n@dataclass\nclass Derived(Base):\n    v: str\nd = Derived(1)\nprint(d.v)\n",
     )
     .expect("test fixture must parse");
-    let err = pycc_hir::lower_checked(&module)
-        .expect_err("a dataclass field redeclared with a differing type across the MRO must be rejected");
+    let err = pycc_hir::lower_checked(&module).expect_err(
+        "a dataclass field redeclared with a differing type across the MRO must be rejected",
+    );
     assert_eq!(err.code, "T0052");
     assert!(
         err.message.contains('v') && err.message.contains("int") && err.message.contains("str"),
@@ -18253,8 +18256,9 @@ fn dataclass_field_type_conflict_between_two_bases_is_rejected_during_hir_loweri
         "from dataclasses import dataclass\n@dataclass\nclass A:\n    v: int\n@dataclass\nclass B:\n    v: str\n@dataclass\nclass Derived(A, B):\n    pass\n",
     )
     .expect("test fixture must parse");
-    let err = pycc_hir::lower_checked(&module)
-        .expect_err("two dataclass bases redeclaring the same field with different types must be rejected");
+    let err = pycc_hir::lower_checked(&module).expect_err(
+        "two dataclass bases redeclaring the same field with different types must be rejected",
+    );
     assert_eq!(err.code, "T0052");
     assert!(
         err.message.contains('v') && err.message.contains("int") && err.message.contains("str"),
@@ -18609,10 +18613,7 @@ fn solver_if_no_else_marks_opaque_body_only_binding_as_maybe() {
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([
             ("cond".to_string(), Ok(Ty::Bool)),
-            (
-                "d".to_string(),
-                Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int)))),
-            ),
+            ("d".to_string(), Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int))))),
         ]),
         local_names: &["cond", "d", "y"],
         defs_rebound: HashSet::new(),
@@ -18667,10 +18668,7 @@ fn solver_if_with_else_marks_both_branch_opaque_binding_as_definite() {
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([
             ("cond".to_string(), Ok(Ty::Bool)),
-            (
-                "d".to_string(),
-                Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int)))),
-            ),
+            ("d".to_string(), Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int))))),
         ]),
         local_names: &["cond", "d", "y"],
         defs_rebound: HashSet::new(),
@@ -18910,10 +18908,7 @@ fn solver_while_loop_marks_opaque_body_only_binding_as_maybe() {
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([
             ("cond".to_string(), Ok(Ty::Bool)),
-            (
-                "d".to_string(),
-                Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int)))),
-            ),
+            ("d".to_string(), Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int))))),
         ]),
         local_names: &["cond", "d", "y"],
         defs_rebound: HashSet::new(),
@@ -24162,9 +24157,8 @@ fn bare_type_checking_name_used_as_a_value_is_not_defined() {
     // `TypeCheckingMarker` diagnostic below -- only the qualified
     // `typing.TYPE_CHECKING` spelling resolves through the registry for
     // value use (see `qualified_type_checking_marker_used_as_value_is_t0021`).
-    let err =
-        check_source("from typing import TYPE_CHECKING\nx = TYPE_CHECKING\nprint(x)\n")
-            .unwrap_err();
+    let err = check_source("from typing import TYPE_CHECKING\nx = TYPE_CHECKING\nprint(x)\n")
+        .unwrap_err();
     assert_eq!(err.code, "T0021");
     assert!(
         err.message.contains("is not defined"),
@@ -27411,7 +27405,7 @@ fn walrus_nested_inside_a_slice_bound_on_the_solver_path_propagates_a_forward_re
 
 #[test]
 fn walrus_nested_inside_a_dict_literal_key_on_the_solver_path_propagates_a_forward_reference_error()
- {
+{
     // Exercises `DictLiteral`'s own `bind_named_expr_targets(k)?` call
     // (source line 1040).
     let signatures = HashMap::new();
@@ -27527,7 +27521,7 @@ fn walrus_nested_inside_a_dict_get_or_default_key_on_the_solver_path_propagates_
 
 #[test]
 fn walrus_nested_inside_a_method_call_base_on_the_solver_path_propagates_a_forward_reference_error()
- {
+{
     // Exercises `MethodCall`'s own `bind_named_expr_targets(base)?` call
     // (source line 1053).
     let signatures = HashMap::new();
@@ -27565,7 +27559,8 @@ fn walrus_nested_inside_a_method_call_base_on_the_solver_path_propagates_a_forwa
 }
 
 #[test]
-fn walrus_nested_inside_a_method_call_arg_on_the_solver_path_propagates_a_forward_reference_error() {
+fn walrus_nested_inside_a_method_call_arg_on_the_solver_path_propagates_a_forward_reference_error()
+{
     // Exercises `MethodCall`'s own `bind_named_expr_targets(arg)?` call
     // inside its argument loop (source line 1055). The base is a harmless
     // bare name so the base's own recursion (line 1053) succeeds and the
@@ -28622,8 +28617,8 @@ fn class_getitem_argument_type_is_checked_against_the_hook() {
 }
 
 #[test]
-fn class_getitem_value_position_prefers_a_base_s_staticmethod_hook_over_a_derived_classmethod_override(
-) {
+fn class_getitem_value_position_prefers_a_base_s_staticmethod_hook_over_a_derived_classmethod_override()
+ {
     // Issue #693 deep-review, Finding 1: `resolve_static_or_class_method_call`
     // walks the full MRO checking `static_methods` first, and only if none
     // of the MRO's classes declare the hook there does it walk the full MRO
@@ -28904,7 +28899,6 @@ fn an_optional_int_value_narrows_back_to_a_bare_int_annotation_inside_is_not_non
     );
 }
 
-
 #[test]
 fn is_none_on_an_optional_int_type_checks_as_bool() {
     let result = check_source(
@@ -29013,7 +29007,8 @@ fn a_walrus_with_an_optional_str_value_is_rejected_with_t0050() {
         name: "y".to_string(),
         value: Box::new(HirExpr::Name("x".to_string())),
     };
-    let err = infer_expr(&env, &expr).expect_err("an `Optional[str]`-valued walrus must be rejected");
+    let err =
+        infer_expr(&env, &expr).expect_err("an `Optional[str]`-valued walrus must be rejected");
     assert_eq!(err.code, "T0050");
 }
 
@@ -29143,8 +29138,8 @@ fn a_failing_walrus_binding_in_a_module_bare_expr_stmt_propagates_t0023() {
 
 #[test]
 fn a_failing_walrus_binding_in_a_module_if_test_propagates_t0023() {
-    let err =
-        check_source("n = \"hi\"\nif (n := 1) > 0:\n    pass\n").expect_err("incompatible redefinition");
+    let err = check_source("n = \"hi\"\nif (n := 1) > 0:\n    pass\n")
+        .expect_err("incompatible redefinition");
     assert_eq!(err.code, "T0023");
 }
 
@@ -29197,8 +29192,7 @@ fn a_failing_walrus_nested_inside_a_named_exprs_own_value_propagates_t0023() {
     // (line ~996) failing, as opposed to `check_assignment` on the outer
     // name failing -- the outer name `m` binds cleanly; it's the *inner*
     // `n` rebind nested inside `m`'s value that fails.
-    let err =
-        check_source("n = \"hi\"\n(m := (n := 1))\n").expect_err("incompatible redefinition");
+    let err = check_source("n = \"hi\"\n(m := (n := 1))\n").expect_err("incompatible redefinition");
     assert_eq!(err.code, "T0023");
 }
 
@@ -29365,7 +29359,6 @@ fn a_walrus_inside_a_list_literal_test_in_a_function_body_is_a_local_name() {
     assert!(check(&hir).is_ok(), "{:?}", check(&hir));
 }
 
-
 // The `ListLiteral`/`SetLiteral`/`TupleLiteral` match arm above is one
 // source line shared by all three variants, but each `|`-alternative still
 // carries its own coverage region -- the test above only ever exercises
@@ -29432,9 +29425,8 @@ fn a_walrus_inside_a_tuple_literal_test_in_a_function_body_is_a_local_name() {
 
 #[test]
 fn is_not_none_narrows_the_body_to_plain_int() {
-    let result = check_source(
-        "x: int | None = 5\nif x is not None:\n    y: int = x\n    print(y)\n",
-    );
+    let result =
+        check_source("x: int | None = 5\nif x is not None:\n    y: int = x\n    print(y)\n");
     assert!(
         result.is_ok(),
         "`is not None` must narrow `x` to plain `int` inside the body: {result:?}"
@@ -29456,8 +29448,7 @@ fn is_none_narrows_the_orelse_to_plain_int() {
 fn is_none_does_not_narrow_the_body() {
     // The body of `if x is None:` is exactly the case where `x` is absent
     // -- it must stay `Optional[int]` there, never narrow to `int`.
-    let result =
-        check_source("x: int | None = 5\nif x is None:\n    y: int = x\n    print(y)\n");
+    let result = check_source("x: int | None = 5\nif x is None:\n    y: int = x\n    print(y)\n");
     let err = result.expect_err("`x` inside `if x is None:`'s own body must stay Optional");
     assert_eq!(err.code, "T0025");
 }
@@ -29469,7 +29460,8 @@ fn is_not_none_does_not_narrow_the_orelse() {
     let result = check_source(
         "x: int | None = 5\nif x is not None:\n    print(0)\nelse:\n    y: int = x\n    print(y)\n",
     );
-    let err = result.expect_err("`x` inside the `orelse` of `if x is not None:` must stay Optional");
+    let err =
+        result.expect_err("`x` inside the `orelse` of `if x is not None:` must stay Optional");
     assert_eq!(err.code, "T0025");
 }
 
@@ -29602,9 +29594,7 @@ fn narrowed_read_composes_with_ordinary_int_operators() {
     // An end-to-end narrowing-semantics smoke test: the narrowed value is
     // usable directly as a plain `int` operand, not merely assignable to an
     // `int`-annotated target.
-    let result = check_source(
-        "x: int | None = 5\nif x is not None:\n    print(x + 1)\n",
-    );
+    let result = check_source("x: int | None = 5\nif x is not None:\n    print(x + 1)\n");
     assert!(
         result.is_ok(),
         "a narrowed `Optional[int]` must be usable as a plain `int` operand: {result:?}"
@@ -29613,9 +29603,8 @@ fn narrowed_read_composes_with_ordinary_int_operators() {
 
 #[test]
 fn narrowing_applies_at_module_scope_and_function_scope_alike() {
-    let module_scope = check_source(
-        "x: int | None = 5\nif x is not None:\n    y: int = x\n    print(y)\n",
-    );
+    let module_scope =
+        check_source("x: int | None = 5\nif x is not None:\n    y: int = x\n    print(y)\n");
     let function_scope = check_source(
         "def f(x: int | None) -> int:\n    if x is not None:\n        return x\n    return 0\n",
     );
@@ -29698,8 +29687,7 @@ fn reassignment_inside_one_match_case_kills_narrowing() {
     let result = check_source(
         "x: int | None = 5\nflag: int = 0\nif x is not None:\n    match flag:\n        case 0:\n            x = None\n        case _:\n            pass\n    print(x + 1)\n",
     );
-    let err =
-        result.expect_err("a reassignment inside one `match` case must kill the narrowing");
+    let err = result.expect_err("a reassignment inside one `match` case must kill the narrowing");
     assert_eq!(err.code, "T0021");
 }
 

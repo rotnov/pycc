@@ -75,7 +75,10 @@ fn an_unseeded_module_still_does_not_read_the_flat_seven_as_shadowed() {
         assert!(!env.is_synthetic_class(name));
         let unshadowed = is_unshadowed_builtin_exception(&env, &[], name);
         if pycc_hir::is_flat_builtin_exception_class(name) {
-            assert!(unshadowed, "`{name}` must not read as shadowed while absent");
+            assert!(
+                unshadowed,
+                "`{name}` must not read as shadowed while absent"
+            );
         } else {
             // Part 2 of #543 (#739), work item 5: an `OSError`-family name
             // has no name-based fallback, so absence from the class table
@@ -257,8 +260,9 @@ fn a_user_subclass_of_a_builtin_exception_class_is_raisable_but_not_a_bound_valu
     )
     .expect("raising a user subclass of a builtin exception must stay accepted");
 
-    let err = resolve_source("class MyError(ValueError):\n    pass\n\nx = MyError(\"boom\")\nprint(1)\n")
-        .expect_err("binding the inherited constructor's result to a name must be rejected");
+    let err =
+        resolve_source("class MyError(ValueError):\n    pass\n\nx = MyError(\"boom\")\nprint(1)\n")
+            .expect_err("binding the inherited constructor's result to a name must be rejected");
     assert_eq!(err.code, "C0001");
     assert!(
         err.message.contains("cannot instantiate exception class"),
@@ -446,4 +450,3 @@ fn provenance_survives_monomorphization() {
     assert!(env.is_synthetic_class("ValueError"));
     assert!(!env.is_synthetic_class("Box"));
 }
-

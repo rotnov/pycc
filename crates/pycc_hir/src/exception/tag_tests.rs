@@ -63,7 +63,10 @@ fn the_original_flat_seven_are_never_tagged_by_this_pass() {
     );
     for (name, tag) in &tags {
         if crate::is_flat_builtin_exception_class(name) {
-            assert_eq!(*tag, None, "flat builtin `{name}` must carry no assigned tag");
+            assert_eq!(
+                *tag, None,
+                "flat builtin `{name}` must carry no assigned tag"
+            );
         }
     }
 }

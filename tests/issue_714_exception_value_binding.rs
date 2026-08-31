@@ -150,8 +150,5 @@ fn raising_a_user_exception_subclass_with_the_wrong_argument_type_is_rejected() 
          main()\n",
     );
     assert!(text.contains("T0021"), "unexpected diagnostic: {text}");
-    assert!(
-        text.contains("str"),
-        "unexpected diagnostic: {text}"
-    );
+    assert!(text.contains("str"), "unexpected diagnostic: {text}");
 }

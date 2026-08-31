@@ -22,8 +22,8 @@ use crate::{
     is_known_callable_builtin, is_local, is_marker_kind, lookup_bound_name, marker_is_not_a_value,
     non_callable_binding, numeric_or_bool_compatible, possibly_unbound,
     std_constant_is_not_callable, std_function_used_as_a_value, std_qualified_symbol,
-    std_receiver_name, std_receiver_shadowed, std_scalar_to_ty, type_checking_marker_is_not_a_value,
-    unbound_local, unsupported_callable_builtin,
+    std_receiver_name, std_receiver_shadowed, std_scalar_to_ty,
+    type_checking_marker_is_not_a_value, unbound_local, unsupported_callable_builtin,
 };
 
 use pycc_diag::{Diagnostic, Span};

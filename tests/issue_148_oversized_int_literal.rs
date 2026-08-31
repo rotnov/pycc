@@ -174,7 +174,10 @@ fn an_oversized_literal_as_a_list_index_is_rejected_at_compile_time() {
 
 #[test]
 fn an_oversized_literal_as_a_str_literal_repeat_count_is_rejected_at_compile_time() {
-    assert_compile_time_boundary_rejection("str_repeat_count", &format!("print(\"ab\" * {OVERSIZED})\n"));
+    assert_compile_time_boundary_rejection(
+        "str_repeat_count",
+        &format!("print(\"ab\" * {OVERSIZED})\n"),
+    );
 }
 
 #[test]

@@ -548,10 +548,7 @@ fn a_nested_scoped_body_entered_while_already_narrowed_still_sees_the_narrowing(
     let MirItem::Function { body, .. } = &mir.items[0] else {
         panic!("expected the only item to be the lowered function");
     };
-    let MirStmt::If {
-        body: if_body, ..
-    } = &body[0]
-    else {
+    let MirStmt::If { body: if_body, .. } = &body[0] else {
         panic!("expected the only function statement to be the lowered `if`");
     };
     let MirStmt::While {

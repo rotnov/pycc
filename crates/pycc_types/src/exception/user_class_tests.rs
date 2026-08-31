@@ -277,7 +277,10 @@ fn raising_a_user_exception_class_panics_if_the_synthetic_init_is_somehow_unregi
             bases: Vec::new(),
             mro: vec!["Ghost".to_string()],
             attrs: Vec::new(),
-            methods: vec![("__init__".to_string(), EXCEPTION_INIT_MANGLED_NAME.to_string())],
+            methods: vec![(
+                "__init__".to_string(),
+                EXCEPTION_INIT_MANGLED_NAME.to_string(),
+            )],
             type_param: None,
             properties: Vec::new(),
             static_methods: Vec::new(),

@@ -15,8 +15,7 @@ use std::path::Path;
 mod exception;
 use exception::{
     ExceptionCodegenState, emit_exception_set_frame, emit_exception_value,
-    expression_can_set_exception,
-    guard_statement_effects,
+    expression_can_set_exception, guard_statement_effects,
 };
 mod bigint_rc;
 use bigint_rc::{
@@ -1148,8 +1147,7 @@ fn coerce_scalar_to_type<'ctx>(
         // `truthy` and an `if x is not None:` narrowed unwrap.
         (pycc_mir::Ty::Optional(inner), Scalar::Optional(v)) => {
             let struct_ty =
-                ty_to_basic_type(context, pycc_mir::Ty::Optional(inner.clone()))
-                    .into_struct_type();
+                ty_to_basic_type(context, pycc_mir::Ty::Optional(inner.clone())).into_struct_type();
             if v.get_type() == struct_ty {
                 Scalar::Optional(v)
             } else {
@@ -1190,12 +1188,7 @@ fn coerce_scalar_to_type<'ctx>(
                     ),
                 };
                 let with_payload = builder
-                    .build_insert_value(
-                        struct_ty.get_undef(),
-                        payload0,
-                        0,
-                        "opt_none_payload",
-                    )
+                    .build_insert_value(struct_ty.get_undef(), payload0, 0, "opt_none_payload")
                     .expect(
                         "build_insert_value should not fail inserting field 0 of a fresh struct",
                     )
@@ -1825,7 +1818,9 @@ fn emit_expr_unchecked<'ctx>(
             };
             let payload = builder
                 .build_extract_value(v, 0, "narrowed_payload")
-                .expect("build_extract_value should not fail extracting field 0 of an Optional struct");
+                .expect(
+                    "build_extract_value should not fail extracting field 0 of an Optional struct",
+                );
             // #809 (Part 3 of #747): `T0049`'s widened gate now admits
             // `Ty::Float`/`Ty::Bool` inner types alongside the pre-existing
             // `Ty::Int`, so the narrowed payload must become the matching
@@ -2535,8 +2530,15 @@ fn emit_expr_unchecked<'ctx>(
         // int temporary the operand produced *after* `truthy` reads it
         // (#146 Part 2, D-181) -- this one follows the identical sequence.
         MirExpr::Not(operand) => {
-            let operand_scalar =
-                emit_expr(context, builder, module, rt, user_functions, locals, operand);
+            let operand_scalar = emit_expr(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                operand,
+            );
             let truthy_cond = truthy(context, builder, rt, operand_scalar);
             release_scalar_if_int_temporary(context, builder, rt, operand, &operand_scalar);
             let inverted = builder
@@ -3229,10 +3231,9 @@ fn emit_expr_unchecked<'ctx>(
                 // `build_insert_value` below is block-agnostic and takes
                 // part in no phi, so nothing here depends on the block the
                 // element was evaluated in.
-                let scalar =
-                    retain_if_int_duplicate_and_track_for_exception_edge(
-                        context, builder, rt, element, scalar,
-                    );
+                let scalar = retain_if_int_duplicate_and_track_for_exception_edge(
+                    context, builder, rt, element, scalar,
+                );
                 // Push *after* the retain-and-track call, matching
                 // `build_call_to_with_leading_args`'s own call order:
                 // `int_temporary_word` (via
@@ -3283,7 +3284,10 @@ fn emit_expr_unchecked<'ctx>(
             // this backwards (releasing instead of truncating) would
             // double-free every owning element on this normal,
             // non-exception path.
-            rt.exceptions.pending_int_releases.borrow_mut().truncate(mark);
+            rt.exceptions
+                .pending_int_releases
+                .borrow_mut()
+                .truncate(mark);
             Scalar::Tuple(aggregate)
         }
         // `base[start:stop:step]` (PR-12 Task 9, D-118). Evaluates `base`,
@@ -3906,7 +3910,10 @@ fn build_call_to_with_leading_args<'ctx>(
     // `mark` *without* releasing: ownership of every entry pushed above
     // has now transferred to the callee's parameter slots via the
     // `build_call`/`build_indirect_call` below.
-    rt.exceptions.pending_int_releases.borrow_mut().truncate(mark);
+    rt.exceptions
+        .pending_int_releases
+        .borrow_mut()
+        .truncate(mark);
     arg_values.extend(marshalled_args);
     // Issue #22: dispatch indirectly through the function-pointer slot.
     // Load the current binding; if null, the function hasn't been defined
@@ -4117,7 +4124,12 @@ fn truthy<'ctx>(
                     // zero-extend), rather than inventing a new mechanism.
                     let zero = context.f64_type().const_float(0.0);
                     let cond = builder
-                        .build_float_compare(FloatPredicate::UNE, fv, zero, "opt_payload_float_truthy")
+                        .build_float_compare(
+                            FloatPredicate::UNE,
+                            fv,
+                            zero,
+                            "opt_payload_float_truthy",
+                        )
                         .expect("build_float_compare should not fail for two f64 operands");
                     builder
                         .build_int_z_extend(

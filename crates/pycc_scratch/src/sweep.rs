@@ -379,7 +379,9 @@ mod tests {
             .write(true)
             .open(root.join(LOCK_FILE_NAME))
             .expect("the fixture lock file should be openable");
-        holder.lock().expect("the fixture lock should be acquirable");
+        holder
+            .lock()
+            .expect("the fixture lock should be acquirable");
 
         let report = sweep_stale_roots_in(&arena, &roomy_config(), now_plus_hours(2));
 
@@ -470,11 +472,7 @@ mod tests {
             "an unopenable lock file must be a conservative skip"
         );
         assert_eq!(report.deleted, usize::from(privileged));
-        assert_eq!(
-            root.is_dir(),
-            !privileged,
-            "the root must survive the skip"
-        );
+        assert_eq!(root.is_dir(), !privileged, "the root must survive the skip");
 
         // Restore permissions so the arena's own Drop can clean up. Under
         // uid 0 the root is already gone and this fails; that is fine —

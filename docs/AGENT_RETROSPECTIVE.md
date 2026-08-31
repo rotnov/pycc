@@ -33,6 +33,31 @@ never a merge gate.
 
 ---
 
+## 2026-08-31 — Read a 4893-line staged diff into my own context before realizing the D-068 reviewer should read it itself
+
+What happened: while preparing PR #860 (Part 1 of #24, formatting the
+workspace), I exported the full staged diff to `/tmp/staged_diff.txt` and
+then used my own `Read` tool on it to "prepare" for dispatching the D-068
+`ievo:deep-reviewer` agent. That `Read` call alone consumed roughly 110,000
+tokens for only a partial view (lines 1-940 of 4894) and hit a truncation
+warning, without producing anything the reviewer needed from me.
+
+Root cause: `ievo:deep-reviewer` has only `Read`/`Grep` tools and no Bash —
+its first dispatch (told to run `git diff --staged` itself) correctly failed
+and reported the review unavailable, which was the right fallback per this
+file's own documented policy. But the fix for that failure is to hand the
+reviewer agent a *file path* to `Read` directly with its own separate token
+budget — not to relay the diff content through my own context first. Reading
+the diff myself before redispatching added a large, unnecessary cost with no
+benefit: I don't review the diff, the dispatched agent does.
+
+Lesson: when a large diff or artifact needs to reach a Read/Grep-only
+subagent, export it to a file and pass the *path* in the dispatch prompt.
+Never `Read` a multi-thousand-line diff into the orchestrating session's own
+context "to be ready" before dispatching a review agent — that context is
+not what performs the review, and the file will exceed a single `Read`
+call's window anyway on anything this large.
+
 ## 2026-08-29 — Chased a phantom coverage gap in a package-scoped summary instead of running the actual gate command
 
 What happened: while implementing #249 (non-UTF-8 native paths in

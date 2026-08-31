@@ -420,7 +420,10 @@ pub(crate) fn annotation_to_ty(
                 // the recursion below, which reports it exactly as it does
                 // today.
                 _ => {
-                    if let Some(info) = class_defs.iter().find(|info| info.name == base_name.id.as_str()) {
+                    if let Some(info) = class_defs
+                        .iter()
+                        .find(|info| info.name == base_name.id.as_str())
+                    {
                         if !info.subscriptable {
                             return Err(Diagnostic::error(
                                 "T0044",

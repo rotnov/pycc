@@ -63,11 +63,11 @@ use crate::unop::unary_result_type;
 use crate::{
     Environment, annotation_marker_is_not_a_value, cast_marker_is_not_a_value,
     check_incompatible_attribute_redeclarations, check_incompatible_redefinitions,
-    check_with_signatures, enum_marker_is_not_a_value,
-    is_assignable, is_generic_signature, is_known_callable_builtin, is_local, is_marker_kind,
-    marker_is_not_a_value, non_callable_binding, solver, std_constant_is_not_callable,
-    std_function_used_as_a_value, std_qualified_symbol, std_receiver_name, std_receiver_shadowed,
-    std_scalar_to_ty, t0042, ty_contains_param, type_checking_marker_is_not_a_value, unbound_local,
+    check_with_signatures, enum_marker_is_not_a_value, is_assignable, is_generic_signature,
+    is_known_callable_builtin, is_local, is_marker_kind, marker_is_not_a_value,
+    non_callable_binding, solver, std_constant_is_not_callable, std_function_used_as_a_value,
+    std_qualified_symbol, std_receiver_name, std_receiver_shadowed, std_scalar_to_ty, t0042,
+    ty_contains_param, type_checking_marker_is_not_a_value, unbound_local,
     unsupported_callable_builtin,
 };
 use pycc_diag::{Diagnostic, Span};
@@ -636,10 +636,8 @@ pub(crate) fn collect_expr_constraints(
                             annotation_marker_is_not_a_value(callee)
                         } else if matches!(symbol.kind, pycc_std::StdSymbolKind::CastMarker) {
                             cast_marker_is_not_a_value(callee)
-                        } else if matches!(
-                            symbol.kind,
-                            pycc_std::StdSymbolKind::TypeCheckingMarker
-                        ) {
+                        } else if matches!(symbol.kind, pycc_std::StdSymbolKind::TypeCheckingMarker)
+                        {
                             type_checking_marker_is_not_a_value(callee)
                         } else {
                             marker_is_not_a_value(callee)
@@ -1783,22 +1781,22 @@ pub(crate) fn collect_block_constraints(
                 )?;
                 for case in cases {
                     // Issue #771 join-site follow-up: include `opaque_bindings`
-                // alongside `bindings` here. A name definitely-but-opaquely
-                // bound before this construct must count as pre-existing
-                // too -- otherwise a branch that reassigns it to a real,
-                // solver-representable term looks "newly introduced" to the
-                // join helper below, and when only one branch performs that
-                // reassignment the name is misclassified as bound in both
-                // branches (the other, untouched branch still carries the
-                // opaque marker), unmasking a term that only reflects one
-                // path as if it were unconditionally correct. Confirmed as a
-                // real gap by the pinned local reviewer's second pass.
-                let pre_existing: HashSet<String> = env
-                    .bindings
-                    .keys()
-                    .chain(env.opaque_bindings.iter())
-                    .cloned()
-                    .collect();
+                    // alongside `bindings` here. A name definitely-but-opaquely
+                    // bound before this construct must count as pre-existing
+                    // too -- otherwise a branch that reassigns it to a real,
+                    // solver-representable term looks "newly introduced" to the
+                    // join helper below, and when only one branch performs that
+                    // reassignment the name is misclassified as bound in both
+                    // branches (the other, untouched branch still carries the
+                    // opaque marker), unmasking a term that only reflects one
+                    // path as if it were unconditionally correct. Confirmed as a
+                    // real gap by the pinned local reviewer's second pass.
+                    let pre_existing: HashSet<String> = env
+                        .bindings
+                        .keys()
+                        .chain(env.opaque_bindings.iter())
+                        .cloned()
+                        .collect();
                     let mut case_env = env.clone();
                     collect_block_constraints(
                         signatures,

@@ -38,9 +38,9 @@ use pycc_hir::BinOpKind;
 use pycc_hir::CmpOpKind;
 #[cfg(test)]
 use pycc_hir::PropertyDef;
+pub use pycc_hir::Ty;
 #[cfg(test)]
 use pycc_hir::UnaryOpKind;
-pub use pycc_hir::Ty;
 use pycc_hir::{
     CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirMatchCase, HirModule, HirPattern,
     HirStmt,
@@ -573,7 +573,12 @@ fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mut Vec<&'a s
             collect_named_expr_names_in_expr(base, names);
             collect_named_expr_names_in_expr(index, names);
         }
-        HirExpr::Slice { base, start, stop, step } => {
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
             collect_named_expr_names_in_expr(base, names);
             for bound in [start, stop, step].into_iter().flatten() {
                 collect_named_expr_names_in_expr(bound, names);
@@ -1113,7 +1118,12 @@ fn collect_named_expr_bindings(
             collect_named_expr_bindings(env, local_names, base)?;
             collect_named_expr_bindings(env, local_names, index)
         }
-        HirExpr::Slice { base, start, stop, step } => {
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
             collect_named_expr_bindings(env, local_names, base)?;
             for bound in [start, stop, step].into_iter().flatten() {
                 collect_named_expr_bindings(env, local_names, bound)?;
@@ -2321,7 +2331,12 @@ fn check_function_in(
             class_def.abstract_methods.iter().any(|m| m == method_name)
         });
     if !is_abstract_method {
-        narrow::check_stmt_sequence_in_function(&mut env, local_names, body, resolved_return.clone())?;
+        narrow::check_stmt_sequence_in_function(
+            &mut env,
+            local_names,
+            body,
+            resolved_return.clone(),
+        )?;
     }
     if !is_abstract_method && resolved_return != Ty::None && !block_always_returns(body) {
         return Err(Diagnostic::error(

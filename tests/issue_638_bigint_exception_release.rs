@@ -350,10 +350,8 @@ mod peak_rss {
     /// for why the marginal, not the raw ratio, is the discriminating
     /// measurement here.
     fn marginal_rss(case_prefix: &str, repro: impl Fn(u32) -> String, iterations: u32) -> i64 {
-        let single =
-            built_program_peak_rss(&format!("{case_prefix}_1x"), &repro(iterations));
-        let double =
-            built_program_peak_rss(&format!("{case_prefix}_2x"), &repro(iterations * 2));
+        let single = built_program_peak_rss(&format!("{case_prefix}_1x"), &repro(iterations));
+        let double = built_program_peak_rss(&format!("{case_prefix}_2x"), &repro(iterations * 2));
         double - single
     }
 
@@ -447,8 +445,7 @@ mod peak_rss {
     fn a_call_argument_orphaned_on_the_exception_edge_does_not_grow_with_the_iteration_count() {
         let leak_marginal =
             marginal_rss("rss_exc_call", call_argument_exception_edge_repro, 250_000);
-        let control_marginal =
-            marginal_rss("rss_ctl_call", call_argument_control_repro, 250_000);
+        let control_marginal = marginal_rss("rss_ctl_call", call_argument_control_repro, 250_000);
         assert!(
             (leak_marginal as f64) < (control_marginal as f64) * 1.15,
             "leak-shape marginal RSS growth must track the same-exception-rate \
@@ -485,8 +482,7 @@ mod peak_rss {
      {
         let leak_marginal =
             marginal_rss("rss_exc_tuple", tuple_literal_exception_edge_repro, 250_000);
-        let control_marginal =
-            marginal_rss("rss_ctl_tuple", tuple_literal_control_repro, 250_000);
+        let control_marginal = marginal_rss("rss_ctl_tuple", tuple_literal_control_repro, 250_000);
         assert!(
             (leak_marginal as f64) < (control_marginal as f64) * 1.15,
             "leak-shape marginal RSS growth must track the same-exception-rate \

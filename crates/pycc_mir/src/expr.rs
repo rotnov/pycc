@@ -44,8 +44,7 @@ pub(super) fn lower_expr(
         // just below. Checked before the plain `Name` arm so a narrowed
         // read never falls through to it.
         HirExpr::Name(name) if super::narrowed_ty(scopes, name).is_some() => {
-            let inner = super::narrowed_ty(scopes, name)
-                .expect("just matched Some above");
+            let inner = super::narrowed_ty(scopes, name).expect("just matched Some above");
             MirExpr::OptionalUnwrap(
                 Box::new(MirExpr::Name {
                     name: name.clone(),
@@ -1015,7 +1014,12 @@ pub(super) fn pre_bind_named_expr_targets(
             pre_bind_named_expr_targets(base, scopes, classes, current_class);
             pre_bind_named_expr_targets(index, scopes, classes, current_class);
         }
-        HirExpr::Slice { base, start, stop, step } => {
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
             pre_bind_named_expr_targets(base, scopes, classes, current_class);
             for bound in [start, stop, step].into_iter().flatten() {
                 pre_bind_named_expr_targets(bound, scopes, classes, current_class);

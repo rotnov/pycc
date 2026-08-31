@@ -60,7 +60,10 @@
 /// same way, is never mistaken for a violation of itself -- important
 /// specifically because the real caller in the parent module scans this
 /// whole crate's `src/` directory, which now includes this file too.
-pub(super) fn d029_violations(sources: &[(&str, &str)], expected_triple_call_sites: usize) -> Vec<String> {
+pub(super) fn d029_violations(
+    sources: &[(&str, &str)],
+    expected_triple_call_sites: usize,
+) -> Vec<String> {
     let printer = format!(".{}()", "print_to_string");
     let verifier = format!(".{}()", "verify");
     let wrapper = format!("llvm_string_to_{}(", "owned");
@@ -159,7 +162,10 @@ mod d029_violations_tests {
     #[test]
     fn a_fully_compliant_source_has_no_violations() {
         let source = compliant_fixture();
-        assert_eq!(d029_violations(&[("fixture.rs", &source)], 2), Vec::<String>::new());
+        assert_eq!(
+            d029_violations(&[("fixture.rs", &source)], 2),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -201,10 +207,7 @@ mod d029_violations_tests {
             "verify"
         );
         let compliant = compliant_fixture();
-        let violations = d029_violations(
-            &[("lib.rs", &compliant), ("sibling.rs", &sibling)],
-            2,
-        );
+        let violations = d029_violations(&[("lib.rs", &compliant), ("sibling.rs", &sibling)], 2);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("the only direct inkwell verify call"));
     }
@@ -234,7 +237,10 @@ mod d029_violations_tests {
             "owned",
             "print_to_string"
         );
-        assert_eq!(d029_violations(&[("fixture.rs", &source)], 2), Vec::<String>::new());
+        assert_eq!(
+            d029_violations(&[("fixture.rs", &source)], 2),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -248,6 +254,9 @@ mod d029_violations_tests {
             compliant_fixture(),
             "create"
         );
-        assert_eq!(d029_violations(&[("fixture.rs", &source)], 3), Vec::<String>::new());
+        assert_eq!(
+            d029_violations(&[("fixture.rs", &source)], 3),
+            Vec::<String>::new()
+        );
     }
 }

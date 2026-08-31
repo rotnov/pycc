@@ -350,8 +350,8 @@ except ValueError:
 }
 
 fn assert_raw_codegen_error(name: &str, stmt: pycc_mir::MirStmt, expected_message: &str) {
-    let dir = ScratchDir::new(&format!("382_raw_codegen_{name}"))
-        .expect("failed to create scratch dir");
+    let dir =
+        ScratchDir::new(&format!("382_raw_codegen_{name}")).expect("failed to create scratch dir");
     let mir = pycc_mir::MirModule {
         items: vec![pycc_mir::MirItem::TopLevelStmt(stmt)],
         class_defs: vec![],
@@ -852,8 +852,8 @@ fn a_user_function_cannot_silently_shadow_a_builtin_exception_in_raise() {
 
 #[test]
 fn a_user_class_cannot_silently_shadow_a_builtin_exception_in_raise() {
-    let dir = ScratchDir::new("382_shadowed_exception_class")
-        .expect("failed to create scratch dir");
+    let dir =
+        ScratchDir::new("382_shadowed_exception_class").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "shadowed_exception_class.py",
@@ -868,8 +868,8 @@ fn a_user_class_cannot_silently_shadow_a_builtin_exception_in_raise() {
 
 #[test]
 fn a_value_binding_cannot_silently_shadow_a_builtin_exception_in_raise() {
-    let dir = ScratchDir::new("382_shadowed_exception_value")
-        .expect("failed to create scratch dir");
+    let dir =
+        ScratchDir::new("382_shadowed_exception_value").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "shadowed_exception_value.py",
@@ -884,8 +884,8 @@ fn a_value_binding_cannot_silently_shadow_a_builtin_exception_in_raise() {
 
 #[test]
 fn a_function_local_cannot_silently_shadow_a_builtin_exception_in_raise() {
-    let dir = ScratchDir::new("382_shadowed_exception_local")
-        .expect("failed to create scratch dir");
+    let dir =
+        ScratchDir::new("382_shadowed_exception_local").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "shadowed_exception_local.py",
@@ -900,8 +900,8 @@ fn a_function_local_cannot_silently_shadow_a_builtin_exception_in_raise() {
 
 #[test]
 fn a_value_binding_cannot_silently_shadow_a_builtin_exception_in_except() {
-    let dir = ScratchDir::new("382_shadowed_exception_handler")
-        .expect("failed to create scratch dir");
+    let dir =
+        ScratchDir::new("382_shadowed_exception_handler").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "shadowed_exception_handler.py",

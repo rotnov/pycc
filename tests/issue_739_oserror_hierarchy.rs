@@ -170,7 +170,10 @@ fn except_connection_error_catches_each_of_its_four_children() {
             ),
         );
         assert!(ok, "`{name}` program failed: {stderr}");
-        assert_eq!(stdout, "caught\n", "`{name}` was not caught by ConnectionError");
+        assert_eq!(
+            stdout, "caught\n",
+            "`{name}` was not caught by ConnectionError"
+        );
     }
 }
 

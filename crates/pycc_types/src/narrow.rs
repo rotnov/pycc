@@ -95,7 +95,10 @@ pub(crate) struct NarrowingTarget {
 /// plain `int`) -- this is deliberately re-checked against `env` on every
 /// call rather than cached, since the same syntactic test can be reused (a
 /// nested `if` inside a narrowed region) against a different current type.
-pub(crate) fn narrowing_target(env: &Environment, test: &pycc_hir::HirExpr) -> Option<NarrowingTarget> {
+pub(crate) fn narrowing_target(
+    env: &Environment,
+    test: &pycc_hir::HirExpr,
+) -> Option<NarrowingTarget> {
     let (name, polarity) = optional_none_test(test)?;
     match env.lookup_any(name) {
         Some(Ty::Optional(inner)) => Some(NarrowingTarget {
@@ -273,7 +276,10 @@ pub(crate) fn apply_kill_prescan(env: &mut Environment, body: &[HirStmt]) {
 /// each statement -- the narrowing-aware replacement for the raw `for stmt
 /// in stmts { check_stmt(env, stmt)?; }` loop every sequential body in
 /// `lib.rs` used before this issue.
-pub(crate) fn check_stmt_sequence(env: &mut Environment, stmts: &[HirStmt]) -> Result<(), Diagnostic> {
+pub(crate) fn check_stmt_sequence(
+    env: &mut Environment,
+    stmts: &[HirStmt],
+) -> Result<(), Diagnostic> {
     for stmt in stmts {
         check_stmt(env, stmt)?;
         apply_post_if_narrowing(env, stmt);

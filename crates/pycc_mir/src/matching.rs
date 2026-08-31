@@ -100,7 +100,8 @@ fn lower_match_chain(
     // crate lowers can rely on a narrowing fact this ending state would
     // have supplied -- see `lower_scoped_body`'s doc comment. The ending
     // narrowed state is intentionally discarded here.
-    let (case_body, _end_narrowed) = lower_scoped_body(&case.body, scopes, classes, current_class, None);
+    let (case_body, _end_narrowed) =
+        lower_scoped_body(&case.body, scopes, classes, current_class, None);
     let else_chain = lower_match_chain(subj_var, subj_ty, rest, scopes, classes, current_class);
     let inner_body = if let Some(guard) = &case.guard {
         let guard_cond = lower_expr(guard, scopes, classes, current_class);

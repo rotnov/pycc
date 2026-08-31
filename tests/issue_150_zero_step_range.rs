@@ -101,7 +101,10 @@ fn uncaught_literal_zero_step_range_exits_cleanly_with_value_error() {
         "uncaught_literal.py",
         "for i in range(0, 3, 0):\n    print(i)\n",
     );
-    assert!(!ok, "expected non-zero exit for an uncaught zero-step range");
+    assert!(
+        !ok,
+        "expected non-zero exit for an uncaught zero-step range"
+    );
     assert!(
         err.contains("ValueError: range() arg 3 must not be zero"),
         "stderr should report a clean ValueError, not a panic: {err}"
@@ -122,7 +125,10 @@ fn uncaught_computed_zero_step_range_exits_cleanly_with_value_error() {
         "uncaught_computed.py",
         "n: int = 0\nfor i in range(0, 3, n):\n    print(i)\n",
     );
-    assert!(!ok, "expected non-zero exit for an uncaught zero-step range");
+    assert!(
+        !ok,
+        "expected non-zero exit for an uncaught zero-step range"
+    );
     assert!(
         err.contains("ValueError: range() arg 3 must not be zero"),
         "stderr should report a clean ValueError, not a panic: {err}"
@@ -198,7 +204,10 @@ fn uncaught_zero_step_range_inside_a_function_body_is_observed_at_the_next_check
         "function_body_boundary.py",
         "def f(n: int) -> None:\n    for i in range(0, 3, n):\n        print(i)\n    print(\"after loop\")\n\nf(0)\nprint(\"after call\")\n",
     );
-    assert!(!ok, "expected non-zero exit for an uncaught zero-step range");
+    assert!(
+        !ok,
+        "expected non-zero exit for an uncaught zero-step range"
+    );
     assert_eq!(
         out, b"after loop\n",
         "the statement after the loop, still inside f's own body with no \

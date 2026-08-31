@@ -114,7 +114,10 @@ fn except_star_partial_match_reraises_the_unmatched_remainder() {
         "partial.py",
         "try:\n    raise ValueError(\"v\")\nexcept ValueError as e1:\n    try:\n        raise TypeError(\"t\")\n    except TypeError as e2:\n        try:\n            raise ExceptionGroup(\"multi\", [e1, e2])\n        except* ValueError:\n            print(\"caught value\")\n",
     );
-    assert!(!ok, "expected non-zero exit: unmatched TypeError remainder should re-raise");
+    assert!(
+        !ok,
+        "expected non-zero exit: unmatched TypeError remainder should re-raise"
+    );
     assert_eq!(
         out, b"caught value\n",
         "the matched clause should still run before the remainder re-raises"
@@ -227,7 +230,10 @@ fn except_star_unmatched_member_propagates_uncaught() {
         "unmatched.py",
         "try:\n    raise ValueError(\"v\")\nexcept ValueError as e1:\n    try:\n        raise TypeError(\"t\")\n    except TypeError as e2:\n        raise ExceptionGroup(\"multi\", [e1, e2])\n",
     );
-    assert!(!ok, "expected non-zero exit for an unmatched group remainder");
+    assert!(
+        !ok,
+        "expected non-zero exit for an unmatched group remainder"
+    );
     assert!(
         err.contains("ExceptionGroup"),
         "stderr should mention ExceptionGroup: {err}"
@@ -300,7 +306,10 @@ fn a_try_star_else_that_itself_returns_never_falls_through() {
 fn except_star_bare_clause_is_rejected_at_parse_time() {
     let dir = ScratchDir::new("542_bare").expect("failed to create scratch dir");
     let (ok, _combined) = check_only(&dir, "bare.py", "try:\n    pass\nexcept*:\n    pass\n");
-    assert!(!ok, "a typeless except* should be rejected as a syntax error");
+    assert!(
+        !ok,
+        "a typeless except* should be rejected as a syntax error"
+    );
 }
 
 #[test]
@@ -311,7 +320,10 @@ fn exception_group_construction_rejects_a_non_literal_member_list() {
         "nonlit.py",
         "members = [1, 2]\ntry:\n    raise ExceptionGroup(\"multi\", members)\nexcept* ValueError:\n    pass\n",
     );
-    assert!(!ok, "a non-literal ExceptionGroup member list should be rejected");
+    assert!(
+        !ok,
+        "a non-literal ExceptionGroup member list should be rejected"
+    );
     assert!(
         combined.contains("T0021"),
         "should mention T0021: {combined}"
@@ -446,7 +458,10 @@ fn exception_group_construction_rejects_an_empty_member_list() {
         "empty.py",
         "try:\n    raise ExceptionGroup(\"multi\", [])\nexcept* ValueError:\n    pass\n",
     );
-    assert!(!ok, "an empty ExceptionGroup member list should be rejected");
+    assert!(
+        !ok,
+        "an empty ExceptionGroup member list should be rejected"
+    );
     assert!(
         combined.contains("T0021"),
         "should mention T0021: {combined}"
@@ -560,7 +575,10 @@ fn a_type_conflict_inside_a_try_star_body_is_rejected_by_the_solver() {
         "solver_body.py",
         "def f() -> int:\n    try:\n        return \"wrong\"\n    except* ValueError:\n        return 1\n    else:\n        return 1\n    finally:\n        pass\nf()\n",
     );
-    assert!(!ok, "a body/declared-return-type conflict should be rejected");
+    assert!(
+        !ok,
+        "a body/declared-return-type conflict should be rejected"
+    );
     assert!(
         combined.contains("T0022"),
         "should mention T0022: {combined}"
@@ -602,7 +620,10 @@ fn a_type_conflict_inside_a_try_star_else_is_rejected_by_the_solver() {
         "solver_else.py",
         "def f() -> int:\n    try:\n        return 1\n    except* ValueError:\n        return 1\n    else:\n        return \"wrong\"\n    finally:\n        pass\nf()\n",
     );
-    assert!(!ok, "an else/declared-return-type conflict should be rejected");
+    assert!(
+        !ok,
+        "an else/declared-return-type conflict should be rejected"
+    );
     assert!(
         combined.contains("T0022"),
         "should mention T0022: {combined}"
@@ -855,7 +876,10 @@ fn a_try_star_finally_that_itself_raises_never_falls_through() {
         "finally_raises.py",
         "def f() -> int:\n    try:\n        raise ValueError(\"bad\")\n    except* ValueError:\n        return 3\n    finally:\n        raise RuntimeError(\"boom\")\n\nprint(f())\n",
     );
-    assert!(!ok, "the finally's own raise should propagate and abort the program");
+    assert!(
+        !ok,
+        "the finally's own raise should propagate and abort the program"
+    );
     assert!(out.is_empty(), "no output should be printed: {out:?}");
     assert!(
         err.contains("RuntimeError") && err.contains("boom"),

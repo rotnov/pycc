@@ -788,7 +788,9 @@ pub(crate) fn lower_stmt(
         HirStmt::DictSet { key, value, .. } => {
             contains_named_expr(key) || contains_named_expr(value)
         }
-        HirStmt::ListCompAssign { iter, cond, elt, .. } => {
+        HirStmt::ListCompAssign {
+            iter, cond, elt, ..
+        } => {
             comp_iter_contains_named_expr(iter)
                 || cond.as_deref().is_some_and(contains_named_expr)
                 || contains_named_expr(elt)
@@ -805,7 +807,9 @@ pub(crate) fn lower_stmt(
                 || contains_named_expr(key)
                 || contains_named_expr(value)
         }
-        HirStmt::SetCompAssign { iter, cond, elt, .. } => {
+        HirStmt::SetCompAssign {
+            iter, cond, elt, ..
+        } => {
             comp_iter_contains_named_expr(iter)
                 || cond.as_deref().is_some_and(contains_named_expr)
                 || contains_named_expr(elt)

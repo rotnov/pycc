@@ -208,7 +208,11 @@ pub(crate) fn lower_expr(
                 .iter()
                 .map(|e| {
                     let lowered = lower_expr(e, in_function, class_name)?;
-                    check_boundary_literal(&lowered, pycc_ast::expr_range(e), "list-literal element")?;
+                    check_boundary_literal(
+                        &lowered,
+                        pycc_ast::expr_range(e),
+                        "list-literal element",
+                    )?;
                     Ok(lowered)
                 })
                 .collect::<Result<Vec<_>, _>>()?,
@@ -239,7 +243,11 @@ pub(crate) fn lower_expr(
                 .iter()
                 .map(|e| {
                     let lowered = lower_expr(e, in_function, class_name)?;
-                    check_boundary_literal(&lowered, pycc_ast::expr_range(e), "set-literal element")?;
+                    check_boundary_literal(
+                        &lowered,
+                        pycc_ast::expr_range(e),
+                        "set-literal element",
+                    )?;
                     Ok(lowered)
                 })
                 .collect::<Result<Vec<_>, _>>()?,
@@ -266,9 +274,24 @@ pub(crate) fn lower_expr(
                 };
                 HirExpr::Slice {
                     base: Box::new(lower_expr(&sub.value, in_function, class_name)?),
-                    start: slice.lower.as_deref().map(lower_bound).transpose()?.map(Box::new),
-                    stop: slice.upper.as_deref().map(lower_bound).transpose()?.map(Box::new),
-                    step: slice.step.as_deref().map(lower_bound).transpose()?.map(Box::new),
+                    start: slice
+                        .lower
+                        .as_deref()
+                        .map(lower_bound)
+                        .transpose()?
+                        .map(Box::new),
+                    stop: slice
+                        .upper
+                        .as_deref()
+                        .map(lower_bound)
+                        .transpose()?
+                        .map(Box::new),
+                    step: slice
+                        .step
+                        .as_deref()
+                        .map(lower_bound)
+                        .transpose()?
+                        .map(Box::new),
                 }
             }
             _ => {
@@ -1071,9 +1094,14 @@ pub(crate) fn lower_range_call(
     // ordinary, supported behavior, not a candidate for a boundary
     // diagnostic. See D-207 for why this position was wrongly included in
     // #618's own filed inventory (copied from D-178's pre-D-179 fourteen).
-    let lower_arg = |e: &Expr| -> Result<HirExpr, Diagnostic> { lower_expr(e, in_function, class_name) };
+    let lower_arg =
+        |e: &Expr| -> Result<HirExpr, Diagnostic> { lower_expr(e, in_function, class_name) };
     match &*call.arguments.args {
-        [stop] => Ok((HirExpr::IntLiteral(0), lower_arg(stop)?, HirExpr::IntLiteral(1))),
+        [stop] => Ok((
+            HirExpr::IntLiteral(0),
+            lower_arg(stop)?,
+            HirExpr::IntLiteral(1),
+        )),
         [start, stop] => Ok((lower_arg(start)?, lower_arg(stop)?, HirExpr::IntLiteral(1))),
         [start, stop, step] => Ok((lower_arg(start)?, lower_arg(stop)?, lower_arg(step)?)),
         other => Err(unsupported(
@@ -1235,7 +1263,11 @@ pub(crate) fn lower_list_comp_assign(
     // for a comprehension-internal `yield`/`yield from` in both enclosing
     // scopes.
     let elt_hir = lower_expr(&comp.elt, true, class_name)?;
-    check_boundary_literal(&elt_hir, pycc_ast::expr_range(&comp.elt), "listcomp element")?;
+    check_boundary_literal(
+        &elt_hir,
+        pycc_ast::expr_range(&comp.elt),
+        "listcomp element",
+    )?;
     let elt = rename_name_in_expr(elt_hir, &source_name, &synth_var);
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
     Ok(HirStmt::ListCompAssign {
@@ -1303,7 +1335,11 @@ pub(crate) fn lower_dict_comp_assign(
         &synth_var,
     );
     let value_hir = lower_expr(&comp.value, true, class_name)?;
-    check_boundary_literal(&value_hir, pycc_ast::expr_range(&comp.value), "dictcomp value")?;
+    check_boundary_literal(
+        &value_hir,
+        pycc_ast::expr_range(&comp.value),
+        "dictcomp value",
+    )?;
     let value = rename_name_in_expr(value_hir, &source_name, &synth_var);
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
     Ok(HirStmt::DictCompAssign {
@@ -1731,10 +1767,7 @@ mod tests {
 
     #[test]
     fn boundary_list_index_is_t0051() {
-        assert_t0051(
-            &format!("xs = [1, 2, 3]\ny = xs[{OOR}]\n"),
-            "list index",
-        );
+        assert_t0051(&format!("xs = [1, 2, 3]\ny = xs[{OOR}]\n"), "list index");
     }
 
     #[test]
@@ -1873,8 +1906,7 @@ mod tests {
     // boundary position.
     #[test]
     fn plain_int_multiplication_with_an_out_of_range_literal_still_lowers() {
-        let module =
-            pycc_parser::parse(&format!("x = 2\ny = x * {OOR}\n")).expect("must parse");
+        let module = pycc_parser::parse(&format!("x = 2\ny = x * {OOR}\n")).expect("must parse");
         crate::lower_checked(&module).expect("plain int*int multiplication must not be rejected");
     }
 
@@ -1887,8 +1919,8 @@ mod tests {
     // issue).
     #[test]
     fn str_typed_variable_repeat_count_out_of_range_is_not_yet_caught_here() {
-        let module = pycc_parser::parse(&format!("s = \"ab\"\nt = s * {OOR}\n"))
-            .expect("must parse");
+        let module =
+            pycc_parser::parse(&format!("s = \"ab\"\nt = s * {OOR}\n")).expect("must parse");
         crate::lower_checked(&module)
             .expect("a str-typed variable's repeat count is a documented out-of-scope gap, not yet rejected at HIR-lowering time");
     }

@@ -185,10 +185,7 @@ fn not_nonempty_str_is_false() {
 #[test]
 fn not_a_none_optional_is_true() {
     assert_eq!(
-        build_and_run(
-            "not_none_optional",
-            "x: int | None = None\nprint(not x)\n",
-        ),
+        build_and_run("not_none_optional", "x: int | None = None\nprint(not x)\n",),
         "True\n"
     );
 }
@@ -196,10 +193,7 @@ fn not_a_none_optional_is_true() {
 #[test]
 fn not_a_present_nonzero_optional_is_false() {
     assert_eq!(
-        build_and_run(
-            "not_present_optional",
-            "x: int | None = 5\nprint(not x)\n",
-        ),
+        build_and_run("not_present_optional", "x: int | None = 5\nprint(not x)\n",),
         "False\n"
     );
 }
