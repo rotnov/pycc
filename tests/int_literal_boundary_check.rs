@@ -36,8 +36,8 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 
 #[test]
 fn a_literal_in_a_boundary_position_fails_check_instead_of_building() {
-    let dir = ScratchDir::new("int_boundary_literal_check_fails")
-        .expect("failed to create scratch dir");
+    let dir =
+        ScratchDir::new("int_boundary_literal_check_fails").expect("failed to create scratch dir");
     let source = "\
 xs = [1]
 xs.append(4611686018427387904)

@@ -886,7 +886,11 @@ fn cast_compatibility(env: &Environment, from: &Ty, to: &Ty) -> Result<(), CastM
     let Some(from_def) = env.lookup_class(from_name) else {
         return Err(CastMismatch::Representation);
     };
-    let Some(to_pos) = from_def.mro.iter().position(|m| m.as_str() == to_name.as_str()) else {
+    let Some(to_pos) = from_def
+        .mro
+        .iter()
+        .position(|m| m.as_str() == to_name.as_str())
+    else {
         return Err(CastMismatch::Layout);
     };
     let Some(to_def) = env.lookup_class(to_name) else {
@@ -899,7 +903,10 @@ fn cast_compatibility(env: &Environment, from: &Ty, to: &Ty) -> Result<(), CastM
         .flat_map(|def| def.methods.iter().map(|(name, _)| name.as_str()))
         .filter(|name| *name != "__init__")
         .collect();
-    for def in from_def.mro[..to_pos].iter().filter_map(|name| env.lookup_class(name)) {
+    for def in from_def.mro[..to_pos]
+        .iter()
+        .filter_map(|name| env.lookup_class(name))
+    {
         if let Some((name, _)) = def
             .methods
             .iter()
@@ -3479,8 +3486,7 @@ mod tests {
     // HIR→MIR pipeline at all, and none of them contain a walrus, so this
     // test closes that gap directly.
     #[test]
-    fn a_walrus_nested_inside_binop_compare_unaryop_and_fstring_binds_every_name_via_mir_build()
-     {
+    fn a_walrus_nested_inside_binop_compare_unaryop_and_fstring_binds_every_name_via_mir_build() {
         let hir = HirModule {
             seeded_builtin_exception_classes: false,
             items: vec![

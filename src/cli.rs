@@ -137,7 +137,9 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn parsed_build_path_and_out(command: Command) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    fn parsed_build_path_and_out(
+        command: Command,
+    ) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
         match command {
             Command::Build { path, out, .. } => Some((path, out)),
             _ => None,

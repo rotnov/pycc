@@ -156,7 +156,9 @@ fn an_exception_group_with_a_non_str_message_is_rejected() {
     ));
     assert_eq!(diagnostic.code, "T0021");
     assert!(
-        diagnostic.message.contains("expects a `str` message argument"),
+        diagnostic
+            .message
+            .contains("expects a `str` message argument"),
         "unexpected message: {}",
         diagnostic.message
     );
@@ -255,9 +257,7 @@ fn a_non_exception_group_member_is_rejected() {
     ));
     assert_eq!(diagnostic.code, "T0021");
     assert!(
-        diagnostic
-            .message
-            .contains("must be an exception instance"),
+        diagnostic.message.contains("must be an exception instance"),
         "unexpected message: {}",
         diagnostic.message
     );

@@ -51,8 +51,8 @@ fn build_and_expect_compile_error(label: &str, source: &str, expected_code: &str
 }
 
 fn compile_mir(label: &str, mir: &MirModule) -> Result<(), String> {
-    let dir = ScratchDir::new(&format!("slice1_mir_{label}"))
-        .expect("failed to create scratch dir");
+    let dir =
+        ScratchDir::new(&format!("slice1_mir_{label}")).expect("failed to create scratch dir");
     pycc_codegen::compile_to_object(mir, &dir.join(format!("{label}.o")), None, false)
 }
 
@@ -1169,8 +1169,8 @@ def _run() -> None:
 _run()
 "
         );
-        let dir = ScratchDir::new(&format!("slice1_{label}"))
-            .expect("failed to create scratch dir");
+        let dir =
+            ScratchDir::new(&format!("slice1_{label}")).expect("failed to create scratch dir");
         let src = write_fixture(&dir, &format!("{label}.py"), &source);
         let output = Command::new(pycc_bin())
             .args([

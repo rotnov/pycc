@@ -173,10 +173,7 @@ mod tests {
                 bases: Vec::new(),
                 mro: vec!["Exception".to_string()],
                 attrs: vec![],
-                methods: vec![(
-                    "__init__".to_string(),
-                    "Exception.__init__".to_string(),
-                )],
+                methods: vec![("__init__".to_string(), "Exception.__init__".to_string())],
                 type_param: None,
                 properties: Vec::new(),
                 static_methods: Vec::new(),
@@ -200,7 +197,8 @@ mod tests {
         .expect_err("a direct call on a synthetic class's method must be rejected");
         assert_eq!(err.code, "C0001");
         assert!(
-            err.message.contains("cannot call `__init__` directly on `Exception`"),
+            err.message
+                .contains("cannot call `__init__` directly on `Exception`"),
             "unexpected diagnostic: {}",
             err.message
         );

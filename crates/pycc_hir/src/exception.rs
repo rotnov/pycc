@@ -149,7 +149,9 @@ pub fn is_builtin_exception_class(name: &str) -> bool {
 pub fn builtin_exception_parent(name: &str) -> Option<&'static str> {
     match name {
         "Exception" => None,
-        "BrokenPipeError" | "ConnectionAbortedError" | "ConnectionRefusedError"
+        "BrokenPipeError"
+        | "ConnectionAbortedError"
+        | "ConnectionRefusedError"
         | "ConnectionResetError" => Some("ConnectionError"),
         // Part 3 of #382 (#542, D-202): `BaseExceptionGroup` parents to
         // `Exception` rather than a separate `BaseException`-only root, and
@@ -159,10 +161,8 @@ pub fn builtin_exception_parent(name: &str) -> Option<&'static str> {
         | "ZeroDivisionError" | "RuntimeError" | "BaseExceptionGroup" => Some("Exception"),
         "ExceptionGroup" => Some("BaseExceptionGroup"),
         "BlockingIOError" | "ChildProcessError" | "ConnectionError" | "FileExistsError"
-        | "FileNotFoundError" | "InterruptedError" | "IsADirectoryError"
-        | "NotADirectoryError" | "PermissionError" | "ProcessLookupError" | "TimeoutError" => {
-            Some("OSError")
-        }
+        | "FileNotFoundError" | "InterruptedError" | "IsADirectoryError" | "NotADirectoryError"
+        | "PermissionError" | "ProcessLookupError" | "TimeoutError" => Some("OSError"),
         _ => None,
     }
 }
@@ -564,7 +564,14 @@ mod tests {
 
     #[test]
     fn the_original_flat_seven_still_derive_directly_from_exception() {
-        for name in ["ValueError", "TypeError", "KeyError", "IndexError", "ZeroDivisionError", "RuntimeError"] {
+        for name in [
+            "ValueError",
+            "TypeError",
+            "KeyError",
+            "IndexError",
+            "ZeroDivisionError",
+            "RuntimeError",
+        ] {
             assert_eq!(builtin_exception_parent(name), Some("Exception"));
         }
     }
@@ -665,7 +672,10 @@ mod tests {
     /// `BaseExceptionGroup`.
     #[test]
     fn exception_group_hierarchy_parents_base_exception_group_to_exception() {
-        assert_eq!(builtin_exception_parent("BaseExceptionGroup"), Some("Exception"));
+        assert_eq!(
+            builtin_exception_parent("BaseExceptionGroup"),
+            Some("Exception")
+        );
         assert_eq!(
             builtin_exception_parent("ExceptionGroup"),
             Some("BaseExceptionGroup")
@@ -687,9 +697,17 @@ mod tests {
             "ZeroDivisionError",
             "RuntimeError",
         ] {
-            assert!(is_flat_builtin_exception_class(name), "`{name}` must be flat");
+            assert!(
+                is_flat_builtin_exception_class(name),
+                "`{name}` must be flat"
+            );
         }
-        for name in ["OSError", "FileNotFoundError", "ConnectionResetError", "NotAnException"] {
+        for name in [
+            "OSError",
+            "FileNotFoundError",
+            "ConnectionResetError",
+            "NotAnException",
+        ] {
             assert!(
                 !is_flat_builtin_exception_class(name),
                 "`{name}` must not be flat"
@@ -705,10 +723,7 @@ mod tests {
         // even when the handler actually caught a different named type, a
         // false positive (chatgpt-codex-connector[bot] finding on #740).
         assert_eq!(
-            except_handler_binding_type_name(&[
-                "ValueError".to_string(),
-                "TypeError".to_string(),
-            ]),
+            except_handler_binding_type_name(&["ValueError".to_string(), "TypeError".to_string(),]),
             "Exception"
         );
         assert_eq!(

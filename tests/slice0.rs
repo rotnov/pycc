@@ -1686,7 +1686,10 @@ fn build_sweeps_a_provably_stale_scratch_root_and_spares_everything_else() {
         .env("TEMP", &tmp)
         .status()
         .unwrap();
-    assert!(build_status.success(), "the sweeping build must still succeed");
+    assert!(
+        build_status.success(),
+        "the sweeping build must still succeed"
+    );
 
     assert!(
         !stale.exists(),

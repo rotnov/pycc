@@ -1,13 +1,13 @@
 //! HIR-to-MIR statement lowering (#546): `lower_stmt`, the per-`HirStmt`
 //! dispatch that the crate root's `build`/`lower_item` walk drives.
 
+use super::expr::pre_bind_named_expr_targets;
 use super::matching::lower_match;
 use super::{
     HirClassDef, MirExceptHandler, MirExpr, MirStmt, bind, bind_variable, class_def_of,
     handler_type_tags, lookup, lower_expr, lower_raise, mro_attrs, mro_class_def,
     resolve_comp_source,
 };
-use super::expr::pre_bind_named_expr_targets;
 use pycc_hir::{HirStmt, Ty};
 use std::collections::HashMap;
 
@@ -283,10 +283,7 @@ pub(super) fn lower_stmt(
                     _ => None,
                 }
             });
-            let narrows_body = matches!(
-                narrowing,
-                Some((_, pycc_hir::NoneTestPolarity::IsNot, _))
-            );
+            let narrows_body = matches!(narrowing, Some((_, pycc_hir::NoneTestPolarity::IsNot, _)));
             let narrows_orelse = matches!(narrowing, Some((_, pycc_hir::NoneTestPolarity::Is, _)));
 
             let body_narrow = narrows_body.then(|| {

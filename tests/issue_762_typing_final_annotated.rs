@@ -75,7 +75,10 @@ fn typing_final_and_annotated_import_build_and_run_succeeds() {
         String::from_utf8_lossy(&build.stderr)
     );
     let run = Command::new(&out).output().unwrap();
-    assert!(run.status.success(), "the built binary should run successfully");
+    assert!(
+        run.status.success(),
+        "the built binary should run successfully"
+    );
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
         "100\n42\n",

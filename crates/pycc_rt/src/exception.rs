@@ -226,8 +226,7 @@ pub unsafe extern "C" fn pycc_rt_exception_group_alloc(
     exceptions_len: usize,
 ) -> *mut PyExceptionObj {
     // Safety: forwarded from this function's own safety contract.
-    let (exceptions_ptr, exceptions_len) =
-        unsafe { copy_member_array(exceptions, exceptions_len) };
+    let (exceptions_ptr, exceptions_len) = unsafe { copy_member_array(exceptions, exceptions_len) };
     Box::into_raw(Box::new(PyExceptionObj {
         type_tag,
         name,
@@ -312,8 +311,7 @@ pub unsafe extern "C" fn pycc_rt_exception_group_partition(
     unsafe {
         *matched_out =
             build_group_or_null(matched, group_type_tag, group_name, group_name_len, message);
-        *rest_out =
-            build_group_or_null(rest, group_type_tag, group_name, group_name_len, message);
+        *rest_out = build_group_or_null(rest, group_type_tag, group_name, group_name_len, message);
     }
 }
 
@@ -448,7 +446,10 @@ fn render_single_exception(exc: &PyExceptionObj) -> String {
         out.push_str(type_name);
     } else {
         let msg_bytes = unsafe { (*exc.message).bytes() };
-        out.push_str(&format!("{type_name}: {}", String::from_utf8_lossy(msg_bytes)));
+        out.push_str(&format!(
+            "{type_name}: {}",
+            String::from_utf8_lossy(msg_bytes)
+        ));
     }
     out
 }
@@ -640,7 +641,10 @@ mod tests {
         const INVALID: [u8; 2] = [0xff, 0xfe];
         let obj = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "boom");
         unsafe { pycc_rt_exception_set_frame(obj, INVALID.as_ptr(), INVALID.len()) };
-        assert_eq!(exception_frame_function(unsafe { &*obj }), Some("<unknown>"));
+        assert_eq!(
+            exception_frame_function(unsafe { &*obj }),
+            Some("<unknown>")
+        );
     }
 
     #[test]
@@ -701,7 +705,10 @@ mod tests {
         assert_eq!(rendered, expected);
         // The cause's own block -- printed first -- must appear before the
         // effect's, matching CPython's oldest-first chained rendering.
-        assert!(rendered.find("ValueError: cause").unwrap() < rendered.find("RuntimeError: effect").unwrap());
+        assert!(
+            rendered.find("ValueError: cause").unwrap()
+                < rendered.find("RuntimeError: effect").unwrap()
+        );
     }
 
     #[test]
@@ -722,7 +729,8 @@ mod tests {
         assert!(root_pos < middle_pos);
         assert!(middle_pos < leaf_pos);
         assert_eq!(
-            rendered.matches("The above exception was the direct cause of the following exception:")
+            rendered
+                .matches("The above exception was the direct cause of the following exception:")
                 .count(),
             2
         );
@@ -756,7 +764,8 @@ mod tests {
         );
         assert_eq!(rendered, expected);
         assert_eq!(
-            rendered.matches("The above exception was the direct cause of the following exception:")
+            rendered
+                .matches("The above exception was the direct cause of the following exception:")
                 .count(),
             1
         );
@@ -944,7 +953,10 @@ mod tests {
         let type_err = alloc_named(EXCEPTION_TYPE_TYPE_ERROR, "TypeError", "t");
         let key_err = alloc_named(EXCEPTION_TYPE_KEY_ERROR, "KeyError", "k");
         let group = group_of(&[value_err, type_err, key_err]);
-        let (matched, rest) = partition(group, &[EXCEPTION_TYPE_VALUE_ERROR, EXCEPTION_TYPE_KEY_ERROR]);
+        let (matched, rest) = partition(
+            group,
+            &[EXCEPTION_TYPE_VALUE_ERROR, EXCEPTION_TYPE_KEY_ERROR],
+        );
         unsafe {
             assert!(!matched.is_null());
             assert_eq!((*matched).type_tag, GROUP_TAG);
@@ -955,7 +967,10 @@ mod tests {
             );
             assert!(!rest.is_null());
             assert_eq!((*rest).exceptions_len, 1);
-            assert_eq!(std::slice::from_raw_parts((*rest).exceptions, 1), [type_err]);
+            assert_eq!(
+                std::slice::from_raw_parts((*rest).exceptions, 1),
+                [type_err]
+            );
         }
     }
 
@@ -1023,7 +1038,10 @@ mod tests {
         unsafe {
             assert!(!matched.is_null());
             assert_eq!((*matched).exceptions_len, 1);
-            assert_eq!(std::slice::from_raw_parts((*matched).exceptions, 1), [plain]);
+            assert_eq!(
+                std::slice::from_raw_parts((*matched).exceptions, 1),
+                [plain]
+            );
         }
         assert!(rest.is_null());
     }

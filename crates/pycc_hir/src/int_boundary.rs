@@ -76,7 +76,11 @@ pub(crate) fn fits_tagged_smallint(n: i64) -> bool {
 /// position for the diagnostic message (e.g. `"list index"`, `` "`.append()`
 /// value" ``) -- always a `&'static str` literal supplied at the call site,
 /// never derived from user input.
-fn int_literal_boundary_diagnostic(n: i64, span: std::ops::Range<u32>, position: &str) -> Diagnostic {
+fn int_literal_boundary_diagnostic(
+    n: i64,
+    span: std::ops::Range<u32>,
+    position: &str,
+) -> Diagnostic {
     Diagnostic::error(
         "T0051",
         format!(
@@ -146,7 +150,9 @@ mod tests {
 
     #[test]
     fn check_boundary_literal_accepts_a_non_literal_expression() {
-        assert!(check_boundary_literal(&HirExpr::Name("x".to_string()), 0..1, "test position").is_ok());
+        assert!(
+            check_boundary_literal(&HirExpr::Name("x".to_string()), 0..1, "test position").is_ok()
+        );
     }
 
     #[test]

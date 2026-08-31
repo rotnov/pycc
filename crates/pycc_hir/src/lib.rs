@@ -16,8 +16,7 @@ pub use exception::{
     BUILTIN_EXCEPTION_CLASSES, EXCEPTION_GROUP_TYPE_TAG, EXCEPTION_INIT_MANGLED_NAME,
     FIRST_USER_EXCEPTION_TYPE_TAG, HirExceptHandler, MAX_USER_EXCEPTION_CLASSES,
     builtin_exception_class_defs, builtin_exception_init_item, builtin_exception_parent,
-    except_handler_binding_type_name, is_builtin_exception_class,
-    is_flat_builtin_exception_class,
+    except_handler_binding_type_name, is_builtin_exception_class, is_flat_builtin_exception_class,
 };
 pub(crate) use func::{
     annotation_to_ty, lower_arg_list, lower_function, lower_return_annotation, type_param_name,
@@ -957,7 +956,10 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
             HirStmt::ExprStmt(expr) => {
                 collect_named_expr_targets_in_expr(expr, killed);
             }
-            HirStmt::DictSet { .. } | HirStmt::AttrSet { .. } | HirStmt::Return(_) | HirStmt::Raise { .. } => {}
+            HirStmt::DictSet { .. }
+            | HirStmt::AttrSet { .. }
+            | HirStmt::Return(_)
+            | HirStmt::Raise { .. } => {}
         }
     }
 }
@@ -972,7 +974,10 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
 /// `Match` arm above and its own doc comment's inclusion criterion).
 fn collect_pattern_capture_names_as_killed(pattern: &HirPattern, killed: &mut HashSet<String>) {
     match pattern {
-        HirPattern::Wildcard | HirPattern::Literal(_) | HirPattern::Singleton(_) | HirPattern::NoneSingleton => {}
+        HirPattern::Wildcard
+        | HirPattern::Literal(_)
+        | HirPattern::Singleton(_)
+        | HirPattern::NoneSingleton => {}
         HirPattern::Capture(name) => {
             killed.insert(name.clone());
         }
@@ -998,7 +1003,9 @@ fn collect_pattern_capture_names_as_killed(pattern: &HirPattern, killed: &mut Ha
             }
         }
         HirPattern::Class {
-            positional, keyword, ..
+            positional,
+            keyword,
+            ..
         } => {
             for sub in positional {
                 collect_pattern_capture_names_as_killed(sub, killed);

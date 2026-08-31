@@ -1039,12 +1039,14 @@ fn an_attribute_named_type_checking_on_another_receiver_is_not_folded() {
     // receiver -- an attribute access that happens to be named
     // `TYPE_CHECKING` on some other object must not be folded, and must
     // lower as an ordinary `if` whose test is a plain attribute read.
-    let module = pycc_parser_test_helper::parse(
-        "if some_other_module.TYPE_CHECKING:\n    print(1)\n",
-    );
+    let module =
+        pycc_parser_test_helper::parse("if some_other_module.TYPE_CHECKING:\n    print(1)\n");
     let hir = lower_checked(&module).unwrap();
     let HirItem::TopLevelStmt(HirStmt::If { test, body, orelse }) = &hir.items[0] else {
-        panic!("expected the `if` statement to lower to `HirStmt::If`, got {:?}", hir.items[0]);
+        panic!(
+            "expected the `if` statement to lower to `HirStmt::If`, got {:?}",
+            hir.items[0]
+        );
     };
     assert_eq!(
         *test,
@@ -2381,7 +2383,8 @@ fn an_annotation_subscript_on_an_inherited_hook_resolves_through_the_mro() {
 }
 
 #[test]
-fn an_annotation_subscript_prefers_a_base_s_staticmethod_hook_over_a_derived_classmethod_override() {
+fn an_annotation_subscript_prefers_a_base_s_staticmethod_hook_over_a_derived_classmethod_override()
+{
     // Issue #693 deep-review, Finding 1: `class_getitem_return_ty` must walk
     // the MRO in the exact same two-pass order as `pycc_types`'
     // `resolve_static_or_class_method_call` (every MRO entry's
@@ -5202,10 +5205,7 @@ fn optional_none_test_recognizes_name_is_none() {
         left: Box::new(HirExpr::Name("x".to_string())),
         right: Box::new(HirExpr::NoneLiteral),
     };
-    assert_eq!(
-        optional_none_test(&test),
-        Some(("x", NoneTestPolarity::Is))
-    );
+    assert_eq!(optional_none_test(&test), Some(("x", NoneTestPolarity::Is)));
 }
 
 #[test]
@@ -5215,10 +5215,7 @@ fn optional_none_test_recognizes_none_is_name_reversed_operand_order() {
         left: Box::new(HirExpr::NoneLiteral),
         right: Box::new(HirExpr::Name("x".to_string())),
     };
-    assert_eq!(
-        optional_none_test(&test),
-        Some(("x", NoneTestPolarity::Is))
-    );
+    assert_eq!(optional_none_test(&test), Some(("x", NoneTestPolarity::Is)));
 }
 
 #[test]
@@ -5398,10 +5395,7 @@ fn killed_names_includes_the_for_range_loop_variable_and_recurses_into_its_body(
         }],
     }];
     let killed = killed_names(&body);
-    assert_eq!(
-        killed,
-        HashSet::from(["i".to_string(), "y".to_string()])
-    );
+    assert_eq!(killed, HashSet::from(["i".to_string(), "y".to_string()]));
 }
 
 #[test]
@@ -5415,10 +5409,7 @@ fn killed_names_includes_the_for_list_loop_variable_and_recurses_into_its_body()
         }],
     }];
     let killed = killed_names(&body);
-    assert_eq!(
-        killed,
-        HashSet::from(["elt".to_string(), "y".to_string()])
-    );
+    assert_eq!(killed, HashSet::from(["elt".to_string(), "y".to_string()]));
 }
 
 #[test]
@@ -5552,7 +5543,10 @@ fn killed_names_includes_capture_names_nested_inside_a_sequence_pattern() {
     let body = [HirStmt::Match {
         subject: HirExpr::Name("y".to_string()),
         cases: vec![HirMatchCase {
-            pattern: HirPattern::SequenceStar(vec![HirPattern::Capture("a".to_string())], Some("rest".to_string())),
+            pattern: HirPattern::SequenceStar(
+                vec![HirPattern::Capture("a".to_string())],
+                Some("rest".to_string()),
+            ),
             guard: None,
             body: vec![],
         }],
@@ -5947,10 +5941,7 @@ fn killed_names_finds_a_walrus_nested_inside_every_expression_kind() {
         ],
     };
 
-    let body = [HirStmt::While {
-        test,
-        body: vec![],
-    }];
+    let body = [HirStmt::While { test, body: vec![] }];
     let killed = killed_names(&body);
     let expected: HashSet<String> = [
         "call_arg",

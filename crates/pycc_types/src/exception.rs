@@ -501,8 +501,9 @@ fn check_raise_operand(
         // registered -- matching `resolve_instantiation`'s own
         // "internal error" panic precondition, never actually reachable
         // here.
-        let (param_tys, _return_ty) =
-            env.lookup_function(EXCEPTION_INIT_MANGLED_NAME).unwrap_or_else(|| {
+        let (param_tys, _return_ty) = env
+            .lookup_function(EXCEPTION_INIT_MANGLED_NAME)
+            .unwrap_or_else(|| {
                 panic!(
                     "pycc_types: internal error: `{EXCEPTION_INIT_MANGLED_NAME}` was not \
                      registered as an ordinary function -- `pycc_hir::lower_checked` seeds \

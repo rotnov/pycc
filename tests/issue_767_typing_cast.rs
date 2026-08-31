@@ -224,7 +224,9 @@ fn an_up_cast_across_an_overridden_method_is_rejected_before_build() {
     );
     let stdout = String::from_utf8_lossy(&check.stdout);
     assert!(
-        stdout.contains("C0001") && stdout.contains("`describe`") && stdout.contains("statically resolve"),
+        stdout.contains("C0001")
+            && stdout.contains("`describe`")
+            && stdout.contains("statically resolve"),
         "expected a C0001 method-dispatch diagnostic naming `describe`, got: {stdout}"
     );
 }

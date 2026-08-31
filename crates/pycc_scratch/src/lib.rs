@@ -21,7 +21,7 @@
 
 mod sweep;
 
-pub use sweep::{sweep_stale_roots, SweepReport};
+pub use sweep::{SweepReport, sweep_stale_roots};
 
 use std::fs::File;
 use std::io;

@@ -991,8 +991,7 @@ pub(crate) fn class_annotation_infos(
                 // `Ty::Instance(ClassName)` fallback that
                 // `annotation_to_ty`'s `Subscript` arm already provides for
                 // a `None` `class_getitem_return`.
-                subscriptable: def.type_param.is_some()
-                    || defines_class_getitem(defs, &def.mro),
+                subscriptable: def.type_param.is_some() || defines_class_getitem(defs, &def.mro),
                 class_getitem_return,
             }
         })
@@ -1946,10 +1945,7 @@ pub(crate) fn lower_class(
                                 existing_ty.name(),
                                 ty.name(),
                             ),
-                            Span::new(
-                                u32::from(def.range.start()),
-                                u32::from(def.range.end()),
-                            ),
+                            Span::new(u32::from(def.range.start()), u32::from(def.range.end())),
                         ));
                     }
                     Some(_) => {}

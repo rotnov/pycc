@@ -155,10 +155,7 @@ mod tests {
         let (body, handlers, orelse, finalbody) = expect_top_level_try(&items[0]);
         assert_eq!(body.len(), 1);
         assert_eq!(handlers.len(), 1);
-        assert_eq!(
-            handlers[0].exc_type,
-            Some(vec!["ValueError".to_string()])
-        );
+        assert_eq!(handlers[0].exc_type, Some(vec!["ValueError".to_string()]));
         assert!(handlers[0].name.is_none());
         assert_eq!(handlers[0].body.len(), 1);
         assert!(orelse.is_empty());
@@ -171,10 +168,7 @@ mod tests {
             .expect("test fixture must parse");
         let hir = crate::lower_checked(&module).expect("lowering must succeed");
         let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
-        assert_eq!(
-            handlers[0].exc_type,
-            Some(vec!["ValueError".to_string()])
-        );
+        assert_eq!(handlers[0].exc_type, Some(vec!["ValueError".to_string()]));
         assert_eq!(handlers[0].name.as_deref(), Some("e"));
     }
 
@@ -197,14 +191,8 @@ mod tests {
         let hir = crate::lower_checked(&module).expect("lowering must succeed");
         let (_, handlers, _, _) = expect_top_level_try(&hir.items[0]);
         assert_eq!(handlers.len(), 2);
-        assert_eq!(
-            handlers[0].exc_type,
-            Some(vec!["ValueError".to_string()])
-        );
-        assert_eq!(
-            handlers[1].exc_type,
-            Some(vec!["KeyError".to_string()])
-        );
+        assert_eq!(handlers[0].exc_type, Some(vec!["ValueError".to_string()]));
+        assert_eq!(handlers[1].exc_type, Some(vec!["KeyError".to_string()]));
     }
 
     #[test]
@@ -307,9 +295,8 @@ mod tests {
 
     #[test]
     fn lower_try_star_with_as_binding_lowers_successfully() {
-        let module =
-            pycc_parser::parse("try:\n    x = 1\nexcept* ValueError as e:\n    y = 2\n")
-                .expect("test fixture must parse");
+        let module = pycc_parser::parse("try:\n    x = 1\nexcept* ValueError as e:\n    y = 2\n")
+            .expect("test fixture must parse");
         let hir = crate::lower_checked(&module).expect("except* as e must lower");
         let (_, handlers, _, _) = expect_top_level_try_star(&hir.items[0]);
         assert_eq!(handlers[0].name, Some("e".to_string()));
