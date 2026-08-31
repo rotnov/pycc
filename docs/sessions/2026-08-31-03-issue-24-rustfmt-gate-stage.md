@@ -54,12 +54,26 @@ per D-192.
   without the job existing is rejected; a malformed job body is rejected;
   `continue-on-error` on the job is rejected. Full suite: 250 runs / 1260
   assertions / 0 failures (was 244/1245 before this change).
-- Noted, and worked around, a pre-existing YAML quirk shared with
-  `D171_GOVERNANCE_POLICY_STEPS`: a whitespace-preceded `#` inside an
+- Noted (post-advisor-review correction) a pre-existing YAML quirk shared
+  with `D171_GOVERNANCE_POLICY_STEPS`: a whitespace-preceded `#` inside an
   unquoted plain scalar starts a YAML comment, so a step name like
-  `"...issue #24)"` parses (and displays in the Actions UI) truncated at
-  `"...issue"` — `D215_RUSTFMT_JOB`'s step name matches that truncated form
-  intentionally, documented inline at its definition.
+  `Check formatting (rustfmt gate, issue #24)` would parse truncated at
+  `"...issue"` if left unquoted. An earlier draft of this change matched
+  that truncated form intentionally (mirroring the existing wart in
+  `D171_GOVERNANCE_POLICY_STEPS`); a second look concluded that freezing a
+  truncated name into a constant this staging PR intends to be applied
+  byte-for-byte by a later activate PR would make the truncation
+  effectively permanent and costly to fix later. The fixture and
+  `D215_RUSTFMT_JOB` now both carry the full, untruncated step name, with
+  the fixture's `name:` value quoted (`"Check formatting (rustfmt gate,
+  issue #24)"`) so YAML parses it whole; nothing looks the step up by
+  name, so this was a local, no-behavior-change fix. Re-verified: full
+  `scripts/test_check_roadmap_evidence.rb` suite (250/250) and
+  `scripts/check_roadmap_evidence.rb` against the live `ci.yml` both still
+  pass, and copying the fixture over `.github/workflows/ci.yml` locally and
+  running `scripts/check_ci_permissions.rb` against it also passes (10/10
+  files), confirming the fixture satisfies both required workflow-policy
+  checkers, not just the one already exercised by the new tests.
 - `docs/decisions/README.md` regenerated
   (`python3 scripts/generate_decisions_index.py … --check` passes).
 

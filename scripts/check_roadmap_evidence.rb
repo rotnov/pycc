@@ -1457,13 +1457,7 @@ D215_RUSTFMT_JOB = {
       "run" => "rustup show"
     },
     {
-      # YAML treats a whitespace-preceded `#` as a comment start even inside
-      # an unquoted plain scalar, so the parsed step name truncates at
-      # "issue" the same way `D171_GOVERNANCE_POLICY_STEPS`'s "Check README
-      # coverage badge binding (issue" key already does for the identical
-      # reason -- the live step name in the Actions UI is truncated
-      # identically, this is not specific to this checker.
-      "name" => "Check formatting (rustfmt gate, issue",
+      "name" => "Check formatting (rustfmt gate, issue #24)",
       "run" => <<~SHELL.strip
         rustup component add rustfmt
         cargo fmt --all -- --check
