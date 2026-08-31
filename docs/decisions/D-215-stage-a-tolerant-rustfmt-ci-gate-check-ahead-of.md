@@ -95,3 +95,23 @@ status: accepted
   request, or it becomes permanent dead code the moment `D171_OPTIONAL_ROUTING` gains the
   `rustfmt` entry. Until activation, issue #24 stays open with the gate itself
   unenforced; only its design, fixture, and staged checker support are landed here.
+- Update (activation, Part 3 of #24): the activate pull request folded `"rustfmt"` into
+  `D171_OPTIONAL_ROUTING` and deleted `validate_optional_rustfmt_gate` and its
+  `D215_RUSTFMT_CI_GATE_NEEDS`/`D215_RUSTFMT_CI_GATE_FAILURE_CONDITION` constants exactly
+  as planned above, but it did **not** delete the frozen job-shape assertion this decision
+  introduced as `D215_RUSTFMT_JOB`. That assertion was renamed to `D171_RUSTFMT_JOB` and
+  kept as an unconditional check inside `validate_d171_ci_routing`, immediately after the
+  `D171_OPTIONAL_ROUTING.each` loop. Reasoning: that generic loop only compares a job's
+  `needs`/`if`, never its `steps`; every other content-bearing `D171_OPTIONAL_ROUTING`
+  member already has a dedicated content validator elsewhere in the same function or its
+  delegated "unrouted" checks (`D171_NATIVE_REQUIRED_RUN_STEPS`,
+  `D171_CROSS_REQUIRED_RUN_STEPS`, `D171_PAGES_GATE_RUNS`, `coverage_gate_present?`,
+  `validate_source_aware_perf_gate_lifecycle`). Deleting the shape check along with the
+  tolerance branch, as a literal reading of "delete `validate_optional_rustfmt_gate` and
+  its constants as dead code" could suggest, would have left `rustfmt`'s own steps
+  entirely unchecked -- a malformed `cargo fmt --all` (missing `--check`) or an added
+  `continue-on-error` would pass structural validation undetected. Only the *tolerance*
+  (the `jobs.key?(...)` presence branch and the separately-derived
+  `D215_RUSTFMT_CI_GATE_NEEDS`/`_FAILURE_CONDITION`) was dead code after the fold; the
+  shape assertion became unconditionally reachable instead, so it was kept, not dropped.
+  Issue #24 is now closed by that same pull request.

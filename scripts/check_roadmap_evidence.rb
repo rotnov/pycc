@@ -251,7 +251,7 @@ PY3147_ORACLE_CI_WORKFLOW_SHA256 =
 # heavy jobs, and the fail-closed ci-gate truth table while retaining every
 # existing hard-gate body.
 D171_CHANGE_AWARE_CI_WORKFLOW_SHA256 =
-  "785e6415aea979ac67563589fb8295f2d7a9ce991f11d269d2054422a527e33f"
+  "7c136cc8eec7db6bc904e12b5f9ddff628ef5722da41cbe33c7182e39f2f81db"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
@@ -1248,7 +1248,8 @@ D171_OPTIONAL_ROUTING = {
   "frontend-perf-gate" =>
     ["compiler", ["classify-changes", "frontend-perf-measure"]],
   "pages-performance" => ["pages", "classify-changes"],
-  "pages-accessibility" => ["pages", "classify-changes"]
+  "pages-accessibility" => ["pages", "classify-changes"],
+  "rustfmt" => ["compiler", "classify-changes"]
 }.freeze
 D171_JOB_NAMES = [
   "classify-changes",
@@ -1390,6 +1391,35 @@ D171_PAGES_GATE_RUNS = {
     SHELL
   ]
 }.freeze
+# Issue #24 (D-215/activation): the rustfmt gate job's frozen shape. Unlike
+# the other `D171_OPTIONAL_ROUTING` members, the generic `needs`/`if` loop
+# above does not check a job's own steps, so this constant and its assertion
+# in `validate_d171_ci_routing` are the only thing preventing a malformed
+# `cargo fmt` invocation (a missing `--check`, a stray `continue-on-error`)
+# from silently passing.
+D171_RUSTFMT_JOB = {
+  "needs" => "classify-changes",
+  "if" => "needs.classify-changes.outputs.compiler == 'true'",
+  "runs-on" => "ubuntu-latest",
+  "permissions" => { "contents" => "read" },
+  "steps" => [
+    {
+      "uses" => PINNED_CHECKOUT_ACTION,
+      "with" => { "persist-credentials" => "false" }
+    },
+    {
+      "name" => "Show pinned toolchain",
+      "run" => "rustup show"
+    },
+    {
+      "name" => "Check formatting (rustfmt gate, issue #24)",
+      "run" => <<~SHELL.strip
+        rustup component add rustfmt
+        cargo fmt --all -- --check
+      SHELL
+    }
+  ]
+}.freeze
 D171_TIER1_MATRIX = [
   { "os" => "ubuntu-latest", "target" => "x86_64-unknown-linux-gnu" },
   { "os" => "ubuntu-24.04-arm", "target" => "aarch64-unknown-linux-gnu" },
@@ -1426,56 +1456,6 @@ D171_CI_GATE_RUN = <<~'SHELL'.strip
   echo '${{ toJSON(needs) }}'
   exit 1
 SHELL
-
-# Issue #24 (D-215, staged, not yet activated): the rustfmt CI gate.
-#
-# `rustfmt` is deliberately NOT a member of `D171_OPTIONAL_ROUTING` yet --
-# adding it there would immediately require `ci-gate`'s `needs`/failure
-# condition (computed from that map, see `D171_CI_GATE_NEEDS`/
-# `D171_CI_GATE_FAILURE_CONDITION` above) to depend on a `rustfmt` job that
-# does not exist in the live `ci.yml`, breaking every push to `main` until a
-# later "activate" pull request lands the job for real (the same
-# `pull_request_target`-base-ref constraint D-080/D-090 record). Until then,
-# `validate_optional_rustfmt_gate` accepts a D-171-routed workflow that omits
-# the job entirely (today's `main`) and accepts one that adds it in exactly
-# this frozen shape; anything else is rejected. See D-215 for the full
-# reasoning and the activate pull request's obligations.
-D215_RUSTFMT_JOB_NAME = "rustfmt"
-D215_RUSTFMT_CLASSIFIER_OUTPUT = "compiler"
-D215_RUSTFMT_JOB = {
-  "needs" => "classify-changes",
-  "if" => "needs.classify-changes.outputs.compiler == 'true'",
-  "runs-on" => "ubuntu-latest",
-  "permissions" => { "contents" => "read" },
-  "steps" => [
-    {
-      "uses" => PINNED_CHECKOUT_ACTION,
-      "with" => { "persist-credentials" => "false" }
-    },
-    {
-      "name" => "Show pinned toolchain",
-      "run" => "rustup show"
-    },
-    {
-      "name" => "Check formatting (rustfmt gate, issue #24)",
-      "run" => <<~SHELL.strip
-        rustup component add rustfmt
-        cargo fmt --all -- --check
-      SHELL
-    }
-  ]
-}.freeze
-D215_RUSTFMT_CI_GATE_NEEDS =
-  (D171_CI_GATE_NEEDS + [D215_RUSTFMT_JOB_NAME]).freeze
-D215_RUSTFMT_CI_GATE_FAILURE_CONDITION = (
-  [D171_CI_GATE_FAILURE_CONDITION] +
-  [
-    "(needs.classify-changes.outputs.#{D215_RUSTFMT_CLASSIFIER_OUTPUT} == 'true' && " \
-      "needs.#{D215_RUSTFMT_JOB_NAME}.result != 'success')",
-    "(needs.classify-changes.outputs.#{D215_RUSTFMT_CLASSIFIER_OUTPUT} == 'false' && " \
-      "needs.#{D215_RUSTFMT_JOB_NAME}.result != 'skipped')"
-  ]
-).join(" || ").freeze
 
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
@@ -1954,6 +1934,18 @@ def validate_d171_ci_routing(workflow_text, source)
     )
   end
 
+  # Issue #24 (D-215/activation): the generic loop above only checks
+  # `needs`/`if`, so the rustfmt job's own steps get a dedicated frozen-shape
+  # assertion here, matching the pattern every other content-bearing
+  # `D171_OPTIONAL_ROUTING` member already has (native/cross-compile run
+  # steps, pages gate runs, coverage/perf lifecycle delegation below).
+  rustfmt_job = d171_mapping(jobs["rustfmt"], "#{source} rustfmt")
+  d171_require_equal(
+    rustfmt_job,
+    D171_RUSTFMT_JOB,
+    "#{source} rustfmt job shape (issue #24 rustfmt gate)"
+  )
+
   d171_require_equal(
     jobs.dig("native-build-test", "strategy"),
     D171_TIER1_STRATEGY,
@@ -2113,20 +2105,7 @@ def validate_d171_ci_routing(workflow_text, source)
     %w[if needs permissions runs-on steps].sort,
     "#{source} ci-gate keys"
   )
-  # Issue #24 (D-215, staged): a workflow that has already activated the
-  # rustfmt gate carries an extra `rustfmt` entry in `needs`/the failure
-  # condition, computed by `D215_RUSTFMT_CI_GATE_NEEDS`/
-  # `D215_RUSTFMT_CI_GATE_FAILURE_CONDITION` from the same D171_CI_GATE_*
-  # constants below rather than duplicated by hand. Every workflow without a
-  # `rustfmt` job (including today's live `ci.yml`) is still held to the
-  # exact unmodified `D171_CI_GATE_NEEDS`/`D171_CI_GATE_FAILURE_CONDITION`.
-  rustfmt_activated = jobs.key?(D215_RUSTFMT_JOB_NAME)
-  expected_ci_gate_needs =
-    rustfmt_activated ? D215_RUSTFMT_CI_GATE_NEEDS : D171_CI_GATE_NEEDS
-  expected_ci_gate_failure_condition =
-    rustfmt_activated ? D215_RUSTFMT_CI_GATE_FAILURE_CONDITION : D171_CI_GATE_FAILURE_CONDITION
-
-  d171_require_equal(ci_gate["needs"], expected_ci_gate_needs, "#{source} ci-gate needs")
+  d171_require_equal(ci_gate["needs"], D171_CI_GATE_NEEDS, "#{source} ci-gate needs")
   d171_require_equal(ci_gate["if"], "always()", "#{source} ci-gate condition")
   d171_require_equal(ci_gate["runs-on"], "ubuntu-latest", "#{source} ci-gate runner")
   d171_require_equal(ci_gate["permissions"], {}, "#{source} ci-gate permissions")
@@ -2145,12 +2124,10 @@ def validate_d171_ci_routing(workflow_text, source)
   )
   d171_require_equal(
     d171_normalize_expression(gate_step["if"]),
-    d171_normalize_expression(expected_ci_gate_failure_condition),
+    d171_normalize_expression(D171_CI_GATE_FAILURE_CONDITION),
     "#{source} ci-gate truth table"
   )
   d171_require_equal(gate_step["run"], D171_CI_GATE_RUN, "#{source} ci-gate failure")
-
-  validate_optional_rustfmt_gate(jobs, source)
 
   # Strip only the D-171 scheduling envelope, then delegate the unchanged
   # coverage, performance provenance, aggregate predecessor, and Pages
@@ -2183,23 +2160,6 @@ def validate_d171_ci_routing(workflow_text, source)
   end
   validate_source_aware_perf_gate_lifecycle(unrouted_text, source)
   validate_pages_performance_lifecycle(unrouted_text, source)
-  true
-end
-
-# Issue #24 (D-215, staged): see the constants defined above for context.
-# `ci-gate`'s own `needs`/failure-condition shape is already checked against
-# `D215_RUSTFMT_CI_GATE_NEEDS`/`D215_RUSTFMT_CI_GATE_FAILURE_CONDITION` (when
-# `rustfmt` is present) immediately before this call; this function only
-# verifies the `rustfmt` job itself matches the one frozen shape.
-def validate_optional_rustfmt_gate(jobs, source)
-  return true unless jobs.key?(D215_RUSTFMT_JOB_NAME)
-
-  job = d171_mapping(jobs[D215_RUSTFMT_JOB_NAME], "#{source} #{D215_RUSTFMT_JOB_NAME}")
-  d171_require_equal(
-    job,
-    D215_RUSTFMT_JOB,
-    "#{source} #{D215_RUSTFMT_JOB_NAME} job shape (issue #24 rustfmt gate)"
-  )
   true
 end
 
