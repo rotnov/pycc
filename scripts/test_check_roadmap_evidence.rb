@@ -29,6 +29,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     REPOSITORY_ROOT / ".github/workflows/ci.yml"
   D171_WORKFLOW_FIXTURE =
     REPOSITORY_ROOT / "tests/fixtures/policy-successors/ci-d171.yml"
+  D215_RUSTFMT_GATE_WORKFLOW_FIXTURE =
+    REPOSITORY_ROOT / "tests/fixtures/d215-rustfmt-gate-ci.yml"
   RETIRED_D51_PAIRED_WORKFLOW =
     REPOSITORY_ROOT / "tests/fixtures/d51-paired-ci.yml"
   D56_SOURCE_AWARE_WORKFLOW_FIXTURE =
@@ -1221,6 +1223,82 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert validate_d171_ci_routing(
       live.read,
       live.to_s
+    )
+  end
+
+  # Issue #24 (D-215, staged): the tolerant rustfmt-gate check must accept
+  # both shapes a D-171-routed workflow may take before the gate is
+  # activated -- absent (covered above by the live `ci.yml`, which has no
+  # `rustfmt` job) and present in exactly the frozen shape (this fixture,
+  # the intended final `ci.yml` bytes a later activate pull request applies
+  # verbatim).
+  def test_d215_rustfmt_gate_fixture_is_accepted_by_d171_routing
+    assert validate_d171_ci_routing(
+      D215_RUSTFMT_GATE_WORKFLOW_FIXTURE.read,
+      D215_RUSTFMT_GATE_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  def d215_rustfmt_activated_workflow
+    workflow = d171_workflow
+    jobs = workflow.fetch("jobs")
+    jobs["rustfmt"] = Marshal.load(Marshal.dump(D215_RUSTFMT_JOB))
+    ci_gate = jobs.fetch("ci-gate")
+    ci_gate["needs"] = Marshal.load(Marshal.dump(D215_RUSTFMT_CI_GATE_NEEDS))
+    ci_gate.fetch("steps").first["if"] =
+      D215_RUSTFMT_CI_GATE_FAILURE_CONDITION
+    yield workflow if block_given?
+    workflow
+  end
+
+  def test_d215_rustfmt_gate_activated_is_accepted_by_d171_routing
+    assert_d171_routing_accepted(d215_rustfmt_activated_workflow, "d215-rustfmt-activated")
+  end
+
+  def test_d215_rustfmt_gate_rejects_a_job_missing_from_ci_gate_needs
+    workflow = d215_rustfmt_activated_workflow do |wf|
+      wf.fetch("jobs").fetch("ci-gate")["needs"] =
+        Marshal.load(Marshal.dump(D171_CI_GATE_NEEDS))
+    end
+    assert_d171_routing_rejected(
+      workflow,
+      "d215-rustfmt-missing-from-needs",
+      expected_context: "ci-gate needs"
+    )
+  end
+
+  def test_d215_rustfmt_gate_rejects_a_dangling_ci_gate_reference
+    workflow = d171_workflow
+    ci_gate = workflow.fetch("jobs").fetch("ci-gate")
+    ci_gate["needs"] = Marshal.load(Marshal.dump(D215_RUSTFMT_CI_GATE_NEEDS))
+    ci_gate.fetch("steps").first["if"] = D215_RUSTFMT_CI_GATE_FAILURE_CONDITION
+    assert_d171_routing_rejected(
+      workflow,
+      "d215-rustfmt-dangling-needs-reference",
+      expected_context: "ci-gate needs"
+    )
+  end
+
+  def test_d215_rustfmt_gate_rejects_a_malformed_job_shape
+    workflow = d215_rustfmt_activated_workflow do |wf|
+      wf.fetch("jobs").fetch("rustfmt").fetch("steps").last["run"] =
+        "cargo fmt --all"
+    end
+    assert_d171_routing_rejected(
+      workflow,
+      "d215-rustfmt-malformed-job",
+      expected_context: "rustfmt job shape"
+    )
+  end
+
+  def test_d215_rustfmt_gate_rejects_continue_on_error
+    workflow = d215_rustfmt_activated_workflow do |wf|
+      wf.fetch("jobs").fetch("rustfmt").fetch("steps").last["continue-on-error"] = true
+    end
+    assert_d171_routing_rejected(
+      workflow,
+      "d215-rustfmt-continue-on-error",
+      expected_context: "rustfmt job shape"
     )
   end
 
