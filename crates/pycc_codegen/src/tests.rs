@@ -459,8 +459,8 @@ fn release_mode_actually_runs_llvm_optimization_passes() {
 fn cross_compiles_object_code_for_a_different_target_triple() {
     // This host is aarch64-apple-darwin; request the other macOS Tier-1
     // architecture. LLVM's codegen backend is inherently multi-target,
-    // so this only needs Target::initialize_all (see compile_to_object)
-    // plus the requested triple -- verified by checking the emitted
+    // so this only needs Target::initialize_all (see the target_machine
+    // module) plus the requested triple -- verified by checking the emitted
     // object file's actual architecture, not just that codegen didn't
     // error.
     let mir = MirModule {
@@ -507,6 +507,57 @@ fn an_unknown_target_triple_is_a_clean_error() {
     let err = compile_to_object(&mir, &obj_path, Some("not-a-real-target-triple"), false)
         .expect_err("an unrecognized target triple should be rejected");
     assert!(!err.is_empty());
+}
+
+#[test]
+fn target_initialization_happens_once_across_concurrent_compiles() {
+    // #628: LLVM's target registry is process-global mutable state, and
+    // inkwell's create_target_machine reads it without taking the lock it
+    // holds while initialize_all writes it. The crate's OnceLock guard is
+    // what makes concurrent compilation safe, so this test binds on the
+    // guard's own observable effect -- the initializer body ran exactly
+    // once -- rather than merely on every thread returning Ok, which would
+    // pass identically with the guard removed.
+    //
+    // The count is checked for equality with 1, not for "no growth across
+    // this test": every other test in the harness also compiles, so any
+    // interleaving still leaves the process-wide total at exactly 1. That
+    // makes the assertion independent of test ordering and of whether the
+    // harness runs single- or multi-threaded (D-029's Windows job uses
+    // --test-threads=1; the four threads below are this test's own and are
+    // unaffected by that flag). No sleeps, barriers or timing assumptions
+    // are involved.
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(call_print(42))],
+        class_defs: Vec::new(),
+    };
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..4)
+            .map(|index| {
+                let mir = &mir;
+                scope.spawn(move || {
+                    // A scratch directory per thread: concurrent compiles
+                    // must not share an output path.
+                    let dir = pycc_scratch::ScratchDir::new("concurrent_target_init")
+                        .expect("failed to create scratch dir");
+                    let obj_path = dir.join(format!("concurrent_{index}.o"));
+                    compile_to_object(mir, &obj_path, None, false)
+                        .expect("concurrent compilation to an object file should succeed");
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle
+                .join()
+                .expect("no concurrent compilation thread should panic");
+        }
+    });
+
+    assert_eq!(
+        crate::target_machine::target_init_count(),
+        1,
+        "LLVM's target registry must be initialized exactly once per process"
+    );
 }
 
 #[test]
