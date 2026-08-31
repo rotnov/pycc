@@ -7,6 +7,7 @@
 
 use super::{PyStrObj, PyStrPayload};
 use std::cell::Cell;
+use std::collections::HashSet;
 
 pub const EXCEPTION_TYPE_EXCEPTION: u8 = 0;
 pub const EXCEPTION_TYPE_VALUE_ERROR: u8 = 1;
@@ -31,6 +32,19 @@ pub struct PyExceptionObj {
     pub(crate) name: *const u8,
     pub(crate) name_len: usize,
     pub(crate) message: *mut PyStrObj,
+    /// The enclosing function's source name (`"<module>"` at top level)
+    /// where this exception was raised (#707), as a pointer to UTF-8 bytes
+    /// with no terminator, plus `frame_function_len`. Null means "not
+    /// recorded" -- codegen always calls [`pycc_rt_exception_set_frame`]
+    /// immediately after allocating the exception it is about to raise, but
+    /// a handler-bound exception that a program merely inspects (e.g. `str
+    /// (e)`) without reraising never observably depends on this field being
+    /// set, and every unit test in this module that hand-builds a
+    /// `PyExceptionObj` bypasses codegen entirely. `exception_print_and_exit`
+    /// renders no `File "..."` line at all when this is null, rather than a
+    /// blank or placeholder function name.
+    pub(crate) frame_function: *const u8,
+    pub(crate) frame_function_len: usize,
     /// Explicit `raise ... from cause` chain.
     pub(crate) cause: *mut PyExceptionObj,
     /// Implicit handler context. Reserved but not wired in this part.
@@ -92,11 +106,42 @@ pub extern "C" fn pycc_rt_exception_alloc(
         name,
         name_len,
         message,
+        frame_function: std::ptr::null(),
+        frame_function_len: 0,
         cause: std::ptr::null_mut(),
         _context: std::ptr::null_mut(),
         exceptions: std::ptr::null_mut(),
         exceptions_len: 0,
     }))
+}
+
+/// Records `frame_function`/`frame_function_len` on `obj` (#707) --
+/// codegen's `pycc_rt_exception_set_frame` counterpart, called once per
+/// `raise`/`raise ... from ...` statement on the exception being raised,
+/// immediately after allocating it and before the pending-exception state is
+/// set. A no-op on a null `obj`, matching this module's other exception
+/// operations' tolerance for a null primary object (e.g.
+/// `pycc_rt_exception_raise_with_cause`).
+///
+/// # Safety
+///
+/// A non-null `obj` must point to a live `PyExceptionObj`. A non-null
+/// `frame_function` must point to `frame_function_len` readable UTF-8 bytes
+/// that outlive the object -- codegen only ever supplies a static string
+/// constant.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_exception_set_frame(
+    obj: *mut PyExceptionObj,
+    frame_function: *const u8,
+    frame_function_len: usize,
+) {
+    if obj.is_null() {
+        return;
+    }
+    unsafe {
+        (*obj).frame_function = frame_function;
+        (*obj).frame_function_len = frame_function_len;
+    }
 }
 
 /// Copies `exceptions_len` member pointers out of the caller-supplied
@@ -150,6 +195,8 @@ fn build_group_or_null(
         name: group_name,
         name_len: group_name_len,
         message,
+        frame_function: std::ptr::null(),
+        frame_function_len: 0,
         cause: std::ptr::null_mut(),
         _context: std::ptr::null_mut(),
         exceptions: exceptions_ptr,
@@ -186,6 +233,8 @@ pub unsafe extern "C" fn pycc_rt_exception_group_alloc(
         name,
         name_len,
         message,
+        frame_function: std::ptr::null(),
+        frame_function_len: 0,
         cause: std::ptr::null_mut(),
         _context: std::ptr::null_mut(),
         exceptions: exceptions_ptr,
@@ -348,6 +397,112 @@ fn exception_type_name(exc: &PyExceptionObj) -> &str {
     std::str::from_utf8(bytes).unwrap_or("Exception")
 }
 
+/// The enclosing function's name `exc` was raised from (#707), or `None` when
+/// no `raise`/`raise ... from ...` statement ever called
+/// [`pycc_rt_exception_set_frame`] on it -- a handler-bound exception a
+/// program only inspects (`str(e)`, `e.args`) without reraising, or any
+/// `PyExceptionObj` a unit test builds directly without going through
+/// codegen's emission path.
+///
+/// # Safety
+///
+/// A non-null `exc.frame_function` must point to `exc.frame_function_len`
+/// readable UTF-8 bytes that outlive this call -- true of every frame name
+/// `pycc_rt_exception_set_frame` ever records, since codegen only ever
+/// supplies a static string constant.
+fn exception_frame_function(exc: &PyExceptionObj) -> Option<&str> {
+    if exc.frame_function.is_null() {
+        return None;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(exc.frame_function, exc.frame_function_len) };
+    Some(std::str::from_utf8(bytes).unwrap_or("<unknown>"))
+}
+
+/// Renders one exception's own `Traceback (most recent call last):` block
+/// (when a frame was recorded, #707) followed by its `Type: message` line --
+/// CPython's format for the single frame this compiler tracks, minus the
+/// `File "...", line N,` prefix CPython's own block carries: `pycc_hir`
+/// drops every statement's source span before `pycc_mir` lowering, so there
+/// is no line number, and pycc has no notion of the original `.py` source
+/// path at this point in the pipeline either (see the `not_proven` entries
+/// this issue corrected in `tests/fixtures/conformance-breadth-manifest.json`
+/// for the full accounting). An exception with no recorded frame renders
+/// only its `Type: message` line, matching this runtime's pre-#707 output
+/// exactly -- the common case for a `PyExceptionObj` a unit test builds by
+/// hand, or a builtin error raised from inside a runtime helper (division by
+/// zero, an out-of-range index) rather than from a source-level `raise`.
+///
+/// Pure and side-effect-free (no `eprintln!`/`process::exit`) so this is
+/// exercised directly by unit tests below, unlike
+/// [`exception_print_and_exit`] itself, which is `cfg(not(test))` and only
+/// reachable from a compiled Python program's own uncaught-exception exit
+/// path.
+fn render_single_exception(exc: &PyExceptionObj) -> String {
+    let mut out = String::new();
+    if let Some(frame) = exception_frame_function(exc) {
+        out.push_str("Traceback (most recent call last):\n");
+        out.push_str(&format!("  File \"<compiled>\", in {frame}\n"));
+    }
+    let type_name = exception_type_name(exc);
+    if exc.message.is_null() {
+        out.push_str(type_name);
+    } else {
+        let msg_bytes = unsafe { (*exc.message).bytes() };
+        out.push_str(&format!("{type_name}: {}", String::from_utf8_lossy(msg_bytes)));
+    }
+    out
+}
+
+/// Renders `exc`'s full uncaught-exception text, walking its explicit
+/// `.cause` chain (PEP 409, #707): each cause's own [`render_single_exception`]
+/// block is rendered first, oldest cause first, joined to its effect by
+/// CPython's exact `The above exception was the direct cause of the
+/// following exception:` separator -- matching CPython's own chained
+/// rendering order (the earliest exception in the chain prints first).
+/// Implicit `__context__` chaining (a bare `raise` inside a handler with no
+/// explicit `from`) is #606's separate, still-open scope; `_context` stays
+/// unread here exactly as it already was before #707.
+///
+/// Valid Python source can make `.cause` cyclic -- `except ValueError as e:
+/// raise e from e` sets `e.cause = e`, and a longer cycle
+/// (`e1.cause = e2; e2.cause = e1`) is reachable the same way through two
+/// `raise ... from` statements. This walks the chain iteratively (rather
+/// than recursing per cause, which would overflow the stack on a cycle),
+/// tracking every exception pointer already visited and stopping the walk
+/// the moment a pointer repeats -- CPython applies the same cycle-breaking
+/// rule to its own `__cause__`/`__context__` chains rather than looping
+/// forever. Every distinct exception reachable before the walk detects a
+/// repeat still renders exactly once, oldest first -- including a node
+/// whose own `.cause` closes a cycle that started earlier in the chain
+/// (e.g. `a.cause = b; b.cause = c; c.cause = b`: `a`, `b`, and `c` all
+/// render once each, and the walk stops on re-visiting `b`).
+fn render_exception_chain(exc: &PyExceptionObj) -> String {
+    let mut chain: Vec<&PyExceptionObj> = Vec::new();
+    let mut visited: HashSet<*const PyExceptionObj> = HashSet::new();
+    let mut current: *const PyExceptionObj = exc;
+    loop {
+        if !visited.insert(current) {
+            break;
+        }
+        let current_ref = unsafe { &*current };
+        chain.push(current_ref);
+        if current_ref.cause.is_null() {
+            break;
+        }
+        current = current_ref.cause;
+    }
+    let mut out = String::new();
+    for (idx, e) in chain.into_iter().rev().enumerate() {
+        if idx > 0 {
+            out.push_str(
+                "\n\nThe above exception was the direct cause of the following exception:\n\n",
+            );
+        }
+        out.push_str(&render_single_exception(e));
+    }
+    out
+}
+
 #[cfg(not(test))]
 fn exception_print_and_exit(obj: *mut PyExceptionObj) -> ! {
     if obj.is_null() {
@@ -355,13 +510,7 @@ fn exception_print_and_exit(obj: *mut PyExceptionObj) -> ! {
         std::process::exit(1);
     }
     let exc = unsafe { &*obj };
-    let type_name = exception_type_name(exc);
-    if exc.message.is_null() {
-        eprintln!("{type_name}");
-    } else {
-        let msg_bytes = unsafe { (*exc.message).bytes() };
-        eprintln!("{type_name}: {}", String::from_utf8_lossy(msg_bytes));
-    }
+    eprintln!("{}", render_exception_chain(exc));
     std::process::exit(1);
 }
 
@@ -458,6 +607,183 @@ mod tests {
         let message = unsafe { pycc_rt_exception_message(obj) };
         assert_eq!(unsafe { (*message).bytes() }, b"boom");
         assert_eq!(message, unsafe { (*obj).message });
+    }
+
+    // -- #707: raise-site frame recording and traceback rendering.
+
+    #[test]
+    fn a_freshly_allocated_exception_carries_no_frame() {
+        let obj = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "boom");
+        assert!(unsafe { (*obj).frame_function }.is_null());
+        assert_eq!(unsafe { (*obj).frame_function_len }, 0);
+        assert_eq!(exception_frame_function(unsafe { &*obj }), None);
+    }
+
+    #[test]
+    fn set_frame_records_the_function_name() {
+        let obj = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "boom");
+        const FRAME: &str = "do_thing";
+        unsafe { pycc_rt_exception_set_frame(obj, FRAME.as_ptr(), FRAME.len()) };
+        assert_eq!(exception_frame_function(unsafe { &*obj }), Some(FRAME));
+    }
+
+    #[test]
+    fn set_frame_on_a_null_object_is_a_no_op() {
+        // Mirrors `pycc_rt_exception_raise_with_cause`'s own tolerance for a
+        // null primary object -- codegen never emits this, but the runtime
+        // contract stays defined rather than undefined behavior.
+        unsafe { pycc_rt_exception_set_frame(std::ptr::null_mut(), std::ptr::null(), 0) };
+    }
+
+    #[test]
+    fn a_non_utf8_frame_name_reports_unknown() {
+        const INVALID: [u8; 2] = [0xff, 0xfe];
+        let obj = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "boom");
+        unsafe { pycc_rt_exception_set_frame(obj, INVALID.as_ptr(), INVALID.len()) };
+        assert_eq!(exception_frame_function(unsafe { &*obj }), Some("<unknown>"));
+    }
+
+    #[test]
+    fn render_single_exception_with_no_frame_matches_the_pre_707_one_liner() {
+        let obj = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "boom");
+        assert_eq!(
+            render_single_exception(unsafe { &*obj }),
+            "ValueError: boom"
+        );
+    }
+
+    #[test]
+    fn render_single_exception_with_a_frame_shows_a_traceback_block() {
+        let obj = alloc_named(EXCEPTION_TYPE_RUNTIME_ERROR, "RuntimeError", "boom");
+        const FRAME: &str = "do_thing";
+        unsafe { pycc_rt_exception_set_frame(obj, FRAME.as_ptr(), FRAME.len()) };
+        assert_eq!(
+            render_single_exception(unsafe { &*obj }),
+            "Traceback (most recent call last):\n  File \"<compiled>\", in do_thing\nRuntimeError: boom"
+        );
+    }
+
+    #[test]
+    fn render_single_exception_with_no_message_omits_the_colon() {
+        let obj = pycc_rt_exception_alloc(
+            EXCEPTION_TYPE_VALUE_ERROR,
+            "ValueError".as_ptr(),
+            "ValueError".len(),
+            std::ptr::null_mut(),
+        );
+        assert_eq!(render_single_exception(unsafe { &*obj }), "ValueError");
+    }
+
+    #[test]
+    fn render_exception_chain_with_no_cause_matches_render_single_exception() {
+        let obj = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "boom");
+        assert_eq!(
+            render_exception_chain(unsafe { &*obj }),
+            render_single_exception(unsafe { &*obj })
+        );
+    }
+
+    #[test]
+    fn render_exception_chain_shows_the_direct_cause_separator_oldest_first() {
+        let cause = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "cause");
+        const CAUSE_FRAME: &str = "inner";
+        unsafe { pycc_rt_exception_set_frame(cause, CAUSE_FRAME.as_ptr(), CAUSE_FRAME.len()) };
+        let effect = alloc_named(EXCEPTION_TYPE_RUNTIME_ERROR, "RuntimeError", "effect");
+        const EFFECT_FRAME: &str = "outer";
+        unsafe { pycc_rt_exception_set_frame(effect, EFFECT_FRAME.as_ptr(), EFFECT_FRAME.len()) };
+        unsafe { (*effect).cause = cause };
+        let rendered = render_exception_chain(unsafe { &*effect });
+        let expected = format!(
+            "{}\n\nThe above exception was the direct cause of the following exception:\n\n{}",
+            render_single_exception(unsafe { &*cause }),
+            render_single_exception(unsafe { &*effect })
+        );
+        assert_eq!(rendered, expected);
+        // The cause's own block -- printed first -- must appear before the
+        // effect's, matching CPython's oldest-first chained rendering.
+        assert!(rendered.find("ValueError: cause").unwrap() < rendered.find("RuntimeError: effect").unwrap());
+    }
+
+    #[test]
+    fn render_exception_chain_walks_a_multi_level_cause_chain() {
+        // A `from` chain nested two levels deep (`raise C from B`, itself
+        // caught from `raise B from A`) exercises `render_exception_chain`'s
+        // iterative walk beyond a single hop, following the `.cause` chain
+        // two levels deep.
+        let root = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "root");
+        let middle = alloc_named(EXCEPTION_TYPE_TYPE_ERROR, "TypeError", "middle");
+        unsafe { (*middle).cause = root };
+        let leaf = alloc_named(EXCEPTION_TYPE_RUNTIME_ERROR, "RuntimeError", "leaf");
+        unsafe { (*leaf).cause = middle };
+        let rendered = render_exception_chain(unsafe { &*leaf });
+        let root_pos = rendered.find("ValueError: root").unwrap();
+        let middle_pos = rendered.find("TypeError: middle").unwrap();
+        let leaf_pos = rendered.find("RuntimeError: leaf").unwrap();
+        assert!(root_pos < middle_pos);
+        assert!(middle_pos < leaf_pos);
+        assert_eq!(
+            rendered.matches("The above exception was the direct cause of the following exception:")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn render_exception_chain_breaks_a_self_cycle_instead_of_overflowing() {
+        // `except ValueError as e: raise e from e` is valid Python source
+        // and sets `e.cause = e`. Rendering must detect the repeat and stop
+        // instead of recursing forever.
+        let exc = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "self cycle");
+        unsafe { (*exc).cause = exc };
+        let rendered = render_exception_chain(unsafe { &*exc });
+        assert_eq!(rendered, render_single_exception(unsafe { &*exc }));
+        assert!(!rendered.contains("direct cause"));
+    }
+
+    #[test]
+    fn render_exception_chain_breaks_a_two_node_cycle() {
+        // A longer cycle is reachable through two `raise ... from`
+        // statements: `e1.cause = e2` and, separately, `e2.cause = e1`.
+        let e1 = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "e1");
+        let e2 = alloc_named(EXCEPTION_TYPE_TYPE_ERROR, "TypeError", "e2");
+        unsafe { (*e1).cause = e2 };
+        unsafe { (*e2).cause = e1 };
+        let rendered = render_exception_chain(unsafe { &*e1 });
+        let expected = format!(
+            "{}\n\nThe above exception was the direct cause of the following exception:\n\n{}",
+            render_single_exception(unsafe { &*e2 }),
+            render_single_exception(unsafe { &*e1 })
+        );
+        assert_eq!(rendered, expected);
+        assert_eq!(
+            rendered.matches("The above exception was the direct cause of the following exception:")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn render_exception_chain_renders_a_non_cyclic_prefix_before_a_later_cycle() {
+        // The cycle's entry point (`b`) is not the chain's head (`a`):
+        // `a.cause = b; b.cause = c; c.cause = b`. Every distinct node
+        // reachable before the walk re-visits `b` must still render exactly
+        // once, oldest first, per `render_exception_chain`'s own doc
+        // comment -- this is stricter than only covering a cycle rooted at
+        // the traversal's start.
+        let a = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "a");
+        let b = alloc_named(EXCEPTION_TYPE_TYPE_ERROR, "TypeError", "b");
+        let c = alloc_named(EXCEPTION_TYPE_RUNTIME_ERROR, "RuntimeError", "c");
+        unsafe { (*a).cause = b };
+        unsafe { (*b).cause = c };
+        unsafe { (*c).cause = b };
+        let rendered = render_exception_chain(unsafe { &*a });
+        let expected = format!(
+            "{}\n\nThe above exception was the direct cause of the following exception:\n\n{}\n\nThe above exception was the direct cause of the following exception:\n\n{}",
+            render_single_exception(unsafe { &*c }),
+            render_single_exception(unsafe { &*b }),
+            render_single_exception(unsafe { &*a })
+        );
+        assert_eq!(rendered, expected);
     }
 
     #[test]

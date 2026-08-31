@@ -17,7 +17,8 @@ use std::path::Path;
 
 mod exception;
 use exception::{
-    ExceptionCodegenState, emit_exception_value, expression_can_set_exception,
+    ExceptionCodegenState, emit_exception_set_frame, emit_exception_value,
+    expression_can_set_exception,
     guard_statement_effects,
 };
 mod bigint_rc;
@@ -8688,7 +8689,10 @@ fn emit_stmt<'ctx>(
         // this block. `emit_body` routes that explicit raise directly to the
         // nearest installed exception target (a `try` handler, the caller's
         // exceptional exit, or the top-level exit).
-        MirStmt::Raise { exception } => {
+        MirStmt::Raise {
+            exception,
+            frame_function,
+        } => {
             let exc_obj = emit_exception_value(
                 context,
                 builder,
@@ -8699,6 +8703,7 @@ fn emit_stmt<'ctx>(
                 exception,
                 "exception",
             )?;
+            emit_exception_set_frame(context, builder, module, rt, exc_obj, frame_function);
             builder
                 .build_call(rt.exception_raise, &[exc_obj.into()], "")
                 .expect("build_call should not fail for exception_raise");
@@ -8716,7 +8721,11 @@ fn emit_stmt<'ctx>(
         // #382: `raise ExceptionType("msg") from CauseType("cause")` —
         // allocate both exception and cause objects, then raise with cause.
         // Same `unreachable` approach as `Raise`.
-        MirStmt::RaiseFrom { exception, cause } => {
+        MirStmt::RaiseFrom {
+            exception,
+            cause,
+            frame_function,
+        } => {
             let exc_obj = emit_exception_value(
                 context,
                 builder,
@@ -8737,6 +8746,7 @@ fn emit_stmt<'ctx>(
                 cause,
                 "cause",
             )?;
+            emit_exception_set_frame(context, builder, module, rt, exc_obj, frame_function);
             builder
                 .build_call(
                     rt.exception_raise_with_cause,

@@ -159,6 +159,15 @@ pub(super) struct RtFns<'ctx> {
     pub(super) exception_alloc: FunctionValue<'ctx>,
     /// `exception_raise(obj: *mut PyExceptionObj)` — sets pending state (void).
     pub(super) exception_raise: FunctionValue<'ctx>,
+    /// `exception_set_frame(obj: *mut PyExceptionObj, frame_function: *const
+    /// u8, frame_function_len: usize)` (void, #707): records the enclosing
+    /// function's source name on the exception object being raised, for
+    /// `exception_print_and_exit`'s traceback rendering. Called once, at the
+    /// `raise`/`raise ... from ...` statement itself, on the raised
+    /// exception only -- never on a `from` clause's cause, which keeps
+    /// whatever frame it already carried (see
+    /// `pycc_mir::MirStmt::RaiseFrom::frame_function`'s doc comment).
+    pub(super) exception_set_frame: FunctionValue<'ctx>,
     /// `exception_raise_with_cause(obj, cause: *mut PyExceptionObj)` (void).
     pub(super) exception_raise_with_cause: FunctionValue<'ctx>,
     /// `exception_type_matches(obj: *mut PyExceptionObj, type_tag: u8) -> i8`.
@@ -465,6 +474,13 @@ pub(super) fn declare_rt_functions<'ctx>(
         exception_raise_with_cause: declare(
             "pycc_rt_exception_raise_with_cause",
             void_type.fn_type(&[ptr_type.into(), ptr_type.into()], false),
+        ),
+        exception_set_frame: declare(
+            "pycc_rt_exception_set_frame",
+            void_type.fn_type(
+                &[ptr_type.into(), ptr_type.into(), context.i64_type().into()],
+                false,
+            ),
         ),
         exception_type_matches: declare(
             "pycc_rt_exception_type_matches",

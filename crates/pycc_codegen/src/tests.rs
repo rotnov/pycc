@@ -2997,6 +2997,7 @@ fn a_non_none_function_whose_try_raise_finally_body_always_terminates_compiles_c
                         class_name: "ValueError".to_string(),
                         message: MirExpr::StringLiteral("boom".to_string()),
                     },
+                    frame_function: "test_fn".to_string(),
                 }],
                 handlers: vec![],
                 orelse: vec![],
@@ -6775,6 +6776,7 @@ fn an_optional_int_function_that_raises_before_returning_still_produces_a_valid_
                         class_name: "ValueError".to_string(),
                         message: MirExpr::StringLiteral("boom".to_string()),
                     },
+                    frame_function: "test_fn".to_string(),
                 }],
             },
             MirItem::TopLevelStmt(MirStmt::Try {
@@ -7438,6 +7440,7 @@ fn an_optional_bool_function_that_raises_before_returning_still_produces_a_valid
                         class_name: "ValueError".to_string(),
                         message: MirExpr::StringLiteral("boom".to_string()),
                     },
+                    frame_function: "test_fn".to_string(),
                 }],
             },
             MirItem::TopLevelStmt(MirStmt::Try {
@@ -12763,6 +12766,7 @@ fn bare_except_codegen_builds_and_runs() {
                     class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("test".to_string()),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: vec![MirExceptHandler {
                 exc_type_tag: None, // bare except
@@ -12799,6 +12803,7 @@ fn raise_with_non_string_message_is_a_codegen_error() {
                 class_name: "ValueError".to_string(),
                 message: MirExpr::IntLiteral(42),
             },
+            frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
     };
@@ -12816,6 +12821,7 @@ fn raising_a_non_instance_existing_value_is_a_codegen_error() {
     let mir = MirModule {
         items: vec![MirItem::TopLevelStmt(MirStmt::Raise {
             exception: MirExceptionValue::Existing(MirExpr::IntLiteral(42)),
+            frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
     };
@@ -12837,6 +12843,7 @@ fn raising_a_bound_existing_exception_builds_successfully() {
                     class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("original".to_string()),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: vec![MirExceptHandler {
                 exc_type_tag: Some(vec![1]),
@@ -12847,6 +12854,7 @@ fn raising_a_bound_existing_exception_builds_successfully() {
                         name: "error".to_string(),
                         ty: exception_ty,
                     }),
+                    frame_function: "test_fn".to_string(),
                 }],
             }],
             orelse: vec![],
@@ -12877,6 +12885,7 @@ fn constructed_group_with_non_string_message_is_a_codegen_error() {
                 message: MirExpr::IntLiteral(42),
                 members: vec![],
             },
+            frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
     };
@@ -12901,6 +12910,7 @@ fn constructed_group_with_a_non_instance_member_is_a_codegen_error() {
                 message: MirExpr::StringLiteral("multi".to_string()),
                 members: vec![MirExpr::IntLiteral(1)],
             },
+            frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
     };
@@ -12934,6 +12944,7 @@ fn a_successful_multi_member_exception_group_construction_compiles_and_runs() {
                         class_name: "ValueError".to_string(),
                         message: MirExpr::StringLiteral("v1".to_string()),
                     },
+                    frame_function: "test_fn".to_string(),
                 }],
                 handlers: vec![MirExceptHandler {
                     exc_type_tag: Some(vec![1]),
@@ -12946,6 +12957,7 @@ fn a_successful_multi_member_exception_group_construction_compiles_and_runs() {
                                 class_name: "TypeError".to_string(),
                                 message: MirExpr::StringLiteral("v2".to_string()),
                             },
+                            frame_function: "test_fn".to_string(),
                         }],
                         handlers: vec![MirExceptHandler {
                             exc_type_tag: Some(vec![2]),
@@ -12967,6 +12979,7 @@ fn a_successful_multi_member_exception_group_construction_compiles_and_runs() {
                                         },
                                     ],
                                 },
+                                frame_function: "test_fn".to_string(),
                             }],
                         }],
                         orelse: vec![],
@@ -13027,6 +13040,7 @@ fn constructed_group_cause_with_non_string_message_is_a_codegen_error() {
                 message: MirExpr::IntLiteral(42),
                 members: vec![],
             },
+            frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
     };
@@ -13057,6 +13071,7 @@ fn a_codegen_error_in_a_try_star_body_propagates_out_of_emit_try_star() {
                     class_name: "ValueError".to_string(),
                     message: MirExpr::IntLiteral(42),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: vec![],
             orelse: vec![],
@@ -13086,6 +13101,7 @@ fn a_codegen_error_in_a_try_star_handler_body_propagates_out_of_emit_try_star() 
                         class_name: "ValueError".to_string(),
                         message: MirExpr::IntLiteral(42),
                     },
+                    frame_function: "test_fn".to_string(),
                 }],
             }],
             orelse: vec![],
@@ -13122,6 +13138,7 @@ fn a_codegen_error_in_a_try_star_else_body_propagates_out_of_emit_try_star() {
                     class_name: "ValueError".to_string(),
                     message: MirExpr::IntLiteral(42),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             finalbody: vec![],
         })],
@@ -13155,6 +13172,7 @@ fn a_codegen_error_in_a_try_star_finally_body_propagates_out_of_emit_try_star() 
                     class_name: "ValueError".to_string(),
                     message: MirExpr::IntLiteral(42),
                 },
+                frame_function: "test_fn".to_string(),
             }],
         })],
         class_defs: Vec::new(),
@@ -13191,6 +13209,7 @@ fn a_try_star_with_a_bound_handler_else_and_finally_compiles_and_runs() {
                     class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("boom".to_string()),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: vec![MirExceptHandler {
                 exc_type_tag: Some(vec![1]),
@@ -13392,6 +13411,7 @@ fn a_try_star_without_a_finally_reraises_an_unmatched_remainder() {
                     class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("boom".to_string()),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: vec![
                 MirExceptHandler {
@@ -13437,6 +13457,7 @@ fn raise_from_with_non_string_message_is_a_codegen_error() {
                 class_name: "TypeError".to_string(),
                 message: MirExpr::StringLiteral("cause".to_string()),
             },
+            frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
     };
@@ -13464,6 +13485,7 @@ fn raise_from_with_non_string_cause_is_a_codegen_error() {
                 class_name: "TypeError".to_string(),
                 message: MirExpr::IntLiteral(42),
             },
+            frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
     };
@@ -13926,6 +13948,7 @@ fn raise_from_codegen_builds_and_runs() {
                     class_name: "TypeError".to_string(),
                     message: MirExpr::StringLiteral("cause".to_string()),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: vec![MirExceptHandler {
                 exc_type_tag: Some(vec![1]),
@@ -13964,6 +13987,7 @@ fn reraise_codegen_builds() {
                     class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("orig".to_string()),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: vec![MirExceptHandler {
                 exc_type_tag: Some(vec![1]),
@@ -14001,6 +14025,7 @@ fn try_with_no_handlers_branches_to_finally() {
                     class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("uncaught".to_string()),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: Vec::new(),
             orelse: Vec::new(),
@@ -14040,6 +14065,7 @@ fn try_with_multiple_handlers_dispatches_to_next() {
                     class_name: "KeyError".to_string(),
                     message: MirExpr::StringLiteral("key".to_string()),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: vec![
                 MirExceptHandler {
@@ -14094,6 +14120,7 @@ fn a_multi_tag_handler_ors_every_tag_it_accepts() {
                     class_name: "DatabaseError".to_string(),
                     message: MirExpr::StringLiteral("boom".to_string()),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: vec![
                 MirExceptHandler {
@@ -14144,6 +14171,7 @@ fn a_multi_tag_handler_declines_a_tag_outside_its_set() {
                     class_name: "KeyError".to_string(),
                     message: MirExpr::StringLiteral("key".to_string()),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: vec![
                 MirExceptHandler {
@@ -14199,6 +14227,7 @@ fn a_pep_758_multi_type_handler_ors_every_named_types_tag_independently() {
                         class_name: class_name.to_string(),
                         message: MirExpr::StringLiteral("boom".to_string()),
                     },
+                    frame_function: "test_fn".to_string(),
                 }],
                 handlers: vec![
                     MirExceptHandler {
@@ -14305,6 +14334,7 @@ fn print_of_a_caught_exception_binding_prints_its_message() {
                     class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("boom".to_string()),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: vec![MirExceptHandler {
                 exc_type_tag: Some(vec![1]),
@@ -14345,6 +14375,7 @@ fn fstring_interpolation_of_a_caught_exception_binding_renders_its_message() {
                     class_name: "ValueError".to_string(),
                     message: MirExpr::StringLiteral("boom".to_string()),
                 },
+                frame_function: "test_fn".to_string(),
             }],
             handlers: vec![MirExceptHandler {
                 exc_type_tag: Some(vec![1]),

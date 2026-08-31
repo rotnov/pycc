@@ -89,9 +89,17 @@ pub(super) fn lower_raise(
         return MirStmt::RaiseFrom {
             exception,
             cause: lower_exception_value(cause, scopes, classes, current_class),
+            // Filled in by `set_frame_function`'s post-pass over the
+            // enclosing item's whole body, once `frame_name` is known;
+            // `lower_raise` never sees it directly (see
+            // `MirStmt::Raise::frame_function`'s doc comment).
+            frame_function: String::new(),
         };
     }
-    MirStmt::Raise { exception }
+    MirStmt::Raise {
+        exception,
+        frame_function: String::new(),
+    }
 }
 
 pub(super) fn lower_exception_value(

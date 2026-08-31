@@ -194,7 +194,7 @@
         {
           "category": "traceback rendering for an uncaught exception",
           "kind": "core",
-          "reason": "pycc emits no traceback frames, so an uncaught exception's stderr text cannot be compared against CPython's. Tracked by #606."
+          "reason": "#707 gave pycc a single raise-site frame (the enclosing function's name, `\"<module>\"` at top level) rendered as a `Traceback (most recent call last):` block, but it carries no source file name or line number -- HIR drops the source span before `pycc_mir` ever sees a `raise` statement, so there is nothing to render one from. This repository's conformance oracle (`tests/conformance.rs`) also only diffs the *successful*-exit stdout of matching runs, never the stderr of a program that exits 1, so an uncaught exception's text has no automated CPython comparison regardless of format. Neither gap is tracked by #606, which is exclusively about implicit `__context__` chaining (misciting it here predated #707); a source-span/line-number row would need its own new issue if pursued."
         }
       ]
     },
@@ -353,7 +353,7 @@
         {
           "category": "traceback output showing `The above exception was the direct cause of ...` or its suppression",
           "kind": "core",
-          "reason": "pycc emits no traceback frames, so the only rendering in which CPython surfaces `from` chaining cannot be compared. Tracked by #606."
+          "reason": "#707 made pycc's `exception_print_and_exit` walk the `.cause` chain and print CPython's exact `The above exception was the direct cause of the following exception:` separator between an uncaught exception's own `Traceback` block and its cause's (unit-tested directly in `pycc_rt::exception`'s `render_exception_chain`). What remains unproven here is CPython-diff evidence, not the rendering itself: this repository's conformance oracle (`tests/conformance.rs`) only diffs the stdout of a *successful* run, and an uncaught `raise ... from ...` always exits 1, so there is no automated byte-for-byte comparison of this stderr text against CPython's own (which also carries file/line info pycc's frames do not -- see the PEP 3110 row's matching not-proven entry). Not #606's scope, which is exclusively about implicit `__context__` (the citation here predated #707)."
         }
       ]
     },
