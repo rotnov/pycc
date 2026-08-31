@@ -1,12 +1,9 @@
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
-use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::passes::PassBuilderOptions;
-use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
-};
+use inkwell::targets::FileType;
 use inkwell::types::BasicType;
 use inkwell::values::{FloatValue, FunctionValue, IntValue, PointerValue};
 use pycc_mir::{
@@ -35,6 +32,7 @@ mod exception_render;
 use exception_render::emit_exception_message;
 mod rt_fns;
 use rt_fns::{RtFns, declare_rt_functions};
+mod target_machine;
 #[cfg(test)]
 mod tests;
 pub use pycc_artifact_layout as artifact_layout;
@@ -5295,6 +5293,16 @@ fn declare_module_globals<'ctx>(
 /// pycc emits exactly one LLVM module per compilation (single-file only
 /// until v0.4's multi-file support), so this is "maximum whole-module
 /// optimization," not literal cross-file link-time optimization.
+///
+/// # Concurrency
+///
+/// Safe to call concurrently from several threads of one process. LLVM's
+/// process-global target registry is initialized exactly once, behind a
+/// `OnceLock`, so no thread can observe the registry mid-write; see
+/// `target_machine`'s module documentation for why that guard is needed
+/// even though inkwell locks `Target::initialize_all` internally. Each
+/// call otherwise owns its own `Context`, `Module` and `TargetMachine`,
+/// and callers must still supply distinct `output_path`s.
 pub fn compile_to_object(
     mir: &MirModule,
     output_path: &Path,
@@ -5797,58 +5805,10 @@ fn compile_to_object_with_observer(
 
     verify_module(&module);
 
-    // initialize_all (not initialize_native): a requested target_triple may
-    // not match the host's own architecture, and LLVM only has codegen
-    // support for a target's backend if that backend was initialized.
-    Target::initialize_all(&InitializationConfig::default());
-    // ManuallyDrop, not a plain value: see D-029. TargetTriple wraps an
-    // LLVMString (inkwell's own message wrapper around LLVMCreateMessage /
-    // LLVMGetDefaultTargetTriple), whose Drop calls LLVMDisposeMessage --
-    // this crashes on Windows against the official prebuilt LLVM 22.1.1
-    // release. Suppressing the drop here, at the point of creation, covers
-    // every exit path uniformly (the early `?` below included), not just
-    // the success path a trailing forget would. Leaks one small string per
-    // compile on every platform -- negligible in a short-lived CLI process,
-    // and simpler than cfg-gating a type difference for a Windows-only leak.
-    let triple = std::mem::ManuallyDrop::new(match target_triple {
-        Some(t) => TargetTriple::create(t),
-        None => TargetMachine::get_default_triple(),
-    });
-    let target = Target::from_triple(&triple).map_err(|e| {
-        format!(
-            "pycc_codegen: `{}` is not a target LLVM knows how to generate code for: {}",
-            triple.as_str().to_string_lossy(),
-            llvm_string_to_owned(e)
-        )
-    })?;
-    let target_machine = target
-        .create_target_machine(
-            &triple,
-            "generic",
-            "",
-            if release {
-                OptimizationLevel::Aggressive
-            } else {
-                OptimizationLevel::None
-            },
-            // `RelocMode::Default` resolves to absolute (non-PIC)
-            // addressing for this LLVM/target pairing on Linux, but
-            // Ubuntu's `cc`/`gcc` links as a PIE by default (D-073):
-            // large-`.rodata` programs (confirmed with the
-            // `mandelbrot_ascii` fixture -- its ASCII palette/float
-            // constants push a relocation past what a 32-bit absolute
-            // reloc can express in a PIE) fail with "relocation
-            // R_X86_64_32 against `.rodata' can not be used when making
-            // a PIE object". `RelocMode::PIC` matches every Tier-1
-            // linker's actual default (mandatory on macOS, standard on
-            // Windows/MSVC, and Linux's own PIE default) uniformly.
-            RelocMode::PIC,
-            CodeModel::Default,
-        )
-        .expect(
-            "creating a target machine with generic CPU/features should never fail for a \
-             triple Target::from_triple has already accepted",
-        );
+    // See `target_machine::target_machine_for` for the LLVM target-registry
+    // initialization contract this call satisfies, and for the D-029 and
+    // D-073 reasoning behind the triple and relocation-model choices.
+    let target_machine = target_machine::target_machine_for(target_triple, release)?;
     // `--release`'s whole-module optimization pipeline (D-094). This is
     // "maximum whole-module optimization," not literal cross-translation-
     // unit LTO: pycc emits exactly one LLVM module per compilation today
@@ -5856,7 +5816,8 @@ fn compile_to_object_with_observer(
     // ever one module for `"default<O3>"` to optimize.
     //
     // Deliberately `.expect(..)`, not `.map_err(llvm_string_to_owned)?` like
-    // `Target::from_triple`/`write_to_file` below: those two are genuine,
+    // `Target::from_triple` (in `target_machine`)/`write_to_file` below:
+    // those two are genuine,
     // externally-triggerable failure modes with their own dedicated tests
     // and reachable `Err` paths this crate's 100% region-coverage gate
     // (D-014) can actually exercise. `run_passes` here runs a fixed,
@@ -5865,8 +5826,9 @@ fn compile_to_object_with_observer(
     // Windows-specific IR-building path exists" reasoning, which applies
     // here too) -- there is no way to make this fail that a test could
     // construct, so this stays infallible given how this function always
-    // calls it, the same treatment `create_target_machine` gets immediately
-    // above and `module.verify()` gets in `verify_module` below. On the
+    // calls it, the same treatment `create_target_machine` gets in
+    // `target_machine` and `module.verify()` gets in `verify_module` below.
+    // On the
     // vanishingly narrow chance this ever legitimately panics on Windows,
     // the `LLVMString`'s `Drop` would run during unwinding (D-029's crash)
     // -- an accepted, currently unreachable risk, not a silently ignored one.
