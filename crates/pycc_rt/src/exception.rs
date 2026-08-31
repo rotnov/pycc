@@ -7,6 +7,7 @@
 
 use super::{PyStrObj, PyStrPayload};
 use std::cell::Cell;
+use std::collections::HashSet;
 
 pub const EXCEPTION_TYPE_EXCEPTION: u8 = 0;
 pub const EXCEPTION_TYPE_VALUE_ERROR: u8 = 1;
@@ -461,16 +462,44 @@ fn render_single_exception(exc: &PyExceptionObj) -> String {
 /// Implicit `__context__` chaining (a bare `raise` inside a handler with no
 /// explicit `from`) is #606's separate, still-open scope; `_context` stays
 /// unread here exactly as it already was before #707.
+///
+/// Valid Python source can make `.cause` cyclic -- `except ValueError as e:
+/// raise e from e` sets `e.cause = e`, and a longer cycle
+/// (`e1.cause = e2; e2.cause = e1`) is reachable the same way through two
+/// `raise ... from` statements. This walks the chain iteratively (rather
+/// than recursing per cause, which would overflow the stack on a cycle),
+/// tracking every exception pointer already visited and stopping the walk
+/// the moment a pointer repeats -- CPython applies the same cycle-breaking
+/// rule to its own `__cause__`/`__context__` chains rather than looping
+/// forever. Every distinct exception reachable before the walk detects a
+/// repeat still renders exactly once, oldest first -- including a node
+/// whose own `.cause` closes a cycle that started earlier in the chain
+/// (e.g. `a.cause = b; b.cause = c; c.cause = b`: `a`, `b`, and `c` all
+/// render once each, and the walk stops on re-visiting `b`).
 fn render_exception_chain(exc: &PyExceptionObj) -> String {
-    let mut out = String::new();
-    if !exc.cause.is_null() {
-        let cause = unsafe { &*exc.cause };
-        out.push_str(&render_exception_chain(cause));
-        out.push_str(
-            "\n\nThe above exception was the direct cause of the following exception:\n\n",
-        );
+    let mut chain: Vec<&PyExceptionObj> = Vec::new();
+    let mut visited: HashSet<*const PyExceptionObj> = HashSet::new();
+    let mut current: *const PyExceptionObj = exc;
+    loop {
+        if !visited.insert(current) {
+            break;
+        }
+        let current_ref = unsafe { &*current };
+        chain.push(current_ref);
+        if current_ref.cause.is_null() {
+            break;
+        }
+        current = current_ref.cause;
     }
-    out.push_str(&render_single_exception(exc));
+    let mut out = String::new();
+    for (idx, e) in chain.into_iter().rev().enumerate() {
+        if idx > 0 {
+            out.push_str(
+                "\n\nThe above exception was the direct cause of the following exception:\n\n",
+            );
+        }
+        out.push_str(&render_single_exception(e));
+    }
     out
 }
 
@@ -679,7 +708,8 @@ mod tests {
     fn render_exception_chain_walks_a_multi_level_cause_chain() {
         // A `from` chain nested two levels deep (`raise C from B`, itself
         // caught from `raise B from A`) exercises `render_exception_chain`'s
-        // own recursion beyond the single-cause base case above.
+        // iterative walk beyond a single hop, following the `.cause` chain
+        // two levels deep.
         let root = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "root");
         let middle = alloc_named(EXCEPTION_TYPE_TYPE_ERROR, "TypeError", "middle");
         unsafe { (*middle).cause = root };
@@ -696,6 +726,64 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn render_exception_chain_breaks_a_self_cycle_instead_of_overflowing() {
+        // `except ValueError as e: raise e from e` is valid Python source
+        // and sets `e.cause = e`. Rendering must detect the repeat and stop
+        // instead of recursing forever.
+        let exc = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "self cycle");
+        unsafe { (*exc).cause = exc };
+        let rendered = render_exception_chain(unsafe { &*exc });
+        assert_eq!(rendered, render_single_exception(unsafe { &*exc }));
+        assert!(!rendered.contains("direct cause"));
+    }
+
+    #[test]
+    fn render_exception_chain_breaks_a_two_node_cycle() {
+        // A longer cycle is reachable through two `raise ... from`
+        // statements: `e1.cause = e2` and, separately, `e2.cause = e1`.
+        let e1 = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "e1");
+        let e2 = alloc_named(EXCEPTION_TYPE_TYPE_ERROR, "TypeError", "e2");
+        unsafe { (*e1).cause = e2 };
+        unsafe { (*e2).cause = e1 };
+        let rendered = render_exception_chain(unsafe { &*e1 });
+        let expected = format!(
+            "{}\n\nThe above exception was the direct cause of the following exception:\n\n{}",
+            render_single_exception(unsafe { &*e2 }),
+            render_single_exception(unsafe { &*e1 })
+        );
+        assert_eq!(rendered, expected);
+        assert_eq!(
+            rendered.matches("The above exception was the direct cause of the following exception:")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn render_exception_chain_renders_a_non_cyclic_prefix_before_a_later_cycle() {
+        // The cycle's entry point (`b`) is not the chain's head (`a`):
+        // `a.cause = b; b.cause = c; c.cause = b`. Every distinct node
+        // reachable before the walk re-visits `b` must still render exactly
+        // once, oldest first, per `render_exception_chain`'s own doc
+        // comment -- this is stricter than only covering a cycle rooted at
+        // the traversal's start.
+        let a = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "a");
+        let b = alloc_named(EXCEPTION_TYPE_TYPE_ERROR, "TypeError", "b");
+        let c = alloc_named(EXCEPTION_TYPE_RUNTIME_ERROR, "RuntimeError", "c");
+        unsafe { (*a).cause = b };
+        unsafe { (*b).cause = c };
+        unsafe { (*c).cause = b };
+        let rendered = render_exception_chain(unsafe { &*a });
+        let expected = format!(
+            "{}\n\nThe above exception was the direct cause of the following exception:\n\n{}\n\nThe above exception was the direct cause of the following exception:\n\n{}",
+            render_single_exception(unsafe { &*c }),
+            render_single_exception(unsafe { &*b }),
+            render_single_exception(unsafe { &*a })
+        );
+        assert_eq!(rendered, expected);
     }
 
     #[test]
