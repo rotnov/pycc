@@ -221,3 +221,4 @@ current.
 | [D-212](./D-212-track-a-duplicate-int-s-retain-on-the.md) | Track a duplicate int's exception-edge retain, and correct D-208's site count | accepted |
 | [D-213](./D-213-defer-pep-487-full-invocation-reject-the.md) | Defer PEP 487 full invocation; reject the inherited-__init_subclass__ soundness gap | accepted |
 | [D-214](./D-214-unify-the-init-subclass-guard-into-a.md) | Unify the __init_subclass__ guard into a single unconditional nearest-ancestor lookup | accepted |
+| [D-215](./D-215-stage-a-tolerant-rustfmt-ci-gate-check-ahead-of.md) | Stage a tolerant rustfmt CI-gate check ahead of activating the rustfmt job (issue #24, Part 2) | accepted |
