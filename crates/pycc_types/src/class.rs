@@ -1590,8 +1590,8 @@ mod tests {
         // `collect_block_constraints`'s own new `AttrGet`/`MethodCall`/
         // `AttrSet` arms (D-154): the constraint solver only runs at all
         // when at least one function in the module is not fully annotated
-        // (`concrete_function_signatures` returns `None`, routing `check`
-        // through `infer_function_signatures_with_solver` instead of the
+        // (`concrete_function_environment` returns `None`, routing `check`
+        // through `infer_function_signatures_with_solver_all` instead of the
         // concrete fast path) -- every other test in this module uses only
         // fully annotated methods, so none of them exercises this path.
         // `_touch` is private (D-038: an unannotated *private* name is
@@ -1925,7 +1925,7 @@ mod tests {
         // generic function whose own body reads/writes an instance
         // attribute and calls a method is needed to walk those recursive-
         // descent helpers into these new node shapes at all.
-        // `check_and_resolve` exercises both: `checked_function_signatures`
+        // `check_and_resolve` exercises both: `checked_function_signatures_all`
         // routes `helper` through `check_generic_function_in` (which calls
         // `reject_generic_calls_in_stmt` to reject self-recursion).
         // `monomorphize`'s own Pass 2, however, explicitly *skips* a generic

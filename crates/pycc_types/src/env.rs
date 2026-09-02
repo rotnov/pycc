@@ -96,7 +96,7 @@ pub struct Environment {
     /// `Clone`d per function via `child_for_function`, so this needs the
     /// same cheap-clone property `functions`/`generics` already rely on).
     /// Populated once, from `HirModule::class_defs`, by every `Environment`
-    /// constructor this crate has (`check_with_signatures`,
+    /// constructor this crate has (`check_with_signatures_all`,
     /// `concrete_function_environment`) -- see `class::bind_classes`.
     pub(crate) classes: Arc<HashMap<String, HirClassDef>>,
     /// Part 1 of #541 (extending D-173): the subset of `classes` whose
@@ -274,7 +274,7 @@ impl Environment {
         // Issue #22: by default, binding a function also marks it as
         // defined. This makes standalone `infer_expr` / `check_function`
         // calls work without callers needing to separately track
-        // `defined_functions`. `check_with_environment` clears this set
+        // `defined_functions`. `check_with_environment_all` clears this set
         // before its top-level source-order pass so call-before-`def` is
         // caught there.
         self.defined_functions.insert(name);

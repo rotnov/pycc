@@ -5,7 +5,7 @@
 //! guideline in `AGENTS.md`'s "Keep source files decomposable" section.
 //! Both checks below run once per module, before any per-function
 //! `Environment`/signature-inference work, and are called from both
-//! `check` (`lib.rs`) and `check_and_resolve` (`constraints.rs`).
+//! `check_all` and `checked_function_signatures_all` (both in `module.rs`).
 
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{HirClassDef, HirItem, HirModule, Ty};
@@ -35,12 +35,12 @@ use std::collections::HashMap;
 /// shared signature and pass silently (issue #402). Do not reintroduce a
 /// skip for `Ty::Infer` positions.
 ///
-/// Called from `check` and `checked_function_signatures` (catches the
+/// Called from `check_all` and `checked_function_signatures_all` (catches the
 /// concrete path before the concrete/solver split), both pre-resolution.
 /// `check_and_resolve` no longer needs its own post-resolution recheck:
 /// since this function now rejects every raw-shape mismatch up front
 /// (arity or `Infer`-vs-concrete), any redefinition pair it accepts is
-/// already raw-shape-identical, and `infer_function_signatures_with_solver`
+/// already raw-shape-identical, and `infer_function_signatures_with_solver_all`
 /// resolves same-named items through one shared, name-keyed signature
 /// entry -- so raw-shape-identical items are guaranteed to resolve to the
 /// same concrete signature too. A post-resolution recheck would therefore

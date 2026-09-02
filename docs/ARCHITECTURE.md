@@ -150,11 +150,24 @@ expressions; HIR does not yet assign binding identities or build and memoize a
 call graph. Syntactically valid constructs outside that implemented HIR subset
 return a spanned `C0001` capability diagnostic, so `pycc check` never turns an
 unsupported statement or expression into an uncaught lowering panic.
-`pycc_types::check` validates the lowered module against the
-inferred signature table without cloning HIR. Compiler stages that need
-concrete private-helper signatures use `pycc_types::check_and_resolve`, which
-performs the same validation and returns HIR with those signatures
-materialized.
+`pycc_types::check_all` validates the lowered module against the
+inferred signature table without cloning HIR and reports one diagnostic per
+failing function (D-220). A pre-check failure (an incompatible
+redefinition or attribute redeclaration) is reported alone. Otherwise, if
+the private-helper solver's list is module-level (a failure in its
+top-level walk or in a post-body phase such as
+`propagate_binop_constraints`), that one diagnostic is reported alone and
+the annotation checker's list is dropped, because a post-body solver
+diagnostic cannot be matched by function to the checker's entry for the
+same error. Otherwise the solver's per-function diagnostics are reported in
+item order, then every checker entry -- per-function or module-level --
+whose function the solver did not flag, in the checker's order. If the
+solver passes, the checker's list against the solved signatures is reported
+on its own.
+Compiler stages that need concrete private-helper signatures use
+`pycc_types::check_and_resolve_all`, which performs the same validation and
+returns HIR with those signatures materialized. `check` and
+`check_and_resolve` are the first-element views of the same lists.
 
 `pycc check` stops after the check-only frontend pipeline. `build`/`run`
 continue through `pycc_mir` and `pycc_codegen` into the full v0.1 language
@@ -189,8 +202,10 @@ checker builds its function environment directly rather than materializing and
 then cloning an intermediate signature table; the constraint-collection walk
 is reserved for modules that contain an actual private-helper inference
 variable. A concrete module that fails validation falls back to the historical
-solver-first sequence so the selected diagnostic does not change when multiple
-errors are present; valid concrete modules keep the single-pass fast path.
+solver-first sequence so the first diagnostic does not change when multiple
+errors are present, and the checker's per-function list is merged after the
+solver's by function key (D-220); valid concrete modules keep the single-pass
+fast path.
 Call validation preserves its all-arguments-before-arity diagnostic order while
 holding up to four inferred argument types in a stack buffer; wider calls use a
 heap-backed fallback.

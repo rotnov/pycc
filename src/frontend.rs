@@ -1,7 +1,8 @@
 //! The driver's frontend seam: runs a source file through the parser, checked
 //! HIR lowering, and the type checker, and renders whatever diagnostics the
 //! first failing pass collected (#864 Part 1, D-217; Part 2's per-item HIR
-//! collection, D-219, flows through the same payload).
+//! collection, D-219, and Part 3's per-function type-checker collection,
+//! D-220, flow through the same payload).
 //!
 //! Extracted from `src/main.rs` (AGENTS.md's oversized-file rule) when the
 //! failure payload became a `Vec<Diagnostic>`; `main.rs` keeps the command
@@ -23,11 +24,15 @@ pub(crate) enum FrontendFailure {
     /// `pycc_parser::parse_all`; HIR lowering: one per failing top-level
     /// item in source order, with cascades of an earlier skipped item
     /// suppressed, see `pycc_hir::lower_all` and D-219; the type checker:
-    /// still one entry until #864 Part 3, #868, lands).
+    /// one per failing function, solver-first per function; a pre-check
+    /// or module-level solver failure is reported alone, otherwise the
+    /// checker's entries for functions the solver did not flag follow the
+    /// solver's -- see `pycc_types::check_all` and D-220).
     ///
     /// Invariant: `diagnostics` is never empty. Every constructor below
     /// either wraps one `Diagnostic` in a `vec![...]` or forwards
-    /// `pycc_parser::parse_all`'s or `pycc_hir::lower_all`'s `Err`, both
+    /// `pycc_parser::parse_all`'s, `pycc_hir::lower_all`'s, or
+    /// `pycc_types::check_all`/`check_and_resolve_all`'s `Err`, all
     /// non-empty by construction (proven by those crates' unit tests). No
     /// runtime assertion guards it:
     /// an `assert!` would add an uncoverable in-crate region under D-014's
@@ -74,16 +79,16 @@ pub(crate) fn lower_frontend(
 
 pub(crate) fn check_frontend(path: &Path) -> Result<(), FrontendFailure> {
     let (hir, source) = lower_frontend(path)?;
-    pycc_types::check(&hir).map_err(|diagnostic| FrontendFailure::Compile {
-        diagnostics: vec![diagnostic],
+    pycc_types::check_all(&hir).map_err(|diagnostics| FrontendFailure::Compile {
+        diagnostics,
         source,
     })
 }
 
 pub(crate) fn resolve_frontend(path: &Path) -> Result<pycc_hir::HirModule, FrontendFailure> {
     let (hir, source) = lower_frontend(path)?;
-    pycc_types::check_and_resolve(&hir).map_err(|diagnostic| FrontendFailure::Compile {
-        diagnostics: vec![diagnostic],
+    pycc_types::check_and_resolve_all(&hir).map_err(|diagnostics| FrontendFailure::Compile {
+        diagnostics,
         source,
     })
 }

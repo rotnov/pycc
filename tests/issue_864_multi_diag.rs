@@ -7,8 +7,10 @@
 //! on their own: one JSON object per line with no blank separators, per-file
 //! output concatenated byte-for-byte across files, and the `build` stderr
 //! mirror of `check`'s human stdout. Part 2 (#867, D-219) adds the HIR
-//! fan-out case at the bottom: two `C0001`s from one file reach the driver
-//! through the same payload.
+//! fan-out case: two `C0001`s from one file reach the driver through the
+//! same payload. Part 3 (#868, D-220) adds the type-checker cases at the
+//! bottom: one diagnostic per failing function in solver-first order, the
+//! HIR-failure-stops boundary, and a no-panic sweep of the corpus.
 
 use pycc_scratch::ScratchDir;
 use std::path::Path;
@@ -180,4 +182,119 @@ fn hir_per_item_diagnostics_reach_check_json_and_build_stderr() {
         read_fixture("c0001_issue_864_repro.expected.txt")
     );
     assert_eq!(stderr(&build).matches("error[C0001]").count(), 2);
+}
+
+/// #868 (D-220): the type checker's per-function list reaches the driver
+/// through the same payload: three objects for the three broken functions
+/// of the fixture, in solver-first order (`f`'s T0022 and `h`'s T0021 from
+/// the solver's body walk, then `g`'s T0043 from the annotation checker),
+/// and the same three human renders on `build`'s stderr.
+#[test]
+fn type_per_function_diagnostics_reach_check_json_and_build_stderr() {
+    const TYPES_FIXTURE: &str = "tests/diagnostics/t0022_types_per_function.py";
+    let output = check(&[TYPES_FIXTURE], true);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stdout(&output);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "expected exactly three JSON lines:\n{text}");
+    let codes: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            let object: serde_json::Value = serde_json::from_str(line).unwrap();
+            object["code"].as_str().unwrap().to_string()
+        })
+        .collect();
+    assert_eq!(codes, vec!["T0022", "T0021", "T0043"]);
+
+    let dir = ScratchDir::new("issue_868_build_stderr").expect("failed to create scratch dir");
+    let out = dir.join("out");
+    let build = Command::new(pycc_bin())
+        .args(["build", TYPES_FIXTURE, "-o"])
+        .arg(&out)
+        .current_dir(repo_root())
+        .output()
+        .unwrap();
+    assert_eq!(build.status.code(), Some(1));
+    assert!(stdout(&build).is_empty(), "build must not write to stdout");
+    assert!(!out.exists(), "no output artifact may be produced");
+    assert_eq!(
+        stderr(&build),
+        read_fixture("t0022_types_per_function.expected.txt")
+    );
+    assert_eq!(stderr(&build).matches("error[T").count(), 3);
+}
+
+/// #868 decision A: a HIR lowering failure still stops before the type
+/// checker runs, so a file with both a `C0001` and a type error reports
+/// only the `C0001` -- the type checker's list never mixes with an earlier
+/// pass's.
+#[test]
+fn hir_failure_still_stops_before_the_type_checker() {
+    let dir = ScratchDir::new("issue_868_hir_stops").expect("failed to create scratch dir");
+    let path = dir.join("mixed.py");
+    std::fs::write(
+        &path,
+        "class A:\n    x: int = 1\n\n\ndef f() -> int:\n    return \"a\"\n",
+    )
+    .unwrap();
+    let path = path.to_string_lossy().into_owned();
+    let output = check(&[&path], true);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stdout(&output);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 1, "expected exactly one JSON line:\n{text}");
+    let object: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(object["code"], "C0001");
+    assert!(
+        !text.contains("\"T0"),
+        "no type diagnostic may follow a HIR failure:\n{text}"
+    );
+}
+
+/// #868: the per-function collectors keep walking after a body fails, so a
+/// later body is checked in a state the pre-#868 driver never reached. This
+/// sweeps every `.py` file in the repository's fixture corpora that lowers
+/// through both public entry points and asserts only that neither panics
+/// and that neither ever returns an empty `Err`.
+#[test]
+fn type_checker_entry_points_never_panic_on_the_fixture_corpus() {
+    let mut sources = Vec::new();
+    for corpus in ["tests/fixtures", "tests/diagnostics", "tests/regress"] {
+        collect_py_files(&repo_root().join(corpus), &mut sources);
+    }
+    sources.sort();
+    assert!(
+        sources.len() > 100,
+        "corpus unexpectedly small: {}",
+        sources.len()
+    );
+    let mut lowered = 0usize;
+    for path in &sources {
+        let source = std::fs::read_to_string(path).unwrap();
+        let Ok(module) = pycc_parser::parse(&source) else {
+            continue;
+        };
+        let Ok(hir) = pycc_hir::lower_checked(&module) else {
+            continue;
+        };
+        lowered += 1;
+        if let Err(diagnostics) = pycc_types::check_all(&hir) {
+            assert!(!diagnostics.is_empty(), "{}: empty Err", path.display());
+        }
+        if let Err(diagnostics) = pycc_types::check_and_resolve_all(&hir) {
+            assert!(!diagnostics.is_empty(), "{}: empty Err", path.display());
+        }
+    }
+    assert!(lowered > 50, "too few fixtures lowered: {lowered}");
+}
+
+fn collect_py_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            collect_py_files(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "py") {
+            out.push(path);
+        }
+    }
 }

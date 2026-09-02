@@ -847,7 +847,7 @@ pub fn build(hir: &HirModule) -> MirModule {
     }
     // Lower module statements first, in source order, so the module scope is
     // complete before any function body is lowered. This mirrors
-    // `pycc_types::check_with_signatures`'s D-041 three-pass contract:
+    // `pycc_types::check_with_signatures_all`'s D-041 three-pass contract:
     // top-level forward reads stay invalid because these statements are still
     // visited sequentially, while a function may read a global assigned after
     // its `def` because function bodies are evaluated only when called.
@@ -862,7 +862,7 @@ pub fn build(hir: &HirModule) -> MirModule {
             // here), but this call keeps every sequential-statement-list
             // walk in this crate routed through the same narrowing-aware
             // shape uniformly, mirroring
-            // `pycc_types::check_with_environment`'s own identical no-op
+            // `pycc_types::check_with_environment_all`'s own identical no-op
             // call at its module top level.
             apply_post_if_narrowing(stmt, &mut scopes);
         }

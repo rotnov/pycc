@@ -8,12 +8,13 @@
 //! [`binop`](crate::binop), and [`class`](crate::class).
 //!
 //! The seam is cohesive because every item in it exists to serve one
-//! pipeline, entered exactly once from the crate root: `check_and_resolve`
-//! calls [`checked_function_signatures`], which either accepts the
+//! pipeline, entered exactly once from the module-level driver
+//! ([`crate::module`], issue #868): `check_and_resolve_all` calls
+//! `checked_function_signatures_all` there, which either accepts the
 //! fully-annotated fast path ([`concrete_function_signatures`]) or falls
-//! through to [`infer_function_signatures_with_solver`]. Everything else
-//! here is one of that pipeline's stages, and none of them has any other
-//! caller:
+//! through to [`infer_function_signatures_with_solver_all`], both in the
+//! [`signatures`] submodule. Everything else here is one of that pipeline's
+//! stages, and none of them has any other caller:
 //!
 //! * its own type vocabulary -- `TypeTerm`, `SignatureTerms`,
 //!   `BinOpConstraint`, [`SolverConstraints`],
@@ -27,12 +28,14 @@
 //! * constraint application ([`propagate_binop_constraints`],
 //!   [`apply_annotation_defaults`]) and the signature materialization that
 //!   validates a solved signature set against the ordinary checker
-//!   ([`concrete_function_signatures`], [`infer_function_signatures_with_solver`],
-//!   [`checked_function_signatures`]).
+//!   ([`concrete_function_signatures`], [`infer_function_signatures_with_solver_all`],
+//!   in [`signatures`]; `checked_function_signatures_all` itself moved to
+//!   [`crate::module`] with the rest of the driver).
 //!
-//! Deliberately left in `lib.rs`: the annotation-driven checker itself.
-//! `check_and_resolve`, `infer_expr`/`infer_expr_in`, [`check_stmt`](crate::check_stmt),
-//! `check_stmt_in_function`, `check_with_signatures`, `check_assignment`,
+//! Deliberately left in `lib.rs` (or, for the driver, `module.rs`): the
+//! annotation-driven checker itself. `check_and_resolve`,
+//! `infer_expr`/`infer_expr_in`, [`check_stmt`](crate::check_stmt),
+//! `check_stmt_in_function`, `check_with_signatures_all`, `check_assignment`,
 //! [`Environment`], and the `bind_local_types_*` helpers
 //! stay behind, together with the four issue-#118 `*_in_place*` fast-path
 //! wrappers around `check_stmt`/`check_stmt_in_function`, which the solver
@@ -55,6 +58,9 @@
 //!
 //! [D-185]: https://github.com/rotnov/pycc/blob/main/docs/decisions/D-185-permit-a-dedicated-tracking-issue-per-oversized.md
 
+mod signatures;
+pub(crate) use signatures::*;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -62,13 +68,11 @@ use crate::binop::numeric_result_type;
 use crate::unop::unary_result_type;
 use crate::{
     Environment, annotation_marker_is_not_a_value, cast_marker_is_not_a_value,
-    check_incompatible_attribute_redeclarations, check_incompatible_redefinitions,
-    check_with_signatures, enum_marker_is_not_a_value, is_assignable, is_generic_signature,
-    is_known_callable_builtin, is_local, is_marker_kind, marker_is_not_a_value,
-    non_callable_binding, solver, std_constant_is_not_callable, std_function_used_as_a_value,
-    std_qualified_symbol, std_receiver_name, std_receiver_shadowed, std_scalar_to_ty, t0042,
-    ty_contains_param, type_checking_marker_is_not_a_value, unbound_local,
-    unsupported_callable_builtin,
+    enum_marker_is_not_a_value, is_assignable, is_generic_signature, is_known_callable_builtin,
+    is_local, is_marker_kind, marker_is_not_a_value, non_callable_binding, solver,
+    std_constant_is_not_callable, std_function_used_as_a_value, std_qualified_symbol,
+    std_receiver_name, std_receiver_shadowed, std_scalar_to_ty, t0042, ty_contains_param,
+    type_checking_marker_is_not_a_value, unbound_local, unsupported_callable_builtin,
 };
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
@@ -809,8 +813,8 @@ pub(crate) fn collect_expr_constraints(
         // element lists, or any element producing `None`/`Err` keep the
         // historical `Ok(None)` behavior -- returning `Err` here for a case
         // this solver can't actually validate would wrongly preempt
-        // `checked_function_signatures`' fallback to the real, list-aware
-        // check pass (`check_with_signatures`) that runs after this solver.
+        // `checked_function_signatures_all`'s fallback to the real, list-aware
+        // check pass (`check_with_signatures_all`) that runs after this solver.
         // `unify_terms` and `merge_inferred_types` are unchanged -- the
         // carrier is destructured, never unified.
         HirExpr::ListLiteral(elements) => {
@@ -1546,7 +1550,7 @@ pub(crate) fn collect_block_constraints(
                 // reference to it doesn't spuriously fail as "not bound"
                 // (it *is* locally bound, just not solver-typed); real
                 // element-type checking happens in the second, real check
-                // pass (`check_with_signatures`).
+                // pass (`check_with_signatures_all`).
                 // Issue #359 (Part 2 of #118): snapshot the pre-loop binding
                 // names so the loop variable and body-only bindings can be
                 // tracked as maybe-bound after the loop (a `for` loop may
@@ -1986,7 +1990,7 @@ pub(crate) fn collect_block_constraints(
                 // `check_raise_stmt` in the check pass, so errors from
                 // constraint collection for raise operands are deliberately
                 // ignored here — they would otherwise prevent the solver
-                // path from reaching `check_with_signatures`, where the
+                // path from reaching `check_with_signatures_all`, where the
                 // real check succeeds.
                 if let Some(exc_expr) = exc {
                     let _ = collect_expr_constraints(
@@ -2202,324 +2206,4 @@ pub(crate) fn introduces_bindings(body: &[HirStmt]) -> bool {
         }
         HirStmt::Raise { .. } => false,
     })
-}
-
-pub(crate) fn concrete_function_signatures(
-    hir: &HirModule,
-) -> Option<HashMap<String, (Vec<Ty>, Ty)>> {
-    let mut signatures = HashMap::new();
-    for item in &hir.items {
-        let HirItem::Function {
-            name,
-            params,
-            return_ty,
-            ..
-        } = item
-        else {
-            continue;
-        };
-        if *return_ty == Ty::Infer || params.iter().any(|(_, ty)| *ty == Ty::Infer) {
-            return None;
-        }
-        signatures.insert(
-            name.clone(),
-            (
-                params.iter().map(|(_, ty)| ty.clone()).collect(),
-                return_ty.clone(),
-            ),
-        );
-    }
-    Some(signatures)
-}
-
-/// Builds the function registry for a fully annotated module directly from
-/// HIR. Unlike [`concrete_function_signatures`] followed by
-/// [`check_with_signatures`], this creates each owned name and parameter vector
-/// only once. `check` does not need to materialize a second signature map for a
-/// downstream consumer, so its overwhelmingly common concrete, valid path can
-/// validate with this registry directly.
-pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
-    let mut functions = HashMap::new();
-    let mut generics = HashMap::new();
-    for item in &hir.items {
-        let HirItem::Function {
-            name,
-            params,
-            return_ty,
-            ..
-        } = item
-        else {
-            continue;
-        };
-        if *return_ty == Ty::Infer || params.iter().any(|(_, ty)| *ty == Ty::Infer) {
-            return None;
-        }
-        if is_generic_signature(params, return_ty) {
-            generics.insert(name.clone(), item.clone());
-        }
-        functions.insert(
-            name.clone(),
-            (
-                params.iter().map(|(_, ty)| ty.clone()).collect(),
-                return_ty.clone(),
-            ),
-        );
-    }
-    let mut env = Environment {
-        bindings: HashMap::new(),
-        declared: HashMap::new(),
-        functions: Arc::new(functions),
-        def_rebound: HashSet::new(),
-        defined_functions: HashSet::new(),
-        generics: Arc::new(generics),
-        classes: Arc::new(HashMap::new()),
-        synthetic_classes: Arc::new(HashSet::new()),
-        own_type_param: None,
-        current_class: None,
-        finals: HashSet::new(),
-        in_except_handler: false,
-        narrowed: HashMap::new(),
-    };
-    // Part 1 of #541: register the class table through `bind_class` (via
-    // `bind_classes`) rather than by populating `classes` directly, so this
-    // second `Environment` constructor cannot drift from the first on which
-    // entries are marked synthetic. `bind_class` and `bind_synthetic_class`
-    // are together the sole mutators of both tables precisely so that
-    // invariant holds by construction.
-    crate::class::bind_classes(&mut env, hir);
-    Some(env)
-}
-
-pub(crate) fn infer_function_signatures_with_solver(
-    hir: &HirModule,
-    function_local_names: &[Vec<&str>],
-) -> Result<HashMap<String, (Vec<Ty>, Ty)>, Diagnostic> {
-    let mut parents = Vec::new();
-    let mut concrete = Vec::new();
-    let mut signatures = HashMap::new();
-    for item in &hir.items {
-        if let HirItem::Function {
-            name,
-            params,
-            return_ty,
-            ..
-        } = item
-        {
-            signatures.insert(
-                name.clone(),
-                (
-                    params.iter().map(|(name, _)| name.clone()).collect(),
-                    params
-                        .iter()
-                        .map(|(_, ty)| term_for_type(ty.clone(), &mut parents, &mut concrete))
-                        .collect(),
-                    term_for_type(return_ty.clone(), &mut parents, &mut concrete),
-                ),
-            );
-        }
-    }
-
-    let mut constraints = SolverConstraints::default();
-    let mut globals = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-    };
-    for item in &hir.items {
-        match item {
-            HirItem::TopLevelStmt(stmt) => {
-                collect_block_constraints(
-                    &signatures,
-                    &mut parents,
-                    &mut concrete,
-                    &mut constraints,
-                    &mut globals,
-                    std::slice::from_ref(stmt),
-                    None,
-                )?;
-            }
-            // Mirror of pass 2's source-order `def` rebinding (D-110): the
-            // `def` marks the name def-rebound in the accumulated globals
-            // (without erasing its term, which representation tracking may
-            // still need), so helper-body environments seeded from them see
-            // the net binding, not a stale shadowed primitive.
-            HirItem::Function { name, .. } => {
-                globals.defs_rebound.insert(name.clone());
-            }
-        }
-    }
-    for (item, local_names) in hir.items.iter().zip(function_local_names) {
-        let HirItem::Function {
-            name, body, params, ..
-        } = item
-        else {
-            continue;
-        };
-        let signature = &signatures[name];
-        let mut env = ConstraintEnvironment {
-            bindings: globals.bindings.clone(),
-            local_names,
-            defs_rebound: globals.defs_rebound.clone(),
-            maybe_bindings: globals.maybe_bindings.clone(),
-            opaque_bindings: globals.opaque_bindings.clone(),
-        };
-        for local_name in local_names.iter().copied() {
-            env.bindings.remove(local_name);
-            // A local name (parameter or body-assigned) re-binds within this
-            // body, so a stale module-level def-rebound fact must not
-            // survive for it (D-110, PR #252's round-6 review): a parameter
-            // colliding with a def-rebound module name would otherwise skip
-            // the mirror gate and be mislabeled "not bound before this use".
-            env.defs_rebound.remove(local_name);
-            env.maybe_bindings.remove(local_name);
-            // Issue #771: same reasoning as `maybe_bindings` above — a
-            // local name re-binds within this function body, so a stale
-            // module-level opaque marker must not survive for it either.
-            env.opaque_bindings.remove(local_name);
-        }
-        // Use the current item's own parameter names, not the last-inserted
-        // signature's names (#386): a redefined method shares its mangled
-        // name but has its own parameter names, and checking its body against
-        // the wrong names would report false T0021 "not bound" errors. The
-        // type terms (signature.1) and return type (signature.2) come from
-        // the last definition, which is correct — compatible redefinitions
-        // have the same raw type shape (already validated by
-        // check_incompatible_redefinitions), and the last definition is the
-        // one bound at call sites.
-        for (param_name, param_ty) in params.iter().map(|(n, _)| n).zip(&signature.1) {
-            env.bindings.insert(param_name.clone(), param_ty.clone());
-        }
-        // #380 (PR-20): skip the constraint solver for abstract method
-        // bodies. An abstract method's HIR body is just `Return(None)`,
-        // but its declared return type may be non-`None` (e.g. `-> int`).
-        // Running the solver on it would unify `None` with the declared
-        // type and produce a spurious `T0022`. The type checker
-        // (`check_and_resolve`) also skips abstract method bodies.
-        let is_abstract_method = name
-            .split('.')
-            .next()
-            .filter(|class_name| *class_name != name)
-            .and_then(|class_name| {
-                hir.class_defs
-                    .iter()
-                    .find(|(n, _)| n == class_name)
-                    .map(|(_, cd)| cd)
-            })
-            .is_some_and(|class_def| {
-                let method_name = name.split('.').nth(1).unwrap_or("");
-                class_def.abstract_methods.iter().any(|m| m == method_name)
-            });
-        if is_abstract_method {
-            continue;
-        }
-        collect_block_constraints(
-            &signatures,
-            &mut parents,
-            &mut concrete,
-            &mut constraints,
-            &mut env,
-            body,
-            Some(signature.2.clone()),
-        )?;
-        if signature.2.is_err() && !contains_return(body) {
-            unify_terms(
-                signature.2.clone(),
-                Ok(Ty::None),
-                &mut parents,
-                &mut concrete,
-                "T0022",
-                "private helper implicit return",
-            )?;
-        }
-    }
-
-    // Annotation bounds are directional defaults, not hard equalities. Let
-    // every call/operator fact settle first, aggregate all remaining bounds
-    // per union-find root, then propagate any selected fallback back through
-    // operators. This keeps inference independent of body/declaration order.
-    propagate_binop_constraints(&constraints.binops, &mut parents, &mut concrete)?;
-    apply_annotation_defaults(
-        &constraints.annotation_defaults,
-        &mut parents,
-        &mut concrete,
-    )?;
-    propagate_binop_constraints(&constraints.binops, &mut parents, &mut concrete)?;
-
-    let non_scalar_local_roots = constraints
-        .non_scalar_local_terms
-        .iter()
-        .map(|&var| root(&mut parents, var))
-        .collect::<HashSet<_>>();
-
-    let mut resolved = HashMap::new();
-    for (name, signature) in &signatures {
-        let param_tys = signature
-            .0
-            .iter()
-            .zip(signature.1.iter().cloned())
-            .map(|(param_name, term)| {
-                resolved_private_signature_term(
-                    term,
-                    &mut parents,
-                    &concrete,
-                    &non_scalar_local_roots,
-                )
-                .ok_or_else(|| {
-                    Diagnostic::error(
-                        "T0021",
-                        format!(
-                            "cannot infer type of parameter `{param_name}` in private helper `{name}`; add an annotation"
-                        ),
-                        Span::new(0, 0),
-                    ).with_help(format!("add a type annotation to parameter `{param_name}`"))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let return_ty = resolved_private_signature_term(
-            signature.2.clone(),
-            &mut parents,
-            &concrete,
-            &non_scalar_local_roots,
-        )
-        .ok_or_else(|| {
-            Diagnostic::error(
-                "T0021",
-                format!("cannot infer return type of private helper `{name}`; add an annotation"),
-                Span::new(0, 0),
-            )
-            .with_help(format!("add a return type annotation to `{name}`"))
-        })?;
-        resolved.insert(name.clone(), (param_tys, return_ty));
-    }
-    Ok(resolved)
-}
-
-pub(crate) fn checked_function_signatures(
-    hir: &HirModule,
-    function_local_names: &[Vec<&str>],
-) -> Result<HashMap<String, (Vec<Ty>, Ty)>, Diagnostic> {
-    // Issue #22: reject incompatible redefinitions before trying either the
-    // concrete or solver path (same rationale as `check`'s own call).
-    check_incompatible_redefinitions(hir)?;
-    // #676 (D-210): same rationale and call-site timing as `check`'s own
-    // call -- this entry point (via `check_and_resolve`) is also reachable
-    // from `pycc build` without an earlier `pycc check`/`check` call, so it
-    // needs its own guard against a cross-MRO attribute redeclaration.
-    check_incompatible_attribute_redeclarations(hir)?;
-    // Fully annotated valid modules have no inference variables to constrain.
-    // Validate them once and avoid the preceding constraint-collection walk.
-    // If validation fails, deliberately fall back to the historical
-    // solver-first sequence so modules with multiple errors retain the same
-    // first diagnostic as before this fast path existed.
-    if let Some(signatures) = concrete_function_signatures(hir)
-        && check_with_signatures(hir, &signatures, function_local_names).is_ok()
-    {
-        return Ok(signatures);
-    }
-
-    let signatures = infer_function_signatures_with_solver(hir, function_local_names)?;
-    check_with_signatures(hir, &signatures, function_local_names)?;
-    Ok(signatures)
 }

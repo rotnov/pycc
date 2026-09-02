@@ -433,6 +433,20 @@ fn t0045_final_reassignment() {
     assert_diagnostic_matches_fixture("t0045_final_reassignment");
 }
 
+// Issue #868 (Part 3 of #864, D-220): the type checker reports one
+// diagnostic per failing function. Report order is the solver's body walk
+// (item order) first -- `f`'s T0022 and `h`'s T0021 -- then the concrete
+// annotation checker's entries for functions the solver did not flag --
+// `g`'s T0043 -- so the order is `f, h, g`, not source order. The first
+// render is byte-identical to the pre-#868 single diagnostic (D-217 rule
+// 2). Every `pycc_types` diagnostic still carries an empty span, so all
+// three render at `:1:1` (D-043).
+#[test]
+fn t0022_types_per_function() {
+    assert_diagnostic_matches_fixture("t0022_types_per_function");
+    assert_json_diagnostic_matches_fixture("t0022_types_per_function");
+}
+
 // Issue #618: an out-of-range `int` literal in a runtime `int`-boundary
 // position (D-141) is rejected at compile time with a spanned T0051
 // diagnostic instead of reaching `pycc_rt_int_untag_checked` and aborting at

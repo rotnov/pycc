@@ -229,7 +229,8 @@ fn incompatible_redefinition_is_a_check_error() {
 /// Issue #22 review fix: a redefinition with a different signature must
 /// also be rejected by `pycc build`. Both signatures here are fully
 /// concrete, so this fixture is rejected by the pre-resolution check
-/// (`check_and_resolve` calls `checked_function_signatures`, which calls
+/// (`check_and_resolve` is the first-diagnostic view of
+/// `check_and_resolve_all`, whose `checked_function_signatures_all` calls
 /// `check_incompatible_redefinitions` before any solver resolution runs).
 /// Issue #402 fixed the same pre-resolution check to also reject a
 /// same-arity redefinition where one signature still carries `Ty::Infer`
