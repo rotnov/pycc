@@ -1,7 +1,7 @@
 {
   "schema": "pycc-llms-txt-context-manifest/v1",
   "description": "Hermetic, reviewed fixture that binds every non-optional llms.txt inference link to its local source file, representation role, and per-resource byte budget. scripts/check-site.sh parses site/llms.txt, matches its non-optional (Project and Specifications) links against this manifest, computes the actual byte count from each local_path, and fails closed when a representation is not Markdown/plain text, a GitHub blob/application URL is used where a raw tracked document is expected, a per-resource or aggregate budget is breached, or the non-optional link set drifts from the manifest. No pull-request CI fetches the live site, GitHub, or the mutable reference parser; the byte counts are computed from the checked-out repository so the budget is enforced hermetically against the exact content in the commit.",
-  "budget_kib": 264,
+  "budget_kib": 272,
   "non_optional_documents": [
     {
       "label": "Markdown landing",

@@ -103,6 +103,30 @@ fn l0001_except_multi_type_as_binding_requires_parens() {
     assert_diagnostic_matches_fixture("l0001_except_multi_type_as_binding_requires_parens");
 }
 
+// #864 Part 1 (D-217): a file with several syntax errors reports every one
+// of them, in ruff's discovery order, as concatenated human renders (no
+// separator) and as one JSON object per line. `def main(:\n` yields exactly
+// two ruff errors (the malformed parameter list, then the trailing
+// `unexpected EOF` recovery cascade, reported verbatim). The first render in
+// both fixtures is byte-identical to what the pre-#864 single-diagnostic
+// `check` printed for the same file.
+#[test]
+fn l0001_two_syntax_errors() {
+    assert_diagnostic_matches_fixture("l0001_two_syntax_errors");
+    assert_json_diagnostic_matches_fixture("l0001_two_syntax_errors");
+}
+
+// #864's own reproduction, pinning the Part 1 boundary: HIR lowering still
+// reports only its first diagnostic (one `C0001` at `2:5`), because per-item
+// collection is Part 2 (#867). Part 2's acceptance is regenerating these two
+// fixtures so they show both `C0001`s -- a reviewable diff, not a flipped
+// assertion.
+#[test]
+fn c0001_issue_864_repro() {
+    assert_diagnostic_matches_fixture("c0001_issue_864_repro");
+    assert_json_diagnostic_matches_fixture("c0001_issue_864_repro");
+}
+
 // PEP 758 (Part 3 of #543, #740): `except ():` parses successfully as an
 // empty-tuple exception type, but names zero exception types -- rejected
 // at HIR lowering rather than reaching MIR/codegen's non-empty

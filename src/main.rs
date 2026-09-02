@@ -1,10 +1,11 @@
 mod cli;
+mod frontend;
 mod project_config;
 mod source;
 
 use clap::Parser;
 use cli::{Cli, Command, ErrorFormat, OutputFormat};
-use pycc_diag::Diagnostic;
+use frontend::{check_frontend, report_build_failure, report_check_failure, resolve_frontend};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -139,7 +140,7 @@ fn main() -> ExitCode {
 /// code, with a plain stderr message regardless of `--format` -- an
 /// unrecognized code is an out-of-band invocation failure, not a
 /// diagnostic occurrence, so it is never subject to `--format` the way
-/// `check`'s own out-of-band `FrontendFailure::Input` class ("could not
+/// `check`'s own out-of-band `frontend::FrontendFailure::Input` class ("could not
 /// read ...") is never subject to `--error-format` either.
 fn explain(code: &str, format: OutputFormat) -> ExitCode {
     match pycc_diag::explain::find(code) {
@@ -341,100 +342,6 @@ fn resolve_release_flag(explicit_release: bool, source_path: &Path) -> bool {
     }
 }
 
-enum FrontendFailure {
-    Input(String),
-    Compile {
-        // Boxed (D-152): `Diagnostic` grew a `help: Option<String>` field,
-        // which pushed this variant's inline size past clippy's
-        // `result_large_err` threshold. Boxing keeps `Result<_,
-        // FrontendFailure>` small regardless of how large `Diagnostic`
-        // itself grows in the future.
-        diagnostic: Box<Diagnostic>,
-        source: String,
-    },
-}
-
-fn lower_frontend(path: &Path) -> Result<(pycc_hir::HirModule, String), FrontendFailure> {
-    let bytes = std::fs::read(path).map_err(|error| FrontendFailure::Input(error.to_string()))?;
-    let source = source::decode_python_source(&bytes).map_err(FrontendFailure::Input)?;
-    let module = match pycc_parser::parse(&source) {
-        Ok(module) => module,
-        Err(diagnostic) => {
-            return Err(FrontendFailure::Compile {
-                diagnostic: Box::new(diagnostic),
-                source,
-            });
-        }
-    };
-    let hir = match pycc_hir::lower_checked(&module) {
-        Ok(hir) => hir,
-        Err(diagnostic) => {
-            return Err(FrontendFailure::Compile {
-                diagnostic: Box::new(diagnostic),
-                source,
-            });
-        }
-    };
-    Ok((hir, source))
-}
-
-fn check_frontend(path: &Path) -> Result<(), FrontendFailure> {
-    let (hir, source) = lower_frontend(path)?;
-    pycc_types::check(&hir).map_err(|diagnostic| FrontendFailure::Compile {
-        diagnostic: Box::new(diagnostic),
-        source,
-    })
-}
-
-fn resolve_frontend(path: &Path) -> Result<pycc_hir::HirModule, FrontendFailure> {
-    let (hir, source) = lower_frontend(path)?;
-    pycc_types::check_and_resolve(&hir).map_err(|diagnostic| FrontendFailure::Compile {
-        diagnostic: Box::new(diagnostic),
-        source,
-    })
-}
-
-fn report_check_failure(path: &Path, failure: FrontendFailure, error_format: ErrorFormat) -> u8 {
-    let path = path.to_string_lossy();
-    match failure {
-        FrontendFailure::Input(message) => {
-            eprintln!(
-                "error: could not read `{}`: {message}",
-                pycc_diag::display_path(&path)
-            );
-            2
-        }
-        FrontendFailure::Compile { diagnostic, source } => {
-            match error_format {
-                ErrorFormat::Human => {
-                    print!("{}", pycc_diag::render_human(&diagnostic, &path, &source));
-                }
-                ErrorFormat::Json => {
-                    println!("{}", pycc_diag::render_json(&diagnostic, &path, &source));
-                }
-            }
-            1
-        }
-    }
-}
-
-fn report_build_failure(path: &Path, failure: FrontendFailure) -> u8 {
-    let path = path.to_string_lossy();
-    match failure {
-        FrontendFailure::Input(message) => {
-            eprintln!(
-                "error: could not read `{}`: {message}",
-                pycc_diag::display_path(&path)
-            );
-            2
-        }
-        FrontendFailure::Compile { diagnostic, source } => {
-            eprint!("{}", pycc_diag::render_human(&diagnostic, &path, &source));
-            1
-        }
-    }
-}
-
 /// Windows has no `cc` by default (that's a Unix convention -- MSVC's own
 /// tools are `cl.exe`/`link.exe`), so this uses the `clang` bundled with the
 /// same LLVM install `LLVM_SYS_221_PREFIX` already points builds at (see
@@ -609,7 +516,7 @@ fn run(path: &Path, args: &[std::ffi::OsString]) -> ExitCode {
 /// a path that cannot be executed reaches the `Err` arm deterministically,
 /// without needing `run`'s own scratch-directory and build machinery to
 /// manufacture that failure. Returns a plain `u8` rather than `ExitCode`
-/// (mirroring `report_check_failure`/`report_build_failure` above) so a
+/// (mirroring `frontend::report_check_failure`/`report_build_failure`) so a
 /// test can assert the exact numeric value instead of only "did not
 /// panic" -- `ExitCode` itself has no `PartialEq` (see
 /// `create_scratch_tests`'s own note on this).

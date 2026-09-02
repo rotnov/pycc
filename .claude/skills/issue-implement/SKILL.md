@@ -206,7 +206,14 @@ Follow the plan. Write tests for success, failure, and edge paths alongside the 
 the coverage gate is a merge invariant, not a target. Update every affected document in the
 same commits as the code. Before entering review, run the full local gate set: the coverage
 gate with its preparatory builds exactly as CI performs them, the `scripts/` unittest suite,
-the agent-asset and agent-policy validators, and clippy with warnings denied.
+the agent-asset and agent-policy validators, and clippy with warnings denied. When the diff
+touches any document `site/llms-txt-context-manifest.json` lists as non-optional (today
+`README.md`, `docs/SPEC.md`, `docs/ARCHITECTURE.md`, `docs/PYTHON_STANDARDS.md`,
+`docs/ROADMAP.md`, `site/index.html.md`), also run `sh scripts/check-site.sh` against the
+rebased tree: the Pages workflow enforces the manifest's aggregate byte budget on every push
+that changes those files, `origin/main` routinely sits within a few bytes of the ceiling, and a
+`docs/ROADMAP.md` changelog paragraph that passed locally pre-rebase has failed post-rebase
+often enough to be a standing retrospective theme.
 
 A gate's verdict is its exit status, and a shell pipeline destroys it: `cmd | tail -2;
 echo $?` reports the pager's exit, not the gate's, which can present a failing gate as
@@ -358,7 +365,12 @@ the dispatch brief. Point, don't retell: a path stays true mid-loop while a summ
 with the orchestrator's context, and the reviewer reads the plan itself in its fresh context
 (it has Read and Grep, not `gh` — anything it needs from the issue must live in the plan or
 be quoted in the brief). A dispatch missing the plan pointer is an invalid round —
-re-dispatch with it instead of reviewing blind.
+re-dispatch with it instead of reviewing blind. The brief also states what this round must
+*not* expect: the deliverables step 6 schedules after the loop (the `docs/sessions/` file,
+the pull-request body) are absent from the range by design, and gate results or GitHub
+state cited in reviewed files are verified by this session, not by the reviewer — their
+absence or unverifiability is not a finding (incident:
+reviewer-flags-a-later-phase-deliverable).
 
 Verify each finding against the sources before acting on it — preferably by *running* the
 predicted failure, not re-deriving it: when a finding predicts a wrong diagnostic or a false
@@ -400,7 +412,12 @@ pull request: one pass over the pile. Findings cluster into root-cause classes, 
 is counted inside the batch and against `.harden/incidents/`, and only classes that clear
 the threshold earn an artefact (expected product is promotions to cheaper gates, not new
 prose; singletons seed counters). Artefacts and journal entries it lands are commits on
-this same branch and ride into the pull request below.
+this same branch and ride into the pull request below. Before the batch, read the pile
+back with `python3 scripts/check_harden_findings.py .harden/findings/issue-<N>.jsonl`: it
+fails when the file is not tracked (a machine-local exclude can hide the tracked
+`.harden/` directory from `git add -A`, so a clean `git status` proves nothing) or when a
+line's `disposition`/`note` pair is malformed (incident:
+process-record-written-without-read-back).
 
 ### 6. Pull request
 

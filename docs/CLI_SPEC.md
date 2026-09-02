@@ -8,7 +8,7 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 |---|---|
 | `pycc build [PATH] -o OUT` | compile to a deployment artifact; debug by default, unless `--release` or a neighboring `pycc.toml`'s `opt = "release"` says otherwise (see `--release` below) |
 | `pycc run [PATH] [-- args]` | build + execute |
-| `pycc check PATH...` | frontend only: parse + HIR + types for every explicit file; no codegen |
+| `pycc check PATH...` | frontend only: parse + HIR + types for every explicit file; reports every diagnostic the failing pass found for that file (parser fan-out since #864 Part 1, D-217; HIR and type passes still report their first until Parts 2/3 land); no codegen |
 | `pycc test` | run project tests compiled (pytest-style discovery, subset) |
 | `pycc explain CODE` | long-form doc for a diagnostic (`pycc explain T0021`) |
 | `pycc init [NAME]` | scaffold `pycc.toml` + `src/main.py`; refuses to overwrite an existing `pycc.toml`, non-directory `src`, or `src/main.py` (exit 2, nothing written) |
@@ -75,7 +75,10 @@ tier-1 targets:
 
 The current v0.1 slice requires at least one explicit file for `pycc check` and
 accepts multiple files in one invocation, matching the argument shape used by
-pre-commit. It checks every supplied file before exiting. Directory discovery,
+pre-commit. It checks every supplied file before exiting. Within a file, every
+diagnostic the first failing pass collected is reported, in that pass's own
+order; the first diagnostic for any input is stable across releases (byte-
+identical code, message, and span -- D-217). Directory discovery,
 an omitted path meaning the current project, and `pycc.toml` project loading
 arrive with multi-file projects in v0.4. The ownership pass joins `check` when
 `pycc_own` is introduced in v0.5.
@@ -314,9 +317,14 @@ has no numeric `ExitStatus::code()`), and a platform abort status wider than
 the CLI's portable one-byte exit-code range; raw child status values are not
 part of the CLI contract.
 
-`pycc check` reports all supplied-file failures. If different files produce
-both compile errors and unreadable-input errors, it exits `2`; otherwise any
-compile error exits `1`.
+`pycc check` reports all supplied-file failures. Exit `1` means at least one
+compile diagnostic in at least one file, however many diagnostics each file
+produced. If different files produce both compile errors and unreadable-input
+errors, it exits `2`; otherwise any compile error exits `1`.
+
+`pycc check` writes diagnostics to stdout in the selected `--error-format`;
+`pycc build` and `pycc run` write the same human renders to stderr (they have
+no `--error-format`), every collected diagnostic, then stop before MIR.
 
 Before `build` and `run` create their per-invocation scratch directory in
 the system temp directory, they also opportunistically remove
@@ -343,9 +351,16 @@ is, and the caret label always repeats the diagnostic's full message rather
 than an independent short label -- both are current, real behavior, not an
 aspirational target (D-043).
 
-JSON format versioned (`"format_version": 1`), one object per diagnostic: code, severity, spans[{file,line,col,len,label}], message, help[]; a planned `fix{edits[]}` field for machine-applicable suggestions is not yet emitted by the serializer (`crates/pycc_diag/src/lib.rs`'s `render_json`/`Diagnostic` have no `fix` key today) and awaits the same `--fix` implementation described above. `line` and `col` are 1-indexed Unicode-scalar positions; `len` counts Unicode scalar values from the span start, including normalized line separators in a multi-line span. Consumed by editors and the corpus bot (TESTING.md).
+Several diagnostics for one file are rendered as concatenated human renders with no separator, exactly as multi-file output already is.
+
+JSON format versioned (`"format_version": 1`), one object per diagnostic, one object per line in report order (JSON Lines) -- a single file may therefore emit several lines, and `format_version` stays `1` because the per-object schema is unchanged (D-217). Each object carries: code, severity, spans[{file,line,col,len,label}], message, help[]; a planned `fix{edits[]}` field for machine-applicable suggestions is not yet emitted by the serializer (`crates/pycc_diag/src/lib.rs`'s `render_json`/`Diagnostic` have no `fix` key today) and awaits the same `--fix` implementation described above. `line` and `col` are 1-indexed Unicode-scalar positions; `len` counts Unicode scalar values from the span start, including normalized line separators in a multi-line span. Consumed by editors and the corpus bot (TESTING.md).
 
 `help[]` holds exactly one entry for a diagnostic whose message already states a determinate, safe fix (an exact expected type, an exact expected count, an exact "add an annotation" instruction, an already-embedded usage example, or a self-contained constraint the message itself already names, such as a literal-index requirement), and is empty otherwise (D-152). This is currently true for arity/type-mismatch, missing-annotation, and literal-index-constraint diagnostic families; name-resolution, capability-limitation, and ambiguous-conflict diagnostics still emit `help: []`. The human format above has no `help:` line codepath at all, regardless of whether `help[]` is populated in JSON (D-043, D-083).
+
+Report order is pass order (parser, then HIR, then types -- today only one
+pass fails per file), then that pass's own collection order; the parser's is
+ruff's discovery order, which is not always source order. No span-monotone
+order is promised across a file's diagnostics (D-217).
 
 Displayed diagnostic paths are lexically normalized without filesystem
 canonicalization: native path separators are rendered as `/`, redundant `.`

@@ -223,3 +223,5 @@ current.
 | [D-214](./D-214-unify-the-init-subclass-guard-into-a.md) | Unify the __init_subclass__ guard into a single unconditional nearest-ancestor lookup | accepted |
 | [D-215](./D-215-stage-a-tolerant-rustfmt-ci-gate-check-ahead-of.md) | Stage a tolerant rustfmt CI-gate check ahead of activating the rustfmt job (issue #24, Part 2) | accepted |
 | [D-216](./D-216-close-the-target-dir-flag-and-config-file.md) | Close the --target-dir flag and config-file build.target-dir exclusions as permanent | accepted |
+| [D-217](./D-217-report-every-frontend-diagnostic-per-pass-with.md) | Report every frontend diagnostic per pass, with a byte-stable first diagnostic and JSON Lines output (issue #864, Part 1) | accepted |
+| [D-218](./D-218-raise-llms-txt-aggregate-budget-to-272-kib.md) | Raise the llms.txt aggregate context budget from 264 KiB to 272 KiB (issue #207) | accepted |
