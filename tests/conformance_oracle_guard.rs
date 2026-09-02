@@ -1,5 +1,8 @@
-//! Guards `tests/conformance.rs`'s differential assertions against becoming
-//! tautological (#224).
+//! Guards the conformance harness's differential assertions against becoming
+//! tautological (#224). The harness is `tests/conformance.rs` plus its
+//! `tests/conformance/*.rs` cohort submodules, read as one text in that order
+//! by `harness_support/conformance_sources.rs` (shared with
+//! `tests/conformance_matrix_guard.rs`).
 //!
 //! Every conformance claim in `docs/PYTHON_STANDARDS.md` ultimately rests on one
 //! sentence of `tests/conformance.rs`: the shared helper returns the compiled
@@ -11,8 +14,8 @@
 //! and turns all 40 differential tests into `assert_eq!(x, x)` while every gate
 //! stays green.
 //!
-//! This guard closes that hole by reading `tests/conformance.rs` as text and
-//! asserting its differential-oracle semantics structurally. It deliberately
+//! This guard closes that hole by reading the harness sources as text and
+//! asserting their differential-oracle semantics structurally. It deliberately
 //! needs neither LLVM nor the oracle interpreter, so it is a genuine negative
 //! control rather than a second copy of the tests it guards: the mutations below
 //! are applied to synthetic harness sources in this file's own tests and the
@@ -23,9 +26,19 @@
 //! evidence-backed matrix rows cite fixtures that exist and are registered here.
 //! It says nothing about what those registered tests actually compare. This
 //! guard owns that second half.
+//!
+//! Ordering invariant: the mutation controls at the bottom of this file rewrite
+//! the *first* occurrence of a pattern in the concatenated harness text, so the
+//! root-first, sorted-cohort order is part of the contract, and the root must
+//! keep at least one dual-profile differential test (the PR-9 seed tests such
+//! as `pep_0526_var_annotations_...` stay there) so the rewritten occurrence is
+//! the same function for every reader.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+
+#[path = "harness_support/conformance_sources.rs"]
+mod conformance_sources;
 
 /// Differential tests are named `<subject>_matches_cpython_3_14_7_byte_for_byte`.
 const DIFFERENTIAL_SUFFIX: &str = "_matches_cpython_3_14_7_byte_for_byte";
@@ -45,11 +58,6 @@ const DEBUG_ONLY_TESTS: [&str; 2] = [
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn read(relative: &str) -> String {
-    let path = repo_root().join(relative);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 
 /// Index just past the closing quote of the string literal opening at `quote`.
@@ -503,12 +511,12 @@ fn audit(harness: &str) -> Vec<String> {
     errors
 }
 
-/// The harness source with line endings normalized. A Windows checkout can
-/// materialize `tests/conformance.rs` with CRLF endings, and every structural
-/// pattern this guard reasons about — including the mutation controls below —
-/// is written against LF.
+/// The harness sources (`tests/conformance.rs` then `tests/conformance/*.rs`)
+/// with line endings normalized. A Windows checkout can materialize them with
+/// CRLF endings, and every structural pattern this guard reasons about —
+/// including the mutation controls below — is written against LF.
 fn harness() -> String {
-    read("tests/conformance.rs").replace("\r\n", "\n")
+    conformance_sources::harness_sources_in(&repo_root())
 }
 
 // --- Positive control: the real harness ------------------------------------
@@ -518,7 +526,8 @@ fn the_conformance_harness_binds_every_differential_assertion_to_the_oracle() {
     let errors = audit(&harness());
     assert!(
         errors.is_empty(),
-        "tests/conformance.rs no longer proves pycc against the pinned CPython oracle:\n{}",
+        "the conformance harness (tests/conformance.rs + tests/conformance/*.rs) no longer proves \
+         pycc against the pinned CPython oracle:\n{}",
         errors.join("\n")
     );
 }
@@ -576,7 +585,7 @@ fn every_registered_pep_fixture_is_exercised_by_a_test() {
         .collect();
     assert!(
         unexercised.is_empty(),
-        "these registered fixtures are named in tests/conformance.rs but never run by a test: \
+        "these registered fixtures are named in the conformance harness but never run by a test: \
          {unexercised:?}"
     );
 }
@@ -951,7 +960,7 @@ fn the_real_harness_rejects_the_issue_224_helper_mutation() {
     assert_ne!(
         mutated,
         harness(),
-        "the mutation did not apply to tests/conformance.rs"
+        "the mutation did not apply to the conformance harness sources"
     );
     rejects(
         &mutated,
@@ -969,7 +978,7 @@ fn the_real_harness_rejects_a_tautological_per_pep_assertion() {
     assert_ne!(
         mutated,
         harness(),
-        "the mutation did not apply to tests/conformance.rs"
+        "the mutation did not apply to the conformance harness sources"
     );
     rejects(&mutated, "compares `debug_pycc` with itself");
 }

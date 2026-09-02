@@ -206,8 +206,27 @@ def evidence_rows(markdown: str) -> list[MatrixRow]:
     return [row for row in parse_matrix(markdown) if row.status in EVIDENCE_STATUSES]
 
 
+def read_harness(root_file: Path) -> str:
+    """The conformance harness sources: `root_file` plus its cohort files.
+
+    The harness is `tests/conformance.rs` followed by every direct `*.rs` file
+    under the sibling `tests/conformance/` directory in sorted file-name order
+    (non-recursive; a missing directory yields the root alone). Deliberately
+    identical to `tests/harness_support/conformance_sources.rs`, the rule the
+    two Rust guards share: a test moved into a cohort file must stay visible to
+    every text-reader of the harness, or it silently leaves that reader's audit.
+    """
+    parts = [root_file.read_text(encoding="utf-8")]
+    module_dir = root_file.with_suffix("")
+    if module_dir.is_dir():
+        for module in sorted(module_dir.glob("*.rs")):
+            if module.is_file():
+                parts.append(module.read_text(encoding="utf-8"))
+    return "\n".join(parts)
+
+
 def is_registered(harness: str, fixture: str) -> bool:
-    """Whether `tests/conformance.rs` joins this fixture as a path.
+    """Whether the conformance harness joins this fixture as a path.
 
     Deliberately identical to `conformance_matrix_guard.rs`'s own rule: a
     fixture named only in a doc comment or an assertion message is not a
@@ -382,7 +401,7 @@ def validate(markdown: str, manifest: Any, harness: str) -> None:
         for fixture in fixtures:
             if not is_registered(harness, fixture):
                 failures.append(
-                    f"{where}: `{fixture}` is not registered in tests/conformance.rs, "
+                    f"{where}: `{fixture}` is not registered in the conformance harness, "
                     "so nothing runs it"
                 )
 
@@ -630,7 +649,15 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=root / "tests/fixtures/conformance-breadth-manifest.json",
     )
-    parser.add_argument("--harness", type=Path, default=root / "tests/conformance.rs")
+    parser.add_argument(
+        "--harness",
+        type=Path,
+        default=root / "tests/conformance.rs",
+        help=(
+            "crate root of the conformance harness; its sibling <stem>/*.rs cohort "
+            "files are concatenated after it"
+        ),
+    )
     parser.add_argument("--roadmap", type=Path, default=root / "docs/ROADMAP.md")
     args = parser.parse_args(argv)
 
@@ -644,7 +671,7 @@ def main(argv: list[str] | None = None) -> int:
         validate(
             args.matrix.read_text(encoding="utf-8"),
             manifest,
-            args.harness.read_text(encoding="utf-8"),
+            read_harness(args.harness),
         )
     except BreadthError as error:
         print(str(error), file=sys.stderr)
