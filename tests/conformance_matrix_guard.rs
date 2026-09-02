@@ -17,7 +17,9 @@
 //! resolves would be asserting something the matrix never claimed. An
 //! evidence-backed row is different: it claims its fixture passes, which is only
 //! meaningful if the file exists and actually runs. So such a row's path must
-//! resolve, and its fixture must be registered in `tests/conformance.rs`.
+//! resolve, and its fixture must be registered in the conformance harness
+//! (`tests/conformance.rs` or one of its `tests/conformance/*.rs` cohort files —
+//! `harness_support/conformance_sources.rs` defines that source set).
 //!
 //! `◐` (subset) and `✅` (whole-PEP acceptance) differ only in how much of the PEP
 //! the row is allowed to claim — see
@@ -28,6 +30,9 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+
+#[path = "harness_support/conformance_sources.rs"]
+mod conformance_sources;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -119,7 +124,8 @@ fn evidence_rows(markdown: &str) -> Vec<MatrixRow> {
 }
 
 /// `pep_*.py` fixtures that live under `tests/fixtures/` but are deliberately
-/// not registered in `tests/conformance.rs`. Each entry records why, so that
+/// not registered in the conformance harness (`tests/conformance.rs` or
+/// `tests/conformance/*.rs`). Each entry records why, so that
 /// removing one is a decision someone made rather than a line that rotted.
 const UNREGISTERED_FIXTURE_ALLOWLIST: &[(&str, &str)] = &[
     (
@@ -146,12 +152,14 @@ fn is_allowlisted(fixture: &str) -> bool {
         .any(|(name, _reason)| *name == fixture)
 }
 
-/// True when `tests/conformance.rs` actually registers `fixture`.
+/// True when the conformance harness (`tests/conformance.rs` plus
+/// `tests/conformance/*.rs`, concatenated by
+/// `conformance_sources::harness_sources_in`) actually registers `fixture`.
 ///
 /// Matches the `tests/fixtures/<name>` form the harness's own `Path::join`
-/// calls use, not the bare file name. Several fixtures are also named in
-/// `tests/conformance.rs`'s doc comments as bare backticked file names, and a
-/// bare-name search would count such a mention as a registration.
+/// calls use, not the bare file name. Several fixtures are also named in the
+/// harness's doc comments as bare backticked file names, and a bare-name
+/// search would count such a mention as a registration.
 fn is_registered(harness: &str, fixture: &str) -> bool {
     harness.contains(&format!("tests/fixtures/{fixture}"))
 }
@@ -220,14 +228,15 @@ fn every_evidence_matrix_row_cites_an_existing_flat_fixture() {
 #[test]
 fn every_evidence_matrix_fixture_is_registered_in_the_conformance_harness() {
     let markdown = read("docs/PYTHON_STANDARDS.md");
-    let harness = read("tests/conformance.rs");
+    let harness = conformance_sources::harness_sources_in(&repo_root());
 
     let mut failures = Vec::new();
     for row in evidence_rows(&markdown) {
         for fixture in &row.fixtures {
             if !is_registered(&harness, fixture) {
                 failures.push(format!(
-                    "line {}: PEP {} is {} but `{}` is not registered in tests/conformance.rs",
+                    "line {}: PEP {} is {} but `{}` is not registered in the conformance harness \
+                     (tests/conformance.rs or tests/conformance/*.rs)",
                     row.line_number, row.pep, row.status, fixture
                 ));
             }
@@ -238,7 +247,7 @@ fn every_evidence_matrix_fixture_is_registered_in_the_conformance_harness() {
 
 #[test]
 fn every_pep_fixture_is_registered_or_allowlisted() {
-    let harness = read("tests/conformance.rs");
+    let harness = conformance_sources::harness_sources_in(&repo_root());
 
     let unregistered: Vec<String> = pep_fixture_files()
         .into_iter()
@@ -248,14 +257,15 @@ fn every_pep_fixture_is_registered_or_allowlisted() {
 
     assert!(
         unregistered.is_empty(),
-        "these tests/fixtures/pep_*.py files are neither registered in tests/conformance.rs nor \
-         allowlisted in UNREGISTERED_FIXTURE_ALLOWLIST: {unregistered:?}"
+        "these tests/fixtures/pep_*.py files are neither registered in the conformance harness \
+         (tests/conformance.rs or tests/conformance/*.rs) nor allowlisted in \
+         UNREGISTERED_FIXTURE_ALLOWLIST: {unregistered:?}"
     );
 }
 
 #[test]
 fn the_allowlist_does_not_outlive_its_entries() {
-    let harness = read("tests/conformance.rs");
+    let harness = conformance_sources::harness_sources_in(&repo_root());
     let present = pep_fixture_files();
 
     let mut failures = Vec::new();
@@ -266,8 +276,9 @@ fn the_allowlist_does_not_outlive_its_entries() {
             ));
         } else if is_registered(&harness, fixture) {
             failures.push(format!(
-                "allowlist entry `{fixture}` is now registered in tests/conformance.rs — drop the \
-                 entry so the guard covers it"
+                "allowlist entry `{fixture}` is now registered in the conformance harness \
+                 (tests/conformance.rs or tests/conformance/*.rs) — drop the entry so the \
+                 guard covers it"
             ));
         }
     }

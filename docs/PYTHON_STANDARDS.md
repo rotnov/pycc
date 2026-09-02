@@ -19,7 +19,7 @@ asserts the exact diagnostic.
   required. This describes the eventual v1.0-scale, language-level-selecting
   harness; per [D-102](./decisions/D-102-extend-tests-conformance-rs-for-pr-9-s-9-new-pep.md)
   the fixtures PR-9 added live flat at `tests/fixtures/pep_NNNN_slug.py`
-  instead, run directly by `tests/conformance.rs` — the `pyXY/` tree and its
+  instead, run by the conformance harness (`tests/conformance.rs` plus its `tests/conformance/*.rs` cohort files, see [TESTING.md](./TESTING.md)) — the `pyXY/` tree and its
   language-level selection do not exist yet.
 - Negative tests: `tests/diagnostics/dNNNN_slug.py` — must *fail to compile* with the documented error code.
 - Category: `syntax` · `typing` · `sem` (semantics/data model) · `import` · `rt` (runtime) — `rt`-only PEPs may need design docs instead of codegen.
@@ -83,7 +83,7 @@ For each newly observed upstream release:
    targets in both build profiles. Building the real automation remains a
    tracked `docs/ROADMAP.md` follow-up.
 6. Bookkeeping lag is itself a defect, not a safe default. A fixture that is
-   registered in `tests/conformance.rs` and already observed green under rule 5
+   registered in the conformance harness and already observed green under rule 5
    must have its row flipped; leaving it `☐` understates conformance and, per
    [#572](https://github.com/rotnov/pycc/issues/572), made v0.3's own row-count
    Accept criterion read as further from reach than it was. Seven rows —

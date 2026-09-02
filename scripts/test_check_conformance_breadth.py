@@ -34,6 +34,7 @@ BreadthError = CHECKER.BreadthError
 cited_fixtures = CHECKER.cited_fixtures
 evidence_rows = CHECKER.evidence_rows
 is_registered = CHECKER.is_registered
+read_harness = CHECKER.read_harness
 parse_matrix = CHECKER.parse_matrix
 validate = CHECKER.validate
 check_roadmap_counts = CHECKER.check_roadmap_counts
@@ -286,7 +287,9 @@ class ValidationTests(unittest.TestCase):
         document["rows"][0]["proven"][0]["evidence"] = "pep_0498_unrun.py"
         with self.assertRaises(BreadthError) as caught:
             validate(matrix, document, HARNESS)
-        self.assertIn("is not registered in tests/conformance.rs", str(caught.exception))
+        self.assertIn(
+            "is not registered in the conformance harness", str(caught.exception)
+        )
 
     def test_proven_evidence_outside_the_rows_fixtures_is_rejected(self) -> None:
         self.assert_rejected(
@@ -471,6 +474,55 @@ class OverclaimTests(unittest.TestCase):
                 validate(matrix, document, harness)
 
 
+class ReadHarnessTests(unittest.TestCase):
+    """`read_harness` mirrors `tests/harness_support/conformance_sources.rs`.
+
+    The harness is the crate root plus its `<stem>/*.rs` cohort files; a
+    reader that saw only the root would silently stop auditing any test moved
+    into a cohort file.
+    """
+
+    def test_a_root_without_a_module_directory_is_returned_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root_file = Path(directory) / "conformance.rs"
+            root_file.write_text("fn root() {}\n", encoding="utf-8")
+            self.assertEqual(read_harness(root_file), "fn root() {}\n")
+
+    def test_modules_follow_the_root_in_sorted_file_name_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root_file = Path(directory) / "conformance.rs"
+            root_file.write_text("fn root() {}\n", encoding="utf-8")
+            module_dir = Path(directory) / "conformance"
+            module_dir.mkdir()
+            (module_dir / "b.rs").write_text(
+                'fn b() { "tests/fixtures/only_in_b.py"; }\n', encoding="utf-8"
+            )
+            (module_dir / "a.rs").write_text("fn a() {}\n", encoding="utf-8")
+            text = read_harness(root_file)
+        self.assertEqual(
+            text, 'fn root() {}\n\nfn a() {}\n\nfn b() { "tests/fixtures/only_in_b.py"; }\n'
+        )
+        self.assertTrue(is_registered(text, "only_in_b.py"))
+
+    def test_only_direct_rs_files_in_the_module_directory_count(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root_file = Path(directory) / "conformance.rs"
+            root_file.write_text("fn root() {}\n", encoding="utf-8")
+            module_dir = Path(directory) / "conformance"
+            (module_dir / "py30").mkdir(parents=True)
+            (module_dir / "a.rs").write_text("fn a() {}\n", encoding="utf-8")
+            (module_dir / "fixture.py").write_text(
+                "print('tests/fixtures/not_a_module.py')\n", encoding="utf-8"
+            )
+            (module_dir / "py30" / "nested.rs").write_text(
+                'fn nested() { "tests/fixtures/nested.py"; }\n', encoding="utf-8"
+            )
+            text = read_harness(root_file)
+        self.assertEqual(text, "fn root() {}\n\nfn a() {}\n")
+        self.assertFalse(is_registered(text, "not_a_module.py"))
+        self.assertFalse(is_registered(text, "nested.py"))
+
+
 class RepositoryTests(unittest.TestCase):
     @staticmethod
     def _checked_in_manifest() -> dict:
@@ -484,7 +536,7 @@ class RepositoryTests(unittest.TestCase):
         matrix = (REPOSITORY_ROOT / "docs/PYTHON_STANDARDS.md").read_text(
             encoding="utf-8"
         )
-        harness = (REPOSITORY_ROOT / "tests/conformance.rs").read_text(encoding="utf-8")
+        harness = read_harness(REPOSITORY_ROOT / "tests/conformance.rs")
         validate(matrix, self._checked_in_manifest(), harness)
 
     def test_the_checked_in_roadmap_states_the_checked_in_totals(self) -> None:
@@ -946,6 +998,56 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(stdout, "")
         self.assertIn("invalid JSON", stderr)
+
+    # A manifest-cited fixture whose every occurrence is moved out of the root
+    # file into a cohort file. `is_registered` is a substring test and every
+    # fixture path appears more than once in the root (the `join` line plus the
+    # assertion messages), so removing only one occurrence would prove nothing.
+    MOVED_FIXTURE = "tests/fixtures/pep_0238_division.py"
+
+    def _root_without_the_moved_fixture(self) -> str:
+        # Starts from the whole checked-in harness (root plus cohorts) so the
+        # temporary root still registers every other fixture the manifest's
+        # evidence rows cite, then strips *every* occurrence of the one moved.
+        harness = read_harness(REPOSITORY_ROOT / "tests/conformance.rs")
+        self.assertGreaterEqual(harness.count(self.MOVED_FIXTURE), 2)
+        return harness.replace(self.MOVED_FIXTURE, "")
+
+    def test_a_fixture_registered_only_in_a_cohort_file_is_seen_by_the_command(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root_file = Path(directory) / "harness.rs"
+            root_file.write_text(self._root_without_the_moved_fixture(), encoding="utf-8")
+            module_dir = Path(directory) / "harness"
+            module_dir.mkdir()
+            (module_dir / "z.rs").write_text(
+                f'fn moved() {{ "{self.MOVED_FIXTURE}"; }}\n', encoding="utf-8"
+            )
+            status, stdout, stderr = self._run(["--harness", str(root_file)])
+        self.assertEqual(status, 0, stderr)
+        matrix = (REPOSITORY_ROOT / "docs/PYTHON_STANDARDS.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(summary_body(evidence_rows(matrix)), stdout)
+
+    def test_a_fixture_absent_from_root_and_cohort_files_fails_the_command(
+        self,
+    ) -> None:
+        # The negative mirror of the test above: the same root file with the
+        # cohort file empty proves that the positive case passed because
+        # `main` read the sibling directory, not because the root alone did.
+        with tempfile.TemporaryDirectory() as directory:
+            root_file = Path(directory) / "harness.rs"
+            root_file.write_text(self._root_without_the_moved_fixture(), encoding="utf-8")
+            module_dir = Path(directory) / "harness"
+            module_dir.mkdir()
+            (module_dir / "z.rs").write_text("", encoding="utf-8")
+            status, stdout, stderr = self._run(["--harness", str(root_file)])
+        self.assertEqual(status, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("pep_0238_division.py", stderr)
+        self.assertIn("is not registered in the conformance harness", stderr)
 
 
 if __name__ == "__main__":
