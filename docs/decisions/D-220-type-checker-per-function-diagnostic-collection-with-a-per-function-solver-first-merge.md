@@ -150,19 +150,22 @@ status: accepted
 
 - Consequences:
   - Under-reporting after a module-level failure is accepted and documented
-    in `docs/DIAGNOSTICS.md` and `docs/CLI_SPEC.md`. Rule 4 yields three
-    module-level outcomes. A pre-check failure is reported alone. If the
-    solver fails at module level (its top-level walk or a post-body phase
+    in `docs/DIAGNOSTICS.md` and `docs/CLI_SPEC.md`. In rule 4's terms: a
+    pre-check failure (an incompatible redefinition or attribute
+    redeclaration) is reported alone. Otherwise, if the solver's list is
+    module-level (a failure in its top-level walk or in a post-body phase
     such as `propagate_binop_constraints` -- including the pre-existing
     `T0021 cannot infer` for an unresolvable unannotated helper, which
     already hid every other diagnostic in the file), that one diagnostic
-    is reported alone and the annotation checker's list, its own
-    top-level-statement entry included, is dropped. If the solver flags
-    one or more functions, those come first and the checker's own
-    module-level entry (a failing top-level statement, which stops the
-    checker's pass 2 at one entry and skips its pass 3) follows them; if
-    the solver passes, the checker's list stands alone. In every case the
-    root cause is reported; fixing it surfaces the rest.
+    is reported alone and the checker's list is dropped, because a
+    post-body solver diagnostic cannot be matched by function to the
+    checker's entry for the same error. Otherwise the solver's
+    per-function diagnostics are reported in item order, then every
+    checker entry -- per-function or module-level --
+    whose function the solver did not flag, in the checker's order. If the
+    solver passes, the checker's list against the solved signatures is
+    reported on its own.
+    In every case the root cause is reported; fixing it surfaces the rest.
   - One observable coupling: after body `f` fails, the constraints it
     accepted before failing stay in the solver, so a later body `g` may be
     reported for a conflict with a type `f` established, and fixing `f` may

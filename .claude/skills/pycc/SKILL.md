@@ -26,14 +26,14 @@ parser, checked HIR lowering, and strict type-checker subset for every
 supplied file, reports every diagnostic the failing pass found for each input
 (parser: all syntax errors; HIR lowering: one per failing top-level item, with
 an item that only references a class or alias that itself failed to lower
-skipped silently, D-219; the type checker: one per failing function, the
-solver's entries first and then the annotation checker's for functions the
-solver did not flag -- a pre-check failure alone; a module-level solver
-failure (its top-level walk or a post-body phase such as
-`propagate_binop_constraints`) alone with the checker's list dropped; the
-checker's own module-level entry, a failing top-level statement, after the
-solver's per-function entries when the solver flagged any function, and
-the checker's list alone when the solver passes, D-220), and can render
+skipped silently, D-219; the type checker: one per failing function --
+a pre-check failure is reported alone; otherwise a module-level solver
+list (its top-level walk or a post-body phase such as
+`propagate_binop_constraints`) is reported alone and the checker's list
+dropped; otherwise the solver's per-function diagnostics in item order,
+then every checker entry -- per-function or module-level --
+whose function the solver did not flag, in the checker's order; if the
+solver passes, the checker's list on its own, D-220), and can render
 human or JSON diagnostics (JSON: one object
 per line). `build` and `run` lower the
 implemented v0.1 language subset through MIR, LLVM, the host linker, and the

@@ -328,19 +328,18 @@ pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
 /// at most one module-level diagnostic (Part 3 of #864, D-220); the `Err` is
 /// never empty.
 ///
-/// Order: the solver's diagnostics in item order, then the concrete
-/// checker's diagnostics for functions the solver did not flag, in item
-/// order -- see `merge_solver_first`. The module-level outcomes (D-220
-/// rule 4): a pre-check failure (an incompatible redefinition) is reported
-/// alone; if the solver fails at module level (its top-level walk or a
-/// post-body phase such as `propagate_binop_constraints`), that one
-/// diagnostic is reported alone and the concrete checker's list is dropped
-/// -- everything after such a failure would be checked against a partial
-/// or inconsistent environment; if the solver flags one or more functions,
-/// those come first and the checker's own module-level entry (a failing
-/// top-level statement, which stops that collector at one `None`-keyed
-/// entry) follows them; if the solver passes, the checker's list stands
-/// alone.
+/// Order (D-220 rule 4): a pre-check failure (an incompatible
+/// redefinition or attribute redeclaration) is reported alone. Otherwise,
+/// if the solver's list is module-level (a failure in its top-level walk
+/// or in a post-body phase such as `propagate_binop_constraints`), that
+/// one diagnostic is reported alone and the checker's list is dropped,
+/// because a post-body solver diagnostic cannot be matched by function to
+/// the checker's entry for the same error -- see `merge_solver_first`.
+/// Otherwise the solver's per-function diagnostics are reported in item
+/// order, then every checker entry -- per-function or module-level --
+/// whose function the solver did not flag, in the checker's order. If the
+/// solver passes, the checker's list against the solved signatures is
+/// reported on its own.
 pub fn check_all(hir: &HirModule) -> Result<(), Vec<Diagnostic>> {
     let function_local_names = module_function_local_names(hir);
     // Issue #22: reject incompatible redefinitions before trying either the

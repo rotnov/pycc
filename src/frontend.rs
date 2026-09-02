@@ -24,13 +24,10 @@ pub(crate) enum FrontendFailure {
     /// `pycc_parser::parse_all`; HIR lowering: one per failing top-level
     /// item in source order, with cascades of an earlier skipped item
     /// suppressed, see `pycc_hir::lower_all` and D-219; the type checker:
-    /// one per failing function, the solver's diagnostic when both the
-    /// solver and the annotation checker flag a function; a pre-check
-    /// failure alone, a module-level solver failure alone with the
-    /// checker's list dropped, the checker's own module-level entry after
-    /// the solver's per-function entries when the solver flagged any
-    /// function, and the checker's list alone when the solver passes, see
-    /// `pycc_types::check_all` and D-220).
+    /// one per failing function, solver-first per function; a pre-check
+    /// or module-level solver failure is reported alone, otherwise the
+    /// checker's entries for functions the solver did not flag follow the
+    /// solver's -- see `pycc_types::check_all` and D-220).
     ///
     /// Invariant: `diagnostics` is never empty. Every constructor below
     /// either wraps one `Diagnostic` in a `vec![...]` or forwards

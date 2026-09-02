@@ -152,14 +152,18 @@ return a spanned `C0001` capability diagnostic, so `pycc check` never turns an
 unsupported statement or expression into an uncaught lowering panic.
 `pycc_types::check_all` validates the lowered module against the
 inferred signature table without cloning HIR and reports one diagnostic per
-failing function: solver first, then the annotation checker's entries for
-functions the solver did not flag. A pre-check failure is reported alone;
-if the solver fails at module level (its top-level walk or a post-body
-phase such as `propagate_binop_constraints`), that one diagnostic is
-reported alone and the checker's list is dropped; if the solver flags one
-or more functions, those come first and the checker's own module-level
-entry (a failing top-level statement) follows them; if the solver passes,
-the checker's list stands alone (D-220).
+failing function (D-220). A pre-check failure (an incompatible
+redefinition or attribute redeclaration) is reported alone. Otherwise, if
+the private-helper solver's list is module-level (a failure in its
+top-level walk or in a post-body phase such as
+`propagate_binop_constraints`), that one diagnostic is reported alone and
+the annotation checker's list is dropped, because a post-body solver
+diagnostic cannot be matched by function to the checker's entry for the
+same error. Otherwise the solver's per-function diagnostics are reported in
+item order, then every checker entry -- per-function or module-level --
+whose function the solver did not flag, in the checker's order. If the
+solver passes, the checker's list against the solved signatures is reported
+on its own.
 Compiler stages that need concrete private-helper signatures use
 `pycc_types::check_and_resolve_all`, which performs the same validation and
 returns HIR with those signatures materialized. `check` and
