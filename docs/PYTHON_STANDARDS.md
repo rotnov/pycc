@@ -19,7 +19,7 @@ asserts the exact diagnostic.
   required. This describes the eventual v1.0-scale, language-level-selecting
   harness; per [D-102](./decisions/D-102-extend-tests-conformance-rs-for-pr-9-s-9-new-pep.md)
   the fixtures PR-9 added live flat at `tests/fixtures/pep_NNNN_slug.py`
-  instead, run directly by `tests/conformance.rs` — the `pyXY/` tree and its
+  instead, run by the conformance harness (`tests/conformance.rs` plus its `tests/conformance/*.rs` cohort files, see [TESTING.md](./TESTING.md)) — the `pyXY/` tree and its
   language-level selection do not exist yet.
 - Negative tests: `tests/diagnostics/dNNNN_slug.py` — must *fail to compile* with the documented error code.
 - Category: `syntax` · `typing` · `sem` (semantics/data model) · `import` · `rt` (runtime) — `rt`-only PEPs may need design docs instead of codegen.
