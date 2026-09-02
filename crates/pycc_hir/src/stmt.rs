@@ -27,9 +27,9 @@
 //! second piece of threaded context, but purely as a pass-through: none of
 //! this module's own `in_loop`-driven logic reads it. `lower_stmt`/
 //! `lower_body`/`lower_elif_else_clauses` all gained it because they sit on
-//! the only route from the two places that decide it (`lower_checked`'s
-//! module-level dispatch and `lower_function`'s body dispatch, both in
-//! `lib.rs`) to `expr.rs`'s `lower_expr`, which every one of these three
+//! the only route from the two places that decide it (`module.rs`'s
+//! `lower_top_level_item` module-level dispatch and `func.rs`'s
+//! `lower_function` body dispatch) to `expr.rs`'s `lower_expr`, which every one of these three
 //! functions calls directly (test expressions, `Return` values, `AnnAssign`
 //! values, assignment/subscript values) -- D-148's own framing ("the two
 //! lowering passes stay independently parameterized") remains true in the
@@ -106,7 +106,7 @@ use pycc_diag::Diagnostic;
 /// a local `let` binding below in the `Stmt::AnnAssign` arm, not a separate
 /// function) and `expr.rs`'s textual, non-import-gated resolution of
 /// `math.sqrt`-shaped attribute access -- `lower_stmt`/`lower_body` have no
-/// access to the module-level import side-table `lower_checked` builds, so
+/// access to the module-level import side-table `module::lower_all` builds, so
 /// this recognizes the two concrete spellings the real-world idiom uses
 /// rather than resolving a general expression through `pycc_std`.
 /// Deliberately does not recognize a negated or compound test (`if not

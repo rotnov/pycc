@@ -4378,7 +4378,7 @@ fn method_call_on_a_non_name_receiver_lowers_to_a_generic_method_call() {
 
 #[test]
 fn import_inside_a_function_body_is_c0001() {
-    // The module-level side-table is populated only by `lower_checked`'s
+    // The module-level side-table is populated only by `module::lower_all`'s
     // top-level loop (mirroring `type_aliases`); a nested import still
     // reaches plain `lower_stmt`, which has no arm for `Stmt::Import`.
     let module =

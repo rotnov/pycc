@@ -462,7 +462,7 @@ pub(crate) fn lower_expr(
                 // flow-sensitive "was `math` actually imported before this
                 // use" verification is not attempted here, because
                 // `lower_expr` has no access to the module-level import
-                // side-table `lower_checked` builds (threading it through
+                // side-table `module::lower_all` builds (threading it through
                 // every recursive `lower_expr` call site is a materially
                 // larger change than this thin v0.2 slice needs). `math` is
                 // not a valid bare Python identifier binding to anything

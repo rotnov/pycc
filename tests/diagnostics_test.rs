@@ -116,15 +116,27 @@ fn l0001_two_syntax_errors() {
     assert_json_diagnostic_matches_fixture("l0001_two_syntax_errors");
 }
 
-// #864's own reproduction, pinning the Part 1 boundary: HIR lowering still
-// reports only its first diagnostic (one `C0001` at `2:5`), because per-item
-// collection is Part 2 (#867). Part 2's acceptance is regenerating these two
-// fixtures so they show both `C0001`s -- a reviewable diff, not a flipped
-// assertion.
+// #864's own reproduction, regenerated for Part 2 (#867, D-219): HIR
+// lowering now collects one diagnostic per failing top-level item, so both
+// class-body `C0001`s (`2:5` and `4:5`) are reported, in source order. The
+// first render is byte-identical to the Part 1 fixture (D-217 rule 2). The
+// type error on line 6 is the type checker's, which still does not run
+// after an HIR failure.
 #[test]
 fn c0001_issue_864_repro() {
     assert_diagnostic_matches_fixture("c0001_issue_864_repro");
     assert_json_diagnostic_matches_fixture("c0001_issue_864_repro");
+}
+
+// #867 (D-219) cascade suppression: an unsupported `import os`, a rejected
+// `class A`, and a later genuine `*args` gap are the three reported
+// `C0001`s; `class B(A)` (unknown base) and `def g(a: A)` (unknown
+// annotation) name the skipped `A` and are skipped silently -- no render
+// of any kind between the line-3 and line-9 diagnostics.
+#[test]
+fn c0001_hir_cascade_suppressed() {
+    assert_diagnostic_matches_fixture("c0001_hir_cascade_suppressed");
+    assert_json_diagnostic_matches_fixture("c0001_hir_cascade_suppressed");
 }
 
 // PEP 758 (Part 3 of #543, #740): `except ():` parses successfully as an

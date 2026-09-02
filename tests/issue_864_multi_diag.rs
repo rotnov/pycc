@@ -6,7 +6,9 @@
 //! multi-diagnostic output that the whole-stdout snapshots cannot express
 //! on their own: one JSON object per line with no blank separators, per-file
 //! output concatenated byte-for-byte across files, and the `build` stderr
-//! mirror of `check`'s human stdout.
+//! mirror of `check`'s human stdout. Part 2 (#867, D-219) adds the HIR
+//! fan-out case at the bottom: two `C0001`s from one file reach the driver
+//! through the same payload.
 
 use pycc_scratch::ScratchDir;
 use std::path::Path;
@@ -138,4 +140,44 @@ fn build_prints_every_diagnostic_to_stderr_and_stops_before_codegen() {
         stderr(&output),
         read_fixture("l0001_two_syntax_errors.expected.txt")
     );
+}
+
+/// #867 (D-219): HIR lowering's per-item collection reaches the driver
+/// through the same `Vec<Diagnostic>` payload as the parser's fan-out: two
+/// `C0001` objects in source order as JSON Lines, and the same two human
+/// renders on `build`'s stderr, which exits 1 before codegen.
+#[test]
+fn hir_per_item_diagnostics_reach_check_json_and_build_stderr() {
+    const HIR_FIXTURE: &str = "tests/diagnostics/c0001_issue_864_repro.py";
+    let output = check(&[HIR_FIXTURE], true);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stdout(&output);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "expected exactly two JSON lines:\n{text}");
+    let mut seen_lines = Vec::new();
+    for line in &lines {
+        let object: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(object["code"], "C0001");
+        seen_lines.push(object["spans"][0]["line"].as_u64().unwrap());
+    }
+    // Source order: the HIR pass's own collection order is the loop order
+    // over top-level items (no re-sort, D-217 rule 3).
+    assert_eq!(seen_lines, vec![2, 4]);
+
+    let dir = ScratchDir::new("issue_867_build_stderr").expect("failed to create scratch dir");
+    let out = dir.join("out");
+    let build = Command::new(pycc_bin())
+        .args(["build", HIR_FIXTURE, "-o"])
+        .arg(&out)
+        .current_dir(repo_root())
+        .output()
+        .unwrap();
+    assert_eq!(build.status.code(), Some(1));
+    assert!(stdout(&build).is_empty(), "build must not write to stdout");
+    assert!(!out.exists(), "no output artifact may be produced");
+    assert_eq!(
+        stderr(&build),
+        read_fixture("c0001_issue_864_repro.expected.txt")
+    );
+    assert_eq!(stderr(&build).matches("error[C0001]").count(), 2);
 }

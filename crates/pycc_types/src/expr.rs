@@ -410,14 +410,14 @@ pub(crate) fn infer_expr_in(
             // comment) -- so it is resolved here, checked before the
             // ordinary ("ClassName" as a plain function) lookup below, the
             // same precedence a generic-function call already gets just
-            // above. `pycc_hir::lower_checked` enforces that a class name
-            // can never collide with a top-level function, type-alias, or
-            // import name in this compiler's flat, single-namespace model
-            // -- both directions are rejected with `C0001` at HIR-lowering
-            // time, before `env` is ever built (D-068 review finding on
-            // #385; `crates/pycc_hir/src/lib.rs`'s `lower_checked`) -- so
-            // trying the class table first here is unambiguous, not merely
-            // an assumption.
+            // above. `pycc_hir::lower_all` (`lower_checked` wraps it) enforces
+            // that a class name can never collide with a top-level function,
+            // type-alias, or import name in this compiler's flat,
+            // single-namespace model -- both directions are rejected with
+            // `C0001` at HIR-lowering time, before `env` is ever built (D-068
+            // review finding on #385; `crates/pycc_hir/src/module.rs`'s
+            // `lower_top_level_item`) -- so trying the class table first here
+            // is unambiguous, not merely an assumption.
             if env.lookup_class(callee).is_some() {
                 return class::resolve_instantiation(env, callee, arg_tys);
             }
