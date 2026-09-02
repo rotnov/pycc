@@ -208,8 +208,8 @@ clause was added by [#869](https://github.com/rotnov/pycc/issues/869)
 because the `CARGO_TARGET_DIR` recovery below was otherwise undiscoverable
 from the terminal; it follows the same convention as the diverged-root
 warning in `crates/pycc_codegen/build.rs`, which already tells the user to
-set an absolute `CARGO_TARGET_DIR`. It is no longer an ordinary
-first-build message. Under a config-file
+set an absolute `CARGO_TARGET_DIR`. The diagnostic is no longer an
+ordinary first-build message. Under a config-file
 `build.target-dir` redirect (or a `--target-dir` flag the user repeats on
 the recovery command, say through a shell alias) the suggested command is
 not sufficient on its own, because `cargo build -p pycc_rt` honors the
