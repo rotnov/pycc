@@ -34,6 +34,8 @@
 //! all -- they never forward the ambient `in_function` value, only the one
 //! literal that reproduces current behavior.
 
+mod container_call;
+
 use crate::int_boundary::check_boundary_literal;
 use crate::{
     BinOpKind, CmpOpKind, CompIter, FStringPart, HirExpr, HirStmt, Ty, UnaryOpKind,
@@ -360,99 +362,10 @@ pub(crate) fn lower_expr(
                         args,
                     });
                 }
-                if attr.attr.as_str() == "append" {
-                    let Expr::Name(list_name) = attr.value.as_ref() else {
-                        return Err(unsupported(
-                            "`.append()` is only supported on a bare-name list so far",
-                            pycc_ast::expr_range(&attr.value),
-                        ));
-                    };
-                    let [value] = &*call.arguments.args else {
-                        return Err(unsupported(
-                            format!(
-                                "list.append() takes exactly one argument, got {}",
-                                call.arguments.args.len()
-                            ),
-                            call.range,
-                        ));
-                    };
-                    let value_span = pycc_ast::expr_range(value);
-                    let value = lower_expr(value, in_function, class_name)?;
-                    check_boundary_literal(&value, value_span, "`list.append()` value")?;
-                    return Ok(HirExpr::ListAppend {
-                        list: list_name.id.as_str().to_string(),
-                        value: Box::new(value),
-                    });
-                }
-                if attr.attr.as_str() == "pop" {
-                    let Expr::Name(list_name) = attr.value.as_ref() else {
-                        return Err(unsupported(
-                            "`.pop()` is only supported on a bare-name list so far",
-                            pycc_ast::expr_range(&attr.value),
-                        ));
-                    };
-                    let [] = &*call.arguments.args else {
-                        return Err(unsupported(
-                            format!(
-                                "list.pop() takes no arguments, got {}",
-                                call.arguments.args.len()
-                            ),
-                            call.range,
-                        ));
-                    };
-                    return Ok(HirExpr::ListPop {
-                        list: list_name.id.as_str().to_string(),
-                    });
-                }
-                if attr.attr.as_str() == "get" {
-                    let Expr::Name(dict_name) = attr.value.as_ref() else {
-                        return Err(unsupported(
-                            "`.get()` is only supported on a bare-name dict so far",
-                            pycc_ast::expr_range(&attr.value),
-                        ));
-                    };
-                    let [key, default] = &*call.arguments.args else {
-                        return Err(unsupported(
-                            format!(
-                                "dict.get() takes exactly two arguments (key, default), got {}",
-                                call.arguments.args.len()
-                            ),
-                            call.range,
-                        ));
-                    };
-                    let default_span = pycc_ast::expr_range(default);
-                    let key = lower_expr(key, in_function, class_name)?;
-                    let default = lower_expr(default, in_function, class_name)?;
-                    check_boundary_literal(&default, default_span, "`dict.get()` default")?;
-                    return Ok(HirExpr::DictGetOrDefault {
-                        dict: dict_name.id.as_str().to_string(),
-                        key: Box::new(key),
-                        default: Box::new(default),
-                    });
-                }
-                if attr.attr.as_str() == "add" {
-                    let Expr::Name(set_name) = attr.value.as_ref() else {
-                        return Err(unsupported(
-                            "`.add()` is only supported on a bare-name set so far",
-                            pycc_ast::expr_range(&attr.value),
-                        ));
-                    };
-                    let [value] = &*call.arguments.args else {
-                        return Err(unsupported(
-                            format!(
-                                "set.add() takes exactly one argument, got {}",
-                                call.arguments.args.len()
-                            ),
-                            call.range,
-                        ));
-                    };
-                    let value_span = pycc_ast::expr_range(value);
-                    let value = lower_expr(value, in_function, class_name)?;
-                    check_boundary_literal(&value, value_span, "`set.add()` value")?;
-                    return Ok(HirExpr::SetAdd {
-                        set: set_name.id.as_str().to_string(),
-                        value: Box::new(value),
-                    });
+                if let Some(lowered) =
+                    container_call::lower_container_method_call(call, attr, in_function, class_name)
+                {
+                    return lowered;
                 }
                 // `math.sqrt(x)`-shaped stdlib intrinsic call (D-136/D-137).
                 // Resolved textually against `pycc_std`'s registry (receiver
