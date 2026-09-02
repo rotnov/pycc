@@ -83,6 +83,7 @@
 //! with `C0001` before either loop kind's body is lowered).
 
 mod exception;
+mod for_loop;
 
 use crate::class::ClassAnnotationInfo;
 use crate::expr::{
@@ -417,114 +418,14 @@ pub(crate) fn lower_stmt(
                 )?,
             }
         }
-        Stmt::For(for_stmt) => {
-            if for_stmt.is_async {
-                // `async for` is only valid Python syntax inside an `async
-                // def` body, but `lower_function` unconditionally rejects
-                // any `async def` (D-141's own `def.is_async` check, earlier
-                // in this file) before its body is ever lowered -- so this
-                // arm can only ever be reached from a synchronous function
-                // body or from module scope, never from inside a real async
-                // function. There is therefore no reachable "valid Python,
-                // just not implemented yet" case here today: every
-                // occurrence is context-invalid, exactly like a top-level
-                // `break`/`continue` (see the `Stmt::Break`/`Stmt::Continue`
-                // arms above). Revisit this once/if async function support
-                // lands -- it would reopen a genuine valid-but-unimplemented
-                // case this arm cannot distinguish from today (D-148).
-                return Err(context_invalid(
-                    "'async for' outside async function",
-                    for_stmt.range,
-                ));
-            }
-            if !for_stmt.orelse.is_empty() {
-                return Err(unsupported("for/else is not supported yet", for_stmt.range));
-            }
-            let Expr::Name(var) = for_stmt.target.as_ref() else {
-                return Err(unsupported(
-                    format!(
-                        "only a bare name for-target is supported so far: {:?}",
-                        for_stmt.target
-                    ),
-                    pycc_ast::expr_range(&for_stmt.target),
-                ));
-            };
-            // A bare-name iterable is `for v in some_list:` (D-105) or
-            // `for k in some_dict:` (PR-11 Task 3, D-123) -- resolved to
-            // `Ty::List`, `Ty::Dict`, or rejected by pycc_types, not here;
-            // HIR only records the syntactic shape.
-            if let Expr::Name(list_name) = for_stmt.iter.as_ref() {
-                return Ok(HirStmt::ForList {
-                    var: var.id.to_string(),
-                    list: list_name.id.as_str().to_string(),
-                    body: lower_body(
-                        &for_stmt.body,
-                        aliases,
-                        true,
-                        in_function,
-                        // See the `Stmt::While` arm above -- the same
-                        // CPython-verified shielding rule applies to a
-                        // `for` loop's body.
-                        false,
-                        class_name,
-                        type_param,
-                        class_defs,
-                    )?,
-                });
-            }
-            let Expr::Call(call) = for_stmt.iter.as_ref() else {
-                return Err(unsupported(
-                    format!(
-                        "only `for x in range(...)` or `for x in <list>` is supported so far: {:?}",
-                        for_stmt.iter
-                    ),
-                    pycc_ast::expr_range(&for_stmt.iter),
-                ));
-            };
-            let Expr::Name(callee) = call.func.as_ref() else {
-                return Err(unsupported(
-                    format!(
-                        "only `for x in range(...)` is supported so far: {:?}",
-                        call.func
-                    ),
-                    pycc_ast::expr_range(&call.func),
-                ));
-            };
-            if callee.id.as_str() != "range" {
-                return Err(unsupported(
-                    format!(
-                        "only iterating over `range(...)` is supported so far, got `{}`",
-                        callee.id
-                    ),
-                    call.range,
-                ));
-            }
-            if !call.arguments.keywords.is_empty() {
-                return Err(unsupported(
-                    "keyword arguments to range() are not supported yet",
-                    call.range,
-                ));
-            }
-            let (start, stop, step) = lower_range_call(call, in_function, class_name)?;
-            HirStmt::ForRange {
-                var: var.id.to_string(),
-                start,
-                stop,
-                step,
-                body: lower_body(
-                    &for_stmt.body,
-                    aliases,
-                    true,
-                    in_function,
-                    // See the `Stmt::While` arm above -- the same
-                    // CPython-verified shielding rule applies here too.
-                    false,
-                    class_name,
-                    type_param,
-                    class_defs,
-                )?,
-            }
-        }
+        Stmt::For(for_stmt) => for_loop::lower_for(
+            for_stmt,
+            aliases,
+            in_function,
+            class_name,
+            type_param,
+            class_defs,
+        )?,
         Stmt::Return(ret) => {
             if in_finally && in_function {
                 // PEP 765 (issue #738, Part 1 of #543): a `return` that
