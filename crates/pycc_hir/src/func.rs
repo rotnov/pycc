@@ -332,8 +332,10 @@ pub(crate) fn annotation_to_ty(
                     .find(|(alias_name, _)| alias_name == other)
                     .map(|(_, ty)| ty.clone())
                     .ok_or_else(|| {
+                        // The message is built in `module` so #867's cascade
+                        // classifier can parse it back (D-219).
                         unsupported(
-                            format!("type annotation `{other}` is not supported yet"),
+                            crate::module::unknown_annotation_name_message(other),
                             pycc_ast::expr_range(annotation),
                         )
                     })

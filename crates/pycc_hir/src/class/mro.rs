@@ -43,11 +43,10 @@ pub(super) fn validate_bases(
     // #432: validate each base class against the already-defined classes.
     for base_name in bases {
         let Some(base_def) = defined_classes.iter().find(|(name, _)| name == base_name) else {
+            // The message is built in `module` so #867's cascade classifier
+            // can parse it back (D-219).
             return Err(unsupported(
-                format!(
-                    "class `{class_name}` inherits from unknown class `{base_name}` -- base \
-                     classes must be defined earlier in the same module"
-                ),
+                crate::module::unknown_base_message(class_name, base_name),
                 range.clone(),
             ));
         };

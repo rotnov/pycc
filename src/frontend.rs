@@ -1,6 +1,7 @@
 //! The driver's frontend seam: runs a source file through the parser, checked
 //! HIR lowering, and the type checker, and renders whatever diagnostics the
-//! first failing pass collected (#864 Part 1, D-217).
+//! first failing pass collected (#864 Part 1, D-217; Part 2's per-item HIR
+//! collection, D-219, flows through the same payload).
 //!
 //! Extracted from `src/main.rs` (AGENTS.md's oversized-file rule) when the
 //! failure payload became a `Vec<Diagnostic>`; `main.rs` keeps the command
@@ -19,13 +20,16 @@ pub(crate) enum FrontendFailure {
     /// A frontend pass rejected the file. `diagnostics` holds every
     /// diagnostic the *first failing pass* collected for it, in that pass's
     /// own collection order (the parser: ruff's discovery order, see
-    /// `pycc_parser::parse_all`; HIR lowering and type checking: still one
-    /// entry each until #864 Parts 2-3 land).
+    /// `pycc_parser::parse_all`; HIR lowering: one per failing top-level
+    /// item in source order, with cascades of an earlier skipped item
+    /// suppressed, see `pycc_hir::lower_all` and D-219; the type checker:
+    /// still one entry until #864 Part 3, #868, lands).
     ///
     /// Invariant: `diagnostics` is never empty. Every constructor below
     /// either wraps one `Diagnostic` in a `vec![...]` or forwards
-    /// `pycc_parser::parse_all`'s `Err`, which is non-empty by construction
-    /// (proven by that crate's unit tests). No runtime assertion guards it:
+    /// `pycc_parser::parse_all`'s or `pycc_hir::lower_all`'s `Err`, both
+    /// non-empty by construction (proven by those crates' unit tests). No
+    /// runtime assertion guards it:
     /// an `assert!` would add an uncoverable in-crate region under D-014's
     /// 100%-region gate. (Should the invariant ever break, `render_all`'s
     /// loops would print nothing and `check` would exit 1 silently -- a
@@ -56,11 +60,11 @@ pub(crate) fn lower_frontend(
             });
         }
     };
-    let hir = match pycc_hir::lower_checked(&module) {
+    let hir = match pycc_hir::lower_all(&module) {
         Ok(hir) => hir,
-        Err(diagnostic) => {
+        Err(diagnostics) => {
             return Err(FrontendFailure::Compile {
-                diagnostics: vec![diagnostic],
+                diagnostics,
                 source,
             });
         }

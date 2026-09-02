@@ -24,7 +24,7 @@ pub(crate) use func::{
 pub(crate) use import::{
     import_local_name, lower_import_stmt, lower_legacy_type_alias_ann_assign, lower_type_alias_stmt,
 };
-pub use module::lower_checked;
+pub use module::{lower_all, lower_checked};
 pub use typecheck::{
     ExtractClassNamesError, eval_isinstance_single, eval_issubclass_single, extract_class_names,
     is_abc_base_name, is_builtin_type_name, is_enum_base_name, is_protocol_base_name,
