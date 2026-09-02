@@ -82,10 +82,13 @@ status: accepted
      anchoring the resolver on it would give the same function two
      different resolution rules depending on which binary it was compiled
      into, which is worse than the status quo of not consulting the flag at
-     all. No mechanism has emerged since D-183 that would let a `bin`
-     target observe `--target-dir` at runtime — Cargo has no documented
-     plan to export it, and this project has no interposing wrapper of its
-     own invocation.
+     all. Nothing observes `--target-dir` in the `pycc` process itself —
+     Cargo has no documented plan to export it at runtime, and this project
+     has no interposing wrapper of its own invocation. The one candidate
+     mechanism is indirect: a build script's `OUT_DIR` lives inside the
+     actual target root, so that root could be derived from it and embedded
+     into the binary with `cargo::rustc-env`. It is evaluated and rejected
+     under *Alternatives* below.
 
 - Decision:
 
@@ -153,6 +156,35 @@ status: accepted
     integration-test call site (`tests/slice0.rs`) that already works
     correctly today via `CARGO_TARGET_DIR`. Two rules for one function, in
     exchange for coverage of a path that was never the gap users hit.
+
+  - **Derive the target root from a build script's `OUT_DIR` and embed it
+    with `cargo::rustc-env`.** Raised in review of this entry, and it is a
+    real mechanism: `OUT_DIR` is
+    `<root>/[<triple>/]<profile>/build/<pkg>-<hash>/out`, the root
+    `build.rs` already exports build-time values this way
+    (`PYCC_BUILD_RUSTC_VERSION`), and `pycc_codegen`'s build script already
+    reads `OUT_DIR` (`anchor_target_root_for_build_script`). Rejected on
+    four grounds. First, it is the kind-keyed alternative above in another
+    costume: a `cargo::rustc-env` value is scoped to the targets of the
+    package whose build script emits it, and `resolve_cargo_target_root`
+    lives in `pycc_artifact_layout`, which has no build script — so the
+    shared resolver could never read the value itself. Every consuming
+    package (`pycc`, `pycc_codegen`) would need its build script to emit
+    its own constant and its own call sites to thread that constant in,
+    which is N per-package anchors in place of one shared rule. Second, it
+    depends on the
+    internal target-directory layout, which Cargo documents as unstable
+    (the `build/<pkg>-<hash>/out` shape is described, not promised).
+    Third, it freezes a per-invocation absolute path into the binary — a
+    strictly more volatile anchor than `CARGO_MANIFEST_DIR` — and regresses
+    `cargo install`, whose temporary target directory is deleted after the
+    install, leaving the embedded root pointing at nothing. Fourth,
+    `anchor_target_root_for_build_script`'s `diverged` warning exists
+    precisely because anchoring a *relative* resolved root against the
+    workspace root — one corner of the `OUT_DIR`-versus-resolved-root
+    relationship — already proved sharp enough to need a guardrail. Against all that, the
+    exclusion costs a stray `<workspace>/target` tree and nothing else,
+    because both sides resolve the same root.
 
   - **Leave #639 open as a standing deferral instead of closing it.**
     Rejected: #639's own completion criteria list "neither" as a valid

@@ -197,7 +197,20 @@ does not produce (`--target <triple>`, which additionally needs `rustup
 target add <triple>`), and a target directory redirected by an input
 `pycc` cannot observe when the archive is also absent from the
 `<workspace>/target` fallback the build script installs into. It is no
-longer an ordinary first-build message.
+longer an ordinary first-build message. Under a config-file
+`build.target-dir` redirect (or a `--target-dir` flag the user repeats on
+the recovery command, say through a shell alias) the suggested command is
+not sufficient on its own, because `cargo build -p pycc_rt` honors the
+same redirect that `pycc` cannot see and writes the archive there; a bare
+`cargo build -p pycc_rt` after a one-off `--target-dir` build lands in
+`<workspace>/target` and does work. For the persistent case, either set
+`CARGO_TARGET_DIR` to the redirected directory so `pycc` follows it, or
+run `CARGO_TARGET_DIR=<workspace>/target cargo build -p pycc_rt` so the
+rebuild lands where `pycc` searches — `CARGO_TARGET_DIR` outranks a
+config-file `build.target-dir` (verified under both cargo 1.88.0 and the
+pinned 1.97.1: with `.cargo/config.toml` naming `from-config`, a plain
+build wrote there and `CARGO_TARGET_DIR=from-env` redirected to
+`from-env`).
 
 ## `pycc.toml`
 
