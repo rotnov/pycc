@@ -524,7 +524,10 @@ pub(crate) fn annotation_to_ty(
             Ok(Ty::Optional(Box::new(inner)))
         }
         other => Err(unsupported(
-            format!("only a bare name type annotation is supported so far: {other:?}"),
+            format!(
+                "only a bare name type annotation is supported so far, got {}",
+                pycc_ast::expr_kind_name(other)
+            ),
             pycc_ast::expr_range(other),
         )),
     }

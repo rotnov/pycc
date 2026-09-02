@@ -74,8 +74,9 @@ use pycc_diag::{Diagnostic, Span};
 /// `set` receiver from a class instance whose own method just happens to
 /// share one of these four names -- so `some_instance.get(5)` would
 /// silently misroute into the dict-`get` fast path and fail with a
-/// confusing "dict.get() takes exactly two arguments" diagnostic instead of
-/// ever reaching the user's own method (D-068 review finding on #385).
+/// confusing "`.get()` is only supported as `dict.get(key, default)` with
+/// exactly two arguments" diagnostic instead of ever reaching the user's own
+/// method (D-068 review finding on #385).
 /// Rejecting the name here, at class-definition time, turns that confusing
 /// failure into a clear, immediate one.
 const CONTAINER_METHOD_NAMES: [&str; 4] = ["append", "pop", "get", "add"];
@@ -2911,9 +2912,10 @@ mod tests {
         // own rejection, `buf.get(5)` below would hit `expr.rs`'s
         // hand-recognized dict-`.get()` fast path first (no type
         // information is available at that lowering step to know `buf` is
-        // actually a `Buf` instance) and fail with the confusing "dict.get()
-        // takes exactly two arguments (key, default), got 1" message
-        // instead of ever reaching `Buf`'s own `get` method. Asserting the
+        // actually a `Buf` instance) and fail with the confusing "`.get()`
+        // is only supported as `dict.get(key, default)` with exactly two
+        // arguments so far, got 1" message instead of ever reaching `Buf`'s
+        // own `get` method. Asserting the
         // *exact* message, not just the `C0001` code, is what actually
         // distinguishes "rejected with the new, clear diagnostic" from
         // "rejected with the old, confusing one" -- both are `C0001`.
@@ -2930,9 +2932,7 @@ mod tests {
             diagnostic.message
         );
         assert!(
-            !diagnostic
-                .message
-                .contains("dict.get() takes exactly two arguments"),
+            !diagnostic.message.contains("exactly two arguments"),
             "the confusing container-method message must not resurface: {}",
             diagnostic.message
         );

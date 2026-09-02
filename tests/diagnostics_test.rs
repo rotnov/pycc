@@ -638,3 +638,127 @@ fn c0001_callable_builtin_private_helper() {
 fn quick_start_type_error() {
     assert_diagnostic_matches_fixture("quick_start_type_error");
 }
+
+// Issue #890: every `C0001` message HIR lowering emits names the rejected
+// construct in Python terms (`pycc_ast::expr_kind_name`/`stmt_kind_name`)
+// instead of dumping the AST node's Rust `Debug` form or naming no
+// construct at all. One rejected construct per fixture (D-219: HIR reports
+// one diagnostic per failing top-level item, so a second construct in the
+// same item would never be exercised).
+#[test]
+fn c0001_attribute_annotation() {
+    assert_diagnostic_matches_fixture("c0001_attribute_annotation");
+}
+
+#[test]
+fn c0001_string_annotation() {
+    assert_diagnostic_matches_fixture("c0001_string_annotation");
+}
+
+#[test]
+fn c0001_multi_target_assign() {
+    assert_diagnostic_matches_fixture("c0001_multi_target_assign");
+}
+
+#[test]
+fn c0001_tuple_assign_target() {
+    assert_diagnostic_matches_fixture("c0001_tuple_assign_target");
+}
+
+#[test]
+fn c0001_attribute_ann_assign_target() {
+    assert_diagnostic_matches_fixture("c0001_attribute_ann_assign_target");
+}
+
+#[test]
+fn c0001_tuple_for_target() {
+    assert_diagnostic_matches_fixture("c0001_tuple_for_target");
+}
+
+#[test]
+fn c0001_for_iterable_not_name_or_call() {
+    assert_diagnostic_matches_fixture("c0001_for_iterable_not_name_or_call");
+}
+
+#[test]
+fn c0001_for_call_not_bare_name() {
+    assert_diagnostic_matches_fixture("c0001_for_call_not_bare_name");
+}
+
+#[test]
+fn c0001_call_of_call() {
+    assert_diagnostic_matches_fixture("c0001_call_of_call");
+}
+
+#[test]
+fn c0001_comprehension_iterable_not_name_or_call() {
+    assert_diagnostic_matches_fixture("c0001_comprehension_iterable_not_name_or_call");
+}
+
+#[test]
+fn c0001_protocol_body_assign() {
+    assert_diagnostic_matches_fixture("c0001_protocol_body_assign");
+}
+
+#[test]
+fn c0001_protocol_body_ellipsis() {
+    assert_diagnostic_matches_fixture("c0001_protocol_body_ellipsis");
+}
+
+#[test]
+fn c0001_function_local_import() {
+    assert_diagnostic_matches_fixture("c0001_function_local_import");
+}
+
+#[test]
+fn c0001_nested_def() {
+    assert_diagnostic_matches_fixture("c0001_nested_def");
+}
+
+#[test]
+fn c0001_nested_class() {
+    assert_diagnostic_matches_fixture("c0001_nested_class");
+}
+
+#[test]
+fn c0001_boolop_receiver() {
+    assert_diagnostic_matches_fixture("c0001_boolop_receiver");
+}
+
+#[test]
+fn c0001_ellipsis_expression() {
+    assert_diagnostic_matches_fixture("c0001_ellipsis_expression");
+}
+
+#[test]
+fn c0001_get_zero_args_on_non_dict() {
+    assert_diagnostic_matches_fixture("c0001_get_zero_args_on_non_dict");
+}
+
+/// Issue #890: no checked-in diagnostic fixture may carry an AST node's
+/// Rust `Debug` form. Every `ruff_python_ast` node's `Debug` output contains
+/// `node_index: NodeIndex(`, so scanning for that marker is sufficient; this
+/// enforces `docs/DIAGNOSTICS.md`'s `C0001` sentence independently of the
+/// `debug_assert!` inside `pycc_hir`'s own `unsupported()` helper.
+#[test]
+fn no_diagnostic_fixture_renders_an_ast_debug_dump() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/diagnostics");
+    let mut scanned = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|ext| ext == "txt") {
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                !text.contains("NodeIndex("),
+                "{} renders an AST node's Debug form",
+                path.display()
+            );
+            scanned += 1;
+        }
+    }
+    assert!(
+        scanned > 0,
+        "no .expected.txt fixtures found in {}",
+        dir.display()
+    );
+}

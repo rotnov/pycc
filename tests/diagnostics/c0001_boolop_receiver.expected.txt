@@ -1,0 +1,5 @@
+error[C0001]: expression kind not supported yet: an `and`/`or` boolean expression
+ --> tests/diagnostics/c0001_boolop_receiver.py:2:13
+  |
+2 |     return (a or b).upper()
+  |             ^^^^^^ expression kind not supported yet: an `and`/`or` boolean expression

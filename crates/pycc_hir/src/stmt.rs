@@ -161,8 +161,8 @@ pub(crate) fn lower_stmt(
             let [target] = assign.targets.as_slice() else {
                 return Err(unsupported(
                     format!(
-                        "only a single assignment target is supported so far: {:?}",
-                        assign.targets
+                        "only a single assignment target is supported so far, got {} targets",
+                        assign.targets.len()
                     ),
                     assign.range,
                 ));
@@ -280,7 +280,10 @@ pub(crate) fn lower_stmt(
                 }
                 other => {
                     return Err(unsupported(
-                        format!("only assigning to a bare name is supported so far: {other:?}"),
+                        format!(
+                            "only assigning to a bare name is supported so far, got {}",
+                            pycc_ast::expr_kind_name(other)
+                        ),
                         pycc_ast::expr_range(other),
                     ));
                 }
@@ -290,8 +293,8 @@ pub(crate) fn lower_stmt(
             let Expr::Name(name) = ann.target.as_ref() else {
                 return Err(unsupported(
                     format!(
-                        "only assigning to a bare name is supported so far: {:?}",
-                        ann.target
+                        "only assigning to a bare name is supported so far, got {}",
+                        pycc_ast::expr_kind_name(&ann.target)
                     ),
                     pycc_ast::expr_range(&ann.target),
                 ));
@@ -488,7 +491,7 @@ pub(crate) fn lower_stmt(
                 // A real enclosing loop -- valid Python, break/continue
                 // control-flow codegen is just not implemented yet.
                 unsupported(
-                    "statement kind not supported yet",
+                    "statement kind not supported yet: `break` inside a loop",
                     pycc_ast::stmt_range(stmt),
                 )
             } else {
@@ -511,7 +514,7 @@ pub(crate) fn lower_stmt(
             }
             return Err(if in_loop {
                 unsupported(
-                    "statement kind not supported yet",
+                    "statement kind not supported yet: `continue` inside a loop",
                     pycc_ast::stmt_range(stmt),
                 )
             } else {
@@ -634,8 +637,33 @@ pub(crate) fn lower_stmt(
             HirStmt::Raise { exc, cause }
         }
         other => {
+            // Issue #890: name the rejected kind. Four kinds that *are*
+            // supported at module level reach this arm only because they
+            // are nested, so naming them by kind alone would falsely say
+            // "a function definition is not supported"; each gets a
+            // position qualifier instead. Every top-level `Import`/
+            // `ImportFrom` goes through `import::lower_import_stmt` before
+            // `module::lower_all` ever calls `lower_stmt`, and an `if
+            // TYPE_CHECKING:` body is constant-folded above, so an import
+            // here is always inside a function or block body (a class-body
+            // import is rejected by `class.rs` first and never gets here).
+            let kind = match other {
+                Stmt::FunctionDef(_) => {
+                    "a `def` nested inside a function or block body \
+                     (only a module-level `def` or a method in a class body is supported)"
+                }
+                Stmt::ClassDef(_) => {
+                    "a `class` nested inside a function or block body \
+                     (only a module-level `class` is supported)"
+                }
+                Stmt::Import(_) | Stmt::ImportFrom(_) => {
+                    "an `import` inside a function or block body \
+                     (only a module-level import, or one inside an `if TYPE_CHECKING:` guard, is supported)"
+                }
+                _ => pycc_ast::stmt_kind_name(other),
+            };
             return Err(unsupported(
-                "statement kind not supported yet",
+                format!("statement kind not supported yet: {kind}"),
                 pycc_ast::stmt_range(other),
             ));
         }

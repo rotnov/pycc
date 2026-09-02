@@ -1,0 +1,5 @@
+error[C0001]: only assigning to a bare name is supported so far, got a tuple
+ --> tests/diagnostics/c0001_tuple_assign_target.py:2:5
+  |
+2 |     a, b = 1, 2
+  |     ^^^^ only assigning to a bare name is supported so far, got a tuple

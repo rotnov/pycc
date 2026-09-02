@@ -104,9 +104,17 @@ fn lower_dict_get(
         ));
     };
     let [key, default] = &*call.arguments.args else {
+        // Issue #890: this fast path cannot see the receiver's type, so
+        // the message must not assert one. The receiver may be a real
+        // dict (`x = {"a": 1}; x.get("a")`) or something else entirely
+        // (`v.get()` on an `int`, a `ContextVar`); a non-dict receiver's
+        // own `.get()` is unsupported and is reported by `pycc_types`'s
+        // `T0033` only for the two-argument shape, because every other
+        // arity is rejected here first. The wording is receiver-neutral
+        // on purpose.
         return Err(unsupported(
             format!(
-                "dict.get() takes exactly two arguments (key, default), got {}",
+                "`.get()` is only supported as `dict.get(key, default)` with exactly two arguments so far, got {}",
                 call.arguments.args.len()
             ),
             call.range,

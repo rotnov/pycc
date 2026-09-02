@@ -219,11 +219,22 @@ pub(super) fn lower_protocol_class(
             // precedent for the same construct.
             Stmt::Expr(expr_stmt) if matches!(*expr_stmt.value, Expr::StringLiteral(_)) => {}
             _ => {
+                // Issue #890: name the rejected statement kind. Only a
+                // docstring `Expr` is accepted above, so the common stub
+                // idiom `class P(Protocol): ...` lands here and must name
+                // the expression inside the statement, not just "an
+                // expression statement".
+                let kind = match stmt {
+                    Stmt::Expr(expr_stmt) => format!(
+                        "an expression statement ({})",
+                        pycc_ast::expr_kind_name(&expr_stmt.value)
+                    ),
+                    _ => pycc_ast::stmt_kind_name(stmt).to_string(),
+                };
                 return Err(unsupported(
                     format!(
                         "a protocol class body must contain only method definitions (`def ...`) \
-                         and annotated assignments (`x: int`) -- {:?} is not supported yet",
-                        stmt
+                         and annotated assignments (`x: int`) -- {kind} is not supported yet"
                     ),
                     pycc_ast::stmt_range(stmt),
                 ));

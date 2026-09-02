@@ -46,8 +46,8 @@ pub(super) fn lower_for(
     let Expr::Name(var) = for_stmt.target.as_ref() else {
         return Err(unsupported(
             format!(
-                "only a bare name for-target is supported so far: {:?}",
-                for_stmt.target
+                "only a bare name for-target is supported so far, got {}",
+                pycc_ast::expr_kind_name(&for_stmt.target)
             ),
             pycc_ast::expr_range(&for_stmt.target),
         ));
@@ -78,8 +78,8 @@ pub(super) fn lower_for(
     let Expr::Call(call) = for_stmt.iter.as_ref() else {
         return Err(unsupported(
             format!(
-                "only `for x in range(...)` or `for x in <list>` is supported so far: {:?}",
-                for_stmt.iter
+                "only `for x in range(...)` or `for x in <list>` is supported so far, got {} as the iterable",
+                pycc_ast::expr_kind_name(&for_stmt.iter)
             ),
             pycc_ast::expr_range(&for_stmt.iter),
         ));
@@ -87,8 +87,8 @@ pub(super) fn lower_for(
     let Expr::Name(callee) = call.func.as_ref() else {
         return Err(unsupported(
             format!(
-                "only `for x in range(...)` is supported so far: {:?}",
-                call.func
+                "only `for x in range(...)` is supported so far, got a call whose callee is {}",
+                pycc_ast::expr_kind_name(&call.func)
             ),
             pycc_ast::expr_range(&call.func),
         ));

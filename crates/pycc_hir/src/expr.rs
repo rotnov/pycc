@@ -490,9 +490,13 @@ pub(crate) fn lower_expr(
             }
             let Expr::Name(callee) = call.func.as_ref() else {
                 return Err(unsupported(
+                    // The callee here is never a `Name`, `Attribute`, or
+                    // `Subscript` -- those are handled or rejected earlier
+                    // in this arm -- so the dominant case, `g()()`, reads
+                    // "got a call whose callee is a call expression".
                     format!(
-                        "only calling a bare name is supported so far: {:?}",
-                        call.func
+                        "only calling a bare name is supported so far, got a call whose callee is {}",
+                        pycc_ast::expr_kind_name(&call.func)
                     ),
                     pycc_ast::expr_range(&call.func),
                 ));
@@ -746,7 +750,10 @@ pub(crate) fn lower_expr(
         }
         other => {
             return Err(unsupported(
-                "expression kind not supported yet",
+                format!(
+                    "expression kind not supported yet: {}",
+                    pycc_ast::expr_kind_name(other)
+                ),
                 pycc_ast::expr_range(other),
             ));
         }
@@ -1041,7 +1048,8 @@ fn lower_comprehension_iter(
     let Expr::Call(call) = iter_expr else {
         return Err(unsupported(
             format!(
-                "only `range(...)` or a bare-name iterable is supported so far in a comprehension: {iter_expr:?}"
+                "only `range(...)` or a bare-name iterable is supported so far in a comprehension, got {} as the iterable",
+                pycc_ast::expr_kind_name(iter_expr)
             ),
             pycc_ast::expr_range(iter_expr),
         ));

@@ -1,5 +1,5 @@
-error[C0001]: expression kind not supported yet
+error[C0001]: expression kind not supported yet: a list comprehension
  --> tests/diagnostics/c0001_comprehension_as_call_argument.py:1:7
   |
 1 | print([i for i in range(3)])
-  |       ^^^^^^^^^^^^^^^^^^^^^ expression kind not supported yet
+  |       ^^^^^^^^^^^^^^^^^^^^^ expression kind not supported yet: a list comprehension
