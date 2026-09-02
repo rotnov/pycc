@@ -92,6 +92,15 @@ this file was drafted; their outcome is in the pull-request body.
   `docs/decisions/README.md`. It merged as `ab9beef3` before this pull
   request opened, so the rebase regenerated `docs/decisions/README.md`;
   D-217's number stayed valid. No pull request was open at rebase time.
+- The Pages workflow's first run on PR #871 failed `scripts/check-site.sh`'s
+  llms.txt aggregate budget by 104 bytes: `origin/main` at `751f10c7` left 9
+  bytes under the 264 KiB ceiling and this branch's `docs/ROADMAP.md` clause
+  is 113 bytes. Resolved per D-127 by
+  [D-218](../decisions/D-218-raise-llms-txt-aggregate-budget-to-272-kib.md)
+  (264 -> 272 KiB, D-200's step repeated) rather than by trimming, and by
+  adding `check-site.sh` to `issue-implement`'s step 4 gate list for diffs
+  touching a manifest-listed document. The #802 umbrella item on shrinking
+  the budgeted documents stays open.
 - Motivation, for the record: a read-only `pycc check` sweep over an
   external ~59k-line corpus found 96% of first diagnostics were `import`
   statements, hiding everything after them; Part 2 is the part that

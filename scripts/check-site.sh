@@ -2220,7 +2220,7 @@ for required_link in (
 # (site/llms-txt-context-manifest.json) binds each non-optional link to its
 # local source file, representation role, and per-resource byte budget. The
 # validator computes actual byte counts from the checked-out repository so the
-# 264 KiB aggregate ceiling and per-resource budgets are enforced without any
+# 272 KiB aggregate ceiling and per-resource budgets are enforced without any
 # live network fetch. See docs/WEBSITE.md "llms.txt bounded expansion contract"
 # for the full consumer contract.
 import re as _re

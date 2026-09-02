@@ -206,7 +206,14 @@ Follow the plan. Write tests for success, failure, and edge paths alongside the 
 the coverage gate is a merge invariant, not a target. Update every affected document in the
 same commits as the code. Before entering review, run the full local gate set: the coverage
 gate with its preparatory builds exactly as CI performs them, the `scripts/` unittest suite,
-the agent-asset and agent-policy validators, and clippy with warnings denied.
+the agent-asset and agent-policy validators, and clippy with warnings denied. When the diff
+touches any document `site/llms-txt-context-manifest.json` lists as non-optional (today
+`README.md`, `docs/SPEC.md`, `docs/ARCHITECTURE.md`, `docs/PYTHON_STANDARDS.md`,
+`docs/ROADMAP.md`, `site/index.html.md`), also run `sh scripts/check-site.sh` against the
+rebased tree: the Pages workflow enforces the manifest's aggregate byte budget on every push
+that changes those files, `origin/main` routinely sits within a few bytes of the ceiling, and a
+`docs/ROADMAP.md` changelog paragraph that passed locally pre-rebase has failed post-rebase
+often enough to be a standing retrospective theme.
 
 A gate's verdict is its exit status, and a shell pipeline destroys it: `cmd | tail -2;
 echo $?` reports the pager's exit, not the gate's, which can present a failing gate as
