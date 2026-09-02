@@ -31,7 +31,7 @@ pub(crate) use redeclaration::{
 
 pub(crate) use constraints::*;
 pub(crate) use module::module_function_local_names;
-pub use module::{check, check_and_resolve};
+pub use module::{check, check_all, check_and_resolve, check_and_resolve_all};
 #[cfg(test)]
 pub(crate) use module::{check_with_signatures, checked_function_signatures};
 pub use monomorphize::*;

@@ -26,8 +26,10 @@ parser, checked HIR lowering, and strict type-checker subset for every
 supplied file, reports every diagnostic the failing pass found for each input
 (parser: all syntax errors; HIR lowering: one per failing top-level item, with
 an item that only references a class or alias that itself failed to lower
-skipped silently, D-219; the type pass: still its first, until #864 Part 3
-lands), and can render human or JSON diagnostics (JSON: one object
+skipped silently, D-219; the type checker: one per failing function, the
+solver's entries first and then the annotation checker's for functions the
+solver did not flag, a module-level failure alone, D-220), and can render
+human or JSON diagnostics (JSON: one object
 per line). `build` and `run` lower the
 implemented v0.1 language subset through MIR, LLVM, the host linker, and the
 native runtime, subject to the explicit gaps in `docs/ROADMAP.md`. `test` and

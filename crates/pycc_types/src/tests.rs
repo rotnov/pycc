@@ -195,6 +195,17 @@ fn concrete_fast_path_preserves_solver_first_diagnostic_selection() {
     assert_eq!(fast_path.message, solver_first.message);
     assert_eq!(public_check.code, solver_first.code);
     assert_eq!(public_check.message, solver_first.message);
+    // #868 (D-220): the per-function list keeps the same selection at index
+    // 0, and `broken` is reported exactly once (both phases flag it; the
+    // solver's entry wins by key, the checker's `Some(1)` entry is dropped).
+    let all = check_all(&hir).unwrap_err();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].code, solver_first.code);
+    assert_eq!(all[0].message, solver_first.message);
+    let fast_path_all =
+        crate::module::checked_function_signatures_all(&hir, &local_names).unwrap_err();
+    assert_eq!(fast_path_all.len(), 1);
+    assert_eq!(fast_path_all[0].message, solver_first.message);
 }
 
 #[test]

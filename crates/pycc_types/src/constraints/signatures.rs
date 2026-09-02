@@ -11,6 +11,9 @@
 //! and the public `check*` functions) lives in [`crate::module`].
 
 use super::*;
+#[cfg(test)]
+use crate::module::first_keyed;
+use crate::module::{KeyedDiagnostics, module_level};
 
 pub(crate) fn concrete_function_signatures(
     hir: &HirModule,
@@ -98,10 +101,47 @@ pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environme
     Some(env)
 }
 
+/// First-diagnostic view of [`infer_function_signatures_with_solver_all`],
+/// kept for the crate's unit tests that pin the solver's own first pick.
+#[cfg(test)]
 pub(crate) fn infer_function_signatures_with_solver(
     hir: &HirModule,
     function_local_names: &[Vec<&str>],
 ) -> Result<HashMap<String, (Vec<Ty>, Ty)>, Diagnostic> {
+    infer_function_signatures_with_solver_all(hir, function_local_names).map_err(first_keyed)
+}
+
+/// Infers every private-helper signature by constraint solving, collecting
+/// one diagnostic per failing function body (Part 3 of #864, D-220 rule
+/// C3); the `Err` is never empty.
+///
+/// The top-level constraint walk is sequential over the module globals, so
+/// its first failure is returned alone as `(None, d)`. The per-body loop
+/// records `(Some(i), d)` for each body whose constraint collection or
+/// implicit-return unification fails and continues with the next body; when
+/// it collected anything the function returns that list *without* running
+/// the post-body phases (`propagate_binop_constraints`,
+/// `apply_annotation_defaults`, the `T0021` resolution loop) -- none of them
+/// ran after a body failure before this part either, and skipping them
+/// avoids reporting resolution failures caused by the missing constraints.
+/// A post-phase failure with no body failure is `(None, d)`, as before.
+///
+/// Invariant (relied on by `module::merge_solver_first`): the `Err` is
+/// either exactly `[(None, d)]` or entirely `Some`-keyed -- the top-level
+/// walk returns at once, and the post-phases run only when no body was
+/// collected, so a `None` key never coexists with a `Some` key.
+///
+/// Continuing past a failed body is sound because `unify_terms` returns
+/// before mutating the union-find on a conflict, so it only ever holds
+/// constraints that were *accepted*: the unifications a failing body made
+/// before its error are genuine constraints that body imposes, and a later
+/// body conflicting with them has a genuine conflict (D-220 records this
+/// cross-body coupling as the one observable consequence of not rolling the
+/// union-find back per body).
+pub(crate) fn infer_function_signatures_with_solver_all(
+    hir: &HirModule,
+    function_local_names: &[Vec<&str>],
+) -> Result<HashMap<String, (Vec<Ty>, Ty)>, KeyedDiagnostics> {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut signatures = HashMap::new();
@@ -146,7 +186,8 @@ pub(crate) fn infer_function_signatures_with_solver(
                     &mut globals,
                     std::slice::from_ref(stmt),
                     None,
-                )?;
+                )
+                .map_err(module_level)?;
             }
             // Mirror of pass 2's source-order `def` rebinding (D-110): the
             // `def` marks the name def-rebound in the accumulated globals
@@ -158,7 +199,8 @@ pub(crate) fn infer_function_signatures_with_solver(
             }
         }
     }
-    for (item, local_names) in hir.items.iter().zip(function_local_names) {
+    let mut collected = KeyedDiagnostics::new();
+    for (index, (item, local_names)) in hir.items.iter().zip(function_local_names).enumerate() {
         let HirItem::Function {
             name, body, params, ..
         } = item
@@ -222,7 +264,7 @@ pub(crate) fn infer_function_signatures_with_solver(
         if is_abstract_method {
             continue;
         }
-        collect_block_constraints(
+        if let Err(diagnostic) = collect_block_constraints(
             &signatures,
             &mut parents,
             &mut concrete,
@@ -230,30 +272,42 @@ pub(crate) fn infer_function_signatures_with_solver(
             &mut env,
             body,
             Some(signature.2.clone()),
-        )?;
-        if signature.2.is_err() && !contains_return(body) {
-            unify_terms(
+        ) {
+            collected.push((Some(index), diagnostic));
+            continue;
+        }
+        if signature.2.is_err()
+            && !contains_return(body)
+            && let Err(diagnostic) = unify_terms(
                 signature.2.clone(),
                 Ok(Ty::None),
                 &mut parents,
                 &mut concrete,
                 "T0022",
                 "private helper implicit return",
-            )?;
+            )
+        {
+            collected.push((Some(index), diagnostic));
         }
+    }
+    if !collected.is_empty() {
+        return Err(collected);
     }
 
     // Annotation bounds are directional defaults, not hard equalities. Let
     // every call/operator fact settle first, aggregate all remaining bounds
     // per union-find root, then propagate any selected fallback back through
     // operators. This keeps inference independent of body/declaration order.
-    propagate_binop_constraints(&constraints.binops, &mut parents, &mut concrete)?;
+    propagate_binop_constraints(&constraints.binops, &mut parents, &mut concrete)
+        .map_err(module_level)?;
     apply_annotation_defaults(
         &constraints.annotation_defaults,
         &mut parents,
         &mut concrete,
-    )?;
-    propagate_binop_constraints(&constraints.binops, &mut parents, &mut concrete)?;
+    )
+    .map_err(module_level)?;
+    propagate_binop_constraints(&constraints.binops, &mut parents, &mut concrete)
+        .map_err(module_level)?;
 
     let non_scalar_local_roots = constraints
         .non_scalar_local_terms
@@ -284,7 +338,8 @@ pub(crate) fn infer_function_signatures_with_solver(
                     ).with_help(format!("add a type annotation to parameter `{param_name}`"))
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(module_level)?;
         let return_ty = resolved_private_signature_term(
             signature.2.clone(),
             &mut parents,
@@ -298,7 +353,8 @@ pub(crate) fn infer_function_signatures_with_solver(
                 Span::new(0, 0),
             )
             .with_help(format!("add a return type annotation to `{name}`"))
-        })?;
+        })
+        .map_err(module_level)?;
         resolved.insert(name.clone(), (param_tys, return_ty));
     }
     Ok(resolved)
