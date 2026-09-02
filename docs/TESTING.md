@@ -178,7 +178,7 @@ existing D-072 should-panic unit test remains the negative control that
   through `py315/` against a pinned current Python 3.15 patch; the separate
   Python 3.14 compatibility run remains required. Outputs are recorded and
   re-recorded on oracle patch bumps.
-- A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand (no automation backs this yet — see the PR-9 status note below for D-102's accepted interim by-hand policy). Whichever way a row is flipped, `tests/conformance_matrix_guard.rs` requires the newly-green row to cite a real flat fixture that is registered in `tests/conformance.rs`.
+- A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand (no automation backs this yet — see the PR-9 status note below for D-102's accepted interim by-hand policy). Whichever way a row is flipped, `tests/conformance_matrix_guard.rs` requires the newly-green row to cite a real flat fixture that is registered in the conformance harness (`tests/conformance.rs` plus its `tests/conformance/*.rs` cohort files).
 - **v0.1 exception:** `--release`/LTO doesn't exist until v0.2 (see ROADMAP.md), so the "both profiles" rule only binds from v0.2 on. Every v0.1 PEP/feature flips to ✅ on `--debug` alone; nothing in v0.1 is held to a `--release` bar that has nothing to build against (see DELIVERY_PLAN.md, "Debug/release conformance").
 
 **Python 3.14.7 oracle transition (activated 2026-08-15):** the three-round
