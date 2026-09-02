@@ -93,6 +93,88 @@ pub fn expr_range(expr: &Expr) -> std::ops::Range<u32> {
     (*range).into()
 }
 
+/// Names a statement's syntactic kind in Python terms, with its own
+/// article, for a user-facing diagnostic (issue #890) -- ``a `with`
+/// statement``, `an assignment statement`, never the Rust `Debug` form of
+/// the node. The match is exhaustive on purpose: a `ruff_python_ast`
+/// upgrade that adds a variant fails to compile here rather than silently
+/// printing something generic. Every phrase is distinct within the table,
+/// and none begins with ``type annotation ` `` or ``class ` ``, the two
+/// prefixes `pycc_hir`'s D-219 cascade detection classifies a `C0001`
+/// message by.
+pub fn stmt_kind_name(stmt: &Stmt) -> &'static str {
+    match stmt {
+        Stmt::FunctionDef(_) => "a function definition (`def ...`)",
+        Stmt::ClassDef(_) => "a class definition (`class ...`)",
+        Stmt::Return(_) => "a `return` statement",
+        Stmt::Delete(_) => "a `del` statement",
+        Stmt::TypeAlias(_) => "a `type` alias statement",
+        Stmt::Assign(_) => "an assignment statement",
+        Stmt::AugAssign(_) => "an augmented assignment (`x += 1`)",
+        Stmt::AnnAssign(_) => "an annotated assignment (`x: int = 1`)",
+        Stmt::For(_) => "a `for` loop",
+        Stmt::While(_) => "a `while` loop",
+        Stmt::If(_) => "an `if` statement",
+        Stmt::With(_) => "a `with` statement",
+        Stmt::Match(_) => "a `match` statement",
+        Stmt::Raise(_) => "a `raise` statement",
+        Stmt::Try(_) => "a `try` statement",
+        Stmt::Assert(_) => "an `assert` statement",
+        Stmt::Import(_) => "an `import` statement",
+        Stmt::ImportFrom(_) => "a `from ... import ...` statement",
+        Stmt::Global(_) => "a `global` declaration",
+        Stmt::Nonlocal(_) => "a `nonlocal` declaration",
+        Stmt::Expr(_) => "an expression statement",
+        Stmt::Pass(_) => "a `pass` statement",
+        Stmt::Break(_) => "a `break` statement",
+        Stmt::Continue(_) => "a `continue` statement",
+        Stmt::IpyEscapeCommand(_) => "an IPython escape command (`%magic` / `!shell`)",
+    }
+}
+
+/// Names an expression's syntactic kind in Python terms, with its own
+/// article, for a user-facing diagnostic (issue #890) -- `a tuple`, ``an
+/// attribute expression (`obj.attr`)``, never the Rust `Debug` form of the
+/// node. Exhaustive for the same reason as `stmt_kind_name`, and under the
+/// same two constraints on its phrases.
+pub fn expr_kind_name(expr: &Expr) -> &'static str {
+    match expr {
+        Expr::BoolOp(_) => "an `and`/`or` boolean expression",
+        Expr::Named(_) => "an assignment expression (`x := ...`)",
+        Expr::BinOp(_) => "a binary operator expression",
+        Expr::UnaryOp(_) => "a unary operator expression",
+        Expr::Lambda(_) => "a `lambda`",
+        Expr::If(_) => "a conditional expression (`x if c else y`)",
+        Expr::Dict(_) => "a dict display (`{...}`)",
+        Expr::Set(_) => "a set display (`{...}`)",
+        Expr::ListComp(_) => "a list comprehension",
+        Expr::SetComp(_) => "a set comprehension",
+        Expr::DictComp(_) => "a dict comprehension",
+        Expr::Generator(_) => "a generator expression",
+        Expr::Await(_) => "an `await` expression",
+        Expr::Yield(_) => "a `yield` expression",
+        Expr::YieldFrom(_) => "a `yield from` expression",
+        Expr::Compare(_) => "a comparison expression",
+        Expr::Call(_) => "a call expression",
+        Expr::FString(_) => "an f-string",
+        Expr::TString(_) => "a t-string (template string literal)",
+        Expr::StringLiteral(_) => "a string literal",
+        Expr::BytesLiteral(_) => "a bytes literal",
+        Expr::NumberLiteral(_) => "a number literal",
+        Expr::BooleanLiteral(_) => "a `True`/`False` literal",
+        Expr::NoneLiteral(_) => "a `None` literal",
+        Expr::EllipsisLiteral(_) => "an `...` ellipsis literal",
+        Expr::Attribute(_) => "an attribute expression (`obj.attr`)",
+        Expr::Subscript(_) => "a subscript expression (`obj[key]`)",
+        Expr::Starred(_) => "a starred expression (`*x`)",
+        Expr::Name(_) => "a bare name",
+        Expr::List(_) => "a list display (`[...]`)",
+        Expr::Tuple(_) => "a tuple",
+        Expr::Slice(_) => "a slice (`a:b`)",
+        Expr::IpyEscapeCommand(_) => "an IPython escape command (`%magic` / `!shell`)",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,6 +310,142 @@ mod tests {
         assert_eq!(stmt_range(&ipython.body[0]), 0..4);
         let assignment = ipython.body[1].as_assign_stmt().unwrap();
         assert_eq!(expr_range(&assignment.value), 13..18);
+    }
+
+    #[test]
+    fn kind_names_cover_every_upstream_variant() {
+        // Mirrors `range_facade_covers_every_upstream_statement_and_expression_variant`
+        // above source-for-source: that set is exactly the 25 `Stmt` and 33
+        // `Expr` variants of the pinned `ruff_python_ast`, so every arm of
+        // both kind-name tables is hit and its phrase asserted verbatim
+        // (the phrases land byte-exact in `tests/diagnostics` fixtures).
+        let statement_cases = [
+            (
+                "def function():\n    pass\n",
+                "a function definition (`def ...`)",
+            ),
+            (
+                "class Class:\n    pass\n",
+                "a class definition (`class ...`)",
+            ),
+            ("return 1\n", "a `return` statement"),
+            ("del value\n", "a `del` statement"),
+            ("type Alias = int\n", "a `type` alias statement"),
+            ("value = 1\n", "an assignment statement"),
+            ("value += 1\n", "an augmented assignment (`x += 1`)"),
+            ("value: int = 1\n", "an annotated assignment (`x: int = 1`)"),
+            ("for value in values:\n    pass\n", "a `for` loop"),
+            ("while value:\n    pass\n", "a `while` loop"),
+            ("if value:\n    pass\n", "an `if` statement"),
+            ("with value:\n    pass\n", "a `with` statement"),
+            (
+                "match value:\n    case _:\n        pass\n",
+                "a `match` statement",
+            ),
+            ("raise value\n", "a `raise` statement"),
+            ("try:\n    pass\nexcept:\n    pass\n", "a `try` statement"),
+            ("assert value\n", "an `assert` statement"),
+            ("import module\n", "an `import` statement"),
+            (
+                "from module import value\n",
+                "a `from ... import ...` statement",
+            ),
+            ("global value\n", "a `global` declaration"),
+            ("nonlocal value\n", "a `nonlocal` declaration"),
+            ("value\n", "an expression statement"),
+            ("pass\n", "a `pass` statement"),
+            ("break\n", "a `break` statement"),
+            ("continue\n", "a `continue` statement"),
+        ];
+        for (source, expected) in statement_cases {
+            let module = parse_test_source(source);
+            assert_eq!(stmt_kind_name(&module.body[0]), expected, "{source:?}");
+        }
+
+        let expression_cases = [
+            ("left and right", "an `and`/`or` boolean expression"),
+            ("(target := value)", "an assignment expression (`x := ...`)"),
+            ("left + right", "a binary operator expression"),
+            ("-value", "a unary operator expression"),
+            ("lambda: value", "a `lambda`"),
+            (
+                "left if test else right",
+                "a conditional expression (`x if c else y`)",
+            ),
+            ("{}", "a dict display (`{...}`)"),
+            ("{value}", "a set display (`{...}`)"),
+            ("[value for value in values]", "a list comprehension"),
+            ("{value for value in values}", "a set comprehension"),
+            ("{key: value for key in values}", "a dict comprehension"),
+            ("(value for value in values)", "a generator expression"),
+            ("await value", "an `await` expression"),
+            ("left < right", "a comparison expression"),
+            ("function()", "a call expression"),
+            ("f\"{value}\"", "an f-string"),
+            ("t\"{value}\"", "a t-string (template string literal)"),
+            ("\"value\"", "a string literal"),
+            ("b\"value\"", "a bytes literal"),
+            ("1", "a number literal"),
+            ("True", "a `True`/`False` literal"),
+            ("None", "a `None` literal"),
+            ("...", "an `...` ellipsis literal"),
+            ("value.attribute", "an attribute expression (`obj.attr`)"),
+            ("value[0]", "a subscript expression (`obj[key]`)"),
+            ("value", "a bare name"),
+            ("[value]", "a list display (`[...]`)"),
+            ("(value,)", "a tuple"),
+        ];
+        for (source, expected) in expression_cases {
+            let parsed = ruff_python_parser::parse_expression(source).unwrap();
+            assert_eq!(expr_kind_name(parsed.expr()), expected, "{source:?}");
+        }
+
+        for (source, expected) in [
+            (
+                "def generator():\n    yield value\n",
+                "a `yield` expression",
+            ),
+            (
+                "def generator():\n    yield from value\n",
+                "a `yield from` expression",
+            ),
+        ] {
+            let module = parse_test_source(source);
+            let function = module.body[0].as_function_def_stmt().unwrap();
+            let expression = function.body[0].as_expr_stmt().unwrap();
+            assert_eq!(expr_kind_name(&expression.value), expected, "{source:?}");
+        }
+
+        let starred = ruff_python_parser::parse_expression("[*value]").unwrap();
+        let starred = starred.expr().as_list_expr().unwrap().elts[0]
+            .as_starred_expr()
+            .unwrap();
+        assert_eq!(
+            expr_kind_name(&Expr::Starred(starred.clone())),
+            "a starred expression (`*x`)"
+        );
+
+        let sliced = ruff_python_parser::parse_expression("value[1:2]").unwrap();
+        let slice = &sliced.expr().as_subscript_expr().unwrap().slice;
+        assert_eq!(expr_kind_name(slice), "a slice (`a:b`)");
+
+        let ipython = ruff_python_parser::parse(
+            "!pwd\nvalue = !!pwd\n",
+            ruff_python_parser::ParseOptions::from(ruff_python_parser::Mode::Ipython),
+        )
+        .unwrap()
+        .try_into_module()
+        .unwrap()
+        .into_syntax();
+        assert_eq!(
+            stmt_kind_name(&ipython.body[0]),
+            "an IPython escape command (`%magic` / `!shell`)"
+        );
+        let assignment = ipython.body[1].as_assign_stmt().unwrap();
+        assert_eq!(
+            expr_kind_name(&assignment.value),
+            "an IPython escape command (`%magic` / `!shell`)"
+        );
     }
 
     #[test]
