@@ -177,7 +177,7 @@ status: accepted
     distinguished by message only, and two functions with the same error
     fingerprint identically for a consumer keyed on code plus span shape.
     This part does not widen to add spans; a follow-up issue (filed at PR
-    time, #TBD) tracks threading real spans through `pycc_types`, inheriting
+    time, #877) tracks threading real spans through `pycc_types`, inheriting
     D-043's "regenerate fixtures, never hand-edit" rule.
   - The module-level driver moves from `crates/pycc_types/src/lib.rs` (past
     the ~1,000-line decomposition threshold, #544) into

@@ -49,7 +49,7 @@ section and `merge_solver_first`'s code). Seven independent paraphrases of
 one formal rule are seven places for the same omission.
 
 What fixed it: one canonical sentence derived from the rule and the code,
-installed verbatim at all seven sites (`f5a2a1b0`), verified by reading the
+installed verbatim at all seven sites (`ed89b1c8`), verified by reading the
 diff against `merge_solver_first` rather than by a seventh review round. The
 `/harden batch` pass for #868 added the rule to `AGENTS.md` ("Keep
 documentation current") and opened
@@ -66,8 +66,8 @@ once), not the wording.
 What happened: #868 demoted three single-diagnostic entry points of
 `pycc_types` to `#[cfg(test)]` wrappers and deleted a fourth. The round-1 fix
 ran the tree-wide search that `issue-implement` step 5 asks for, adjudicated
-every hit, and still left 35 stale comments for round 2 (`5af94c2b`) and six
-more for round 3 (`49324f90`).
+every hit, and still left 35 stale comments for round 2 (`f0104826`) and six
+more for round 3 (`3035f4eb`).
 
 Root cause: the round-1 adjudication asked "does this name still compile"
 — which a `cfg(test)` wrapper satisfies — instead of "does this name exist in
