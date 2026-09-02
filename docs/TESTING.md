@@ -22,7 +22,7 @@ planned sections below for the current status of each.
 Layer 2's `tests/conformance/pyXY/` location is the same kind of row: it
 describes the eventual v1.0-scale, language-level-selecting harness, not what
 runs today. Every conformance fixture currently lives **flat** at
-`tests/fixtures/pep_NNNN_slug.py` and is run directly by `tests/conformance.rs`
+`tests/fixtures/pep_NNNN_slug.py` and is run by the conformance harness (`tests/conformance.rs` plus its `tests/conformance/*.rs` cohort files, see below)
 (D-102); no `pyXY/` directory exists anywhere in this repository, and the only
 subdirectory under `tests/fixtures/` is `policy-successors/`. This is already
 recorded for the PR-13 fixtures below, and it is the settled convention rather
