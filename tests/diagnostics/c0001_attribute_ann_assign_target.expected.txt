@@ -1,0 +1,5 @@
+error[C0001]: only assigning to a bare name is supported so far, got an attribute expression (`obj.attr`)
+ --> tests/diagnostics/c0001_attribute_ann_assign_target.py:3:9
+  |
+3 |         self.x: int = 1
+  |         ^^^^^^ only assigning to a bare name is supported so far, got an attribute expression (`obj.attr`)

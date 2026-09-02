@@ -83,6 +83,7 @@
 //! with `C0001` before either loop kind's body is lowered).
 
 mod exception;
+mod for_loop;
 
 use crate::class::ClassAnnotationInfo;
 use crate::expr::{
@@ -160,8 +161,8 @@ pub(crate) fn lower_stmt(
             let [target] = assign.targets.as_slice() else {
                 return Err(unsupported(
                     format!(
-                        "only a single assignment target is supported so far: {:?}",
-                        assign.targets
+                        "only a single assignment target is supported so far, got {} targets",
+                        assign.targets.len()
                     ),
                     assign.range,
                 ));
@@ -279,7 +280,10 @@ pub(crate) fn lower_stmt(
                 }
                 other => {
                     return Err(unsupported(
-                        format!("only assigning to a bare name is supported so far: {other:?}"),
+                        format!(
+                            "only assigning to a bare name is supported so far, got {}",
+                            pycc_ast::expr_kind_name(other)
+                        ),
                         pycc_ast::expr_range(other),
                     ));
                 }
@@ -289,8 +293,8 @@ pub(crate) fn lower_stmt(
             let Expr::Name(name) = ann.target.as_ref() else {
                 return Err(unsupported(
                     format!(
-                        "only assigning to a bare name is supported so far: {:?}",
-                        ann.target
+                        "only assigning to a bare name is supported so far, got {}",
+                        pycc_ast::expr_kind_name(&ann.target)
                     ),
                     pycc_ast::expr_range(&ann.target),
                 ));
@@ -417,114 +421,14 @@ pub(crate) fn lower_stmt(
                 )?,
             }
         }
-        Stmt::For(for_stmt) => {
-            if for_stmt.is_async {
-                // `async for` is only valid Python syntax inside an `async
-                // def` body, but `lower_function` unconditionally rejects
-                // any `async def` (D-141's own `def.is_async` check, earlier
-                // in this file) before its body is ever lowered -- so this
-                // arm can only ever be reached from a synchronous function
-                // body or from module scope, never from inside a real async
-                // function. There is therefore no reachable "valid Python,
-                // just not implemented yet" case here today: every
-                // occurrence is context-invalid, exactly like a top-level
-                // `break`/`continue` (see the `Stmt::Break`/`Stmt::Continue`
-                // arms above). Revisit this once/if async function support
-                // lands -- it would reopen a genuine valid-but-unimplemented
-                // case this arm cannot distinguish from today (D-148).
-                return Err(context_invalid(
-                    "'async for' outside async function",
-                    for_stmt.range,
-                ));
-            }
-            if !for_stmt.orelse.is_empty() {
-                return Err(unsupported("for/else is not supported yet", for_stmt.range));
-            }
-            let Expr::Name(var) = for_stmt.target.as_ref() else {
-                return Err(unsupported(
-                    format!(
-                        "only a bare name for-target is supported so far: {:?}",
-                        for_stmt.target
-                    ),
-                    pycc_ast::expr_range(&for_stmt.target),
-                ));
-            };
-            // A bare-name iterable is `for v in some_list:` (D-105) or
-            // `for k in some_dict:` (PR-11 Task 3, D-123) -- resolved to
-            // `Ty::List`, `Ty::Dict`, or rejected by pycc_types, not here;
-            // HIR only records the syntactic shape.
-            if let Expr::Name(list_name) = for_stmt.iter.as_ref() {
-                return Ok(HirStmt::ForList {
-                    var: var.id.to_string(),
-                    list: list_name.id.as_str().to_string(),
-                    body: lower_body(
-                        &for_stmt.body,
-                        aliases,
-                        true,
-                        in_function,
-                        // See the `Stmt::While` arm above -- the same
-                        // CPython-verified shielding rule applies to a
-                        // `for` loop's body.
-                        false,
-                        class_name,
-                        type_param,
-                        class_defs,
-                    )?,
-                });
-            }
-            let Expr::Call(call) = for_stmt.iter.as_ref() else {
-                return Err(unsupported(
-                    format!(
-                        "only `for x in range(...)` or `for x in <list>` is supported so far: {:?}",
-                        for_stmt.iter
-                    ),
-                    pycc_ast::expr_range(&for_stmt.iter),
-                ));
-            };
-            let Expr::Name(callee) = call.func.as_ref() else {
-                return Err(unsupported(
-                    format!(
-                        "only `for x in range(...)` is supported so far: {:?}",
-                        call.func
-                    ),
-                    pycc_ast::expr_range(&call.func),
-                ));
-            };
-            if callee.id.as_str() != "range" {
-                return Err(unsupported(
-                    format!(
-                        "only iterating over `range(...)` is supported so far, got `{}`",
-                        callee.id
-                    ),
-                    call.range,
-                ));
-            }
-            if !call.arguments.keywords.is_empty() {
-                return Err(unsupported(
-                    "keyword arguments to range() are not supported yet",
-                    call.range,
-                ));
-            }
-            let (start, stop, step) = lower_range_call(call, in_function, class_name)?;
-            HirStmt::ForRange {
-                var: var.id.to_string(),
-                start,
-                stop,
-                step,
-                body: lower_body(
-                    &for_stmt.body,
-                    aliases,
-                    true,
-                    in_function,
-                    // See the `Stmt::While` arm above -- the same
-                    // CPython-verified shielding rule applies here too.
-                    false,
-                    class_name,
-                    type_param,
-                    class_defs,
-                )?,
-            }
-        }
+        Stmt::For(for_stmt) => for_loop::lower_for(
+            for_stmt,
+            aliases,
+            in_function,
+            class_name,
+            type_param,
+            class_defs,
+        )?,
         Stmt::Return(ret) => {
             if in_finally && in_function {
                 // PEP 765 (issue #738, Part 1 of #543): a `return` that
@@ -587,7 +491,7 @@ pub(crate) fn lower_stmt(
                 // A real enclosing loop -- valid Python, break/continue
                 // control-flow codegen is just not implemented yet.
                 unsupported(
-                    "statement kind not supported yet",
+                    "statement kind not supported yet: `break` inside a loop",
                     pycc_ast::stmt_range(stmt),
                 )
             } else {
@@ -610,7 +514,7 @@ pub(crate) fn lower_stmt(
             }
             return Err(if in_loop {
                 unsupported(
-                    "statement kind not supported yet",
+                    "statement kind not supported yet: `continue` inside a loop",
                     pycc_ast::stmt_range(stmt),
                 )
             } else {
@@ -733,8 +637,33 @@ pub(crate) fn lower_stmt(
             HirStmt::Raise { exc, cause }
         }
         other => {
+            // Issue #890: name the rejected kind. Four kinds that *are*
+            // supported at module level reach this arm only because they
+            // are nested, so naming them by kind alone would falsely say
+            // "a function definition is not supported"; each gets a
+            // position qualifier instead. Every top-level `Import`/
+            // `ImportFrom` goes through `import::lower_import_stmt` before
+            // `module::lower_all` ever calls `lower_stmt`, and an `if
+            // TYPE_CHECKING:` body is constant-folded above, so an import
+            // here is always inside a function or block body (a class-body
+            // import is rejected by `class.rs` first and never gets here).
+            let kind = match other {
+                Stmt::FunctionDef(_) => {
+                    "a `def` nested inside a function or block body \
+                     (only a module-level `def` or a method in a class body is supported)"
+                }
+                Stmt::ClassDef(_) => {
+                    "a `class` nested inside a function or block body \
+                     (only a module-level `class` is supported)"
+                }
+                Stmt::Import(_) | Stmt::ImportFrom(_) => {
+                    "an `import` inside a function or block body \
+                     (only a module-level import, or one inside an `if TYPE_CHECKING:` guard, is supported)"
+                }
+                _ => pycc_ast::stmt_kind_name(other),
+            };
             return Err(unsupported(
-                "statement kind not supported yet",
+                format!("statement kind not supported yet: {kind}"),
                 pycc_ast::stmt_range(other),
             ));
         }
@@ -1123,208 +1052,4 @@ fn lower_pattern(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::HirItem;
-
-    #[test]
-    fn lower_pattern_rejects_bare_match_star() {
-        let star = Pattern::MatchStar(pycc_ast::PatternMatchStar {
-            node_index: Default::default(),
-            range: Default::default(),
-            name: None,
-        });
-        let err = lower_pattern(&star, false, None).unwrap_err();
-        assert_eq!(err.code, "C0001");
-        assert!(
-            err.message
-                .contains("a `*` pattern is only valid inside a sequence pattern")
-        );
-    }
-
-    #[test]
-    fn lower_pattern_as_with_no_name_produces_empty_name() {
-        let inner = Pattern::MatchValue(pycc_ast::PatternMatchValue {
-            node_index: Default::default(),
-            range: Default::default(),
-            value: Box::new(Expr::NumberLiteral(pycc_ast::ExprNumberLiteral {
-                node_index: Default::default(),
-                range: Default::default(),
-                value: pycc_ast::Number::Float(1.0),
-            })),
-        });
-        let as_pat = Pattern::MatchAs(pycc_ast::PatternMatchAs {
-            node_index: Default::default(),
-            range: Default::default(),
-            pattern: Some(Box::new(inner)),
-            name: None,
-        });
-        let result = lower_pattern(&as_pat, false, None).unwrap();
-        assert_eq!(
-            result,
-            HirPattern::As(
-                Box::new(HirPattern::Literal(HirExpr::FloatLiteral(1.0))),
-                String::new(),
-            )
-        );
-    }
-
-    #[test]
-    fn lower_match_with_unsupported_body_emits_c0001() {
-        let module = pycc_parser::parse(
-            "x = 1\nmatch x:\n    case 1:\n        while True:\n            pass\n        else:\n            pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-    }
-
-    #[test]
-    fn lower_match_subject_expr_error_propagates() {
-        // `{**x}` is a dict-unpacking expression that `lower_expr` rejects
-        // with C0001; used as the match subject it propagates through the
-        // `?` on the subject expression.
-        let module = pycc_parser::parse("match {**x}:\n    case _:\n        pass\n")
-            .expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-    }
-
-    #[test]
-    fn lower_match_guard_expr_error_propagates() {
-        // `{**y}` as a guard expression causes `lower_expr` to fail with
-        // C0001, propagating through the `?` on the guard.
-        let module = pycc_parser::parse(
-            "x = 1\nmatch x:\n    case 1 if {**y}:\n        pass\n    case _:\n        pass\n",
-        )
-        .expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-    }
-
-    #[test]
-    fn lower_match_value_pattern_folds_a_negative_literal() {
-        // #602: `case -1:` is a value pattern whose expression is `USub`
-        // applied to the literal `1`. The fold makes it an ordinary
-        // `HirExpr::IntLiteral(-1)`, so it is an accepted literal pattern.
-        let module = pycc_parser::parse(
-            "x = 1\nmatch x:\n    case -1:\n        pass\n    case _:\n        pass\n",
-        )
-        .expect("test fixture must parse");
-        let hir = crate::lower_checked(&module).expect("a negative literal pattern must lower");
-        assert!(matches!(
-            &hir.items[1],
-            HirItem::TopLevelStmt(HirStmt::Match { cases, .. })
-                if cases[0].pattern == HirPattern::Literal(HirExpr::IntLiteral(-1))
-        ));
-    }
-
-    #[test]
-    fn lower_match_value_pattern_expr_error_propagates() {
-        // A magnitude past `i64`'s range still fails in `lower_expr`, so the
-        // `?` on the value pattern's own expression keeps its error path
-        // covered after #602 made `case -1:` succeed.
-        let module = pycc_parser::parse(
-            "x = 1\nmatch x:\n    case -99999999999999999999999:\n        pass\n    case _:\n        pass\n",
-        )
-        .expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-    }
-
-    #[test]
-    fn lower_match_mapping_key_folds_a_negative_literal() {
-        // #602: a mapping key `-1` folds to `HirExpr::IntLiteral(-1)`.
-        let module = pycc_parser::parse(
-            "x = {1: 2}\nmatch x:\n    case {-1: v}:\n        pass\n    case _:\n        pass\n",
-        )
-        .expect("test fixture must parse");
-        let hir = crate::lower_checked(&module).expect("a negative mapping key must lower");
-        assert!(matches!(
-            &hir.items[1],
-            HirItem::TopLevelStmt(HirStmt::Match { cases, .. })
-                if matches!(
-                    &cases[0].pattern,
-                    HirPattern::Mapping(entries, _)
-                        if entries[0].0 == HirExpr::IntLiteral(-1)
-                )
-        ));
-    }
-
-    #[test]
-    fn lower_match_mapping_key_expr_error_propagates() {
-        // As above, an out-of-range magnitude keeps the mapping key's own
-        // `?` error path covered now that `-1` folds successfully.
-        let module = pycc_parser::parse(
-            "x = {1: 2}\nmatch x:\n    case {-99999999999999999999999: v}:\n        pass\n    case _:\n        pass\n",
-        )
-        .expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-    }
-
-    #[test]
-    fn lower_match_sequence_subpattern_error_propagates() {
-        let module = pycc_parser::parse(
-            "x = [1]\nmatch x:\n    case [foo.bar]:\n        pass\n    case _:\n        pass\n",
-        )
-        .expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-    }
-
-    #[test]
-    fn lower_match_sequence_star_subpattern_error_propagates() {
-        let module = pycc_parser::parse(
-            "x = [1]\nmatch x:\n    case [foo.bar, *rest]:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-    }
-
-    #[test]
-    fn lower_match_mapping_value_pattern_error_propagates() {
-        let module = pycc_parser::parse(
-            "x = {\"k\": 1}\nmatch x:\n    case {\"k\": foo.bar}:\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-    }
-
-    #[test]
-    fn lower_match_class_positional_subpattern_error_propagates() {
-        let module = pycc_parser::parse(
-            "class P:\n    def __init__(self):\n        pass\nx = P()\nmatch x:\n    case P(foo.bar):\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-    }
-
-    #[test]
-    fn lower_match_class_keyword_subpattern_error_propagates() {
-        let module = pycc_parser::parse(
-            "class P:\n    def __init__(self):\n        pass\nx = P()\nmatch x:\n    case P(a=foo.bar):\n        pass\n    case _:\n        pass\n",
-        ).expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-    }
-
-    #[test]
-    fn lower_match_as_pattern_inner_error_propagates() {
-        let module = pycc_parser::parse(
-            "x = 1\nmatch x:\n    case foo.bar as y:\n        pass\n    case _:\n        pass\n",
-        )
-        .expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-    }
-
-    #[test]
-    fn lower_match_or_pattern_subpattern_error_propagates() {
-        let module = pycc_parser::parse(
-            "x = 1\nmatch x:\n    case foo.bar | 1:\n        pass\n    case _:\n        pass\n",
-        )
-        .expect("test fixture must parse");
-        let err = crate::lower_checked(&module).unwrap_err();
-        assert_eq!(err.code, "C0001");
-    }
-}
+mod tests;

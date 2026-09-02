@@ -2847,10 +2847,18 @@ fn getting_from_a_non_bare_name_base_is_unsupported() {
 }
 
 #[test]
+fn get_with_zero_arguments_is_unsupported() {
+    assert_capability_error_message(
+        "d.get()\n",
+        "`.get()` is only supported as `dict.get(key, default)` with exactly two arguments so far, got 0",
+    );
+}
+
+#[test]
 fn get_with_one_argument_is_unsupported() {
     assert_capability_error_message(
         "d.get(\"a\")\n",
-        "dict.get() takes exactly two arguments (key, default), got 1",
+        "`.get()` is only supported as `dict.get(key, default)` with exactly two arguments so far, got 1",
     );
 }
 
@@ -2858,7 +2866,7 @@ fn get_with_one_argument_is_unsupported() {
 fn get_with_three_arguments_is_unsupported() {
     assert_capability_error_message(
         "d.get(\"a\", 0, 1)\n",
-        "dict.get() takes exactly two arguments (key, default), got 3",
+        "`.get()` is only supported as `dict.get(key, default)` with exactly two arguments so far, got 3",
     );
 }
 
@@ -5975,4 +5983,223 @@ fn killed_names_finds_a_walrus_nested_inside_every_expression_kind() {
     .map(str::to_string)
     .collect();
     assert_eq!(killed, expected);
+}
+
+// Issue #890: every rewritten `C0001` message names the rejected construct
+// in Python terms. One exact-wording assertion per rewritten site (and per
+// special-cased branch inside a site), so each is a covered region and a
+// wording regression is caught here before the byte-exact fixtures in
+// `tests/diagnostics` are.
+
+#[test]
+fn an_attribute_annotation_names_its_kind() {
+    assert_capability_error_message(
+        "import typing\ndef f(x: typing.Any) -> int:\n    return 1\n",
+        "only a bare name type annotation is supported so far, got an attribute expression (`obj.attr`)",
+    );
+}
+
+#[test]
+fn a_string_annotation_names_its_kind() {
+    assert_capability_error_message(
+        "def f(x: \"int\") -> int:\n    return x\n",
+        "only a bare name type annotation is supported so far, got a string literal",
+    );
+}
+
+#[test]
+fn a_multi_target_assignment_reports_the_target_count() {
+    assert_capability_error_message(
+        "a = b = c = 1\n",
+        "only a single assignment target is supported so far, got 3 targets",
+    );
+}
+
+#[test]
+fn a_tuple_assignment_target_names_its_kind() {
+    assert_capability_error_message(
+        "a, b = 1, 2\n",
+        "only assigning to a bare name is supported so far, got a tuple",
+    );
+}
+
+#[test]
+fn a_list_assignment_target_names_its_kind() {
+    assert_capability_error_message(
+        "[a, b] = [1, 2]\n",
+        "only assigning to a bare name is supported so far, got a list display (`[...]`)",
+    );
+}
+
+#[test]
+fn an_annotated_attribute_target_names_its_kind() {
+    assert_capability_error_message(
+        "class C:\n    def __init__(self) -> None:\n        self.x: int = 1\n",
+        "only assigning to a bare name is supported so far, got an attribute expression (`obj.attr`)",
+    );
+}
+
+#[test]
+fn an_annotated_subscript_target_names_its_kind() {
+    assert_capability_error_message(
+        "d = {1: 2}\nd[1]: int = 3\n",
+        "only assigning to a bare name is supported so far, got a subscript expression (`obj[key]`)",
+    );
+}
+
+#[test]
+fn a_tuple_for_target_names_its_kind() {
+    assert_capability_error_message(
+        "for a, b in pairs:\n    pass\n",
+        "only a bare name for-target is supported so far, got a tuple",
+    );
+}
+
+#[test]
+fn a_literal_for_iterable_names_its_kind() {
+    assert_capability_error_message(
+        "for x in [1, 2, 3]:\n    pass\n",
+        "only `for x in range(...)` or `for x in <list>` is supported so far, got a list display (`[...]`) as the iterable",
+    );
+}
+
+#[test]
+fn a_for_call_with_a_non_bare_name_callee_names_the_callee_kind() {
+    assert_capability_error_message(
+        "d = {1: 2}\nfor k in d.keys():\n    pass\n",
+        "only `for x in range(...)` is supported so far, got a call whose callee is an attribute expression (`obj.attr`)",
+    );
+}
+
+#[test]
+fn calling_the_result_of_a_call_names_the_callee_kind() {
+    assert_capability_error_message(
+        "def f() -> int:\n    return g()()\n",
+        "only calling a bare name is supported so far, got a call whose callee is a call expression",
+    );
+}
+
+#[test]
+fn a_literal_comprehension_iterable_names_its_kind() {
+    assert_capability_error_message(
+        "xs = [k for k in [1, 2, 3]]\n",
+        "only `range(...)` or a bare-name iterable is supported so far in a comprehension, got a list display (`[...]`) as the iterable",
+    );
+}
+
+#[test]
+fn a_protocol_body_assignment_names_its_statement_kind() {
+    assert_capability_error_message(
+        "from typing import Protocol\nclass P(Protocol):\n    x = 1\n",
+        "a protocol class body must contain only method definitions (`def ...`) and annotated assignments (`x: int`) -- an assignment statement is not supported yet",
+    );
+}
+
+#[test]
+fn a_protocol_body_ellipsis_names_the_expression_inside_the_statement() {
+    assert_capability_error_message(
+        "from typing import Protocol\nclass P(Protocol): ...\n",
+        "a protocol class body must contain only method definitions (`def ...`) and annotated assignments (`x: int`) -- an expression statement (an `...` ellipsis literal) is not supported yet",
+    );
+}
+
+#[test]
+fn a_boolean_operator_receiver_names_its_expression_kind() {
+    assert_capability_error_message(
+        "def f(a: str, b: str) -> str:\n    return (a or b).upper()\n",
+        "expression kind not supported yet: an `and`/`or` boolean expression",
+    );
+}
+
+#[test]
+fn an_unsupported_statement_names_its_kind() {
+    assert_capability_error_message(
+        "with open(\"f\") as fh:\n    pass\n",
+        "statement kind not supported yet: a `with` statement",
+    );
+}
+
+#[test]
+fn a_nested_def_is_qualified_by_its_position() {
+    assert_capability_error_message(
+        "def outer() -> int:\n    def inner() -> int:\n        return 1\n    return 1\n",
+        "statement kind not supported yet: a `def` nested inside a function or block body (only a module-level `def` or a method in a class body is supported)",
+    );
+}
+
+#[test]
+fn a_def_under_a_module_level_if_is_qualified_by_its_position() {
+    assert_capability_error_message(
+        "flag = True\nif flag:\n    def f() -> int:\n        return 1\n",
+        "statement kind not supported yet: a `def` nested inside a function or block body (only a module-level `def` or a method in a class body is supported)",
+    );
+}
+
+#[test]
+fn a_nested_class_is_qualified_by_its_position() {
+    assert_capability_error_message(
+        "def outer() -> int:\n    class Inner:\n        def __init__(self) -> None:\n            return\n    return 1\n",
+        "statement kind not supported yet: a `class` nested inside a function or block body (only a module-level `class` is supported)",
+    );
+}
+
+#[test]
+fn a_function_local_import_is_qualified_by_its_position() {
+    assert_capability_error_message(
+        "def f() -> int:\n    import os\n    return 1\n",
+        "statement kind not supported yet: an `import` inside a function or block body (only a module-level import, or one inside an `if TYPE_CHECKING:` guard, is supported)",
+    );
+}
+
+#[test]
+fn a_function_local_from_import_is_qualified_by_its_position() {
+    assert_capability_error_message(
+        "def f() -> int:\n    from os import path\n    return 1\n",
+        "statement kind not supported yet: an `import` inside a function or block body (only a module-level import, or one inside an `if TYPE_CHECKING:` guard, is supported)",
+    );
+}
+
+#[test]
+fn break_inside_a_loop_names_the_construct() {
+    assert_capability_error_message(
+        "for i in range(3):\n    break\n",
+        "statement kind not supported yet: `break` inside a loop",
+    );
+}
+
+#[test]
+fn continue_inside_a_loop_names_the_construct() {
+    assert_capability_error_message(
+        "for i in range(3):\n    continue\n",
+        "statement kind not supported yet: `continue` inside a loop",
+    );
+}
+
+#[test]
+fn no_capability_message_renders_an_ast_debug_dump() {
+    // Issue #890: every `C0001` HIR lowering emits names the construct in
+    // Python terms; the `Debug` form of a `ruff_python_ast` node always
+    // carries `node_index: NodeIndex(`, so its absence proves no dump
+    // leaked through any of the rewritten sites.
+    for source in [
+        "import typing\ndef f(x: typing.Any) -> int:\n    return 1\n",
+        "a = b = 1\n",
+        "a, b = 1, 2\n",
+        "class C:\n    def __init__(self) -> None:\n        self.x: int = 1\n",
+        "for a, b in pairs:\n    pass\n",
+        "for x in [1]:\n    pass\n",
+        "d = {1: 2}\nfor k in d.keys():\n    pass\n",
+        "def f() -> int:\n    return g()()\n",
+        "xs = [k for k in [1]]\n",
+        "from typing import Protocol\nclass P(Protocol):\n    x = 1\n",
+    ] {
+        let module = pycc_parser_test_helper::parse(source);
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001", "{source:?}");
+        assert!(
+            !diagnostic.message.contains("NodeIndex("),
+            "{source:?}: {}",
+            diagnostic.message
+        );
+    }
 }

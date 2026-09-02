@@ -1,0 +1,5 @@
+error[C0001]: only a bare name type annotation is supported so far, got a string literal
+ --> tests/diagnostics/c0001_string_annotation.py:1:10
+  |
+1 | def f(x: "int") -> int:
+  |          ^^^^^ only a bare name type annotation is supported so far, got a string literal
