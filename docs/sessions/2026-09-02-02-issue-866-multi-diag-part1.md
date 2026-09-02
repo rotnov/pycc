@@ -1,11 +1,13 @@
-# 2026-09-02-01 -- Issue #866 (Part 1 of #864): report every frontend diagnostic per pass
+# 2026-09-02-02 -- Issue #866 (Part 1 of #864): report every frontend diagnostic per pass
 
 ## Status: delivered by the pull request that carries this file
 
 Worktree: `/Users/denis/projects/pycc-worktrees/issue-864-multi-diag`, branch
-`feat/issue-864-multi-diag-part1`, based on `origin/main` at
-`afc0c13b8c4644f513f89b8036fa413ef9d6d34d` (re-fetched immediately before
-this file was written; unchanged). Implements
+`feat/issue-864-multi-diag-part1`, developed on `origin/main` at
+`afc0c13b8c4644f513f89b8036fa413ef9d6d34d` and rebased before the pull
+request opened onto `751f10c7c5d255f2079033fe4f350e111a7b8932` (#865 and
+#870 merged in between; the only conflict was the generated
+`docs/decisions/README.md`, regenerated). Implements
 [#866](https://github.com/rotnov/pycc/issues/866), Part 1 of
 [#864](https://github.com/rotnov/pycc/issues/864); #864 stays open for
 Parts 2 ([#867](https://github.com/rotnov/pycc/issues/867), HIR
@@ -62,7 +64,7 @@ Round 1 (pinned `ievo:deep-reviewer`, full merge-base..HEAD range): two
 findings, no blockers. (1) This session file was missing from the range --
 a deliverable of the PR step, written here. (2) The `FrontendFailure::Compile`
 doc comment implied an empty-list `check` exit would be acceptable;
-tightened in `c5302d00`. Findings recorded in
+tightened in `16867136` (pre-rebase `c5302d00`). Findings recorded in
 `.harden/findings/issue-866.jsonl`. Round 2 and the harden batch ran after
 this file was drafted; their outcome is in the pull-request body.
 
@@ -84,11 +86,12 @@ this file was drafted; their outcome is in the pull-request body.
 
 ## Known state at drafting time
 
-- Open pull request [#865](https://github.com/rotnov/pycc/pull/865) (head
-  `9d696c45`, BLOCKED) claims D-216 and edits `docs/CLI_SPEC.md`,
-  `docs/ROADMAP.md`, and `docs/decisions/README.md`; if it merges first, the
-  rebase of this branch must regenerate `docs/decisions/README.md`. D-217's
-  number stays valid either way.
+- Pull request [#865](https://github.com/rotnov/pycc/pull/865) was open
+  (head `9d696c45`, BLOCKED) while this branch was developed; it claimed
+  D-216 and edited `docs/CLI_SPEC.md`, `docs/ROADMAP.md`, and
+  `docs/decisions/README.md`. It merged as `ab9beef3` before this pull
+  request opened, so the rebase regenerated `docs/decisions/README.md`;
+  D-217's number stayed valid. No pull request was open at rebase time.
 - Motivation, for the record: a read-only `pycc check` sweep over an
   external ~59k-line corpus found 96% of first diagnostics were `import`
   statements, hiding everything after them; Part 2 is the part that
