@@ -23,8 +23,10 @@ complete pycc interface.
 At this alpha revision, `build`, `run`, `check`, and `version --verbose` have
 implementations. `check` accepts one or more native file paths, runs the
 parser, checked HIR lowering, and strict type-checker subset for every
-supplied file, reports one current frontend diagnostic for each failing input,
-and can render human or JSON diagnostics. `build` and `run` lower the
+supplied file, reports every diagnostic the failing pass found for each input
+(parser: all syntax errors; HIR and type passes: still their first, until #864
+Parts 2-3 land), and can render human or JSON diagnostics (JSON: one object
+per line). `build` and `run` lower the
 implemented v0.1 language subset through MIR, LLVM, the host linker, and the
 native runtime, subject to the explicit gaps in `docs/ROADMAP.md`. `test` and
 `clean` return an explicit not-implemented error, and `check --fix` is not
