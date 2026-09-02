@@ -7,7 +7,7 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | Layer | Location | What it proves |
 |---|---|---|
 | 1. Unit (Rust) | per-crate `#[cfg(test)]` | lexer/parser/checker/MIR internals |
-| 2. Conformance | `tests/conformance/pyXY/` *(planned; today flat at `tests/fixtures/`)* | each supported language level compiles and runs its cumulative fixture set; `stdout ==` that level's pinned CPython oracle |
+| 2. Conformance | fixtures: `tests/conformance/pyXY/` *(planned; today flat at `tests/fixtures/`)*; harness: `tests/conformance.rs` + `tests/conformance/*.rs` | each supported language level compiles and runs its cumulative fixture set; `stdout ==` that level's pinned CPython oracle |
 | 3. Diagnostics | `tests/diagnostics/` | rejected constructs fail with the exact code + span (insta-style snapshots) |
 | 4. Differential fuzzing *(planned)* | `tests/fuzz/` *(not yet created)* | generated typed-Python programs: pycc binary output ≡ CPython output; crashes/mismatches auto-minimized |
 | 5. Runtime property tests | `pycc_rt` proptest | str/list/dict/RC/cycle-collector invariants |
@@ -28,15 +28,32 @@ subdirectory under `tests/fixtures/` is `policy-successors/`. This is already
 recorded for the PR-13 fixtures below, and it is the settled convention rather
 than an accident of those two files.
 
+The harness's own Rust sources are a different thing from that fixture tree.
+`tests/conformance.rs` is the crate root, and its cohort submodules live at
+`tests/conformance/*.rs` (`classes.rs`, `exceptions.rs`, `numeric.rs`),
+`#[path]`-declared from the root's `harness_modules!` block; a new fixture's
+test goes in the cohort that owns its semantics. Per
+[D-220](./decisions/D-220-the-conformance-harness-is-the-root-file-plus-its.md),
+the **conformance harness sources** are the root file followed by every direct
+`tests/conformance/*.rs` in sorted file-name order, and that set is the one
+contract all three text-readers of the harness share: the two Rust guards
+include `tests/harness_support/conformance_sources.rs`, and
+`scripts/check_conformance_breadth.py`'s `read_harness` mirrors it. The root's
+`every_harness_module_on_disk_is_declared` test fails on a cohort file that
+exists on disk but is not declared, so a file cannot be read by the guards
+without also being compiled. The still-planned `pyXY/` fixture directories are
+invisible to that non-recursive `*.rs` rule by design.
+
 `docs/PYTHON_STANDARDS.md`'s matrix follows the same split, and
 `tests/conformance_matrix_guard.rs` is what now holds the line (see
 [D-175](./decisions/D-175-scope-the-conformance-matrix-fixture-guard-to-green.md)):
 a `☐` row's `pyNN/`-prefixed path is a *planned* path for a fixture nobody has
 authored yet and is deliberately not asserted to exist, while an evidence-backed
 row — `◐` or `✅` — claims its fixture passes and so must cite a path that
-resolves under `tests/fixtures/` and is registered in `tests/conformance.rs`. The guard also runs the inverse
-direction — every `tests/fixtures/pep_*.py` must be registered in
-`tests/conformance.rs` or carry an allowlist entry recording why it is not.
+resolves under `tests/fixtures/` and is registered in the conformance harness
+(`tests/conformance.rs` plus `tests/conformance/*.rs`). The guard also runs the
+inverse direction — every `tests/fixtures/pep_*.py` must be registered in the
+conformance harness or carry an allowlist entry recording why it is not.
 
 That guard proves a green row's fixture *exists and runs*; it deliberately
 says nothing about how much of the PEP that fixture exercises. Breadth is a
@@ -114,7 +131,7 @@ its second, and a helper returning `(pycc_output.stdout.clone(),
 pycc_output.stdout)` would still build pycc, still launch `python3.14`, still
 assert both processes exited zero — and turn every differential test into
 `assert_eq!(x, x)` with every gate green. `tests/conformance_oracle_guard.rs`
-holds that line. It reads `tests/conformance.rs` as text (so it needs neither
+holds that line. It reads the harness sources as text (so it needs neither
 LLVM nor the oracle interpreter, and is a genuine negative control rather than
 a second copy of the tests it guards) and requires: the shared helper launches
 the oracle and asserts both processes succeeded; its returned tuple's first

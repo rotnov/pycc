@@ -83,7 +83,7 @@ For each newly observed upstream release:
    targets in both build profiles. Building the real automation remains a
    tracked `docs/ROADMAP.md` follow-up.
 6. Bookkeeping lag is itself a defect, not a safe default. A fixture that is
-   registered in `tests/conformance.rs` and already observed green under rule 5
+   registered in the conformance harness and already observed green under rule 5
    must have its row flipped; leaving it `☐` understates conformance and, per
    [#572](https://github.com/rotnov/pycc/issues/572), made v0.3's own row-count
    Accept criterion read as further from reach than it was. Seven rows —
