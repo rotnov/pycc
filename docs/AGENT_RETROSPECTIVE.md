@@ -33,6 +33,36 @@ never a merge gate.
 
 ---
 
+## 2026-09-02 — Three review rounds spent chasing one stale claim, one phrasing at a time
+
+What happened: while delivering #729 (splitting `tests/conformance.rs` into a
+root file plus `tests/conformance/*.rs` cohorts), the pinned D-068 reviewer
+found, in rounds 3, 4 and 5 respectively, three sentences
+(`docs/PYTHON_STANDARDS.md:22`, `docs/TESTING.md:25`, `docs/TESTING.md:181`)
+still saying the fixtures are run by or registered in `tests/conformance.rs`
+alone. Each round fixed only the cited line; the round-4 sweep grepped for the
+exact wording just corrected (`run directly by`) and reported the tree clean,
+so the `registered in` sentence survived to round 5.
+
+Root cause: the sweep searched for a phrasing, not for the claim. A single
+predicate grep over the verbs that locate tests in a file
+(`run by|registered in|declared in|lives in` followed by the path) returns all
+three sentences at the post-split commit.
+
+What fixed it: the round-5 fix was preceded by a grep for every mention of
+the literal path across the live documents and an explicit adjudication of
+each hit, after which round 6 was clean.
+
+Lesson: when a change moves, splits or renames a file, sweep for the *claim*
+before the first review round — grep every verb that can locate something in
+the old file, across `docs/`, `tests/` and `scripts/`, and adjudicate every
+hit — rather than grepping for one phrasing after a reviewer cites one line.
+This is the fifth recurrence of the
+`documentation-sweep-stops-at-the-changed-file` incident topic; the
+`.harden/incidents/` entry for #729 records the measurement and the follow-up
+static checker.
+
+
 ## 2026-09-02 — Three review rounds spent re-paraphrasing a rule that already had a canonical statement
 
 What happened: while delivering #868 (Part 3 of #864), D-220 rule 4 — the
