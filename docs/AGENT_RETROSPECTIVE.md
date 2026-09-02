@@ -33,6 +33,62 @@ never a merge gate.
 
 ---
 
+## 2026-09-02 — Three review rounds spent re-paraphrasing a rule that already had a canonical statement
+
+What happened: while delivering #868 (Part 3 of #864), D-220 rule 4 — the
+solver-first merge of two keyed diagnostic lists — was restated in prose at
+seven sites. The D-068 reviewer found the restatement wrong in round 4 (two
+arms where the merge has three), again in round 5 (the third arm added, the
+second still too narrow), and again in round 6 (the second arm named only
+the checker's module-level entry, plus an invented rationale in `check_all`'s
+doc). Each fix round patched the arm the reviewer had shown and nothing else.
+
+Root cause: a paraphrase was verified against the counter-example that
+prompted the edit, not against the rule's own source (D-220's Decision
+section and `merge_solver_first`'s code). Seven independent paraphrases of
+one formal rule are seven places for the same omission.
+
+What fixed it: one canonical sentence derived from the rule and the code,
+installed verbatim at all seven sites (`f5a2a1b0`), verified by reading the
+diff against `merge_solver_first` rather than by a seventh review round. The
+`/harden batch` pass for #868 added the rule to `AGENTS.md` ("Keep
+documentation current") and opened
+`.harden/incidents/paraphrase-of-a-formal-rule-drifts-from-its-source/`.
+
+Lesson: when a rule has a canonical statement, quote it or cross-reference
+it; never restate it per site. If a restatement must exist, check it against
+the source, not against the finding — and when the same prose finding
+survives two fix attempts, change the method (derive from source, install
+once), not the wording.
+
+## 2026-09-02 — A tree-wide search with the wrong adjudication criterion cost two review rounds
+
+What happened: #868 demoted three single-diagnostic entry points of
+`pycc_types` to `#[cfg(test)]` wrappers and deleted a fourth. The round-1 fix
+ran the tree-wide search that `issue-implement` step 5 asks for, adjudicated
+every hit, and still left 35 stale comments for round 2 (`5af94c2b`) and six
+more for round 3 (`49324f90`).
+
+Root cause: the round-1 adjudication asked "does this name still compile"
+— which a `cfg(test)` wrapper satisfies — instead of "does this name exist in
+a release build, at this location, in this role". The round-2 search then
+matched backticked names only, missing bare and path-qualified spellings and
+"lives in `lib.rs`" location claims.
+
+What fixed it: widening the search forms and re-adjudicating with the
+release-build criterion; the `/harden batch` pass for #868 wrote both into
+the step-5 sentence of `.claude/skills/issue-implement/SKILL.md` and recorded
+the fifth file under
+`.harden/incidents/documentation-sweep-stops-at-the-changed-file/`, together
+with the static rung that would catch the Rust half of the class (rustdoc
+intra-doc links under `-D rustdoc::broken_intra_doc_links`), deferred as its
+own convention change.
+
+Lesson: a sweep is only as good as its criterion. After a demotion or a
+move, adjudicate each hit against the name's post-change status in a release
+build, and search every spelling — bare, backticked, path-qualified — plus
+the location claims that name the old home.
+
 ## 2026-09-02 — A retrospective-only lesson recurred verbatim: the fix-extent rule was never promoted to the procedure that needed it
 
 What happened: the #867 deep-review round 1 named three doc comments in

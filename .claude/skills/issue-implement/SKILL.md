@@ -367,12 +367,16 @@ with the orchestrator's context, and the reviewer reads the plan itself in its f
 be quoted in the brief). A dispatch missing the plan pointer is an invalid round —
 re-dispatch with it instead of reviewing blind. The brief also states what this round must
 *not* expect: the deliverables step 6 schedules after the loop (the `docs/sessions/` file,
-the pull-request body) are absent from the range by design, and gate results, GitHub
+the pull-request body) and the `.harden/findings/` pile (which cannot exist before the
+first round's verdicts) are absent from the range by design, and gate results, GitHub
 state, and any claim that needs `git` to check (a pure-move commit's behaviour-neutrality, a
 rename's line-set identity, a commit's ancestry) are verified by this session, not by the
 reviewer — their absence, or the reviewer's own inability to verify them with `Read` and
 `Grep`, is not a finding; the brief states which such claims this session has already
-verified (incident: reviewer-flags-a-later-phase-deliverable).
+verified. Compose the brief from [references/review-brief.md](references/review-brief.md)
+and fill its slots; do not retype the exclusions from memory — a brief typed freehand
+dropped them in three consecutive tasks (incident:
+reviewer-flags-a-later-phase-deliverable).
 
 Verify each finding against the sources before acting on it — preferably by *running* the
 predicted failure, not re-deriving it: when a finding predicts a wrong diagnostic or a false
@@ -382,9 +386,12 @@ fail with the predicted message. A finding confirmed by evidence gets a focused 
 derived from the defect, not from the reviewer's cited sites: when the finding corrects a
 claim that recurs as a phrase or a symbol attribution (a moved or renamed function, a
 narrowed population, a stale entry point), search the whole tree for that phrase or symbol
-*before* committing the fix, adjudicate every hit, and record the search and its hit count
-in the finding's `note` — the cited sites are examples of the class, not its boundary
-(incident: documentation-sweep-stops-at-the-changed-file). A finding refuted by evidence
+*before* committing the fix — every spelling of it (backticked and bare, path-qualified and
+unqualified) and the location claims that name its old home — adjudicate every hit against
+the name's post-change status (does it still exist in a release build, at that location, in
+that role; not merely whether the name still compiles), and record the search, its forms,
+its criterion, and its hit count in the finding's `note` — the cited sites are examples of
+the class, not its boundary (incident: documentation-sweep-stops-at-the-changed-file). A finding refuted by evidence
 gets its reasoning recorded, not a blind fix. Rerun the review after
 fixes whenever the previous findings may no longer describe the diff. The loop ends when a
 round reports no actionable findings. The same finding surviving two genuine fix attempts is
