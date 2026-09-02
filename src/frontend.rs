@@ -27,8 +27,11 @@ pub(crate) enum FrontendFailure {
     /// `pycc_parser::parse_all`'s `Err`, which is non-empty by construction
     /// (proven by that crate's unit tests). No runtime assertion guards it:
     /// an `assert!` would add an uncoverable in-crate region under D-014's
-    /// 100%-region gate, and the loops in `render_all` are correct (render
-    /// nothing) for an empty list anyway.
+    /// 100%-region gate. (Should the invariant ever break, `render_all`'s
+    /// loops would print nothing and `check` would exit 1 silently -- a
+    /// contract violation of CLI_SPEC.md's "exit 1 means at least one
+    /// diagnostic", which is exactly why construction, not rendering, is
+    /// what guarantees non-emptiness.)
     ///
     /// The payload used to be `Box<Diagnostic>` only to keep this variant
     /// under clippy's `result_large_err` threshold after D-152 grew
