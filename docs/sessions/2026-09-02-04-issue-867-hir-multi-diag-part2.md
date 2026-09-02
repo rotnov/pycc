@@ -60,7 +60,11 @@ merge-base..HEAD range. Round 1: three stale doc comments naming
 `lower_checked` as the walker (fixed at the three cited sites) and two
 refuted findings. Round 2: the same class at ten more sites plus one
 over-narrow gloss from the round-1 fix (fixed with a whole-crate sweep).
-Round 3: clean. All seven findings are in `.harden/findings/issue-867.jsonl`.
+Round 3: clean. After the pull request opened, the Codex reviewer bot added
+one P2 finding: a valueless `X: TypeAlias` was poisonable although it binds
+no alias, so a later genuine `X` diagnostic was suppressed; fixed in
+`a529bcac` with a test. All eight findings are in
+`.harden/findings/issue-867.jsonl`.
 The harden batch promoted the fix-extent lesson (derive a fix's extent from
 a tree-wide search, not the reviewer's cited sites -- it had lived only in
 `docs/AGENT_RETROSPECTIVE.md` since 2026-08-29 and recurred) into
