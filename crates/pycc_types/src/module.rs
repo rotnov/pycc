@@ -23,6 +23,7 @@
 //! byte-identical to what `check` reported before this part (D-217 rule 2).
 
 use super::*;
+use std::collections::HashSet;
 
 /// The private-helper signature table: function name to `(parameter
 /// types, return type)`.
@@ -455,12 +456,16 @@ fn merge_solver_first(
     solver: KeyedDiagnostics,
     concrete: Option<KeyedDiagnostics>,
 ) -> Vec<Diagnostic> {
-    let module_level_failure = solver.iter().any(|(key, _)| key.is_none());
+    // One pass over `solver` to index its keys: with F failing functions both
+    // lists are Θ(F) long, and rescanning `solver` per `concrete` entry would
+    // make the merge Θ(F²) on error-heavy generated inputs.
+    let solver_keys: HashSet<Option<usize>> = solver.iter().map(|(key, _)| *key).collect();
+    let module_level_failure = solver_keys.contains(&None);
     let checker_only: KeyedDiagnostics = concrete
         .filter(|_| !module_level_failure)
         .into_iter()
         .flatten()
-        .filter(|(key, _)| !solver.iter().any(|(solver_key, _)| solver_key == key))
+        .filter(|(key, _)| !solver_keys.contains(key))
         .collect();
     drop_keys(solver.into_iter().chain(checker_only).collect())
 }
