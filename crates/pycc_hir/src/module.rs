@@ -472,12 +472,11 @@ fn lower_top_level_item<'a>(stmt: &'a Stmt, state: &mut ModuleState<'a>) -> Resu
 /// all).
 ///
 /// The legacy predicate is exactly `lower_legacy_type_alias_ann_assign`'s
-/// shape minus the value: a `Stmt::AnnAssign` whose annotation is the bare
-/// name `TypeAlias` and whose target is a `Name`. A valueless `X: TypeAlias`
-/// falls through to ordinary `AnnAssign` lowering and fails on `TypeAlias`
-/// itself; poisoning `X` there is harmless (a name that is also validly
-/// bound never produces a cascade-shaped error) and keeps this predicate
-/// free of a fourth early-out.
+/// shape, value included: a `Stmt::AnnAssign` whose annotation is the bare
+/// name `TypeAlias`, whose target is a `Name`, and which carries a value. A
+/// valueless `X: TypeAlias` binds no alias -- it falls through to ordinary
+/// `AnnAssign` lowering and fails on `TypeAlias` itself -- so it yields
+/// `None` here, and a later `X` diagnostic stays reported.
 pub(crate) fn poisonable_name(stmt: &Stmt) -> Option<&str> {
     match stmt {
         Stmt::ClassDef(def) => Some(def.name.as_str()),
