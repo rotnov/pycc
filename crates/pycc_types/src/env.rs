@@ -96,7 +96,7 @@ pub struct Environment {
     /// `Clone`d per function via `child_for_function`, so this needs the
     /// same cheap-clone property `functions`/`generics` already rely on).
     /// Populated once, from `HirModule::class_defs`, by every `Environment`
-    /// constructor this crate has (`check_with_signatures`,
+    /// constructor this crate has (`check_with_signatures_all`,
     /// `concrete_function_environment`) -- see `class::bind_classes`.
     pub(crate) classes: Arc<HashMap<String, HirClassDef>>,
     /// Part 1 of #541 (extending D-173): the subset of `classes` whose

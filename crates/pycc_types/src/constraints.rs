@@ -9,10 +9,10 @@
 //!
 //! The seam is cohesive because every item in it exists to serve one
 //! pipeline, entered exactly once from the module-level driver
-//! ([`crate::module`], issue #868): `check_and_resolve` calls
-//! `checked_function_signatures` there, which either accepts the
+//! ([`crate::module`], issue #868): `check_and_resolve_all` calls
+//! `checked_function_signatures_all` there, which either accepts the
 //! fully-annotated fast path ([`concrete_function_signatures`]) or falls
-//! through to [`infer_function_signatures_with_solver`], both in the
+//! through to [`infer_function_signatures_with_solver_all`], both in the
 //! [`signatures`] submodule. Everything else here is one of that pipeline's
 //! stages, and none of them has any other caller:
 //!
@@ -28,14 +28,14 @@
 //! * constraint application ([`propagate_binop_constraints`],
 //!   [`apply_annotation_defaults`]) and the signature materialization that
 //!   validates a solved signature set against the ordinary checker
-//!   ([`concrete_function_signatures`], [`infer_function_signatures_with_solver`],
-//!   in [`signatures`]; `checked_function_signatures` itself moved to
+//!   ([`concrete_function_signatures`], [`infer_function_signatures_with_solver_all`],
+//!   in [`signatures`]; `checked_function_signatures_all` itself moved to
 //!   [`crate::module`] with the rest of the driver).
 //!
 //! Deliberately left in `lib.rs` (or, for the driver, `module.rs`): the
 //! annotation-driven checker itself. `check_and_resolve`,
 //! `infer_expr`/`infer_expr_in`, [`check_stmt`](crate::check_stmt),
-//! `check_stmt_in_function`, `check_with_signatures`, `check_assignment`,
+//! `check_stmt_in_function`, `check_with_signatures_all`, `check_assignment`,
 //! [`Environment`], and the `bind_local_types_*` helpers
 //! stay behind, together with the four issue-#118 `*_in_place*` fast-path
 //! wrappers around `check_stmt`/`check_stmt_in_function`, which the solver
@@ -813,8 +813,8 @@ pub(crate) fn collect_expr_constraints(
         // element lists, or any element producing `None`/`Err` keep the
         // historical `Ok(None)` behavior -- returning `Err` here for a case
         // this solver can't actually validate would wrongly preempt
-        // `checked_function_signatures`' fallback to the real, list-aware
-        // check pass (`check_with_signatures`) that runs after this solver.
+        // `checked_function_signatures_all`'s fallback to the real, list-aware
+        // check pass (`check_with_signatures_all`) that runs after this solver.
         // `unify_terms` and `merge_inferred_types` are unchanged -- the
         // carrier is destructured, never unified.
         HirExpr::ListLiteral(elements) => {
@@ -1550,7 +1550,7 @@ pub(crate) fn collect_block_constraints(
                 // reference to it doesn't spuriously fail as "not bound"
                 // (it *is* locally bound, just not solver-typed); real
                 // element-type checking happens in the second, real check
-                // pass (`check_with_signatures`).
+                // pass (`check_with_signatures_all`).
                 // Issue #359 (Part 2 of #118): snapshot the pre-loop binding
                 // names so the loop variable and body-only bindings can be
                 // tracked as maybe-bound after the loop (a `for` loop may
@@ -1990,7 +1990,7 @@ pub(crate) fn collect_block_constraints(
                 // `check_raise_stmt` in the check pass, so errors from
                 // constraint collection for raise operands are deliberately
                 // ignored here — they would otherwise prevent the solver
-                // path from reaching `check_with_signatures`, where the
+                // path from reaching `check_with_signatures_all`, where the
                 // real check succeeds.
                 if let Some(exc_expr) = exc {
                     let _ = collect_expr_constraints(

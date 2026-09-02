@@ -350,8 +350,8 @@ fn constraint_collection_rejects_a_non_integer_top_level_for_binding() {
 fn a_list_literal_still_type_checks_correctly_when_an_unrelated_private_helper_forces_the_solver_path()
  {
     // Any `Ty::Infer` signature anywhere in the module routes `check`
-    // through `infer_function_signatures_with_solver` first (see
-    // `checked_function_signatures`), which runs `collect_expr_constraints`
+    // through `infer_function_signatures_with_solver_all` first (see
+    // `checked_function_signatures_all`), which runs `collect_expr_constraints`
     // over every expression in the module, including this list literal.
     // That solver-side pass must stay lenient (`Ok(None)`, recurse only)
     // for list forms -- confirms it doesn't wrongly reject a valid list.
@@ -380,7 +380,7 @@ fn a_list_literal_still_type_checks_correctly_when_an_unrelated_private_helper_f
 fn a_heterogeneous_list_literal_is_still_rejected_when_the_solver_path_runs_first() {
     // The load-bearing counterpart to the test above: the solver's
     // leniency must not swallow a genuine list error -- it has to fall
-    // through to the real, list-aware check pass (`check_with_signatures`)
+    // through to the real, list-aware check pass (`check_with_signatures_all`)
     // that runs after the solver, which is what actually raises T0032.
     let hir = HirModule {
         seeded_builtin_exception_classes: false,
@@ -508,7 +508,7 @@ fn slicing_type_checks_correctly_when_an_unrelated_private_helper_forces_the_sol
     // reaches this task's new `HirExpr::Slice` constraint-collection arm
     // (which must stay lenient, `Ok(None)`, recursing only) without
     // wrongly rejecting a valid slice, and that the real check pass
-    // (`check_with_signatures`) run afterward still type-checks it.
+    // (`check_with_signatures_all`) run afterward still type-checks it.
     let hir = HirModule {
         seeded_builtin_exception_classes: false,
         items: vec![
@@ -8923,7 +8923,7 @@ fn collect_block_constraints_gives_a_name_iterable_comprehension_s_loop_variable
     // `ForList`'s own analogous branch): this solver doesn't track a
     // list-typed name's element type, so the loop variable just gets an
     // unconstrained fresh term here -- real element-type checking is
-    // the subsequent `check_with_signatures` pass's job. Every other
+    // the subsequent `check_with_signatures_all` pass's job. Every other
     // solver-path comprehension test above uses `CompIter::Range`.
     let hir = HirModule {
         seeded_builtin_exception_classes: false,
@@ -13239,9 +13239,9 @@ fn private_identity_signature_is_inferred_from_its_call_site_and_return() {
 fn check_and_resolve_takes_the_fast_path_for_an_already_concrete_valid_module() {
     // Pre-existing gap noticed while chasing this task's own 100%
     // coverage requirement: every other `check_and_resolve` test in this
-    // file uses a `Ty::Infer` signature, so `checked_function_signatures`'s
+    // file uses a `Ty::Infer` signature, so `checked_function_signatures_all`'s
     // fast-path *success* return (`concrete_function_signatures` is
-    // `Some` and `check_with_signatures` succeeds) was never exercised.
+    // `Some` and `check_with_signatures_all` succeeds) was never exercised.
     // Unrelated to this task's list-typing work, but cheap and in-scope
     // to close here rather than leave dangling.
     let hir = HirModule {
@@ -14218,9 +14218,9 @@ fn private_slice_base_recursion_pins_an_otherwise_unconstrained_parameter() {
     // recurses into `base`.
     //
     // If that recursion is missing, `xs`'s term never resolves, and
-    // `infer_function_signatures_with_solver`'s own final resolution
+    // `infer_function_signatures_with_solver_all`'s own final resolution
     // loop raises "cannot infer type of parameter `xs`... add an
-    // annotation" *before `check_with_signatures`/Pass 3 ever runs for
+    // annotation" *before `check_with_signatures_all`/Pass 3 ever runs for
     // this function* -- Pass 3 cannot mask a failure that happens
     // before Pass 3 is even reached. Confirmed empirically: gutting the
     // `Slice` arm to a bare `Ok(None)` flips this test from `Ok(())` to
@@ -15684,7 +15684,7 @@ fn check_and_resolve_dedupes_two_call_sites_with_the_same_concrete_type() {
 fn check_and_resolve_monomorphizes_a_generic_function_alongside_an_inferred_private_helper() {
     // `_helper`'s own `Ty::Infer` signature defeats `concrete_function_environment`/
     // `concrete_function_signatures`'s fast path, forcing the solver-inferred
-    // path -- this exercises `check_with_signatures`'s own `bind_generic`
+    // path -- this exercises `check_with_signatures_all`'s own `bind_generic`
     // registration (the fast path's registration lives in
     // `concrete_function_environment` instead, already covered by every
     // other test in this group).
@@ -17892,7 +17892,7 @@ fn checked_function_signatures_rejects_the_issue_402_reproduction_fixture() {
     // above, which exercises that same call site with a fully-concrete,
     // different-arity fixture instead of an Infer-involving one).
     // `check_incompatible_redefinitions` is called directly from both
-    // `check` and `checked_function_signatures`; each entry point is
+    // `check_all` and `checked_function_signatures_all`; each entry point is
     // exercised independently rather than relying on one to cover the
     // other.
     let hir = HirModule {
@@ -18113,7 +18113,7 @@ fn diamond_sibling_base_classes_with_differing_types_are_rejected() {
 #[test]
 fn checked_function_signatures_also_rejects_a_cross_mro_attribute_redeclaration() {
     // `check_incompatible_attribute_redeclarations` is called from both
-    // `check` and `checked_function_signatures` (the latter reachable
+    // `check_all` and `checked_function_signatures_all` (the latter reachable
     // from `pycc build`'s `check_and_resolve` without an earlier `pycc
     // check`/`check` call) -- each entry point is exercised
     // independently, mirroring how
@@ -18365,7 +18365,7 @@ fn check_and_resolve_rejects_incompatible_redefinition_with_infer_signature() {
     // inside `check_and_resolve`. That recheck is gone now: this raw
     // shape mismatch (arity, independent of Infer) is caught by the
     // pre-resolution `check_incompatible_redefinitions` call inside
-    // `checked_function_signatures`, reached before `check_and_resolve`
+    // `checked_function_signatures_all`, reached before `check_and_resolve`
     // ever builds a resolved HIR.
     let hir = HirModule {
         seeded_builtin_exception_classes: false,
@@ -23728,7 +23728,7 @@ fn cast_down_to_a_derived_class_via_a_plain_assignment_binding_is_c0001() {
     // (`cast_down_to_a_derived_class_is_c0001` above) already reported
     // correctly. Root cause (D-199): `check()` discards the concrete
     // path's correct `C0001` on `Err` and unconditionally falls back to
-    // `infer_function_signatures_with_solver`, whose `Assign` arm left `d`
+    // `infer_function_signatures_with_solver_all`, whose `Assign` arm left `d`
     // wholly untracked because the `Cast` arm returns `Ok(None)` for a
     // non-scalar target -- so `return d.b` misfired as an unbound local in
     // that second pass before the first pass's real diagnostic could

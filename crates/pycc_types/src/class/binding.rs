@@ -32,7 +32,7 @@ use pycc_hir::{HirClassDef, HirModule, Ty};
 use super::check_call_args;
 
 /// Populates `env`'s class table from `hir.class_defs` -- called once by
-/// every `Environment` constructor this crate has (`check_with_signatures`'s
+/// every `Environment` constructor this crate has (`check_with_signatures_all`'s
 /// own per-item loop, `concrete_function_environment`'s literal), mirroring
 /// how each already registers every function's signature.
 ///

@@ -1,13 +1,13 @@
 //! Module-level signature entry points of the constraint solver: the
 //! fully-annotated fast path (`concrete_function_signatures`,
 //! `concrete_function_environment`) and the solver walk that infers every
-//! private-helper signature (`infer_function_signatures_with_solver`).
+//! private-helper signature (`infer_function_signatures_with_solver_all`).
 //!
 //! Extracted from `constraints.rs` per AGENTS.md's file-decomposition rule
 //! (issue #868, tracked by #544), laid out beside it the way `class.rs` and
 //! `class/` already are. `constraints.rs` re-exports everything here with
 //! `pub(crate) use signatures::*`, so every crate-root path is unchanged.
-//! The driver that sequences these entry points (`checked_function_signatures`
+//! The driver that sequences these entry points (`checked_function_signatures_all`
 //! and the public `check*` functions) lives in [`crate::module`].
 
 use super::*;
@@ -43,7 +43,7 @@ pub(crate) fn concrete_function_signatures(hir: &HirModule) -> Option<FunctionSi
 
 /// Builds the function registry for a fully annotated module directly from
 /// HIR. Unlike [`concrete_function_signatures`] followed by
-/// [`check_with_signatures`], this creates each owned name and parameter vector
+/// [`check_with_signatures_all`], this creates each owned name and parameter vector
 /// only once. `check` does not need to materialize a second signature map for a
 /// downstream consumer, so its overwhelmingly common concrete, valid path can
 /// validate with this registry directly.

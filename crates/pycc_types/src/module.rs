@@ -8,7 +8,7 @@
 //! and the signature-validated check pass lives here. `lib.rs` re-exports
 //! `check`, `check_all`, `check_and_resolve`, `check_and_resolve_all`, and
 //! the crate-private helpers the tests and `monomorphize` reach through the
-//! crate root, so no path changed. `checked_function_signatures` moved here
+//! crate root, so no path changed. `checked_function_signatures_all` moved here
 //! from `constraints.rs` with them: it is `check_and_resolve`'s half of the
 //! same driver.
 //!

@@ -1099,8 +1099,8 @@ fn rewrite_comp_iter(
 /// order its first call site was encountered (module item order, depth
 /// first through each function body).
 ///
-/// Callers must have already validated `hir` (e.g. via `check` or
-/// `checked_function_signatures`, both of which now dispatch a generic call
+/// Callers must have already validated `hir` (e.g. via `check_all` or
+/// `checked_function_signatures_all`, both of which now dispatch a generic call
 /// site through `instantiate_generic_call` themselves via
 /// `infer_expr_in`'s own generic arm) -- this pass performs no validation
 /// of its own and instead trusts that every generic call site it encounters
@@ -2543,7 +2543,7 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     // `resolve_method_call`). Without this, a generic function whose own
     // body reads/writes an instance attribute or calls a method would
     // panic here with "class `X` has no registered HirClassDef" the
-    // moment this pass reached it, even though `check_with_signatures`
+    // moment this pass reached it, even though `check_with_signatures_all`
     // already validated that exact body successfully against a `classes`-
     // populated `Environment` of its own.
     crate::class::bind_classes(&mut env, hir);
