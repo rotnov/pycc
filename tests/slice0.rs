@@ -950,7 +950,11 @@ fn targeting_a_valid_triple_with_no_local_pycc_rt_build_is_a_clean_error() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("no pycc_rt build found"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no pycc_rt build found"));
+    // The end-to-end path (driver -> `error: ...` -> exit 2) also carries
+    // the CARGO_TARGET_DIR recovery clause (#869).
+    assert!(stderr.contains("with CARGO_TARGET_DIR set"));
 }
 
 #[test]
