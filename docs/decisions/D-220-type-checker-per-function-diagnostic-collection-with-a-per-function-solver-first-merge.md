@@ -150,12 +150,16 @@ status: accepted
 
 - Consequences:
   - Under-reporting after a module-level failure is accepted and documented
-    in `docs/DIAGNOSTICS.md` and `docs/CLI_SPEC.md`: a failing top-level
-    statement, a top-level solver conflict, or a post-phase solver failure
-    -- including the pre-existing `T0021 cannot infer` for an unresolvable
-    unannotated helper, which already hid every other diagnostic in the
-    file -- stops the pass at one diagnostic. The root cause is reported;
-    fixing it surfaces the rest.
+    in `docs/DIAGNOSTICS.md` and `docs/CLI_SPEC.md`. A pre-check failure
+    or a module-level failure of the solver (a top-level solver conflict
+    or a post-body phase failure -- including the pre-existing `T0021
+    cannot infer` for an unresolvable unannotated helper, which already
+    hid every other diagnostic in the file) stops the pass at one
+    diagnostic. The annotation checker's own failing top-level statement
+    (its pass 2) stops *that* collector at one entry and skips its pass 3;
+    under rule 4 that entry is reported alone only when the solver flagged
+    no function, and otherwise follows the solver's per-function entries.
+    Either way the root cause is reported; fixing it surfaces the rest.
   - One observable coupling: after body `f` fails, the constraints it
     accepted before failing stay in the solver, so a later body `g` may be
     reported for a conflict with a type `f` established, and fixing `f` may

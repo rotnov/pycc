@@ -25,9 +25,9 @@ pub(crate) enum FrontendFailure {
     /// item in source order, with cascades of an earlier skipped item
     /// suppressed, see `pycc_hir::lower_all` and D-219; the type checker:
     /// one per failing function, the solver's diagnostic when both the
-    /// solver and the annotation checker flag a function, with a
-    /// module-level failure reported alone, see `pycc_types::check_all` and
-    /// D-220).
+    /// solver and the annotation checker flag a function, with a pre-check
+    /// or solver module-level failure reported alone, see
+    /// `pycc_types::check_all` and D-220).
     ///
     /// Invariant: `diagnostics` is never empty. Every constructor below
     /// either wraps one `Diagnostic` in a `vec![...]` or forwards

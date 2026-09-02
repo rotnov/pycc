@@ -330,10 +330,13 @@ pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
 ///
 /// Order: the solver's diagnostics in item order, then the concrete
 /// checker's diagnostics for functions the solver did not flag, in item
-/// order -- see `merge_solver_first`. A module-level failure (an
-/// incompatible redefinition, a failing top-level statement, a whole-module
-/// solver phase) is reported alone: everything after it would be checked
-/// against a partial or inconsistent environment.
+/// order -- see `merge_solver_first`. A pre-check failure (an incompatible
+/// redefinition) or a module-level solver failure (its top-level walk or a
+/// post-body phase) is reported alone: everything after it would be checked
+/// against a partial or inconsistent environment. The concrete checker's
+/// own failing top-level statement stops that collector at one `None`-keyed
+/// entry, which is reported alone when the solver flagged no function and
+/// otherwise follows the solver's per-function entries.
 pub fn check_all(hir: &HirModule) -> Result<(), Vec<Diagnostic>> {
     let function_local_names = module_function_local_names(hir);
     // Issue #22: reject incompatible redefinitions before trying either the

@@ -153,7 +153,9 @@ unsupported statement or expression into an uncaught lowering panic.
 `pycc_types::check_all` validates the lowered module against the
 inferred signature table without cloning HIR and reports one diagnostic per
 failing function (solver first, then the annotation checker's entries for
-functions the solver did not flag; a module-level failure alone -- D-220).
+functions the solver did not flag; a pre-check or solver module-level
+failure alone, the checker's top-level-statement failure alone only when the
+solver flagged no function -- D-220).
 Compiler stages that need concrete private-helper signatures use
 `pycc_types::check_and_resolve_all`, which performs the same validation and
 returns HIR with those signatures materialized. `check` and
