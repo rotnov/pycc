@@ -299,7 +299,7 @@ mod tests {
         // from A) is impossible through normal source-order processing --
         // a base class must be defined before the derived class that
         // inherits from it, so A's MRO can never contain B before B is
-        // even defined. This test bypasses `lower_checked` (which processes
+        // even defined. This test bypasses `module::lower_all` (which processes
         // classes in source order) and calls `lower_class` directly with a
         // hand-built `defined_classes` whose "A" entry already lists "B"
         // in its MRO, exercising the defensive circular-inheritance check

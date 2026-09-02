@@ -1,12 +1,12 @@
 //! Module-level `import` statements and type-alias declarations: the
-//! statement kinds `lower_checked` resolves before it walks a module's
+//! statement kinds `module::lower_all` resolves before it walks a module's
 //! remaining items (D-135 for aliases, D-136/D-137 for stdlib imports).
 //!
 //! Extracted from `lib.rs` per AGENTS.md's file-decomposition rule (issue
 //! #547, Part 2). This is a low-fan-in cohesion unit: `lower_import_stmt`,
 //! `lower_type_alias_stmt`, and `lower_legacy_type_alias_ann_assign` are
 //! each called exactly once, and `import_local_name` twice, all from
-//! `lower_checked` -- which is why `lib.rs` re-exports them `pub(crate)`
+//! `module::lower_top_level_item` -- which is why `lib.rs` re-exports them `pub(crate)`
 //! rather than making them public. The dependency runs the other way for
 //! annotations: the two alias lowerings call `annotation_to_ty`, which
 //! lives in the sibling `func` module.
