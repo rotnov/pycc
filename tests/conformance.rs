@@ -740,7 +740,7 @@ fn pep_0594_dead_battery_rejected_produces_c0001() {
     );
 }
 
-// PEP 698 (#432): `@override` -- its fixture test
+// PEP 698 (#579, Part 3 of #572): `@override` -- its fixture test
 // (`pep_0698_override_matches_cpython_3_14_7_byte_for_byte`) lives in
 // tests/conformance/classes.rs.
 
