@@ -186,7 +186,8 @@ that resolved root (the build script has not run for the profile or
 `--target` triple in use, or the artifact was cleaned), the driver fails
 with the ordinary actionable exit-2 message naming the directory that was
 searched (`no pycc_rt build found (expected ...). Run \`cargo build -p
-pycc_rt\` first.`) rather than mislinking.
+pycc_rt\` first, or run pycc with CARGO_TARGET_DIR set to the directory
+Cargo built into.`) rather than mislinking.
 The environment-variable precedence above is the complete contract; both
 exclusions are a closed decision, not a pending gap
 ([D-216](./decisions/D-216-close-the-target-dir-flag-and-config-file.md)).
@@ -195,15 +196,23 @@ Within the resolved directory the layout is Cargo's: `<root>/debug/` or
 `<root>/release/` for a host build, `<root>/<triple>/<profile>/` when
 `--target` is given.
 
-The `no pycc_rt build found ... Run \`cargo build -p pycc_rt\` first.`
-diagnostic is retained verbatim rather than reworded, because the
-situations that still produce it are exactly the ones where running that
-command by hand is the fix: a cross-compilation target the build script
-does not produce (`--target <triple>`, which additionally needs `rustup
-target add <triple>`), and a target directory redirected by an input
-`pycc` cannot observe when the archive is also absent from the
-`<workspace>/target` fallback the build script installs into. It is no
-longer an ordinary first-build message. Under a config-file
+The `no pycc_rt build found ... Run \`cargo build -p pycc_rt\` first, or
+run pycc with CARGO_TARGET_DIR set to the directory Cargo built into.`
+diagnostic names both recoveries on its single line, because the
+situations that still produce it split two ways: a cross-compilation
+target the build script does not produce (`--target <triple>`, which
+additionally needs `rustup target add <triple>`) and a one-off
+`--target-dir` build are fixed by running the suggested `cargo build`
+command by hand, while a target directory persistently redirected by an
+input `pycc` cannot observe — when the archive is also absent from the
+`<workspace>/target` fallback the build script installs into — is fixed by
+pointing `pycc` at that directory through `CARGO_TARGET_DIR`. The second
+clause was added by [#869](https://github.com/rotnov/pycc/issues/869)
+because the `CARGO_TARGET_DIR` recovery below was otherwise undiscoverable
+from the terminal; it follows the same convention as the diverged-root
+warning in `crates/pycc_codegen/build.rs`, which already tells the user to
+set an absolute `CARGO_TARGET_DIR`. The diagnostic is no longer an
+ordinary first-build message. Under a config-file
 `build.target-dir` redirect (or a `--target-dir` flag the user repeats on
 the recovery command, say through a shell alias) the suggested command is
 not sufficient on its own, because `cargo build -p pycc_rt` honors the

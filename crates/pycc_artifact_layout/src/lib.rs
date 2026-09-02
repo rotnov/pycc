@@ -155,6 +155,13 @@ pub fn pycc_rt_lib_filename(target: Option<&str>) -> &'static str {
 /// on `pycc_rt`. Failing with a clear, actionable message is better than a
 /// confusing linker error about a missing `-lpycc_rt`.
 ///
+/// Both failure messages also name the `CARGO_TARGET_DIR` recovery: under a
+/// persistent target-dir redirect `pycc` cannot observe (a `.cargo/config.toml`
+/// `build.target-dir`, see `docs/CLI_SPEC.md`'s Environment section), the
+/// suggested `cargo build` rebuilds into that same redirect and reproduces
+/// the failure, so pointing `pycc` at the redirected directory is the fix
+/// (#869). The message stays a single line either way.
+///
 /// `release` selects which of `pycc_rt`'s own two builds to link against.
 /// Before this parameter existed, the compiler driver unconditionally
 /// linked the debug build regardless of `pycc build --release` -- a real,
@@ -195,12 +202,14 @@ pub fn find_pycc_rt_lib_dir_in(
     } else if let Some(triple) = target {
         Err(format!(
             "no pycc_rt build found for target `{triple}` (expected {}). \
-             Run `rustup target add {triple}` then `cargo build{release_flag} --target {triple} -p pycc_rt` first.",
+             Run `rustup target add {triple}` then `cargo build{release_flag} --target {triple} -p pycc_rt` first, \
+             or run pycc with CARGO_TARGET_DIR set to the directory Cargo built into.",
             dir.display()
         ))
     } else {
         Err(format!(
-            "no pycc_rt build found (expected {}). Run `cargo build{release_flag} -p pycc_rt` first.",
+            "no pycc_rt build found (expected {}). Run `cargo build{release_flag} -p pycc_rt` first, \
+             or run pycc with CARGO_TARGET_DIR set to the directory Cargo built into.",
             dir.display()
         ))
     }
@@ -472,6 +481,10 @@ mod tests {
         assert!(err.contains("cargo build -p pycc_rt"));
         // Must not suggest --release for a debug-profile lookup.
         assert!(!err.contains("--release"));
+        // The persistent-redirect recovery (#869) is named alongside the
+        // rebuild command, and the message stays a single line.
+        assert!(err.contains("with CARGO_TARGET_DIR set"));
+        assert!(!err.contains('\n'));
     }
 
     #[test]
@@ -493,6 +506,8 @@ mod tests {
                 .unwrap_err();
         assert!(err.contains("x86_64-unknown-linux-gnu"));
         assert!(err.contains("rustup target add"));
+        assert!(err.contains("with CARGO_TARGET_DIR set"));
+        assert!(!err.contains('\n'));
     }
 
     #[test]
@@ -514,6 +529,7 @@ mod tests {
         // compares components instead of literal separator bytes.
         let expected_dir = root.join("release");
         assert!(err.contains(&expected_dir.display().to_string()));
+        assert!(err.contains("with CARGO_TARGET_DIR set"));
     }
 
     #[test]
@@ -535,6 +551,7 @@ mod tests {
         assert!(err.contains("x86_64-unknown-linux-gnu"));
         assert!(err.contains("rustup target add"));
         assert!(err.contains("cargo build --release --target x86_64-unknown-linux-gnu -p pycc_rt"));
+        assert!(err.contains("with CARGO_TARGET_DIR set"));
     }
 
     #[test]
