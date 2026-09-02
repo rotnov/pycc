@@ -45,9 +45,9 @@ pub const EXPLANATIONS: &[DiagnosticExplanation] = &[
 C0001 is a versioned capability diagnostic, not a rejected-by-design language \
 rule: it fires whenever HIR lowering reaches a syntactically valid Python \
 statement, expression, or annotation shape that this pycc version's frontend \
-does not yet lower -- a class definition, a `try`/`except` block, a `with` \
-statement, an unrecognized import shape, or a type annotation more complex \
-than a bare name, for example. It also fires for calls to known Python 3.14 \
+does not yet lower -- a `with` statement, a tuple-unpacking assignment, an \
+unrecognized import shape, or a type annotation more complex than a bare \
+name, for example. It also fires for calls to known Python 3.14 \
 callable builtins that this compiler version does not implement (e.g. \
 `ValueError(\"x\")`, `Exception(\"msg\")`, `int(\"5\")`, `range(10)` as a \
 standalone call) -- these are valid Python, not name-resolution failures \
@@ -64,8 +64,9 @@ D-198, issue #767) are the current instances -- for the same reason: the \
 construct is valid Python that a later slice can implement, not a by-design \
 rejection. The construct remains reserved and stops \
 producing C0001 the moment the corresponding roadmap slice is implemented; \
-until then the diagnostic's span points at the unsupported node so the \
-message stays actionable rather than a bare \"not implemented\".",
+until then the diagnostic's span points at the unsupported node and the \
+message names the construct in Python terms, so it stays actionable rather \
+than a bare \"not implemented\".",
         example: "\
 class Point:
     def __init__(self, x: int, y: int) -> None:
