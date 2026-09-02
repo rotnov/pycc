@@ -33,7 +33,7 @@ The harness's own Rust sources are a different thing from that fixture tree.
 `tests/conformance/*.rs` (`classes.rs`, `exceptions.rs`, `numeric.rs`),
 `#[path]`-declared from the root's `harness_modules!` block; a new fixture's
 test goes in the cohort that owns its semantics. Per
-[D-220](./decisions/D-220-the-conformance-harness-is-the-root-file-plus-its.md),
+[D-221](./decisions/D-221-the-conformance-harness-is-the-root-file-plus-its.md),
 the **conformance harness sources** are the root file followed by every direct
 `tests/conformance/*.rs` in sorted file-name order, and that set is the one
 contract all three text-readers of the harness share: the two Rust guards

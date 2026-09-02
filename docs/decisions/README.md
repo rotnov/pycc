@@ -227,3 +227,4 @@ current.
 | [D-218](./D-218-raise-llms-txt-aggregate-budget-to-272-kib.md) | Raise the llms.txt aggregate context budget from 264 KiB to 272 KiB (issue #207) | accepted |
 | [D-219](./D-219-hir-per-item-diagnostic-collection-with-poisoned-binding-cascade-suppression.md) | HIR lowering collects one diagnostic per top-level item and silently skips cascades of a skipped class or alias (issue #864, Part 2) | accepted |
 | [D-220](./D-220-type-checker-per-function-diagnostic-collection-with-a-per-function-solver-first-merge.md) | The type checker collects one diagnostic per failing function and merges the solver's and the annotation checker's lists solver-first per function (issue #864, Part 3) | accepted |
+| [D-221](./D-221-the-conformance-harness-is-the-root-file-plus-its.md) | The conformance harness is `tests/conformance.rs` plus `tests/conformance/*.rs`; every harness text-reader audits the concatenation (#729) | accepted |

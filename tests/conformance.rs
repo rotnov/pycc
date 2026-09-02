@@ -20,16 +20,17 @@ harness_modules! {
     numeric => "conformance/numeric.rs",
 }
 
-/// A cohort file that exists on disk but is not declared above would still be
-/// read by the three harness text-readers (so its fixtures would count as
-/// registered) while never being compiled or run. Runs by default, no oracle.
-#[test]
-fn every_harness_module_on_disk_is_declared() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/conformance");
-    let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
-        .expect("tests/conformance/ exists")
+/// The `conformance/<name>.rs` paths of every regular `*.rs` file directly in
+/// `dir`, sorted. The `is_file` guard is the same one
+/// `tests/harness_support/conformance_sources.rs` and
+/// `scripts/check_conformance_breadth.py` apply, so this control's on-disk
+/// set is exactly the set those readers concatenate (a *directory* named
+/// `x.rs` is read by neither and must not be demanded here).
+fn harness_modules_on_disk(dir: &Path) -> Vec<String> {
+    let mut on_disk: Vec<String> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
         .map(|entry| entry.expect("entry").path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "rs"))
         .map(|path| {
             format!(
                 "conformance/{}",
@@ -38,11 +39,39 @@ fn every_harness_module_on_disk_is_declared() {
         })
         .collect();
     on_disk.sort();
+    on_disk
+}
+
+/// A cohort file that exists on disk but is not declared above would still be
+/// read by the three harness text-readers (so its fixtures would count as
+/// registered) while never being compiled or run. Runs by default, no oracle.
+#[test]
+fn every_harness_module_on_disk_is_declared() {
+    let on_disk =
+        harness_modules_on_disk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/conformance"));
     let mut declared: Vec<String> = HARNESS_MODULE_FILES.iter().map(|s| s.to_string()).collect();
     declared.sort();
     assert_eq!(
         on_disk, declared,
         "every tests/conformance/*.rs must be declared in harness_modules!"
+    );
+}
+
+#[test]
+fn harness_modules_on_disk_ignores_directories_and_non_rs_files() {
+    let scratch = ScratchDir::new("harness_modules_on_disk").expect("scratch dir");
+    let dir = scratch.join("conformance");
+    std::fs::create_dir_all(dir.join("fake.rs")).expect("a directory named *.rs");
+    std::fs::create_dir_all(dir.join("py30")).expect("nested dir");
+    std::fs::write(dir.join("b.rs"), "").expect("b.rs");
+    std::fs::write(dir.join("a.rs"), "").expect("a.rs");
+    std::fs::write(dir.join("fixture.py"), "").expect("fixture.py");
+    assert_eq!(
+        harness_modules_on_disk(&dir),
+        vec![
+            "conformance/a.rs".to_string(),
+            "conformance/b.rs".to_string()
+        ]
     );
 }
 
@@ -711,12 +740,9 @@ fn pep_0594_dead_battery_rejected_produces_c0001() {
     );
 }
 
-// PEP 698 (#432): `@override` decorator. pycc treats `@override` as a
-// built-in decorator name (no import required), while CPython 3.14
-// requires `from typing import override`. Since pycc does not yet support
-// imports, a byte-for-byte conformance fixture is not possible until
-// import support lands (v0.4). The @override behavior is covered by the
-// integration tests in tests/issue_432_inheritance.rs instead.
+// PEP 698 (#432): `@override` -- its fixture test
+// (`pep_0698_override_matches_cpython_3_14_7_byte_for_byte`) lives in
+// tests/conformance/classes.rs.
 
 // PEP 593 (#383): `Annotated[X, ...]` — unwraps to `X`, metadata discarded.
 #[test]
