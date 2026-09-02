@@ -31,9 +31,10 @@ GOOD = {
     "category": "doc-drift",
     "summary": "comment overstates",
     "disposition": "fixed",
+    "fix_commit": "abc1234",
     "note": "",
 }
-REFUTED = dict(GOOD, disposition="refuted", note="the guard is exercised by test y")
+REFUTED = dict(GOOD, disposition="refuted", fix_commit="", note="the guard is exercised by test y")
 
 
 def git(root: Path, *args: str) -> None:
@@ -117,6 +118,32 @@ class FindingsCheckerTests(unittest.TestCase):
         self.write([GOOD])
         self.assertEqual(CHECKER.validate([self.pile], self.root), [])
 
+    def test_fixed_without_fix_reference_is_rejected(self) -> None:
+        # The observed corruption: a refutation reason recorded under `fixed`.
+        for row in (
+            dict(GOOD, fix_commit="", note="not a defect: the guard is exercised by test y"),
+            dict(GOOD, fix_commit="  "),
+            dict(GOOD, fix_commit=None),
+            {k: v for k, v in GOOD.items() if k != "fix_commit"},
+        ):
+            self.write([row])
+            problems = CHECKER.validate([self.pile], self.root)
+            self.assertEqual(len(problems), 1, row)
+            self.assertIn("fixed finding has no fix_commit", problems[0])
+        self.write([GOOD])
+        self.assertEqual(CHECKER.validate([self.pile], self.root), [])
+
+    def test_legacy_unreferenced_fix_pile_skips_only_the_fix_reference_rule(self) -> None:
+        legacy = self.pile.with_name("pr-518.jsonl")
+        self.assertIn(legacy.name, CHECKER.LEGACY_UNREFERENCED_FIX_PILES)
+        legacy.write_text(json.dumps(dict(GOOD, fix_commit=None)) + "\n", encoding="utf-8")
+        git(self.root, "add", "-f", "--", str(legacy))
+        self.assertEqual(CHECKER.validate([legacy], self.root), [])
+        legacy.write_text(json.dumps(dict(GOOD, disposition="deferred")) + "\n", encoding="utf-8")
+        problems = CHECKER.validate([legacy], self.root)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("disposition 'deferred' is not one of fixed, refuted", problems[0])
+
     def test_clean_round_marker_is_accepted_only_with_its_category(self) -> None:
         marker = dict(GOOD, disposition="clean", category="clean-round", note="round 3 clean")
         self.write([GOOD, marker])
@@ -142,9 +169,9 @@ class FindingsCheckerTests(unittest.TestCase):
         self.assertEqual(CHECKER.validate([legacy], self.root), [])
         self.assertIn(legacy.name, CHECKER.LEGACY_SCHEMA_PILES)
 
-    def test_legacy_snapshot_names_only_piles_that_exist(self) -> None:
+    def test_legacy_snapshots_name_only_piles_that_exist(self) -> None:
         repo = Path(__file__).resolve().parent.parent
-        for name in CHECKER.LEGACY_SCHEMA_PILES:
+        for name in CHECKER.LEGACY_SCHEMA_PILES | CHECKER.LEGACY_UNREFERENCED_FIX_PILES:
             self.assertTrue((repo / ".harden" / "findings" / name).is_file(), name)
 
     def test_real_repository_piles_conform(self) -> None:

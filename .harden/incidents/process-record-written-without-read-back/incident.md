@@ -12,7 +12,7 @@ termination: precommit
 related: []
 fixture: scripts/test_check_harden_findings.py — constructed git checkouts, both directions
 artifact: scripts/check_harden_findings.py
-verify: manual — 16 unit cases: an excluded-then-`git add -A` pile, an untracked pile, a malformed disposition and a note-less refutation are rejected; a tracked well-formed pile and every checked-in pile pass
+verify: manual — 18 unit cases: an excluded-then-`git add -A` pile, an untracked pile, a malformed disposition, a note-less refutation and a `fixed` line without a `fix_commit` are rejected; a tracked well-formed pile and every checked-in pile pass
 verdict: profit
 ---
 
@@ -47,7 +47,9 @@ trigger for (3) -- the existing guard exists and cannot fire; absence for
 `scripts/check_harden_findings.py`, run at step 5.5 before the batch:
 `git ls-files --error-unmatch` on each pile plus a per-line schema check
 (required keys, `disposition` in the enum, a `refuted` line carries a
-note). Static rung: a command over static state detects the class, it binds
+note, a `fixed` line carries a `fix_commit` -- the last added after the PR
+#871 Codex review observed that without positive evidence for a fix, the
+exact observed corruption (4) still passed). Static rung: a command over static state detects the class, it binds
 every harness and the human, and it lives in the `scripts/` suite CI already
 discovers (`test_check_harden_findings.py` runs every checked-in pile
 through it). The prose alternative -- "confirm with `git ls-files`" beside

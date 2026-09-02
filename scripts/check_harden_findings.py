@@ -17,9 +17,12 @@ clusters what it reads. Two silent failure modes were observed on one task
 This checker is the read-back. Given one or more pile paths it verifies
 that each is tracked by git (`git ls-files --error-unmatch`), that every
 line is a JSON object carrying the schema's required keys, that
-`disposition` is `fixed` or `refuted`, and that a `refuted` line carries a
+`disposition` is `fixed` or `refuted`, that a `refuted` line carries a
 non-empty `note` (the refutation reason is the datum the batch pass routes
-to the reviewer's own artefact). Exit 0 when every pile passes, 1 with one
+to the reviewer's own artefact), and that a `fixed` line carries a non-empty
+`fix_commit` (the positive evidence that a fix exists; without it a
+refutation mislabeled as `fixed` is indistinguishable from a fix, which is
+the second failure mode above). Exit 0 when every pile passes, 1 with one
 message per defect otherwise, 2 for a usage error.
 """
 
@@ -52,6 +55,11 @@ LEGACY_SCHEMA_PILES = frozenset(
     }
 )
 
+# Piles whose `fixed` lines predate the fix-reference rule and carry an empty
+# or absent `fix_commit`. The same one-time snapshot discipline as above: the
+# set only shrinks, and every other rule still applies to these piles.
+LEGACY_UNREFERENCED_FIX_PILES = frozenset({"issue-727.jsonl", "pr-518.jsonl"})
+
 
 def is_tracked(path: Path, repo_root: Path) -> bool:
     """Return whether git tracks ``path`` (index or HEAD) inside ``repo_root``."""
@@ -64,8 +72,11 @@ def is_tracked(path: Path, repo_root: Path) -> bool:
     return result.returncode == 0
 
 
-def validate_lines(text: str, label: str) -> list[str]:
-    """Return the schema defects found in ``text``, prefixed with ``label``."""
+def validate_lines(text: str, label: str, require_fix_reference: bool = True) -> list[str]:
+    """Return the schema defects found in ``text``, prefixed with ``label``.
+
+    ``require_fix_reference`` is False only for the legacy snapshot above.
+    """
     problems: list[str] = []
     seen = 0
     for number, raw in enumerate(text.splitlines(), start=1):
@@ -94,6 +105,15 @@ def validate_lines(text: str, label: str) -> list[str]:
             )
         elif disposition == "refuted" and not str(row["note"]).strip():
             problems.append(f"{label}:{number}: refuted finding has an empty note")
+        elif (
+            disposition == "fixed"
+            and require_fix_reference
+            and not str(row.get("fix_commit") or "").strip()
+        ):
+            problems.append(
+                f"{label}:{number}: fixed finding has no fix_commit -- a fix needs a "
+                "reference, otherwise a mislabeled refutation passes as one"
+            )
     if seen == 0:
         problems.append(f"{label}: pile is empty")
     return problems
@@ -114,7 +134,13 @@ def validate(paths: list[Path], repo_root: Path) -> list[str]:
             )
         if path.name in LEGACY_SCHEMA_PILES:
             continue
-        problems.extend(validate_lines(path.read_text(encoding="utf-8"), label))
+        problems.extend(
+            validate_lines(
+                path.read_text(encoding="utf-8"),
+                label,
+                require_fix_reference=path.name not in LEGACY_UNREFERENCED_FIX_PILES,
+            )
+        )
     return problems
 
 
