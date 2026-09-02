@@ -435,7 +435,7 @@ fn a_for_list_loop_still_type_checks_correctly_when_the_solver_path_runs_first()
 }
 
 // PR-12 Task 7 (D-118): whole-module `check()` tests for `HirExpr::Slice`,
-// exercising the real statement walkers (`check_with_environment`'s
+// exercising the real statement walkers (`check_with_environment_all`'s
 // `check_stmt`, and `collect_block_constraints`'s `Assign` arm under the
 // solver path) rather than calling `infer_expr`/`collect_expr_constraints`
 // directly on a hand-built expression. Mirrors the list-literal pair
@@ -5052,7 +5052,7 @@ fn check_accepts_a_module_level_comprehension_whose_target_is_read_afterward() {
     // `Environment`, or runs the full `check`/`check_and_resolve`
     // pipeline over a module expected to *fail*. This is the one test
     // confirming the full `check` pipeline (`module_function_names` ->
-    // `concrete_function_environment` -> `check_with_environment` ->
+    // `concrete_function_environment` -> `check_with_environment_all` ->
     // `check_stmt`) accepts a *valid* module-level comprehension and
     // that its `target` binding genuinely survives into the next
     // top-level statement's environment, exactly like an ordinary
@@ -6667,7 +6667,7 @@ fn adding_propagates_an_ill_typed_value_s_error() {
 // regression of exactly this shape (a solver arm that looked correct in
 // isolation but was never actually reached by the block walker) -- these
 // confirm each new arm is genuinely wired into both the fast
-// (`check_with_environment`) and solver (`collect_block_constraints`)
+// (`check_with_environment_all`) and solver (`collect_block_constraints`)
 // paths, not just correct when `infer_expr`/`collect_expr_constraints`
 // are called directly on a hand-built expression.
 
@@ -14146,7 +14146,7 @@ fn private_slice_base_wrapping_a_conflict_is_rejected_end_to_end() {
     // at module top level, which the pair above this whole group
     // already covers) -- a real and valuable thing to test on its own.
     // It does NOT, on its own, prove that `collect_expr_constraints`'s
-    // `Slice` arm itself recurses into `base`: `check_with_environment`'s
+    // `Slice` arm itself recurses into `base`: `check_with_environment_all`'s
     // Pass 3 independently re-type-checks every function body via
     // `infer_expr_in` regardless of what the solver's own
     // constraint-collection pass did or didn't visit, so this exact
@@ -15503,7 +15503,7 @@ fn check_and_resolve_monomorphizes_a_nested_generic_call_and_drops_the_original(
 fn monomorphize_lets_a_non_generic_function_read_a_module_global_defined_later_in_the_file_alongside_a_generic_function()
  {
     // Fix-round regression test (finding #1): `check` (via
-    // `check_with_environment`'s three-pass D-041 discipline) and
+    // `check_with_environment_all`'s three-pass D-041 discipline) and
     // `check_and_resolve`/`monomorphize` must agree on validity for a
     // module that mixes a generic function with a non-generic function
     // reading a module-level global assigned *after* that function's

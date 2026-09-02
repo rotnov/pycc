@@ -274,7 +274,7 @@ impl Environment {
         // Issue #22: by default, binding a function also marks it as
         // defined. This makes standalone `infer_expr` / `check_function`
         // calls work without callers needing to separately track
-        // `defined_functions`. `check_with_environment` clears this set
+        // `defined_functions`. `check_with_environment_all` clears this set
         // before its top-level source-order pass so call-before-`def` is
         // caught there.
         self.defined_functions.insert(name);

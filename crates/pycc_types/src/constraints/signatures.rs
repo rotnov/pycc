@@ -13,11 +13,9 @@
 use super::*;
 #[cfg(test)]
 use crate::module::first_keyed;
-use crate::module::{KeyedDiagnostics, module_level};
+use crate::module::{FunctionSignatures, KeyedDiagnostics, module_level};
 
-pub(crate) fn concrete_function_signatures(
-    hir: &HirModule,
-) -> Option<HashMap<String, (Vec<Ty>, Ty)>> {
+pub(crate) fn concrete_function_signatures(hir: &HirModule) -> Option<FunctionSignatures> {
     let mut signatures = HashMap::new();
     for item in &hir.items {
         let HirItem::Function {
@@ -107,7 +105,7 @@ pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environme
 pub(crate) fn infer_function_signatures_with_solver(
     hir: &HirModule,
     function_local_names: &[Vec<&str>],
-) -> Result<HashMap<String, (Vec<Ty>, Ty)>, Diagnostic> {
+) -> Result<FunctionSignatures, Diagnostic> {
     infer_function_signatures_with_solver_all(hir, function_local_names).map_err(first_keyed)
 }
 
@@ -141,7 +139,7 @@ pub(crate) fn infer_function_signatures_with_solver(
 pub(crate) fn infer_function_signatures_with_solver_all(
     hir: &HirModule,
     function_local_names: &[Vec<&str>],
-) -> Result<HashMap<String, (Vec<Ty>, Ty)>, KeyedDiagnostics> {
+) -> Result<FunctionSignatures, KeyedDiagnostics> {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut signatures = HashMap::new();

@@ -2583,7 +2583,7 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
         &mut new_class_defs,
     );
 
-    // Two passes, matching `check_with_environment`'s own D-041 discipline
+    // Two passes, matching `check_with_environment_all`'s own D-041 discipline
     // exactly (register every function's signature -- already done above --
     // then process every top-level statement in source order against the
     // *growing* module `env`, then check every function body against the
