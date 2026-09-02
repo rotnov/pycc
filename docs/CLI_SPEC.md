@@ -84,12 +84,13 @@ failure is a reference to a class or type alias that itself failed to lower is
 skipped silently rather than reported as a second gap (D-219). The type
 checker reports one diagnostic per failing function: the private-helper
 solver's per-body diagnostics first, then the concrete annotation checker's
-for functions the solver did not flag; a pre-check failure or a
-module-level failure of the solver (its top-level walk or a post-body phase
-such as `monomorphize`) is reported alone, exactly as before, while the
-annotation checker's own top-level-statement failure is reported alone only
-when the solver flagged no function and otherwise follows the solver's
-per-function entries (D-220). Directory discovery,
+for functions the solver did not flag. A pre-check failure is reported
+alone; if the solver fails at module level (its top-level walk or a
+post-body phase such as `propagate_binop_constraints`), that one diagnostic
+is reported alone and the annotation checker's list is dropped; if the
+solver flags one or more functions, those come first and the checker's own
+module-level entry (a failing top-level statement) follows them; if the
+solver passes, the checker's list stands alone (D-220). Directory discovery,
 an omitted path meaning the current project, and `pycc.toml` project loading
 arrive with multi-file projects in v0.4. The ownership pass joins `check` when
 `pycc_own` is introduced in v0.5.

@@ -443,6 +443,19 @@ fn merge_appends_a_module_level_checker_entry_the_solver_did_not_flag() {
 }
 
 #[test]
+fn merge_drops_the_checker_list_after_a_module_level_solver_failure() {
+    // Rule 4's third outcome: the checker fails at pass 2 with its own
+    // `(None, T0025)` for the top-level statement, but the solver's
+    // top-level walk accepts it and its post-body
+    // `propagate_binop_constraints` fails with `(None, T0021)` -- that one
+    // solver line is reported and the checker's list, top-level entry
+    // included, is dropped.
+    let hir = lower("x: int = \"s\"\n\n\ndef f(a: int) -> int:\n    y = a + \"s\"\n    return y\n");
+    let diagnostics = check_all(&hir).unwrap_err();
+    assert_eq!(codes(&diagnostics), vec!["T0021"]);
+}
+
+#[test]
 fn merge_reports_a_module_level_solver_failure_alone() {
     // The solver's `T0021 operator Add` for `f` is a post-phase diagnostic
     // (`None`-keyed); the checker also flags `f` and `g`, but neither is

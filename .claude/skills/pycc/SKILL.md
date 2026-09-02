@@ -28,9 +28,12 @@ supplied file, reports every diagnostic the failing pass found for each input
 an item that only references a class or alias that itself failed to lower
 skipped silently, D-219; the type checker: one per failing function, the
 solver's entries first and then the annotation checker's for functions the
-solver did not flag, a pre-check or solver module-level failure alone and
-the checker's top-level-statement failure alone only when the solver flagged
-no function, D-220), and can render
+solver did not flag -- a pre-check failure alone; a module-level solver
+failure (its top-level walk or a post-body phase such as
+`propagate_binop_constraints`) alone with the checker's list dropped; the
+checker's own module-level entry, a failing top-level statement, after the
+solver's per-function entries when the solver flagged any function, and
+the checker's list alone when the solver passes, D-220), and can render
 human or JSON diagnostics (JSON: one object
 per line). `build` and `run` lower the
 implemented v0.1 language subset through MIR, LLVM, the host linker, and the
