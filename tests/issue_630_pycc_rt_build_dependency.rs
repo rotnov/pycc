@@ -22,6 +22,20 @@
 //! pure function instead, by
 //! `pycc_artifact_layout::anchor_target_root_for_build_script`'s own unit
 //! tests, which drive the contained and divergent cases directly.
+//!
+//! Nor is either input D-216 permanently excludes -- Cargo's `--target-dir`
+//! flag and a config-file `build.target-dir` -- exercised as a process. The
+//! positive half of such a case could not fail: CI runs
+//! `cargo build --workspace` first, so the archives already sit under
+//! `<workspace>/target` whatever a redirected build did, and on the
+//! coverage job that path is a symlink into the isolated root the test
+//! would then write into. The negative half (asserting the redirected root
+//! does *not* receive the archive) would pin the absence of a feature, so
+//! a decision superseding D-216 would have to delete a green test that
+//! reads as a regression. The config-file form is cwd-resolved, which the
+//! paragraph above already rules out. The contract that matters --
+//! `resolve_cargo_target_root` consults exactly the two environment
+//! variables and nothing else -- is pinned by its own unit tests.
 
 use pycc_codegen::artifact_layout::{pycc_rt_lib_filename, should_scrub_for_nested_cargo};
 use pycc_scratch::ScratchDir;

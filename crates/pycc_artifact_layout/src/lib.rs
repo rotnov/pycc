@@ -77,7 +77,9 @@ const DEFAULT_TARGET_DIR_NAME: &str = "target";
 /// `env!("CARGO_TARGET_TMPDIR")` is `<dir>/tmp` while every runtime
 /// lookup of it is `NotPresent`). Anchoring this one shared resolver on
 /// it would give it two different resolution rules depending on which
-/// binary it was compiled into. See `docs/decisions/D-183-*.md`.
+/// binary it was compiled into. See `docs/decisions/D-183-*.md` for the
+/// original reasoning and `docs/decisions/D-216-*.md`, which closed both
+/// exclusions as permanent rather than deferred.
 ///
 /// `env_lookup` is a plain `fn` pointer, not `impl Fn(..)`, for the same
 /// reason as [`find_pycc_rt_lib_dir_in`]'s `exists`: a generic parameter

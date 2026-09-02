@@ -159,7 +159,7 @@ of the process that invoked *it*; `pycc` is a separate process, so this
 agrees with Cargo when `pycc` runs from that same directory.
 
 Two inputs rank above all three levels in Cargo's own precedence and are
-**not honored**: the `--target-dir` **command-line flag**, and
+**permanently not honored**: the `--target-dir` **command-line flag**, and
 `build.target-dir` when set in a `.cargo/config.toml` **config file**.
 Reading the config-file form means re-implementing Cargo's
 ancestor-walking config discovery — the `$CARGO_HOME` merge, Cargo's own
@@ -171,11 +171,19 @@ binary a user invokes; anchoring the shared resolver on it would give one
 function two resolution rules depending on which binary it was compiled
 into. A build whose
 artifacts were redirected by one of those two, with neither environment
-variable set, fails with the ordinary actionable exit-2 message naming
-the directory that was searched (`no pycc_rt build found (expected ...).
-Run \`cargo build -p pycc_rt\` first.`) rather than mislinking.
-Whether either input should be honored at all is tracked as
-[#639](https://github.com/rotnov/pycc/issues/639).
+variable set, resolves to the `<workspace>/target` fallback on both the
+write side and the read side — `pycc_codegen`'s build script installs the
+`pycc_rt` archives there and the driver searches there — so it links
+correctly, at the cost of a stray `<workspace>/target` tree beside the
+directory Cargo actually built into. Whenever the archive is absent from
+that resolved root (the build script has not run for the profile or
+`--target` triple in use, or the artifact was cleaned), the driver fails
+with the ordinary actionable exit-2 message naming the directory that was
+searched (`no pycc_rt build found (expected ...). Run \`cargo build -p
+pycc_rt\` first.`) rather than mislinking.
+The environment-variable precedence above is the complete contract; both
+exclusions are a closed decision, not a pending gap
+([D-216](./decisions/D-216-close-the-target-dir-flag-and-config-file.md)).
 
 Within the resolved directory the layout is Cargo's: `<root>/debug/` or
 `<root>/release/` for a host build, `<root>/<triple>/<profile>/` when
@@ -187,7 +195,22 @@ situations that still produce it are exactly the ones where running that
 command by hand is the fix: a cross-compilation target the build script
 does not produce (`--target <triple>`, which additionally needs `rustup
 target add <triple>`), and a target directory redirected by an input
-`pycc` cannot observe. It is no longer an ordinary first-build message.
+`pycc` cannot observe when the archive is also absent from the
+`<workspace>/target` fallback the build script installs into. It is no
+longer an ordinary first-build message. Under a config-file
+`build.target-dir` redirect (or a `--target-dir` flag the user repeats on
+the recovery command, say through a shell alias) the suggested command is
+not sufficient on its own, because `cargo build -p pycc_rt` honors the
+same redirect that `pycc` cannot see and writes the archive there; a bare
+`cargo build -p pycc_rt` after a one-off `--target-dir` build lands in
+`<workspace>/target` and does work. For the persistent case, either set
+`CARGO_TARGET_DIR` to the redirected directory so `pycc` follows it, or
+run `CARGO_TARGET_DIR=<workspace>/target cargo build -p pycc_rt` so the
+rebuild lands where `pycc` searches — `CARGO_TARGET_DIR` outranks a
+config-file `build.target-dir` (verified under both cargo 1.88.0 and the
+pinned 1.97.1: with `.cargo/config.toml` naming `from-config`, a plain
+build wrote there and `CARGO_TARGET_DIR=from-env` redirected to
+`from-env`).
 
 ## `pycc.toml`
 
