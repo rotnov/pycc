@@ -1263,6 +1263,16 @@ where
     std::ops::Range<u32>: From<R>,
 {
     let range = std::ops::Range::<u32>::from(range);
+    let message = message.into();
+    // Issue #890: a `C0001` message must name the rejected construct in
+    // Python terms (`pycc_ast::expr_kind_name`/`stmt_kind_name`), never
+    // render an AST node's Rust `Debug` form. Every `ruff_python_ast`
+    // node's `Debug` output contains `node_index: NodeIndex(`, so this
+    // catches a reintroduced `{:?}` of a node in every test build. The
+    // assertion is deliberately message-less: a messaged `debug_assert!`
+    // leaves its never-formatted message literal as an uncovered region
+    // under D-014's 100%-region gate, and this comment says why it fired.
+    debug_assert!(!message.contains("NodeIndex("));
     Diagnostic::error("C0001", message, Span::new(range.start, range.end))
 }
 
