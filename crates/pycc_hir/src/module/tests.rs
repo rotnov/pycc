@@ -287,13 +287,34 @@ fn a_rejected_alias_after_a_valid_class_un_poisons_nothing_and_reports_once() {
 }
 
 #[test]
+fn a_valueless_legacy_alias_declaration_poisons_nothing() {
+    // `X: TypeAlias` without a value is lowered as an ordinary annotated
+    // assignment (no alias is recorded), so its own rejection must not poison
+    // `X`: the later `def f(a: X)` is a genuine gap, not a cascade.
+    let source = "X: TypeAlias\n\
+                  def f(a: X) -> int:\n    return 1\n";
+    let diagnostics = lower_all_err(source);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert_c0001(
+        &diagnostics[0],
+        &unknown_annotation_name_message("TypeAlias"),
+        span_of(source, "TypeAlias", 0),
+    );
+    assert_c0001(
+        &diagnostics[1],
+        &unknown_annotation_name_message("X"),
+        span_of(source, "X", 1),
+    );
+}
+
+#[test]
 fn poisonable_name_per_statement_kind() {
     let cases: &[(&str, Option<&str>)] = &[
         ("class C:\n    pass\n", Some("C")),
         ("type X = int\n", Some("X")),
         ("X: TypeAlias = int\n", Some("X")),
-        // Valueless legacy spelling: still `Some` (the value is ignored).
-        ("X: TypeAlias\n", Some("X")),
+        // Valueless legacy spelling binds no alias, so it is not poisonable.
+        ("X: TypeAlias\n", None),
         // ruff drops the parentheses, so the target is still a `Name`.
         ("(x): TypeAlias = int\n", Some("x")),
         // Target is not a `Name`.

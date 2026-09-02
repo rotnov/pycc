@@ -501,6 +501,12 @@ pub(crate) fn poisonable_name(stmt: &Stmt) -> Option<&str> {
             let Expr::Name(target) = ann.target.as_ref() else {
                 return None;
             };
+            // A valueless `X: TypeAlias` binds nothing:
+            // `import::lower_legacy_type_alias_ann_assign` records no alias
+            // for it and lets it fall through as an ordinary annotated
+            // assignment, so poisoning `X` would suppress a genuine later
+            // `X` diagnostic (Codex review on #875).
+            ann.value.as_ref()?;
             Some(target.id.as_str())
         }
         _ => None,
