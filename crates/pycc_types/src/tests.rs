@@ -351,7 +351,7 @@ fn a_list_literal_still_type_checks_correctly_when_an_unrelated_private_helper_f
  {
     // Any `Ty::Infer` signature anywhere in the module routes `check`
     // through `infer_function_signatures_with_solver_all` first (see
-    // `checked_function_signatures_all`), which runs `collect_expr_constraints`
+    // `check_all`), which runs `collect_expr_constraints`
     // over every expression in the module, including this list literal.
     // That solver-side pass must stay lenient (`Ok(None)`, recurse only)
     // for list forms -- confirms it doesn't wrongly reject a valid list.
@@ -17671,7 +17671,7 @@ fn incompatible_redefinition_with_different_param_count_is_rejected() {
 
 #[test]
 fn checked_function_signatures_rejects_incompatible_redefinition() {
-    // Exercises the fast path in checked_function_signatures that calls
+    // Exercises the fast path in checked_function_signatures_all that calls
     // check_incompatible_redefinitions before trying concrete or solver.
     let hir = HirModule {
         seeded_builtin_exception_classes: false,
@@ -17846,7 +17846,7 @@ fn check_and_resolve_rejects_the_issue_402_reproduction_fixture() {
     // type), second `foo` is fully concrete and a different shape.
     // This is now rejected by the pre-resolution
     // check_incompatible_redefinitions call inside
-    // checked_function_signatures, before check_and_resolve ever
+    // checked_function_signatures_all, before check_and_resolve ever
     // builds a resolved HIR.
     let hir = HirModule {
         seeded_builtin_exception_classes: false,

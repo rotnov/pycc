@@ -847,7 +847,7 @@ pub fn build(hir: &HirModule) -> MirModule {
     }
     // Lower module statements first, in source order, so the module scope is
     // complete before any function body is lowered. This mirrors
-    // `pycc_types::check_with_signatures`'s D-041 three-pass contract:
+    // `pycc_types::check_with_signatures_all`'s D-041 three-pass contract:
     // top-level forward reads stay invalid because these statements are still
     // visited sequentially, while a function may read a global assigned after
     // its `def` because function bodies are evaluated only when called.

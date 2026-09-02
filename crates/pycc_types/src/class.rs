@@ -1590,7 +1590,7 @@ mod tests {
         // `collect_block_constraints`'s own new `AttrGet`/`MethodCall`/
         // `AttrSet` arms (D-154): the constraint solver only runs at all
         // when at least one function in the module is not fully annotated
-        // (`concrete_function_signatures` returns `None`, routing `check`
+        // (`concrete_function_environment` returns `None`, routing `check`
         // through `infer_function_signatures_with_solver_all` instead of the
         // concrete fast path) -- every other test in this module uses only
         // fully annotated methods, so none of them exercises this path.

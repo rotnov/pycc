@@ -5,7 +5,7 @@
 //! guideline in `AGENTS.md`'s "Keep source files decomposable" section.
 //! Both checks below run once per module, before any per-function
 //! `Environment`/signature-inference work, and are called from both
-//! `check` (`lib.rs`) and `check_and_resolve` (`constraints.rs`).
+//! `check_all` and `checked_function_signatures_all` (both in `module.rs`).
 
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{HirClassDef, HirItem, HirModule, Ty};
