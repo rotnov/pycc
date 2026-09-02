@@ -232,7 +232,7 @@ pub(crate) fn lower_legacy_type_alias_ann_assign(
 }
 
 /// The bound local name of an import, regardless of which `ImportBinding`
-/// variant it is -- used by `lower_checked`'s class-name-collision check
+/// variant it is -- used by `module::lower_top_level_item`'s class-name-collision check
 /// (D-068 review finding on #385) so it does not need to duplicate the
 /// match on both variants at its own call site.
 pub(crate) fn import_local_name(binding: &ImportBinding) -> &str {

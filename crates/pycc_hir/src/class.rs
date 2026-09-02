@@ -217,7 +217,8 @@ pub struct HirClassDef {
     /// `pycc_hir::exception::builtin_exception_class_defs`. Reading `None`
     /// as "user-defined" or `Some` as "user-defined" is equally wrong.
     ///
-    /// A tag is assigned by `lower_checked` to every user-declared class whose
+    /// A tag is assigned by `module::lower_all` (the per-item walk behind
+    /// `lower_checked`) to every user-declared class whose
     /// MRO reaches a builtin exception class, in a deterministic order, from
     /// the range `25..=255` — `0..=24` are reserved for the 25-member builtin
     /// hierarchy (the flat seven, the `OSError` family, and `ExceptionGroup`/
@@ -960,7 +961,7 @@ pub(crate) struct ClassAnnotationInfo {
 
 /// Projects the full class table down to the [`ClassAnnotationInfo`] slice
 /// `annotation_to_ty` consults. Both of this crate's own projection sites
-/// (`lower_checked`'s per-statement rebuild and `lower_class`'s own
+/// (`module::lower_top_level_item`'s per-statement rebuild and `lower_class`'s own
 /// `defined_classes` view) go through here, so the two agree on every flag.
 /// `items` is the module's `HirItem::Function` list accumulated so far (in
 /// source order) -- it carries the resolved `return_ty` for every already-
