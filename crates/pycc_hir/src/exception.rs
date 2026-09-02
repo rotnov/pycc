@@ -391,7 +391,7 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
 ///   `class Exception:` has replaced resolves its inherited `__init__`
 ///   against the wrong class.
 /// * It makes `HirModule::seeded_builtin_exception_classes` -- the single
-///   flag `lower_checked` records when it seeds -- an exact provenance
+///   flag `module::lower_all` records when it seeds -- an exact provenance
 ///   record. Because a module containing a user binding of any of the 25
 ///   names carries no synthetic definitions at all, "the flag is set and the
 ///   name is one of the 25" identifies precisely the compiler-produced

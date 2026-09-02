@@ -1,12 +1,12 @@
 //! Module-level `import` statements and type-alias declarations: the
-//! statement kinds `lower_checked` resolves before it walks a module's
+//! statement kinds `module::lower_all` resolves before it walks a module's
 //! remaining items (D-135 for aliases, D-136/D-137 for stdlib imports).
 //!
 //! Extracted from `lib.rs` per AGENTS.md's file-decomposition rule (issue
 //! #547, Part 2). This is a low-fan-in cohesion unit: `lower_import_stmt`,
 //! `lower_type_alias_stmt`, and `lower_legacy_type_alias_ann_assign` are
 //! each called exactly once, and `import_local_name` twice, all from
-//! `lower_checked` -- which is why `lib.rs` re-exports them `pub(crate)`
+//! `module::lower_top_level_item` -- which is why `lib.rs` re-exports them `pub(crate)`
 //! rather than making them public. The dependency runs the other way for
 //! annotations: the two alias lowerings call `annotation_to_ty`, which
 //! lives in the sibling `func` module.
@@ -232,7 +232,7 @@ pub(crate) fn lower_legacy_type_alias_ann_assign(
 }
 
 /// The bound local name of an import, regardless of which `ImportBinding`
-/// variant it is -- used by `lower_checked`'s class-name-collision check
+/// variant it is -- used by `module::lower_top_level_item`'s class-name-collision check
 /// (D-068 review finding on #385) so it does not need to duplicate the
 /// match on both variants at its own call site.
 pub(crate) fn import_local_name(binding: &ImportBinding) -> &str {

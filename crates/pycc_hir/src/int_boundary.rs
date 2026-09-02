@@ -23,8 +23,8 @@
 //! receiver + attribute name (see `crate::expr::lower_expr`'s `Expr::Call`
 //! arm), and `list`/`dict`/`set` literals, subscripts, and slices are
 //! recognized directly from the AST shape. `pycc
-//! check` itself runs only `pycc_hir::lower_checked` followed by
-//! `pycc_types::check` (see `src/main.rs`'s `check_frontend`) -- neither
+//! check` itself runs only `pycc_hir::lower_all` followed by
+//! `pycc_types::check` (see `src/frontend.rs`'s `lower_frontend`) -- neither
 //! step reaches MIR or codegen -- so a check that fires during HIR lowering
 //! is sufficient on its own to make `pycc check` catch the defect, without
 //! opening up `pycc_mir` or `pycc_codegen` at all.

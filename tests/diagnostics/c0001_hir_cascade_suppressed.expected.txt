@@ -1,0 +1,15 @@
+error[C0001]: import of module `os` is not supported yet
+ --> tests/diagnostics/c0001_hir_cascade_suppressed.py:1:1
+  |
+1 | import os
+  | ^^^^^^^^^ import of module `os` is not supported yet
+error[C0001]: a class body statement must be a method definition (`def ...`) -- no other statement kind is supported yet
+ --> tests/diagnostics/c0001_hir_cascade_suppressed.py:3:5
+  |
+3 |     x: int = 1
+  |     ^^^^^^^^^^ a class body statement must be a method definition (`def ...`) -- no other statement kind is supported yet
+error[C0001]: `*args` is not supported yet
+ --> tests/diagnostics/c0001_hir_cascade_suppressed.py:9:6
+  |
+9 | def h(*args: int) -> int:
+  |      ^^^^^^^^^^^^ `*args` is not supported yet

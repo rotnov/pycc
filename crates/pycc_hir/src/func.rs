@@ -5,7 +5,7 @@
 //! Extracted from `lib.rs` per AGENTS.md's file-decomposition rule (issue
 //! #547, Part 2). This is not a low-fan-in leaf the way `stmt`/`expr` were:
 //! `lower_function` and `lower_params` are each called once (from
-//! `lower_checked` and from `lower_function` respectively), but the three
+//! `module::lower_top_level_item` and from `lower_function` respectively), but the three
 //! `pub(crate)` helpers are reached from across the crate --
 //! `lower_return_annotation` from 3 call sites in `class.rs`,
 //! `lower_arg_list` from 8, `type_param_name` from 1, and `annotation_to_ty`
@@ -249,7 +249,7 @@ pub(crate) fn lower_return_annotation(
 }
 
 /// Resolves an annotation expression to a `Ty`. `aliases` is the D-135 type
-/// alias table (`(name, Ty)` pairs recorded by `lower_checked` for every
+/// alias table (`(name, Ty)` pairs recorded by `module::lower_all` for every
 /// `type X = ...`/legacy `X: TypeAlias = ...` statement reached so far, in
 /// source order): checked as the last resort for a bare name before falling
 /// through to the `C0001` "not supported yet" catch-all, so an alias name
@@ -332,8 +332,10 @@ pub(crate) fn annotation_to_ty(
                     .find(|(alias_name, _)| alias_name == other)
                     .map(|(_, ty)| ty.clone())
                     .ok_or_else(|| {
+                        // The message is built in `module` so #867's cascade
+                        // classifier can parse it back (D-219).
                         unsupported(
-                            format!("type annotation `{other}` is not supported yet"),
+                            crate::module::unknown_annotation_name_message(other),
                             pycc_ast::expr_range(annotation),
                         )
                     })

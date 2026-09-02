@@ -33,6 +33,37 @@ never a merge gate.
 
 ---
 
+## 2026-09-02 — A retrospective-only lesson recurred verbatim: the fix-extent rule was never promoted to the procedure that needed it
+
+What happened: the #867 deep-review round 1 named three doc comments in
+`crates/pycc_hir` that still attributed the module walk to `lower_checked`
+after it moved into `module.rs`. The fix round (`1ab2431c`) edited exactly
+those three sites; round 2 found the same class at ten more sites across the
+crate, and the whole-crate `grep` fix (`0c7946d1`) cost one extra review
+round. This is the 2026-08-29 entry below ("Review fix round swept the
+reviewer's enumerated sites, not the defective phrase") repeated by the same
+agent four days later.
+
+Root cause: the 2026-08-29 lesson lived only in this file, which `AGENTS.md`
+declares informational — "promote any rule discovered there into `AGENTS.md`,
+`docs/decisions/`, or the owning specification before relying on it as
+policy" — and nothing in `issue-implement` step 5, where the fix round is
+briefed, pointed at it. A rule that only exists in a journal the procedure
+never reads is not at the fork when the fork is reached.
+
+What fixed it: the `/harden batch` pass for #867 promoted the rule into the
+step-5 "focused fix" sentence of `.claude/skills/issue-implement/SKILL.md`
+(derive a fix's extent from a tree-wide search for the phrase or symbol,
+adjudicate every hit, record the search in the finding's `note`) and recorded
+the recurrence in
+`.harden/incidents/documentation-sweep-stops-at-the-changed-file/`.
+
+Lesson: when a retrospective entry ends in a rule an agent should follow at a
+specific step of a repository procedure, promote it into that step in the
+same change — this file is where the lesson is explained, not where it is
+enforced. A lesson that has been written here once and recurs is evidence
+the promotion was skipped, not evidence the wording was weak.
+
 ## 2026-08-31 — Read a 4893-line staged diff into my own context before realizing the D-068 reviewer should read it itself
 
 What happened: while preparing PR #860 (Part 1 of #24, formatting the

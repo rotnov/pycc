@@ -8,7 +8,7 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 |---|---|
 | `pycc build [PATH] -o OUT` | compile to a deployment artifact; debug by default, unless `--release` or a neighboring `pycc.toml`'s `opt = "release"` says otherwise (see `--release` below) |
 | `pycc run [PATH] [-- args]` | build + execute |
-| `pycc check PATH...` | frontend only: parse + HIR + types for every explicit file; reports every diagnostic the failing pass found for that file (parser fan-out since #864 Part 1, D-217; HIR and type passes still report their first until Parts 2/3 land); no codegen |
+| `pycc check PATH...` | frontend only: parse + HIR + types for every explicit file; reports every diagnostic the failing pass found for that file (parser fan-out since #864 Part 1, D-217; HIR lowering per top-level item with cascade suppression since Part 2, D-219; the type pass still reports its first until Part 3 lands); no codegen |
 | `pycc test` | run project tests compiled (pytest-style discovery, subset) |
 | `pycc explain CODE` | long-form doc for a diagnostic (`pycc explain T0021`) |
 | `pycc init [NAME]` | scaffold `pycc.toml` + `src/main.py`; refuses to overwrite an existing `pycc.toml`, non-directory `src`, or `src/main.py` (exit 2, nothing written) |
@@ -78,7 +78,10 @@ accepts multiple files in one invocation, matching the argument shape used by
 pre-commit. It checks every supplied file before exiting. Within a file, every
 diagnostic the first failing pass collected is reported, in that pass's own
 order; the first diagnostic for any input is stable across releases (byte-
-identical code, message, and span -- D-217). Directory discovery,
+identical code, message, and span -- D-217). HIR lowering collects one
+diagnostic per failing top-level item and skips that item; an item whose only
+failure is a reference to a class or type alias that itself failed to lower is
+skipped silently rather than reported as a second gap (D-219). Directory discovery,
 an omitted path meaning the current project, and `pycc.toml` project loading
 arrive with multi-file projects in v0.4. The ownership pass joins `check` when
 `pycc_own` is introduced in v0.5.
@@ -368,7 +371,8 @@ JSON format versioned (`"format_version": 1`), one object per diagnostic, one ob
 
 Report order is pass order (parser, then HIR, then types -- today only one
 pass fails per file), then that pass's own collection order; the parser's is
-ruff's discovery order, which is not always source order. No span-monotone
+ruff's discovery order, which is not always source order, and HIR lowering's
+is the source order of the failing top-level items (D-219). No span-monotone
 order is promised across a file's diagnostics (D-217).
 
 Displayed diagnostic paths are lexically normalized without filesystem
