@@ -640,7 +640,7 @@ pub(crate) fn poisonable_names(stmt: &Stmt) -> Vec<&str> {
             // relative import, an unresolvable module) takes the project arm
             // or is rejected outright, and poisons below.
             if let Some(module) = (import.level == 0)
-                .then(|| import.module.as_ref())
+                .then_some(import.module.as_ref())
                 .flatten()
                 .and_then(|module| pycc_std::resolve_module(module.as_str()))
             {
