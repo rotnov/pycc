@@ -543,22 +543,29 @@ fn statement_span(stmt: &Stmt) -> Span {
     Span::new(range.start, range.end)
 }
 
-/// The class, type-alias, or project-import names a top-level statement
-/// would bind -- the binding kinds that can be the root of an HIR cascade
-/// (D-219, P1; #898 added the import kind).
+/// The class, type-alias, or import names a top-level statement would bind
+/// -- the binding kinds that can be the root of an HIR cascade (D-219, P1;
+/// #898 added the import kind, amending D-219 rule 3 -- see D-222).
 ///
 /// `class C` -> `[C]`; `type X = ...` -> `[X]`; legacy `X: TypeAlias = ...`
-/// -> `[X]`; `from geometry import Point, Line` -> `[Point, Line]` when
-/// `geometry` is not a `pycc_std` module (a relative import, or an
-/// absolute one the driver resolves against the project), since a project
-/// import can bind a class or alias the two cascade lookups
-/// (`annotation_to_ty`'s bare-name arm and `validate_bases`) would resolve.
-/// Every other statement kind -- a stdlib import, `import m`, `def`,
-/// assignment, expression statement -- yields nothing on purpose: those
-/// lookups consult only the class table and the alias table and can never
-/// resolve a stdlib-import-, function-, or variable-bound name, so an
-/// annotation naming one fails today whether or not that binding lowered.
-/// That diagnostic is a genuine, independent gap and must stay reported.
+/// -> `[X]`.
+///
+/// An import yields names exactly when it *fails*, and then the names are
+/// the ones it would have bound locally: `from geometry import Point, Line`
+/// -> `[Point, Line]`, `import pkg.dep as d` -> `[d]`, and a rejected
+/// `from math import *` -> `math`'s whole export list. Both import arms
+/// therefore mirror `import::lower_import_stmt`'s own success conditions
+/// exactly rather than approximating them, one arm per statement kind, so
+/// a shape that lowers poisons nothing and every shape that does not
+/// poisons. An import that lowers binds a name the two cascade lookups
+/// (`annotation_to_ty`'s bare-name arm and `validate_bases`) cannot resolve
+/// anyway -- they consult only the class table and the alias table -- so a
+/// later annotation naming it fails today either way, and that diagnostic
+/// is a genuine, independent gap that must stay reported.
+///
+/// Every remaining statement kind -- `def`, assignment, expression
+/// statement -- yields nothing on purpose, for that same reason: those
+/// lookups can never resolve a function- or variable-bound name.
 /// This is deliberately narrower than
 /// `exception::expr_bound_builtin_exception_name`'s destructuring scan,
 /// which answers a different question (does the module shadow a name at
