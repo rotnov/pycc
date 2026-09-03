@@ -91,7 +91,9 @@ fn the_reproduction_builds_and_runs() {
         None,
     );
     assert_eq!(built.code, 0, "{}", built.both());
-    let output = Command::new(&binary).output().expect("the program must run");
+    let output = Command::new(&binary)
+        .output()
+        .expect("the program must run");
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
 }
 
@@ -117,7 +119,11 @@ fn an_entry_named_by_a_bare_file_name_resolves_its_siblings() {
 #[test]
 fn a_relative_import_from_a_bare_file_name_entry_names_the_current_directory() {
     let scratch = ScratchDir::new("issue_881").unwrap();
-    write(&scratch, "helper.py", "def double(x: int) -> int:\n    return x * 2\n");
+    write(
+        &scratch,
+        "helper.py",
+        "def double(x: int) -> int:\n    return x * 2\n",
+    );
     write(
         &scratch,
         "main.py",
@@ -126,7 +132,9 @@ fn a_relative_import_from_a_bare_file_name_entry_names_the_current_directory() {
     let result = run(&["check", "main.py"], Some(&scratch));
     assert_eq!(result.code, 1, "{}", result.both());
     assert!(
-        result.both().contains("attempted relative import with no known parent package"),
+        result
+            .both()
+            .contains("attempted relative import with no known parent package"),
         "{}",
         result.both()
     );
@@ -188,7 +196,11 @@ fn a_program_wide_pre_check_failure_is_reported_against_the_entry() {
     // The redefinition spans two files, so no single item owns it; the
     // driver renders it against the entry.
     let scratch = ScratchDir::new("issue_881").unwrap();
-    write(&scratch, "helper.py", "def shared(x: int) -> int:\n    return x\n");
+    write(
+        &scratch,
+        "helper.py",
+        "def shared(x: int) -> int:\n    return x\n",
+    );
     let entry = write(
         &scratch,
         "main.py",
@@ -223,7 +235,9 @@ fn a_flat_namespace_collision_names_both_files() {
     let result = check(&entry);
     assert_eq!(result.code, 1, "{}", result.both());
     assert!(
-        result.both().contains("top-level name `report` is already defined by")
+        result
+            .both()
+            .contains("top-level name `report` is already defined by")
             && result.both().contains("helper.py")
             && result.both().contains("main.py"),
         "{}",
@@ -245,12 +259,7 @@ fn json_output_carries_the_dependency_path() {
         "from helper import double\n\n\ndef main() -> None:\n    print(double(1))\n",
     );
     let result = run(
-        &[
-            "check",
-            entry.to_str().unwrap(),
-            "--error-format",
-            "json",
-        ],
+        &["check", entry.to_str().unwrap(), "--error-format", "json"],
         None,
     );
     assert_eq!(result.code, 1, "{}", result.both());
