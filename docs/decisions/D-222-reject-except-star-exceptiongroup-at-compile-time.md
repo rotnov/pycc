@@ -29,11 +29,20 @@ status: accepted
   raising a `TypeError` of its own. The choice is therefore not "match
   CPython or not" but "which honest failure mode to ship in the meantime".
 
-- Decision: reject both names at compile time from
+- Decision: reject both names, **and every user class that derives from
+  either of them**, at compile time from
   `pycc_types::exception::check_try_star_stmt` with **`C0001`** ("valid Python
-  this compiler does not implement yet"), gated on the name being an
-  *unshadowed* builtin so a module defining its own `ExceptionGroup` class
-  keeps reaching the existing user-exception-class path. `C0001` is the honest
+  this compiler does not implement yet"). The exact-name check is gated on the
+  name being an *unshadowed* builtin so a module defining its own
+  `ExceptionGroup` class keeps reaching the existing user-exception-class
+  path; the subclass check scans the resolved class's MRO, because CPython's
+  runtime `TypeError` fires for any class whose MRO reaches
+  `BaseExceptionGroup`, not only for the two group names themselves. That
+  scan needs no shadow gate of its own: it only ever sees a class carrying an
+  `exception_type_tag`, and a module that defines its own class under a
+  builtin exception name withholds the seeded builtin exception classes
+  entirely, so no class in such a module is tagged and the handler reports
+  `T0021` well before the scan runs. `C0001` is the honest
   code precisely because the program *is* valid Python that pycc declines to
   compile — this is not a claim that CPython rejects it. The diagnostic says
   so in its own message ("CPython rejects it at runtime with a `TypeError`,
@@ -44,7 +53,7 @@ status: accepted
   temporary, divergence in the same area and records it separately, per
   `AGENTS.md`'s rule against editing an accepted decision in place.
   [#903](https://github.com/rotnov/pycc/issues/903) tracks delivering the
-  real runtime `TypeError`, at which point this rejection and its two
+  real runtime `TypeError`, at which point this rejection and its three
   diagnostic fixtures are removed.
 
 - Alternatives:
@@ -68,6 +77,13 @@ status: accepted
     Rejected: CPython's runtime check covers both, and D-202 already treats
     `BaseExceptionGroup`'s hierarchy parent as `Exception`, so leaving one of
     the two accepted would be an arbitrary half-measure with no user benefit.
+  - **Reject only the two exact names, leaving subclasses accepted.**
+    Rejected for the same reason, one step further: CPython raises the
+    identical `TypeError` for `class G(ExceptionGroup)` as for
+    `ExceptionGroup` itself, so accepting `except* G:` would compile it into
+    ordinary tag matching and produce a wrong runtime answer — precisely the
+    silent over-acceptance the first alternative rejects, merely spelled with
+    one more class in between.
 
 - Consequences:
   - A program that is valid Python and would run under CPython (raising
@@ -79,10 +95,21 @@ status: accepted
   - The PEP 654 conformance matrix row stays `◐` with this recorded as a
     `core` gap pointing at #903 rather than #795, so closing #795 does not
     quietly launder the divergence into "proven".
-  - Reversing this is cheap and expected: #903 deletes one check and two
+  - Reversing this is cheap and expected: #903 deletes two checks and three
     diagnostic fixtures and replaces them with runtime-behaviour tests. No
     data format, public API, or on-disk artefact depends on the rejection.
-  - `check_try_star_stmt` now has one more per-handler-type branch to keep
+  - `check_try_star_stmt` now has two more per-handler-type branches to keep
     ordered correctly: the group-name check runs before the
     builtin/user-class resolution but only for an unshadowed builtin, so a
-    shadowing user class still resolves through the pre-existing path.
+    shadowing user class still resolves through the pre-existing path; the
+    MRO scan runs after that resolution and before `reject_own_constructor`,
+    so a group subclass that also declares its own `__init__` reports the
+    group divergence (the reason it can never be compiled) rather than the
+    constructor gap (which #703 will close).
+  - The `L0001` half of #795 is not airtight: a `return` inside an `except*`
+    clause body that sits under `if TYPE_CHECKING:` is erased by the
+    constant-fold before lowering ever sees it, so it is still accepted. That
+    is a pre-existing, general property of the fold rather than anything this
+    entry introduces — the same hole swallows a `break` in a `finally` — and
+    it is tracked separately as the TYPE_CHECKING constant-fold gap (#798's
+    area).

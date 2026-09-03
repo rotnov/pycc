@@ -319,6 +319,17 @@ fn c0001_except_star_base_exception_group_in_tuple() {
     assert_diagnostic_matches_fixture("c0001_except_star_base_exception_group_in_tuple");
 }
 
+// #795, second round (D-068 review of the first): CPython's runtime
+// `TypeError` fires for any class whose MRO reaches `BaseExceptionGroup`, so
+// a user-defined subclass of a group class is refused at compile time too.
+// Without this the compiler would silently lower `except* G:` into ordinary
+// tag matching -- the wrong-runtime-answer outcome the divergence exists to
+// prevent.
+#[test]
+fn c0001_except_star_exception_group_subclass() {
+    assert_diagnostic_matches_fixture("c0001_except_star_exception_group_subclass");
+}
+
 // Companion to the three fixtures above: with NO valid escape target
 // anywhere (no enclosing loop at all), CPython's actual fatal error for a
 // `break`/`continue` directly in a `finally` is the pre-existing "outside

@@ -543,3 +543,96 @@ fn a_shadowed_exception_group_name_does_not_reach_the_group_rejection() {
     );
     assert_eq!(diagnostic.code, "T0021");
 }
+
+#[test]
+fn a_user_subclass_of_exception_group_is_rejected() {
+    // #795, second round: the exact-name check above never sees this name,
+    // so the rejection has to come from the MRO scan. CPython raises the
+    // same `TypeError` for a subclass as for the group class itself.
+    let diagnostic = expect_error(
+        "class G(ExceptionGroup):\n\
+         \x20   pass\n\
+         \n\
+         def main() -> None:\n\
+         \x20   try:\n\
+         \x20       pass\n\
+         \x20   except* G:\n\
+         \x20       pass\n",
+    );
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic.message.contains("catching `G` with `except*`")
+            && diagnostic
+                .message
+                .contains("it derives from `ExceptionGroup`"),
+        "unexpected message: {}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn a_user_subclass_of_base_exception_group_is_rejected() {
+    // The MRO scan's second `matches!` alternative: `BaseExceptionGroup` is
+    // the group root, so a subclass of it is refused for the same reason.
+    let diagnostic = expect_error(
+        "class G(BaseExceptionGroup):\n\
+         \x20   pass\n\
+         \n\
+         def main() -> None:\n\
+         \x20   try:\n\
+         \x20       pass\n\
+         \x20   except* G:\n\
+         \x20       pass\n",
+    );
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic
+            .message
+            .contains("it derives from `BaseExceptionGroup`"),
+        "unexpected message: {}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn an_ordinary_user_exception_class_in_an_except_star_handler_is_still_accepted() {
+    // The MRO scan's `None` arm: a class that never touches the group
+    // hierarchy keeps compiling, so the new rejection cannot regress the
+    // ordinary user-exception path.
+    check_source(
+        "class AppError(Exception):\n\
+         \x20   pass\n\
+         \n\
+         def main() -> None:\n\
+         \x20   try:\n\
+         \x20       pass\n\
+         \x20   except* AppError:\n\
+         \x20       pass\n",
+    )
+    .expect("an ordinary user exception class must still be accepted");
+}
+
+#[test]
+fn a_subclass_of_a_shadowed_exception_group_class_reports_t0021() {
+    // Why the MRO scan needs no shadow gate of its own: a module that
+    // defines its own class under a builtin exception name withholds the
+    // seeded builtin exception classes entirely, so nothing in it ever gets
+    // an `exception_type_tag` and `except* G:` stops at the existing
+    // unrecognized-class path (`T0021`) long before the scan runs. A group
+    // name that does reach the scan is therefore always the builtin one.
+    let diagnostic = expect_error(
+        "class ExceptionGroup:\n\
+         \x20   def __init__(self) -> None:\n\
+         \x20       pass\n\
+         \n\
+         class G(ExceptionGroup):\n\
+         \x20   pass\n\
+         \n\
+         def main() -> None:\n\
+         \x20   try:\n\
+         \x20       pass\n\
+         \x20   except* G:\n\
+         \x20       pass\n",
+    );
+    assert_eq!(diagnostic.code, "T0021");
+}

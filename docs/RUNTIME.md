@@ -237,12 +237,20 @@ recorded (see D-222, which narrows D-202):
   block`. A loop entered *within* the clause body shields `break`/`continue`
   but never `return`, exactly as CPython's compiler behaves; at module scope
   a `return` reports the pre-existing `T0024` instead, again matching
-  CPython's own precedence.
-- `except* ExceptionGroup:` and `except* BaseExceptionGroup:` are rejected at
+  CPython's own precedence. One residual hole: a `return` guarded by `if
+  TYPE_CHECKING:` is erased by the constant-fold before lowering sees it and
+  so is still accepted -- a pre-existing, general property of that fold
+  rather than anything specific to `except*`, tracked as the TYPE_CHECKING
+  constant-fold gap (#798's area).
+- `except* ExceptionGroup:` and `except* BaseExceptionGroup:`, and any
+  `except*` handler naming a user class whose MRO reaches either of them
+  (`class G(ExceptionGroup): ...` then `except* G:`), are rejected at
   compile time with `C0001`. This is a **deliberate divergence**: CPython
   accepts both at compile time and raises `TypeError: catching ExceptionGroup
   with except* is not allowed. Use except instead.` when the handler is
-  matched. pycc has no materialized group value at match time (D-173
+  matched -- for a subclass exactly as for the group class itself, which is
+  why the compile-time refusal covers subclasses too. pycc has no
+  materialized group value at match time (D-173
   propagates a raised exception through global runtime state rather than an
   allocated instance) and no mechanism for raising a `TypeError` from inside
   generated `except*` dispatch, so the program is refused as valid-Python-not-
