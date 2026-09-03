@@ -409,7 +409,7 @@ pub struct HirModule {
     pub items: Vec<HirItem>,
     /// Compile-time-only name-to-`Ty` bindings from a `type X = <expr>`
     /// statement or a legacy `X: TypeAlias = <expr>` annotated assignment
-    /// (D-135). Populated in source order by `module::lower_all` as it walks the
+    /// (D-135). Populated in source order by `module::lower_module` as it walks the
     /// module body. Neither form lowers to any `HirItem`/`HirStmt` of its
     /// own -- the alias has zero HIR/MIR/codegen/runtime footprint, and this
     /// field exists purely so a later annotation naming the alias resolves
@@ -417,7 +417,7 @@ pub struct HirModule {
     pub type_aliases: Vec<(String, Ty)>,
     /// Compile-time-only stdlib and project import bindings (D-136/D-137,
     /// and #898 for `ImportBinding::Project`), populated in source order by
-    /// `module::lower_all` exactly like `type_aliases`. Only a
+    /// `module::lower_module` exactly like `type_aliases`. Only a
     /// module-level `import`/`from ... import ...` statement is recognized
     /// here -- one nested inside a function body or any other block still
     /// reaches plain `lower_stmt`, which has no arm for `Stmt::Import`/
@@ -427,7 +427,7 @@ pub struct HirModule {
     pub imports: Vec<ImportBinding>,
     /// Class name -> declared shape (attribute slots in first-`__init__`-
     /// assignment order, method table) (D-154, Part 1 of #375). Populated by
-    /// `class::lower_class` as `module::lower_all` walks the module body, in
+    /// `class::lower_class` as `module::lower_module` walks the module body, in
     /// source order, mirroring `type_aliases`/`imports`'s own shape: a class
     /// definition has no `HirItem`/`HirStmt` footprint of its own (unlike a
     /// top-level function) -- only its individual methods do, each lowered

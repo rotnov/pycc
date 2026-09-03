@@ -540,7 +540,7 @@ fn check_raise_operand(
 /// membership and ordinary shadow checks: `resolve_exception_tag`
 /// (`pycc_mir::exception`) resolves them by name, independent of whether the
 /// class table actually seeded a definition, so an unseeded module (see
-/// `pycc_hir::exception::module_shadows_builtin_exception_name`'s
+/// `pycc_hir::exception::shadowed_builtin_exception_name`'s
 /// all-or-nothing gate) still behaves correctly for them.
 ///
 /// For the 16-member `OSError` family (Part 2 of #543, #739) this is *not*

@@ -59,7 +59,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     })
 }
 
-/// The tables `lower_all` builds up as it walks a module's top-level
+/// The tables `lower_module` builds up as it walks a module's top-level
 /// statements, in source order. Each is a `Vec` rather than a map so the
 /// lookups every later item performs see earlier items in a stable order.
 struct ModuleState<'a> {
@@ -265,7 +265,7 @@ fn strip_imported<T>(entries: Vec<T>, imported_indices: &[usize]) -> Vec<T> {
 /// pre-#867 loop body did: type alias, legacy type alias, import, class,
 /// then function or plain statement, each with its own reverse-direction
 /// name-collision checks. On `Err` nothing was recorded into `state`, which
-/// is what lets `lower_all` skip the item as a unit.
+/// is what lets `lower_module` skip the item as a unit.
 fn lower_top_level_item<'a>(
     stmt: &'a Stmt,
     state: &mut ModuleState<'a>,
@@ -646,7 +646,7 @@ pub(crate) fn unknown_base_message(class_name: &str, base_name: &str) -> String 
 /// Classifies a failed item's diagnostic (D-219, P2): `Some(name)` when it
 /// is one of the two cascade-shaped `C0001`s -- the bare-name annotation
 /// message naming `name`, or the unknown-base message whose base is `name`
-/// -- and `None` for every other diagnostic. Only `lower_all` decides
+/// -- and `None` for every other diagnostic. Only `lower_module` decides
 /// whether `name` is actually poisoned; a `Some` for an un-poisoned name is
 /// an ordinary, reported gap.
 pub(crate) fn cascade_name(diagnostic: &Diagnostic) -> Option<&str> {
