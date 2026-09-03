@@ -8,6 +8,7 @@ mod hir_module;
 mod import;
 mod int_boundary;
 mod module;
+mod program;
 mod stmt;
 mod typecheck;
 
@@ -21,11 +22,17 @@ pub use exception::{
 pub(crate) use func::{
     annotation_to_ty, lower_arg_list, lower_function, lower_return_annotation, type_param_name,
 };
-pub use hir_module::{HirModule, ImportBinding, killed_names};
+pub use hir_module::{
+    HirModule, ImportBinding, ProjectBindingKind, killed_names, top_level_bound_names,
+};
+pub use import::{
+    ProjectImportRequest, ResolvedImport, ResolvedImports, ResolvedModule, project_import_requests,
+};
 pub(crate) use import::{
     import_local_name, lower_import_stmt, lower_legacy_type_alias_ann_assign, lower_type_alias_stmt,
 };
-pub use module::{lower_all, lower_checked};
+pub use module::{LoweredModule, lower_all, lower_checked, lower_module};
+pub use program::{LinkInput, finalize, link};
 pub use typecheck::{
     ExtractClassNamesError, eval_isinstance_single, eval_issubclass_single, extract_class_names,
     is_abc_base_name, is_builtin_type_name, is_enum_base_name, is_protocol_base_name,

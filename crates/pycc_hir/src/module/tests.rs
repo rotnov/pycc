@@ -333,7 +333,11 @@ fn poisonable_name_per_statement_kind() {
     ];
     for (source, expected) in cases {
         let module = parse(source);
-        assert_eq!(poisonable_name(&module.body[0]), *expected, "{source}");
+        assert_eq!(
+            poisonable_names(&module.body[0]).first().copied(),
+            *expected,
+            "{source}"
+        );
     }
 }
 

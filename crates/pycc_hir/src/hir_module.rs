@@ -349,6 +349,59 @@ pub enum ImportBinding {
         module: pycc_std::StdModule,
         symbol: pycc_std::StdSymbol,
     },
+    /// `from geometry import Point` where `geometry` is a project file the
+    /// driver resolved and lowered first (#898, D-222): binds `local_name`
+    /// to the top-level definition of the same name in `module_path`, the
+    /// display path of the module that *defines* it (never of a module that
+    /// merely re-exports it -- a re-export chain is collapsed at binding
+    /// time, so one hop always reaches the definition). Like the two
+    /// stdlib variants it has zero runtime footprint: after
+    /// `program::link` concatenates every module into one program the
+    /// definition itself is in scope under the same name, so the binding
+    /// only records provenance for later re-exports and diagnostics.
+    Project {
+        local_name: String,
+        module_path: String,
+        kind: ProjectBindingKind,
+    },
+}
+
+/// Which kind of top-level definition an [`ImportBinding::Project`] names
+/// in its origin module -- the four binding kinds a module's top level can
+/// hold in this compiler's flat namespace model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectBindingKind {
+    /// A `class` statement. The importing module's lowering also receives a
+    /// clone of the class and its whole MRO so annotations and bases can
+    /// resolve it; `module::lower_module` strips those clones again before
+    /// building its `HirModule`, so the linked program defines each class
+    /// exactly once.
+    Class,
+    /// A top-level `def`.
+    Function,
+    /// A name bound by a top-level statement (`X = 1`, a loop variable, a
+    /// walrus target, ...) -- exactly the set `top_level_bound_names`
+    /// reports.
+    Variable,
+    /// A `type X = ...` alias or its legacy `X: TypeAlias = ...` spelling;
+    /// the alias table entry is copied into the importer too.
+    TypeAlias,
+}
+
+/// Every bare name a module's top-level statements bind at runtime, in no
+/// particular order -- the `killed_names` walk applied to the module's
+/// `HirItem::TopLevelStmt`s only (a top-level `def` is a function, not a
+/// variable, and is looked up separately by `import::lower_import_stmt`).
+/// This is the `ProjectBindingKind::Variable` lookup table for a project
+/// import (#898).
+pub fn top_level_bound_names(items: &[HirItem]) -> HashSet<String> {
+    let mut bound = HashSet::new();
+    for item in items {
+        if let HirItem::TopLevelStmt(stmt) = item {
+            collect_killed_names(std::slice::from_ref(stmt), &mut bound);
+        }
+    }
+    bound
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -362,8 +415,9 @@ pub struct HirModule {
     /// field exists purely so a later annotation naming the alias resolves
     /// to the same `Ty` (see `annotation_to_ty`'s alias-table lookup).
     pub type_aliases: Vec<(String, Ty)>,
-    /// Compile-time-only stdlib import bindings (D-136/D-137), populated in
-    /// source order by `module::lower_all` exactly like `type_aliases`. Only a
+    /// Compile-time-only stdlib and project import bindings (D-136/D-137,
+    /// and #898 for `ImportBinding::Project`), populated in source order by
+    /// `module::lower_all` exactly like `type_aliases`. Only a
     /// module-level `import`/`from ... import ...` statement is recognized
     /// here -- one nested inside a function body or any other block still
     /// reaches plain `lower_stmt`, which has no arm for `Stmt::Import`/
@@ -382,12 +436,12 @@ pub struct HirModule {
     /// the reasoning for not adding a dedicated `HirItem::ClassDef` variant).
     pub class_defs: Vec<(String, HirClassDef)>,
     /// Provenance for the builtin exception hierarchy (Part 1 of #541,
-    /// D-188): `true` exactly when *this* lowering pass seeded the seven
+    /// D-188): `true` exactly when *this* lowering pass seeded the 25
     /// `BUILTIN_EXCEPTION_CLASSES` entries into `class_defs`, and `false`
     /// for every module whose classes are all user-authored.
     ///
     /// Seeding is all-or-nothing and its shadow gate guarantees no user
-    /// top-level binding of any of the seven names survives alongside it,
+    /// top-level binding of any of the 25 names survives alongside it,
     /// so this single flag plus `is_builtin_exception_class` identifies the
     /// synthetic entries exactly -- see `pycc_types`'s `bind_classes`.
     /// Provenance is recorded here rather than re-derived downstream
