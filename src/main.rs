@@ -1,5 +1,6 @@
 mod cli;
 mod frontend;
+mod modules;
 mod project_config;
 mod source;
 
@@ -188,7 +189,7 @@ fn check_paths(paths: &[std::path::PathBuf], error_format: ErrorFormat) -> ExitC
     let mut exit_code = 0;
     for path in paths {
         if let Err(failure) = check_frontend(path) {
-            exit_code = exit_code.max(report_check_failure(path, failure, error_format));
+            exit_code = exit_code.max(report_check_failure(failure, error_format));
         }
     }
     ExitCode::from(exit_code)
@@ -256,8 +257,8 @@ fn try_build(
     release: bool,
     obj_path: &Path,
 ) -> Result<(), ExitCode> {
-    let typed_hir = resolve_frontend(path)
-        .map_err(|failure| ExitCode::from(report_build_failure(path, failure)))?;
+    let typed_hir =
+        resolve_frontend(path).map_err(|failure| ExitCode::from(report_build_failure(failure)))?;
     let mir = pycc_mir::build(&typed_hir);
 
     pycc_codegen::compile_to_object(&mir, obj_path, target, release).map_err(|e| {

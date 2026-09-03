@@ -205,7 +205,7 @@ fn concrete_fast_path_preserves_solver_first_diagnostic_selection() {
     let fast_path_all =
         crate::module::checked_function_signatures_all(&hir, &local_names).unwrap_err();
     assert_eq!(fast_path_all.len(), 1);
-    assert_eq!(fast_path_all[0].message, solver_first.message);
+    assert_eq!(fast_path_all[0].1.message, solver_first.message);
 }
 
 #[test]

@@ -118,35 +118,38 @@ fn every_cascade_of_a_skipped_class_is_silent_and_transitive() {
 
 #[test]
 fn non_cascade_shapes_after_a_skipped_import_stay_reported() {
-    // `os` is import-bound, so it is never poisonable (correction 7): the
-    // bare annotation is a genuine gap that exists with or without the
-    // import, the attribute annotation fails on its own shape, and the
-    // value-position reference is not an HIR lookup at all.
+    // The rejected `import os` poisons `os`, so the bare annotation `p: os`
+    // is suppressed as a cascade. This supersedes "correction 7", which read
+    // the question as "would `p: os` still be an error once `import os` is
+    // supported?" (yes) rather than the question poisoning actually asks:
+    // "is the message we print caused by the earlier failure?". `unknown
+    // annotation name `os`` is produced *only* because nothing bound `os`,
+    // and it is misleading once the import gap is already reported at 1:1;
+    // a future `import os` would fail `p: os` through a different path with
+    // a correctly worded message. What survives is the boundary of the
+    // mechanism: the attribute annotation fails on its own shape rather than
+    // on a name lookup, and the value-position `os.getpid()` is not an HIR
+    // name lookup at all -- neither is silenced by the poisoned name.
     let source = "import os\n\
                   def h(p: os) -> int:\n    return 1\n\
                   def h2(p: os.PathLike) -> int:\n    return 1\n\
                   def h3() -> int:\n    return os.getpid()\n";
     let diagnostics = lower_all_err(source);
-    assert_eq!(diagnostics.len(), 3, "{diagnostics:#?}");
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
     assert_c0001(
         &diagnostics[0],
         IMPORT_OS_GAP,
         span_of(source, "import os", 0),
     );
-    assert_c0001(
-        &diagnostics[1],
-        &unknown_annotation_name_message("os"),
-        span_of(source, "os", 1),
-    );
-    assert_eq!(diagnostics[2].code, "C0001");
+    assert_eq!(diagnostics[1].code, "C0001");
     assert!(
-        diagnostics[2]
+        diagnostics[1]
             .message
             .starts_with("only a bare name type annotation is supported so far"),
         "{}",
-        diagnostics[2].message
+        diagnostics[1].message
     );
-    assert_eq!(diagnostics[2].span, Some(span_of(source, "os.PathLike", 0)));
+    assert_eq!(diagnostics[1].span, Some(span_of(source, "os.PathLike", 0)));
 }
 
 #[test]
@@ -324,7 +327,14 @@ fn poisonable_name_per_statement_kind() {
         ("X: Final = 1\n", None),
         // Annotation is not a `Name`.
         ("X: list[int] = []\n", None),
-        ("import os\n", None),
+        // A plain `import` binds a name only when it lowers: exactly one
+        // alias, no `asname`, and a module `pycc_std` resolves.
+        ("import math\n", None),
+        ("import os\n", Some("os")),
+        ("import math as m\n", Some("m")),
+        ("import pkg.dep\n", Some("pkg")),
+        ("import pkg.dep as d\n", Some("d")),
+        ("import math, os\n", Some("math")),
         ("from math import sqrt\n", None),
         ("def f() -> int:\n    return 1\n", None),
         ("x = 1\n", None),
@@ -333,7 +343,11 @@ fn poisonable_name_per_statement_kind() {
     ];
     for (source, expected) in cases {
         let module = parse(source);
-        assert_eq!(poisonable_name(&module.body[0]), *expected, "{source}");
+        assert_eq!(
+            poisonable_names(&module.body[0]).first().copied(),
+            *expected,
+            "{source}"
+        );
     }
 }
 
@@ -444,4 +458,287 @@ fn a_clean_module_lowers_through_lower_all() {
     let hir = lower_all(&module).expect("module must lower");
     assert_eq!(hir.class_defs.len(), 1);
     assert_eq!(hir.class_defs[0].0, "A");
+}
+
+/// Lowers `source` with every project import answered by the same
+/// driver-supplied rejection, the way `src/modules.rs` answers an import
+/// that names no file (`T0021`) or closes a cycle (`E0108`).
+fn lower_with_not_found(source: &str, code: &'static str, message: &str) -> Vec<Diagnostic> {
+    let parsed = parse(source);
+    let mut resolved = ResolvedImports::default();
+    for request in crate::project_import_requests(&parsed) {
+        resolved.insert(
+            request.span,
+            crate::ResolvedImport::NotFound {
+                code,
+                message: message.to_string(),
+            },
+        );
+    }
+    lower_module(&parsed, &resolved).expect_err("fixture must fail to lower")
+}
+
+#[test]
+fn a_rejected_project_import_poisons_the_names_it_would_have_bound() {
+    // #898: the driver's own rejection reaches the walk as the import
+    // item's error, so D-219's poisoning applies to it exactly as to any
+    // other skipped item -- the later annotation is a cascade, not a gap.
+    let source = "from .dep import Point\n\
+                  def use(p: Point) -> int:\n    return 1\n\
+                  x: Point = Point()\n";
+    let message = "no module named `.dep` in `.`";
+    let diagnostics = lower_with_not_found(source, "T0021", message);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "T0021");
+    assert_eq!(diagnostics[0].message, message);
+    assert_eq!(
+        diagnostics[0].span,
+        Some(span_of(source, "from .dep import Point", 0))
+    );
+}
+
+const CLASS_BODY: &str = "    def __init__(self) -> None:\n        self.v = 1\n";
+
+#[test]
+fn a_rejected_plain_import_poisons_its_alias() {
+    // `import x as y` is rejected outright, and the name it would have
+    // bound is `y`, so a later `y` is a cascade while an unrelated name is
+    // still reported.
+    let source = format!("import pkg.dep as d\nclass Foo(d):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        diagnostics[0].message,
+        "`import ... as ...` aliasing is not supported yet"
+    );
+
+    let source = format!("import pkg.dep as d\nclass Foo(pkg):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert!(
+        diagnostics[1]
+            .message
+            .contains("inherits from unknown class `pkg`"),
+        "unexpected second diagnostic: {:#?}",
+        diagnostics[1]
+    );
+}
+
+#[test]
+fn a_rejected_dotted_import_poisons_only_its_first_segment() {
+    // `import pkg.dep` binds `pkg`, not `pkg.dep`, so poisoning the whole
+    // dotted name would leave the real cascade unsuppressed.
+    let source = format!("import pkg.dep\nclass Foo(pkg):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        diagnostics[0].message,
+        "import of module `pkg.dep` is not supported yet"
+    );
+}
+
+#[test]
+fn a_rejected_stdlib_import_poisons_the_name_it_would_have_bound() {
+    let source = format!("import os\nclass Foo(os):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].message, IMPORT_OS_GAP);
+}
+
+#[test]
+fn a_multi_name_import_poisons_every_name_it_would_have_bound() {
+    let source = format!(
+        "import pkg.dep, other\nclass Foo(pkg):\n{CLASS_BODY}class Bar(other):\n{CLASS_BODY}"
+    );
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        diagnostics[0].message,
+        "only a single module per `import` statement is supported so far"
+    );
+}
+
+#[test]
+fn a_successful_stdlib_import_poisons_nothing() {
+    // `import math` lowers, so it suppresses nothing: a later use of the
+    // bound name as a class base is a genuine diagnostic, not a cascade.
+    let source = format!("import math\nclass Foo(math):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("inherits from unknown class `math`"),
+        "unexpected diagnostic: {:#?}",
+        diagnostics[0]
+    );
+}
+
+#[test]
+fn a_rejected_project_import_poisons_the_alias_not_the_source_name() {
+    // The name a `from ... import x as y` statement binds locally is `y`,
+    // so `y` is the cascade to suppress and `x` stays a genuine unknown
+    // name. The sibling test above only covers `asname == name`, where the
+    // two spellings coincide and cannot discriminate the two.
+    let message = "no module named `.dep` in `.`";
+
+    let aliased = "from .dep import helper as h\n\
+                   class Foo(h):\n    def __init__(self) -> None:\n        self.v = 1\n";
+    let diagnostics = lower_with_not_found(aliased, "T0021", message);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "T0021");
+
+    let source_name = "from .dep import helper as h\n\
+                       class Bar(helper):\n    def __init__(self) -> None:\n        self.v = 1\n";
+    let diagnostics = lower_with_not_found(source_name, "T0021", message);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "T0021");
+    assert!(
+        diagnostics[1]
+            .message
+            .contains("inherits from unknown class `helper`"),
+        "unexpected second diagnostic: {:#?}",
+        diagnostics[1]
+    );
+}
+
+#[test]
+fn an_import_cycle_poisons_transitively() {
+    let source = "from dep import Base\n\
+                  class Sub(Base):\n    def __init__(self) -> None:\n        self.v = 1\n\
+                  def use(p: Sub) -> int:\n    return 1\n";
+    let message = "import cycle: `a.py` -> `b.py` -> `a.py`";
+    let diagnostics = lower_with_not_found(source, "E0108", message);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "E0108");
+    assert_eq!(diagnostics[0].message, message);
+}
+
+#[test]
+fn a_rejected_stdlib_from_import_poisons_the_names_it_would_have_bound() {
+    // A stdlib `from` import fails exactly as a project one can, so it
+    // poisons the same way: the statement below binds nothing, and the
+    // later `bogus` is a cascade of the `C0002` above it.
+    let source = format!("from math import bogus\nclass Foo(bogus):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "C0002");
+
+    let annotated = "from math import bogus\ndef f(p: bogus) -> int:\n    return 1\n";
+    let diagnostics = lower_all_err(annotated);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "C0002");
+}
+
+#[test]
+fn an_aliased_stdlib_from_import_poisons_its_asname_only() {
+    // `from math import sqrt as s` binds `s`, so a later `s` is the
+    // cascade and a later `sqrt` is a genuine unknown name.
+    let source = format!("from math import sqrt as s\nclass Foo(s):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        diagnostics[0].message,
+        "`from ... import x as y` aliasing is not supported yet"
+    );
+
+    let source = format!("from math import sqrt as s\nclass Bar(sqrt):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert!(
+        diagnostics[1]
+            .message
+            .contains("inherits from unknown class `sqrt`"),
+        "unexpected second diagnostic: {:#?}",
+        diagnostics[1]
+    );
+}
+
+#[test]
+fn a_wildcard_stdlib_from_import_poisons_the_modules_whole_export_list() {
+    // `from math import *` would have bound every name `math` exports, so
+    // each of them is a cascade of the rejection -- while a name the module
+    // does not export is still reported.
+    let source = format!("from math import *\nclass Foo(sqrt):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        diagnostics[0].message,
+        "`from ... import *` (wildcard import) is not supported yet"
+    );
+
+    let source = format!("from math import *\nclass Bar(nope):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert!(
+        diagnostics[1]
+            .message
+            .contains("inherits from unknown class `nope`"),
+        "unexpected second diagnostic: {:#?}",
+        diagnostics[1]
+    );
+}
+
+#[test]
+fn a_successful_stdlib_from_import_poisons_nothing() {
+    // The import lowers, so `sqrt` is bound -- it is simply not usable as a
+    // base class, and that diagnostic is genuine rather than a cascade.
+    let source = format!("from math import sqrt\nclass Foo(sqrt):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("inherits from unknown class `sqrt`"),
+        "unexpected diagnostic: {:#?}",
+        diagnostics[0]
+    );
+}
+
+/// Every import shape whose lowering outcome is decidable without a
+/// project resolver, one row per rejection branch of
+/// `import::lower_import_stmt` plus the accepting shapes around them.
+/// `#898`'s review loop found this arm-vs-arm mirroring broken three
+/// separate times -- once per repair round, each fix scoped to the single
+/// site just reported -- so the invariant is asserted over a corpus rather
+/// than one shape at a time. A new rejection branch added to
+/// `lower_import_stmt` without a matching `poisonable_names` arm fails
+/// here as soon as its shape joins this list.
+const IMPORT_SHAPES: &[&str] = &[
+    // `Stmt::Import`: accepted, then one row per rejection branch.
+    "import math\n",
+    "import enum\n",
+    "import os\n",             // module `pycc_std` does not resolve
+    "import pkg.dep\n",        // dotted, unresolvable
+    "import math as m\n",      // `asname`
+    "import pkg.dep as d\n",   // `asname`, dotted
+    "import math, enum\n",     // more than one alias
+    "import pkg.dep, other\n", // more than one alias, unresolvable
+    // `Stmt::ImportFrom`, stdlib arm: accepted, then its rejection branches.
+    "from math import sqrt\n",
+    "from math import sqrt, pi\n",
+    "from math import bogus\n",       // not a registered symbol
+    "from math import sqrt, bogus\n", // one of several is not
+    "from math import sqrt as s\n",   // `asname`
+    "from math import *\n",           // wildcard
+    "from os import path\n",          // module `pycc_std` does not resolve
+];
+
+#[test]
+fn a_failing_import_poisons_and_a_lowering_one_does_not() {
+    for source in IMPORT_SHAPES {
+        let module = parse(source);
+        let statement = &module.body[0];
+        let poisoned = poisonable_names(statement);
+        let lowered = lower_all(&module).is_ok();
+        assert_eq!(
+            lowered,
+            poisoned.is_empty(),
+            "`{}` lowers={lowered} but poisons {poisoned:?} -- \
+             `poisonable_names` must mirror `lower_import_stmt`'s success \
+             condition exactly: a shape that lowers poisons nothing, and \
+             every shape that fails poisons what it would have bound",
+            source.trim_end()
+        );
+    }
 }

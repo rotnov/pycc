@@ -25,7 +25,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0001` | error | public function missing annotation |
 | `T0002` | error | `Any` outside interop boundary |
 | `T0003` | error | untyped empty container needs annotation |
-| `T0021` | error | name resolution (including an unbound local), operand, call, or inference type mismatch |
+| `T0021` | error | name resolution (including an unbound local), operand, call, or inference type mismatch; also the project-import failures CPython itself rejects (D-222): a name the imported module does not define, a relative import with no parent package or climbing above the top-level package, and a relative target that resolves to no module |
 | `T0022` | error | return type mismatch |
 | `T0023` | error | incompatible assignment |
 | `T0024` | error | `return` outside a function |
@@ -65,7 +65,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `E0105` | error | metaclass with non-static side effects |
 | `E0106` | warning→error | `__del__` relies on refcount timing |
 | `E0107` | error | `sys.getrefcount` unavailable |
-| `E0108` | error | import cycle in top-level init |
+| `E0108` | error | import cycle in top-level init, reported as the chain of files that closes it (`import cycle: `a.py` -> `b.py` -> `a.py``), emitted by the driver's project-module loader since #898/D-222 |
 | `I0401` | error | untyped value leaks across interop boundary |
 | `I0402` | error | CPython-backed direct import root rejected by the effective v0.7 `allowlist` or `deny` policy (planned; not emitted by the current compiler) |
 | `W1001` | warning | unreachable code |
@@ -88,6 +88,19 @@ primary span and a message that names the rejected construct in Python terms
 callee is a call expression`); a message never renders an AST node's Rust
 `Debug` form, and `tests/diagnostics_test.rs` scans every `.expected.txt`
 fixture for the `NodeIndex(` marker such a dump would carry (issue #890).
+It also covers the project-import shapes #898/D-222 recognizes but does not
+implement yet: a bare `import <project module>` and a `from pkg import
+<submodule>` (both bind a module namespace -- ``module namespace bindings
+(`import geometry`) are not supported yet``), a PEP 420 namespace package as
+an import's *terminal* segment (``namespace package `nspkg` (a directory
+without `__init__.py`) is not supported yet``; an intermediate namespace
+segment is fine), and a top-level name two linked modules both define
+(``top-level name `helper` is already defined by `colA.py`; a separate
+namespace per module is not supported yet``, lifted by Part 3 of #881). A
+program that seeds the builtin exception classes in one module while another
+shadows one of their names is rejected the same way. An import failure
+CPython itself would raise on is `T0021`, not `C0001`.
+
 `pycc_types` also uses it for calls to known Python 3.14
 callable builtins that this compiler version does not implement (e.g.
 `ValueError("x")`, `Exception("msg")`, `int("5")`, `range(10)` as a

@@ -9,6 +9,14 @@
 //! `lower_all` and `lower_checked` so the `pycc_hir::lower_checked` path is
 //! unchanged.
 //!
+//! #898 (D-222) splits the walk from the program-level phases that used to
+//! follow it: `lower_module` is the per-module walk (against the driver's
+//! `ResolvedImports` answers for the module's project imports), and
+//! `program::link` + `program::finalize` combine any number of lowered
+//! modules into one program and run the post-loop phases (exception type
+//! tags, `Exception.__init__`). `lower_all` is the single-file composition
+//! of the two and is byte-identical to what it produced before the split.
+//!
 //! Part 2 of #864 (#867, D-219): the walk collects one diagnostic per
 //! failing top-level item instead of stopping at the first. A failing item
 //! is skipped as a unit -- a `def` aborts only that function, a failing
@@ -17,16 +25,15 @@
 //! than independent gaps: a bare-name annotation that names a class or
 //! type alias which failed to lower, and a base-class reference to one.
 //! Those are suppressed silently through the "poisoned bindings" set kept by
-//! `lower_all` (see `poisonable_name` and `cascade_name`); everything else
+//! `lower_module` (see `poisonable_names` and `cascade_name`); everything else
 //! is reported. HIR failures still stop the pipeline before the type
 //! checker (`src/frontend.rs`), so no partial module is ever type-checked.
 
+use crate::import::ResolvedImports;
 use crate::{
-    FIRST_USER_EXCEPTION_TYPE_TAG, HirClassDef, HirItem, HirModule, ImportBinding,
-    MAX_USER_EXCEPTION_CLASSES, Ty, builtin_exception_class_defs, builtin_exception_init_item,
-    class, exception, import_local_name, is_builtin_exception_class, lower_function,
-    lower_import_stmt, lower_legacy_type_alias_ann_assign, lower_type_alias_stmt, stmt,
-    unsupported,
+    HirClassDef, HirItem, HirModule, ImportBinding, Ty, builtin_exception_class_defs, class,
+    exception, import_local_name, killed_names, lower_function, lower_import_stmt,
+    lower_legacy_type_alias_ann_assign, lower_type_alias_stmt, program, stmt, unsupported,
 };
 use pycc_ast::{Expr, ModModule, Stmt};
 use pycc_diag::{Diagnostic, Span};
@@ -52,7 +59,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     })
 }
 
-/// The tables `lower_all` builds up as it walks a module's top-level
+/// The tables `lower_module` builds up as it walks a module's top-level
 /// statements, in source order. Each is a `Vec` rather than a map so the
 /// lookups every later item performs see earlier items in a stable order.
 struct ModuleState<'a> {
@@ -68,11 +75,50 @@ struct ModuleState<'a> {
     // already handles bases it cannot introspect elsewhere.
     class_asts: Vec<(String, &'a pycc_ast::StmtClassDef)>,
     items: Vec<HirItem>,
+    // #898: positions in `class_defs`/`aliases` that a project import
+    // copied in from another module so this module's annotations and
+    // bases can resolve them. Stripped again before the `HirModule` is
+    // built: the linked program defines each class and alias exactly once,
+    // in the module that authored it.
+    imported_class_indices: Vec<usize>,
+    imported_alias_indices: Vec<usize>,
+    // #898: every top-level definition this module makes, with its span,
+    // so `program::link` can report a cross-module name collision at the
+    // later definition. Names may repeat (a variable rebound twice).
+    definition_spans: Vec<(String, Span)>,
+}
+
+/// One module's lowering, before `program::link`/`program::finalize`
+/// (#898). `shadowed_builtin_exception_name` is the first builtin exception
+/// name this module's top level binds, if any -- the input to `link`'s
+/// cross-module seeding check, since a module that shadows one of the 25
+/// names is never seeded itself but cannot be linked with a module that
+/// was. `definition_spans` feeds `link`'s collision diagnostics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoweredModule {
+    pub hir: HirModule,
+    pub shadowed_builtin_exception_name: Option<String>,
+    pub definition_spans: Vec<(String, Span)>,
 }
 
 /// Lowers every top-level item of a parsed module, collecting one
 /// diagnostic per failing item (in source order) and skipping that item;
-/// the `Err` is never empty (D-219, Part 2 of #864).
+/// the `Err` is never empty (D-219, Part 2 of #864). The single-file
+/// entry: exactly `lower_module` with no project imports answered,
+/// followed by `program::finalize` -- the same phases in the same order as
+/// before #898, so the result is byte-identical.
+pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
+    let lowered = lower_module(module, &ResolvedImports::default())?;
+    program::finalize(lowered.hir)
+}
+
+/// The per-module walk (#898): lowers every top-level item against the
+/// driver's answers for the module's project imports, collecting one
+/// diagnostic per failing item (in source order) and skipping that item;
+/// the `Err` is never empty (D-219). The result still needs
+/// `program::link` (even for a single module) and `program::finalize`
+/// before it is a complete program: the exception type tags and the
+/// synthetic `Exception.__init__` are program-wide and assigned there.
 ///
 /// Type aliases (D-135) are resolved in a single left-to-right pass: a
 /// `type X = <expr>` or legacy `X: TypeAlias = <expr>` statement is
@@ -85,26 +131,30 @@ struct ModuleState<'a> {
 ///
 /// Cascade suppression ("poisoned bindings", D-219): every item is lowered
 /// first and its failure classified afterwards. When an item fails, the
-/// class or type-alias name it would have bound (`poisonable_name`) is
-/// recorded as poisoned; when a later item fails with one of the two
-/// cascade-shaped `C0001`s (`cascade_name`) naming a poisoned name, that
-/// item is skipped *silently* -- no diagnostic of any kind -- and its own
-/// poisonable name is recorded too, so `class B(A)` after a skipped `A`
-/// silences a following `class C(B)`. A later class or alias that binds a
-/// poisoned name and lowers successfully un-poisons it. Nothing before the
-/// first failing item is ever skipped, and that item's diagnostic is pushed
-/// unconditionally (the set is still empty), so the first collected
-/// diagnostic is byte-identical to the pre-#867 single diagnostic (D-217
-/// rule 2). The post-loop phases (rotating the seeded exception classes to
-/// the back, assigning exception type tags, seeding `Exception.__init__`)
-/// run only when nothing was collected.
-pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
+/// class, type-alias, or project-import names it would have bound
+/// (`poisonable_names`) are recorded as poisoned; when a later item fails
+/// with one of the two cascade-shaped `C0001`s (`cascade_name`) naming a
+/// poisoned name, that item is skipped *silently* -- no diagnostic of any
+/// kind -- and its own poisonable names are recorded too, so `class B(A)`
+/// after a skipped `A` silences a following `class C(B)`. A later item
+/// that binds a poisoned name and lowers successfully un-poisons it.
+/// Nothing before the first failing item is ever skipped, and that item's
+/// diagnostic is pushed unconditionally (the set is still empty), so the
+/// first collected diagnostic is byte-identical to the pre-#867 single
+/// diagnostic (D-217 rule 2).
+pub fn lower_module(
+    module: &ModModule,
+    resolved: &ResolvedImports<'_>,
+) -> Result<LoweredModule, Vec<Diagnostic>> {
     let mut state = ModuleState {
         aliases: Vec::new(),
         imports: Vec::new(),
         class_defs: Vec::new(),
         class_asts: Vec::new(),
         items: Vec::with_capacity(module.body.len()),
+        imported_class_indices: Vec::new(),
+        imported_alias_indices: Vec::new(),
+        definition_spans: Vec::new(),
     };
     // Part 1 of #541 (extending D-173): give the builtin exception
     // hierarchy a real presence in the class table, seeded *before* any
@@ -112,21 +162,22 @@ pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
     // (`class MyError(ValueError):`) exactly as it inherits from a user
     // base. Two gates, both of which must pass:
     //
-    // * The module must actually *reference* one of the seven names. Every
+    // * The module must actually *reference* one of the 25 names. Every
     //   entry in `class_defs` costs the per-item work below (the projected
     //   class slice, the name-collision checks) and the per-function class
     //   binding in `pycc_types`, and a module that never names a builtin
     //   exception cannot observe the difference -- see
     //   `exception::module_references_builtin_exception_name`.
-    // * The module's own top level must not *bind* any of the seven names.
+    // * The module's own top level must not *bind* any of the 25 names.
     //   That gate is all-or-nothing, so every existing name-collision check
     //   below applies to the synthetic definitions with no exemption -- see
-    //   `exception::module_shadows_builtin_exception_name`. Both gates are
+    //   `exception::shadowed_builtin_exception_name`. Both gates are
     //   whole-module AST scans decided here, before the loop, so a
     //   shadowing class that later fails to lower still counts as a shadow.
+    let shadowed_builtin_exception_name = exception::shadowed_builtin_exception_name(module);
     let seeded_builtin_exception_classes =
         exception::module_references_builtin_exception_name(module)
-            && !exception::module_shadows_builtin_exception_name(module);
+            && shadowed_builtin_exception_name.is_none();
     if seeded_builtin_exception_classes {
         state.class_defs.extend(builtin_exception_class_defs());
     }
@@ -139,12 +190,12 @@ pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
     // Small and searched linearly; insertion order keeps tests deterministic.
     let mut poisoned: Vec<String> = Vec::new();
     for stmt in &module.body {
-        match lower_top_level_item(stmt, &mut state) {
+        match lower_top_level_item(stmt, &mut state, resolved) {
             Ok(()) => {
-                // P5: a class or alias that binds a poisoned name and lowers
+                // P5: an item that binds a poisoned name and lowers
                 // un-poisons it. `retain`, never `position` + `remove`, so a
                 // duplicate could never survive even if one were inserted.
-                if let Some(name) = poisonable_name(stmt) {
+                for name in poisonable_names(stmt) {
                     poisoned.retain(|poisoned_name| poisoned_name != name);
                 }
             }
@@ -158,12 +209,12 @@ pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
                     diagnostics.push(diagnostic);
                 }
                 // P1: whatever the reason, the item bound nothing, so the
-                // name it would have bound is now poisoned (transitively for
-                // a cascade skip). Insert only if absent.
-                if let Some(name) = poisonable_name(stmt)
-                    && !poisoned.iter().any(|poisoned_name| poisoned_name == name)
-                {
-                    poisoned.push(name.to_string());
+                // names it would have bound are now poisoned (transitively
+                // for a cascade skip). Insert only if absent.
+                for name in poisonable_names(stmt) {
+                    if !poisoned.iter().any(|poisoned_name| poisoned_name == name) {
+                        poisoned.push(name.to_string());
+                    }
                 }
             }
         }
@@ -174,86 +225,52 @@ pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
     let ModuleState {
         aliases,
         imports,
-        mut class_defs,
-        class_asts: _,
-        mut items,
-    } = state;
-    class_defs.rotate_left(synthetic_class_count);
-    let user_class_count = class_defs.len() - synthetic_class_count;
-    let mut any_user_exception_class = false;
-    if synthetic_class_count > 0 {
-        // Part 2 of #541 (D-189): assign each raisable user class its runtime
-        // exception type tag here, in source order, so every downstream
-        // consumer (`pycc_types`, `pycc_mir`, `pycc_codegen`) reads the same
-        // number for the same class without re-deriving it. Source order is
-        // the only ordering available that is stable across runs -- a hash
-        // map's iteration order is not (risk R3 of this issue's plan).
-        //
-        // A class is raisable when its MRO reaches one of the seeded builtin
-        // exception classes. `synthetic_class_count > 0` is exactly
-        // `seeded_builtin_exception_classes`, so this branch never mistakes a
-        // user class named `Exception` for the builtin one.
-        let mut next_tag: u16 = u16::from(FIRST_USER_EXCEPTION_TYPE_TAG);
-        for (_, def) in &mut class_defs[..user_class_count] {
-            if !def
-                .mro
-                .iter()
-                .any(|ancestor| is_builtin_exception_class(ancestor))
-            {
-                continue;
-            }
-            any_user_exception_class = true;
-            if next_tag > u16::from(u8::MAX) {
-                // The tag is a `u8` in `PyExceptionObj` and in every runtime
-                // entry point that carries one, so the hierarchy cannot grow
-                // past 256 types. No span is available here: `class_defs`
-                // records no source range, and the diagnostic is about the
-                // module's class count rather than any one declaration.
-                // Reached only when every item lowered, so this stays a
-                // one-element `Err` (P6).
-                return Err(vec![Diagnostic::error(
-                    "C0001",
-                    format!(
-                        "module declares more than {} exception classes; pycc \
-                         supports at most {} user-defined exception classes \
-                         per module",
-                        MAX_USER_EXCEPTION_CLASSES, MAX_USER_EXCEPTION_CLASSES
-                    ),
-                    Span::new(0, 0),
-                )]);
-            }
-            def.exception_type_tag = Some(next_tag as u8);
-            next_tag += 1;
-        }
-    }
-    // The synthetic `Exception.__init__` body is emitted only when a user
-    // class actually inherits it -- that is, when some user class's computed
-    // MRO reaches one of the seeded builtin exception classes, which is
-    // exactly the condition that assigned at least one tag above. The
-    // class-table entries above are metadata every module needs for name and
-    // base resolution; this is *code*, and emitting an uncallable constructor
-    // into every compiled module would put a dead function in every object
-    // file. The synthetic classes themselves can never call it: instantiating
-    // one is rejected by the type checker
-    // (`pycc_types::class::resolve_instantiation`).
-    if any_user_exception_class {
-        items.push(builtin_exception_init_item());
-    }
-    Ok(HirModule {
-        items,
-        type_aliases: aliases,
-        imports,
         class_defs,
-        seeded_builtin_exception_classes,
+        class_asts: _,
+        items,
+        imported_class_indices,
+        imported_alias_indices,
+        definition_spans,
+    } = state;
+    // The imported copies were pushed after the synthetic set, so
+    // stripping them leaves the synthetic entries still at the front.
+    let mut class_defs = strip_imported(class_defs, &imported_class_indices);
+    let aliases = strip_imported(aliases, &imported_alias_indices);
+    class_defs.rotate_left(synthetic_class_count);
+    Ok(LoweredModule {
+        hir: HirModule {
+            items,
+            type_aliases: aliases,
+            imports,
+            class_defs,
+            seeded_builtin_exception_classes,
+        },
+        shadowed_builtin_exception_name,
+        definition_spans,
     })
+}
+
+/// Drops the entries at `imported_indices` (a project import's copied
+/// classes or aliases) from `entries`, keeping every other entry in order.
+fn strip_imported<T>(entries: Vec<T>, imported_indices: &[usize]) -> Vec<T> {
+    entries
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| !imported_indices.contains(index))
+        .map(|(_, entry)| entry)
+        .collect()
 }
 
 /// Lowers one top-level statement into `state`, in exactly the order the
 /// pre-#867 loop body did: type alias, legacy type alias, import, class,
 /// then function or plain statement, each with its own reverse-direction
 /// name-collision checks. On `Err` nothing was recorded into `state`, which
-/// is what lets `lower_all` skip the item as a unit.
-fn lower_top_level_item<'a>(stmt: &'a Stmt, state: &mut ModuleState<'a>) -> Result<(), Diagnostic> {
+/// is what lets `lower_module` skip the item as a unit.
+fn lower_top_level_item<'a>(
+    stmt: &'a Stmt,
+    state: &mut ModuleState<'a>,
+    resolved: &ResolvedImports<'_>,
+) -> Result<(), Diagnostic> {
     // #380 (PR-20): build the projected class slice `annotation_to_ty`
     // uses to resolve cross-class annotations; #611 (PEP 560) added the
     // per-class subscriptability flag it carries. Recomputed per item so a
@@ -280,6 +297,9 @@ fn lower_top_level_item<'a>(stmt: &'a Stmt, state: &mut ModuleState<'a>) -> Resu
                 pycc_ast::stmt_range(stmt),
             ));
         }
+        state
+            .definition_spans
+            .push((name.clone(), statement_span(stmt)));
         state.aliases.push((name, ty));
         return Ok(());
     }
@@ -301,20 +321,33 @@ fn lower_top_level_item<'a>(stmt: &'a Stmt, state: &mut ModuleState<'a>) -> Resu
                 pycc_ast::stmt_range(stmt),
             ));
         }
+        state
+            .definition_spans
+            .push((name.clone(), statement_span(stmt)));
         state.aliases.push((name, ty));
         return Ok(());
     }
-    if let Some(mut bound) = lower_import_stmt(stmt)? {
+    if let Some(mut lowered) = lower_import_stmt(stmt, resolved)? {
         // Same reverse-direction check as the two type-alias arms above,
         // for `import ...`/`from ... import ...` (a single statement can
         // bind more than one local name, e.g. `from math import sqrt,
-        // pi`, so every bound name is checked, not just the first).
-        if let Some(colliding) = bound.iter().map(import_local_name).find(|local_name| {
-            state
-                .class_defs
-                .iter()
-                .any(|(class_name, _)| class_name == local_name)
-        }) {
+        // pi`, so every bound name is checked, not just the first). A
+        // class this module imported earlier is exempt: `from a import
+        // Point` twice binds the same definition twice, not a collision.
+        if let Some(colliding) = lowered
+            .bindings
+            .iter()
+            .map(import_local_name)
+            .find(|local_name| {
+                state
+                    .class_defs
+                    .iter()
+                    .enumerate()
+                    .any(|(index, (class_name, _))| {
+                        class_name == local_name && !state.imported_class_indices.contains(&index)
+                    })
+            })
+        {
             return Err(unsupported(
                 format!(
                     "import `{colliding}` collides with a class of the same name \
@@ -323,7 +356,39 @@ fn lower_top_level_item<'a>(stmt: &'a Stmt, state: &mut ModuleState<'a>) -> Resu
                 pycc_ast::stmt_range(stmt),
             ));
         }
-        state.imports.append(&mut bound);
+        // #898: bring an imported class (with its MRO) and an imported
+        // alias into this module's tables so later annotations and bases
+        // resolve them; a copy already present (an ancestor shared with an
+        // earlier import, or a synthetic exception class this module seeded
+        // itself) is not duplicated.
+        //
+        // The two `continue` guards below have no observable effect on
+        // Part 1's output, and no test discriminates them: every copy they
+        // would skip is also recorded in `imported_class_indices` /
+        // `imported_alias_indices` and removed again by `strip_imported`
+        // before anything downstream sees the module, and the name lookups
+        // in between take the first match over byte-identical entries.
+        // They are kept because they hold the one-name-one-entry invariant
+        // that the collision checks just above and the `HashMap`-collected
+        // class tables downstream (`pycc_types::Environment::classes`,
+        // `pycc_mir`'s own `classes` map) are written against. Part 2
+        // (#899, per-module namespaces) is where stripping stops being
+        // universal and the guards become load-bearing.
+        for entry in lowered.classes {
+            if state.class_defs.iter().any(|(name, _)| *name == entry.0) {
+                continue;
+            }
+            state.imported_class_indices.push(state.class_defs.len());
+            state.class_defs.push(entry);
+        }
+        for entry in lowered.aliases {
+            if state.aliases.iter().any(|(name, _)| *name == entry.0) {
+                continue;
+            }
+            state.imported_alias_indices.push(state.aliases.len());
+            state.aliases.push(entry);
+        }
+        state.imports.append(&mut lowered.bindings);
         return Ok(());
     }
     if let Stmt::ClassDef(def) = stmt {
@@ -344,10 +409,16 @@ fn lower_top_level_item<'a>(stmt: &'a Stmt, state: &mut ModuleState<'a>) -> Resu
         // diagnostic -- reject it here, at the same point `lower_class`'s
         // own duplicate-method check (`crates/pycc_hir/src/class.rs`)
         // fires for the identical shape one level down.
+        // #898: a class copied in by a project import is not a definition
+        // of this module, so a same-named `class` here is reported by the
+        // import-collision check below, not as a duplicate definition.
         if state
             .class_defs
             .iter()
-            .any(|(name, _)| name == &class_def.name)
+            .enumerate()
+            .any(|(index, (name, _))| {
+                name == &class_def.name && !state.imported_class_indices.contains(&index)
+            })
         {
             return Err(unsupported(
                 format!(
@@ -415,6 +486,9 @@ fn lower_top_level_item<'a>(stmt: &'a Stmt, state: &mut ModuleState<'a>) -> Resu
                 def.range,
             ));
         }
+        state
+            .definition_spans
+            .push((class_def.name.clone(), statement_span(stmt)));
         state.class_asts.push((class_def.name.clone(), def));
         state.class_defs.push((class_def.name.clone(), class_def));
         state.items.append(&mut method_items);
@@ -451,23 +525,49 @@ fn lower_top_level_item<'a>(stmt: &'a Stmt, state: &mut ModuleState<'a>) -> Resu
             &class_name_defs,
         )?),
     };
+    let span = statement_span(stmt);
+    match &item {
+        HirItem::Function { name, .. } => state.definition_spans.push((name.clone(), span)),
+        HirItem::TopLevelStmt(lowered) => {
+            for name in killed_names(std::slice::from_ref(lowered)) {
+                state.definition_spans.push((name, span));
+            }
+        }
+    }
     state.items.push(item);
     Ok(())
 }
 
-/// The class or type-alias name a top-level statement would bind -- the
-/// only binding kinds that can be the root of an HIR cascade (D-219, P1).
+fn statement_span(stmt: &Stmt) -> Span {
+    let range = pycc_ast::stmt_range(stmt);
+    Span::new(range.start, range.end)
+}
+
+/// The class, type-alias, or import names a top-level statement would bind
+/// -- the binding kinds that can be the root of an HIR cascade (D-219, P1;
+/// #898 added the import kind, amending D-219 rule 3 -- see D-222).
 ///
-/// `class C` -> `C`; `type X = ...` -> `X`; legacy `X: TypeAlias = ...` ->
-/// `X`. Every other statement kind -- `import`, `from ... import`, `def`,
-/// assignment, expression statement -- yields `None` on purpose: the two
-/// cascade lookups (`annotation_to_ty`'s bare-name arm and
-/// `validate_bases`) consult only the class table and the alias table and
-/// can never resolve an import-, function-, or variable-bound name, so an
-/// annotation naming one fails today whether or not that binding lowered.
-/// That diagnostic is a genuine, independent gap and must stay reported.
+/// `class C` -> `[C]`; `type X = ...` -> `[X]`; legacy `X: TypeAlias = ...`
+/// -> `[X]`.
+///
+/// An import yields names exactly when it *fails*, and then the names are
+/// the ones it would have bound locally: `from geometry import Point, Line`
+/// -> `[Point, Line]`, `import pkg.dep as d` -> `[d]`, and a rejected
+/// `from math import *` -> `math`'s whole export list. Both import arms
+/// therefore mirror `import::lower_import_stmt`'s own success conditions
+/// exactly rather than approximating them, one arm per statement kind, so
+/// a shape that lowers poisons nothing and every shape that does not
+/// poisons. An import that lowers binds a name the two cascade lookups
+/// (`annotation_to_ty`'s bare-name arm and `validate_bases`) cannot resolve
+/// anyway -- they consult only the class table and the alias table -- so a
+/// later annotation naming it fails today either way, and that diagnostic
+/// is a genuine, independent gap that must stay reported.
+///
+/// Every remaining statement kind -- `def`, assignment, expression
+/// statement -- yields nothing on purpose, for that same reason: those
+/// lookups can never resolve a function- or variable-bound name.
 /// This is deliberately narrower than
-/// `exception::expr_binds_builtin_exception_name`'s destructuring scan,
+/// `exception::expr_bound_builtin_exception_name`'s destructuring scan,
 /// which answers a different question (does the module shadow a name at
 /// all).
 ///
@@ -476,39 +576,115 @@ fn lower_top_level_item<'a>(stmt: &'a Stmt, state: &mut ModuleState<'a>) -> Resu
 /// name `TypeAlias`, whose target is a `Name`, and which carries a value. A
 /// valueless `X: TypeAlias` binds no alias -- it falls through to ordinary
 /// `AnnAssign` lowering and fails on `TypeAlias` itself -- so it yields
-/// `None` here, and a later `X` diagnostic stays reported.
-pub(crate) fn poisonable_name(stmt: &Stmt) -> Option<&str> {
+/// nothing here, and a later `X` diagnostic stays reported.
+pub(crate) fn poisonable_names(stmt: &Stmt) -> Vec<&str> {
     match stmt {
-        Stmt::ClassDef(def) => Some(def.name.as_str()),
+        Stmt::ClassDef(def) => vec![def.name.as_str()],
         // Same `.expect` as `lower_type_alias_stmt`: ruff unconditionally
         // parses a `type` statement's name as `Expr::Name`.
-        Stmt::TypeAlias(alias) => Some(
+        Stmt::TypeAlias(alias) => vec![
             alias
                 .name
                 .as_name_expr()
                 .expect("ruff always parses a `type` statement's name as Expr::Name")
                 .id
                 .as_str(),
-        ),
+        ],
         Stmt::AnnAssign(ann) => {
             let Expr::Name(annotation) = ann.annotation.as_ref() else {
-                return None;
+                return Vec::new();
             };
             if annotation.id.as_str() != "TypeAlias" {
-                return None;
+                return Vec::new();
             }
             let Expr::Name(target) = ann.target.as_ref() else {
-                return None;
+                return Vec::new();
             };
             // A valueless `X: TypeAlias` binds nothing:
             // `import::lower_legacy_type_alias_ann_assign` records no alias
             // for it and lets it fall through as an ordinary annotated
             // assignment, so poisoning `X` would suppress a genuine later
             // `X` diagnostic (Codex review on #875).
-            ann.value.as_ref()?;
-            Some(target.id.as_str())
+            if ann.value.is_none() {
+                return Vec::new();
+            }
+            vec![target.id.as_str()]
         }
-        _ => None,
+        Stmt::Import(import) => {
+            // `import::lower_import_stmt` accepts exactly one shape: a single
+            // alias, no `asname`, and a module name `pycc_std` resolves. The
+            // condition is exact rather than an approximation of that arm --
+            // its earlier `ResolvedImport::Found` branch cannot fire for a
+            // stdlib-resolving name, because `project_import_request` returns
+            // `None` for one, so no answer is ever recorded for its span.
+            if let [alias] = import.names.as_slice()
+                && alias.asname.is_none()
+                && pycc_std::resolve_module(alias.name.as_str()).is_some()
+            {
+                return Vec::new();
+            }
+            // Every other shape fails, so poison what it would have bound:
+            // the alias when present, and otherwise the first dotted segment,
+            // since `import pkg.dep` binds `pkg`. `import a, b` fails as a
+            // whole statement, so both of its names are poisoned.
+            import
+                .names
+                .iter()
+                .map(|alias| {
+                    alias.asname.as_ref().map_or_else(
+                        || {
+                            let name = alias.name.as_str();
+                            name.split_once('.').map_or(name, |(head, _)| head)
+                        },
+                        |asname| asname.as_str(),
+                    )
+                })
+                .collect()
+        }
+        Stmt::ImportFrom(import) => {
+            // A `level == 0` statement naming a module `pycc_std` resolves
+            // takes `lower_import_stmt`'s stdlib arm; everything else (a
+            // relative import, an unresolvable module) takes the project arm
+            // or is rejected outright, and poisons below.
+            if let Some(module) = (import.level == 0)
+                .then_some(import.module.as_ref())
+                .flatten()
+                .and_then(|module| pycc_std::resolve_module(module.as_str()))
+            {
+                // Mirror that arm's success condition exactly, as the
+                // `Stmt::Import` arm above mirrors its own: the statement
+                // lowers when no name is the wildcard, none carries an
+                // `asname`, and every name is a symbol of `module`. Anything
+                // else fails, and a failed stdlib import poisons what it
+                // would have bound just like a failed project one -- a
+                // wildcard binds the module's whole export list, every other
+                // shape binds its own aliases.
+                if import.names.iter().any(|alias| alias.name.as_str() == "*") {
+                    return pycc_std::module_symbol_names(module).collect();
+                }
+                if import.names.iter().all(|alias| {
+                    alias.asname.is_none()
+                        && pycc_std::resolve_symbol(module, alias.name.as_str()).is_some()
+                }) {
+                    return Vec::new();
+                }
+            }
+            // The poisoned name is the one this statement would have *bound*
+            // locally, not the one it reads from the other module: under
+            // `from .dep import helper as h` a later `h` is the cascade to
+            // suppress, and a later `helper` is a genuine unknown name.
+            import
+                .names
+                .iter()
+                .map(|alias| {
+                    alias
+                        .asname
+                        .as_ref()
+                        .map_or(alias.name.as_str(), |asname| asname.as_str())
+                })
+                .collect()
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -536,7 +712,7 @@ pub(crate) fn unknown_base_message(class_name: &str, base_name: &str) -> String 
 /// Classifies a failed item's diagnostic (D-219, P2): `Some(name)` when it
 /// is one of the two cascade-shaped `C0001`s -- the bare-name annotation
 /// message naming `name`, or the unknown-base message whose base is `name`
-/// -- and `None` for every other diagnostic. Only `lower_all` decides
+/// -- and `None` for every other diagnostic. Only `lower_module` decides
 /// whether `name` is actually poisoned; a `Some` for an un-poisoned name is
 /// an ordinary, reported gap.
 pub(crate) fn cascade_name(diagnostic: &Diagnostic) -> Option<&str> {

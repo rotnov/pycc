@@ -41,7 +41,7 @@ use super::check_call_args;
 /// `hir.seeded_builtin_exception_classes`, set by `lower_checked` at the
 /// point it seeds; combined with `is_builtin_exception_class` it is exact,
 /// because seeding is all-on/all-off and its shadow gate guarantees a
-/// seeded module has no user top-level binding of any of the seven names.
+/// seeded module has no user top-level binding of any of the 25 names.
 /// Nothing here inspects a `HirClassDef`'s shape: a user-authored class can
 /// be structurally identical to a synthetic one, so shape is not evidence
 /// of origin.

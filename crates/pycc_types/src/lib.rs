@@ -31,7 +31,10 @@ pub(crate) use redeclaration::{
 
 pub(crate) use constraints::*;
 pub(crate) use module::module_function_local_names;
-pub use module::{check, check_all, check_and_resolve, check_and_resolve_all};
+pub use module::{
+    DiagnosticKey, KeyedDiagnostics, check, check_all, check_all_keyed, check_and_resolve,
+    check_and_resolve_all, check_and_resolve_all_keyed,
+};
 #[cfg(test)]
 pub(crate) use module::{check_with_signatures, checked_function_signatures};
 pub use monomorphize::*;

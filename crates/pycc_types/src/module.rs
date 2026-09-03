@@ -15,7 +15,8 @@
 //! Part 3 of #864 (#868, D-220): the driver collects one diagnostic per
 //! failing function instead of stopping at the first. Every collector
 //! returns a [`KeyedDiagnostics`] list whose key is the failing function's
-//! index in `hir.items` (`None` for a module-level failure), and
+//! index in `hir.items` (a `TopLevel`/`Module` key for a module-level
+//! failure; see [`DiagnosticKey`]), and
 //! [`merge_solver_first`] combines the solver's list with the concrete
 //! checker's so that, per function, the solver's diagnostic wins when both
 //! phases flagged it -- the historical solver-first rule, applied per
@@ -29,22 +30,54 @@ use std::collections::HashSet;
 /// types, return type)`.
 pub(crate) type FunctionSignatures = HashMap<String, (Vec<Ty>, Ty)>;
 
+/// Where in `hir.items` a collected diagnostic belongs (D-220; #898 made
+/// it public and split the old `None` key in two so the driver can map a
+/// linked program's diagnostic back to the file that owns the item).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DiagnosticKey {
+    /// A failing function body: the `HirItem::Function`'s index.
+    Function(usize),
+    /// A failing top-level statement: the `HirItem::TopLevelStmt`'s index.
+    TopLevel(usize),
+    /// A whole-program failure with no owning item: a pre-check (an
+    /// incompatible redefinition or attribute redeclaration), a post-body
+    /// solver phase, or a post-check phase (`monomorphize`,
+    /// `unroll_enum_loops`).
+    Module,
+}
+
+impl DiagnosticKey {
+    /// The owning item's index, when there is one.
+    pub fn item_index(self) -> Option<usize> {
+        match self {
+            Self::Function(index) | Self::TopLevel(index) => Some(index),
+            Self::Module => None,
+        }
+    }
+}
+
 /// One diagnostic per failing function, keyed by the function's index in
-/// `hir.items`; `None` keys a module-level failure (a top-level statement,
-/// or a whole-module solver phase).
+/// `hir.items`; a `TopLevel`/`Module` key is a module-level failure (a
+/// top-level statement, or a whole-module solver phase).
 ///
-/// Invariant kept by every collector in this crate: a `None`-keyed entry is
-/// always the *only* entry (a module-level failure stops that collector at
-/// once), so a list is either exactly `[(None, d)]` or entirely
-/// `Some`-keyed. [`merge_solver_first`] relies on it.
-pub(crate) type KeyedDiagnostics = Vec<(Option<usize>, Diagnostic)>;
+/// Invariant kept by every collector in this crate: a non-`Function`-keyed
+/// entry is always the *only* entry (a module-level failure stops that
+/// collector at once), so a list is either exactly one `TopLevel`/`Module`
+/// entry or entirely `Function`-keyed. [`merge_solver_first`] relies on it.
+pub type KeyedDiagnostics = Vec<(DiagnosticKey, Diagnostic)>;
 
 /// Wraps a whole-module failure as a one-element keyed list. A named `fn`
 /// rather than a closure at every `map_err` site so the five solver
 /// post-phase paths do not each grow their own closure region under the
 /// 100%-region gate (D-014).
 pub(crate) fn module_level(diagnostic: Diagnostic) -> KeyedDiagnostics {
-    vec![(None, diagnostic)]
+    vec![(DiagnosticKey::Module, diagnostic)]
+}
+
+/// Wraps a failing top-level statement's diagnostic as a one-element keyed
+/// list under `DiagnosticKey::TopLevel(index)`.
+pub(crate) fn top_level(index: usize, diagnostic: Diagnostic) -> KeyedDiagnostics {
+    vec![(DiagnosticKey::TopLevel(index), diagnostic)]
 }
 
 /// First-diagnostic view of a keyed list, for the test-only wrappers that
@@ -67,12 +100,6 @@ fn first_diagnostic(diagnostics: Vec<Diagnostic>) -> Diagnostic {
         .into_iter()
         .next()
         .expect("check_all's Err is never empty by construction")
-}
-
-/// Wraps a post-check failure (or a pre-check one) as the one-element list
-/// the public `*_all` entry points return for it.
-fn single(diagnostic: Diagnostic) -> Vec<Diagnostic> {
-    vec![diagnostic]
 }
 
 fn drop_keys(diagnostics: KeyedDiagnostics) -> Vec<Diagnostic> {
@@ -116,6 +143,14 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
 /// still report a single diagnostic, wrapped as a one-element list -- they
 /// are not part of the type pass's collection.
 pub fn check_and_resolve_all(hir: &HirModule) -> Result<HirModule, Vec<Diagnostic>> {
+    check_and_resolve_all_keyed(hir).map_err(drop_keys)
+}
+
+/// [`check_and_resolve_all`] keeping each diagnostic's [`DiagnosticKey`]
+/// (#898): the driver maps a linked program's item index back to the file
+/// that owns it. The post-check phases' single diagnostic is keyed
+/// `Module`.
+pub fn check_and_resolve_all_keyed(hir: &HirModule) -> Result<HirModule, KeyedDiagnostics> {
     let function_local_names = module_function_local_names(hir);
     let signatures = checked_function_signatures_all(hir, &function_local_names)?;
 
@@ -147,8 +182,8 @@ pub fn check_and_resolve_all(hir: &HirModule) -> Result<HirModule, Vec<Diagnosti
     // redefinition pair that reaches this point is already raw-shape-
     // identical and is guaranteed to resolve to the same concrete
     // signature. A second check here would be unreachable dead code.
-    let monomorphized = monomorphize(&resolved_hir).map_err(single)?;
-    unroll_enum_loops(monomorphized).map_err(single)
+    let monomorphized = monomorphize(&resolved_hir).map_err(module_level)?;
+    unroll_enum_loops(monomorphized).map_err(module_level)
 }
 
 /// First-diagnostic view of [`check_with_signatures_all`], kept for the
@@ -214,10 +249,10 @@ pub(super) fn check_with_signatures_all(
 /// function (D-220 rule C2).
 ///
 /// Pass 2 (top-level statements) is sequential over a growing environment,
-/// so its first failure is reported alone as `(None, d)` and pass 3 does
-/// *not* run: a function reading a global bound after the failing statement
-/// would otherwise produce a false `T0021`. Pass 3 checks **every** function
-/// body and records `(Some(i), d)` for each failure -- one diagnostic per
+/// so its first failure is reported alone as `(TopLevel(i), d)` and pass 3
+/// does *not* run: a function reading a global bound after the failing
+/// statement would otherwise produce a false `T0021`. Pass 3 checks
+/// **every** function body and records `(Function(i), d)` for each failure -- one diagnostic per
 /// function, the function's own first error. Methods are `HirItem::Function`s
 /// with mangled `Class.method` names, so a class with two broken methods
 /// yields two entries with no special casing.
@@ -248,10 +283,10 @@ pub(super) fn check_with_environment_all(
     // consulting so an incompatible later reassignment still fails T0023.
     // The gate therefore tests the net source-order binding, in this pass
     // and in pass 3's final environment alike.
-    for item in &hir.items {
+    for (index, item) in hir.items.iter().enumerate() {
         match item {
             HirItem::TopLevelStmt(stmt) => {
-                check_stmt(&mut env, stmt).map_err(module_level)?;
+                check_stmt(&mut env, stmt).map_err(|diagnostic| top_level(index, diagnostic))?;
                 // Issue #769 (Part 2 of #747): applied uniformly with every
                 // other sequential-statement-list call site in this crate
                 // for consistency, even though `HirStmt::Return` (the only
@@ -298,7 +333,7 @@ pub(super) fn check_with_environment_all(
                 check_function_in(&env, item, local_names)
             };
             if let Err(diagnostic) = checked {
-                collected.push((Some(index), diagnostic));
+                collected.push((DiagnosticKey::Function(index), diagnostic));
             }
         }
     }
@@ -342,6 +377,13 @@ pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
 /// solver passes, the checker's list against the solved signatures is
 /// reported on its own.
 pub fn check_all(hir: &HirModule) -> Result<(), Vec<Diagnostic>> {
+    check_all_keyed(hir).map_err(drop_keys)
+}
+
+/// [`check_all`] keeping each diagnostic's [`DiagnosticKey`] (#898): the
+/// driver maps a linked program's item index back to the file that owns
+/// it. A pre-check failure is keyed `Module`.
+pub fn check_all_keyed(hir: &HirModule) -> Result<(), KeyedDiagnostics> {
     let function_local_names = module_function_local_names(hir);
     // Issue #22: reject incompatible redefinitions before trying either the
     // concrete or solver path -- including a same-arity, `Ty::Infer`-
@@ -349,12 +391,12 @@ pub fn check_all(hir: &HirModule) -> Result<(), Vec<Diagnostic>> {
     // comment). Calling it here (not inside `check_with_environment_all`)
     // ensures the error is returned directly rather than being masked by
     // the concrete-path fallback to the solver path.
-    check_incompatible_redefinitions(hir).map_err(single)?;
+    check_incompatible_redefinitions(hir).map_err(module_level)?;
     // #676 (D-210): reject a cross-MRO attribute redeclaration with a
     // differing declared type before any expression using that attribute
     // is type-checked -- see the function's own doc comment for why this
     // must be a class-definition-time rejection rather than a coercion.
-    check_incompatible_attribute_redeclarations(hir).map_err(single)?;
+    check_incompatible_attribute_redeclarations(hir).map_err(module_level)?;
     // The public validation-only API has no resolved-signature result to
     // return. Avoid building a temporary concrete signature map and then
     // cloning it into an `Environment`: construct that environment directly.
@@ -370,9 +412,7 @@ pub fn check_all(hir: &HirModule) -> Result<(), Vec<Diagnostic>> {
     };
     match infer_function_signatures_with_solver_all(hir, &function_local_names) {
         Err(solver) => Err(merge_solver_first(solver, concrete)),
-        Ok(signatures) => {
-            check_with_signatures_all(hir, &signatures, &function_local_names).map_err(drop_keys)
-        }
+        Ok(signatures) => check_with_signatures_all(hir, &signatures, &function_local_names),
     }
 }
 
@@ -383,7 +423,7 @@ pub(crate) fn checked_function_signatures(
     hir: &HirModule,
     function_local_names: &[Vec<&str>],
 ) -> Result<FunctionSignatures, Diagnostic> {
-    checked_function_signatures_all(hir, function_local_names).map_err(first_diagnostic)
+    checked_function_signatures_all(hir, function_local_names).map_err(first_keyed)
 }
 
 /// `check_and_resolve_all`'s check half: the same pre-checks, concrete fast
@@ -392,16 +432,16 @@ pub(crate) fn checked_function_signatures(
 pub(crate) fn checked_function_signatures_all(
     hir: &HirModule,
     function_local_names: &[Vec<&str>],
-) -> Result<FunctionSignatures, Vec<Diagnostic>> {
+) -> Result<FunctionSignatures, KeyedDiagnostics> {
     // Issue #22: reject incompatible redefinitions before trying either the
     // concrete or solver path (same rationale as `check_all`'s own call).
-    check_incompatible_redefinitions(hir).map_err(single)?;
+    check_incompatible_redefinitions(hir).map_err(module_level)?;
     // #676 (D-210): same rationale and call-site timing as `check_all`'s
     // own call -- this entry point (via `check_and_resolve`) is also
     // reachable from `pycc build` without an earlier `pycc check`/`check`
     // call, so it needs its own guard against a cross-MRO attribute
     // redeclaration.
-    check_incompatible_attribute_redeclarations(hir).map_err(single)?;
+    check_incompatible_attribute_redeclarations(hir).map_err(module_level)?;
     // Fully annotated valid modules have no inference variables to constrain.
     // Validate them once and avoid the preceding constraint-collection walk.
     // If validation fails, keep its per-function list and fall through to
@@ -422,7 +462,7 @@ pub(crate) fn checked_function_signatures_all(
         Err(solver) => return Err(merge_solver_first(solver, concrete)),
         Ok(signatures) => signatures,
     };
-    check_with_signatures_all(hir, &signatures, function_local_names).map_err(drop_keys)?;
+    check_with_signatures_all(hir, &signatures, function_local_names)?;
     Ok(signatures)
 }
 
@@ -443,8 +483,8 @@ pub(crate) fn checked_function_signatures_all(
 /// for an earlier function would then precede the solver's first entry and
 /// change the first diagnostic (D-217 rule 2).
 ///
-/// A `None`-keyed solver entry (by the [`KeyedDiagnostics`] invariant, the
-/// only entry) is reported alone. It comes from the top-level constraint
+/// A non-`Function`-keyed solver entry (by the [`KeyedDiagnostics`]
+/// invariant, the only entry) is reported alone. It comes from the top-level constraint
 /// walk or from a post-body phase such as `propagate_binop_constraints`,
 /// which runs after every body was walked and therefore cannot attribute
 /// its diagnostic to a function even though it usually originates in one
@@ -455,19 +495,21 @@ pub(crate) fn checked_function_signatures_all(
 fn merge_solver_first(
     solver: KeyedDiagnostics,
     concrete: Option<KeyedDiagnostics>,
-) -> Vec<Diagnostic> {
+) -> KeyedDiagnostics {
     // One pass over `solver` to index its keys: with F failing functions both
     // lists are Θ(F) long, and rescanning `solver` per `concrete` entry would
     // make the merge Θ(F²) on error-heavy generated inputs.
-    let solver_keys: HashSet<Option<usize>> = solver.iter().map(|(key, _)| *key).collect();
-    let module_level_failure = solver_keys.contains(&None);
+    let solver_keys: HashSet<DiagnosticKey> = solver.iter().map(|(key, _)| *key).collect();
+    let module_level_failure = solver_keys
+        .iter()
+        .any(|key| !matches!(key, DiagnosticKey::Function(_)));
     let checker_only: KeyedDiagnostics = concrete
         .filter(|_| !module_level_failure)
         .into_iter()
         .flatten()
         .filter(|(key, _)| !solver_keys.contains(key))
         .collect();
-    drop_keys(solver.into_iter().chain(checker_only).collect())
+    solver.into_iter().chain(checker_only).collect()
 }
 
 #[cfg(test)]
