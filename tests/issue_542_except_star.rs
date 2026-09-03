@@ -869,8 +869,8 @@ fn a_try_star_finally_bare_return_with_no_enclosing_finally_emits_ret_void() {
     assert_eq!(out, b"cleanup\ndone\n");
 }
 
-/// All three fixtures above intercept a `return` from the *try*/*handler*
-/// body through an implicitly-falling-through `finally` block (one whose
+/// All three fixtures above intercept a `return` from the *try* body
+/// through an implicitly-falling-through `finally` block (one whose
 /// own body never itself ends in a terminator), so `emit_try_star`'s
 /// `finally_falls_through` flag -- computed from whether the `finally`
 /// block's own generated code already ends with an LLVM terminator -- is
