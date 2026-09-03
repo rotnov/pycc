@@ -22,7 +22,7 @@ fn codes(diagnostics: &[Diagnostic]) -> Vec<&str> {
     diagnostics.iter().map(|d| d.code).collect()
 }
 
-fn keyed_codes(diagnostics: &KeyedDiagnostics) -> Vec<(Option<usize>, &str)> {
+fn keyed_codes(diagnostics: &KeyedDiagnostics) -> Vec<(DiagnosticKey, &str)> {
     diagnostics.iter().map(|(key, d)| (*key, d.code)).collect()
 }
 
@@ -246,7 +246,10 @@ fn checker_collects_one_diagnostic_per_failing_function_in_item_order() {
     let collected = check_with_environment_all(&hir, env, &local_names).unwrap_err();
     assert_eq!(
         keyed_codes(&collected),
-        vec![(Some(0), "T0043"), (Some(1), "T0043")]
+        vec![
+            (DiagnosticKey::Function(0), "T0043"),
+            (DiagnosticKey::Function(1), "T0043")
+        ]
     );
     for (_, diagnostic) in &collected {
         assert_eq!(diagnostic.message, T0043_INT_ATTR);
@@ -265,7 +268,7 @@ fn checker_collects_one_diagnostic_per_broken_method() {
     // also an item, so the entries are asserted by name, not position.
     let names: Vec<&str> = collected
         .iter()
-        .map(|(key, _)| item_name(&hir, key.unwrap()))
+        .map(|(key, _)| item_name(&hir, key.item_index().unwrap()))
         .collect();
     assert_eq!(names, vec!["A.m", "A.n"]);
     assert_eq!(codes(&drop_keys(collected)), vec!["T0043", "T0043"]);
@@ -277,7 +280,10 @@ fn checker_stops_at_a_failing_top_level_statement_without_running_pass_3() {
     let local_names = module_function_local_names(&hir);
     let env = concrete_function_environment(&hir).unwrap();
     let collected = check_with_environment_all(&hir, env, &local_names).unwrap_err();
-    assert_eq!(keyed_codes(&collected), vec![(None, "T0025")]);
+    assert_eq!(
+        keyed_codes(&collected),
+        vec![(DiagnosticKey::TopLevel(0), "T0025")]
+    );
     assert_eq!(collected[0].1.message, T0025_TOP_LEVEL);
 }
 
@@ -293,7 +299,10 @@ fn checker_collects_a_failing_generic_function_body_alongside_an_ordinary_one() 
     let collected = check_with_environment_all(&hir, env, &local_names).unwrap_err();
     assert_eq!(
         keyed_codes(&collected),
-        vec![(Some(0), "T0043"), (Some(1), "T0021")]
+        vec![
+            (DiagnosticKey::Function(0), "T0043"),
+            (DiagnosticKey::Function(1), "T0021")
+        ]
     );
 }
 
@@ -322,7 +331,10 @@ fn solver_collects_one_diagnostic_per_failing_body_and_skips_the_post_phases() {
     let collected = infer_function_signatures_with_solver_all(&hir, &local_names).unwrap_err();
     assert_eq!(
         keyed_codes(&collected),
-        vec![(Some(1), "T0022"), (Some(2), "T0022")]
+        vec![
+            (DiagnosticKey::Function(1), "T0022"),
+            (DiagnosticKey::Function(2), "T0022")
+        ]
     );
     for (_, diagnostic) in &collected {
         assert_eq!(diagnostic.message, T0022_RETURN);
@@ -336,7 +348,10 @@ fn solver_collects_one_diagnostic_per_failing_body_and_skips_the_post_phases() {
     let hir = lower("def _h(a):\n    return a\n");
     let local_names = module_function_local_names(&hir);
     let collected = infer_function_signatures_with_solver_all(&hir, &local_names).unwrap_err();
-    assert_eq!(keyed_codes(&collected), vec![(None, "T0021")]);
+    assert_eq!(
+        keyed_codes(&collected),
+        vec![(DiagnosticKey::Module, "T0021")]
+    );
     assert_eq!(
         collected[0].1.message,
         "cannot infer type of parameter `a` in private helper `_h`; add an annotation"
@@ -354,7 +369,10 @@ fn solver_collects_an_implicit_return_failure_in_a_later_body() {
     let collected = infer_function_signatures_with_solver_all(&hir, &local_names).unwrap_err();
     assert_eq!(
         keyed_codes(&collected),
-        vec![(Some(0), "T0022"), (Some(2), "T0022")]
+        vec![
+            (DiagnosticKey::Function(0), "T0022"),
+            (DiagnosticKey::Function(2), "T0022")
+        ]
     );
     assert_eq!(collected[0].1.message, T0022_RETURN);
     assert_eq!(
@@ -368,7 +386,10 @@ fn solver_reports_a_top_level_failure_alone() {
     let hir = lower(TOP_LEVEL_SOLVER_FAILURE);
     let local_names = module_function_local_names(&hir);
     let collected = infer_function_signatures_with_solver_all(&hir, &local_names).unwrap_err();
-    assert_eq!(keyed_codes(&collected), vec![(None, "T0021")]);
+    assert_eq!(
+        keyed_codes(&collected),
+        vec![(DiagnosticKey::TopLevel(2), "T0021")]
+    );
     assert_eq!(collected[0].1.message, T0021_TOP_LEVEL_SOLVER);
 }
 
@@ -386,7 +407,10 @@ fn a_none_keyed_solver_list_always_has_length_one() {
         let local_names = module_function_local_names(&hir);
         let collected = infer_function_signatures_with_solver_all(&hir, &local_names).unwrap_err();
         assert_eq!(collected.len(), 1, "{source}");
-        assert!(collected[0].0.is_none(), "{source}");
+        assert!(
+            !matches!(collected[0].0, DiagnosticKey::Function(_)),
+            "{source}"
+        );
     }
 }
 
@@ -426,7 +450,10 @@ fn merge_reports_a_function_flagged_by_both_phases_once_with_the_solver_text() {
     let local_names = module_function_local_names(&hir);
     let env = concrete_function_environment(&hir).unwrap();
     let checker = check_with_environment_all(&hir, env, &local_names).unwrap_err();
-    assert_eq!(keyed_codes(&checker), vec![(Some(0), "T0022")]);
+    assert_eq!(
+        keyed_codes(&checker),
+        vec![(DiagnosticKey::Function(0), "T0022")]
+    );
     assert_ne!(checker[0].1.message, T0022_RETURN);
     let diagnostics = check_all(&hir).unwrap_err();
     assert_eq!(codes(&diagnostics), vec!["T0022"]);
@@ -445,9 +472,9 @@ fn merge_appends_a_module_level_checker_entry_the_solver_did_not_flag() {
 #[test]
 fn merge_drops_the_checker_list_after_a_module_level_solver_failure() {
     // Rule 4's third outcome: the checker fails at pass 2 with its own
-    // `(None, T0025)` for the top-level statement, but the solver's
+    // `(TopLevel(0), T0025)` for the top-level statement, but the solver's
     // top-level walk accepts it and its post-body
-    // `propagate_binop_constraints` fails with `(None, T0021)` -- that one
+    // `propagate_binop_constraints` fails with `(Module, T0021)` -- that one
     // solver line is reported and the checker's list, top-level entry
     // included, is dropped.
     let hir = lower("x: int = \"s\"\n\n\ndef f(a: int) -> int:\n    y = a + \"s\"\n    return y\n");
@@ -468,7 +495,10 @@ fn merge_reports_a_module_level_solver_failure_alone() {
     let checker = check_with_environment_all(&hir, env, &local_names).unwrap_err();
     assert_eq!(
         keyed_codes(&checker),
-        vec![(Some(0), "T0021"), (Some(1), "T0043")]
+        vec![
+            (DiagnosticKey::Function(0), "T0021"),
+            (DiagnosticKey::Function(1), "T0043")
+        ]
     );
     let diagnostics = check_all(&hir).unwrap_err();
     assert_eq!(codes(&diagnostics), vec!["T0021"]);
@@ -487,18 +517,31 @@ fn merge_solver_first_arms_are_keyed_not_content_based() {
     let d = |code: &'static str| Diagnostic::error(code, code.to_string(), Span::new(0, 0));
     // Key present in `solver`: dropped from `concrete`; key absent: kept, in
     // `concrete`'s order, after every solver entry.
-    let solver = vec![(Some(2), d("S2")), (Some(0), d("S0"))];
-    let concrete = vec![(Some(0), d("C0")), (None, d("CN")), (Some(1), d("C1"))];
+    let solver = vec![
+        (DiagnosticKey::Function(2), d("S2")),
+        (DiagnosticKey::Function(0), d("S0")),
+    ];
+    let concrete = vec![
+        (DiagnosticKey::Function(0), d("C0")),
+        (DiagnosticKey::Module, d("CN")),
+        (DiagnosticKey::Function(1), d("C1")),
+    ];
     let merged = merge_solver_first(solver.clone(), Some(concrete.clone()));
-    assert_eq!(codes(&merged), vec!["S2", "S0", "CN", "C1"]);
+    assert_eq!(codes(&drop_keys(merged)), vec!["S2", "S0", "CN", "C1"]);
     // No concrete pass: the solver list alone.
-    assert_eq!(codes(&merge_solver_first(solver, None)), vec!["S2", "S0"]);
-    // A `None`-keyed solver failure is reported alone, whatever `concrete`
+    assert_eq!(
+        codes(&drop_keys(merge_solver_first(solver, None))),
+        vec!["S2", "S0"]
+    );
+    // A `Module`-keyed solver failure is reported alone, whatever `concrete`
     // holds -- even an identical-content entry is never deduplicated by
     // text (C7), only by key.
-    let module_level_failure = vec![(None, d("SN"))];
+    let module_level_failure = vec![(DiagnosticKey::Module, d("SN"))];
     assert_eq!(
-        codes(&merge_solver_first(module_level_failure, Some(concrete))),
+        codes(&drop_keys(merge_solver_first(
+            module_level_failure,
+            Some(concrete)
+        ))),
         vec!["SN"]
     );
 }

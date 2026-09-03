@@ -13,7 +13,7 @@
 use super::*;
 #[cfg(test)]
 use crate::module::first_keyed;
-use crate::module::{FunctionSignatures, KeyedDiagnostics, module_level};
+use crate::module::{DiagnosticKey, FunctionSignatures, KeyedDiagnostics, module_level, top_level};
 
 pub(crate) fn concrete_function_signatures(hir: &HirModule) -> Option<FunctionSignatures> {
     let mut signatures = HashMap::new();
@@ -173,7 +173,7 @@ pub(crate) fn infer_function_signatures_with_solver_all(
         maybe_bindings: HashSet::new(),
         opaque_bindings: HashSet::new(),
     };
-    for item in &hir.items {
+    for (index, item) in hir.items.iter().enumerate() {
         match item {
             HirItem::TopLevelStmt(stmt) => {
                 collect_block_constraints(
@@ -185,7 +185,7 @@ pub(crate) fn infer_function_signatures_with_solver_all(
                     std::slice::from_ref(stmt),
                     None,
                 )
-                .map_err(module_level)?;
+                .map_err(|diagnostic| top_level(index, diagnostic))?;
             }
             // Mirror of pass 2's source-order `def` rebinding (D-110): the
             // `def` marks the name def-rebound in the accumulated globals
@@ -271,7 +271,7 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             body,
             Some(signature.2.clone()),
         ) {
-            collected.push((Some(index), diagnostic));
+            collected.push((DiagnosticKey::Function(index), diagnostic));
             continue;
         }
         if signature.2.is_err()
@@ -285,7 +285,7 @@ pub(crate) fn infer_function_signatures_with_solver_all(
                 "private helper implicit return",
             )
         {
-            collected.push((Some(index), diagnostic));
+            collected.push((DiagnosticKey::Function(index), diagnostic));
         }
     }
     if !collected.is_empty() {
