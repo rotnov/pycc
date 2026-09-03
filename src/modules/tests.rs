@@ -594,3 +594,117 @@ fn display_root_trims_components_and_pads_with_parent_links() {
     assert_eq!(display_root(Path::new(""), 2), PathBuf::from("../.."));
     assert_eq!(display_root(Path::new("a"), 3), PathBuf::from("../.."));
 }
+
+#[test]
+fn a_failing_package_initializer_is_reported_against_its_own_file() {
+    // The `__init__.py` preloaded on the way to `pkg.mod` is a module like
+    // any other: its own failure aborts the walk and renders against it.
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "pkg/__init__.py", "def broken(:\n");
+    write(&scratch, "pkg/mod.py", HELPER);
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from pkg.mod import helper\n\n\ndef main() -> None:\n    print(helper(1))\n",
+    );
+    let (path, _, _) = first_diagnostic(&entry);
+    assert!(path.ends_with("__init__.py"), "unexpected file: {path}");
+}
+
+#[test]
+fn a_wildcard_import_of_a_project_module_is_rejected() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "helper.py", HELPER);
+    let entry = write(&scratch, "main.py", "from helper import *\n");
+    let (path, code, message) = first_diagnostic(&entry);
+    assert!(path.ends_with("main.py"), "unexpected file: {path}");
+    assert_eq!(code, "C0001");
+    assert!(
+        message.contains("wildcard import"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn aliasing_a_name_imported_from_a_project_module_is_rejected() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "helper.py", HELPER);
+    let entry = write(&scratch, "main.py", "from helper import helper as h\n");
+    let (path, code, message) = first_diagnostic(&entry);
+    assert!(path.ends_with("main.py"), "unexpected file: {path}");
+    assert_eq!(code, "C0001");
+    assert!(
+        message.contains("aliasing is not supported yet"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn one_type_alias_reached_through_two_modules_is_recorded_once() {
+    // `main` imports `Number` from the module that defines it and again
+    // from a module that re-exports it; the second copy is dropped rather
+    // than duplicating the alias in `main`'s own table.
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(
+        &scratch,
+        "defs.py",
+        "type Number = int\n\n\ndef identity(x: Number) -> Number:\n    return x\n",
+    );
+    write(
+        &scratch,
+        "reexport.py",
+        "from defs import Number, identity\n\n\ndef twice(x: Number) -> Number:\n    return identity(x) + identity(x)\n",
+    );
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from defs import Number\nfrom reexport import Number, twice\n\n\ndef main(x: Number) -> Number:\n    return twice(x)\n",
+    );
+    assert_eq!(
+        loaded_paths(&entry),
+        vec!["defs.py", "reexport.py", "main.py"]
+    );
+}
+
+#[test]
+fn identity_path_falls_back_to_the_path_as_given() {
+    // Only reachable when the filesystem cannot canonicalize the path at
+    // all; the memoization key is then the path itself, and the read that
+    // follows reports the real failure.
+    let missing = Path::new("/pycc-does-not-exist/nowhere.py");
+    assert_eq!(identity_path(missing), missing.to_path_buf());
+}
+
+#[test]
+fn a_bare_file_name_importer_renders_its_directory_as_a_single_dot() {
+    // The entry can be named by a bare file name (`pycc check main.py`),
+    // whose directory spelling is empty; a relative import from it must
+    // still render a directory a diagnostic can show. Exercised directly
+    // because the spelling is working-directory-relative by construction;
+    // `tests/issue_881_project_imports.rs` covers the same shape through
+    // the real CLI.
+    let mut loader = Loader {
+        modules: Vec::new(),
+        memo: HashMap::new(),
+        in_progress: Vec::new(),
+        entry_dir: PathBuf::new(),
+        entry_display_dir: PathBuf::new(),
+        root: None,
+    };
+    let request = ProjectImportRequest {
+        level: 1,
+        module: Some("helper".to_string()),
+        names: vec!["helper".to_string()],
+        span: pycc_diag::Span::new(0, 0),
+    };
+    let base = loader
+        .base_dir(&request, "main.py")
+        .unwrap_or_else(|failure| panic!("base resolution must not fail: {}", describe(&failure)));
+    let rejection = base
+        .rejection
+        .expect("the worktree root is not a package, so the base is rejected");
+    assert!(
+        rejection.contains("`.` has no `__init__.py`"),
+        "unexpected rejection: {rejection}"
+    );
+}

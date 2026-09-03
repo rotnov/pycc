@@ -176,9 +176,7 @@ impl Loader {
         request: &ProjectImportRequest,
         importer_display: &str,
     ) -> Result<Resolution, FrontendFailure> {
-        let Some(base) = self.base_dir(request, importer_display)? else {
-            return Ok(Resolution::Unanswered);
-        };
+        let base = self.base_dir(request, importer_display)?;
         let segments: Vec<&str> = match &request.module {
             Some(module) => module.split('.').collect(),
             None => Vec::new(),
@@ -192,7 +190,7 @@ impl Loader {
             // module namespace, so the file is never loaded.
             return Ok(Resolution::Found);
         }
-        let canonical = canonicalize(&target.path, &target.display)?;
+        let canonical = identity_path(&target.path);
         if let Some(position) = self
             .in_progress
             .iter()
@@ -209,7 +207,7 @@ impl Loader {
             });
         }
         for (init_path, init_display) in target.package_inits {
-            let init_canonical = canonicalize(&init_path, &init_display)?;
+            let init_canonical = identity_path(&init_path);
             // An `__init__.py` already on the in-progress stack is the
             // importer itself (a package initializer importing its own
             // submodule); loading it again would be a cycle. Re-loading an
@@ -232,22 +230,22 @@ impl Loader {
 
     /// The directory `request`'s dotted name resolves against: the source
     /// root for an absolute import, the importer's package (climbed
-    /// `level - 1` times) for a relative one. `Ok(None)` means the request
-    /// is not answerable here and lowers as a single-file compilation
-    /// would.
+    /// `level - 1` times) for a relative one. A base that cannot be
+    /// resolved at all carries its own rejection (see [`Base::rejected`])
+    /// rather than being absent.
     fn base_dir(
         &mut self,
         request: &ProjectImportRequest,
         importer_display: &str,
-    ) -> Result<Option<Base>, FrontendFailure> {
+    ) -> Result<Base, FrontendFailure> {
         if request.level == 0 {
             let root = self.source_root()?;
-            return Ok(Some(Base {
+            return Ok(Base {
                 path: root.canonical,
                 display: root.display,
                 relative: false,
                 rejection: None,
-            }));
+            });
         }
         let mut display = PathBuf::from(importer_display);
         display.pop();
@@ -257,7 +255,7 @@ impl Loader {
             // diagnostic can actually render.
             display = PathBuf::from(".");
         }
-        let mut canonical = canonicalize(&display, &display.to_string_lossy())?;
+        let mut canonical = identity_path(&display);
         for climb in 0..request.level {
             if !canonical.join("__init__.py").is_file() {
                 let message = if climb == 0 {
@@ -268,19 +266,19 @@ impl Loader {
                 } else {
                     "attempted relative import beyond the top-level package".to_string()
                 };
-                return Ok(Some(Base::rejected(message)));
+                return Ok(Base::rejected(message));
             }
             if climb + 1 < request.level {
                 canonical.pop();
                 display.pop();
             }
         }
-        Ok(Some(Base {
+        Ok(Base {
             path: canonical,
             display,
             relative: true,
             rejection: None,
-        }))
+        })
     }
 
     /// Discovers, once per invocation, the directory absolute project
@@ -512,6 +510,17 @@ fn display_root(dir: &Path, climbs: usize) -> PathBuf {
 fn canonicalize(path: &Path, display: &str) -> Result<PathBuf, FrontendFailure> {
     path.canonicalize()
         .map_err(|error| FrontendFailure::input(display.to_string(), error.to_string()))
+}
+
+/// The identity a path is memoized under: its canonical form when the
+/// filesystem can produce one, and the path as given otherwise. Every
+/// caller has already probed the path with `is_file`/`is_dir`, or is about
+/// to read it, so a canonicalization failure here is not the right place
+/// to report: the read that follows raises the real diagnostic, and the
+/// only cost of the fallback is that two spellings of one unreadable file
+/// memoize separately.
+fn identity_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(test)]

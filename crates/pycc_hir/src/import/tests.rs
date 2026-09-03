@@ -357,3 +357,97 @@ fn project_import_requests_skips_everything_the_stdlib_registry_answers() {
         ]
     );
 }
+
+#[test]
+fn a_wildcard_import_of_a_resolved_dependency_is_rejected() {
+    let fixture = Fixture::new(DEFINITIONS);
+    let diagnostic = fixture.first_error("from dep import *\n", &[]);
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "`from ... import *` (wildcard import) is not supported yet"
+    );
+}
+
+#[test]
+fn aliasing_a_name_imported_from_a_resolved_dependency_is_rejected() {
+    let fixture = Fixture::new(DEFINITIONS);
+    let diagnostic = fixture.first_error("from dep import helper as h\n", &[]);
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "`from ... import x as y` aliasing is not supported yet"
+    );
+}
+
+#[test]
+fn an_ancestor_shared_by_two_imported_classes_is_copied_once() {
+    // Each `from` statement copies its class *with its ancestors*; the
+    // second statement finds `ValueError` already in this module's table
+    // and skips the duplicate.
+    let fixture =
+        Fixture::new("class Left(ValueError):\n    pass\n\n\nclass Right(ValueError):\n    pass\n");
+    let lowered = fixture.lower_ok("from dep import Left\nfrom dep import Right\n");
+    assert_eq!(
+        binding_kinds(&lowered),
+        vec![
+            ("Left", ProjectBindingKind::Class),
+            ("Right", ProjectBindingKind::Class),
+        ]
+    );
+}
+
+#[test]
+fn one_type_alias_reached_through_two_modules_is_recorded_once() {
+    // `Alias` arrives both from the module that defines it and from the
+    // module that re-exports it; the second copy is dropped rather than
+    // duplicating the alias in the importer's own table.
+    let defining =
+        lower_dependency("type Alias = int\n\n\ndef helper(n: Alias) -> Alias:\n    return n\n");
+    let reexport = {
+        let parsed = parse("from defs import Alias, helper\n");
+        let mut resolved = ResolvedImports::default();
+        resolved.add_module("defs.py".to_string(), &defining);
+        for request in project_import_requests(&parsed) {
+            resolved.insert(
+                request.span,
+                ResolvedImport::Module(ResolvedModule {
+                    display_path: "defs.py".to_string(),
+                    hir: &defining,
+                    submodule_names: Vec::new(),
+                }),
+            );
+        }
+        lower_module(&parsed, &resolved)
+            .expect("the re-exporting fixture must lower")
+            .hir
+    };
+    let parsed =
+        parse("from defs import Alias\nfrom mid import Alias, helper\n\nn: Alias = helper(1)\n");
+    let mut resolved = ResolvedImports::default();
+    resolved.add_module("defs.py".to_string(), &defining);
+    resolved.add_module("mid.py".to_string(), &reexport);
+    for request in project_import_requests(&parsed) {
+        let (display_path, hir) = match request.module.as_deref() {
+            Some("defs") => ("defs.py", &defining),
+            _ => ("mid.py", &reexport),
+        };
+        resolved.insert(
+            request.span,
+            ResolvedImport::Module(ResolvedModule {
+                display_path: display_path.to_string(),
+                hir,
+                submodule_names: Vec::new(),
+            }),
+        );
+    }
+    let lowered = lower_module(&parsed, &resolved).expect("the importer must lower");
+    assert_eq!(
+        binding_kinds(&lowered),
+        vec![
+            ("Alias", ProjectBindingKind::TypeAlias),
+            ("Alias", ProjectBindingKind::TypeAlias),
+            ("helper", ProjectBindingKind::Function),
+        ]
+    );
+}
