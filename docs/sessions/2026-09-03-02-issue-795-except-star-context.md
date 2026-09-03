@@ -39,11 +39,12 @@ silently:
 - **Gap 2 -- `except* ExceptionGroup`.** CPython raises `TypeError` at
   runtime for `except* ExceptionGroup` / `except* BaseExceptionGroup`; pycc
   has no mechanism to raise it. `check_try_star_stmt` in
-  `crates/pycc_types/src/exception.rs` now rejects both names at compile
-  time with `C0001` and a message that says why. D-222 records that choice
+  `crates/pycc_types/src/exception.rs` now rejects both names -- and any
+  user class whose MRO reaches either of them -- at compile time with
+  `C0001` and a message that says why. D-222 records that choice
   and why a compile-time `C0001` is the honest form of the divergence.
 
-Nine new `tests/diagnostics/` fixture pairs cover both gaps plus the
+Ten new `tests/diagnostics/` fixture pairs cover both gaps plus the
 shielded-`break`, `break`-inside-`finally` and module-scope precedence
 paths; `crates/pycc_hir/src/stmt/exception.rs` hosts fifteen inline
 `except_star_context_tests` for the context-threading states that have no

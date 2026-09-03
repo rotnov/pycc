@@ -111,5 +111,5 @@ status: accepted
     constant-fold before lowering ever sees it, so it is still accepted. That
     is a pre-existing, general property of the fold rather than anything this
     entry introduces — the same hole swallows a `break` in a `finally` — and
-    it is tracked separately as the TYPE_CHECKING constant-fold gap (#798's
-    area).
+    it is tracked separately by
+    [#905](https://github.com/rotnov/pycc/issues/905).

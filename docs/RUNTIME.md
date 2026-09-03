@@ -240,8 +240,8 @@ recorded (see D-222, which narrows D-202):
   CPython's own precedence. One residual hole: a `return` guarded by `if
   TYPE_CHECKING:` is erased by the constant-fold before lowering sees it and
   so is still accepted -- a pre-existing, general property of that fold
-  rather than anything specific to `except*`, tracked as the TYPE_CHECKING
-  constant-fold gap (#798's area).
+  rather than anything specific to `except*`, tracked by
+  [#905](https://github.com/rotnov/pycc/issues/905).
 - `except* ExceptionGroup:` and `except* BaseExceptionGroup:`, and any
   `except*` handler naming a user class whose MRO reaches either of them
   (`class G(ExceptionGroup): ...` then `except* G:`), are rejected at
