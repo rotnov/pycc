@@ -1309,3 +1309,27 @@ fn return_in_finally_is_rejected_at_build_time() {
         "expected the PEP 765 finally-return message, got: {err}"
     );
 }
+
+#[test]
+fn an_exception_class_crosses_a_project_import_boundary() {
+    // #898 (Part 1 of #881): the builtin exception hierarchy is seeded per
+    // module but reconciled program-wide by `pycc_hir::link`, and the
+    // runtime type tags are assigned once over the linked program -- so a
+    // class declared in one file is raisable and catchable in another.
+    let dir = ScratchDir::new("382_project_import").expect("failed to create scratch dir");
+    write_fixture(
+        &dir,
+        "errors.py",
+        "class AppError(ValueError):\n    pass\n\n\nclass OtherError(ValueError):\n    pass\n",
+    );
+    let (ok, out, err) = build_and_run(
+        &dir,
+        "main.py",
+        "from errors import AppError, OtherError\n\n\
+         try:\n    raise AppError(\"boom\")\nexcept OtherError:\n    print(\"wrong\")\n\
+         except AppError:\n    print(\"caught\")\n\
+         except ValueError:\n    print(\"too broad\")\n",
+    );
+    assert!(ok, "the two-file program must build and run: {err}");
+    assert_eq!(String::from_utf8_lossy(&out).trim(), "caught");
+}

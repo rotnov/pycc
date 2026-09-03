@@ -735,6 +735,14 @@ fn c0001_get_zero_args_on_non_dict() {
     assert_diagnostic_matches_fixture("c0001_get_zero_args_on_non_dict");
 }
 
+// #898 (Part 1 of #881): a relative import from a file whose directory has
+// no `__init__.py` is what CPython itself rejects, so it is `T0021`, not one
+// of pycc's own capability gaps.
+#[test]
+fn t0021_relative_import_outside_package() {
+    assert_diagnostic_matches_fixture("t0021_relative_import_outside_package");
+}
+
 /// Issue #890: no checked-in diagnostic fixture may carry an AST node's
 /// Rust `Debug` form. Every `ruff_python_ast` node's `Debug` output contains
 /// `node_index: NodeIndex(`, so scanning for that marker is sufficient; this
