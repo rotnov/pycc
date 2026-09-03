@@ -41,6 +41,21 @@ status: accepted
     `import m`, `from pkg import submodule`, a namespace package as the terminal
     segment, a top-level name defined by two linked modules). An import cycle is
     `E0108`, now actually emitted.
+  - **A rejected import poisons the name it would have bound.** D-219 rule 3
+    defined the poisonable name of a statement as the class or type alias it
+    binds and said imports bind nothing poisonable. That held while every
+    import either lowered or was the only diagnostic in the file; once a file
+    can fail on a project import and keep lowering, a rejected `import`/`from`
+    statement leaves its bound name undefined and every later reference to it
+    is a cascade of that one failure. So a failing import now poisons what it
+    would have bound: the `asname` when present, otherwise the imported name
+    for `from ... import name`, and the *first dotted segment* for a plain
+    `import pkg.dep` (which binds `pkg`, not `pkg.dep`); `import a, b` fails
+    as a whole statement and poisons both. A `Stmt::Import` lowers -- and so
+    poisons nothing -- exactly when it has one alias, no `asname`, and a
+    module name `pycc_std` resolves. The name poisoned is the one bound
+    locally, never the source-side name: after `from .dep import helper as h`
+    a later `h` is the cascade and a later `helper` is a genuine unknown name.
   - **Seeding reconciliation.** Each module decides its own builtin-exception
     seeding, so `link` strips every module's synthetic entries and appends one set
     if any module seeded. A program that both seeds and shadows a builtin exception

@@ -603,6 +603,37 @@ pub(crate) fn poisonable_names(stmt: &Stmt) -> Vec<&str> {
             }
             vec![target.id.as_str()]
         }
+        Stmt::Import(import) => {
+            // `import::lower_import_stmt` accepts exactly one shape: a single
+            // alias, no `asname`, and a module name `pycc_std` resolves. The
+            // condition is exact rather than an approximation of that arm --
+            // its earlier `ResolvedImport::Found` branch cannot fire for a
+            // stdlib-resolving name, because `project_import_request` returns
+            // `None` for one, so no answer is ever recorded for its span.
+            if let [alias] = import.names.as_slice()
+                && alias.asname.is_none()
+                && pycc_std::resolve_module(alias.name.as_str()).is_some()
+            {
+                return Vec::new();
+            }
+            // Every other shape fails, so poison what it would have bound:
+            // the alias when present, and otherwise the first dotted segment,
+            // since `import pkg.dep` binds `pkg`. `import a, b` fails as a
+            // whole statement, so both of its names are poisoned.
+            import
+                .names
+                .iter()
+                .map(|alias| {
+                    alias.asname.as_ref().map_or_else(
+                        || {
+                            let name = alias.name.as_str();
+                            name.split_once('.').map_or(name, |(head, _)| head)
+                        },
+                        |asname| asname.as_str(),
+                    )
+                })
+                .collect()
+        }
         Stmt::ImportFrom(import) => {
             let is_project_import = import.level != 0
                 || import

@@ -118,35 +118,38 @@ fn every_cascade_of_a_skipped_class_is_silent_and_transitive() {
 
 #[test]
 fn non_cascade_shapes_after_a_skipped_import_stay_reported() {
-    // `os` is import-bound, so it is never poisonable (correction 7): the
-    // bare annotation is a genuine gap that exists with or without the
-    // import, the attribute annotation fails on its own shape, and the
-    // value-position reference is not an HIR lookup at all.
+    // The rejected `import os` poisons `os`, so the bare annotation `p: os`
+    // is suppressed as a cascade. This supersedes "correction 7", which read
+    // the question as "would `p: os` still be an error once `import os` is
+    // supported?" (yes) rather than the question poisoning actually asks:
+    // "is the message we print caused by the earlier failure?". `unknown
+    // annotation name `os`` is produced *only* because nothing bound `os`,
+    // and it is misleading once the import gap is already reported at 1:1;
+    // a future `import os` would fail `p: os` through a different path with
+    // a correctly worded message. What survives is the boundary of the
+    // mechanism: the attribute annotation fails on its own shape rather than
+    // on a name lookup, and the value-position `os.getpid()` is not an HIR
+    // name lookup at all -- neither is silenced by the poisoned name.
     let source = "import os\n\
                   def h(p: os) -> int:\n    return 1\n\
                   def h2(p: os.PathLike) -> int:\n    return 1\n\
                   def h3() -> int:\n    return os.getpid()\n";
     let diagnostics = lower_all_err(source);
-    assert_eq!(diagnostics.len(), 3, "{diagnostics:#?}");
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
     assert_c0001(
         &diagnostics[0],
         IMPORT_OS_GAP,
         span_of(source, "import os", 0),
     );
-    assert_c0001(
-        &diagnostics[1],
-        &unknown_annotation_name_message("os"),
-        span_of(source, "os", 1),
-    );
-    assert_eq!(diagnostics[2].code, "C0001");
+    assert_eq!(diagnostics[1].code, "C0001");
     assert!(
-        diagnostics[2]
+        diagnostics[1]
             .message
             .starts_with("only a bare name type annotation is supported so far"),
         "{}",
-        diagnostics[2].message
+        diagnostics[1].message
     );
-    assert_eq!(diagnostics[2].span, Some(span_of(source, "os.PathLike", 0)));
+    assert_eq!(diagnostics[1].span, Some(span_of(source, "os.PathLike", 0)));
 }
 
 #[test]
@@ -324,7 +327,14 @@ fn poisonable_name_per_statement_kind() {
         ("X: Final = 1\n", None),
         // Annotation is not a `Name`.
         ("X: list[int] = []\n", None),
-        ("import os\n", None),
+        // A plain `import` binds a name only when it lowers: exactly one
+        // alias, no `asname`, and a module `pycc_std` resolves.
+        ("import math\n", None),
+        ("import os\n", Some("os")),
+        ("import math as m\n", Some("m")),
+        ("import pkg.dep\n", Some("pkg")),
+        ("import pkg.dep as d\n", Some("d")),
+        ("import math, os\n", Some("math")),
         ("from math import sqrt\n", None),
         ("def f() -> int:\n    return 1\n", None),
         ("x = 1\n", None),
@@ -484,6 +494,83 @@ fn a_rejected_project_import_poisons_the_names_it_would_have_bound() {
     assert_eq!(
         diagnostics[0].span,
         Some(span_of(source, "from .dep import Point", 0))
+    );
+}
+
+const CLASS_BODY: &str = "    def __init__(self) -> None:\n        self.v = 1\n";
+
+#[test]
+fn a_rejected_plain_import_poisons_its_alias() {
+    // `import x as y` is rejected outright, and the name it would have
+    // bound is `y`, so a later `y` is a cascade while an unrelated name is
+    // still reported.
+    let source = format!("import pkg.dep as d\nclass Foo(d):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        diagnostics[0].message,
+        "`import ... as ...` aliasing is not supported yet"
+    );
+
+    let source = format!("import pkg.dep as d\nclass Foo(pkg):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert!(
+        diagnostics[1]
+            .message
+            .contains("inherits from unknown class `pkg`"),
+        "unexpected second diagnostic: {:#?}",
+        diagnostics[1]
+    );
+}
+
+#[test]
+fn a_rejected_dotted_import_poisons_only_its_first_segment() {
+    // `import pkg.dep` binds `pkg`, not `pkg.dep`, so poisoning the whole
+    // dotted name would leave the real cascade unsuppressed.
+    let source = format!("import pkg.dep\nclass Foo(pkg):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        diagnostics[0].message,
+        "import of module `pkg.dep` is not supported yet"
+    );
+}
+
+#[test]
+fn a_rejected_stdlib_import_poisons_the_name_it_would_have_bound() {
+    let source = format!("import os\nclass Foo(os):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].message, IMPORT_OS_GAP);
+}
+
+#[test]
+fn a_multi_name_import_poisons_every_name_it_would_have_bound() {
+    let source = format!(
+        "import pkg.dep, other\nclass Foo(pkg):\n{CLASS_BODY}class Bar(other):\n{CLASS_BODY}"
+    );
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        diagnostics[0].message,
+        "only a single module per `import` statement is supported so far"
+    );
+}
+
+#[test]
+fn a_successful_stdlib_import_poisons_nothing() {
+    // `import math` lowers, so it suppresses nothing: a later use of the
+    // bound name as a class base is a genuine diagnostic, not a cascade.
+    let source = format!("import math\nclass Foo(math):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("inherits from unknown class `math`"),
+        "unexpected diagnostic: {:#?}",
+        diagnostics[0]
     );
 }
 
