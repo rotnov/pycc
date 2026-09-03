@@ -350,7 +350,7 @@ For each newly observed upstream release:
 | [657](https://peps.python.org/pep-0657/) | Fine-grained error locations | rt | (drives pycc diagnostics UX) | ☐ |
 | [673](https://peps.python.org/pep-0673/) | `Self` as method return/param annotation (#387 Part 1) — resolves to the class's own instance type at HIR-lowering time | typing | `pep_0673_self.py` | ◐ |
 | [675](https://peps.python.org/pep-0675/) | `LiteralString` | typing | `py311/pep_0675_literalstring.py` | ☐ |
-| [681](https://peps.python.org/pep-0681/) | `dataclass_transform` | typing | `py311/pep_0681_dc_transform.py` | ☐ |
+| [681](https://peps.python.org/pep-0681/) | `dataclass_transform` | typing | no fixture — structurally blocked: pycc treats `@dataclass_transform()` as `@dataclass` while CPython's `typing.dataclass_transform` synthesizes nothing at runtime, so any fixture exercising the synthesized methods diverges from the oracle by construction ([D-196](./decisions/D-196-pep-681-is-a-second-itemized-row-permanently.md), [#749](https://github.com/rotnov/pycc/issues/749)); flipping needs a separate decision removing that divergence, not a fixture | ☐ |
 
 ## Python 3.12
 

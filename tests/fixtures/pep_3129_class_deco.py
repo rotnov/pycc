@@ -18,8 +18,8 @@
 # CPython's own `typing.dataclass_transform` is a pure marker that
 # synthesizes nothing -- so a class built that way diverges from the
 # oracle by construction and cannot appear in a byte-for-byte conformance
-# fixture at all. That divergence is tracked separately as #248, and PEP
-# 681 keeps its own matrix row and its own fixture.
+# fixture at all. That divergence is recorded in D-196 (see also #749);
+# PEP 681 keeps its own matrix row, marked "no fixture" for that reason.
 from dataclasses import dataclass
 
 

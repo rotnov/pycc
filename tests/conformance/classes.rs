@@ -294,7 +294,7 @@ fn pep_0698_override_matches_cpython_3_14_7_byte_for_byte() {
 // class-decorator form pycc supports and CPython agrees with (`@dataclass`);
 // `@dataclass_transform()` is deliberately absent because pycc treats it as
 // `@dataclass` while CPython synthesizes nothing, a divergence that cannot
-// appear in a byte-for-byte fixture and is tracked as #248.
+// appear in a byte-for-byte fixture and is recorded in D-196 (see #749).
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
 fn pep_3129_class_deco_matches_cpython_3_14_7_byte_for_byte() {

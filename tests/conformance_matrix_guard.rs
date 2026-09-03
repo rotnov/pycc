@@ -127,24 +127,13 @@ fn evidence_rows(markdown: &str) -> Vec<MatrixRow> {
 /// not registered in the conformance harness (`tests/conformance.rs` or
 /// `tests/conformance/*.rs`). Each entry records why, so that
 /// removing one is a decision someone made rather than a line that rotted.
-const UNREGISTERED_FIXTURE_ALLOWLIST: &[(&str, &str)] = &[
-    (
-        "pep_0526_var_annotations_smoke.py",
-        "Documented throwaway smoke fixture \
+const UNREGISTERED_FIXTURE_ALLOWLIST: &[(&str, &str)] = &[(
+    "pep_0526_var_annotations_smoke.py",
+    "Documented throwaway smoke fixture \
          (docs/superpowers/plans/2026-07-30-v0-2-pr9-conformance-harness.md), consumed by \
          tests/slice1_codegen_depth.rs. It is not a conformance fixture and has no oracle \
          comparison.",
-    ),
-    (
-        "pep_0681_dc_transform.py",
-        "Blocked on the deliberate @dataclass_transform()-as-@dataclass divergence, recorded in \
-         D-196 and tracked by issue #749: pycc synthesizes __init__/__eq__/__repr__ where \
-         CPython's own typing.dataclass_transform synthesizes nothing, so this fixture cannot \
-         match the oracle byte-for-byte at all. #579 registered the other three decorator \
-         fixtures; this one is not merely awaiting the stdlib surface. (The prior citation here, \
-         issue #248, is closed and never mentions PEP 681 -- it was stale.)",
-    ),
-];
+)];
 
 fn is_allowlisted(fixture: &str) -> bool {
     UNREGISTERED_FIXTURE_ALLOWLIST
