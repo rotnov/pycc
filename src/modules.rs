@@ -210,11 +210,14 @@ impl Loader {
         }
         for (init_path, init_display) in target.package_inits {
             let init_canonical = canonicalize(&init_path, &init_display)?;
-            if init_canonical == canonical
-                || self
-                    .in_progress
-                    .iter()
-                    .any(|(path, _)| *path == init_canonical)
+            // An `__init__.py` already on the in-progress stack is the
+            // importer itself (a package initializer importing its own
+            // submodule); loading it again would be a cycle. Re-loading an
+            // *already finished* one is harmless -- `load_module` memoizes.
+            if self
+                .in_progress
+                .iter()
+                .any(|(path, _)| *path == init_canonical)
             {
                 continue;
             }
@@ -469,10 +472,11 @@ fn submodule_names(dir: &Path) -> Vec<String> {
         .flatten()
         .flatten()
         .filter_map(|entry| {
-            let path = entry.path();
-            let name = path.file_stem()?.to_string_lossy().into_owned();
-            let is_module = path.extension().is_some_and(|ext| ext == "py") || path.is_dir();
-            (is_module && name != "__init__").then_some(name)
+            let name = entry.file_name().to_string_lossy().into_owned();
+            match name.strip_suffix(".py") {
+                Some(stem) => (stem != "__init__").then(|| stem.to_string()),
+                None => entry.path().is_dir().then_some(name),
+            }
         })
         .collect();
     names.sort();
@@ -509,3 +513,6 @@ fn canonicalize(path: &Path, display: &str) -> Result<PathBuf, FrontendFailure> 
     path.canonicalize()
         .map_err(|error| FrontendFailure::input(display.to_string(), error.to_string()))
 }
+
+#[cfg(test)]
+mod tests;

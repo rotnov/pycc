@@ -1,0 +1,596 @@
+//! Unit tests for the driver's project-module loader (#898, Part 1 of
+//! #881, D-222): source-root discovery, dotted-name probing, package
+//! `__init__.py` ordering, cycle detection, and every filesystem failure
+//! the walk can hit.
+//!
+//! Every fixture lives inside a [`ScratchDir`] and is addressed by an
+//! absolute path, so the tests never depend on (or mutate) the process
+//! working directory and can run in parallel. The bare-file-name entry
+//! spelling, which is the one case that *is* working-directory-relative,
+//! is covered by `tests/issue_881_project_imports.rs` through the real
+//! CLI.
+
+use super::*;
+use pycc_scratch::ScratchDir;
+
+/// Writes `contents` to `root/relative`, creating parent directories.
+fn write(root: &Path, relative: &str, contents: &str) -> PathBuf {
+    let path = root.join(relative);
+    std::fs::create_dir_all(path.parent().expect("a fixture path has a parent"))
+        .expect("fixture directories must be creatable");
+    std::fs::write(&path, contents).expect("a fixture file must be writable");
+    path
+}
+
+/// The display paths of a successfully loaded program, in load order.
+fn loaded_paths(entry: &Path) -> Vec<String> {
+    load(entry)
+        .unwrap_or_else(|failure| panic!("must load: {}", describe(&failure)))
+        .modules
+        .into_iter()
+        .map(|module| {
+            Path::new(&module.display_path)
+                .file_name()
+                .expect("a loaded module has a file name")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect()
+}
+
+fn describe(failure: &FrontendFailure) -> String {
+    match failure {
+        FrontendFailure::Input { path, message } => format!("{path}: {message}"),
+        FrontendFailure::Compile { files } => files
+            .iter()
+            .flat_map(|file| {
+                file.diagnostics
+                    .iter()
+                    .map(move |d| format!("{}: {} {}", file.path, d.code, d.message))
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+    }
+}
+
+/// The one diagnostic a failing load reports, with the file it belongs to.
+fn first_diagnostic(entry: &Path) -> (String, String, String) {
+    match load(entry).map(|_| ()).expect_err("this fixture must fail") {
+        FrontendFailure::Compile { files } => {
+            let file = &files[0];
+            let diagnostic = &file.diagnostics[0];
+            (
+                file.path.clone(),
+                diagnostic.code.to_string(),
+                diagnostic.message.clone(),
+            )
+        }
+        FrontendFailure::Input { path, message } => {
+            panic!("expected a diagnostic: {path}: {message}")
+        }
+    }
+}
+
+fn input_failure(entry: &Path) -> (String, String) {
+    match load(entry).map(|_| ()).expect_err("this fixture must fail") {
+        FrontendFailure::Input { path, message } => (path, message),
+        FrontendFailure::Compile { files } => {
+            panic!(
+                "expected an input failure, got diagnostics in {}",
+                files[0].path
+            )
+        }
+    }
+}
+
+const HELPER: &str = "def helper(x: int) -> int:\n    return x + 1\n";
+const USES_HELPER: &str =
+    "from helper import helper\n\n\ndef main() -> None:\n    print(helper(1))\n";
+
+#[test]
+fn a_single_file_with_no_project_import_loads_alone() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    let entry = write(&scratch, "main.py", "def main() -> None:\n    print(1)\n");
+    assert_eq!(loaded_paths(&entry), vec!["main.py"]);
+}
+
+#[test]
+fn a_sibling_module_resolves_against_the_working_directory_root() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "helper.py", HELPER);
+    let entry = write(&scratch, "main.py", USES_HELPER);
+    assert_eq!(loaded_paths(&entry), vec!["helper.py", "main.py"]);
+}
+
+#[test]
+fn the_root_walks_out_of_every_enclosing_package() {
+    // `pkg/` has an `__init__.py`, so the entry's own directory is inside a
+    // package and the absolute name `helper` resolves one level up.
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "helper.py", HELPER);
+    write(&scratch, "pkg/__init__.py", "");
+    let entry = write(&scratch, "pkg/main.py", USES_HELPER);
+    assert_eq!(loaded_paths(&entry), vec!["helper.py", "main.py"]);
+}
+
+#[test]
+fn a_pycc_toml_entry_names_the_source_root() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(
+        &scratch,
+        "pycc.toml",
+        "[project]\nname = \"demo\"\nentry = \"src/main.py\"\npython = \"3.14\"\n",
+    );
+    write(&scratch, "src/helper.py", HELPER);
+    // `src/` has no `__init__.py`, so only the manifest can put the root
+    // there; without it the walk would stop at `src/` anyway, so the
+    // dependency is placed one level deeper to make the difference visible.
+    write(&scratch, "src/pkg/__init__.py", "");
+    let entry = write(&scratch, "src/pkg/main.py", USES_HELPER);
+    assert_eq!(loaded_paths(&entry), vec!["helper.py", "main.py"]);
+}
+
+#[test]
+fn an_unparseable_pycc_toml_is_an_input_failure() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "pycc.toml", "this is not toml\n");
+    let entry = write(&scratch, "main.py", USES_HELPER);
+    let (path, message) = input_failure(&entry);
+    assert!(path.ends_with("pycc.toml"), "unexpected path: {path}");
+    assert!(!message.is_empty());
+}
+
+#[test]
+fn a_pycc_toml_naming_an_unreachable_entry_falls_back_to_the_package_walk() {
+    // The manifest's `entry` directory is not an ancestor of the file being
+    // compiled, so `climbs_between` refuses it and the package walk decides
+    // the root instead.
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(
+        &scratch,
+        "pycc.toml",
+        "[project]\nname = \"demo\"\nentry = \"elsewhere/main.py\"\npython = \"3.14\"\n",
+    );
+    write(&scratch, "elsewhere/main.py", "");
+    write(&scratch, "helper.py", HELPER);
+    let entry = write(&scratch, "main.py", USES_HELPER);
+    assert_eq!(loaded_paths(&entry), vec!["helper.py", "main.py"]);
+}
+
+#[test]
+fn a_pycc_toml_naming_a_missing_entry_directory_falls_back_to_the_package_walk() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(
+        &scratch,
+        "pycc.toml",
+        "[project]\nname = \"demo\"\nentry = \"gone/main.py\"\npython = \"3.14\"\n",
+    );
+    write(&scratch, "helper.py", HELPER);
+    let entry = write(&scratch, "main.py", USES_HELPER);
+    assert_eq!(loaded_paths(&entry), vec!["helper.py", "main.py"]);
+}
+
+#[test]
+fn the_standard_library_wins_over_a_same_named_project_module() {
+    // `pycc_std` answers `math` before the request ever reaches the loader,
+    // so the local `math.py` is not compiled into the program.
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(
+        &scratch,
+        "math.py",
+        "def sqrt(x: float) -> float:\n    return x\n",
+    );
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from math import sqrt\n\n\ndef main() -> None:\n    print(sqrt(4.0))\n",
+    );
+    assert_eq!(loaded_paths(&entry), vec!["main.py"]);
+}
+
+#[test]
+fn a_module_file_wins_over_a_package_of_the_same_name() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "helper.py", HELPER);
+    write(
+        &scratch,
+        "helper/__init__.py",
+        "def helper(x: int) -> str:\n    return \"wrong\"\n",
+    );
+    let entry = write(&scratch, "main.py", USES_HELPER);
+    let program =
+        load(&entry).unwrap_or_else(|failure| panic!("must load: {}", describe(&failure)));
+    assert!(
+        program.modules[0].display_path.ends_with("helper.py"),
+        "unexpected dependency: {}",
+        program.modules[0].display_path
+    );
+}
+
+#[test]
+fn a_package_initializer_is_loaded_before_its_submodule() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "pkg/__init__.py", "print(\"init\")\n");
+    write(&scratch, "pkg/mod.py", HELPER);
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from pkg.mod import helper\n\n\ndef main() -> None:\n    print(helper(1))\n",
+    );
+    assert_eq!(
+        loaded_paths(&entry),
+        vec!["__init__.py", "mod.py", "main.py"]
+    );
+}
+
+#[test]
+fn a_package_initializer_importing_its_own_submodule_is_not_a_cycle() {
+    // Loading `pkg.mod` would normally preload `pkg/__init__.py` first, but
+    // it is the module currently being loaded, so the preload is skipped.
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(
+        &scratch,
+        "pkg/__init__.py",
+        "from pkg.mod import helper\n\n\ndef wrapper(x: int) -> int:\n    return helper(x)\n",
+    );
+    write(&scratch, "pkg/mod.py", HELPER);
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from pkg import wrapper\n\n\ndef main() -> None:\n    print(wrapper(1))\n",
+    );
+    assert_eq!(
+        loaded_paths(&entry),
+        vec!["mod.py", "__init__.py", "main.py"]
+    );
+}
+
+#[test]
+fn an_intermediate_directory_without_an_initializer_still_resolves() {
+    // PEP 420: `outer/` is a namespace directory on the way to `outer.mod`,
+    // which is a regular module and therefore supported.
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "outer/mod.py", HELPER);
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from outer.mod import helper\n\n\ndef main() -> None:\n    print(helper(1))\n",
+    );
+    assert_eq!(loaded_paths(&entry), vec!["mod.py", "main.py"]);
+}
+
+#[test]
+fn a_namespace_package_as_the_import_target_is_rejected() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "outer/mod.py", HELPER);
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from outer import mod\n\n\ndef main() -> None:\n    print(1)\n",
+    );
+    let (path, code, message) = first_diagnostic(&entry);
+    assert!(path.ends_with("main.py"), "unexpected path: {path}");
+    assert_eq!(code, "C0001");
+    assert!(
+        message.contains("namespace package") && message.contains("is not supported yet"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn a_bare_import_of_a_real_project_module_is_recognized_but_unsupported() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "helper.py", HELPER);
+    let entry = write(
+        &scratch,
+        "main.py",
+        "import helper\n\n\ndef main() -> None:\n    print(1)\n",
+    );
+    let (_, code, message) = first_diagnostic(&entry);
+    assert_eq!(code, "C0001");
+    assert!(
+        message.contains("module namespace bindings (`import helper`)"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn an_absolute_name_that_resolves_nowhere_keeps_the_single_file_diagnostic() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from nowhere import thing\n\n\ndef main() -> None:\n    print(1)\n",
+    );
+    let (_, code, message) = first_diagnostic(&entry);
+    assert_eq!(code, "C0001");
+    assert!(
+        message.contains("import of module `nowhere` is not supported yet"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn a_relative_import_outside_a_package_is_rejected() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "helper.py", HELPER);
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from .helper import helper\n\n\ndef main() -> None:\n    print(helper(1))\n",
+    );
+    let (_, code, message) = first_diagnostic(&entry);
+    assert_eq!(code, "T0021");
+    assert!(
+        message.contains("attempted relative import with no known parent package")
+            && message.contains("has no `__init__.py`"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn a_sibling_relative_import_inside_a_package_resolves() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "pkg/__init__.py", "");
+    write(&scratch, "pkg/helper.py", HELPER);
+    let entry = write(
+        &scratch,
+        "pkg/main.py",
+        "from .helper import helper\n\n\ndef main() -> None:\n    print(helper(1))\n",
+    );
+    assert_eq!(loaded_paths(&entry), vec!["helper.py", "main.py"]);
+}
+
+#[test]
+fn a_parent_relative_import_climbs_one_package() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "pkg/__init__.py", "");
+    write(&scratch, "pkg/helper.py", HELPER);
+    write(&scratch, "pkg/inner/__init__.py", "");
+    let entry = write(
+        &scratch,
+        "pkg/inner/main.py",
+        "from ..helper import helper\n\n\ndef main() -> None:\n    print(helper(1))\n",
+    );
+    assert_eq!(loaded_paths(&entry), vec!["helper.py", "main.py"]);
+}
+
+#[test]
+fn a_relative_import_beyond_the_top_level_package_is_rejected() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "pkg/__init__.py", "");
+    let entry = write(
+        &scratch,
+        "pkg/main.py",
+        "from ..helper import helper\n\n\ndef main() -> None:\n    print(helper(1))\n",
+    );
+    let (_, code, message) = first_diagnostic(&entry);
+    assert_eq!(code, "T0021");
+    assert_eq!(
+        message,
+        "attempted relative import beyond the top-level package"
+    );
+}
+
+#[test]
+fn a_relative_name_that_resolves_nowhere_is_rejected() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "pkg/__init__.py", "");
+    let entry = write(
+        &scratch,
+        "pkg/main.py",
+        "from .missing import helper\n\n\ndef main() -> None:\n    print(helper(1))\n",
+    );
+    let (_, code, message) = first_diagnostic(&entry);
+    assert_eq!(code, "T0021");
+    assert!(
+        message.contains("no module named `.missing` in `"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn a_bare_relative_import_binds_the_package_itself() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "pkg/__init__.py", HELPER);
+    let entry = write(
+        &scratch,
+        "pkg/main.py",
+        "from . import helper\n\n\ndef main() -> None:\n    print(helper(1))\n",
+    );
+    assert_eq!(loaded_paths(&entry), vec!["__init__.py", "main.py"]);
+}
+
+#[test]
+fn an_import_cycle_is_reported_with_its_chain() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(
+        &scratch,
+        "a.py",
+        "from b import second\n\n\ndef first(x: int) -> int:\n    return second(x)\n",
+    );
+    write(
+        &scratch,
+        "b.py",
+        "from a import first\n\n\ndef second(x: int) -> int:\n    return first(x)\n",
+    );
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from a import first\n\n\ndef main() -> None:\n    print(first(1))\n",
+    );
+    let (path, code, message) = first_diagnostic(&entry);
+    assert!(
+        path.ends_with("b.py"),
+        "reported in the importing file: {path}"
+    );
+    assert_eq!(code, "E0108");
+    assert!(
+        message.starts_with("import cycle: ") && message.matches("a.py").count() == 2,
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn one_file_reached_by_two_spellings_is_one_module() {
+    // `pkg` is a symlink to `real`, so `pkg.mod` and `real.mod` canonicalize
+    // to the same file and must be loaded once.
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "real/__init__.py", "");
+    write(
+        &scratch,
+        "real/mod.py",
+        "def helper(x: int) -> int:\n    return x + 1\n\n\ndef other(x: int) -> int:\n    return x - 1\n",
+    );
+    symlink_dir(&scratch.join("real"), &scratch.join("pkg"));
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from real.mod import helper\nfrom pkg.mod import other\n\n\n\
+         def main() -> None:\n    print(helper(1) + other(1))\n",
+    );
+    let program =
+        load(&entry).unwrap_or_else(|failure| panic!("must load: {}", describe(&failure)));
+    let modules: Vec<&str> = program
+        .modules
+        .iter()
+        .map(|module| module.display_path.as_str())
+        .collect();
+    assert_eq!(
+        modules.len(),
+        3,
+        "two __init__ spellings plus mod.py and main.py would be four: {modules:?}"
+    );
+}
+
+#[cfg(unix)]
+fn symlink_dir(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).expect("a fixture symlink must be creatable");
+}
+
+#[cfg(not(unix))]
+fn symlink_dir(target: &Path, link: &Path) {
+    std::os::windows::fs::symlink_dir(target, link).expect("a fixture symlink must be creatable");
+}
+
+#[test]
+fn an_undecodable_dependency_is_an_input_failure() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    std::fs::write(scratch.join("helper.py"), [0xff, 0xfe, 0x00]).expect("write");
+    let entry = write(&scratch, "main.py", USES_HELPER);
+    let (path, message) = input_failure(&entry);
+    assert!(path.ends_with("helper.py"), "unexpected path: {path}");
+    assert!(!message.is_empty());
+}
+
+#[test]
+fn a_dependency_that_does_not_parse_reports_against_its_own_file() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "helper.py", "def helper(\n");
+    let entry = write(&scratch, "main.py", USES_HELPER);
+    let (path, _, _) = first_diagnostic(&entry);
+    assert!(path.ends_with("helper.py"), "unexpected path: {path}");
+}
+
+#[test]
+fn a_dependency_that_does_not_lower_reports_against_its_own_file() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "helper.py", "class Bare:\n    pass\n");
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from helper import Bare\n\n\ndef main() -> None:\n    print(1)\n",
+    );
+    let (path, code, _) = first_diagnostic(&entry);
+    assert!(path.ends_with("helper.py"), "unexpected path: {path}");
+    assert_eq!(code, "C0001");
+}
+
+#[test]
+fn a_missing_entry_file_is_an_input_failure() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    let entry = scratch.join("missing.py");
+    let (path, message) = input_failure(&entry);
+    assert!(path.ends_with("missing.py"), "unexpected path: {path}");
+    assert!(!message.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_dependency_is_an_input_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    let helper = write(&scratch, "helper.py", HELPER);
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    let entry = write(&scratch, "main.py", USES_HELPER);
+    let result = load(&entry);
+    // Running as root defeats the permission bit entirely; the load then
+    // simply succeeds and there is nothing to assert.
+    if let Err(FrontendFailure::Input { path, message }) = result {
+        assert!(path.ends_with("helper.py"), "unexpected path: {path}");
+        assert!(!message.is_empty());
+    }
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_pycc_toml_is_an_input_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    let toml = write(
+        &scratch,
+        "pycc.toml",
+        "[project]\nname = \"demo\"\nentry = \"main.py\"\npython = \"3.14\"\n",
+    );
+    std::fs::set_permissions(&toml, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    write(&scratch, "helper.py", HELPER);
+    let entry = write(&scratch, "main.py", USES_HELPER);
+    let result = load(&entry);
+    if let Err(FrontendFailure::Input { path, message }) = result {
+        assert!(path.ends_with("pycc.toml"), "unexpected path: {path}");
+        assert!(!message.is_empty());
+    }
+    std::fs::set_permissions(&toml, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+}
+
+#[test]
+fn submodule_names_lists_modules_and_packages_only() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "pkg/__init__.py", "");
+    write(&scratch, "pkg/beta.py", "");
+    write(&scratch, "pkg/alpha/__init__.py", "");
+    write(&scratch, "pkg/README.txt", "");
+    assert_eq!(
+        submodule_names(&scratch.join("pkg")),
+        vec!["alpha".to_string(), "beta".to_string()]
+    );
+}
+
+#[test]
+fn submodule_names_of_a_missing_directory_is_empty() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    assert!(submodule_names(&scratch.join("gone")).is_empty());
+}
+
+#[test]
+fn climbs_between_counts_components_and_refuses_a_non_ancestor() {
+    assert_eq!(
+        climbs_between(Path::new("/a/b/c"), Path::new("/a")),
+        Some(2)
+    );
+    assert_eq!(climbs_between(Path::new("/a"), Path::new("/a")), Some(0));
+    assert_eq!(climbs_between(Path::new("/a/b"), Path::new("/x")), None);
+}
+
+#[test]
+fn display_root_trims_components_and_pads_with_parent_links() {
+    assert_eq!(display_root(Path::new("a/b/c"), 0), PathBuf::from("a/b/c"));
+    assert_eq!(display_root(Path::new("a/b/c"), 2), PathBuf::from("a"));
+    // Fewer components than climbs: the entry was named by a bare file
+    // name, so the root is above the working directory.
+    assert_eq!(display_root(Path::new(""), 2), PathBuf::from("../.."));
+    assert_eq!(display_root(Path::new("a"), 3), PathBuf::from("../.."));
+}
