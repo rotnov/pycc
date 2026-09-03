@@ -246,8 +246,10 @@ fn l0001_return_in_except_star() {
 }
 
 // An intervening loop inside the `except*` clause body does NOT shield a
-// `return` (it does shield `break`/`continue` -- see
-// `c0001_break_in_except_star_inside_a_loop_in_the_clause` below). Verified
+// `return` (it does shield `break`/`continue` -- that direction has no
+// public-CLI fixture, because the shielded form simply compiles; it is
+// covered by `crates/pycc_hir/src/stmt/exception.rs`'s
+// `except_star_context_tests` instead). Verified
 // against CPython 3.14.6: `for i in range(3): return 1` inside an `except*`
 // clause is still a `SyntaxError`, while the same loop containing `break`
 // compiles.
