@@ -217,7 +217,7 @@ fn except_star_inside_a_generic_function_body_type_checks() {
     let (ok, combined) = check_only(
         &dir,
         "generic.py",
-        "def identity[T](x: T) -> T:\n    try:\n        return x\n    except* ValueError:\n        return x\n    else:\n        return x\n    finally:\n        pass\n",
+        "def identity[T](x: T) -> T:\n    try:\n        return x\n    except* ValueError:\n        pass\n    else:\n        return x\n    finally:\n        pass\n    return x\n",
     );
     assert!(ok, "check failed: {combined}");
 }
@@ -264,7 +264,7 @@ fn except_star_with_finally_in_a_value_returning_function_returns_correctly() {
     let (ok, out, err) = build_and_run(
         &dir,
         "finally_ret.py",
-        "def f() -> int:\n    try:\n        raise ValueError(\"bad\")\n    except* ValueError:\n        return 2\n    finally:\n        print(\"cleanup\")\n\nprint(f())\n",
+        "def f() -> int:\n    try:\n        return 2\n    except* ValueError:\n        print(\"handler\")\n    finally:\n        print(\"cleanup\")\n    return 9\n\nprint(f())\n",
     );
     assert!(ok, "build/run failed: {err}");
     assert_eq!(out, b"cleanup\n2\n");
@@ -296,7 +296,7 @@ fn a_try_star_else_that_itself_returns_never_falls_through() {
     let (ok, out, err) = build_and_run(
         &dir,
         "else_returns.py",
-        "def f() -> int:\n    try:\n        pass\n    except* ValueError:\n        return 1\n    else:\n        return 2\n    finally:\n        pass\n\nprint(f())\n",
+        "def f() -> int:\n    try:\n        pass\n    except* ValueError:\n        pass\n    else:\n        return 2\n    finally:\n        pass\n    return 1\n\nprint(f())\n",
     );
     assert!(ok, "build/run failed: {err}");
     assert_eq!(out, b"2\n");
@@ -573,7 +573,7 @@ fn a_type_conflict_inside_a_try_star_body_is_rejected_by_the_solver() {
     let (ok, combined) = check_only(
         &dir,
         "solver_body.py",
-        "def f() -> int:\n    try:\n        return \"wrong\"\n    except* ValueError:\n        return 1\n    else:\n        return 1\n    finally:\n        pass\nf()\n",
+        "def f() -> int:\n    try:\n        return \"wrong\"\n    except* ValueError:\n        pass\n    else:\n        return 1\n    finally:\n        pass\n    return 1\nf()\n",
     );
     assert!(
         !ok,
@@ -589,22 +589,33 @@ fn a_type_conflict_inside_a_try_star_body_is_rejected_by_the_solver() {
 /// above, but isolating the *handler* block's own recursive
 /// `collect_block_constraints` call: the try body itself returns a
 /// solver-compatible `int`, so the conflict is only discovered once the
-/// `except*` handler body's own mismatched return is visited.
+/// `except*` handler body is visited.
+///
+/// #795 (PEP 654) forced the mechanism to change: a mismatched `return`
+/// cannot be placed directly in an `except*` clause body any more (CPython
+/// itself rejects it, and pycc now reports `L0001: 'return' in an 'except*'
+/// block` before the solver ever runs, exactly as the `finally` sibling
+/// below already had to work around for L0001's PEP 765 check). This drives
+/// the conflict through the same *private helper* mechanism that sibling
+/// uses (D-045): `_h`'s parameter type is inferred from its call sites, so
+/// calling it once at module scope with `int` and once from inside the
+/// `except*` handler with `str` makes the handler block's own recursive
+/// call the one that discovers the conflict.
 #[test]
 fn a_type_conflict_inside_a_try_star_handler_is_rejected_by_the_solver() {
     let dir = ScratchDir::new("542_solver_handler").expect("failed to create scratch dir");
     let (ok, combined) = check_only(
         &dir,
         "solver_handler.py",
-        "def f() -> int:\n    try:\n        return 1\n    except* ValueError:\n        return \"wrong\"\n    else:\n        return 1\n    finally:\n        pass\nf()\n",
+        "def _h(x):\n    return x\n\n_h(1)\n\ndef f() -> int:\n    try:\n        return 1\n    except* ValueError:\n        _h(\"s\")\n    else:\n        return 1\n    finally:\n        pass\n    return 1\nf()\n",
     );
     assert!(
         !ok,
-        "a handler/declared-return-type conflict should be rejected"
+        "a handler private-helper argument-type conflict should be rejected"
     );
     assert!(
-        combined.contains("T0022"),
-        "should mention T0022: {combined}"
+        combined.contains("T0021") || combined.contains("T0022"),
+        "should mention a solver conflict code: {combined}"
     );
 }
 
@@ -618,7 +629,7 @@ fn a_type_conflict_inside_a_try_star_else_is_rejected_by_the_solver() {
     let (ok, combined) = check_only(
         &dir,
         "solver_else.py",
-        "def f() -> int:\n    try:\n        return 1\n    except* ValueError:\n        return 1\n    else:\n        return \"wrong\"\n    finally:\n        pass\nf()\n",
+        "def f() -> int:\n    try:\n        return 1\n    except* ValueError:\n        pass\n    else:\n        return \"wrong\"\n    finally:\n        pass\n    return 1\nf()\n",
     );
     assert!(
         !ok,
@@ -647,7 +658,7 @@ fn a_type_conflict_inside_a_try_star_finally_is_rejected_by_the_solver() {
     let (ok, combined) = check_only(
         &dir,
         "solver_finally.py",
-        "def _h(x):\n    return x\n\n_h(1)\n\ndef f() -> int:\n    try:\n        return 1\n    except* ValueError:\n        return 1\n    else:\n        return 1\n    finally:\n        _h(\"s\")\nf()\n",
+        "def _h(x):\n    return x\n\n_h(1)\n\ndef f() -> int:\n    try:\n        return 1\n    except* ValueError:\n        pass\n    else:\n        return 1\n    finally:\n        _h(\"s\")\n    return 1\nf()\n",
     );
     assert!(
         !ok,
@@ -816,7 +827,7 @@ fn a_try_star_finally_returning_a_value_propagates_through_an_enclosing_finally(
     let (ok, out, err) = build_and_run(
         &dir,
         "nested_ret.py",
-        "def f() -> int:\n    try:\n        try:\n            raise ValueError(\"bad\")\n        except* ValueError:\n            return 2\n        finally:\n            print(\"inner\")\n    finally:\n        print(\"outer\")\n\nprint(f())\n",
+        "def f() -> int:\n    try:\n        try:\n            return 2\n        except* ValueError:\n            print(\"handler\")\n        finally:\n            print(\"inner\")\n    finally:\n        print(\"outer\")\n    return 9\n\nprint(f())\n",
     );
     assert!(ok, "build/run failed: {err}");
     assert_eq!(out, b"inner\nouter\n2\n");
@@ -833,7 +844,7 @@ fn a_try_star_finally_bare_return_propagates_through_an_enclosing_finally() {
     let (ok, out, err) = build_and_run(
         &dir,
         "nested_void.py",
-        "def g() -> None:\n    try:\n        try:\n            raise ValueError(\"bad\")\n        except* ValueError:\n            return\n        finally:\n            print(\"inner\")\n    finally:\n        print(\"outer\")\n\ng()\nprint(\"done\")\n",
+        "def g() -> None:\n    try:\n        try:\n            return\n        except* ValueError:\n            print(\"handler\")\n        finally:\n            print(\"inner\")\n    finally:\n        print(\"outer\")\n\ng()\nprint(\"done\")\n",
     );
     assert!(ok, "build/run failed: {err}");
     assert_eq!(out, b"inner\nouter\ndone\n");
@@ -852,7 +863,7 @@ fn a_try_star_finally_bare_return_with_no_enclosing_finally_emits_ret_void() {
     let (ok, out, err) = build_and_run(
         &dir,
         "bare_void.py",
-        "def h() -> None:\n    try:\n        raise ValueError(\"bad\")\n    except* ValueError:\n        return\n    finally:\n        print(\"cleanup\")\n\nh()\nprint(\"done\")\n",
+        "def h() -> None:\n    try:\n        return\n    except* ValueError:\n        print(\"handler\")\n    finally:\n        print(\"cleanup\")\n\nh()\nprint(\"done\")\n",
     );
     assert!(ok, "build/run failed: {err}");
     assert_eq!(out, b"cleanup\ndone\n");
@@ -874,7 +885,7 @@ fn a_try_star_finally_that_itself_raises_never_falls_through() {
     let (ok, out, err) = build_and_run(
         &dir,
         "finally_raises.py",
-        "def f() -> int:\n    try:\n        raise ValueError(\"bad\")\n    except* ValueError:\n        return 3\n    finally:\n        raise RuntimeError(\"boom\")\n\nprint(f())\n",
+        "def f() -> int:\n    try:\n        raise ValueError(\"bad\")\n    except* ValueError:\n        pass\n    finally:\n        raise RuntimeError(\"boom\")\n    return 3\n\nprint(f())\n",
     );
     assert!(
         !ok,

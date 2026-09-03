@@ -81,6 +81,54 @@
 //! `while`/`for`'s own `else:` clause is untested here because both are
 //! unsupported syntax in this compiler today (`while/else`/`for/else` reject
 //! with `C0001` before either loop kind's body is lowered).
+//!
+//! `except_star: ExceptStarCtx` (#795, PEP 654) is this module's fourth
+//! piece of threaded context, and the first that is not a `bool`. It records
+//! where the statement being lowered sits relative to the nearest enclosing
+//! `except*` clause body, and it governs `Stmt::Return`, `Stmt::Break`, and
+//! `Stmt::Continue` -- but, unlike `in_finally`, *not* uniformly:
+//!
+//! - `Stmt::Return` is rejected in **both** inside states, so an intervening
+//!   loop does not rescue it.
+//! - `Stmt::Break`/`Stmt::Continue` are rejected only in
+//!   `InsideUnshielded`; a loop entered *within* the clause body demotes the
+//!   context to `InsideLoopShielded` and they lower normally from there.
+//!
+//! That asymmetry is CPython's, not a design choice, and it is the reason
+//! this piece of context needs three states where `in_finally` needs two.
+//! Verified directly against CPython 3.14.6 by `compile()`-ing each shape:
+//! `for i in range(3): break` inside an `except*` clause compiles, while the
+//! same loop containing `return 1` still raises `SyntaxError: 'break',
+//! 'continue' and 'return' cannot appear in an except* block`. (Note that a
+//! *naive* reading predicts the opposite grouping from PEP 765's, where the
+//! loop shields all three -- the two rules genuinely differ, so neither flag
+//! can be derived from the other.)
+//!
+//! Two further differences from `in_finally`:
+//!
+//! - It is **propagated** into a `finally`, never cleared: CPython rejects a
+//!   `return` in a `finally` that is itself nested inside an `except*`
+//!   clause body. A try-star's own `finalbody` is not inside its own
+//!   handlers, so the incoming value is already `Outside` there and
+//!   `return`-in-a-try-star's-`finally` stays accepted (as PEP 765's own
+//!   `L0001` rejection, not this one).
+//! - When both restrictions apply, the `except*` message wins. That matches
+//!   CPython's own precedence: the `except*` failure is a fatal
+//!   `SyntaxError` while the PEP 765 restriction is only a
+//!   `SyntaxWarning`, so the `except*` guards run first in all three arms.
+//!
+//! Like `in_loop`/`in_finally`, entering a function body resets it -- to the
+//! constant `ExceptStarCtx::Outside`, never a conditional on the enclosing
+//! context, since a `return` inside a `def` nested in an `except*` body is
+//! accepted by CPython and a conditional reset would be an unreachable
+//! branch under this repository's 100%-region coverage gate.
+//!
+//! `Stmt::Return`'s guard carries an `in_function` conjunct for the same
+//! reason the PEP 765 one does: at module scope CPython's fatal error is the
+//! pre-existing `SyntaxError: 'return' outside function`, so pycc defers to
+//! its own `T0024`. `Stmt::Break`/`Stmt::Continue` carry no matching
+//! `in_loop` conjunct, because CPython reports the `except*` error even when
+//! no enclosing loop exists at all.
 
 mod exception;
 mod for_loop;
@@ -142,6 +190,45 @@ fn is_type_checking_guard(test: &Expr) -> bool {
     }
 }
 
+/// #795 (PEP 654): where the statement being lowered sits relative to the
+/// nearest enclosing `except*` clause body. This is this module's fourth
+/// piece of threaded context, and unlike the three `bool`s beside it, it has
+/// three states rather than two -- an intervening loop *demotes* the context
+/// instead of clearing it, because CPython shields a `break`/`continue` with
+/// such a loop but does not shield a `return`.
+///
+/// Verified directly against CPython 3.14.6's own compiler (see the module
+/// doc comment above for the full table): `for i in range(3): break` inside
+/// an `except*` clause body compiles, while the same loop containing
+/// `return 1` still raises `SyntaxError: 'break', 'continue' and 'return'
+/// cannot appear in an except* block`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ExceptStarCtx {
+    /// Not inside any `except*` clause body -- the state every function body
+    /// and every module top level starts in.
+    Outside,
+    /// Inside an `except*` clause body with no intervening loop: `return`,
+    /// `break`, and `continue` are all rejected.
+    InsideUnshielded,
+    /// Inside an `except*` clause body, but behind at least one loop entered
+    /// within it: `break`/`continue` are shielded and lower normally, while
+    /// `return` is still rejected.
+    InsideLoopShielded,
+}
+
+impl ExceptStarCtx {
+    /// The value to thread into the body of a `while`/`for` loop entered
+    /// from this context. `Outside` stays `Outside` (a loop does not put
+    /// anything inside an `except*`); either inside state becomes
+    /// `InsideLoopShielded`, which is idempotent for a second nested loop.
+    pub(crate) fn shielded_by_loop(self) -> Self {
+        match self {
+            Self::Outside => Self::Outside,
+            Self::InsideUnshielded | Self::InsideLoopShielded => Self::InsideLoopShielded,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_stmt(
     stmt: &Stmt,
@@ -149,6 +236,7 @@ pub(crate) fn lower_stmt(
     in_loop: bool,
     in_function: bool,
     in_finally: bool,
+    except_star: ExceptStarCtx,
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
@@ -367,6 +455,7 @@ pub(crate) fn lower_stmt(
                     in_loop,
                     in_function,
                     in_finally,
+                    except_star,
                     class_name,
                     type_param,
                     class_defs,
@@ -381,6 +470,7 @@ pub(crate) fn lower_stmt(
                 in_loop,
                 in_function,
                 in_finally,
+                except_star,
                 class_name,
                 type_param,
                 class_defs,
@@ -391,6 +481,7 @@ pub(crate) fn lower_stmt(
                 in_loop,
                 in_function,
                 in_finally,
+                except_star,
                 class_name,
                 type_param,
                 class_defs,
@@ -415,6 +506,11 @@ pub(crate) fn lower_stmt(
                     // verified against CPython 3.14 (see this module's own
                     // doc comment above).
                     false,
+                    // #795 (PEP 654): a loop entered from inside an `except*`
+                    // clause shields its own body's `break`/`continue` -- but
+                    // not its `return` -- from that clause's restriction, so
+                    // the context is demoted rather than cleared.
+                    except_star.shielded_by_loop(),
                     class_name,
                     type_param,
                     class_defs,
@@ -425,11 +521,33 @@ pub(crate) fn lower_stmt(
             for_stmt,
             aliases,
             in_function,
+            except_star,
             class_name,
             type_param,
             class_defs,
         )?,
         Stmt::Return(ret) => {
+            if except_star != ExceptStarCtx::Outside && in_function {
+                // #795 (PEP 654): CPython rejects `return` anywhere inside an
+                // `except*` clause body, including behind an intervening
+                // loop -- `SyntaxError: 'break', 'continue' and 'return'
+                // cannot appear in an except* block`. `L0001` is reused for
+                // this post-parse context violation, exactly like the PEP 765
+                // `finally` checks below, and this check runs *first*
+                // because CPython's own precedence makes the `except*` error
+                // the fatal one while the `finally` restriction is only a
+                // `SyntaxWarning`.
+                //
+                // The `in_function` conjunct mirrors the `finally` arm's own
+                // precedence, verified against CPython 3.14.6: a `return` in
+                // an `except*` clause at module scope reports `SyntaxError:
+                // 'return' outside function`, not the `except*` message, so
+                // without it pycc would shadow its pre-existing `T0024`.
+                return Err(context_invalid(
+                    "'return' in an 'except*' block",
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
             if in_finally && in_function {
                 // PEP 765 (issue #738, Part 1 of #543): a `return` that
                 // would exit a `finally` block is rejected outright, not
@@ -467,6 +585,22 @@ pub(crate) fn lower_stmt(
             )
         }
         Stmt::Break(_) => {
+            if except_star == ExceptStarCtx::InsideUnshielded {
+                // #795 (PEP 654): unlike `return` above, a `break` directly
+                // in an `except*` clause body is rejected *regardless* of
+                // whether an enclosing loop exists -- CPython reports the
+                // `except*` error even for `try: ... except* E: break` with
+                // no loop anywhere, where the pre-existing `'break' outside
+                // loop` error would otherwise apply. Hence no `in_loop`
+                // conjunct here, and hence the `InsideLoopShielded` state:
+                // once a loop is entered *within* the clause body, CPython
+                // accepts the `break` and this compiler falls through to its
+                // existing `in_loop` handling.
+                return Err(context_invalid(
+                    "'break' in an 'except*' block",
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
             if in_finally && in_loop {
                 // See the `Stmt::Return` arm above for the general PEP 765
                 // rationale. The `in_loop` guard matches CPython's own
@@ -503,6 +637,14 @@ pub(crate) fn lower_stmt(
             });
         }
         Stmt::Continue(_) => {
+            if except_star == ExceptStarCtx::InsideUnshielded {
+                // See the `Stmt::Break` arm above -- identical rationale and
+                // identical CPython precedence.
+                return Err(context_invalid(
+                    "'continue' in an 'except*' block",
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
             if in_finally && in_loop {
                 // See the `Stmt::Break` arm above -- identical rationale and
                 // CPython precedence (`SyntaxError: 'continue' not properly
@@ -530,6 +672,7 @@ pub(crate) fn lower_stmt(
             in_loop,
             in_function,
             in_finally,
+            except_star,
             class_name,
             type_param,
             class_defs,
@@ -541,10 +684,22 @@ pub(crate) fn lower_stmt(
                 in_loop,
                 in_function,
                 in_finally,
+                except_star,
                 class_name,
                 type_param,
                 class_defs,
             )?;
+            // #795 (PEP 654): an `except*` clause body is the only thing
+            // that *sets* the context; a plain `except` clause propagates
+            // whatever was already in scope (an ordinary `try`/`except`
+            // nested inside an `except*` clause body does not shield its
+            // contents). `try_stmt.is_star` is only in scope here, so the
+            // caller derives the value rather than `lower_except_handler`.
+            let handler_except_star = if try_stmt.is_star {
+                ExceptStarCtx::InsideUnshielded
+            } else {
+                except_star
+            };
             let handlers = try_stmt
                 .handlers
                 .iter()
@@ -566,6 +721,7 @@ pub(crate) fn lower_stmt(
                         in_loop,
                         in_function,
                         in_finally,
+                        handler_except_star,
                         class_name,
                         type_param,
                         class_defs,
@@ -578,6 +734,7 @@ pub(crate) fn lower_stmt(
                 in_loop,
                 in_function,
                 in_finally,
+                except_star,
                 class_name,
                 type_param,
                 class_defs,
@@ -593,6 +750,13 @@ pub(crate) fn lower_stmt(
                 in_loop,
                 in_function,
                 true,
+                // #795 (PEP 654): unlike `in_finally`, the `except*` context
+                // is *propagated* into a `finally`, never cleared -- CPython
+                // rejects a `return` inside a `finally` that is itself nested
+                // in an `except*` clause body. A try-star's own `finalbody`
+                // is not inside its own handlers, so the incoming value is
+                // already `Outside` there and that case stays accepted.
+                except_star,
                 class_name,
                 type_param,
                 class_defs,
@@ -791,6 +955,7 @@ pub(crate) fn lower_body(
     in_loop: bool,
     in_function: bool,
     in_finally: bool,
+    except_star: ExceptStarCtx,
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
@@ -809,6 +974,7 @@ pub(crate) fn lower_body(
                 in_loop,
                 in_function,
                 in_finally,
+                except_star,
                 class_name,
                 type_param,
                 class_defs,
@@ -824,6 +990,7 @@ pub(crate) fn lower_elif_else_clauses(
     in_loop: bool,
     in_function: bool,
     in_finally: bool,
+    except_star: ExceptStarCtx,
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
@@ -846,6 +1013,7 @@ pub(crate) fn lower_elif_else_clauses(
                 in_loop,
                 in_function,
                 in_finally,
+                except_star,
                 class_name,
                 type_param,
                 class_defs,
@@ -859,6 +1027,7 @@ pub(crate) fn lower_elif_else_clauses(
                 in_loop,
                 in_function,
                 in_finally,
+                except_star,
                 class_name,
                 type_param,
                 class_defs,
@@ -869,6 +1038,7 @@ pub(crate) fn lower_elif_else_clauses(
                 in_loop,
                 in_function,
                 in_finally,
+                except_star,
                 class_name,
                 type_param,
                 class_defs,
@@ -885,6 +1055,7 @@ pub(crate) fn lower_elif_else_clauses(
                 in_loop,
                 in_function,
                 in_finally,
+                except_star,
                 class_name,
                 type_param,
                 class_defs,
@@ -904,6 +1075,7 @@ fn lower_match(
     in_loop: bool,
     in_function: bool,
     in_finally: bool,
+    except_star: ExceptStarCtx,
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
@@ -923,6 +1095,7 @@ fn lower_match(
             in_loop,
             in_function,
             in_finally,
+            except_star,
             class_name,
             type_param,
             class_defs,

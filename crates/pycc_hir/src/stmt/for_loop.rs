@@ -3,7 +3,7 @@
 //! `stmt/exception.rs`'s precedent. The body is the original arm's,
 //! unchanged.
 
-use super::{lower_body, lower_range_call};
+use super::{ExceptStarCtx, lower_body, lower_range_call};
 use crate::class::ClassAnnotationInfo;
 use crate::{HirStmt, Ty, context_invalid, unsupported};
 use pycc_ast::{Expr, StmtFor};
@@ -17,6 +17,7 @@ pub(super) fn lower_for(
     for_stmt: &StmtFor,
     aliases: &[(String, Ty)],
     in_function: bool,
+    except_star: ExceptStarCtx,
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
@@ -69,6 +70,8 @@ pub(super) fn lower_for(
                 // CPython-verified shielding rule applies to a
                 // `for` loop's body.
                 false,
+                // #795 (PEP 654): and the same `except*` demotion.
+                except_star.shielded_by_loop(),
                 class_name,
                 type_param,
                 class_defs,
@@ -122,6 +125,8 @@ pub(super) fn lower_for(
             // See the `Stmt::While` arm above -- the same
             // CPython-verified shielding rule applies here too.
             false,
+            // #795 (PEP 654): and the same `except*` demotion.
+            except_star.shielded_by_loop(),
             class_name,
             type_param,
             class_defs,

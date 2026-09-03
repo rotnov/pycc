@@ -446,3 +446,100 @@ fn an_exception_group_member_with_a_type_error_propagates() {
         diagnostic.message
     );
 }
+
+// -- #795 (PEP 654), gap 2: `except* ExceptionGroup:` / `except*
+// BaseExceptionGroup:` --
+//
+// CPython accepts both at compile time and raises `TypeError: catching
+// ExceptionGroup with except* is not allowed. Use except instead.` when the
+// handler is matched. pycc has no materialized group value at match time
+// (D-173 propagates a raised exception through global runtime state), so it
+// rejects the program at compile time with `C0001` instead -- a deliberate,
+// documented divergence. #903 tracks delivering the real runtime behavior.
+
+#[test]
+fn catching_an_exception_group_with_except_star_is_rejected() {
+    let diagnostic = expect_error(
+        "def main() -> None:\n\
+         \x20   try:\n\
+         \x20       pass\n\
+         \x20   except* ExceptionGroup:\n\
+         \x20       pass\n",
+    );
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic.message.contains("catching `ExceptionGroup`"),
+        "unexpected message: {}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn catching_a_base_exception_group_with_except_star_is_rejected() {
+    let diagnostic = expect_error(
+        "def main() -> None:\n\
+         \x20   try:\n\
+         \x20       pass\n\
+         \x20   except* BaseExceptionGroup:\n\
+         \x20       pass\n",
+    );
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic.message.contains("catching `BaseExceptionGroup`"),
+        "unexpected message: {}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn a_group_type_in_a_non_first_tuple_position_is_still_rejected() {
+    // The check runs per element of a PEP 758 multi-type handler, not only
+    // on the first name -- the loop's own iteration, not a special case.
+    let diagnostic = expect_error(
+        "def main() -> None:\n\
+         \x20   try:\n\
+         \x20       pass\n\
+         \x20   except* (ValueError, ExceptionGroup):\n\
+         \x20       pass\n",
+    );
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic.message.contains("catching `ExceptionGroup`"),
+        "unexpected message: {}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn catching_a_plain_builtin_with_except_star_is_still_accepted() {
+    // The `matches!` conjunct's false arm: an unshadowed builtin exception
+    // that is *not* one of the two group names lowers and type-checks
+    // exactly as before.
+    check_source(
+        "def main() -> None:\n\
+         \x20   try:\n\
+         \x20       pass\n\
+         \x20   except* ValueError:\n\
+         \x20       pass\n",
+    )
+    .expect("`except* ValueError:` must still be accepted");
+}
+
+#[test]
+fn a_shadowed_exception_group_name_does_not_reach_the_group_rejection() {
+    // The `builtin` conjunct's own false arm *for a group name*: a module
+    // that rebinds `ExceptionGroup` no longer means the builtin, so the
+    // handler falls through to the existing unrecognized-class path
+    // (`T0021`) instead of this rejection. Without the `builtin` gate the
+    // `C0001` above would fire on a name the program does not actually mean.
+    let diagnostic = expect_error(
+        "ExceptionGroup = 1\n\
+         \n\
+         def main() -> None:\n\
+         \x20   try:\n\
+         \x20       pass\n\
+         \x20   except* ExceptionGroup:\n\
+         \x20       pass\n",
+    );
+    assert_eq!(diagnostic.code, "T0021");
+}

@@ -174,6 +174,34 @@ pub(super) fn check_try_star_stmt(
         if let Some(exc_types) = &handler.exc_type {
             for exc_type in exc_types {
                 let builtin = is_unshadowed_builtin_exception(&body_env, local_names, exc_type);
+                if builtin && matches!(exc_type.as_str(), "ExceptionGroup" | "BaseExceptionGroup") {
+                    // #795 (PEP 654): CPython *accepts* `except*
+                    // ExceptionGroup:` at compile time and raises
+                    // `TypeError: catching ExceptionGroup with except* is not
+                    // allowed. Use except instead.` at handler-match time
+                    // instead. pycc cannot model that today -- D-173
+                    // propagates a raised exception through global runtime
+                    // state rather than an allocated group instance, so there
+                    // is no materialized value to type-test at match time --
+                    // so this is a deliberate, documented divergence:
+                    // `C0001` ("valid Python this compiler does not implement
+                    // yet"), which is the honest code precisely because the
+                    // program *is* valid Python. #903 tracks delivering the
+                    // real runtime `TypeError`; the narrowing ADR beside
+                    // D-202 records the divergence.
+                    //
+                    // Gated on `builtin` so a module that shadows the name
+                    // (`class ExceptionGroup: ...`) keeps reaching the
+                    // existing user-class path below rather than being
+                    // rejected for a name it does not actually mean.
+                    return Err(Diagnostic::error(
+                        "C0001",
+                        format!(
+                            "catching `{exc_type}` with `except*` is not supported yet — CPython rejects it at runtime with a `TypeError`, which this compiler cannot raise yet; use a plain `except` clause instead"
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
                 if !builtin {
                     let Some(def) = user_exception_class(&body_env, local_names, exc_type) else {
                         return Err(Diagnostic::error(

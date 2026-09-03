@@ -231,6 +231,92 @@ fn l0001_continue_inside_finally() {
     assert_diagnostic_matches_fixture("l0001_continue_inside_finally");
 }
 
+// #795 (PEP 654): CPython rejects `return`, `break`, and `continue` inside
+// an `except*` clause body outright -- `SyntaxError: 'break', 'continue' and
+// 'return' cannot appear in an except* block`, verified directly against
+// CPython 3.14.6. `L0001` is reused for this post-parse context violation,
+// matching the PEP 765 `finally` family above. The `return` case is the only
+// genuine accept-to-reject change: `break`/`continue` in an `except*` clause
+// were already rejected, only with the wrong diagnostic (`C0001` "inside a
+// loop", or `L0001` "outside loop"), so these fixtures pin the new message
+// rather than a new rejection.
+#[test]
+fn l0001_return_in_except_star() {
+    assert_diagnostic_matches_fixture("l0001_return_in_except_star");
+}
+
+// An intervening loop inside the `except*` clause body does NOT shield a
+// `return` (it does shield `break`/`continue` -- see
+// `c0001_break_in_except_star_inside_a_loop_in_the_clause` below). Verified
+// against CPython 3.14.6: `for i in range(3): return 1` inside an `except*`
+// clause is still a `SyntaxError`, while the same loop containing `break`
+// compiles.
+#[test]
+fn l0001_return_in_loop_in_except_star() {
+    assert_diagnostic_matches_fixture("l0001_return_in_loop_in_except_star");
+}
+
+// Unlike the PEP 765 `finally` family, this check has no "valid escape
+// target" precondition for `break`/`continue`: CPython reports the `except*`
+// error even with no enclosing loop anywhere, where `'break' outside loop`
+// would otherwise apply.
+#[test]
+fn l0001_break_in_except_star() {
+    assert_diagnostic_matches_fixture("l0001_break_in_except_star");
+}
+
+#[test]
+fn l0001_continue_in_except_star() {
+    assert_diagnostic_matches_fixture("l0001_continue_in_except_star");
+}
+
+// A real enclosing loop *outside* the `try`/`except*` does not shield the
+// `break` either -- only a loop entered within the clause body does.
+#[test]
+fn l0001_break_in_except_star_inside_loop() {
+    assert_diagnostic_matches_fixture("l0001_break_in_except_star_inside_loop");
+}
+
+// A `finally` nested inside an `except*` clause body propagates the `except*`
+// context rather than clearing it, and the `except*` message wins over the
+// PEP 765 `finally` message -- matching CPython's own precedence, where the
+// `except*` failure is the fatal `SyntaxError` and the `finally` restriction
+// is only a `SyntaxWarning`.
+#[test]
+fn l0001_break_in_except_star_in_finally() {
+    assert_diagnostic_matches_fixture("l0001_break_in_except_star_in_finally");
+}
+
+// Companion to `l0001_return_in_except_star`: with NO enclosing function at
+// all, CPython's actual fatal error is the pre-existing `SyntaxError:
+// 'return' outside function`, not the `except*` message. pycc mirrors that
+// precedence with the `in_function` conjunct on the `except*` `return`
+// guard, deferring to this pre-existing `T0024`.
+#[test]
+fn d0024_return_in_except_star_at_module_level() {
+    assert_diagnostic_matches_fixture("d0024_return_in_except_star_at_module_level");
+}
+
+// #795 (PEP 654), gap 2: CPython *accepts* `except* ExceptionGroup:` at
+// compile time and raises `TypeError: catching ExceptionGroup with except*
+// is not allowed. Use except instead.` at handler-match time. pycc cannot
+// raise that yet (D-173 keeps no materialized group value to type-test), so
+// it rejects the program at compile time with `C0001` -- a deliberate,
+// documented divergence recorded in the ADR that narrows D-202. #903 tracks
+// delivering the real runtime behavior.
+#[test]
+fn c0001_except_star_exception_group() {
+    assert_diagnostic_matches_fixture("c0001_except_star_exception_group");
+}
+
+// The same rejection for `BaseExceptionGroup`, and in a *non-first* position
+// of a PEP 758 multi-type handler -- proving the check runs per element of
+// the tuple rather than only on the first name.
+#[test]
+fn c0001_except_star_base_exception_group_in_tuple() {
+    assert_diagnostic_matches_fixture("c0001_except_star_base_exception_group_in_tuple");
+}
+
 // Companion to the three fixtures above: with NO valid escape target
 // anywhere (no enclosing loop at all), CPython's actual fatal error for a
 // `break`/`continue` directly in a `finally` is the pre-existing "outside

@@ -72,6 +72,12 @@ pub(crate) fn lower_function(
         false,
         true,
         false,
+        // #795 (PEP 654): a nested function body always starts
+        // `Outside` any enclosing `except*` clause -- CPython accepts a
+        // `return` in a `def` nested inside an `except*` body. This is a
+        // constant, not a conditional on the enclosing context, exactly like
+        // the three `false`s above it.
+        stmt::ExceptStarCtx::Outside,
         None,
         type_param.as_deref(),
         class_defs,

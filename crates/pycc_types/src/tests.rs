@@ -28398,12 +28398,20 @@ fn try_star_with_return_in_body_handler_and_else_always_returns() {
     // exercised by the plain-`try` test above, but the `TryStar`
     // alternative's own lines are only reached when the analyzed function
     // actually contains a `try*`.
+    //
+    // #795 (PEP 654): the handler terminates with a `raise` rather than a
+    // `return` -- CPython rejects a `return` inside an `except*` clause body
+    // outright, and pycc now reports `L0001` for it during lowering, so this
+    // fixture could no longer reach type checking at all. `HirStmt::Raise`
+    // is `block_always_returns`'s other terminal statement, so the
+    // `handled_paths_terminate` conjunct this test exists to exercise is
+    // still driven to `true`.
     let src = "\
 def f() -> int:
     try:
         return 1
     except* ValueError:
-        return 2
+        raise RuntimeError(\"boom\")
     else:
         return 3
 ";
@@ -29955,7 +29963,7 @@ fn a_try_star_except_as_binding_that_reuses_a_narrowed_name_kills_the_narrowing(
     // body was wrongly type-checked as the narrowed `int` instead of the
     // real `Instance(ExceptionGroup)` the runtime actually holds.
     let result = check_source(
-        "def f(x: int | None) -> int:\n    if x is not None:\n        try:\n            raise ValueError(\"boom\")\n        except* ValueError as x:\n            return x + 1\n    return -1\n",
+        "def f(x: int | None) -> int:\n    if x is not None:\n        try:\n            raise ValueError(\"boom\")\n        except* ValueError as x:\n            print(x + 1)\n    return -1\n",
     );
     let err = result.expect_err(
         "an `except* ... as x:` binding must kill `x`'s narrowing overlay entry, since `x` now holds the caught `ExceptionGroup` rather than the narrowed `Optional`'s inner value",
@@ -29972,7 +29980,7 @@ fn a_try_star_except_handler_reached_after_a_try_body_kill_is_rejected() {
     // only after the `try` body's own kill would have wrongly kept seeing
     // the pre-try narrowing.
     let result = check_source(
-        "def f(x: int | None) -> int:\n    if x is not None:\n        try:\n            x = None\n            raise ValueError(\"boom\")\n        except* ValueError:\n            return x + 1\n    return -1\n",
+        "def f(x: int | None) -> int:\n    if x is not None:\n        try:\n            x = None\n            raise ValueError(\"boom\")\n        except* ValueError:\n            print(x + 1)\n    return -1\n",
     );
     let err = result.expect_err(
         "an `except*` handler reachable only after the `try` body's own kill must not see the pre-try narrowing",
