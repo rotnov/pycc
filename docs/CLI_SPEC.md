@@ -105,8 +105,11 @@ ancestors), or -- with no `pycc.toml` -- the first directory above the entry
 file's own package chain (the walk stops at the first directory with no
 `__init__.py`). A stdlib module name always wins over a same-named project
 file. Relative imports (`from .mod import x`) resolve against the importer's
-package. Root discovery is lazy: a file with no project import never pays for
-it.
+package. The two mechanisms are ordered, not exclusive: when a `pycc.toml`
+is found but the directory named by its `[project].entry` cannot be
+canonicalized, or is not an ancestor of the checked file, discovery falls
+back to the package walk rather than reporting a diagnostic. Root discovery
+is lazy: a file with no project import never pays for it.
 
 A dependency's diagnostics render against the dependency's own path, and an
 unreadable or undecodable dependency is exit 2 exactly like an unreadable
