@@ -23051,7 +23051,7 @@ fn typing_override_import_composes_with_an_override_decorated_method() {
 #[test]
 fn typing_dataclass_transform_import_composes_with_its_decorator() {
     // The `@dataclass_transform()`-as-`@dataclass` treatment is a
-    // deliberate semantic approximation (tracked as #248) and is why
+    // deliberate semantic approximation (D-196, #749) and is why
     // no byte-for-byte fixture exercises it; the import resolving is
     // still in scope here, and this pins it.
     let result = check_source(
