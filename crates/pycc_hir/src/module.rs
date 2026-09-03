@@ -612,10 +612,19 @@ pub(crate) fn poisonable_names(stmt: &Stmt) -> Vec<&str> {
             if !is_project_import {
                 return Vec::new();
             }
+            // The poisoned name is the one this statement would have *bound*
+            // locally, not the one it reads from the other module: under
+            // `from .dep import helper as h` a later `h` is the cascade to
+            // suppress, and a later `helper` is a genuine unknown name.
             import
                 .names
                 .iter()
-                .map(|alias| alias.name.as_str())
+                .map(|alias| {
+                    alias
+                        .asname
+                        .as_ref()
+                        .map_or(alias.name.as_str(), |asname| asname.as_str())
+                })
                 .collect()
         }
         _ => Vec::new(),

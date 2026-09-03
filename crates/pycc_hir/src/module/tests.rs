@@ -488,6 +488,34 @@ fn a_rejected_project_import_poisons_the_names_it_would_have_bound() {
 }
 
 #[test]
+fn a_rejected_project_import_poisons_the_alias_not_the_source_name() {
+    // The name a `from ... import x as y` statement binds locally is `y`,
+    // so `y` is the cascade to suppress and `x` stays a genuine unknown
+    // name. The sibling test above only covers `asname == name`, where the
+    // two spellings coincide and cannot discriminate the two.
+    let message = "no module named `.dep` in `.`";
+
+    let aliased = "from .dep import helper as h\n\
+                   class Foo(h):\n    def __init__(self) -> None:\n        self.v = 1\n";
+    let diagnostics = lower_with_not_found(aliased, "T0021", message);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "T0021");
+
+    let source_name = "from .dep import helper as h\n\
+                       class Bar(helper):\n    def __init__(self) -> None:\n        self.v = 1\n";
+    let diagnostics = lower_with_not_found(source_name, "T0021", message);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "T0021");
+    assert!(
+        diagnostics[1]
+            .message
+            .contains("inherits from unknown class `helper`"),
+        "unexpected second diagnostic: {:#?}",
+        diagnostics[1]
+    );
+}
+
+#[test]
 fn an_import_cycle_poisons_transitively() {
     let source = "from dep import Base\n\
                   class Sub(Base):\n    def __init__(self) -> None:\n        self.v = 1\n\
