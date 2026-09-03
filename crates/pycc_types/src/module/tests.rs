@@ -569,3 +569,63 @@ fn valid_modules_are_ok_on_both_the_concrete_and_the_solver_path() {
         assert!(check_and_resolve_all(&hir).is_ok(), "{source}");
     }
 }
+
+// -- The public keyed entry points (#898) --------------------------------
+
+#[test]
+fn check_all_keyed_reports_a_failing_function_body_by_item_index() {
+    let hir =
+        lower("def f() -> int:\n    return 1\n\n\ndef g(y: int) -> int:\n    return y.nope\n");
+    let collected = check_all_keyed(&hir).expect_err("the second body must fail");
+    assert_eq!(
+        keyed_codes(&collected),
+        vec![(DiagnosticKey::Function(1), "T0043")]
+    );
+    assert_eq!(collected[0].0.item_index(), Some(1));
+    // The unkeyed view is exactly the same list without its keys.
+    assert_eq!(codes(&check_all(&hir).unwrap_err()), vec!["T0043"]);
+}
+
+#[test]
+fn check_all_keyed_reports_a_failing_top_level_statement_by_item_index() {
+    let hir = lower("def f() -> int:\n    return 1\n\n\nx: int = \"a\"\n");
+    let collected = check_all_keyed(&hir).expect_err("the top-level statement must fail");
+    assert_eq!(collected.len(), 1, "{collected:#?}");
+    assert_eq!(collected[0].0, DiagnosticKey::TopLevel(1));
+    assert_eq!(collected[0].0.item_index(), Some(1));
+}
+
+#[test]
+fn a_pre_check_failure_has_no_owning_item() {
+    // An incompatible redefinition is rejected before any item is checked,
+    // so it belongs to the program rather than to one item; the driver
+    // renders such a diagnostic against the entry file.
+    let hir =
+        lower("def f(x: int) -> int:\n    return x\n\n\ndef f(x: str) -> str:\n    return x\n");
+    let collected = check_all_keyed(&hir).expect_err("the redefinition must be rejected");
+    assert_eq!(collected.len(), 1, "{collected:#?}");
+    assert_eq!(collected[0].0, DiagnosticKey::Module);
+    assert_eq!(collected[0].0.item_index(), None);
+}
+
+#[test]
+fn check_and_resolve_all_keyed_carries_the_same_keys_as_its_unkeyed_view() {
+    let hir =
+        lower("def f() -> int:\n    return 1\n\n\ndef g(y: int) -> int:\n    return y.nope\n");
+    let collected = check_and_resolve_all_keyed(&hir).expect_err("the second body must fail");
+    assert_eq!(
+        keyed_codes(&collected),
+        vec![(DiagnosticKey::Function(1), "T0043")]
+    );
+    assert_eq!(
+        codes(&check_and_resolve_all(&hir).unwrap_err()),
+        vec!["T0043"]
+    );
+}
+
+#[test]
+fn check_and_resolve_all_keyed_resolves_a_valid_module() {
+    let hir = lower("def f(x: int) -> int:\n    return x\n");
+    let resolved = check_and_resolve_all_keyed(&hir).expect("a valid module must resolve");
+    assert_eq!(resolved.items.len(), hir.items.len());
+}

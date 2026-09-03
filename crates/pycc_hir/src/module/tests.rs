@@ -449,3 +449,52 @@ fn a_clean_module_lowers_through_lower_all() {
     assert_eq!(hir.class_defs.len(), 1);
     assert_eq!(hir.class_defs[0].0, "A");
 }
+
+/// Lowers `source` with every project import answered by the same
+/// driver-supplied rejection, the way `src/modules.rs` answers an import
+/// that names no file (`T0021`) or closes a cycle (`E0108`).
+fn lower_with_not_found(source: &str, code: &'static str, message: &str) -> Vec<Diagnostic> {
+    let parsed = parse(source);
+    let mut resolved = ResolvedImports::default();
+    for request in crate::project_import_requests(&parsed) {
+        resolved.insert(
+            request.span,
+            crate::ResolvedImport::NotFound {
+                code,
+                message: message.to_string(),
+            },
+        );
+    }
+    lower_module(&parsed, &resolved).expect_err("fixture must fail to lower")
+}
+
+#[test]
+fn a_rejected_project_import_poisons_the_names_it_would_have_bound() {
+    // #898: the driver's own rejection reaches the walk as the import
+    // item's error, so D-219's poisoning applies to it exactly as to any
+    // other skipped item -- the later annotation is a cascade, not a gap.
+    let source = "from .dep import Point\n\
+                  def use(p: Point) -> int:\n    return 1\n\
+                  x: Point = Point()\n";
+    let message = "no module named `.dep` in `.`";
+    let diagnostics = lower_with_not_found(source, "T0021", message);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "T0021");
+    assert_eq!(diagnostics[0].message, message);
+    assert_eq!(
+        diagnostics[0].span,
+        Some(span_of(source, "from .dep import Point", 0))
+    );
+}
+
+#[test]
+fn an_import_cycle_poisons_transitively() {
+    let source = "from dep import Base\n\
+                  class Sub(Base):\n    def __init__(self) -> None:\n        self.v = 1\n\
+                  def use(p: Sub) -> int:\n    return 1\n";
+    let message = "import cycle: `a.py` -> `b.py` -> `a.py`";
+    let diagnostics = lower_with_not_found(source, "E0108", message);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "E0108");
+    assert_eq!(diagnostics[0].message, message);
+}
