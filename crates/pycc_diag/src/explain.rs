@@ -206,7 +206,11 @@ function but not yet on this path), calling a non-callable binding, \
 operator/operand type mismatches inside expression inference, and general \
 call-argument type mismatches -- including the stdlib-symbol shapes D-136 \
 adds (calling a stdlib constant, or referencing a stdlib function without \
-calling it). Different call sites across `pycc_types` construct T0021 with \
+calling it). Since #898 (D-222) it also covers the project-import shapes \
+CPython itself rejects: importing a name the target module does not define, \
+a relative import with no parent package or one that climbs above the \
+top-level package, and a relative target that resolves to no module. (An \
+import shape pycc merely has not implemented yet stays `C0001`.) Different call sites across `pycc_types` construct T0021 with \
 different messages for these distinct situations; the shared code reflects \
 that they are all instances of the same underlying category (a name or \
 value did not have the type or binding shape an expression needed), not \
@@ -1063,12 +1067,15 @@ def f(x: object) -> int:
         severity: Severity::Error,
         summary: "import cycle in top-level init",
         explanation: "\
-E0108 is reserved for a cycle in module-level (top-level) initialization \
-order reached through `import` statements -- two or more modules whose \
-top-level code each depends on the other having already run. It is not \
-currently emitted: pycc compiles exactly one module per invocation today \
-(true multi-file support is planned for v0.4, D-094), so there is no \
-cross-module import graph yet for a cycle to exist in.",
+E0108 reports a cycle in module-level (top-level) initialization order \
+reached through `import` statements -- two or more modules whose top-level \
+code each depends on the other having already run. Since #898 (D-222) the \
+driver loads a project's whole import closure, so it detects such a cycle \
+while walking it and reports the chain (`import cycle: `a.py` -> `b.py` -> \
+`a.py``) at the import statement that closes it. pycc links the closure \
+into one program and runs every dependency's top level before its \
+importer's, so a cycle has no valid order at all -- unlike CPython, which \
+tolerates some cycles by binding a partially initialized module.",
         example: "\
 # a.py
 import b

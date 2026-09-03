@@ -1171,6 +1171,19 @@ and collide (the exact defect `crates/pycc_codegen/src/tests_support.rs`'s
 naming used only the process ID, so two call sites sharing a `label` in the
 same test binary raced on the same directory).
 
+## Multi-file (project-import) tests
+
+A multi-file program's layout is part of what is under test, so a project
+fixture is *built at run time* inside a `pycc_scratch::ScratchDir`, never
+checked in under `tests/fixtures/` (which `tests/conformance.rs` treats as a
+flat, single-file corpus by D-221). `src/modules.rs`'s unit tests and
+`tests/issue_881_project_imports.rs` follow that shape: write the package
+tree, invoke the CLI with an absolute path into the scratch directory, and
+assert with `contains` on the parts of the render that are stable. Byte-exact
+whole-output snapshots stay in `tests/diagnostics/`, whose fixtures are
+repo-relative single files run from the repository root, so their rendered
+paths are machine-independent.
+
 `pycc_scratch::ScratchDir` (new workspace crate `crates/pycc_scratch`,
 `crates/pycc_scratch/src/lib.rs`) is the one correct way to obtain a scratch
 directory in this repository going forward: `ScratchDir::new(category:
