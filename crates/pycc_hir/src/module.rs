@@ -635,13 +635,32 @@ pub(crate) fn poisonable_names(stmt: &Stmt) -> Vec<&str> {
                 .collect()
         }
         Stmt::ImportFrom(import) => {
-            let is_project_import = import.level != 0
-                || import
-                    .module
-                    .as_ref()
-                    .is_none_or(|module| pycc_std::resolve_module(module.as_str()).is_none());
-            if !is_project_import {
-                return Vec::new();
+            // A `level == 0` statement naming a module `pycc_std` resolves
+            // takes `lower_import_stmt`'s stdlib arm; everything else (a
+            // relative import, an unresolvable module) takes the project arm
+            // or is rejected outright, and poisons below.
+            if let Some(module) = (import.level == 0)
+                .then(|| import.module.as_ref())
+                .flatten()
+                .and_then(|module| pycc_std::resolve_module(module.as_str()))
+            {
+                // Mirror that arm's success condition exactly, as the
+                // `Stmt::Import` arm above mirrors its own: the statement
+                // lowers when no name is the wildcard, none carries an
+                // `asname`, and every name is a symbol of `module`. Anything
+                // else fails, and a failed stdlib import poisons what it
+                // would have bound just like a failed project one -- a
+                // wildcard binds the module's whole export list, every other
+                // shape binds its own aliases.
+                if import.names.iter().any(|alias| alias.name.as_str() == "*") {
+                    return pycc_std::module_symbol_names(module).collect();
+                }
+                if import.names.iter().all(|alias| {
+                    alias.asname.is_none()
+                        && pycc_std::resolve_symbol(module, alias.name.as_str()).is_some()
+                }) {
+                    return Vec::new();
+                }
             }
             // The poisoned name is the one this statement would have *bound*
             // locally, not the one it reads from the other module: under

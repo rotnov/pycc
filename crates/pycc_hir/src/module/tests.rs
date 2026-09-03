@@ -613,3 +613,84 @@ fn an_import_cycle_poisons_transitively() {
     assert_eq!(diagnostics[0].code, "E0108");
     assert_eq!(diagnostics[0].message, message);
 }
+
+#[test]
+fn a_rejected_stdlib_from_import_poisons_the_names_it_would_have_bound() {
+    // A stdlib `from` import fails exactly as a project one can, so it
+    // poisons the same way: the statement below binds nothing, and the
+    // later `bogus` is a cascade of the `C0002` above it.
+    let source = format!("from math import bogus\nclass Foo(bogus):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "C0002");
+
+    let annotated = "from math import bogus\ndef f(p: bogus) -> int:\n    return 1\n";
+    let diagnostics = lower_all_err(annotated);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "C0002");
+}
+
+#[test]
+fn an_aliased_stdlib_from_import_poisons_its_asname_only() {
+    // `from math import sqrt as s` binds `s`, so a later `s` is the
+    // cascade and a later `sqrt` is a genuine unknown name.
+    let source = format!("from math import sqrt as s\nclass Foo(s):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        diagnostics[0].message,
+        "`from ... import x as y` aliasing is not supported yet"
+    );
+
+    let source = format!("from math import sqrt as s\nclass Bar(sqrt):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert!(
+        diagnostics[1]
+            .message
+            .contains("inherits from unknown class `sqrt`"),
+        "unexpected second diagnostic: {:#?}",
+        diagnostics[1]
+    );
+}
+
+#[test]
+fn a_wildcard_stdlib_from_import_poisons_the_modules_whole_export_list() {
+    // `from math import *` would have bound every name `math` exports, so
+    // each of them is a cascade of the rejection -- while a name the module
+    // does not export is still reported.
+    let source = format!("from math import *\nclass Foo(sqrt):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        diagnostics[0].message,
+        "`from ... import *` (wildcard import) is not supported yet"
+    );
+
+    let source = format!("from math import *\nclass Bar(nope):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert!(
+        diagnostics[1]
+            .message
+            .contains("inherits from unknown class `nope`"),
+        "unexpected second diagnostic: {:#?}",
+        diagnostics[1]
+    );
+}
+
+#[test]
+fn a_successful_stdlib_from_import_poisons_nothing() {
+    // The import lowers, so `sqrt` is bound -- it is simply not usable as a
+    // base class, and that diagnostic is genuine rather than a cascade.
+    let source = format!("from math import sqrt\nclass Foo(sqrt):\n{CLASS_BODY}");
+    let diagnostics = lower_all_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("inherits from unknown class `sqrt`"),
+        "unexpected diagnostic: {:#?}",
+        diagnostics[0]
+    );
+}

@@ -53,8 +53,14 @@ status: accepted
     `import pkg.dep` (which binds `pkg`, not `pkg.dep`); `import a, b` fails
     as a whole statement and poisons both. A `Stmt::Import` lowers -- and so
     poisons nothing -- exactly when it has one alias, no `asname`, and a
-    module name `pycc_std` resolves. The name poisoned is the one bound
-    locally, never the source-side name: after `from .dep import helper as h`
+    module name `pycc_std` resolves. A `Stmt::ImportFrom` naming a
+    `pycc_std`-resolvable module lowers -- and so poisons nothing -- exactly
+    when no name is the wildcard, none carries an `asname`, and every name is
+    a registered symbol of that module; a stdlib `from` import that fails
+    poisons like a project one, and a rejected wildcard poisons the module's
+    whole export list (`pycc_std::module_symbol_names`), because
+    `from math import *` would have bound every one of those names. The name
+    poisoned is the one bound locally, never the source-side name: after `from .dep import helper as h`
     a later `h` is the cascade and a later `helper` is a genuine unknown name.
   - **Seeding reconciliation.** Each module decides its own builtin-exception
     seeding, so `link` strips every module's synthetic entries and appends one set
