@@ -33,6 +33,41 @@ never a merge gate.
 
 ---
 
+## 2026-09-03 — Fixed one mirror arm per review round, three rounds running
+
+What happened: `poisonable_names` in `crates/pycc_hir/src/module.rs` decides,
+per statement kind, what names a failed statement would have bound. #898 made
+imports answerable for the first time, and the answer was wrong in three
+consecutive review rounds — round 2 returned an import's source-side name
+instead of its locally bound one, round 3 revealed there was no `Stmt::Import`
+arm at all, round 5 revealed the `Stmt::ImportFrom` arm still short-circuited
+for every stdlib module. Each round's fix was correct and each was scoped to
+exactly the one arm just reported.
+
+Root cause: the arms hand-mirror `import::lower_import_stmt`'s success
+conditions, and nothing tied a mirror to its original. Fixing the reported arm
+by reading the corresponding branch of the original answers the finding
+without ever asking the question the finding is an instance of — "which other
+arm answers this same question from a stale copy of the rule?".
+
+What fixed it: after round 5, the invariant itself was asserted rather than
+re-checked by hand. `a_failing_import_poisons_and_a_lowering_one_does_not`
+walks a corpus with one row per rejection branch of `lower_import_stmt` and
+derives the expected answer by *calling* `lower_all`, so the mirror cannot
+drift from its original for any shape in the corpus. Both historical defects
+were reconstructed and the test rejects each.
+
+Lesson: when a review finding says a hand-written mirror of another function's
+rule is wrong, the fix is not the arm — it is a test that derives the mirror's
+expected answer by calling the original. Repairing the reported site alone
+guarantees the next round finds the next site, and three rounds of that cost
+more than the test would have. This is the same class
+`.harden/incidents/new-case-misses-branching-sites/` has been counting since
+2026-08-23; its fourth recurrence file records the escalation from prose to a
+required-CI test.
+
+---
+
 ## 2026-09-03 — Chased a workspace-wide coverage gap that only existed in one crate's own test binary
 
 What happened: while delivering #898, the `--fail-under-regions 100` gate kept

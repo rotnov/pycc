@@ -694,3 +694,51 @@ fn a_successful_stdlib_from_import_poisons_nothing() {
         diagnostics[0]
     );
 }
+
+/// Every import shape whose lowering outcome is decidable without a
+/// project resolver, one row per rejection branch of
+/// `import::lower_import_stmt` plus the accepting shapes around them.
+/// `#898`'s review loop found this arm-vs-arm mirroring broken three
+/// separate times -- once per repair round, each fix scoped to the single
+/// site just reported -- so the invariant is asserted over a corpus rather
+/// than one shape at a time. A new rejection branch added to
+/// `lower_import_stmt` without a matching `poisonable_names` arm fails
+/// here as soon as its shape joins this list.
+const IMPORT_SHAPES: &[&str] = &[
+    // `Stmt::Import`: accepted, then one row per rejection branch.
+    "import math\n",
+    "import enum\n",
+    "import os\n",             // module `pycc_std` does not resolve
+    "import pkg.dep\n",        // dotted, unresolvable
+    "import math as m\n",      // `asname`
+    "import pkg.dep as d\n",   // `asname`, dotted
+    "import math, enum\n",     // more than one alias
+    "import pkg.dep, other\n", // more than one alias, unresolvable
+    // `Stmt::ImportFrom`, stdlib arm: accepted, then its rejection branches.
+    "from math import sqrt\n",
+    "from math import sqrt, pi\n",
+    "from math import bogus\n",       // not a registered symbol
+    "from math import sqrt, bogus\n", // one of several is not
+    "from math import sqrt as s\n",   // `asname`
+    "from math import *\n",           // wildcard
+    "from os import path\n",          // module `pycc_std` does not resolve
+];
+
+#[test]
+fn a_failing_import_poisons_and_a_lowering_one_does_not() {
+    for source in IMPORT_SHAPES {
+        let module = parse(source);
+        let statement = &module.body[0];
+        let poisoned = poisonable_names(statement);
+        let lowered = lower_all(&module).is_ok();
+        assert_eq!(
+            lowered,
+            poisoned.is_empty(),
+            "`{}` lowers={lowered} but poisons {poisoned:?} -- \
+             `poisonable_names` must mirror `lower_import_stmt`'s success \
+             condition exactly: a shape that lowers poisons nothing, and \
+             every shape that fails poisons what it would have bound",
+            source.trim_end()
+        );
+    }
+}
