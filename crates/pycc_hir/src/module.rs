@@ -361,6 +361,19 @@ fn lower_top_level_item<'a>(
         // resolve them; a copy already present (an ancestor shared with an
         // earlier import, or a synthetic exception class this module seeded
         // itself) is not duplicated.
+        //
+        // The two `continue` guards below have no observable effect on
+        // Part 1's output, and no test discriminates them: every copy they
+        // would skip is also recorded in `imported_class_indices` /
+        // `imported_alias_indices` and removed again by `strip_imported`
+        // before anything downstream sees the module, and the name lookups
+        // in between take the first match over byte-identical entries.
+        // They are kept because they hold the one-name-one-entry invariant
+        // that the collision checks just above and the `HashMap`-collected
+        // class tables downstream (`pycc_types::Environment::classes`,
+        // `pycc_mir`'s own `classes` map) are written against. Part 2
+        // (#899, per-module namespaces) is where stripping stops being
+        // universal and the guards become load-bearing.
         for entry in lowered.classes {
             if state.class_defs.iter().any(|(name, _)| *name == entry.0) {
                 continue;

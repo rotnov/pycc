@@ -640,10 +640,14 @@ fn aliasing_a_name_imported_from_a_project_module_is_rejected() {
 }
 
 #[test]
-fn one_type_alias_reached_through_two_modules_is_recorded_once() {
+fn a_type_alias_reached_through_two_modules_lowers_and_binds() {
     // `main` imports `Number` from the module that defines it and again
-    // from a module that re-exports it; the second copy is dropped rather
-    // than duplicating the alias in `main`'s own table.
+    // from a module that re-exports it, so the alias reaches `main` twice
+    // and the whole program must still load and lower.
+    // The dedup guard in `module.rs` that skips the second copy has no
+    // observable effect in Part 1 (`strip_imported` removes every
+    // imported entry again), so this covers the reachability of the
+    // path, not the guard itself.
     let scratch = ScratchDir::new("modules_tests").expect("scratch");
     write(
         &scratch,
@@ -683,6 +687,8 @@ fn a_bare_file_name_importer_renders_its_directory_as_a_single_dot() {
     // because the spelling is working-directory-relative by construction;
     // `tests/issue_881_project_imports.rs` covers the same shape through
     // the real CLI.
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    let importer = write(&scratch, "main.py", "from . import helper\n");
     let mut loader = Loader {
         modules: Vec::new(),
         memo: HashMap::new(),
@@ -698,11 +704,11 @@ fn a_bare_file_name_importer_renders_its_directory_as_a_single_dot() {
         span: pycc_diag::Span::new(0, 0),
     };
     let base = loader
-        .base_dir(&request, "main.py")
+        .base_dir(&request, "main.py", &importer)
         .unwrap_or_else(|failure| panic!("base resolution must not fail: {}", describe(&failure)));
     let rejection = base
         .rejection
-        .expect("the worktree root is not a package, so the base is rejected");
+        .expect("the scratch directory is not a package, so the base is rejected");
     assert!(
         rejection.contains("`.` has no `__init__.py`"),
         "unexpected rejection: {rejection}"

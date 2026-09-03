@@ -126,7 +126,7 @@ impl Loader {
         let requests = pycc_hir::project_import_requests(&parsed);
         let mut answers = Vec::with_capacity(requests.len());
         for request in &requests {
-            answers.push((request.span, self.resolve(request, &display)?));
+            answers.push((request.span, self.resolve(request, &display, canonical)?));
         }
         self.in_progress.pop();
 
@@ -175,8 +175,9 @@ impl Loader {
         &mut self,
         request: &ProjectImportRequest,
         importer_display: &str,
+        importer_canonical: &Path,
     ) -> Result<Resolution, FrontendFailure> {
-        let base = self.base_dir(request, importer_display)?;
+        let base = self.base_dir(request, importer_display, importer_canonical)?;
         let segments: Vec<&str> = match &request.module {
             Some(module) => module.split('.').collect(),
             None => Vec::new(),
@@ -237,6 +238,7 @@ impl Loader {
         &mut self,
         request: &ProjectImportRequest,
         importer_display: &str,
+        importer_canonical: &Path,
     ) -> Result<Base, FrontendFailure> {
         if request.level == 0 {
             let root = self.source_root()?;
@@ -255,7 +257,12 @@ impl Loader {
             // diagnostic can actually render.
             display = PathBuf::from(".");
         }
-        let mut canonical = identity_path(&display);
+        // The importer's own canonical path is already known, so the base
+        // never has to be re-derived from the display spelling: popping the
+        // file name off it is exact even when the display path is relative
+        // to the process working directory or spelled through a symlink.
+        let mut canonical = importer_canonical.to_path_buf();
+        canonical.pop();
         for climb in 0..request.level {
             if !canonical.join("__init__.py").is_file() {
                 let message = if climb == 0 {
@@ -512,12 +519,12 @@ fn canonicalize(path: &Path, display: &str) -> Result<PathBuf, FrontendFailure> 
         .map_err(|error| FrontendFailure::input(display.to_string(), error.to_string()))
 }
 
-/// The identity a path is memoized under: its canonical form when the
-/// filesystem can produce one, and the path as given otherwise. Every
-/// caller has already probed the path with `is_file`/`is_dir`, or is about
-/// to read it, so a canonicalization failure here is not the right place
-/// to report: the read that follows raises the real diagnostic, and the
-/// only cost of the fallback is that two spellings of one unreadable file
+/// The identity a module is memoized under: its canonical form when the
+/// filesystem can produce one, and the path as given otherwise. Both
+/// callers have already found the file with `is_file`, and each is about to
+/// read it, so a canonicalization failure here is not the right place to
+/// report: the read that follows raises the real diagnostic, and the only
+/// cost of the fallback is that two spellings of one unreadable file
 /// memoize separately.
 fn identity_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())

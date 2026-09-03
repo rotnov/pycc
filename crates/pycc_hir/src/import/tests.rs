@@ -381,10 +381,14 @@ fn aliasing_a_name_imported_from_a_resolved_dependency_is_rejected() {
 }
 
 #[test]
-fn an_ancestor_shared_by_two_imported_classes_is_copied_once() {
-    // Each `from` statement copies its class *with its ancestors*; the
-    // second statement finds `ValueError` already in this module's table
-    // and skips the duplicate.
+fn two_imported_classes_sharing_an_ancestor_both_bind() {
+    // Each `from` statement copies its class *with its ancestors*, so the
+    // second statement meets `ValueError` already in this module's table.
+    // Both classes must still bind.
+    // The dedup guard in `module.rs` that skips the second copy has no
+    // observable effect in Part 1 (`strip_imported` removes every
+    // imported entry again), so this covers the reachability of the
+    // path, not the guard itself.
     let fixture =
         Fixture::new("class Left(ValueError):\n    pass\n\n\nclass Right(ValueError):\n    pass\n");
     let lowered = fixture.lower_ok("from dep import Left\nfrom dep import Right\n");
@@ -398,10 +402,14 @@ fn an_ancestor_shared_by_two_imported_classes_is_copied_once() {
 }
 
 #[test]
-fn one_type_alias_reached_through_two_modules_is_recorded_once() {
+fn a_type_alias_reached_through_two_modules_lowers_and_binds() {
     // `Alias` arrives both from the module that defines it and from the
-    // module that re-exports it; the second copy is dropped rather than
-    // duplicating the alias in the importer's own table.
+    // module that re-exports it, so the importer meets the same alias
+    // twice and must still lower and bind it.
+    // The dedup guard in `module.rs` that skips the second copy has no
+    // observable effect in Part 1 (`strip_imported` removes every
+    // imported entry again), so this covers the reachability of the
+    // path, not the guard itself.
     let defining =
         lower_dependency("type Alias = int\n\n\ndef helper(n: Alias) -> Alias:\n    return n\n");
     let reexport = {
