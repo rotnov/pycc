@@ -5,6 +5,7 @@
 //! private items it reaches resolve exactly as they did inline.
 
 use super::*;
+use std::collections::HashSet;
 // `lower_comprehension_header`/`rename_name_in_expr` moved to `expr.rs`
 // (issue #361, D-149) but the two tests below call them directly,
 // bypassing the public `lower_checked` entry point -- unlike every other
