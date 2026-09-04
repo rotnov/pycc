@@ -46,8 +46,16 @@ C0001 is a versioned capability diagnostic, not a rejected-by-design language \
 rule: it fires whenever HIR lowering reaches a syntactically valid Python \
 statement, expression, or annotation shape that this pycc version's frontend \
 does not yet lower -- a `with` statement, a tuple-unpacking assignment, an \
-unrecognized import shape, or a type annotation more complex than a bare \
-name, for example. It also fires for calls to known Python 3.14 \
+unrecognized import shape, or a type annotation this version's lowering \
+does not recognize, for example. Since D-227 (issue #918) the \
+parameterized container annotations `list[T]`, `set[T]`, `dict[K, V]` \
+and `tuple[A, B, ...]` *are* lowered in parameter, local-variable, type-\
+alias and protocol-member positions, so C0001 no longer covers every \
+annotation more complex than a bare name; what it still covers there is \
+the bare, unparameterized `list`/`set`/`dict`/`tuple` spelling (whose \
+message names the parameterized form to write instead) and a container \
+annotation in return position, which stays reserved for a later slice \
+(issue #925). It also fires for calls to known Python 3.14 \
 callable builtins that this compiler version does not implement (e.g. \
 `ValueError(\"x\")`, `Exception(\"msg\")`, `int(\"5\")`, `range(10)` as a \
 standalone call) -- these are valid Python, not name-resolution failures \
@@ -859,6 +867,31 @@ class C:
         self.n = 0  # declared int
     def set_true(self) -> None:
         self.n = True  # OK -- same class, bool widens into its own int slot (D-187)
+",
+    },
+    DiagnosticExplanation {
+        code: "T0053",
+        severity: Severity::Error,
+        summary: "container type annotation has the wrong number of type arguments",
+        explanation: "\
+T0053 fires when a parameterized container type annotation is written with \
+an argument count pycc cannot lower: `list[T]` and `set[T]` take exactly \
+one type argument, `dict[K, V]` exactly two, and `tuple[A, B, ...]` at \
+least one. It is an arity check on the annotation itself, run before the \
+element types are gated, so `list[int, str]` reports T0053 rather than a \
+misleading element-type diagnostic. Two `tuple` spellings that are legal \
+Python typing but outside this version's fixed-arity tuple representation \
+(D-116) are also rejected here: the empty tuple `tuple[()]`, which arrives \
+as a zero-element subscript, and the homogeneous-variadic `tuple[int, ...]`, \
+whose length is not known at compile time. Both remain reserved for a later \
+slice (D-227, issue #918); write the explicit fixed-arity form, e.g. \
+`tuple[int, int]`, in the meantime. The `...` rejection is checked for every \
+container family before arity is, so the ill-typed `list[...]` and \
+`dict[str, ...]` spellings report the same `...` message rather than an \
+argument-count one.",
+        example: "\
+def f(d: dict[str]) -> None:  # T0053 -- dict takes exactly 2 type arguments
+    pass
 ",
     },
     DiagnosticExplanation {

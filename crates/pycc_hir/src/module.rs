@@ -704,6 +704,28 @@ pub(crate) fn unknown_annotation_name_message(name: &str) -> String {
     format!("{UNKNOWN_ANNOTATION_PREFIX}{name}{UNKNOWN_ANNOTATION_SUFFIX}")
 }
 
+/// The `C0001` message for a *bare* builtin container annotation -- `list`,
+/// `set`, `dict` or `tuple` written with no type arguments (D-227, issue
+/// #918). Split out from [`unknown_annotation_name_message`] because a bare
+/// container is no longer an unknown name: the parameterized form now lowers,
+/// so the actionable advice is "write `list[int]`", not "this name means
+/// nothing here".
+///
+/// Deliberately *not* cascade-shaped: it starts with `a bare \``, not
+/// `type annotation \``, so [`cascade_name`] returns `None` for it. That is
+/// the wanted outcome under D-219 -- a bare `list` annotation does not poison
+/// a name the way an unknown class name does, because nothing else in the
+/// module can be waiting on `list` to be defined.
+///
+/// `frozenset` and `type` deliberately keep the generic unknown-name message:
+/// neither has a `Ty` variant, so steering a user toward `frozenset[int]`
+/// would point at a form this version rejects just as hard.
+pub(crate) fn bare_container_annotation_message(name: &str, example: &str) -> String {
+    format!(
+        "a bare `{name}` type annotation is not supported yet -- write the parameterized form, e.g. `{example}`"
+    )
+}
+
 /// The `C0001` message for a base class that is not defined earlier in the
 /// module (`class::mro::validate_bases`). The only producer of this message;
 /// `cascade_name` parses it back under the same round-trip test.

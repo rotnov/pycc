@@ -812,7 +812,7 @@
     },
     {
       "pep": "[585](https://peps.python.org/pep-0585/)",
-      "feature": "Builtin generics: `list[int]` (D-105), `dict[str, int]`/`set[int]` (D-121/D-122, PR-11a), and `tuple[...]` (D-115/D-116, PR-11b) all ship real codegen — this row's `✅` reflects all four fixtures' own CI-observed, all-5-Tier-1-target evidence ([PR #305](https://github.com/rotnov/pycc/pull/305)). `tuple[...]`'s own literal construction, `t[k]` literal-index reads, and both module-global and function-local storage are covered; passing or returning a tuple *value* across a function boundary from real, unannotated Python source does not work yet even though the codegen layer already supports it, for two independent reasons: `pycc_types`' signature-inference solver is scalar-only (D-116 point 4's correction note), and `pycc_codegen`'s `emit_expr` has no `MirExpr::Call` result-dispatch arm for a container-typed return either (D-116's own further correction note) — deferred alongside iteration, unpacking assignment, and an annotation syntax (see `docs/ROADMAP.md`)",
+      "feature": "Builtin generics: `list[int]` (D-105), `dict[str, int]`/`set[int]` (D-121/D-122, PR-11a), and `tuple[...]` (D-115/D-116, PR-11b) all ship real codegen, and since D-227 (issue #918) the parameterized *annotation* forms `list[T]`, `set[T]`, `dict[K, V]` and `tuple[A, B, ...]` are lowered in parameter, local-variable, type-alias and protocol-member positions, with explicit arity validation (`T0053`) and the same element-type capability gates the literals run (`T0034`/`T0036`/`T0038`/`T0039`). Passing a container *value* across a function boundary now works from real Python source when the parameter carries such an annotation — measured end to end for all four families against CPython 3.14. Still deferred: container types in **return** position (issue #925, which is also what keeps D-146's private-helper solver reaching an unhandled codegen case, issue #926), nested containers (#895), unions inside containers (#747), `frozenset[...]`/`type[...]` (no `Ty` variant under D-109's 16-byte ceiling), the variadic `tuple[int, ...]` and empty `tuple[()]` (both rejected with `T0053`), and inferring an empty literal's element type from its annotation (#927)",
       "matrix_line": 326,
       "fixtures": [
         "pep_0585_builtin_generics.py",
@@ -842,12 +842,17 @@
         {
           "category": "builtin generics as annotations on nested or user-defined generic types",
           "kind": "core",
-          "reason": "Only the scalar element types recorded in D-105/D-121/D-122/D-124 are supported."
+          "reason": "Only the scalar element types recorded in D-105/D-121/D-122/D-124 are supported; a nested `list[list[int]]` annotation lowers but is rejected by the element-type gate (issue #895)."
         },
         {
           "category": "`frozenset[...]`, `type[...]`, and the remaining builtin generic aliases",
           "kind": "core",
-          "reason": "Not exercised, and outside the recorded scalar container scope."
+          "reason": "Not exercised, and outside the recorded scalar container scope: neither has a `Ty` variant, which D-109's 16-byte `size_of::<Ty>()` ceiling would have to be cleared to add."
+        },
+        {
+          "category": "a container type in return position",
+          "kind": "core",
+          "reason": "Rejected with `C0001` by D-227 on purpose (issue #925): a container-typed call result already reaches an unhandled codegen case (issue #926)."
         }
       ]
     },

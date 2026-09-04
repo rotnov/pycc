@@ -188,6 +188,35 @@ pub(super) fn lower_protocol_class(
                     &[],
                     class_name_defs,
                 )?;
+                // D-227 (issue #918): a container-typed protocol attribute is
+                // rejected. Before #918 no container `Ty` could reach this
+                // branch at all -- there was no annotation syntax that
+                // produced one -- so this arm has never had a type gate,
+                // unlike the two class-body attribute sites, which both run
+                // `is_scalar_slot_type`. Structural conformance against a
+                // container-typed member has no exercised path anywhere in
+                // the compiler (no fixture, no codegen case), so admitting it
+                // here would ship an untested route into container codegen
+                // rather than a feature. Non-container member types keep
+                // their existing behaviour exactly: `Ty::Instance`,
+                // `Ty::Optional`, `Ty::None` and `Ty::Protocol` attributes
+                // are all still accepted, which is why this is a container
+                // check and not a reuse of `is_scalar_slot_type`.
+                if matches!(
+                    attr_ty,
+                    Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::Tuple(_)
+                ) {
+                    return Err(unsupported(
+                        format!(
+                            "protocol attribute `{class_name}.{attr_name}` has container type \
+                             `{}`, which is not supported yet -- a protocol member's type takes \
+                             part in structural conformance checking, which has no container \
+                             case yet",
+                            attr_ty.name()
+                        ),
+                        ann.range,
+                    ));
+                }
                 // A protocol attribute cannot have a default value.
                 if ann.value.is_some() {
                     return Err(unsupported(

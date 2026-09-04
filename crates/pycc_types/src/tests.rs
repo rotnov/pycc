@@ -14859,9 +14859,13 @@ fn check_generic_function_rejects_two_distinct_type_parameters() {
 #[test]
 fn check_generic_function_rejects_container_position_type_parameter() {
     // Defense in depth, same rationale as the two-type-parameter test
-    // above: `crates/pycc_hir`'s `annotation_to_ty` never lowers a
-    // `list[T]`-shaped annotation from real source at all, so this can
-    // only be exercised via a hand-built `HirItem`.
+    // above. `crates/pycc_hir`'s `annotation_to_ty` does lower a
+    // `list[T]`-shaped annotation since D-227 (issue #918), but it
+    // rejects a `Ty::Param` element there itself, with this same `T0042`
+    // code and wording and a real span -- precisely because
+    // `substitute_ty` is not recursive. So a container-position type
+    // parameter still cannot reach this function from real source, and
+    // this can only be exercised via a hand-built `HirItem`.
     let func = HirItem::Function {
         name: "f".to_string(),
         params: vec![(
@@ -29079,7 +29083,8 @@ fn a_walrus_with_an_optional_str_value_is_rejected_with_t0050() {
     // only exercises the recursive `true` return). A real parsed program
     // can never reach this: `annotation_to_ty` (`pycc_hir/src/func.rs`) is
     // the one place a `Ty::Optional` is ever constructed from source, and
-    // it rejects every inner type but `int` at lowering time with T0049,
+    // it rejects every inner type but `int`/`float`/`bool` at lowering
+    // time with T0049,
     // before `pycc_types` ever runs -- so `Ty::Optional(Ty::Str)` only
     // exists as a hand-built `Environment` binding here, bypassing
     // `check_source`/lowering entirely to reach the type-checker's own

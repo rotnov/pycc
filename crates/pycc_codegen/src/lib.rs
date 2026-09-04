@@ -2781,11 +2781,17 @@ fn emit_expr_unchecked<'ctx>(
                 ),
                 // No dedicated arm for `List`/`Dict`/`Set`/`Tuple`: a
                 // container-typed call result gets the same treatment as
-                // every other still-unhandled `Ty` here (currently only
-                // `Ty::Infer`, which never reaches real codegen -- see
-                // `an_infer_typed_call_result_used_as_a_nested_expression_
-                // is_not_supported` below), naming the specific type via
-                // `.name()` instead of a bare `{:?}`.
+                // every other still-unhandled `Ty` here, naming the specific
+                // type via `.name()` instead of a bare `{:?}`.
+                //
+                // This panic is reachable today, which is why it is tracked
+                // as issue #926: D-146's private-helper return-type solver
+                // can infer a container return type for an *un-annotated*
+                // helper and reach here. D-227 (issue #918) deliberately does
+                // not widen that -- it rejects a container *return*
+                // annotation in `pycc_hir::lower_return_annotation` with
+                // `C0001` rather than opening a second route to this line.
+                // Supporting container returns properly is issue #925.
                 other => {
                     panic!(
                         "pycc_codegen: a `{}`-typed call result is not supported yet",
@@ -4828,11 +4834,12 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         // `list[T]` but `list[int]` before codegen ever runs, so `list`'s
         // element type is `int` for every `ForList` that can reach this
         // crate. Deliberately not derived from `bindings[list]` instead:
-        // that entry can be absent -- not because `list` might be a
-        // list-typed function *parameter* (unreachable: `pycc_hir::
-        // annotation_to_ty` rejects any non-bare-name annotation, so
-        // `def f(xs: list[int])` fails with `C0001` long before codegen),
-        // but because `list` can be a module-scope global iterated from
+        // that entry can be absent. Before D-227 (issue #918) the reason
+        // given here was that `list` could never be a list-typed function
+        // *parameter* at all; that is no longer true -- `def f(xs:
+        // list[int])` now lowers and reaches codegen. The binding can still
+        // be absent for the original second reason, which is the one that
+        // actually matters: `list` can be a module-scope global iterated from
         // inside a function body, whose `local_bindings` is built from that
         // function body alone and so has no entry for it at all --
         // exactly what `a_module_level_list_binding_lives_in_a_global_slot`

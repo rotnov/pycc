@@ -869,3 +869,130 @@ fn no_diagnostic_fixture_renders_an_ast_debug_dump() {
         dir.display()
     );
 }
+
+// D-227 (issue #918): parameterized container type annotations. There is no
+// fixture auto-discovery in this harness -- every `.py`/`.expected.txt` pair
+// needs its own registration below or it silently never runs.
+
+#[test]
+fn t0053_list_two_args() {
+    assert_diagnostic_matches_fixture("t0053_list_two_args");
+}
+
+#[test]
+fn t0053_set_two_args() {
+    assert_diagnostic_matches_fixture("t0053_set_two_args");
+}
+
+#[test]
+fn t0053_dict_one_arg() {
+    assert_diagnostic_matches_fixture("t0053_dict_one_arg");
+}
+
+#[test]
+fn t0053_dict_three_args() {
+    assert_diagnostic_matches_fixture("t0053_dict_three_args");
+}
+
+#[test]
+fn t0053_tuple_empty() {
+    assert_diagnostic_matches_fixture("t0053_tuple_empty");
+}
+
+#[test]
+fn t0053_tuple_variadic_ellipsis() {
+    assert_diagnostic_matches_fixture("t0053_tuple_variadic_ellipsis");
+}
+
+#[test]
+fn t0053_local_annotation_arity() {
+    assert_diagnostic_matches_fixture("t0053_local_annotation_arity");
+}
+
+#[test]
+fn t0034_list_str_annotation() {
+    assert_diagnostic_matches_fixture("t0034_list_str_annotation");
+}
+
+#[test]
+fn t0034_nested_list_annotation() {
+    assert_diagnostic_matches_fixture("t0034_nested_list_annotation");
+}
+
+#[test]
+fn t0036_dict_int_key_annotation() {
+    assert_diagnostic_matches_fixture("t0036_dict_int_key_annotation");
+}
+
+#[test]
+fn t0038_set_str_annotation() {
+    assert_diagnostic_matches_fixture("t0038_set_str_annotation");
+}
+
+#[test]
+fn t0039_tuple_str_element_annotation() {
+    assert_diagnostic_matches_fixture("t0039_tuple_str_element_annotation");
+}
+
+#[test]
+fn t0042_type_param_in_container_annotation() {
+    assert_diagnostic_matches_fixture("t0042_type_param_in_container_annotation");
+}
+
+// `Optional[T]`'s own `T0049` gate (`crates/pycc_hir/src/func.rs`) predates
+// this change but was unreachable for a container inner type: `list[int]`
+// could not be lowered at all, so `list[int] | None` failed on the inner
+// annotation with `C0001`. Lowering the container annotation makes the
+// composed form reach `T0049` for the first time, rendering a container name
+// into that message, so both directions of the composition are pinned here.
+#[test]
+fn t0049_optional_of_container() {
+    assert_diagnostic_matches_fixture("t0049_optional_of_container");
+}
+
+#[test]
+fn t0034_list_of_optional() {
+    assert_diagnostic_matches_fixture("t0034_list_of_optional");
+}
+
+// The recursive `annotation_to_ty(arg, ..)?` inside
+// `container_annotation_to_ty` propagates a failure from the *inner*
+// annotation before any element-type gate runs, so the reported span is the
+// inner annotation's own, not the whole subscript's. Pinned here because it is
+// the one error path in that function reached by neither `T0053` (arity, which
+// runs first) nor `T0034`/`T0036`/`T0038`/`T0039`/`T0042` (element gates, which
+// run after this returns).
+#[test]
+fn c0001_bare_container_inside_container() {
+    assert_diagnostic_matches_fixture("c0001_bare_container_inside_container");
+}
+
+#[test]
+fn c0001_bare_list_annotation() {
+    assert_diagnostic_matches_fixture("c0001_bare_list_annotation");
+}
+
+#[test]
+fn c0001_bare_tuple_annotation() {
+    assert_diagnostic_matches_fixture("c0001_bare_tuple_annotation");
+}
+
+#[test]
+fn c0001_bare_dict_annotation() {
+    assert_diagnostic_matches_fixture("c0001_bare_dict_annotation");
+}
+
+#[test]
+fn c0001_container_return_annotation() {
+    assert_diagnostic_matches_fixture("c0001_container_return_annotation");
+}
+
+#[test]
+fn c0001_protocol_container_attribute() {
+    assert_diagnostic_matches_fixture("c0001_protocol_container_attribute");
+}
+
+#[test]
+fn t0044_user_class_named_list_subscript() {
+    assert_diagnostic_matches_fixture("t0044_user_class_named_list_subscript");
+}

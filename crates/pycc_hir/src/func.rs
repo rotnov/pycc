@@ -243,7 +243,29 @@ pub(crate) fn lower_return_annotation(
     class_defs: &[ClassAnnotationInfo],
 ) -> Result<Ty, Diagnostic> {
     match returns {
-        Some(ann) => annotation_to_ty(ann, type_param, class_name, aliases, class_defs),
+        Some(ann) => {
+            let ty = annotation_to_ty(ann, type_param, class_name, aliases, class_defs)?;
+            // D-227 (issue #918) lowers container annotations in parameter,
+            // local-variable, type-alias and protocol-member positions only.
+            // Return position is deliberately excluded and tracked separately
+            // as issue #925: a container-typed *call result* already reaches
+            // an unhandled codegen case today (issue #926, via D-146's
+            // private-helper return-type solver), so accepting the annotation
+            // here would widen a known panic's reachability rather than add a
+            // working feature. Rejecting it keeps Part 1 diagnostic-complete.
+            if matches!(ty, Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::Tuple(_)) {
+                return Err(unsupported(
+                    format!(
+                        "a container return type annotation (`{}`) is not supported yet -- \
+                         container annotations are currently supported in parameter, \
+                         local-variable, type-alias and protocol-member positions only",
+                        ty.name()
+                    ),
+                    pycc_ast::expr_range(ann),
+                ));
+            }
+            Ok(ty)
+        }
         None if is_public => Err(Diagnostic::error(
             "T0001",
             format!("public function `{fn_name}` needs a return type annotation"),
@@ -252,6 +274,139 @@ pub(crate) fn lower_return_annotation(
         .with_help(format!("add a return type annotation to `{fn_name}`"))),
         None => Ok(Ty::Infer),
     }
+}
+
+/// The four builtin container types this version lowers from a parameterized
+/// annotation (D-227, issue #918). `frozenset[T]` and `type[T]` are absent on
+/// purpose: neither has a `Ty` variant, and adding one would have to clear
+/// D-109's 16-byte `size_of::<Ty>()` ceiling first.
+const CONTAINER_ANNOTATION_NAMES: [&str; 4] = ["list", "set", "dict", "tuple"];
+
+/// A worked parameterized example for a bare container annotation's `C0001`,
+/// or `None` for a name that is not one of the four. `tuple` gets its own
+/// two-argument example: `tuple[int]` is legal but atypical, and a
+/// single-element example would read as if `tuple` were homogeneous.
+fn bare_container_example(name: &str) -> Option<&'static str> {
+    match name {
+        "list" => Some("list[int]"),
+        "set" => Some("set[int]"),
+        "dict" => Some("dict[str, int]"),
+        "tuple" => Some("tuple[int, int]"),
+        _ => None,
+    }
+}
+
+/// Lowers a parameterized builtin container annotation -- `list[T]`,
+/// `set[T]`, `dict[K, V]` or `tuple[A, B, ...]` -- to its `Ty` (D-227,
+/// issue #918).
+///
+/// Three checks run in a fixed order, so the reported diagnostic always
+/// describes the outermost thing that is wrong:
+///
+/// 1. an `...` type argument (the homogeneous-variadic `tuple[int, ...]`),
+///    rejected with `T0053` because a runtime-length tuple has no fixed-arity
+///    `Ty::Tuple` representation;
+/// 2. arity -- `list`/`set` take exactly one argument, `dict` exactly two,
+///    `tuple` at least one (so the empty `tuple[()]`, which reaches here as a
+///    zero-element `Expr::Tuple`, is rejected here rather than silently
+///    lowering to a zero-field tuple);
+/// 3. each argument's own type, recursively through [`annotation_to_ty`],
+///    then the shared element-type capability gate
+///    ([`crate::container::check_container_ty`]) that container *literals*
+///    also run.
+///
+/// Between 3's recursion and the capability gate, a `Ty::Param` element is
+/// rejected with `T0042` -- the same code and wording `pycc_types`' own
+/// signature scan uses, but carrying the annotation's real span instead of
+/// that scan's `Span::new(0, 0)`. Catching it here rather than relying on the
+/// downstream scan is not just a nicer caret: `substitute_ty` is not
+/// recursive, so a `Ty::Param` buried inside a container would not be
+/// substituted at a call site even where the scan did let it through.
+fn container_annotation_to_ty(
+    family: &str,
+    slice: &Expr,
+    annotation: &Expr,
+    type_param: Option<&str>,
+    class_name: Option<&str>,
+    aliases: &[(String, Ty)],
+    class_defs: &[ClassAnnotationInfo],
+) -> Result<Ty, Diagnostic> {
+    let span = {
+        let range = pycc_ast::expr_range(annotation);
+        Span::new(range.start, range.end)
+    };
+    // A single type argument arrives as the bare expression; two or more (and
+    // the empty `tuple[()]`) arrive as an `Expr::Tuple`.
+    let args: Vec<&Expr> = match slice {
+        Expr::Tuple(tuple) => tuple.elts.iter().collect(),
+        other => vec![other],
+    };
+    if args
+        .iter()
+        .any(|arg| matches!(arg, Expr::EllipsisLiteral(_)))
+    {
+        return Err(Diagnostic::error(
+            "T0053",
+            format!(
+                "the `...` type argument in `{family}[...]` is not supported yet -- a homogeneous-variadic container has no compile-time length, so write an explicit fixed-arity annotation such as `tuple[int, int]` instead"
+            ),
+            span,
+        ));
+    }
+    let exact_arity = match family {
+        "list" | "set" => Some(1usize),
+        "dict" => Some(2usize),
+        // `tuple` is variadic in arity: any count of one or more.
+        _ => None,
+    };
+    match exact_arity {
+        Some(expected) if args.len() != expected => {
+            return Err(Diagnostic::error(
+                "T0053",
+                format!(
+                    "container type annotation `{family}[...]` takes exactly {expected} type argument{}, got {}",
+                    if expected == 1 { "" } else { "s" },
+                    args.len()
+                ),
+                span,
+            ));
+        }
+        None if args.is_empty() => {
+            return Err(Diagnostic::error(
+                "T0053",
+                "container type annotation `tuple[...]` takes at least 1 type argument -- the empty tuple `tuple[()]` is not supported yet".to_string(),
+                span,
+            ));
+        }
+        _ => {}
+    }
+    let mut elements = Vec::with_capacity(args.len());
+    for arg in &args {
+        let element = annotation_to_ty(arg, type_param, class_name, aliases, class_defs)?;
+        if let Ty::Param(name) = &element {
+            return Err(Diagnostic::error(
+                "T0042",
+                format!(
+                    "type parameter `{name}` used inside a container position is not supported yet -- v0.2 only instantiates a bare type-parameter position, matching D-105's own fixed-container-element-type restriction"
+                ),
+                span,
+            ));
+        }
+        elements.push(element);
+    }
+    let mut elements = elements.into_iter();
+    let ty = match family {
+        "list" => Ty::List(Box::new(elements.next().expect("arity checked above"))),
+        "set" => Ty::Set(Box::new(elements.next().expect("arity checked above"))),
+        "dict" => {
+            let key = elements.next().expect("arity checked above");
+            let value = elements.next().expect("arity checked above");
+            Ty::Dict(Box::new((key, value)))
+        }
+        _ => Ty::Tuple(Box::new(elements.collect())),
+    };
+    crate::container::check_container_ty(&ty, span)?;
+    Ok(ty)
 }
 
 /// Resolves an annotation expression to a `Ty`. `aliases` is the D-135 type
@@ -353,6 +508,18 @@ pub(crate) fn annotation_to_ty(
                     .find(|(alias_name, _)| alias_name == other)
                     .map(|(_, ty)| ty.clone())
                     .ok_or_else(|| {
+                        // D-227 (issue #918): a *bare* builtin container name
+                        // gets its own message naming the parameterized form
+                        // that now works. Reached only here, after a
+                        // user-defined class and the alias table have both
+                        // had their chance, so `class list:` and
+                        // `type list = ...` still win.
+                        if let Some(example) = bare_container_example(other) {
+                            return unsupported(
+                                crate::module::bare_container_annotation_message(other, example),
+                                pycc_ast::expr_range(annotation),
+                            );
+                        }
                         // The message is built in `module` so #867's cascade
                         // classifier can parse it back (D-219).
                         unsupported(
@@ -452,10 +619,10 @@ pub(crate) fn annotation_to_ty(
                 // the recursion below, which reports it exactly as it does
                 // today.
                 _ => {
-                    if let Some(info) = class_defs
+                    let known_class = class_defs
                         .iter()
-                        .find(|info| info.name == base_name.id.as_str())
-                    {
+                        .find(|info| info.name == base_name.id.as_str());
+                    if let Some(info) = known_class {
                         if !info.subscriptable {
                             return Err(Diagnostic::error(
                                 "T0044",
@@ -491,6 +658,35 @@ pub(crate) fn annotation_to_ty(
                         if let Some(return_ty) = &info.class_getitem_return {
                             return Ok(return_ty.clone());
                         }
+                    }
+                    // D-227 (issue #918): the four builtin container types are
+                    // lowered here, from a *parameterized* annotation only --
+                    // the bare `list`/`dict`/`set`/`tuple` spelling still falls
+                    // through the `Expr::Name` arm's `other =>` branch and gets
+                    // its own `C0001`.
+                    //
+                    // Deliberately checked *after* the known-class lookup above
+                    // and gated on the alias table: `class list:` and
+                    // `type list = ...` both legally shadow the builtin in
+                    // Python, and silently retyping `x: list[int]` as a builtin
+                    // list when the user defined their own `list` would be a
+                    // miscompile, not merely a worse diagnostic. (The plan for
+                    // #918 proposed a dedicated match arm ahead of this one,
+                    // which would have shadowed both; the ordering here costs
+                    // nothing and keeps the user's own definition winning.)
+                    if known_class.is_none()
+                        && CONTAINER_ANNOTATION_NAMES.contains(&base_name.id.as_str())
+                        && !aliases.iter().any(|(name, _)| name == base_name.id.as_str())
+                    {
+                        return container_annotation_to_ty(
+                            base_name.id.as_str(),
+                            sub.slice.as_ref(),
+                            annotation,
+                            type_param,
+                            class_name,
+                            aliases,
+                            class_defs,
+                        );
                     }
                     annotation_to_ty(
                         &Expr::Name(base_name.clone()),

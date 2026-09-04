@@ -2922,12 +2922,16 @@ fn t0042(message: impl Into<String>) -> Diagnostic {
 ///
 /// Defense in depth, not a reachable frontend path: `crates/pycc_hir/src/func.rs`'s
 /// `lower_function` already enforces at most one PEP 695 `TypeVar` per
-/// function (Task 1) and `annotation_to_ty` never lowers a `Subscript`
-/// annotation at all, so a real `def f[T](x: list[T])` or `def f[T, U](...)`
-/// cannot reach `pycc_types` from parsed source today -- this only fires
-/// for a hand-constructed `HirItem` (a future frontend regression, or a
-/// unit test exercising this function directly, mirroring how this file's
-/// other "defense in depth" checks are exercised elsewhere).
+/// function (Task 1), and since D-227 (issue #918) `annotation_to_ty`
+/// rejects a `Ty::Param` element inside the container annotations it does
+/// lower -- with this same `T0042` code and wording, but a real span -- so a
+/// real `def f[T](x: list[T])` or `def f[T, U](...)` still cannot reach
+/// `pycc_types` from parsed source. (Before #918 the reason was blunter:
+/// `annotation_to_ty` lowered no subscripted container annotation at all.)
+/// This only fires for a hand-constructed `HirItem` (a future frontend
+/// regression, or a unit test exercising this function directly, mirroring
+/// how this file's other "defense in depth" checks are exercised
+/// elsewhere).
 fn scan_signature_ty_for_param(
     ty: &Ty,
     is_top_level: bool,
