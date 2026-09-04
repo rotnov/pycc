@@ -33,17 +33,19 @@ pub fn is_builtin_type_name(name: &str) -> bool {
     matches!(name, "int" | "str" | "float" | "bool")
 }
 
-/// Returns `true` if `name` is the builtin `Enum` base name recognized by
-/// `lower_class` as a marker that a class is a PEP 435 enum (#379, PR-19).
-/// `Enum` is not a user-defined class in `class_defs` -- it is a builtin
-/// base name consumed as a marker, not recorded in the class's `bases`/`mro`.
-/// `pycc_std` registers `enum.Enum` as an `EnumMarker` symbol so
-/// `from enum import Enum` resolves (the import is a no-op binding — `Enum`
-/// is never a first-class value, only a base class marker). The bare name
-/// `Enum` (without any import) is also accepted, matching pycc's existing
-/// textual-resolution precedent for `math.sqrt`.
+/// Returns `true` if `name` is a builtin enum base name recognized by
+/// `lower_class` as a marker that a class is a PEP 435 enum: `Enum`
+/// (#379, PR-19) or `StrEnum` (#892). Neither is a user-defined class in
+/// `class_defs` -- both are builtin base names consumed as markers, not
+/// recorded in the class's `bases`/`mro`. `pycc_std` registers `enum.Enum`
+/// and `enum.StrEnum` as `EnumMarker` symbols so `from enum import Enum`
+/// and `from enum import StrEnum` resolve (the import is a no-op binding —
+/// neither is ever a first-class value, only a base class marker). The bare
+/// names (without any import) are also accepted, matching pycc's existing
+/// textual-resolution precedent for `math.sqrt`. `StrEnum` additionally
+/// fixes the class's member-value type to `str`; see `lower_enum_class`.
 pub fn is_enum_base_name(name: &str) -> bool {
-    name == "Enum"
+    name == "Enum" || name == "StrEnum"
 }
 
 /// Returns `true` if `name` is the builtin `Protocol` base name recognized

@@ -1,4 +1,4 @@
-pub use pycc_hir::HirClassDef;
+pub use pycc_hir::{EnumMemberValue, HirClassDef};
 mod class;
 #[cfg(test)]
 use class::eval_isinstance_protocol;

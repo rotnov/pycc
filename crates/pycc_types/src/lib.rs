@@ -262,6 +262,7 @@ fn is_marker_kind(kind: pycc_std::StdSymbolKind) -> bool {
             | pycc_std::StdSymbolKind::ProtocolMarker
             | pycc_std::StdSymbolKind::AbcMarker
             | pycc_std::StdSymbolKind::DecoratorMarker
+            | pycc_std::StdSymbolKind::EnumAutoMarker
             | pycc_std::StdSymbolKind::AnnotationMarker
             | pycc_std::StdSymbolKind::CastMarker
             | pycc_std::StdSymbolKind::TypeCheckingMarker
@@ -1735,7 +1736,7 @@ fn collect_bool_patterns(pattern: &HirPattern, has_true: &mut bool, has_false: &
 fn collect_enum_member_patterns<'a>(
     pattern: &HirPattern,
     class_name: &str,
-    members: &'a [(String, i64)],
+    members: &'a [(String, pycc_hir::EnumMemberValue)],
     covered: &mut HashSet<&'a str>,
 ) {
     match pattern {

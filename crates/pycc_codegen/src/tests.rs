@@ -12751,7 +12751,10 @@ fn enum_member_singleton_init_emits_and_runs() {
         static_methods: vec![],
         class_methods: vec![],
         type_param: None,
-        enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+        enum_members: vec![
+            ("RED".to_string(), pycc_mir::EnumMemberValue::Int(1)),
+            ("GREEN".to_string(), pycc_mir::EnumMemberValue::Int(2)),
+        ],
         is_dataclass: false,
         dataclass_fields: Vec::new(),
         is_protocol: false,
@@ -12783,6 +12786,78 @@ fn enum_member_singleton_init_emits_and_runs() {
     link_object_with_runtime(&obj_path, &bin_path);
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"1\n");
+}
+
+#[test]
+fn str_valued_enum_member_singleton_init_emits_and_runs() {
+    // #892: the `Scalar::Str` arm of `emit_enum_member_inits`. A
+    // `str`-valued member's slot 0 holds a runtime string object built by
+    // `emit_string_literal`, not a tagged int, and the class's `value`
+    // attribute is typed `Ty::Str`. Building and *running* the binary is
+    // what proves the emitted init sequence is well-formed -- a codegen-only
+    // assertion would not catch a mis-tagged slot word.
+    let class_def = pycc_mir::HirClassDef {
+        exception_type_tag: None,
+        name: "Kind".to_string(),
+        bases: vec![],
+        mro: vec!["Kind".to_string()],
+        attrs: vec![
+            ("value".to_string(), Ty::Str),
+            ("name".to_string(), Ty::Str),
+        ],
+        methods: vec![],
+        properties: vec![],
+        static_methods: vec![],
+        class_methods: vec![],
+        type_param: None,
+        enum_members: vec![
+            (
+                "AXIAL".to_string(),
+                pycc_mir::EnumMemberValue::Str("axial".to_string()),
+            ),
+            (
+                "RADIAL".to_string(),
+                pycc_mir::EnumMemberValue::Str("radial".to_string()),
+            ),
+        ],
+        is_dataclass: false,
+        dataclass_fields: Vec::new(),
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: Vec::new(),
+        abstract_methods: Vec::new(),
+        is_abstract: false,
+    };
+    let read_member = |member: &str, slot: usize, ty: Ty| {
+        MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::AttrGet {
+                base: Box::new(MirExpr::Name {
+                    name: format!("Kind.{member}.enum_member"),
+                    ty: Ty::Instance(Box::new("Kind".to_string())),
+                }),
+                slot,
+                ty,
+            }],
+            ty: Ty::None,
+        }))
+    };
+    let mir = MirModule {
+        items: vec![
+            read_member("AXIAL", 0, Ty::Str),
+            read_member("RADIAL", 0, Ty::Str),
+            read_member("AXIAL", 1, Ty::Str),
+        ],
+        class_defs: vec![("Kind".to_string(), class_def)],
+    };
+    let dir = pycc_scratch::ScratchDir::new("str_enum_member_init")
+        .expect("failed to create scratch dir");
+    let obj_path = dir.join("str_enum_member_init.o");
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join("str_enum_member_init");
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert_eq!(output.stdout, b"axial\nradial\nAXIAL\n");
 }
 
 // -- #380: default_value_for_type covers every Mir Ty variant --------

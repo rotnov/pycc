@@ -5328,7 +5328,8 @@ pub fn compile_to_object(
 /// member is a compile-time singleton instance that must be alive before
 /// any top-level code reads it. For each enum class with members, and each
 /// member in source order, allocate a fresh 2-slot instance
-/// (`pycc_rt_instance_new(2)`), set slot 0 to the integer member value,
+/// (`pycc_rt_instance_new(2)`), set slot 0 to the member's `int` or `str`
+/// value per its `EnumMemberValue` (#892 widened this from `int` alone),
 /// set slot 1 to a string pointer containing the member name, and store
 /// the instance pointer into the synthetic global
 /// `<Class>.<Member>.enum_member`. Extracted from
@@ -5354,15 +5355,29 @@ fn emit_enum_member_inits<'ctx>(
                 .try_as_basic_value()
                 .expect_basic("pycc_rt_instance_new returns a non-void pointer")
                 .into_pointer_value();
-            // Set slot 0 to the integer member value. The value is the
-            // actual `i64` literal from the source (`RED = 1` → 1), carried
-            // in `HirClassDef.enum_members` from HIR through MIR to here.
-            // `emit_int_constant` folds it at compile time into the
-            // tagged-pointer representation `pycc_rt` uses for small ints,
-            // or materializes a heap bigint through `pycc_rt_int_from_i64`
-            // when the discriminant is outside the tagged 63-bit range
-            // (D-178) -- once, here at module init.
-            let value_scalar = Scalar::Int(emit_int_constant(context, builder, rt, *member_value));
+            // Set slot 0 to the member's own value literal, carried in
+            // `HirClassDef.enum_members` from HIR through MIR to here.
+            //
+            // For an `int` member (`RED = 1` → 1), `emit_int_constant` folds
+            // the value at compile time into the tagged-pointer
+            // representation `pycc_rt` uses for small ints, or materializes
+            // a heap bigint through `pycc_rt_int_from_i64` when the
+            // discriminant is outside the tagged 63-bit range (D-178) --
+            // once, here at module init.
+            //
+            // For a `str` member (#892: `RED = "red"`, or any member of an
+            // `enum.StrEnum` subclass), `emit_string_literal` interns the
+            // bytes as a private constant and calls
+            // `pycc_rt_str_from_literal` -- the same helper slot 1 (the
+            // member's `name`) already uses just below.
+            let value_scalar = match member_value {
+                pycc_mir::EnumMemberValue::Int(value) => {
+                    Scalar::Int(emit_int_constant(context, builder, rt, *value))
+                }
+                pycc_mir::EnumMemberValue::Str(value) => {
+                    Scalar::Str(emit_string_literal(context, builder, module, rt, value))
+                }
+            };
             let value_word = scalar_to_slot_word(context, builder, value_scalar);
             let slot0_index = context.i64_type().const_int(0, false);
             builder
