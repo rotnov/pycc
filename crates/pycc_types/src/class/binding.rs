@@ -3,10 +3,13 @@
 //!
 //! Extracted verbatim from `crates/pycc_types/src/class.rs` per AGENTS.md's
 //! file-decomposition rule and D-185's per-file tracking issue (#549): this
-//! is one cohesion-driven seam of that 4,614-line file, not a rewrite. Every
-//! diagnostic message, every check, and every panic message is unchanged --
-//! the only edits are the ones the module boundary forces (visibility
-//! keywords and `use` lines).
+//! is one cohesion-driven seam of that 4,614-line file, not a rewrite. That
+//! extraction changed no diagnostic message, no check, and no panic message
+//! -- its only edits were the ones the module boundary forces (visibility
+//! keywords and `use` lines). Later changes are free to edit this file like
+//! any other; #912 reworded `resolve_instantiation`'s internal-error panic,
+//! so read the claim above as "unchanged relative to the #549 extraction",
+//! not as a standing guarantee.
 //!
 //! The seam is the three places where a class *name* meets `Environment`'s
 //! class *table*: registering every `HirClassDef` the module lowered
@@ -167,7 +170,9 @@ pub(crate) fn resolve_instantiation(
         .unwrap_or_else(|| {
             panic!(
                 "pycc_types: internal error: no `__init__` found in class `{class_name}`'s MRO -- \
-             pycc_hir::lower_class should have rejected this before it reached pycc_types"
+             pycc_hir guarantees an `__init__` for every class it lowers through `lower_class`, \
+             by inheritance or by synthesis; an enum class early-returns at \
+             `pycc_hir::lower_enum_class` and is a known hole tracked by #921"
             )
         });
     // The resolved `__init__` coming from a *synthetic* ancestor means
@@ -271,9 +276,11 @@ mod tests {
     #[test]
     #[should_panic(expected = "no `__init__` found in class `Ghost`'s MRO")]
     fn resolve_instantiation_panics_when_no_init_is_in_the_mro() {
-        // #432: `lower_class` rejects a class with no `__init__` anywhere
-        // in its MRO before it reaches `pycc_types`, so this panic is an
-        // internal error. This test bypasses the normal entry point and
+        // #432 / #912: `pycc_hir` guarantees an `__init__` for every class
+        // it lowers through `lower_class`, by inheritance or by synthesis,
+        // so this panic is an internal error. (An enum class early-returns
+        // at `pycc_hir::lower_enum_class` and is a known hole
+        // tracked by #921.) This test bypasses the normal entry point and
         // binds a class whose MRO contains no `__init__` method. The MRO
         // also includes `Phantom` (not registered), exercising the `?`
         // arm of the `find_map` closure -- `Ghost` is found but has no

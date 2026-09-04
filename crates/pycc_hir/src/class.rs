@@ -50,20 +50,25 @@
 //! address into the slot, and later calls dispatch to it); redefining
 //! `__init__` is still `C0001` (the compile-time attribute-slot pre-scan
 //! `collect_init_attrs` cannot reconcile two different `__init__` bodies); a
-//! class must declare `__init__` (a class with no `__init__` is `C0001` --
-//! this PR ships no default no-op constructor). The attribute-slot pre-scan
+//! class need not declare `__init__` -- when neither it nor any class in its
+//! MRO provides one, [`init::ensure_init`] synthesizes an implicit
+//! zero-argument constructor (#912, D-225), so the class is instantiable as
+//! `C()` exactly as CPython's inherited `object.__init__` makes it. The
+//! attribute-slot pre-scan
 //! below only looks at `__init__`'s own top-level body statements (no
 //! recursion into a nested `if`/`while`/`for`), matching this same minimal,
 //! single-pass scope.
 
 mod body;
 mod enum_class;
+mod init;
 mod mro;
 mod protocol;
 
 use crate::{HirExpr, HirItem, HirStmt, Ty, lower_arg_list, unsupported};
 use body::{ClassBodyInput, ClassBodyOutput, reject_class_attr_collisions, walk_class_body};
 use enum_class::lower_enum_class;
+use init::{ensure_init, synthesize_dataclass_init};
 use mro::{resolve_mro, validate_bases};
 use protocol::lower_protocol_class;
 use pycc_ast::{Decorator, Expr, Number, Stmt};
@@ -1267,25 +1272,10 @@ pub(crate) fn lower_class(
         }
     }
     if !is_dataclass && !methods.iter().any(|(name, _)| name == "__init__") {
-        // #432: a derived class without its own `__init__` inherits the
-        // base class's `__init__` -- check the MRO for a class that has one.
-        // The MRO is ordered most-derived-first, so the first `__init__`
-        // found is the one that would be called (matching CPython's own
-        // MRO-based constructor resolution).
-        let has_inherited_init = mro.iter().skip(1).any(|mro_class| {
-            defined_classes
-                .iter()
-                .find(|(name, _)| name == mro_class)
-                .map(|(_, cd)| cd.methods.iter().any(|(mn, _)| mn == "__init__"))
-                .unwrap_or(false)
-        });
-        if !has_inherited_init {
-            return Err(unsupported(
-                "a class without an `__init__` method is not supported yet \
-                 (and no base class in its MRO provides one)",
-                def.range,
-            ));
-        }
+        // #432 / #912: the class declares no `__init__` of its own, so it
+        // either inherits one from its MRO or gets a synthesized implicit
+        // zero-argument constructor.
+        ensure_init(&class_name, &mro, defined_classes, &mut methods, &mut items);
     }
     // #435 (Part B, __init_subclass__) / #585 / #854: PEP 487's
     // `__init_subclass__` hook is recognized as a valid method name. In
@@ -1696,33 +1686,6 @@ fn lower_method(
 /// time with `C0001` before it can reach codegen and panic.
 fn is_scalar_slot_type(ty: &Ty) -> bool {
     matches!(ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Param(_))
-}
-
-/// #378 (PR-18): Synthesizes a `__init__` method for a `@dataclass` class
-/// from its (merged) field list. The synthesized method takes `self` plus
-/// one parameter per field (in declaration order), and assigns each
-/// parameter to the corresponding `self.<field>` attribute. All fields are
-/// required (no defaults -- see the plan's §3.6 deferral).
-fn synthesize_dataclass_init(class_name: &str, fields: &[(String, Ty)]) -> HirItem {
-    let self_ty = Ty::Instance(Box::new(class_name.to_string()));
-    let mut params: Vec<(String, Ty)> = vec![("self".to_string(), self_ty)];
-    for (name, ty) in fields {
-        params.push((name.clone(), ty.clone()));
-    }
-    let body: Vec<HirStmt> = fields
-        .iter()
-        .map(|(name, _)| HirStmt::AttrSet {
-            base: HirExpr::Name("self".to_string()),
-            attr: name.clone(),
-            value: HirExpr::Name(name.clone()),
-        })
-        .collect();
-    HirItem::Function {
-        name: format!("{class_name}.__init__"),
-        params,
-        return_ty: Ty::None,
-        body,
-    }
 }
 
 /// #378 (PR-18): Synthesizes an `__eq__` method for a `@dataclass` class
@@ -2294,8 +2257,41 @@ mod tests {
     }
 
     #[test]
-    fn a_class_without_init_is_unsupported() {
-        assert_c0001("class C:\n    def foo(self) -> None:\n        return\n");
+    fn a_class_without_init_gets_a_synthesized_zero_argument_constructor() {
+        // #912 (D-225): a class that declares no `__init__` and inherits
+        // none is no longer `C0001` -- `ensure_init` synthesizes
+        // `def __init__(self) -> None: pass` for it.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def foo(self) -> None:\n        return\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+        let (_, class_def) = hir
+            .class_defs
+            .iter()
+            .find(|(name, _)| name == "C")
+            .expect("class `C` is lowered");
+        assert_eq!(
+            class_def
+                .methods
+                .iter()
+                .find(|(mn, _)| mn == "__init__")
+                .map(|(_, mangled)| mangled.as_str()),
+            Some("C.__init__"),
+            "the synthesized constructor is registered under the class's own name"
+        );
+        let init = hir
+            .items
+            .iter()
+            .find_map(|item| match item {
+                HirItem::Function {
+                    name, params, body, ..
+                } if name == "C.__init__" => Some((params.clone(), body.clone())),
+                _ => None,
+            })
+            .expect("the synthesized `C.__init__` item is emitted");
+        assert_eq!(init.0.len(), 1, "only `self` is a parameter: {:?}", init.0);
+        assert_eq!(init.0[0].0, "self");
+        assert!(init.1.is_empty(), "the body is empty: {:?}", init.1);
     }
 
     // -- lower_method: method-shape checks ----------------------------------
@@ -3296,18 +3292,23 @@ mod tests {
     }
 
     #[test]
-    fn a_class_with_no_bases_and_no_init_is_rejected() {
+    fn a_class_with_no_bases_and_no_init_synthesizes_one() {
+        // #912 (D-225): the base-less counterpart of the case above -- with
+        // nothing in the MRO to inherit from, the constructor is synthesized
+        // rather than the class being rejected.
         let module = crate::pycc_parser_test_helper::parse(
             "class C:\n    def f(self) -> int:\n        return 1\n",
         );
-        let diagnostic = lower_checked(&module).unwrap_err();
-        assert_eq!(diagnostic.code, "C0001");
+        let hir = lower_checked(&module).unwrap();
+        let (_, class_def) = hir
+            .class_defs
+            .iter()
+            .find(|(name, _)| name == "C")
+            .expect("class `C` is lowered");
         assert!(
-            diagnostic
-                .message
-                .contains("no base class in its MRO provides one"),
-            "unexpected message: {}",
-            diagnostic.message
+            class_def.methods.iter().any(|(mn, _)| mn == "__init__"),
+            "the synthesized `__init__` joins the method table: {:?}",
+            class_def.methods
         );
     }
 

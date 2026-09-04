@@ -234,7 +234,7 @@ fn hir_failure_still_stops_before_the_type_checker() {
     let path = dir.join("mixed.py");
     std::fs::write(
         &path,
-        "class A:\n    x: int = 1\n\n\ndef f() -> int:\n    return \"a\"\n",
+        "async def g() -> None:\n    pass\n\n\ndef f() -> int:\n    return \"a\"\n",
     )
     .unwrap();
     let path = path.to_string_lossy().into_owned();

@@ -495,11 +495,15 @@ fn a_dependency_that_does_not_parse_reports_against_its_own_file() {
 #[test]
 fn a_dependency_that_does_not_lower_reports_against_its_own_file() {
     let scratch = ScratchDir::new("modules_tests").expect("scratch");
-    write(&scratch, "helper.py", "class Bare:\n    pass\n");
+    write(
+        &scratch,
+        "helper.py",
+        "async def bare() -> None:\n    pass\n",
+    );
     let entry = write(
         &scratch,
         "main.py",
-        "from helper import Bare\n\n\ndef main() -> None:\n    print(1)\n",
+        "from helper import bare\n\n\ndef main() -> None:\n    print(1)\n",
     );
     let (path, code, _) = first_diagnostic(&entry);
     assert!(path.ends_with("helper.py"), "unexpected path: {path}");
