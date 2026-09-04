@@ -131,6 +131,19 @@ level rather than by default:
 - No new `roadmap-evidence` identifier is due: #910 adds no roadmap acceptance
   item, only prose.
 
+One documentation constraint was hit and is now tracked. The first `docs/ROADMAP.md`
+paragraph written for #910 (~1.8 KB) pushed `sh scripts/check-site.sh` over the
+272 KiB llms.txt non-optional aggregate budget by 851 bytes. The paragraph was
+rewritten to ~0.9 KB to fit, which is documentation trimmed for a website-artifact
+reason rather than an editorial one. After this change the expansion stands at
+278,490 of 278,528 bytes — **38 bytes of headroom**, with `docs/ROADMAP.md` alone
+at 67% of the total and growing on essentially every pull request. That is filed as
+[#923](https://github.com/rotnov/pycc/issues/923) (v0.4), which lays out the three
+options: a third ceiling raise after D-200 and D-218, splitting the roadmap's
+per-issue narrative into an Optional-classified document, or a per-resource budget
+so the pressure surfaces on the right document. The next iteration that adds roadmap
+prose of any size will fail `check-site.sh` before it can commit.
+
 `docs/LANGUAGE_SUBSET.md` does not exist in this tree; the class-attribute
 subset rules live in `docs/TYPE_SYSTEM.md`.
 
@@ -142,6 +155,9 @@ subset rules live in `docs/TYPE_SYSTEM.md`.
 - **[#641](https://github.com/rotnov/pycc/issues/641)** — the `nbody` 20x gate
   flake. Still open, now with the 18.58x data point. Expect it to fire on this
   branch's CI too; check for a re-run-to-green before treating it as new.
+- **[#923](https://github.com/rotnov/pycc/issues/923)** — the llms.txt aggregate
+  budget, 38 bytes of headroom. **Blocks the next roadmap paragraph**; resolve it
+  before or as part of the next iteration's documentation step.
 - **[#921](https://github.com/rotnov/pycc/issues/921)**,
   **[#913](https://github.com/rotnov/pycc/issues/913)**,
   **[#916](https://github.com/rotnov/pycc/issues/916)**,
