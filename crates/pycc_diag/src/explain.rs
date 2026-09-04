@@ -890,8 +890,11 @@ whose length is not known at compile time. Both remain reserved for a later \
 slice (D-228, issue #918); write the explicit fixed-arity form, e.g. \
 `tuple[int, int]`, in the meantime. The `...` rejection is checked for every \
 container family before arity is, so the ill-typed `list[...]` and \
-`dict[str, ...]` spellings report the same `...` message rather than an \
-argument-count one.",
+`dict[str, ...]` spellings report an `...` message rather than an \
+argument-count one -- with advice of their own, naming that family's element \
+type (`list[int]`, `dict[str, int]`), since `...` is not a valid type \
+argument there at all and a fixed-arity `tuple` would be a different \
+container.",
         example: "\
 def f(d: dict[str]) -> None:  # T0053 -- dict takes exactly 2 type arguments
     pass

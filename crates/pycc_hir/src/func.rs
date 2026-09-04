@@ -377,11 +377,23 @@ fn container_annotation_to_ty(
         .iter()
         .any(|arg| matches!(arg, Expr::EllipsisLiteral(_)))
     {
+        // The advice is per family. `tuple[X, ...]` is the one spelling that
+        // means something in Python -- a homogeneous variadic tuple -- so it
+        // gets the length explanation and a fixed-arity `tuple`. For
+        // `list`/`set`/`dict`, `...` is simply not a type, and recommending a
+        // `tuple` there would change the container the user asked for.
+        let advice = if family == "tuple" {
+            "a homogeneous-variadic container has no compile-time length, so write an \
+             explicit fixed-arity annotation such as `tuple[int, int]` instead"
+                .to_string()
+        } else {
+            let example = bare_container_example(family)
+                .expect("`family` is one of `CONTAINER_ANNOTATION_NAMES`");
+            format!("`...` is not a type argument here; write the element type, e.g. `{example}`")
+        };
         return Err(Diagnostic::error(
             "T0053",
-            format!(
-                "the `...` type argument in `{family}[...]` is not supported yet -- a homogeneous-variadic container has no compile-time length, so write an explicit fixed-arity annotation such as `tuple[int, int]` instead"
-            ),
+            format!("the `...` type argument in `{family}[...]` is not supported yet -- {advice}"),
             span,
         ));
     }
@@ -704,7 +716,17 @@ pub(crate) fn annotation_to_ty(
                     // #918 proposed a dedicated match arm ahead of this one,
                     // which would have shadowed both; the ordering here costs
                     // nothing and keeps the user's own definition winning.)
+                    //
+                    // A PEP 695 type parameter shadows the builtin for the
+                    // same reason a user-defined class does, and the
+                    // `Expr::Name` arm above already gives `type_param` the
+                    // first word: `def f[list](x: list[int])` declares `list`
+                    // as a type variable, so the annotation subscripts that
+                    // variable -- invalid Python -- rather than naming the
+                    // builtin. Lowering it as `Ty::List(Int)` would silently
+                    // drop the function's genericity.
                     if known_class.is_none()
+                        && Some(base_name.id.as_str()) != type_param
                         && CONTAINER_ANNOTATION_NAMES.contains(&base_name.id.as_str())
                         && !aliases
                             .iter()

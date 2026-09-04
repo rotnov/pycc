@@ -55,7 +55,13 @@ status: accepted
      accept it and lower a `tuple[int, EllipsisType]`. The arity step also
      rejects the empty `tuple[()]` (which arrives as a zero-element
      `Expr::Tuple`), the other legal-Python spelling this version's fixed-arity
-     `Ty::Tuple` cannot represent. Both steps run *before* element types, so a
+     `Ty::Tuple` cannot represent. The `...` message's advice is per family:
+     `tuple[X, ...]` means something in Python, so it alone gets the
+     compile-time-length explanation and a fixed-arity `tuple[int, int]`,
+     while `list`/`set`/`dict` are told to write that family's own element
+     type — recommending a `tuple` there would change the container rather
+     than correct its type arguments (a review finding on the delivering pull
+     request). Both steps run *before* element types, so a
      malformed annotation never reports a misleading element-type error.
   3. **Share the element-type gates** rather than duplicating them. The four
      capability checks move down into a new `pycc_hir::container` module and
@@ -102,10 +108,17 @@ status: accepted
      `type` keep the generic unknown-name message everywhere — neither has a
      `Ty` variant, so steering a user toward `frozenset[int]` would point at a
      form this version rejects just as hard.
-  8. **A user-defined class or type alias named `list` still wins.** The
-     container branch is checked *after* the known-class lookup and is gated
-     on the alias table, so `class list:` and `type list = int` keep the
-     behaviour they had before this decision.
+  8. **A user-defined class, type alias, or PEP 695 type parameter named
+     `list` still wins.** The container branch is checked *after* the
+     known-class lookup and is gated on both the alias table and `type_param`,
+     so `class list:`, `type list = int` and `def f[list](...)` all keep the
+     behaviour they had before this decision. The type-parameter arm was a
+     review finding on the delivering pull request: the bare-name path already
+     gave `type_param` precedence, and the subscript path did not, so
+     `def f[list](x: list[int])` lowered as the builtin and silently dropped
+     the function's genericity. Subscripting a type parameter still discards
+     the argument (`x: list[int]` becomes `Ty::Param("list")`), which is the
+     pre-existing behaviour of `def f[T](x: T[int])` and out of scope here.
   9. **Container types are rejected in return position**, with `C0001`
      naming the positions that do work. This is deliberate, not an oversight:
      a container-typed *call result* already reaches an unhandled codegen case

@@ -6527,19 +6527,68 @@ fn a_variadic_ellipsis_type_argument_is_rejected_in_every_family() {
     // text is pinned rather than assumed to be covered elsewhere. Checked
     // ahead of arity so `tuple[int, ...]` (arity 2, which `tuple` would
     // otherwise accept) reports the variadic form specifically.
-    for (source, family) in [
-        ("def f(x: tuple[int, ...]) -> None:\n    return\n", "tuple"),
-        ("def f(x: list[...]) -> None:\n    return\n", "list"),
+    //
+    // The advice is per family, and that is the point of covering all four
+    // here: `tuple[X, ...]` is the one spelling that means something in
+    // Python, so only it gets the compile-time-length explanation and a
+    // fixed-arity `tuple`. Recommending a `tuple` for a `list`/`set`/`dict`
+    // would answer a question the user did not ask -- it changes the
+    // container rather than correcting its type arguments (review finding on
+    // this pull request).
+    for (source, expected) in [
+        (
+            "def f(x: tuple[int, ...]) -> None:\n    return\n",
+            "the `...` type argument in `tuple[...]` is not supported yet -- a homogeneous-variadic container has no compile-time length, so write an explicit fixed-arity annotation such as `tuple[int, int]` instead",
+        ),
+        (
+            "def f(x: list[...]) -> None:\n    return\n",
+            "the `...` type argument in `list[...]` is not supported yet -- `...` is not a type argument here; write the element type, e.g. `list[int]`",
+        ),
+        (
+            "def f(x: set[...]) -> None:\n    return\n",
+            "the `...` type argument in `set[...]` is not supported yet -- `...` is not a type argument here; write the element type, e.g. `set[int]`",
+        ),
+        (
+            "def f(x: dict[str, ...]) -> None:\n    return\n",
+            "the `...` type argument in `dict[...]` is not supported yet -- `...` is not a type argument here; write the element type, e.g. `dict[str, int]`",
+        ),
     ] {
         let diagnostic = container_annotation_err(source);
         assert_eq!(diagnostic.code, "T0053", "{source:?}");
-        assert_eq!(
-            diagnostic.message,
-            format!(
-                "the `...` type argument in `{family}[...]` is not supported yet -- a homogeneous-variadic container has no compile-time length, so write an explicit fixed-arity annotation such as `tuple[int, int]` instead"
-            ),
-            "{source:?}"
-        );
+        assert_eq!(diagnostic.message, expected, "{source:?}");
+    }
+}
+
+/// A PEP 695 type parameter named after a builtin container shadows it, the
+/// same way a user-defined class or a type alias of that name does. Review
+/// finding on this pull request: the subscript arm consulted `known_class`
+/// and the alias table but not `type_param`, so `def f[list](x: list[int])`
+/// lowered as the builtin and silently dropped the function's genericity.
+///
+/// What the annotation lowers to instead -- `Ty::Param("list")`, discarding
+/// the `[int]` argument -- is the pre-existing behaviour of subscripting any
+/// type parameter (`def f[T](x: T[int])` does the same on the base commit)
+/// and is deliberately not changed here; only the container shadowing is.
+#[test]
+fn a_type_parameter_shadows_a_builtin_container_of_the_same_name() {
+    // The control shares the loop: with a type parameter that does *not*
+    // shadow it, the same annotation is the builtin container.
+    for (source, expected) in [
+        (
+            "def f[list](x: list[int]) -> None:\n    return\n",
+            Ty::Param(Box::new("list".to_string())),
+        ),
+        (
+            "def f[T](x: list[int]) -> None:\n    return\n",
+            Ty::List(Box::new(Ty::Int)),
+        ),
+    ] {
+        let module = pycc_parser_test_helper::parse(source);
+        let hir = lower_checked(&module).expect("lowers");
+        let HirItem::Function { params, .. } = &hir.items[0] else {
+            panic!("expected a function item for {source:?}");
+        };
+        assert_eq!(params[0].1, expected, "{source:?}");
     }
 }
 
