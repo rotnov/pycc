@@ -33,6 +33,42 @@ never a merge gate.
 
 ---
 
+## 2026-09-04 — Treated a green local gate set as covering CI, and shipped a red base-vs-head gate
+
+What happened: the #910 implementation agent ran all eleven local gates to green
+(fmt, clippy, workspace tests, 100% coverage, the `scripts/` unittest suite, the
+Ruby and Python validators, the site checker, `cargo doc`) and PR #924 was opened
+on that basis. CI then failed `status-page-freshness`: the change added a new
+feature-landing paragraph to `docs/ROADMAP.md` without updating either watched
+page. The failure was genuinely attributable to the diff, not a flake, and cost a
+full CI round trip plus the investigation to attribute it.
+
+Root cause: the local gate set is entirely *tree-shaped* — every one of those
+eleven commands inspects the working tree at one revision. `status-page-freshness`
+is *diff-shaped*: `scripts/check_status_page_freshness.rb` takes a base revision
+and a head revision and compares the two sets of feature-landing paragraphs. No
+tree-only invocation of it can fail, so running "all the local gates" and getting
+green says nothing about it. A second reason it went unnoticed: recent v0.4 PRs
+had edited *existing* roadmap paragraphs, and the checker's identity rule is the
+issue number, so a text-only edit to an existing paragraph deliberately does not
+fire. The gate had been silently inapplicable for several PRs in a row, which
+reads exactly like a gate that does not exist.
+
+What fixed it: `ruby scripts/check_status_page_freshness.rb <base-sha> HEAD` —
+the checker takes both revisions as arguments and reproduces the CI verdict
+exactly, locally, in under a second. Running it against the PR's real merge base
+turned the fix from a guess into a verification.
+
+Lesson: a gate that takes a base revision is not covered by any tree-only run of
+the local gate set, however complete that set looks. Before opening a PR, list the
+required checks that compare two revisions — today that is `status-page-freshness`
+— and run each one with the PR's actual merge base as its base argument, not just
+the tree-shaped gates. Corollary: a gate that has not fired in several PRs is not
+evidence it does not apply; check whether its trigger condition was simply absent
+from those diffs.
+
+---
+
 ## 2026-09-04 — Asserted a CI gate flake was a first occurrence, from a query that structurally cannot see re-run flakes
 
 What happened: the #912/PR #922 session file recorded that the `nbody` 20x

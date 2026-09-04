@@ -42,14 +42,40 @@ of #641 — reads as `success`. Counting a specific gate's failures needs per-jo
 attempt history, or the tracking issue's own accumulated record. The lesson is
 logged in `docs/AGENT_RETROSPECTIVE.md`.
 
-## Status: implemented and pushed, pull request NOT yet open
+## Status: pull request #924 open, review taken, CI re-running
 
-`origin/main` is at `440114ff` (re-fetched immediately before this file was
-committed) and there are **zero** open pull requests in the repository. Issue
-[#910](https://github.com/rotnov/pycc/issues/910) is OPEN, milestone v0.4. The
-work below lives on `autopilot/iter-2026-09-04-06`, pushed but with no pull
-request; opening it, running the D-068 reviewer, and merging are the
-orchestrating session's steps, not this one's.
+`origin/main` is at `440114ff` and [#924](https://github.com/rotnov/pycc/pull/924)
+is the only open pull request. Issue
+[#910](https://github.com/rotnov/pycc/issues/910) is OPEN, milestone v0.4, and is
+#924's sole `closingIssuesReferences` entry. The branch is
+`autopilot/iter-2026-09-04-06`, head `5589e137`, baseline `440114ff`.
+
+Two commits carry the work. `236263c9` and its predecessors are the #910
+implementation described below. `5589e137` is the follow-up that fixes the first
+head's one red check and the pinned reviewer's findings:
+
+- **`status-page-freshness` was FAILURE on `236263c9`** (run `33902693418`, job
+  `101120226824`). Attributable to this diff, not a flake: the change adds a
+  *new* feature-landing paragraph to `docs/ROADMAP.md`, and the checker compares
+  the base and head paragraph sets by issue number, so a new number fires it
+  while the text-only edits earlier v0.4 PRs made did not. Fixed by syncing
+  `site/status/index.html` with one sentence in the class-model evidence card,
+  plus its `dateModified`, the sitemap `lastmod`, `check-site.sh`'s pinned
+  `date_modified`, and the manifest `source_artifact_sha256`. Verified with
+  `ruby scripts/check_status_page_freshness.rb 440114ff HEAD` → exit 0. The
+  retrospective entry for the process mistake behind it is in
+  `docs/AGENT_RETROSPECTIVE.md`.
+- **D-068 reviewer: no P0/P1**, one warning and two notes, all three taken in
+  `5589e137` — the stale `class_attrs` rustdoc in `class.rs` and
+  `class/body.rs`, the ambiguous MRO qualifier at `docs/TYPE_SYSTEM.md:196`, and
+  the two untested MRO-base collision arms (inherited instance attribute,
+  inherited `@property`) now covered in
+  `tests/issue_910_unannotated_class_attrs.rs`. That commit is a site page, doc
+  comments and two tests; it does not alter the Rust logic the review passed, so
+  the review was not re-run.
+
+All eleven local gates re-run green on `5589e137` with exit statuses captured
+directly, plus `check_status_page_freshness.rb` and `check_sitemap_lastmod.rb`.
 
 ## What changed
 
@@ -158,6 +184,18 @@ subset rules live in `docs/TYPE_SYSTEM.md`.
 - **[#923](https://github.com/rotnov/pycc/issues/923)** — the llms.txt aggregate
   budget, 38 bytes of headroom. **Blocks the next roadmap paragraph**; resolve it
   before or as part of the next iteration's documentation step.
+- **The status page's false v0.4 claim.** `site/status/index.html` has asserted
+  since 2026-08-26 (`89c8251e`) that v0.4 "has not started: no issue has been
+  selected, no branch opened, and no implementation plan written." Every clause
+  is now individually false. Deliberately **not** fixed in #924: correcting it
+  requires re-pinning four `scripts/check-site.sh` `required_visible_text`
+  literals, `scripts/check_markdown_landing.rb:117`'s phrase and its
+  `test_rejects_missing_v0_4_unstarted_claim` mutation test, both watched pages,
+  both manifest digests and both sitemap `lastmod` values — and the honest
+  replacement is longer than the false sentence, so it is coupled to #923's
+  budget. Narrowed onto the standing website umbrella
+  [#802](https://github.com/rotnov/pycc/issues/802#issuecomment-5544691158),
+  ordered after #923.
 - **[#921](https://github.com/rotnov/pycc/issues/921)**,
   **[#913](https://github.com/rotnov/pycc/issues/913)**,
   **[#916](https://github.com/rotnov/pycc/issues/916)**,
@@ -173,10 +211,11 @@ subset rules live in `docs/TYPE_SYSTEM.md`.
 
 ## Where to resume
 
-Open the pull request for `autopilot/iter-2026-09-04-06` against `main`, run the
-D-068 pinned reviewer over the full merge-base..HEAD range, address findings,
-wait for `audit` and `ci-gate`, and merge. Then record the merge outcome in a new
-`docs/sessions/` file — never by editing this one.
+A fresh `Monitor` watch is armed on #924 for head `5589e137` (the earlier watch's
+stream ended with its terminal verdict — a rerun or new head always needs a new
+one). When it reports `READY`, merge and delete the branch; the merge outcome
+goes in the *next* iteration's session file, never by editing this one. Then
+re-enter `issue-select` for v0.4.
 
 ## Merge outcome
 
