@@ -243,8 +243,29 @@ fn class_attr_value(
     }
 }
 
+/// The class-level tables [`reject_class_attr_collisions`] checks a class
+/// attribute's name against.
+///
+/// Grouped into a struct rather than passed positionally: the check needs the
+/// class's own attribute, property, and three method tables plus its MRO and
+/// the module's class table, which is well past the point where positional
+/// arguments stop being readable (and past `clippy::too_many_arguments`).
+pub(super) struct ClassAttrCollisionInput<'a> {
+    pub class_attrs: &'a [(String, Ty, ClassAttrValue)],
+    pub attrs: &'a [(String, Ty)],
+    pub properties: &'a [PropertyDef],
+    pub methods: &'a [(String, String)],
+    pub static_methods: &'a [(String, String)],
+    pub class_methods: &'a [(String, String)],
+    pub class_name: &'a str,
+    pub mro: &'a [String],
+    pub defined_classes: &'a [(String, HirClassDef)],
+    pub range: std::ops::Range<u32>,
+}
+
 /// #911: Rejects a class attribute that collides with an instance attribute
-/// slot or a `@property` of the same name, in either declaration order.
+/// slot, a `@property`, or a method of the same name, in either declaration
+/// order.
 ///
 /// This runs **after** the body walk rather than at the `AnnAssign` site:
 /// `attrs` is populated by `collect_init_attrs` when the walk reaches
@@ -252,44 +273,77 @@ fn class_attr_value(
 /// empty `attrs` and slip through a statement-site check.
 ///
 /// The direction checked here is exactly one way round: every entry of *this*
-/// class's `class_attrs` against this class's own `attrs`/`properties` and
-/// against every MRO base's `attrs`/`properties`. The reverse direction --
-/// this class's `attrs` (or `properties`) shadowing an *ancestor's*
-/// `class_attrs` -- is deliberately **not** checked here, because the write
-/// itself is what is ill-formed there, and `pycc_types::class::check_attr_set`
-/// already rejects it with `T0044` through `lookup_class_attr_through_mro`'s
-/// full-MRO walk, pointing at the offending assignment rather than at the
-/// class as a whole.
+/// class's `class_attrs` against this class's own tables and against every MRO
+/// base's tables. The reverse direction -- this class's `attrs` (or
+/// `properties`) shadowing an *ancestor's* `class_attrs` -- is deliberately
+/// **not** checked here, because the write itself is what is ill-formed there,
+/// and `pycc_types::class::check_attr_set` already rejects it with `T0044`
+/// through `lookup_class_attr_through_mro`'s full-MRO walk, pointing at the
+/// offending assignment rather than at the class as a whole.
 ///
 /// A collision is `C0001`, not `T0052`: `T0052`'s existing condition fires
 /// only when a redeclaration's `Ty` *differs*, and a same-typed class
 /// attribute shadowing an instance slot is just as broken -- the read would
 /// fold to a constant while the write targeted a slot.
+///
+/// #910 added the three method tables to this check. They were missing while
+/// only the annotated spelling existed, and the gap is observable in both
+/// directions:
+///
+/// * `class A: f: int = 2` alongside `def f(self)` printed `2` for `a.f`,
+///   where CPython's later class-body binding wins and prints a bound method.
+/// * `class B(A): f: int = 2` over an inherited `A.f` printed `1` for `b.f()`,
+///   where CPython raises `TypeError: 'int' object is not callable`.
+///
+/// Neither divergence is modellable while a class attribute folds to a
+/// constant at every read, so both spellings are rejected outright.
 pub(super) fn reject_class_attr_collisions(
-    class_attrs: &[(String, Ty, ClassAttrValue)],
-    attrs: &[(String, Ty)],
-    properties: &[PropertyDef],
-    class_name: &str,
-    mro: &[String],
-    defined_classes: &[(String, HirClassDef)],
-    range: std::ops::Range<u32>,
+    input: &ClassAttrCollisionInput<'_>,
 ) -> Result<(), Diagnostic> {
+    let &ClassAttrCollisionInput {
+        class_attrs,
+        attrs,
+        properties,
+        methods,
+        static_methods,
+        class_methods,
+        class_name,
+        mro,
+        defined_classes,
+        ref range,
+    } = input;
     for (attr_name, _, _) in class_attrs {
-        if attrs.iter().any(|(name, _)| name == attr_name) {
-            return Err(class_attr_collision(
-                class_name,
-                attr_name,
-                "instance attribute",
-                range,
-            ));
-        }
-        if properties.iter().any(|p| &p.name == attr_name) {
-            return Err(class_attr_collision(
-                class_name,
-                attr_name,
-                "`@property`",
-                range,
-            ));
+        let own = [
+            (
+                attrs.iter().any(|(name, _)| name == attr_name),
+                "an instance attribute",
+            ),
+            (
+                properties.iter().any(|p| &p.name == attr_name),
+                "an `@property`",
+            ),
+            (
+                methods.iter().any(|(name, _)| name == attr_name),
+                "a method",
+            ),
+            (
+                static_methods.iter().any(|(name, _)| name == attr_name),
+                "a `@staticmethod`",
+            ),
+            (
+                class_methods.iter().any(|(name, _)| name == attr_name),
+                "a `@classmethod`",
+            ),
+        ];
+        for (hit, what) in own {
+            if hit {
+                return Err(class_attr_collision(
+                    class_name,
+                    attr_name,
+                    what,
+                    range.clone(),
+                ));
+            }
         }
         for base in mro.iter().skip(1) {
             // Every class in the MRO was placed there by `compute_c3_mro`,
@@ -300,21 +354,43 @@ pub(super) fn reject_class_attr_collisions(
                 .iter()
                 .find(|(name, _)| name == base)
                 .expect("every class in the MRO must be in defined_classes");
-            if base_def.attrs.iter().any(|(name, _)| name == attr_name) {
-                return Err(class_attr_collision(
-                    class_name,
-                    attr_name,
-                    &format!("instance attribute inherited from `{base}`"),
-                    range,
-                ));
-            }
-            if base_def.properties.iter().any(|p| &p.name == attr_name) {
-                return Err(class_attr_collision(
-                    class_name,
-                    attr_name,
-                    &format!("`@property` inherited from `{base}`"),
-                    range,
-                ));
+            let inherited = [
+                (
+                    base_def.attrs.iter().any(|(name, _)| name == attr_name),
+                    "an instance attribute",
+                ),
+                (
+                    base_def.properties.iter().any(|p| &p.name == attr_name),
+                    "an `@property`",
+                ),
+                (
+                    base_def.methods.iter().any(|(name, _)| name == attr_name),
+                    "a method",
+                ),
+                (
+                    base_def
+                        .static_methods
+                        .iter()
+                        .any(|(name, _)| name == attr_name),
+                    "a `@staticmethod`",
+                ),
+                (
+                    base_def
+                        .class_methods
+                        .iter()
+                        .any(|(name, _)| name == attr_name),
+                    "a `@classmethod`",
+                ),
+            ];
+            for (hit, what) in inherited {
+                if hit {
+                    return Err(class_attr_collision(
+                        class_name,
+                        attr_name,
+                        &format!("{what} inherited from `{base}`"),
+                        range.clone(),
+                    ));
+                }
             }
         }
     }
@@ -330,10 +406,82 @@ fn class_attr_collision(
 ) -> Diagnostic {
     unsupported(
         format!(
-            "class attribute `{class_name}.{attr_name}` collides with an {what} of the same \
+            "class attribute `{class_name}.{attr_name}` collides with {what} of the same \
              name -- a class attribute is folded to a constant at every read, so it can never \
-             share a name with a value that lives in an instance slot or behind a descriptor"
+             share a name with a value that lives in an instance slot, behind a descriptor, or \
+             in the class's method table"
         ),
         range,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::lower_checked;
+
+    /// Asserts `source` is rejected with a `C0001` whose message contains
+    /// `needle`. `crate::class::tests::assert_c0001` pins only the code, and
+    /// every case here needs the *specific* collision partner named.
+    fn assert_collision(source: &str, needle: &str) {
+        let module = crate::pycc_parser_test_helper::parse(source);
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001", "source: {source:?}");
+        assert!(
+            diagnostic.message.contains(needle),
+            "expected {needle:?} in {:?}",
+            diagnostic.message
+        );
+    }
+
+    // -- #910: a class attribute colliding with the class's own method -----
+
+    #[test]
+    fn a_class_attribute_colliding_with_a_method_is_rejected() {
+        assert_collision(
+            "class C:\n    f: int = 2\n\n    def f(self) -> int:\n        return 1\n",
+            "collides with a method",
+        );
+    }
+
+    #[test]
+    fn a_class_attribute_colliding_with_a_static_method_is_rejected() {
+        assert_collision(
+            "class C:\n    f: int = 2\n\n    @staticmethod\n    def f() -> int:\n        return 1\n",
+            "collides with a `@staticmethod`",
+        );
+    }
+
+    #[test]
+    fn a_class_attribute_colliding_with_a_class_method_is_rejected() {
+        assert_collision(
+            "class C:\n    f: int = 2\n\n    @classmethod\n    def f(cls) -> int:\n        return 1\n",
+            "collides with a `@classmethod`",
+        );
+    }
+
+    // -- #910: the same three collisions against an MRO base ---------------
+
+    #[test]
+    fn a_class_attribute_colliding_with_an_inherited_method_is_rejected() {
+        assert_collision(
+            "class A:\n    def f(self) -> int:\n        return 1\n\n\nclass B(A):\n    f: int = 2\n",
+            "collides with a method inherited from `A`",
+        );
+    }
+
+    #[test]
+    fn a_class_attribute_colliding_with_an_inherited_static_method_is_rejected() {
+        assert_collision(
+            "class A:\n    @staticmethod\n    def f() -> int:\n        return 1\n\n\nclass B(A):\n    f: int = 2\n",
+            "collides with a `@staticmethod` inherited from `A`",
+        );
+    }
+
+    #[test]
+    fn a_class_attribute_colliding_with_an_inherited_class_method_is_rejected() {
+        assert_collision(
+            "class A:\n    @classmethod\n    def f(cls) -> int:\n        return 1\n\n\nclass B(A):\n    f: int = 2\n",
+            "collides with a `@classmethod` inherited from `A`",
+        );
+    }
 }

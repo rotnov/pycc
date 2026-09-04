@@ -67,7 +67,7 @@ mod mro;
 mod protocol;
 
 use crate::{HirExpr, HirItem, HirStmt, Ty, lower_arg_list, unsupported};
-use attrs::reject_class_attr_collisions;
+use attrs::{ClassAttrCollisionInput, reject_class_attr_collisions};
 use body::{ClassBodyInput, ClassBodyOutput, walk_class_body};
 use enum_class::lower_enum_class;
 use init::{ensure_init, synthesize_dataclass_init};
@@ -1137,15 +1137,18 @@ pub(crate) fn lower_class(
     // after the walk, not at the `AnnAssign` site: `attrs` is populated only
     // when the walk reaches `__init__`, so a class attribute declared before
     // `__init__` would see an empty `attrs` and slip through.
-    reject_class_attr_collisions(
-        &class_attrs,
-        &attrs,
-        &properties,
-        &class_name,
-        &mro,
+    reject_class_attr_collisions(&ClassAttrCollisionInput {
+        class_attrs: &class_attrs,
+        attrs: &attrs,
+        properties: &properties,
+        methods: &methods,
+        static_methods: &static_methods,
+        class_methods: &class_methods,
+        class_name: &class_name,
+        mro: &mro,
         defined_classes,
-        def.range.into(),
-    )?;
+        range: def.range.into(),
+    })?;
     // #378 (PR-18): synthesize `__init__`, `__eq__`, and `__repr__` for a
     // `@dataclass` class from its (merged) field list. The synthesized
     // methods flow through the existing method infrastructure as ordinary
