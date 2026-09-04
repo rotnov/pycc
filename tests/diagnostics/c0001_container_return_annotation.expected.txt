@@ -1,5 +1,5 @@
-error[C0001]: a container return type annotation (`list[int]`) is not supported yet -- container annotations are currently supported in parameter, local-variable and type-alias positions only
+error[C0001]: a container return type annotation (`list[int]`) is not supported yet -- container annotations are currently supported in parameter, local- and module-variable and type-alias positions only
  --> tests/diagnostics/c0001_container_return_annotation.py:1:12
   |
 1 | def f() -> list[int]:
-  |            ^^^^^^^^^ a container return type annotation (`list[int]`) is not supported yet -- container annotations are currently supported in parameter, local-variable and type-alias positions only
+  |            ^^^^^^^^^ a container return type annotation (`list[int]`) is not supported yet -- container annotations are currently supported in parameter, local- and module-variable and type-alias positions only

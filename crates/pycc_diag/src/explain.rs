@@ -49,8 +49,8 @@ does not yet lower -- a `with` statement, a tuple-unpacking assignment, an \
 unrecognized import shape, or a type annotation this version's lowering \
 does not recognize, for example. Since D-228 (issue #918) the \
 parameterized container annotations `list[T]`, `set[T]`, `dict[K, V]` \
-and `tuple[A, B, ...]` *are* lowered in parameter, local-variable and \
-type-alias positions, so C0001 no longer covers every \
+and `tuple[A, B, ...]` *are* lowered in parameter, local- and module-variable \
+and type-alias positions, so C0001 no longer covers every \
 annotation more complex than a bare name; what it still covers there is \
 the bare, unparameterized `list`/`set`/`dict`/`tuple` spelling (whose \
 message names the parameterized form to write instead in exactly those \

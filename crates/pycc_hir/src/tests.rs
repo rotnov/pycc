@@ -6658,7 +6658,7 @@ fn a_container_return_annotation_is_rejected_naming_the_positions_that_do_work()
         assert_eq!(
             diagnostic.message,
             format!(
-                "a container return type annotation (`{family}`) is not supported yet -- container annotations are currently supported in parameter, local-variable and type-alias positions only"
+                "a container return type annotation (`{family}`) is not supported yet -- container annotations are currently supported in parameter, local- and module-variable and type-alias positions only"
             ),
             "{family}"
         );
@@ -6672,6 +6672,31 @@ fn a_container_return_annotation_is_rejected_naming_the_positions_that_do_work()
             .message
             .contains("a container return type annotation (`list[int]`)")
     );
+}
+
+#[test]
+fn every_position_the_container_return_advice_names_really_lowers_a_container() {
+    // The C0001 return-position message enumerates the positions that *do*
+    // work, so each one is pinned here: a message that names a position the
+    // compiler rejects, or omits one it accepts, is misleading guidance.
+    for source in [
+        // Parameter.
+        "def f(x: list[int]) -> None:\n    return\n",
+        // Local variable.
+        "def f() -> None:\n    x: list[int] = []\n    return\n",
+        // Module variable.
+        "x: list[int] = []\n",
+        // PEP 695 type alias.
+        "type Ints = list[int]\ndef f(x: Ints) -> None:\n    return\n",
+        // Legacy `TypeAlias` assignment.
+        "Ints: TypeAlias = list[int]\ndef f(x: Ints) -> None:\n    return\n",
+    ] {
+        let module = pycc_parser_test_helper::parse(source);
+        assert!(
+            lower_checked(&module).is_ok(),
+            "the return-position advice names this position as supported: {source:?}"
+        );
+    }
 }
 
 #[test]
