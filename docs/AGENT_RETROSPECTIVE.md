@@ -33,6 +33,51 @@ never a merge gate.
 
 ---
 
+## 2026-09-04 — Re-derived a documented `llvm-cov` accounting rule from scratch over five full coverage runs
+
+What happened: implementing #911, `cargo llvm-cov --workspace --fail-under-lines
+100 --fail-under-regions 100` exited 1 at 99.94% lines / 99.85% regions, with 31
+missed regions and 51 missed lines confined to the seven files the change
+touched — while `--show-missing-lines`, the text report, the lcov export, the
+HTML report, and the JSON `segments` and `functions` exports every one of them
+reported exactly **one** uncovered region in the whole workspace. Five full
+coverage runs went into the investigation, including a `cargo llvm-cov clean
+--workspace` plus complete rebuild to test a stale-artifact hypothesis, which
+reproduced the numbers byte-for-byte and disproved it. A per-source-range union
+over all instantiations was computed by hand and found exactly the same single
+uncovered region the merged views reported, which deepened the apparent
+contradiction rather than resolving it. Only after grouping the JSON
+`data[].functions[]` records by definition location and taking the per-group
+maximum did the summary's 31 reproduce exactly.
+
+Root cause: this is `llvm-cov`'s documented per-instantiation summary
+accounting, and it was already written down in this repository — `docs/TESTING.md`
+line 1082 describes the exact rule (`RegionCoverageInfo::merge` takes
+`max(Covered)` over each instantiation group, so a function whose regions are
+covered by *different* compilations still reports a deficit), names the same
+plain-vs-`--cfg test` double compilation, states that every merged view hides
+it, gives the same JSON grouping recipe, and prescribes the same fix. There is
+also a 2026-07-31 retrospective entry on it and a 2026-09-03 one. None of that
+was read: the red gate was treated as a novel puzzle in the diff rather than as
+a known class with a written diagnosis.
+
+What fixed it: crate-local unit tests in `pycc_hir`, `pycc_types`, and `pycc_mir`
+mirroring the end-to-end cases in `tests/issue_911_class_attrs.rs`, so each
+crate's own unit-test compilation executes the new code instead of only the
+`pycc` binary the integration suite drives as a subprocess. The gate then
+reported 51,824 regions / 33,840 lines, zero missed, 100.00%, exit 0.
+
+Lesson: when the coverage gate is red but every merged view shows no gap, that
+combination *is* the signature of the per-instantiation summary — read
+`docs/TESTING.md`'s "Reading a `cargo llvm-cov` failure" material before
+touching the diff, and go straight to the prescribed fix: for every new code
+path an integration test is the only thing reaching, add a unit test inside the
+owning crate. More generally: a gate failure that feels like a mystery is the
+cue to search `docs/TESTING.md` and this file for the same symptom, not the cue
+to start a fresh investigation. The written diagnosis cost minutes to find and
+the re-derivation cost hours.
+
+
 ## 2026-09-03 — A Ruby checker's test suite reported seven failures that were only a locale
 
 What happened: while running the full local gate set for #795, `ruby
