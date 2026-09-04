@@ -152,7 +152,7 @@ pub(super) fn lower_expr(
                             "pycc_mir: internal error: no `__init__` found in class `{callee}`'s \
                          MRO -- pycc_hir guarantees an `__init__` for every class it lowers \
                          through `lower_class`, by inheritance or by synthesis; an enum class \
-                         early-returns at `crates/pycc_hir/src/class.rs:1070` and is a known \
+                         early-returns at `pycc_hir::lower_enum_class` and is a known \
                          hole tracked by #921"
                         )
                     });
