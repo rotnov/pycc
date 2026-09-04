@@ -33,6 +33,72 @@ never a merge gate.
 
 ---
 
+## 2026-09-04 — Reported a gate sweep as complete while `cargo fmt` was never in it
+
+What happened: the #918 orchestrating session collected eleven gates to green on
+the implementation commit, listed them all explicitly with individually captured
+exit statuses, and declared the change ready for review. A later fix agent, doing
+its own pre-completion pass, found that `cargo fmt --all -- --check` failed at
+that exact commit — a required CI gate (`ci.yml`) had been red the whole time,
+in `func.rs` and two `tests.rs` assertions. It was confirmed by re-running fmt in
+a throwaway worktree pinned to that commit, so it was not an artifact of later
+edits.
+
+Root cause: the gate list was assembled by hand each time from what the previous
+task happened to run, rather than derived from the workflow file. A gate that is
+never invoked cannot fail, so a hand-assembled sweep reports green with exactly
+the same shape whether it covers ten of eleven gates or all eleven. Enumerating
+the gates that *were* run — even carefully, even with real exit statuses — is
+evidence about those gates only, and says nothing about the ones absent from the
+list. The absence is invisible precisely because nothing prints when a command is
+not run.
+
+What fixed it: `cargo fmt --all` on the branch, and thereafter deriving the gate
+list from `.github/workflows/ci.yml` instead of from memory of the last task.
+
+Lesson: a gate sweep is complete only against an enumerated source of truth, not
+against recall. Before declaring gates green, read the required checks out of the
+workflow file and tick each one off that list; a gate missing from a hand-written
+list produces no output at all, which is indistinguishable from a gate that
+passed. Corollary: the more carefully a report enumerates the gates it did run,
+the more convincing it looks, and the less that says about coverage.
+
+---
+
+## 2026-09-04 — Dispatched the pinned reviewer nested inside another agent, and it was orphaned twice
+
+What happened: the #918 D-068 review was dispatched as `ievo:deep-reviewer` from
+inside a general-purpose agent rather than from the orchestrating session. That
+inner reviewer was interrupted mid-run and produced no verdict and no findings —
+twice. Both times the outer agent reported substantive findings from its *own*
+source reading, and the orchestrator initially relayed those to the user as the
+reviewer's output. The review gate had not run at all. Separately, the outer
+agent's own report arrived after a writer agent had already started editing the
+same worktree, so for roughly an hour two writers shared the tree and every gate
+verdict collected in that window was void per AGENTS.md — including the green
+ones.
+
+Root cause: two distinct failures with one shared shape. A nested dispatch has no
+independent notification path to the orchestrator, so when the parent stops the
+child's result is unrecoverable — and with `SendMessage` unavailable the parent
+cannot be resumed to retrieve it. And an agent's report is not a termination: the
+writer was dispatched on the strength of a report from an agent whose child was
+still live.
+
+What fixed it: killing both agents, taking sole ownership of the worktree,
+committing the pending work, re-running the entire gate set from a single-writer
+baseline, and dispatching the pinned reviewer directly from the orchestrating
+session, where its completion notification reaches the session that needs it.
+
+Lesson: dispatch the pinned reviewer from the session that will act on its
+verdict, never nested inside another agent — a nested reviewer's findings are
+unreachable the moment its parent stops. And when an agent reports findings it
+attributes to a tool or subagent it invoked, confirm the tool actually produced
+them before relaying them onward; "my reviewer found X" and "I found X while
+trying to run my reviewer" are different claims with the same shape, and only one
+of them satisfies a review gate.
+
+
 ## 2026-09-04 — Committed a review-findings pile without the read-back its own procedure mandates, and found an earlier one had been silently lost
 
 What happened: the #923 session collected the deep-review findings into

@@ -6624,6 +6624,30 @@ fn a_type_alias_named_list_still_wins_over_the_builtin_container() {
 }
 
 #[test]
+fn a_malformed_container_return_annotation_reports_its_own_defect_first() {
+    // D-227 decision 9's position gate is not the first check a container
+    // return annotation meets. `lower_return_annotation` lowers the
+    // annotation through `annotation_to_ty` *before* applying its own
+    // position check, so decisions 1 and 2 fire first: a bad element type
+    // reports its element gate and an `...` argument reports `T0053`. Only a
+    // container that would otherwise have lowered cleanly ever reaches the
+    // `C0001` that names the working positions -- pinned by
+    // `a_container_return_annotation_is_rejected_naming_the_positions_that_do_work`
+    // above. Measured, not inferred: this is the diagnostic a user sees.
+    for (source, code) in [
+        ("def f() -> list[str]:\n    return None\n", "T0034"),
+        ("def f() -> set[str]:\n    return None\n", "T0038"),
+        ("def f() -> dict[int, int]:\n    return None\n", "T0036"),
+        ("def f() -> tuple[int, str]:\n    return None\n", "T0039"),
+        ("def f() -> tuple[int, ...]:\n    return None\n", "T0053"),
+        ("def f() -> dict[str]:\n    return None\n", "T0053"),
+    ] {
+        let diagnostic = container_annotation_err(source);
+        assert_eq!(diagnostic.code, code, "{source}");
+    }
+}
+
+#[test]
 fn a_container_protocol_attribute_is_rejected_but_a_scalar_one_still_lowers() {
     // The protocol-attribute `AnnAssign` branch ran no type gate at all
     // before #918, because no annotation syntax could produce a container

@@ -46,13 +46,17 @@ status: accepted
      protocol *attribute*'s annotation also routes through
      `annotation_to_ty`, but decision 10's gate then rejects a container
      result, so a container type is *not* usable in that one position.
-  2. **Validate arity explicitly**, with a new diagnostic `T0053`: `list` and
-     `set` take exactly one type argument, `dict` exactly two, `tuple` at
-     least one. `T0053` also rejects two legal-Python spellings this version's
-     fixed-arity `Ty::Tuple` cannot represent — the empty `tuple[()]` (which
-     arrives as a zero-element `Expr::Tuple`) and the homogeneous-variadic
-     `tuple[int, ...]`. Arity is checked *before* element types, so a
-     wrong-arity annotation never reports a misleading element-type error.
+  2. **Validate the shape explicitly**, with a new diagnostic `T0053`, in two
+     ordered steps rather than one. First, scan for an `...` type argument and
+     reject it; second, check arity: `list` and `set` take exactly one type
+     argument, `dict` exactly two, `tuple` at least one. That order is
+     load-bearing rather than incidental — the homogeneous-variadic
+     `tuple[int, ...]` has a legal arity of two, so an arity check alone would
+     accept it and lower a `tuple[int, EllipsisType]`. The arity step also
+     rejects the empty `tuple[()]` (which arrives as a zero-element
+     `Expr::Tuple`), the other legal-Python spelling this version's fixed-arity
+     `Ty::Tuple` cannot represent. Both steps run *before* element types, so a
+     malformed annotation never reports a misleading element-type error.
   3. **Share the element-type gates** rather than duplicating them. The four
      capability checks move down into a new `pycc_hir::container` module and
      `pycc_types` calls *in*. The crate dependency runs `pycc_types` →
@@ -100,6 +104,17 @@ status: accepted
      annotation would widen a known panic's reachability rather than add a
      working feature. Return position is issue
      [#925](https://github.com/rotnov/pycc/issues/925).
+
+     The position gate is *not* the first diagnostic a malformed container
+     return type reports. `lower_return_annotation` lowers the annotation
+     before applying its own position check, so decisions 1 and 2 fire first:
+     `def f() -> list[str]` reports the element gate `T0034`, and
+     `def f() -> tuple[int, ...]` reports `T0053`, not this `C0001`. Only a
+     container that would otherwise have lowered cleanly reaches the position
+     check. That precedence is measured and pinned by
+     `a_malformed_container_return_annotation_reports_its_own_defect_first`
+     rather than left to inference, because it is the diagnostic a user
+     actually sees.
   10. **Container types are rejected as protocol attributes**, with `C0001`.
       The protocol-attribute `AnnAssign` branch ran no type gate at all
       before this decision — not by design, but because no annotation syntax
