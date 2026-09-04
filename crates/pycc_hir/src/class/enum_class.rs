@@ -45,7 +45,9 @@ pub(super) fn lower_enum_class(
     // member. CPython's `enum.auto` continues from the last explicit value,
     // starting at 1, so this advances past every `int` member -- explicit or
     // auto-derived -- as the body is walked.
-    let mut next_auto: i64 = 1;
+    // `None` once a member's value has reached `i64::MAX`, so a following
+    // `auto()` reports an overflow instead of silently repeating that value.
+    let mut next_auto: Option<i64> = Some(1);
     for stmt in &def.body {
         // #744: a docstring (a bare string-literal expression statement) is
         // a no-op, matching `validate_init_subclass_body`'s existing
@@ -144,7 +146,17 @@ pub(super) fn lower_enum_class(
                 if is_str_enum {
                     EnumMemberValue::Str(member_name.to_lowercase())
                 } else {
-                    EnumMemberValue::Int(next_auto)
+                    let Some(value) = next_auto else {
+                        return Err(unsupported(
+                            format!(
+                                "enum member `{member_name}` uses `auto()`, but the preceding \
+                                 member's value is already `i64::MAX` -- only i64-range values \
+                                 are supported"
+                            ),
+                            assign.range,
+                        ));
+                    };
+                    EnumMemberValue::Int(value)
                 }
             }
             _ => {
@@ -163,7 +175,7 @@ pub(super) fn lower_enum_class(
         // from the first member of a plain `Enum` -- binds the rest.
         let member_kind = match member_value {
             EnumMemberValue::Int(value) => {
-                next_auto = value.saturating_add(1);
+                next_auto = value.checked_add(1);
                 "int"
             }
             EnumMemberValue::Str(_) => "str",
@@ -274,6 +286,15 @@ mod tests {
     }
 
     #[test]
+    fn auto_after_an_i64_max_member_is_rejected() {
+        // #892: `auto()` derives the next integer from the previous member.
+        // After `i64::MAX` there is no next `i64`, and silently repeating
+        // `i64::MAX` would give two members the same value, so this is an
+        // error -- consistent with the explicit out-of-range literal above.
+        assert_c0001("class C(Enum):\n    A = 9223372036854775807\n    B = auto()\n");
+    }
+
+    #[test]
     fn enum_member_with_non_literal_value_is_rejected() {
         assert_c0001("x = 1\nclass C(Enum):\n    RED = x\n");
     }
@@ -344,8 +365,8 @@ mod tests {
 
     #[test]
     fn valid_enum_class_lowers_via_unit_test() {
-        // Covers `lower_enum_class`'s `Ok` return path (lines 911-932)
-        // inside this crate's own unit-test binary, working around
+        // Covers `lower_enum_class`'s `Ok` return path inside this
+        // crate's own unit-test binary, working around
         // cargo-llvm-cov issue #276 (instantiation-merge gap between
         // the library and integration-test binaries).
         let hir = lower_ok("class Color(Enum):\n    RED = 1\n    GREEN = 2\n    BLUE = 3\n");

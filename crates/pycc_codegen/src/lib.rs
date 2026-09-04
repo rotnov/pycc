@@ -5328,7 +5328,8 @@ pub fn compile_to_object(
 /// member is a compile-time singleton instance that must be alive before
 /// any top-level code reads it. For each enum class with members, and each
 /// member in source order, allocate a fresh 2-slot instance
-/// (`pycc_rt_instance_new(2)`), set slot 0 to the integer member value,
+/// (`pycc_rt_instance_new(2)`), set slot 0 to the member's `int` or `str`
+/// value per its `EnumMemberValue` (#892 widened this from `int` alone),
 /// set slot 1 to a string pointer containing the member name, and store
 /// the instance pointer into the synthetic global
 /// `<Class>.<Member>.enum_member`. Extracted from
