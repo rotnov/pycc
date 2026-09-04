@@ -10,7 +10,7 @@
 
 use super::{ClassAnnotationInfo, ClassAttrValue, HirClassDef, PropertyDef, is_scalar_slot_type};
 use crate::{Ty, unsupported};
-use pycc_ast::{Expr, Number};
+use pycc_ast::{Expr, Number, UnaryOp};
 use pycc_diag::Diagnostic;
 
 /// #911: Strips a class-body-only `ClassVar[...]` wrapper from an annotation.
@@ -75,6 +75,7 @@ pub(super) fn lower_class_attr(
         ));
     };
     let attr_name = target_name.id.to_string();
+    reject_reserved_class_attr_name(&attr_name, ann.range.into())?;
     if already.iter().any(|(name, _, _)| name == &attr_name) {
         return Err(unsupported(
             format!(
@@ -150,6 +151,135 @@ pub(super) fn lower_class_attr(
     Ok((attr_name, attr_ty, attr_value))
 }
 
+/// #910: Lowers one *un-annotated* class-body assignment (`X = 1`,
+/// `SCALE = -1.5`) into the same `(name, type, constant value)` entry
+/// [`lower_class_attr`] produces for the annotated spelling.
+///
+/// The two spellings differ only in where the type comes from: the annotated
+/// one resolves it from the annotation, this one infers it from the literal
+/// via [`infer_class_attr_ty`]. Everything downstream -- the literal
+/// extraction in [`class_attr_value`], the reserved-name check, the duplicate
+/// check, and [`reject_class_attr_collisions`] -- is shared, so both
+/// spellings accept and reject exactly the same programs.
+///
+/// The #585/D-224 scalar-only invariant documented on [`lower_class_attr`]
+/// holds here by construction rather than by a check: `infer_class_attr_ty`
+/// only ever yields a scalar, so an un-annotated attribute can never name a
+/// descriptor and `__set_name__`'s precondition never arises.
+pub(super) fn lower_unannotated_class_attr(
+    assign: &pycc_ast::StmtAssign,
+    class_name: &str,
+    already: &[(String, Ty, ClassAttrValue)],
+) -> Result<(String, Ty, ClassAttrValue), Diagnostic> {
+    // `a = b = 1` binds both names to one value. Modelling it would mean
+    // pushing two entries from one statement, each needing its own duplicate
+    // and collision check; there is no demand for it, so it stays `C0001`.
+    if assign.targets.len() != 1 {
+        return Err(unsupported(
+            "a class-level attribute assignment must have a single target (`X = 1`), not \
+             multiple targets",
+            assign.range,
+        ));
+    }
+    let target = &assign.targets[0];
+    let Expr::Name(target_name) = target else {
+        return Err(unsupported(
+            "a class-level attribute assignment must target a bare name (`X = 1`), not an \
+             attribute access, subscript, or other expression",
+            pycc_ast::expr_range(target),
+        ));
+    };
+    let attr_name = target_name.id.to_string();
+    reject_reserved_class_attr_name(&attr_name, assign.range.into())?;
+    if already.iter().any(|(name, _, _)| name == &attr_name) {
+        return Err(unsupported(
+            format!(
+                "class attribute `{attr_name}` is already defined in class `{class_name}` -- \
+                 duplicate class attribute names are not allowed"
+            ),
+            assign.range,
+        ));
+    }
+    let value = assign.value.as_ref();
+    let Some(attr_ty) = infer_class_attr_ty(value) else {
+        return Err(bad_class_attr_shape(&attr_name, assign.range.into()));
+    };
+    let attr_value = class_attr_value(value, &attr_ty, &attr_name, assign.range.into())?;
+    Ok((attr_name, attr_ty, attr_value))
+}
+
+/// #910: The natural type of an un-annotated class attribute's literal
+/// right-hand side, or `None` when the shape is not one this pass folds.
+///
+/// A unary `+`/`-` is unwrapped first, because `X = -1` parses as
+/// `UnaryOp(USub, NumberLiteral(1))` and is not a literal at all. Only
+/// `USub`/`UAdd` are unwrapped: `~1` and `not True` are constant-foldable in
+/// principle but are deliberately out of scope, so they yield `None` here and
+/// are reported as an unsupported initializer shape.
+///
+/// This deliberately mirrors, and never widens, [`class_attr_value`]'s
+/// accepted set. A complex literal (`1j`) has no `Ty` in this compiler and
+/// yields `None` rather than a type `class_attr_value` would then reject with
+/// a second, less specific message.
+fn infer_class_attr_ty(value: &Expr) -> Option<Ty> {
+    let inner = match value {
+        Expr::UnaryOp(unary) if matches!(unary.op, UnaryOp::USub | UnaryOp::UAdd) => {
+            unary.operand.as_ref()
+        }
+        other => other,
+    };
+    match inner {
+        Expr::NumberLiteral(number) => match number.value {
+            Number::Int(_) => Some(Ty::Int),
+            Number::Float(_) => Some(Ty::Float),
+            Number::Complex { .. } => None,
+        },
+        // `BooleanLiteral` is matched before `NumberLiteral` cannot apply --
+        // Python's `True`/`False` parse as their own node, not as an int.
+        Expr::BooleanLiteral(_) => Some(Ty::Bool),
+        Expr::StringLiteral(_) => Some(Ty::Str),
+        _ => None,
+    }
+}
+
+/// The `C0001` for a class-attribute initializer whose shape this pass does
+/// not fold, shared by both spellings so they report identically.
+fn bad_class_attr_shape(attr_name: &str, range: std::ops::Range<u32>) -> Diagnostic {
+    unsupported(
+        format!(
+            "class attribute `{attr_name}` must be initialized with a literal -- only an \
+             `int`, `float`, `str`, or `bool` literal (optionally with a unary `+`/`-` on a \
+             number) is supported, because a class attribute is a compile-time constant"
+        ),
+        range,
+    )
+}
+
+/// #910: Rejects a class-body assignment to a name the interpreter gives its
+/// own meaning, in either spelling.
+///
+/// `__slots__` is the one such name reachable here. Python reads it as a
+/// declaration of the instance layout; this compiler fixes that layout at
+/// compile time from `__init__` (D-154) and would instead bind an ordinary
+/// constant named `__slots__`, silently discarding the declaration. The
+/// annotated spelling accepted it before #910 for exactly that reason, so
+/// this check closes both spellings at once.
+fn reject_reserved_class_attr_name(
+    attr_name: &str,
+    range: std::ops::Range<u32>,
+) -> Result<(), Diagnostic> {
+    if attr_name == "__slots__" {
+        return Err(unsupported(
+            "`__slots__` in a class body is not supported yet -- a class's instance layout is \
+             fixed at compile time from its `__init__` (the `__slots__` semantics are already \
+             implicit), so a `__slots__` assignment would be silently ignored rather than \
+             honored",
+            range,
+        ));
+    }
+    Ok(())
+}
+
 /// #911: Extracts the compile-time constant value of a class attribute from
 /// its right-hand side, checking it against the declared annotation.
 ///
@@ -164,16 +294,7 @@ fn class_attr_value(
     attr_name: &str,
     range: std::ops::Range<u32>,
 ) -> Result<ClassAttrValue, Diagnostic> {
-    let bad_shape = || {
-        unsupported(
-            format!(
-                "class attribute `{attr_name}` must be initialized with a literal -- only an \
-                 `int`, `float`, `str`, or `bool` literal (optionally with a unary `+`/`-` on a \
-                 number) is supported, because a class attribute is a compile-time constant"
-            ),
-            range.clone(),
-        )
-    };
+    let bad_shape = || bad_class_attr_shape(attr_name, range.clone());
     let mismatch = |found: &str| {
         unsupported(
             format!(
@@ -313,37 +434,20 @@ pub(super) fn reject_class_attr_collisions(
         ref range,
     } = input;
     for (attr_name, _, _) in class_attrs {
-        let own = [
-            (
-                attrs.iter().any(|(name, _)| name == attr_name),
-                "an instance attribute",
-            ),
-            (
-                properties.iter().any(|p| &p.name == attr_name),
-                "an `@property`",
-            ),
-            (
-                methods.iter().any(|(name, _)| name == attr_name),
-                "a method",
-            ),
-            (
-                static_methods.iter().any(|(name, _)| name == attr_name),
-                "a `@staticmethod`",
-            ),
-            (
-                class_methods.iter().any(|(name, _)| name == attr_name),
-                "a `@classmethod`",
-            ),
-        ];
-        for (hit, what) in own {
-            if hit {
-                return Err(class_attr_collision(
-                    class_name,
-                    attr_name,
-                    what,
-                    range.clone(),
-                ));
-            }
+        if let Some(what) = collision_kind(
+            attr_name,
+            attrs,
+            properties,
+            methods,
+            static_methods,
+            class_methods,
+        ) {
+            return Err(class_attr_collision(
+                class_name,
+                attr_name,
+                what,
+                range.clone(),
+            ));
         }
         for base in mro.iter().skip(1) {
             // Every class in the MRO was placed there by `compute_c3_mro`,
@@ -354,47 +458,58 @@ pub(super) fn reject_class_attr_collisions(
                 .iter()
                 .find(|(name, _)| name == base)
                 .expect("every class in the MRO must be in defined_classes");
-            let inherited = [
-                (
-                    base_def.attrs.iter().any(|(name, _)| name == attr_name),
-                    "an instance attribute",
-                ),
-                (
-                    base_def.properties.iter().any(|p| &p.name == attr_name),
-                    "an `@property`",
-                ),
-                (
-                    base_def.methods.iter().any(|(name, _)| name == attr_name),
-                    "a method",
-                ),
-                (
-                    base_def
-                        .static_methods
-                        .iter()
-                        .any(|(name, _)| name == attr_name),
-                    "a `@staticmethod`",
-                ),
-                (
-                    base_def
-                        .class_methods
-                        .iter()
-                        .any(|(name, _)| name == attr_name),
-                    "a `@classmethod`",
-                ),
-            ];
-            for (hit, what) in inherited {
-                if hit {
-                    return Err(class_attr_collision(
-                        class_name,
-                        attr_name,
-                        &format!("{what} inherited from `{base}`"),
-                        range.clone(),
-                    ));
-                }
+            if let Some(what) = collision_kind(
+                attr_name,
+                &base_def.attrs,
+                &base_def.properties,
+                &base_def.methods,
+                &base_def.static_methods,
+                &base_def.class_methods,
+            ) {
+                return Err(class_attr_collision(
+                    class_name,
+                    attr_name,
+                    &format!("{what} inherited from `{base}`"),
+                    range.clone(),
+                ));
             }
         }
     }
     Ok(())
+}
+
+/// Names what one class exposes under `attr_name`, or `None` if nothing does.
+///
+/// Shared by [`reject_class_attr_collisions`]'s two call sites -- the class's
+/// own tables and each MRO base's -- so a base is checked against exactly the
+/// same five tables, in the same priority order, as the class itself. The
+/// returned string carries its own article, because the caller may prefix it
+/// (`"a method"` becomes `"a method inherited from `A`"`).
+fn collision_kind(
+    attr_name: &str,
+    attrs: &[(String, Ty)],
+    properties: &[PropertyDef],
+    methods: &[(String, String)],
+    static_methods: &[(String, String)],
+    class_methods: &[(String, String)],
+) -> Option<&'static str> {
+    let bound = |table: &[(String, String)]| table.iter().any(|(name, _)| name == attr_name);
+    if attrs.iter().any(|(name, _)| name == attr_name) {
+        return Some("an instance attribute");
+    }
+    if properties.iter().any(|p| p.name == attr_name) {
+        return Some("an `@property`");
+    }
+    if bound(methods) {
+        return Some("a method");
+    }
+    if bound(static_methods) {
+        return Some("a `@staticmethod`");
+    }
+    if bound(class_methods) {
+        return Some("a `@classmethod`");
+    }
+    None
 }
 
 /// The single `C0001` a [`reject_class_attr_collisions`] collision produces.
@@ -417,6 +532,7 @@ fn class_attr_collision(
 
 #[cfg(test)]
 mod tests {
+    use super::{ClassAttrValue, Ty};
     use crate::lower_checked;
 
     /// Asserts `source` is rejected with a `C0001` whose message contains
@@ -482,6 +598,224 @@ mod tests {
         assert_collision(
             "class A:\n    @classmethod\n    def f(cls) -> int:\n        return 1\n\n\nclass B(A):\n    f: int = 2\n",
             "collides with a `@classmethod` inherited from `A`",
+        );
+    }
+
+    // -- #910: un-annotated class attributes, pure-rejection paths ---------
+    //
+    // The accepted surface and its constant folding are pinned end to end
+    // through the CLI in `tests/issue_910_unannotated_class_attrs.rs`; these
+    // cover the shapes that never produce a program to run.
+
+    #[test]
+    fn an_unannotated_complex_literal_is_rejected() {
+        assert_collision(
+            "class C:\n    X = 1j\n",
+            "must be initialized with a literal",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_bitwise_not_is_rejected() {
+        assert_collision(
+            "class C:\n    X = ~1\n",
+            "must be initialized with a literal",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_logical_not_is_rejected() {
+        assert_collision(
+            "class C:\n    X = not True\n",
+            "must be initialized with a literal",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_call_initializer_is_rejected() {
+        assert_collision(
+            "def f() -> int:\n    return 1\n\n\nclass C:\n    X = f()\n",
+            "must be initialized with a literal",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_negated_call_initializer_is_rejected() {
+        assert_collision(
+            "def f() -> int:\n    return 1\n\n\nclass C:\n    X = -f()\n",
+            "must be initialized with a literal",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_bare_name_initializer_is_rejected() {
+        assert_collision(
+            "Y: int = 1\n\n\nclass C:\n    X = Y\n",
+            "must be initialized with a literal",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_arithmetic_initializer_is_rejected() {
+        assert_collision(
+            "class C:\n    X = 1 + 2\n",
+            "must be initialized with a literal",
+        );
+    }
+
+    /// A unary `-` is unwrapped before inference, so `-"a"` infers `str` and
+    /// is caught by the literal extractor's own numeric-operand check rather
+    /// than by inference. Both report the same message.
+    #[test]
+    fn an_unannotated_negated_string_is_rejected() {
+        assert_collision(
+            "class C:\n    X = -\"a\"\n",
+            "must be initialized with a literal",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_int_outside_i64_is_rejected() {
+        assert_collision(
+            "class C:\n    X = 99999999999999999999999\n",
+            "does not fit in i64",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_multi_target_assignment_is_rejected() {
+        assert_collision("class C:\n    a = b = 1\n", "not multiple targets");
+    }
+
+    #[test]
+    fn an_unannotated_tuple_target_is_rejected() {
+        assert_collision("class C:\n    a, b = 1, 2\n", "must target a bare name");
+    }
+
+    #[test]
+    fn an_unannotated_attribute_target_is_rejected() {
+        assert_collision(
+            "class C:\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass D:\n    C.x = 1\n",
+            "must target a bare name",
+        );
+    }
+
+    #[test]
+    fn a_duplicate_unannotated_class_attribute_is_rejected() {
+        assert_collision(
+            "class C:\n    X = 1\n    X = 2\n",
+            "is already defined in class",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_attribute_duplicating_an_annotated_one_is_rejected() {
+        assert_collision(
+            "class C:\n    X: int = 1\n    X = 2\n",
+            "is already defined in class",
+        );
+    }
+
+    #[test]
+    fn an_annotated_attribute_duplicating_an_unannotated_one_is_rejected() {
+        assert_collision(
+            "class C:\n    X = 1\n    X: int = 2\n",
+            "is already defined in class",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_attribute_colliding_with_an_instance_slot_is_rejected() {
+        assert_collision(
+            "class C:\n    x = 1\n\n    def __init__(self) -> None:\n        self.x = 2\n",
+            "collides with an instance attribute",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_attribute_colliding_with_a_property_is_rejected() {
+        assert_collision(
+            "class C:\n    x = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n    @property\n    def x(self) -> int:\n        return self.n\n",
+            "collides with an `@property`",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_attribute_colliding_with_a_method_is_rejected() {
+        assert_collision(
+            "class C:\n    f = 2\n\n    def f(self) -> int:\n        return 1\n",
+            "collides with a method",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_attribute_colliding_with_a_static_method_is_rejected() {
+        assert_collision(
+            "class C:\n    f = 2\n\n    @staticmethod\n    def f() -> int:\n        return 1\n",
+            "collides with a `@staticmethod`",
+        );
+    }
+
+    #[test]
+    fn an_unannotated_attribute_colliding_with_a_class_method_is_rejected() {
+        assert_collision(
+            "class C:\n    f = 2\n\n    @classmethod\n    def f(cls) -> int:\n        return 1\n",
+            "collides with a `@classmethod`",
+        );
+    }
+
+    // -- #910: every inferred literal shape, at the lowering seam ---------
+
+    #[test]
+    fn every_unannotated_literal_shape_infers_its_natural_type() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    I = 1\n    F = 1.5\n    B = True\n    S = \"cfg\"\n    NI = -1024\n    PI = +2048\n    NF = -1.5\n    NB = False\n",
+        );
+        let hir = lower_checked(&module).expect("the class body must lower");
+        let (_, class_def) = hir
+            .class_defs
+            .iter()
+            .find(|(name, _)| name == "C")
+            .expect("class `C` must be lowered");
+
+        assert_eq!(
+            class_def.class_attrs,
+            vec![
+                ("I".to_string(), Ty::Int, ClassAttrValue::Int(1)),
+                ("F".to_string(), Ty::Float, ClassAttrValue::Float(1.5)),
+                ("B".to_string(), Ty::Bool, ClassAttrValue::Bool(true)),
+                (
+                    "S".to_string(),
+                    Ty::Str,
+                    ClassAttrValue::Str("cfg".to_string())
+                ),
+                ("NI".to_string(), Ty::Int, ClassAttrValue::Int(-1024)),
+                ("PI".to_string(), Ty::Int, ClassAttrValue::Int(2048)),
+                ("NF".to_string(), Ty::Float, ClassAttrValue::Float(-1.5)),
+                ("NB".to_string(), Ty::Bool, ClassAttrValue::Bool(false)),
+            ]
+        );
+        // D-154 / D-224: an inferred class attribute is a compile-time
+        // constant, so it takes no instance slot -- the same invariant the
+        // annotated spelling carries.
+        assert!(class_def.attrs.is_empty());
+    }
+
+    // -- #910: `__slots__`, rejected identically in both spellings ---------
+
+    #[test]
+    fn an_unannotated_slots_assignment_is_rejected() {
+        assert_collision(
+            "class C:\n    __slots__ = \"a\"\n",
+            "`__slots__` in a class body",
+        );
+    }
+
+    #[test]
+    fn an_annotated_slots_declaration_is_rejected() {
+        assert_collision(
+            "class C:\n    __slots__: str = \"a\"\n",
+            "`__slots__` in a class body",
         );
     }
 }

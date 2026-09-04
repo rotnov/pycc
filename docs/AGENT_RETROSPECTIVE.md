@@ -33,6 +33,48 @@ never a merge gate.
 
 ---
 
+## 2026-09-04 — Asserted a CI gate flake was a first occurrence, from a query that structurally cannot see re-run flakes
+
+What happened: the #912/PR #922 session file recorded that the `nbody` 20x
+performance gate had failed at 18.58x, called that failing "the first occurrence
+in the last 40 `ci.yml` runs", and concluded that a recurrence "would deserve its
+own issue". Both halves were wrong. Issue
+[#641](https://github.com/rotnov/pycc/issues/641) already tracks exactly this
+flake, has been open across several PRs, and already carried a series of
+sub-threshold measurements — 17.32x on macOS and 17.96x on x86_64-linux in its
+own title, plus further observations in its comments; the 18.58x measurement
+belonged there as one more data point, which is where it has now been added,
+together with the attribution evidence that #922's diff could not have caused it.
+The claim merged into `main` inside that session file and had to be corrected
+from a later session's file, since D-130 forbids editing a previous session's
+snapshot.
+
+Root cause: the evidence for "first occurrence in 40 runs" was
+`gh run list --json conclusion`. A workflow run's `conclusion` is a property of
+the *run*, and a re-run overwrites it — so a job that failed, was re-run, and
+went green leaves a run whose `conclusion` is `success`. Every re-run-to-green
+flake is therefore invisible to that query by construction, and it is precisely
+the flakes that get re-run. The query answers "how many runs ended red", which
+was silently substituted for the question actually being asked, "how often has
+this gate failed".
+
+What fixed it: searching the issue tracker for the gate's own name found #641
+immediately, with its own recorded history. Frequency for a specific job needs
+per-job history — `gh api` over `/actions/runs/<id>/attempts/<n>/jobs` across
+attempts, or the tracking issue's own accumulated measurements — not a
+conclusion-only listing.
+
+Lesson: before asserting how often a CI gate has failed, search the tracker for
+an issue about that gate first — a recurring flake usually already has one, and
+it is a better frequency record than any query. When a query is still needed,
+check that the field being counted is not overwritten by re-runs:
+`gh run list --json conclusion` understates gate-failure frequency and must not
+be cited as evidence of rarity. The cost here was a wrong factual claim asserted
+in a session log that then merged, plus a redundant "file a new issue" plan for
+work already tracked.
+
+---
+
 ## 2026-09-04 — Re-derived a documented `llvm-cov` accounting rule from scratch over five full coverage runs
 
 What happened: implementing #911, `cargo llvm-cov --workspace --fail-under-lines

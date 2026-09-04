@@ -31,7 +31,8 @@ fn assert_c0001(diagnostic: &Diagnostic, message: &str, span: Span) {
     assert_eq!(diagnostic.span, Some(span));
 }
 
-const CLASS_BODY_GAP: &str = "a class body statement must be a method definition (`def ...`) -- no \
+const CLASS_BODY_GAP: &str = "a class body statement must be a method definition (`def ...`) or \
+                              a class-level attribute assignment (`X = 1`, `X: int = 1`) -- no \
                               other statement kind is supported yet";
 /// The re-vehicled class-body rejection these tests ride on (#910).
 ///

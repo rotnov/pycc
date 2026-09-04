@@ -13,7 +13,7 @@
 //! Enum and protocol class bodies never reach this walk -- `lower_class`
 //! returns through `lower_enum_class`/`lower_protocol_class` before it.
 
-use super::attrs::{lower_class_attr, strip_class_var};
+use super::attrs::{lower_class_attr, lower_unannotated_class_attr, strip_class_var};
 use super::{
     CONTAINER_METHOD_NAMES, ClassAnnotationInfo, ClassAttrValue, HirClassDef, MethodKind,
     PropertyDef, classify_decorator, collect_init_attrs, is_declaration_body, is_scalar_slot_type,
@@ -238,10 +238,37 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             dataclass_fields.push((field_name, field_ty));
             continue;
         }
+        // #910 (Part 2 of #885): an un-annotated assignment with a literal
+        // right-hand side is a class attribute whose type is inferred from
+        // that literal. A `@dataclass` body is excluded deliberately: a bare
+        // `x = 1` there is a class-level default for a field declared
+        // elsewhere in Python's own model, not a constant, so it falls
+        // through to the catch-all below and stays `C0001` (#378).
+        if let Stmt::Assign(assign) = stmt
+            && !is_dataclass
+        {
+            class_attrs.push(lower_unannotated_class_attr(
+                assign,
+                class_name,
+                &class_attrs,
+            )?);
+            continue;
+        }
         let Stmt::FunctionDef(method_def) = stmt else {
+            // #910 reworded this, and split it in two. A bare assignment is
+            // now an accepted class-level attribute -- but *only* outside a
+            // `@dataclass`, where it still falls through to here. A single
+            // wording would therefore have to be wrong for one of the two
+            // callers, so each states what its own body actually accepts.
             return Err(unsupported(
-                "a class body statement must be a method definition (`def ...`) -- no \
-                 other statement kind is supported yet",
+                if is_dataclass {
+                    "a `@dataclass` body statement must be a field declaration (`x: int`) or a \
+                     method definition (`def ...`) -- no other statement kind is supported yet"
+                } else {
+                    "a class body statement must be a method definition (`def ...`) or a \
+                     class-level attribute assignment (`X = 1`, `X: int = 1`) -- no other \
+                     statement kind is supported yet"
+                },
                 pycc_ast::stmt_range(stmt),
             ));
         };

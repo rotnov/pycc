@@ -3835,8 +3835,11 @@ mod tests {
 
     #[test]
     fn a_dataclass_with_a_non_method_non_annassign_statement_is_rejected() {
-        // An `Assign` statement (`y = 5`) in a dataclass body is neither an
-        // `AnnAssign` (field) nor a `FunctionDef` (method) nor `Pass`.
+        // #910 accepts a bare `y = 5` as an inferred class attribute, but
+        // only outside a `@dataclass`: in one, a bare assignment is a
+        // class-level default for a field declared elsewhere, not a
+        // constant, so it still falls through to the catch-all. This is the
+        // one site exercising that gate's `is_dataclass` arm.
         assert_c0001("@dataclass\nclass C:\n    x: int\n    y = 5\n");
     }
 
