@@ -23,7 +23,7 @@ verdict: pending
 ## Symptom
 
 The orchestrating session collected eleven gates to green on the implementation
-commit `2934ea6a`, listed each with an individually captured exit status, and
+commit `2934ea6a` (a pre-rebase object, rewritten as `d67d5088` on the pushed branch and unreachable from any ref in a fresh clone), listed each with an individually captured exit status, and
 declared the change ready for review. `cargo fmt --all -- --check` was red at
 that exact commit and was never in the list. Confirmed by re-running fmt in a
 throwaway worktree pinned to that commit, so it was not an artefact of later

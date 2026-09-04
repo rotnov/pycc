@@ -12,7 +12,7 @@ termination: precommit — delegated to rotnov/pycc issue 929
 related: []
 fixture: none — the artefact is a static CI step with a binary outcome; proven by feeding it a colliding tree (see Verify), not by the arena
 artifact: deferred — one step in ci.yml's governance job, specified in rotnov/pycc issue 929
-verify: reproduced — `git archive` of a colliding `docs/decisions` tree plus `generate_decisions_index.py --check` exits 1
+verify: manual, both directions observed in this session — a `git archive` of a colliding `docs/decisions` tree makes `generate_decisions_index.py --check` exit 1, and the clean tree exits 0; what stays pending is the artefact (the CI step), not the verification — see Verify and `verdict: pending`
 verdict: pending
 ---
 

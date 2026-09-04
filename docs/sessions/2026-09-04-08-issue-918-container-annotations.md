@@ -16,7 +16,7 @@ gates), and a new **T0053** covering arity plus the ellipsis forms.
 The ellipsis check runs **before** the arity check, and that order is
 load-bearing rather than stylistic: `tuple[int, ...]` has a legal arity of 2, so
 an arity-first check accepts it and silently lowers `tuple[int, EllipsisType]`.
-A regression test pins the order at `crates/pycc_types/src/tests.rs:9868`.
+A regression test pins the order at `crates/pycc_hir/src/tests.rs`'s `a_variadic_ellipsis_type_argument_is_rejected_in_every_family`.
 
 ## What is deliberately not in this change
 

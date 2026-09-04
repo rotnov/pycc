@@ -183,7 +183,7 @@ regression test pinning the ellipsis-before-arity check order for `tuple[...]`.
 The ordering is load-bearing — `tuple[int, ...]` has a legal arity of 2, so an
 arity check alone accepts it and silently lowers `tuple[int, EllipsisType]`.
 Every code change in the plan was implemented; the named test was not written,
-and was added later at `crates/pycc_types/src/tests.rs:9868`.
+and was added later at `crates/pycc_hir/src/tests.rs`'s `a_variadic_ellipsis_type_argument_is_rejected_in_every_family`.
 
 Root cause: the session's todo list was seeded from the plan's *code* work items,
 so the clause naming a test never became a trackable entry. AGENTS.md Completion
