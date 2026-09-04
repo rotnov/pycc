@@ -212,3 +212,21 @@ fn an_inferred_attribute_shadowing_a_method_of_an_unrelated_class_is_accepted() 
         "1\n2\n",
     );
 }
+
+/// The non-method arms of the same MRO walk: an inferred class attribute may
+/// not shadow a base's instance attribute or `@property` either. Both are
+/// exercised through their own-class spelling elsewhere; these cover the
+/// inherited wording the MRO branch produces.
+#[test]
+fn an_inferred_attribute_shadowing_an_inherited_slot_or_property_is_rejected() {
+    assert_rejected(
+        "910_shadow_base_instance_attr",
+        "class A:\n    def __init__(self) -> None:\n        self.f = 1\n\n\nclass B(A):\n    f = 2\n",
+        "collides with an instance attribute inherited from `A`",
+    );
+    assert_rejected(
+        "910_shadow_base_property",
+        "class A:\n    @property\n    def f(self) -> int:\n        return 1\n\n\nclass B(A):\n    f = 2\n",
+        "collides with an `@property` inherited from `A`",
+    );
+}

@@ -200,9 +200,11 @@ pub struct HirClassDef {
     /// instance allocated once at module-init time (see `pycc_codegen`'s
     /// per-member init sequence).
     pub enum_members: Vec<(String, EnumMemberValue)>,
-    /// PEP 526 (#911, Part 1 of #885): annotated class-level attributes
-    /// (`MIN_WIDTH: int = -1024`, `LIMIT: ClassVar[int] = 8`), in source
-    /// order. Each entry is `(attribute_name, type, constant_value)`.
+    /// Class-level attributes in source order, in either spelling: the
+    /// annotated one PEP 526 gives (`MIN_WIDTH: int = -1024`,
+    /// `LIMIT: ClassVar[int] = 8`, #911, Part 1 of #885) and the bare
+    /// `X = 1`, whose type is inferred from the literal (#910, Part 2).
+    /// Each entry is `(attribute_name, type, constant_value)`.
     ///
     /// **Storage model.** A class attribute is a *compile-time constant*: it
     /// occupies no instance slot and has no runtime representation at all.

@@ -67,7 +67,8 @@ pub(super) struct ClassBodyOutput {
     pub(super) dataclass_fields: Vec<(String, Ty)>,
     /// Names of `@abstractmethod`s declared in this body (#380).
     pub(super) abstract_methods: Vec<String>,
-    /// PEP 526 (#911): annotated class-level attributes, in source order.
+    /// Class-level attributes in source order, in either the annotated
+    /// PEP 526 spelling (#911) or the bare `X = 1` one (#910).
     pub(super) class_attrs: Vec<(String, Ty, ClassAttrValue)>,
 }
 

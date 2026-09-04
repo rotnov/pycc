@@ -59,7 +59,7 @@
             "name": "pycc status — what the Python AOT compiler can do today",
             "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete through v0.3 (released as v0.3.0) and what's planned next, and the CI evidence behind each claim.",
             "inLanguage": "en",
-            "dateModified": "2026-08-26",
+            "dateModified": "2026-09-04",
             "additionalProperty": [
               {
                 "@type": "PropertyValue",
@@ -262,7 +262,12 @@
                   chained exceptions, <code>except*</code>, and
                   parenthesis-free multi-type handlers) are implemented, and
                   a user class can inherit from a builtin exception class,
-                  raise it, and have it caught.
+                  raise it, and have it caught. A bare
+                  <code>X = 1</code> in a class body is now the same
+                  compile-time class attribute as the annotated
+                  <code>X: int = 1</code> spelling, with its type inferred
+                  from the literal; in a <code>@dataclass</code> body it
+                  stays rejected, where it means a field default.
                 </p>
               </div>
             </div>
