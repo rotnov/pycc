@@ -569,7 +569,8 @@ pub(crate) fn lower_type_alias_stmt(
         .name
         .as_name_expr()
         .expect("ruff always parses a `type` statement's name as Expr::Name");
-    let ty = annotation_to_ty(&type_alias.value, None, None, aliases, class_defs)?;
+    let ty = annotation_to_ty(&type_alias.value, None, None, aliases, class_defs)
+        .map_err(|error| crate::with_bare_container_advice(error, &type_alias.value))?;
     Ok(Some((name.id.to_string(), ty)))
 }
 
@@ -615,7 +616,8 @@ pub(crate) fn lower_legacy_type_alias_ann_assign(
     let Expr::Name(target) = ann.target.as_ref() else {
         return Ok(None);
     };
-    let ty = annotation_to_ty(value, None, None, aliases, class_defs)?;
+    let ty = annotation_to_ty(value, None, None, aliases, class_defs)
+        .map_err(|error| crate::with_bare_container_advice(error, value))?;
     Ok(Some((target.id.to_string(), ty)))
 }
 

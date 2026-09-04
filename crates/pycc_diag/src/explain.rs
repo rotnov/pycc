@@ -53,7 +53,8 @@ and `tuple[A, B, ...]` *are* lowered in parameter, local-variable and \
 type-alias positions, so C0001 no longer covers every \
 annotation more complex than a bare name; what it still covers there is \
 the bare, unparameterized `list`/`set`/`dict`/`tuple` spelling (whose \
-message names the parameterized form to write instead), a container \
+message names the parameterized form to write instead in exactly those \
+positions, and stays generic where that form is rejected too), a container \
 annotation in return position, which stays reserved for a later slice \
 (issue #925), and a protocol *attribute* whose type is a container, which no \
 class could ever satisfy because every class attribute slot is restricted to a \

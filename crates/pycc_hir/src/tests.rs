@@ -1719,6 +1719,43 @@ fn each_bare_container_annotation_names_its_own_parameterized_form() {
     }
 }
 
+/// D-228 (issue #918) review finding: the bare-container advice names a form
+/// that only some annotation positions accept, so it is opted into by those
+/// positions rather than emitted unconditionally by `annotation_to_ty`. This
+/// is the affected-site inventory for that split, measured position by
+/// position: every position whose parameterized form is rejected must get the
+/// generic message instead, or the advice walks the user into a second error.
+#[test]
+fn the_bare_container_advice_appears_only_where_the_parameterized_form_lowers() {
+    const ADVICE: &str = "a bare `list` type annotation is not supported yet -- write the parameterized form, \
+         e.g. `list[int]`";
+    const GENERIC: &str = "type annotation `list` is not supported yet";
+
+    // `list[int]` lowers here, so the advice is actionable.
+    for source in [
+        "def f(x: list) -> None:\n    return\n",
+        "def f() -> None:\n    xs: list = []\n",
+        "xs: list = []\n",
+        "type X = list\n",
+        "X: TypeAlias = list\n",
+    ] {
+        assert_capability_error_message(source, ADVICE);
+    }
+
+    // `list[int]` is rejected here by a `C0001` of its own -- the #925 return
+    // gate, the scalar-slot rule for class attributes and dataclass fields,
+    // and D-228's own protocol-attribute gate -- so the advice would name a
+    // form that fails too.
+    for source in [
+        "def f() -> list:\n    return []\n",
+        "class C:\n    xs: list\n",
+        "from dataclasses import dataclass\n\n\n@dataclass\nclass C:\n    xs: list\n",
+        "from typing import Protocol\n\n\nclass P(Protocol):\n    xs: list\n",
+    ] {
+        assert_capability_error_message(source, GENERIC);
+    }
+}
+
 #[test]
 fn a_non_bare_name_annotation_returns_a_capability_error() {
     assert_capability_error_message(
@@ -6457,8 +6494,15 @@ fn a_failing_inner_annotation_propagates_out_of_the_container_position() {
     // subscript's, so the caret points at the part the user must change.
     for (source, expected) in [
         (
+            // The generic message, not the bare-container advice: a container
+            // *element* is one of the positions that rejects the
+            // parameterized form (`list[list[int]]` is `T0034`), so it does
+            // not opt into `with_bare_container_advice`. The parameter
+            // position's own upgrade cannot reach this diagnostic either --
+            // its annotation is the whole `list[list]` subscript, not a bare
+            // name.
             "def f(x: list[list]) -> None:\n    return\n",
-            "a bare `list` type annotation is not supported yet -- write the parameterized form, e.g. `list[int]`",
+            "type annotation `list` is not supported yet",
         ),
         (
             "def f(x: dict[str, 3]) -> None:\n    return\n",

@@ -81,16 +81,27 @@ status: accepted
      nicer caret: `substitute_ty` is not recursive, so a `Ty::Param` nested
      inside a container would never be substituted at a call site. The
      downstream scan remains as defense in depth.
-  7. **Split the bare-container `C0001` message.** A bare `list`/`set`/`dict`/
-     `tuple` now gets its own message naming the parameterized form to write
-     (`a bare \`list\` type annotation is not supported yet -- write the
-     parameterized form, e.g. \`list[int]\``). It is deliberately *not*
-     cascade-shaped ([D-219](./D-219-classify-a-failed-item-s-cascade-by-parsing-its.md)):
-     `cascade_name` returns `None` for it, which is correct, since nothing in
-     a module can be waiting for `list` to be defined. `frozenset` and `type`
-     keep the generic unknown-name message — neither has a `Ty` variant, so
-     steering a user toward `frozenset[int]` would point at a form this
-     version rejects just as hard.
+  7. **Split the bare-container `C0001` message, as an opt-in the annotation
+     position makes.** A bare `list`/`set`/`dict`/`tuple` gets its own message
+     naming the parameterized form to write (`a bare \`list\` type annotation
+     is not supported yet -- write the parameterized form, e.g.
+     \`list[int]\``) — but only in the positions that actually lower a
+     container: a parameter, a local or module-level `AnnAssign`, and a type
+     alias. `annotation_to_ty` itself keeps emitting the generic unknown-name
+     message, and those three callers upgrade it through
+     `func::with_bare_container_advice`. Return, class-attribute,
+     dataclass-field, container-element and protocol-attribute positions each
+     reject the parameterized form with a `C0001` of their own, so advising it
+     there would name a form that fails too; they opt out by not calling the
+     upgrade, which also makes any position added later correct by default.
+     The message *is* cascade-shaped
+     ([D-219](./D-219-classify-a-failed-item-s-cascade-by-parsing-its.md)):
+     `list` is an ordinary bindable name, so a module whose `class list:`
+     fails to lower poisons it, and the later `x: list` must be suppressed
+     exactly as `x: Foo` is after a failed `class Foo:`. `frozenset` and
+     `type` keep the generic unknown-name message everywhere — neither has a
+     `Ty` variant, so steering a user toward `frozenset[int]` would point at a
+     form this version rejects just as hard.
   8. **A user-defined class or type alias named `list` still wins.** The
      container branch is checked *after* the known-class lookup and is gated
      on the alias table, so `class list:` and `type list = int` keep the

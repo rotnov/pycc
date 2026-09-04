@@ -217,7 +217,8 @@ pub(crate) fn lower_arg_list(
             match &param.parameter.annotation {
                 Some(ann) => Ok((
                     name.to_string(),
-                    annotation_to_ty(ann, type_param, class_name, aliases, class_defs)?,
+                    annotation_to_ty(ann, type_param, class_name, aliases, class_defs)
+                        .map_err(|error| with_bare_container_advice(error, ann))?,
                 )),
                 None if is_public => Err(Diagnostic::error(
                     "T0001",
@@ -293,6 +294,37 @@ fn bare_container_example(name: &str) -> Option<&'static str> {
         "dict" => Some("dict[str, int]"),
         "tuple" => Some("tuple[int, int]"),
         _ => None,
+    }
+}
+
+/// Upgrades [`annotation_to_ty`]'s generic unknown-name `C0001` into the
+/// bare-container message that names the parameterized form (D-228, issue
+/// #918) -- for the callers whose annotation position actually lowers a
+/// container.
+///
+/// Only these do: a function or method parameter, a local or module-level
+/// `AnnAssign`, and a type alias. Return, class-attribute,
+/// dataclass-field and protocol-attribute positions each reject `list[int]`
+/// with a `C0001` of their own, so advising the parameterized form there
+/// would walk the user straight into a second error. They opt out simply by
+/// not calling this, which is why the advice is an opt-in upgrade rather
+/// than a position argument threaded through `annotation_to_ty`: a position
+/// added later is correct without touching this file.
+///
+/// Discarding `error` in the upgrade arm is sound because a bare
+/// `Expr::Name` has exactly one failure mode in `annotation_to_ty` -- the
+/// alias-table miss that builds `unknown_annotation_name_message` -- so the
+/// message being replaced is always that one.
+pub(crate) fn with_bare_container_advice(error: Diagnostic, annotation: &Expr) -> Diagnostic {
+    let Expr::Name(name) = annotation else {
+        return error;
+    };
+    match bare_container_example(name.id.as_str()) {
+        Some(example) => unsupported(
+            crate::module::bare_container_annotation_message(name.id.as_str(), example),
+            pycc_ast::expr_range(annotation),
+        ),
+        None => error,
     }
 }
 
@@ -508,20 +540,18 @@ pub(crate) fn annotation_to_ty(
                     .find(|(alias_name, _)| alias_name == other)
                     .map(|(_, ty)| ty.clone())
                     .ok_or_else(|| {
-                        // D-228 (issue #918): a *bare* builtin container name
-                        // gets its own message naming the parameterized form
-                        // that now works. Reached only here, after a
-                        // user-defined class and the alias table have both
-                        // had their chance, so `class list:` and
-                        // `type list = ...` still win.
-                        if let Some(example) = bare_container_example(other) {
-                            return unsupported(
-                                crate::module::bare_container_annotation_message(other, example),
-                                pycc_ast::expr_range(annotation),
-                            );
-                        }
                         // The message is built in `module` so #867's cascade
                         // classifier can parse it back (D-219).
+                        //
+                        // A *bare* builtin container name (`list`, `dict`,
+                        // ...) is deliberately not special-cased here.
+                        // `annotation_to_ty` has no idea which annotation
+                        // position it is lowering, and the parameterized
+                        // form it would advise -- `list[int]` -- is rejected
+                        // in half the positions that reach this function. The
+                        // generic message is correct in all of them, so the
+                        // advice is opted into by the callers that can
+                        // honour it, through `with_bare_container_advice`.
                         unsupported(
                             crate::module::unknown_annotation_name_message(other),
                             pycc_ast::expr_range(annotation),

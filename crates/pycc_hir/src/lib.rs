@@ -23,6 +23,7 @@ pub use exception::{
 };
 pub(crate) use func::{
     annotation_to_ty, lower_arg_list, lower_function, lower_return_annotation, type_param_name,
+    with_bare_container_advice,
 };
 pub use hir_module::{
     HirModule, ImportBinding, ProjectBindingKind, killed_names, top_level_bound_names,

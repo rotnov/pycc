@@ -365,7 +365,28 @@ fn poisonable_name_per_statement_kind() {
 }
 
 #[test]
-fn cascade_name_round_trips_both_message_builders() {
+fn a_poisoned_container_name_suppresses_a_later_bare_container_annotation() {
+    // D-228 (issue #918) review finding: `list` is an ordinary bindable name,
+    // so a failed `class list:` poisons it exactly as a failed `class Foo:`
+    // poisons `Foo`. The bare-container `C0001` the parameter position then
+    // builds has to stay classifiable, or the cascade leaks a second
+    // diagnostic the user cannot act on. Asserted against the `Foo` control
+    // in the same test so the two can never drift apart.
+    for name in ["list", "Foo"] {
+        let source = format!(
+            "class {name}:\n    x: badtype = 1\n\n\ndef f(x: {name}) -> None:\n    return\n"
+        );
+        let diagnostics = lower_all_err(&source);
+        assert_eq!(diagnostics.len(), 1, "{name}: {diagnostics:#?}");
+        assert_eq!(
+            diagnostics[0].message,
+            unknown_annotation_name_message("badtype")
+        );
+    }
+}
+
+#[test]
+fn cascade_name_round_trips_all_three_message_builders() {
     let annotation = unsupported(unknown_annotation_name_message("Foo"), 0..3);
     assert_eq!(cascade_name(&annotation), Some("Foo"));
     let base = unsupported(unknown_base_message("Derived", "Base"), 0..3);
@@ -375,15 +396,16 @@ fn cascade_name_round_trips_both_message_builders() {
     assert_eq!(cascade_name(&diagnostics[0]), Some("Foo"));
     let diagnostics = lower_all_err("class D(Base):\n    def m(self) -> int:\n        return 1\n");
     assert_eq!(cascade_name(&diagnostics[0]), Some("Base"));
-    // The bare-container builder (D-228) is the one `C0001` producer that is
-    // intentionally unclassifiable -- pinned here against the real producer,
-    // not just the builder, so a future rewording cannot silently make it
-    // cascade-shaped.
+    // The bare-container builder (D-228) is cascade-shaped too: a module
+    // whose `class list:` failed poisons the name `list`, and a later
+    // `x: list` must be suppressed exactly as `x: Foo` is after a failed
+    // `class Foo:`. Pinned against the real producer, not just the builder,
+    // so a rewording cannot silently make it unclassifiable again.
     let bare = unsupported(bare_container_annotation_message("list", "list[int]"), 0..4);
-    assert_eq!(cascade_name(&bare), None);
+    assert_eq!(cascade_name(&bare), Some("list"));
     let diagnostics = lower_all_err("def f(a: list) -> int:\n    return 1\n");
     assert_eq!(diagnostics[0].code, "C0001");
-    assert_eq!(cascade_name(&diagnostics[0]), None);
+    assert_eq!(cascade_name(&diagnostics[0]), Some("list"));
 }
 
 #[test]
@@ -406,16 +428,9 @@ fn cascade_name_rejects_every_other_diagnostic_shape() {
         ),
         // Neither prefix.
         ("C0001", CLASS_BODY_GAP),
-        // D-228 (issue #918): the bare-container message is a `C0001` that
-        // deliberately is *not* cascade-shaped -- it starts with "a bare `",
-        // so neither parser claims it. A bare `list` annotation must not
-        // poison the name `list` the way an unknown class name does: nothing
-        // in the module can be waiting for `list` to be defined.
-        (
-            "C0001",
-            "a bare `list` type annotation is not supported yet -- write the parameterized form, \
-             e.g. `list[int]`",
-        ),
+        // D-228 (issue #918): bare-container prefix ok, infix split fails --
+        // the third parser's own negative branch.
+        ("C0001", "a bare `list` annotation, reworded"),
         // Not a `C0001` at all, even with a cascade-shaped message.
         ("T0044", "type annotation `x` is not supported yet"),
         (
