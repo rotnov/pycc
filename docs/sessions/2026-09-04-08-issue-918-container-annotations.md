@@ -2,7 +2,7 @@
 
 ## Overall status
 
-Delivered as PR #930 (`feat/issue-918-container-annotations`, head `1f6435cc`
+Delivered as PR #930 (`feat/issue-918-container-annotations`, head `d1d22692`
 plus this snapshot's own commit),
 based on `origin/main` at `c639e682`. State at the time this snapshot was written:
 open, not a draft, `MERGEABLE`, CI in progress. It carries `Fixes #918` and the
@@ -58,7 +58,8 @@ correct as of that commit and the renumber is its own auditable commit.
 ## Process artefacts
 
 A `/harden batch` pass over `.harden/findings/issue-918.jsonl` (nine findings,
-four rounds) clustered into seven classes. One ships a guard, delegated as #929;
+four rounds at the time of the pass; thirteen over five rounds now) clustered
+into seven classes. One ships a guard, delegated as #929;
 six terminate at "build nothing, deliberately" — four because
 `references/rule-audit.md` disqualifies a further textual artefact in topics
 already at three or more files, two because the gap is compliance rather than
@@ -71,7 +72,20 @@ lines. The full class table and its reasoning are in PR #930's body.
 `.harden/incidents/` gains three new topics
 (`whole-file-conflict-resolution-drops-a-hunk`, `gate-sweep-omits-a-required-check`,
 `decision-number-taken-by-a-merge-mid-review`) and counters in four existing ones.
-`docs/AGENT_RETROSPECTIVE.md` gains five entries.
+`docs/AGENT_RETROSPECTIVE.md` gains six entries.
+
+A fifth review round on `b3f8f225` produced four further findings, all verified
+empirically against a control before being accepted and all fixed in `76d9f544`
+and `d1d22692`: a bare-container message that was not cascade-shaped, the same
+message emitted from position-blind `annotation_to_ty` and therefore false in
+the positions where the parameterized form is itself rejected, a PEP 695 type
+parameter shadowed by the container dispatch, and a `tuple`-only ellipsis
+advice offered for all four families. They are recorded as round-5 lines in the
+findings pile rather than as new incident topics: the reviewer caught each at
+zero cost, which is the class the pile already tracks. The position-blind one
+also carries a lesson, in the retrospective's 2026-09-05 entry — the review
+named four affected positions and an inventory of one file per position found a
+fifth.
 
 The occurrence-4 discriminator that
 `.harden/incidents/reviewer-flags-a-later-phase-deliverable/2026-09-02-issue-868.md`
@@ -93,21 +107,27 @@ four files.
 
 ## Gates
 
-Run from a single-writer baseline. Coverage was measured on `95e51835`:
-`--fail-under-lines 100 --fail-under-regions 100` exit 0, TOTAL 52,483 lines and
-34,354 regions with zero uncovered. `git diff --name-only 95e51835..HEAD --
-crates src Cargo.toml Cargo.lock` is empty, so the Rust tree that run measured is
-byte-identical to the head shipped here. Every other gate — fmt, clippy, build,
-doc, the `scripts/` unittest suite, `check-site.sh`, roadmap evidence, README
-milestone projection, CI permissions, status-page freshness, conformance breadth,
-agent assets, decisions index `--check`, harden findings — was re-run on
-`1f6435cc` and returned 0, with each exit status captured directly rather than
-through a pipeline.
+Run from a single-writer baseline at `d1d22692`. Coverage:
+`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
+exit 0, TOTAL 52,528 lines / 2,359 functions / 34,381 regions, all 100.00% with
+zero uncovered. `cargo clippy --workspace --all-targets -- -D warnings` exit 0
+and `cargo test --workspace` exit 0 on the same commit. Every doc and policy
+gate — decisions index `--check`, roadmap evidence, README milestone projection,
+CI permissions, agent assets, `check-site.sh`, the `scripts/` unittest suite
+including the branch-protection baseline, and the harden findings pile — was
+re-run on `d1d22692` and returned 0, with each exit status captured directly
+rather than through a pipeline.
 
-Two commits land after that measurement: this snapshot itself, and nothing else.
-Both are prose; `git diff --name-only 1f6435cc..HEAD -- crates src Cargo.toml
-Cargo.lock` is empty, so no gate that reads the Rust tree is affected, and the
-doc gates are re-run once more on the final head before the merge.
+An earlier coverage run was killed rather than trusted: it had been started
+before the round-5 fixes landed, so it would have measured a tree that was about
+to change. The numbers above are from the single run taken after `d1d22692` was
+committed and no other writer shared the worktree.
+
+One commit lands after that measurement: this snapshot itself, together with the
+retrospective entry and the round-5 findings lines. All three are prose, so
+`git diff --name-only d1d22692..HEAD -- crates src Cargo.toml Cargo.lock` is
+empty and no gate that reads the Rust tree is affected; the doc gates are re-run
+once more on the final head before the merge.
 
 Both Ruby checkers need `LC_ALL=en_US.UTF-8 RUBYOPT=-EUTF-8` in this shell; that
 is a local locale artifact, not a repository defect.

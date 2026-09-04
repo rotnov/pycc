@@ -33,6 +33,41 @@ never a merge gate.
 
 ---
 
+## 2026-09-05 — Attached a positional message inside a position-blind helper, and let review find the sites
+
+What happened: #918 added a bare-container advice message ("a bare `list` type
+annotation is not supported yet -- write the parameterized form, e.g.
+`list[int]`") inside `annotation_to_ty`, the shared lowering helper every
+annotation position calls. The advice is only true where the parameterized form
+actually lowers. `annotation_to_ty` cannot know which position it is serving, so
+the advice was emitted at every one of them — including the return position, the
+class-attribute and dataclass-field slots, the protocol-attribute gate, and
+inside a container's own element position, where `list[int]` is itself rejected
+and the advice therefore recommends code the compiler refuses. The external
+reviewer named four of those sites. Enumerating the positions myself afterwards,
+one file per position, found a fifth the review had not.
+
+Root cause: the message was written where it was convenient to raise the error,
+not where the fact it asserts is known. A helper with roughly twenty call sites
+was made to speak about the caller's context.
+
+What fixed it: inverting the default. `annotation_to_ty` now emits only the
+position-blind generic message; the five positions where the parameterized form
+lowers opt into the advice through `with_bare_container_advice`. The
+position-blind default is correct for a call site that forgets to opt in, so a
+future position added without thought degrades to a true message rather than a
+false one.
+
+Lesson: before adding a diagnostic whose text is true only in some contexts,
+enumerate the call sites of the function that will emit it and record a line per
+site saying whether the claim holds there — the same affected-site inventory
+`issue-to-plan` already requires for a documentation rule, applied to code.
+Then choose the default so that an unenumerated site gets the weaker true
+message, not the stronger false one. Opt-in beats opt-out for any claim that
+depends on the caller.
+
+---
+
 ## 2026-09-04 — Resolved a rebase conflict whole-file, silently discarding a hunk that never conflicted
 
 What happened: rebasing the #918 branch onto `origin/main` conflicted in
