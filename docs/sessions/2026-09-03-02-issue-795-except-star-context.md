@@ -3,7 +3,10 @@
 ## Status: implemented, pull request open, not merged
 
 Worktree `.claude/worktrees/autopilot-2026-09-02-08`, branch
-`autopilot/iter-2026-09-03-02`, started from `origin/main` at `96c63a82`.
+`autopilot/iter-2026-09-03-02`, started from `origin/main` at `96c63a82`
+and merged up to `origin/main` at `256fb7c8` after the peer session's #906
+landed (that merge is what renumbered this change's ADR from D-222, which
+#906 took first, to D-223).
 [#795](https://github.com/rotnov/pycc/issues/795) (v0.4) is implemented on
 that branch and a pull request is open against `main`; nothing is merged as
 of this snapshot, and CI is watched by the dispatching session rather than
@@ -21,9 +24,11 @@ silently:
 
 - **Gap 1 -- control flow out of an `except*` clause.** CPython makes
   `return`, `break` and `continue` inside an `except*` clause a
-  `SyntaxError`; pycc compiled them. `crates/pycc_hir/src/stmt.rs` now
+  `SyntaxError`; pycc compiled them. `crates/pycc_hir/src/stmt/exception.rs` now
   carries a three-state `pub(crate) enum ExceptStarCtx { Outside,
-  InsideUnshielded, InsideLoopShielded }` threaded positionally exactly like
+  InsideUnshielded, InsideLoopShielded }` (re-exported from `stmt.rs`, which
+  keeps `stmt.rs` itself from growing past what AGENTS.md's ~1,000-line
+  decomposability rule tolerates) threaded positionally exactly like
   the D-193 `in_finally` flag, through `lower_stmt`, `lower_body`,
   `lower_elif_else_clauses`, `lower_match`, `lower_except_handler` and the
   loop lowerings. A `return` anywhere inside an `except*` clause is rejected
@@ -91,6 +96,16 @@ an ambient-locale artefact, not a diff defect, and re-running it under
 - [#903](https://github.com/rotnov/pycc/issues/903) (v0.4) tracks raising a
   real runtime `TypeError` for `except* ExceptionGroup`, which is what would
   let D-223 be superseded rather than narrowed further.
+- [#905](https://github.com/rotnov/pycc/issues/905) tracks the review finding
+  this change declined: a body folded away by the `TYPE_CHECKING` constant
+  fold is never lowered, so none of the new `except*` context checks (nor the
+  pre-existing PEP 765 ones) see it. That is a property of the fold, not of
+  this change, and fixing it belongs with #798's own rework of the fold.
+- `crates/pycc_hir/src/stmt.rs` is still above the ~1,000-line threshold
+  (1,148 lines after the extraction above, against 1,055 on the merge base).
+  AGENTS.md requires decomposing the part a task touches, which this change
+  did; the residual size has no dedicated D-185 tracker, and this run filed
+  none because D-192's non-milestone ceiling is in force.
 
 ## Where a fresh session should resume
 

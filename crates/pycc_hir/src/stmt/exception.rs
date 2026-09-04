@@ -1,10 +1,96 @@
 //! Lowering for `except` handler clauses.
+//!
+//! piece of threaded context, and the first that is not a `bool`. It records
+//! where the statement being lowered sits relative to the nearest enclosing
+//! `except*` clause body, and it governs `Stmt::Return`, `Stmt::Break`, and
+//! `Stmt::Continue` -- but, unlike `in_finally`, *not* uniformly:
+//!
+//! - `Stmt::Return` is rejected in **both** inside states, so an intervening
+//!   loop does not rescue it.
+//! - `Stmt::Break`/`Stmt::Continue` are rejected only in
+//!   `InsideUnshielded`; a loop entered *within* the clause body demotes the
+//!   context to `InsideLoopShielded` and they lower normally from there.
+//!
+//! That asymmetry is CPython's, not a design choice, and it is the reason
+//! this piece of context needs three states where `in_finally` needs two.
+//! Verified directly against CPython 3.14.6 by `compile()`-ing each shape:
+//! `for i in range(3): break` inside an `except*` clause compiles, while the
+//! same loop containing `return 1` still raises `SyntaxError: 'break',
+//! 'continue' and 'return' cannot appear in an except* block`. (Note that a
+//! *naive* reading predicts the opposite grouping from PEP 765's, where the
+//! loop shields all three -- the two rules genuinely differ, so neither flag
+//! can be derived from the other.)
+//!
+//! Two further differences from `in_finally`:
+//!
+//! - It is **propagated** into a `finally`, never cleared: CPython rejects a
+//!   `return` in a `finally` that is itself nested inside an `except*`
+//!   clause body. A try-star's own `finalbody` is not inside its own
+//!   handlers, so the incoming value is already `Outside` there and
+//!   `return`-in-a-try-star's-`finally` stays accepted (as PEP 765's own
+//!   `L0001` rejection, not this one).
+//! - When both restrictions apply, the `except*` message wins. That matches
+//!   CPython's own precedence: the `except*` failure is a fatal
+//!   `SyntaxError` while the PEP 765 restriction is only a
+//!   `SyntaxWarning`, so the `except*` guards run first in all three arms.
+//!
+//! Like `in_loop`/`in_finally`, entering a function body resets it -- to the
+//! constant `ExceptStarCtx::Outside`, never a conditional on the enclosing
+//! context, since a `return` inside a `def` nested in an `except*` body is
+//! accepted by CPython and a conditional reset would be an unreachable
+//! branch under this repository's 100%-region coverage gate.
+//!
+//! `Stmt::Return`'s guard carries an `in_function` conjunct for the same
+//! reason the PEP 765 one does: at module scope CPython's fatal error is the
+//! pre-existing `SyntaxError: 'return' outside function`, so pycc defers to
+//! its own `T0024`. `Stmt::Break`/`Stmt::Continue` carry no matching
+//! `in_loop` conjunct, because CPython reports the `except*` error even when
+//! no enclosing loop exists at all.
 
-use super::{ExceptStarCtx, lower_body};
+use super::lower_body;
 use crate::class::ClassAnnotationInfo;
 use crate::{HirExceptHandler, Ty, unsupported};
 use pycc_ast::{ExceptHandler, Expr};
 use pycc_diag::Diagnostic;
+
+/// #795 (PEP 654): where the statement being lowered sits relative to the
+/// nearest enclosing `except*` clause body. This is this module's fourth
+/// piece of threaded context, and unlike the three `bool`s beside it, it has
+/// three states rather than two -- an intervening loop *demotes* the context
+/// instead of clearing it, because CPython shields a `break`/`continue` with
+/// such a loop but does not shield a `return`.
+///
+/// Verified directly against CPython 3.14.6's own compiler (see the module
+/// doc comment above for the full table): `for i in range(3): break` inside
+/// an `except*` clause body compiles, while the same loop containing
+/// `return 1` still raises `SyntaxError: 'break', 'continue' and 'return'
+/// cannot appear in an except* block`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ExceptStarCtx {
+    /// Not inside any `except*` clause body -- the state every function body
+    /// and every module top level starts in.
+    Outside,
+    /// Inside an `except*` clause body with no intervening loop: `return`,
+    /// `break`, and `continue` are all rejected.
+    InsideUnshielded,
+    /// Inside an `except*` clause body, but behind at least one loop entered
+    /// within it: `break`/`continue` are shielded and lower normally, while
+    /// `return` is still rejected.
+    InsideLoopShielded,
+}
+
+impl ExceptStarCtx {
+    /// The value to thread into the body of a `while`/`for` loop entered
+    /// from this context. `Outside` stays `Outside` (a loop does not put
+    /// anything inside an `except*`); either inside state becomes
+    /// `InsideLoopShielded`, which is idempotent for a second nested loop.
+    pub(crate) fn shielded_by_loop(self) -> Self {
+        match self {
+            Self::Outside => Self::Outside,
+            Self::InsideUnshielded | Self::InsideLoopShielded => Self::InsideLoopShielded,
+        }
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lower_except_handler(
