@@ -130,28 +130,27 @@ mod tests {
         );
     }
 
-    /// The `unwrap_or(false)` arm of `inherits_init`'s MRO walk: an MRO entry
-    /// that names no class in `defined_classes`. A user class inheriting a
-    /// *synthetic* builtin exception reaches it -- the synthetic `Exception`
-    /// is seeded into the class table, but the walk still has to tolerate a
-    /// name it cannot find, and a class with no such contributor synthesizes.
+    /// The `unwrap_or(false)` arm of [`inherits_init`]'s MRO walk: an MRO
+    /// entry naming no class in `defined_classes`.
+    ///
+    /// No successfully-lowered program reaches this arm. `validate_bases`
+    /// (`super::mro`) rejects a direct base absent from `defined_classes`
+    /// before `lower_class` ever calls [`ensure_init`], every deeper MRO
+    /// entry is merged in by C3 from bases that passed that same check, and
+    /// `crate::module` seeds all synthetic builtin exception classes into
+    /// the class table before any user statement is lowered -- so a
+    /// synthetic base is a *defined* class here, not a missing one. The arm
+    /// is defensive, and this test reaches it the only way it can be
+    /// reached: by calling `inherits_init` directly with a hand-built pair,
+    /// the same technique `super::mro`'s own tests use for an analogous
+    /// otherwise-unconstructible input.
     #[test]
     fn an_mro_entry_that_names_no_defined_class_contributes_no_init() {
-        let module = crate::pycc_parser_test_helper::parse(
-            "class Solo:\n    def f(self) -> int:\n        return 1\n",
-        );
-        let hir = lower_checked(&module).unwrap();
-        let (_, solo) = hir
-            .class_defs
-            .iter()
-            .find(|(name, _)| name == "Solo")
-            .expect("class `Solo` is lowered");
-        assert_eq!(
-            solo.methods
-                .iter()
-                .find(|(mn, _)| mn == "__init__")
-                .map(|(_, m)| m.as_str()),
-            Some("Solo.__init__"),
+        let mro = vec!["Derived".to_string(), "Vanished".to_string()];
+        assert!(
+            !super::inherits_init(&mro, &[]),
+            "an MRO entry with no matching `defined_classes` entry contributes \
+             no `__init__`, rather than panicking or reporting one"
         );
     }
 }

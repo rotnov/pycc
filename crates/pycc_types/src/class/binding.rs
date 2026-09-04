@@ -3,10 +3,13 @@
 //!
 //! Extracted verbatim from `crates/pycc_types/src/class.rs` per AGENTS.md's
 //! file-decomposition rule and D-185's per-file tracking issue (#549): this
-//! is one cohesion-driven seam of that 4,614-line file, not a rewrite. Every
-//! diagnostic message, every check, and every panic message is unchanged --
-//! the only edits are the ones the module boundary forces (visibility
-//! keywords and `use` lines).
+//! is one cohesion-driven seam of that 4,614-line file, not a rewrite. That
+//! extraction changed no diagnostic message, no check, and no panic message
+//! -- its only edits were the ones the module boundary forces (visibility
+//! keywords and `use` lines). Later changes are free to edit this file like
+//! any other; #912 reworded `resolve_instantiation`'s internal-error panic,
+//! so read the claim above as "unchanged relative to the #549 extraction",
+//! not as a standing guarantee.
 //!
 //! The seam is the three places where a class *name* meets `Environment`'s
 //! class *table*: registering every `HirClassDef` the module lowered
