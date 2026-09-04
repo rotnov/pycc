@@ -235,6 +235,11 @@
                 <p>
                   Pull requests must keep the current Rust implementation at 100% line
                   and region coverage before the protected branch can merge.
+                  The published llms.txt context expansion is bounded the same
+                  way: its per-resource byte budgets must now sum within the
+                  reviewed 272 KiB ceiling, so each document carries a real,
+                  individually enforced allocation instead of drawing on
+                  another document's unused headroom.
                 </p>
               </div>
               <div class="evidence-card">

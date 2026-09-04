@@ -2953,11 +2953,21 @@ for doc in data["non_optional_documents"]:
         doc["budget_bytes"] = 1
 path.write_text(json.dumps(data, indent=2) + "\n")
 PY
-if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+if budget_output="$(SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" 2>&1)"; then
   echo "Validator accepted an oversized document breaching its per-resource budget (issue #207)" >&2
   exit 1
 fi
 restore_fixtures
+# Assert on the message, not only the exit status: issue #923 added a second
+# budget invariant after this one, and an exit-status-only assertion cannot
+# tell which check actually rejected the fixture.
+case "$budget_output" in
+  *"exceeding its 1-byte per-resource budget"*) : ;;
+  *)
+    echo "Per-resource budget mutation was rejected by the wrong check (issue #923): $budget_output" >&2
+    exit 1
+    ;;
+esac
 cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
 
 # Mutation: shrink the aggregate budget below the actual total so the
@@ -2972,11 +2982,53 @@ data = json.loads(path.read_text())
 data["budget_kib"] = 1
 path.write_text(json.dumps(data, indent=2) + "\n")
 PY
-if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+if budget_output="$(SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" 2>&1)"; then
   echo "Validator accepted aggregate expansion breaching the total budget (issue #207)" >&2
   exit 1
 fi
 restore_fixtures
+# The aggregate ceiling is unreachable in practice once issue #923's partition
+# invariant holds, but it is retained as defense-in-depth and must stay
+# exercised. Grep for its own message so a future change that stops reaching it
+# fails here instead of passing silently on exit status alone.
+case "$budget_output" in
+  *"aggregate budget (issue #207)"*) : ;;
+  *)
+    echo "Aggregate budget mutation was rejected by the wrong check (issue #923): $budget_output" >&2
+    exit 1
+    ;;
+esac
+cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
+
+# Mutation (issue #923): restore the historical, oversubscribed roadmap budget
+# while leaving budget_kib at its reviewed value. Every document stays inside
+# its own budget and the actual total stays under the ceiling, so only the
+# partition invariant can reject this fixture -- which is what isolates it from
+# both budget checks above.
+cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
+python3 - "$fixture_root/site/llms-txt-context-manifest.json" <<'PY'
+from pathlib import Path
+import sys
+import json
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+for doc in data["non_optional_documents"]:
+    if doc["label"] == "Roadmap":
+        doc["budget_bytes"] = 196608
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+if budget_output="$(SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" 2>&1)"; then
+  echo "Validator accepted per-resource budgets oversubscribing the aggregate ceiling (issue #923)" >&2
+  exit 1
+fi
+restore_fixtures
+case "$budget_output" in
+  *"per-resource budgets sum to"*"(issue #923)"*) : ;;
+  *)
+    echo "Oversubscribed-budget mutation was rejected by the wrong check (issue #923): $budget_output" >&2
+    exit 1
+    ;;
+esac
 cp "$repo_root/site/llms-txt-context-manifest.json" "$fixture_root/site/llms-txt-context-manifest.json"
 
 # Mutation: declare a non-optional document's representation as HTML. The

@@ -634,6 +634,26 @@ The supported consumer contract is now explicit and enforced:
   the live site, GitHub, PyPI, or the mutable reference parser; the budget is
   pinned to the commit's content. The manifest is the deterministic record of
   per-document and total byte counts.
+- **Per-resource budgets partition the ceiling (issue #923).** The six
+  `budget_bytes` values must sum to no more than the aggregate ceiling. Before
+  this invariant they summed to 339968 against a 278528-byte ceiling --
+  oversubscribed by 61440 -- so a document could sit inside its own budget
+  while the expansion as a whole was already over, and the per-resource
+  budgets were decorative for any document with slack elsewhere in the
+  manifest. Requiring the sum to fit makes each per-resource budget a real
+  allocation and makes an over-budget failure name the document responsible,
+  at the cost of no longer letting one document draw on another's unused
+  headroom. The current allocation leaves 4096 bytes of the ceiling
+  deliberately unallocated. Because the per-resource budgets now bind first by
+  construction, the aggregate check is provably unreachable; it is knowingly
+  retained as documented defense-in-depth, since it is the direct statement of
+  the ceiling this contract publishes.
+- **Keep the evidence column current, not cumulative.** The documents inside
+  this budget -- `docs/ROADMAP.md` above all -- record current status, the
+  primary evidence link, and the remaining gap. Per-pull-request history
+  belongs in `docs/decisions/`, `docs/sessions/`, or the owning milestone
+  section, not appended to a status cell; see `AGENTS.md`'s "Keep
+  `docs/ROADMAP.md` current" bullet.
 - **Human-navigation discoverability.** The public repository, canonical site,
   and human-readable GitHub links remain discoverable in the Optional section.
   Optimizing inference representation does not remove navigation or source
@@ -649,8 +669,12 @@ controls for each failure mode: a GitHub blob URL in a non-optional section, a
 large human-navigation-only resource moved into the default set, a duplicate
 HTML+Markdown landing in the default expansion, an oversized document
 breaching its per-resource budget, an aggregate expansion breaching the total
-budget, a representation changed from Markdown to HTML, and a non-optional
-link removed so the manifest and file drift. Positive controls retain the
+budget, per-resource budgets oversubscribing the aggregate ceiling, a
+representation changed from Markdown to HTML, and a non-optional link removed
+so the manifest and file drift. The three budget controls assert on the
+rejecting check's own message rather than exit status alone, so one budget
+check cannot silently stop being exercised because another rejects the
+fixture first. Positive controls retain the
 complete project summary, the authorship and current-status boundaries, and
 human-navigation URLs remaining discoverable in Optional.
 

@@ -233,3 +233,4 @@ current.
 | [D-224](./D-224-restrict-class-level-attributes-to-scalar.md) | Restrict class-level attributes to scalar compile-time constants | accepted |
 | [D-225](./D-225-synthesize-an-implicit-zero-argument-constructor.md) | Synthesize an implicit zero-argument constructor for a class with no `__init__` | accepted |
 | [D-226](./D-226-infer-an-un-annotated-class-attribute-s-type.md) | Infer an un-annotated class attribute's type from its literal | accepted |
+| [D-227](./D-227-partition-the-llms-txt-context-ceiling-across.md) | Partition the llms.txt context ceiling across per-resource budgets | accepted |

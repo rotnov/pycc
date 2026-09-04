@@ -33,6 +33,43 @@ never a merge gate.
 
 ---
 
+## 2026-09-04 — Committed a review-findings pile without the read-back its own procedure mandates, and found an earlier one had been silently lost
+
+What happened: the #923 session collected the deep-review findings into
+`.harden/findings/issue-923.jsonl` and committed it in `f71a2f71` without running the
+read-back that `.claude/skills/issue-implement/SKILL.md` step 5.5 names inside that same
+step. The pile used the non-schema key `outcome` instead of `disposition` and left the
+`fixed` row without a `fix_commit`, so `scripts/check_harden_findings.py` exited 1 and
+the CI-discovered `test_real_repository_piles_conform` case failed. The branch was
+CI-red from that commit until the next session repaired it. Investigating the class
+turned up the worse half: `.harden/findings/issue-910.jsonl` exists in no ref at all,
+although #910 ran the identical loop and merged as `12650781`. That pile was never
+committed and nothing reported it.
+
+Root cause: two failures of the same shape, one on each side of the checker.
+`.git/info/exclude` in this checkout carries a machine-local `.harden/` line. It cannot
+hide an already-tracked file, but it silently swallows every *new* one from `git add -A`
+and leaves `git status` clean — which is why #910's pile vanished without a symptom. The
+checker exists precisely for both cases (`git ls-files --error-unmatch` for the
+tracked-ness half, schema validation for the content half), but a checker can only fire
+on a record that exists, so the one thing that catches an absent pile is invoking it from
+inside the writing procedure. Step 5.5 says exactly that. It was not run either time.
+
+What fixed it: adding `disposition` and `fix_commit` to all four rows and re-running
+`python3 scripts/check_harden_findings.py .harden/findings/issue-923.jsonl` (exit 0) and
+`python3 -B -m unittest discover -s scripts -p 'test_*.py'` (exit 0). Every subsequent
+`.harden/` file in that session was staged with `git add -f` and confirmed in
+`git diff --cached --name-only` before committing.
+
+Lesson: a clean `git status` is not evidence that a file was committed, because a
+machine-local `.git/info/exclude` entry is untracked, invisible in review, and silently
+drops new paths under a directory it names. When a procedure tells you to read a record
+back after writing it, that instruction is the only detector for the record never having
+landed — run it, and confirm the write with `git diff --cached --name-only` rather than
+with the absence of an untracked-file line.
+
+---
+
 ## 2026-09-04 — Treated a green local gate set as covering CI, and shipped a red base-vs-head gate
 
 What happened: the #910 implementation agent ran all eleven local gates to green
