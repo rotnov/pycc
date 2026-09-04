@@ -248,17 +248,18 @@ mod tests {
     #[test]
     fn generic_enum_class_is_rejected() {
         // `class C[T](Enum):` — a generic class whose single base is `Enum`.
-        // The type parameter `T` triggers the generic-enum rejection at
-        // line 448-455, distinct from the multiple-bases rejection.
+        // The type parameter `T` triggers the generic-enum rejection in
+        // `lower_class` (before it delegates here), distinct from the
+        // multiple-bases rejection.
         assert_c0001("class C[T](Enum):\n    RED = 1\n");
     }
 
     #[test]
     fn enum_member_with_multiple_targets_is_rejected() {
         // `RED = GREEN = 1` — a chain assignment with multiple targets,
-        // which has `assign.targets.len() == 2`, triggering the rejection
-        // at line 551-556. (Tuple unpacking `RED, GREEN = 1, 2` has a
-        // single tuple target and hits a different path.)
+        // which has `assign.targets.len() == 2`, triggering the
+        // multiple-targets rejection. (Tuple unpacking `RED, GREEN = 1, 2`
+        // has a single tuple target and hits a different path.)
         assert_c0001("class C(Enum):\n    RED = GREEN = 1\n");
     }
 
@@ -283,7 +284,7 @@ mod tests {
     #[test]
     fn enum_body_with_method_is_rejected_via_unit_test() {
         // Exercises the "enum class body must contain only member
-        // assignments" error path (lines 828-832).
+        // assignments" error path.
         assert_c0001(
             "class Color(Enum):\n    RED = 1\n    def f(self) -> int:\n        return 1\n",
         );
@@ -291,20 +292,22 @@ mod tests {
 
     #[test]
     fn duplicate_enum_member_is_rejected_via_unit_test() {
-        // Exercises the "duplicate enum member" error path (lines 854-860).
+        // Exercises the "duplicate enum member" error path.
         assert_c0001("class Color(Enum):\n    RED = 1\n    RED = 2\n");
     }
 
     #[test]
     fn enum_member_float_value_is_rejected_via_unit_test() {
-        // Exercises the "non-integer value" error path (lines 884-893).
+        // Exercises the "non-integer numeric value" error path, which fires
+        // for `Number::Float` inside an `Expr::NumberLiteral`.
         assert_c0001("class Color(Enum):\n    RED = 1.5\n");
     }
 
     #[test]
     fn enum_member_bool_value_is_rejected_via_unit_test() {
-        // Exercises the "non-integer value" error path (lines 884-893)
-        // with a `bool` literal, a distinct match arm from `float`.
+        // `True` parses as `Expr::BooleanLiteral`, not `Expr::NumberLiteral`,
+        // so this exercises the catch-all "must be assigned an integer or
+        // string literal" arm rather than the `float` arm above.
         assert_c0001("class Color(Enum):\n    RED = True\n");
     }
 
