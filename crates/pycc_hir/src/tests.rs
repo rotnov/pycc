@@ -6371,8 +6371,10 @@ fn container_annotation_err(source: &str) -> Diagnostic {
 fn a_parameterized_container_annotation_lowers_in_every_supported_position() {
     // The §6 positions Part 1 covers, exercised through the real lowering
     // entry point: a parameter, a module-level `AnnAssign`, a local
-    // `AnnAssign` and a PEP 695 `type` alias. A protocol member's type is
-    // *not* one of them: it is rejected with `C0001` (D-227 decision 10).
+    // `AnnAssign` and a PEP 695 `type` alias. A protocol *attribute*'s type
+    // is *not* one of them: it is rejected with `C0001` (D-227 decision 10).
+    // A protocol *method*'s parameter is, and is covered by its own test
+    // below.
     for source in [
         "def f(x: list[int]) -> None:\n    return\n",
         "def f(x: dict[str, int]) -> None:\n    return\n",
@@ -6623,21 +6625,69 @@ fn a_type_alias_named_list_still_wins_over_the_builtin_container() {
 
 #[test]
 fn a_container_protocol_attribute_is_rejected_but_a_scalar_one_still_lowers() {
-    // The protocol-member `AnnAssign` branch ran no type gate at all before
-    // #918, because no annotation syntax could produce a container `Ty`
-    // there. Structural conformance against a container-typed member has no
-    // exercised path, so it is rejected -- while every non-container member
-    // type keeps working exactly as before.
+    // The protocol-attribute `AnnAssign` branch ran no type gate at all
+    // before #918, because no annotation syntax could produce a container
+    // `Ty` there. A container-typed protocol attribute is unsatisfiable --
+    // no class can declare a container-typed attribute slot at all -- so it
+    // is rejected, while every non-container attribute type keeps working
+    // exactly as before. The asymmetry with a protocol *method*'s
+    // parameter, which does lower, is deliberate and pinned by
+    // `a_container_annotation_lowers_in_a_protocol_method_parameter`.
     let diagnostic = container_annotation_err(
         "from typing import Protocol\n\n\nclass P(Protocol):\n    xs: list[int]\n",
     );
     assert_eq!(diagnostic.code, "C0001");
     assert_eq!(
         diagnostic.message,
-        "protocol attribute `P.xs` has container type `list[int]`, which is not supported yet -- a protocol member's type takes part in structural conformance checking, which has no container case yet"
+        "protocol attribute `P.xs` has container type `list[int]`, which is not supported yet -- no class could satisfy it, because every class attribute slot is restricted to a scalar type (`int`, `float`, `bool`, `str`); a container type in a protocol method's parameter is supported"
     );
     let module = pycc_parser_test_helper::parse(
         "from typing import Protocol\n\n\nclass P(Protocol):\n    n: int\n",
     );
     assert!(lower_checked(&module).is_ok());
+}
+
+#[test]
+fn a_container_annotation_lowers_in_a_protocol_method_parameter() {
+    // The counterpart to the test above, pinning the deliberate asymmetry of
+    // D-227 decision 10. The gate lives only in the protocol body's
+    // `AnnAssign` arm, so it rejects a container-typed protocol *attribute*
+    // (which no class could ever satisfy -- every class attribute slot is
+    // restricted to `is_scalar_slot_type`). A protocol *method*'s parameter
+    // is an ordinary parameter position: it routes through
+    // `crate::lower_arg_list` -> `annotation_to_ty` with no container gate,
+    // and the resulting program builds and runs (pinned end to end by
+    // `tests/issue_918_container_annotations.rs`). Extending the gate to
+    // method parameters would reject code this compiler compiles correctly.
+    for (source, expected) in [
+        (
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    def f(self, xs: list[int]) -> None: ...\n",
+            "list[int]",
+        ),
+        (
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    def f(self, xs: set[int]) -> None: ...\n",
+            "set[int]",
+        ),
+        (
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    def f(self, xs: dict[str, int]) -> None: ...\n",
+            "dict[str, int]",
+        ),
+        (
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    def f(self, xs: tuple[int, bool]) -> None: ...\n",
+            "tuple[int, bool]",
+        ),
+    ] {
+        let module = pycc_parser_test_helper::parse(source);
+        let lowered = lower_checked(&module).expect("a protocol method parameter should lower");
+        let def = &lowered.class_defs[0].1;
+        let ProtocolMember::Method {
+            name, param_tys, ..
+        } = &def.protocol_members[0]
+        else {
+            panic!("expected a method member: {:?}", def.protocol_members);
+        };
+        assert_eq!(name, "f");
+        assert_eq!(param_tys.len(), 1);
+        assert_eq!(param_tys[0].name(), expected);
+    }
 }

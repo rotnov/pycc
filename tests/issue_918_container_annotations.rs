@@ -6,8 +6,11 @@
 // Deliberately contains no container *return* type: return position is
 // rejected by design in Part 1 and tracked as issue #925 (see
 // `tests/diagnostics/c0001_container_return_annotation.py` for that rejection's
-// own fixture). Every expected stdout below was verified against CPython
-// 3.14 on the same source.
+// own fixture). It does contain a container-typed protocol *method*
+// parameter: D-227 decision 10's gate covers protocol *attributes* only, and
+// a protocol method's parameter is an ordinary parameter position. Every
+// expected stdout below was verified against CPython 3.14 on the same
+// source.
 
 use pycc_scratch::ScratchDir;
 use std::io::Write;
@@ -143,4 +146,38 @@ print(run())
     );
     assert!(output.status.success());
     assert_eq!(output.stdout, b"60\n");
+}
+
+#[test]
+fn a_container_annotation_lowers_in_a_protocol_method_parameter_and_runs() {
+    // D-227 decision 10 gates protocol *attributes* only. A protocol
+    // *method*'s parameter is an ordinary parameter position, so a
+    // container-typed one lowers, builds and runs -- this is the end-to-end
+    // half of the asymmetry pinned in `pycc_hir` by
+    // `a_container_annotation_lowers_in_a_protocol_method_parameter`.
+    // Verified against CPython 3.14 on the same source.
+    let output = build_and_run(
+        "protocol_method_param",
+        "\
+from typing import Protocol
+
+
+class P(Protocol):
+    def total(self, xs: list[int]) -> None: ...
+
+
+class Impl:
+    def total(self, xs: list[int]) -> None:
+        print(len(xs))
+
+
+def use(p: P) -> None:
+    p.total([1, 2, 3])
+
+
+use(Impl())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3\n");
 }

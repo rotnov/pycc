@@ -55,8 +55,9 @@ annotation more complex than a bare name; what it still covers there is \
 the bare, unparameterized `list`/`set`/`dict`/`tuple` spelling (whose \
 message names the parameterized form to write instead), a container \
 annotation in return position, which stays reserved for a later slice \
-(issue #925), and a protocol member whose type is a container, which \
-structural conformance checking has no case for yet. It also fires for calls to known Python 3.14 \
+(issue #925), and a protocol *attribute* whose type is a container, which no \
+class could ever satisfy because every class attribute slot is restricted to a \
+scalar type (a container type in a protocol *method*'s parameter does lower). It also fires for calls to known Python 3.14 \
 callable builtins that this compiler version does not implement (e.g. \
 `ValueError(\"x\")`, `Exception(\"msg\")`, `int(\"5\")`, `range(10)` as a \
 standalone call) -- these are valid Python, not name-resolution failures \

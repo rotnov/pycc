@@ -41,9 +41,11 @@ status: accepted
      `pycc_hir::func::annotation_to_ty`, which makes them available in every
      position that routes through it: function parameters, local and
      module-level `AnnAssign`, PEP 695 `type X = ...` and legacy
-     `X: TypeAlias = ...` aliases. A protocol member's annotation also
-     routes through it, but decision 10's gate then rejects a container
-     result, so a container type is *not* usable there.
+     `X: TypeAlias = ...` aliases. A protocol *method*'s parameters route
+     through the ordinary parameter path and are therefore covered too. A
+     protocol *attribute*'s annotation also routes through
+     `annotation_to_ty`, but decision 10's gate then rejects a container
+     result, so a container type is *not* usable in that one position.
   2. **Validate arity explicitly**, with a new diagnostic `T0053`: `list` and
      `set` take exactly one type argument, `dict` exactly two, `tuple` at
      least one. `T0053` also rejects two legal-Python spellings this version's
@@ -99,15 +101,29 @@ status: accepted
      working feature. Return position is issue
      [#925](https://github.com/rotnov/pycc/issues/925).
   10. **Container types are rejected as protocol attributes**, with `C0001`.
-      The protocol-member `AnnAssign` branch ran no type gate at all before
-      this decision — not by design, but because no annotation syntax could
-      produce a container `Ty` there, unlike the two class-body attribute
-      sites, which both run `is_scalar_slot_type`. Structural conformance
-      against a container-typed member has no exercised path anywhere in the
-      compiler, so it is rejected rather than shipped untested. Every
-      non-container member type (`Ty::Instance`, `Ty::Optional`, `Ty::None`,
-      `Ty::Protocol`) is unaffected, which is why this is a container check
-      and not a reuse of `is_scalar_slot_type`.
+      The protocol-attribute `AnnAssign` branch ran no type gate at all
+      before this decision — not by design, but because no annotation syntax
+      could produce a container `Ty` there, unlike the two class-body
+      attribute sites, which both run `is_scalar_slot_type`. It is rejected
+      because such an attribute is *unsatisfiable*: every path by which a
+      class establishes an instance attribute restricts the slot to
+      `is_scalar_slot_type` — the annotated class-body attribute, the
+      dataclass field and the `self.x = ...` assignment in a hand-written
+      `__init__` — because a slot is a single `i64` word
+      ([D-154](./D-154-class-instance-runtime-layout-stays-opaque.md)).
+      No class could therefore ever declare a matching container-typed
+      attribute. Every non-container attribute type (`Ty::Instance`,
+      `Ty::Optional`, `Ty::None`, `Ty::Protocol`) is unaffected, which is why
+      this is a container check and not a reuse of `is_scalar_slot_type`.
+
+      This gate covers protocol **attributes** only. A protocol *method*'s
+      parameter is an ordinary parameter position: `def f(self, xs:
+      list[int])` in a protocol body lowers through `lower_arg_list` and runs
+      end to end, measured against CPython 3.14. The asymmetry is deliberate
+      — a parameter type is a signature type, not an instance slot — and is
+      pinned by tests on both sides. A container *return* type in a protocol
+      method is rejected by decision 9's return-position gate, not by this
+      one.
 
   This decision **supersedes, as to annotation syntax only**:
   - **D-105 cut 1** ("No annotation syntax for `list[T]` in v0.2") in full;
