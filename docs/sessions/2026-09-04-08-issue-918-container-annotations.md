@@ -2,7 +2,8 @@
 
 ## Overall status
 
-Delivered as PR #930 (`feat/issue-918-container-annotations`, head `ebf48540`),
+Delivered as PR #930 (`feat/issue-918-container-annotations`, head `1f6435cc`
+plus this snapshot's own commit),
 based on `origin/main` at `c639e682`. State at the time this snapshot was written:
 open, not a draft, `MERGEABLE`, CI in progress. It carries `Fixes #918` and the
 GraphQL `closingIssuesReferences` query reports `totalCount: 1` naming only #918.
@@ -100,8 +101,13 @@ byte-identical to the head shipped here. Every other gate — fmt, clippy, build
 doc, the `scripts/` unittest suite, `check-site.sh`, roadmap evidence, README
 milestone projection, CI permissions, status-page freshness, conformance breadth,
 agent assets, decisions index `--check`, harden findings — was re-run on
-`ebf48540` and returned 0, with each exit status captured directly rather than
+`1f6435cc` and returned 0, with each exit status captured directly rather than
 through a pipeline.
+
+Two commits land after that measurement: this snapshot itself, and nothing else.
+Both are prose; `git diff --name-only 1f6435cc..HEAD -- crates src Cargo.toml
+Cargo.lock` is empty, so no gate that reads the Rust tree is affected, and the
+doc gates are re-run once more on the final head before the merge.
 
 Both Ruby checkers need `LC_ALL=en_US.UTF-8 RUBYOPT=-EUTF-8` in this shell; that
 is a local locale artifact, not a repository defect.
