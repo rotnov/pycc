@@ -125,14 +125,15 @@ the more convincing it looks, and the less that says about coverage.
 
 What happened: #918's own decision record introduced a rule — "a parameterized
 container annotation is rejected in a protocol member" — and it was restated at
-six sites (the ADR, two doc comments, an inline comment, `explain.rs`, and
-`docs/PYTHON_STANDARDS.md`). The rule as implemented gates protocol *attributes*
+six files (the ADR, `crates/pycc_hir/src/func.rs`, `explain.rs`,
+`crates/pycc_hir/src/class/protocol.rs`, `docs/PYTHON_STANDARDS.md`, and
+`docs/TYPE_SYSTEM.md`), and was wrong in every one of them. The rule as implemented gates protocol *attributes*
 only; a protocol method's parameter lowers a container normally, which was
 reproduced compiling and running end to end. Three review rounds were spent on
 it.
 
 Root cause: round 1's fix made the replicas agree with *each other* rather than
-with `lower_protocol_class`. Six mutually consistent sentences read as verified,
+with `lower_protocol_class`. Six mutually consistent files read as verified,
 which made rounds 2 and 3 harder rather than easier — the false agreement was
 itself the obstacle.
 
