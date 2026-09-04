@@ -103,6 +103,25 @@ pub enum EnumMemberValue {
     Str(String),
 }
 
+/// The compile-time constant value of an annotated class-level attribute
+/// (#911, Part 1 of #885).
+///
+/// A class attribute has **no runtime storage and no instance slot** -- every
+/// read of it is folded to this literal by `pycc_mir`. The variants therefore
+/// mirror exactly the scalar slot types the annotation is restricted to (see
+/// [`HirClassDef::class_attrs`]), not the full expression grammar.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClassAttrValue {
+    /// An `int`-typed attribute (`MIN_WIDTH: int = -1024`).
+    Int(i64),
+    /// A `float`-typed attribute (`SCALE: float = 1.5`).
+    Float(f64),
+    /// A `bool`-typed attribute (`DEBUG: bool = False`).
+    Bool(bool),
+    /// A `str`-typed attribute (`KIND: str = "window"`).
+    Str(String),
+}
+
 /// A single class's declared shape (D-154): its attribute slots, in
 /// first-`__init__`-assignment source order, and its method table (method
 /// name -> the mangled `HirItem::Function` name in `HirModule::items` its
@@ -174,6 +193,29 @@ pub struct HirClassDef {
     /// instance allocated once at module-init time (see `pycc_codegen`'s
     /// per-member init sequence).
     pub enum_members: Vec<(String, EnumMemberValue)>,
+    /// PEP 526 (#911, Part 1 of #885): annotated class-level attributes
+    /// (`MIN_WIDTH: int = -1024`, `LIMIT: ClassVar[int] = 8`), in source
+    /// order. Each entry is `(attribute_name, type, constant_value)`.
+    ///
+    /// **Storage model.** A class attribute is a *compile-time constant*: it
+    /// occupies no instance slot and has no runtime representation at all.
+    /// `pycc_mir` folds every read (`W.MIN_WIDTH` and `w.MIN_WIDTH` alike)
+    /// straight to the literal, so neither `mro_attrs`/`mro_attr_count` nor
+    /// the allocation size a class's instances need is affected by adding
+    /// one. This deliberately differs from the enum-member model, which
+    /// allocates a per-member singleton with a module global.
+    ///
+    /// **Named invariant -- class attributes are restricted to scalar slot
+    /// types.** Beyond D-154's storage constraint, this is what keeps
+    /// `__set_name__` untriggerable per #585/D-213: a descriptor-valued
+    /// class attribute (`x: SomeDescriptor = SomeDescriptor()`) is not a
+    /// scalar and is rejected with `C0001`, so `__set_name__`'s own
+    /// precondition never arises. Relaxing this restriction requires
+    /// revisiting #585 in the same change.
+    ///
+    /// `Ty::Param(_)` is excluded as well: a type parameter has no
+    /// compile-time constant value to fold.
+    pub class_attrs: Vec<(String, Ty, ClassAttrValue)>,
     /// PEP 557/681 (#378, PR-18): `true` when this class is decorated with
     /// `@dataclass` or `@dataclass_transform(...)`. A dataclass class
     /// auto-generates `__init__`, `__eq__`, and `__repr__` from its
@@ -1296,6 +1338,7 @@ pub(crate) fn lower_class(
     }
     Ok((
         HirClassDef {
+            class_attrs: Vec::new(),
             exception_type_tag: None,
             name: class_name,
             bases,
@@ -2442,6 +2485,7 @@ mod tests {
         assert_eq!(
             *class_def,
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Point".to_string(),
                 bases: Vec::new(),

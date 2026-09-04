@@ -106,15 +106,21 @@ pub enum StdSymbolKind {
     /// anywhere else is the same "marker is not a value" error every other
     /// marker kind produces.
     EnumAutoMarker,
-    /// An annotation-only marker symbol (`typing.Final`, `typing.Annotated`)
-    /// that is only valid as a bare-name annotation subscript
-    /// (`Final[X]`, `Annotated[X, ...]`, PEP 591/593). Unlike the other
+    /// An annotation-only marker symbol (`typing.Final`, `typing.Annotated`,
+    /// `typing.ClassVar`) that is only valid as a bare-name annotation
+    /// subscript (`Final[X]`, `Annotated[X, ...]`, `ClassVar[X]`,
+    /// PEP 591/593/526). Unlike the other
     /// marker kinds it is not a base-class or decorator marker either — it
     /// has no role outside annotation position. `pycc_hir::func::
     /// annotation_to_ty` already recognizes `Final`/`Annotated` by bare
     /// name regardless of whether this registry entry exists; registering
-    /// the symbol here only makes `from typing import Final`/`Annotated`
-    /// itself resolve instead of failing with `C0002` (#762). It is not a
+    /// the symbol here only makes `from typing import Final`/`Annotated`/
+    /// `ClassVar` itself resolve instead of failing with `C0002` (#762,
+    /// #911). `ClassVar[X]` differs from the other two in *where* it is
+    /// accepted: it is a class-body-only annotation wrapper, stripped by
+    /// `pycc_hir::class::body`'s own class-attribute lowering and rejected
+    /// with `C0001` by the shared `pycc_hir::func::annotation_to_ty`
+    /// everywhere else. It is not a
     /// first-class value — referencing it as a value or calling it is
     /// rejected by the type checker, the same as every other marker kind.
     AnnotationMarker,
@@ -242,6 +248,11 @@ const REGISTRY: &[StdSymbol] = &[
     StdSymbol {
         module: StdModule::Typing,
         name: "Annotated",
+        kind: StdSymbolKind::AnnotationMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "ClassVar",
         kind: StdSymbolKind::AnnotationMarker,
     },
     StdSymbol {
@@ -445,6 +456,15 @@ mod tests {
     fn resolve_symbol_rejects_unregistered_symbol_in_typing_module() {
         assert_eq!(resolve_symbol(StdModule::Typing, "TypeVar"), None);
         assert_eq!(resolve_symbol(StdModule::Typing, "Generic"), None);
+    }
+
+    #[test]
+    fn resolve_symbol_finds_typing_class_var() {
+        let sym =
+            resolve_symbol(StdModule::Typing, "ClassVar").expect("typing.ClassVar is registered");
+        assert_eq!(sym.module, StdModule::Typing);
+        assert_eq!(sym.name, "ClassVar");
+        assert_eq!(sym.kind, StdSymbolKind::AnnotationMarker);
     }
 
     #[test]

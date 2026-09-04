@@ -45,6 +45,7 @@ fn static_class_hir(extra_items: Vec<HirItem>) -> HirModule {
         class_defs: vec![(
             "C".to_string(),
             pycc_hir::HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "C".to_string(),
                 bases: Vec::new(),
@@ -223,6 +224,7 @@ fn static_method_call_through_class_name_with_ghost_mro_panics() {
         class_defs: vec![(
             "C".to_string(),
             pycc_hir::HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "C".to_string(),
                 bases: vec!["Ghost".to_string()],
@@ -270,6 +272,7 @@ fn class_method_call_through_class_name_with_ghost_mro_panics() {
         class_defs: vec![(
             "C".to_string(),
             pycc_hir::HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "C".to_string(),
                 bases: vec!["Ghost".to_string()],
@@ -328,6 +331,7 @@ fn static_method_call_through_instance_with_ghost_mro_panics() {
         class_defs: vec![(
             "Derived".to_string(),
             pycc_hir::HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Derived".to_string(),
                 bases: vec!["Ghost".to_string()],
@@ -387,6 +391,7 @@ fn class_method_call_through_instance_with_ghost_mro_panics() {
         class_defs: vec![(
             "Derived".to_string(),
             pycc_hir::HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Derived".to_string(),
                 bases: vec!["Ghost".to_string()],

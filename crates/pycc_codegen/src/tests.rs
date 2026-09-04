@@ -12738,6 +12738,7 @@ fn enum_member_singleton_init_emits_and_runs() {
     // per-member singleton init sequence before the top-level
     // statement loop.
     let class_def = pycc_mir::HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Color".to_string(),
         bases: vec![],
@@ -12797,6 +12798,7 @@ fn str_valued_enum_member_singleton_init_emits_and_runs() {
     // what proves the emitted init sequence is well-formed -- a codegen-only
     // assertion would not catch a mis-tagged slot word.
     let class_def = pycc_mir::HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Kind".to_string(),
         bases: vec![],
@@ -12918,6 +12920,7 @@ fn abstract_method_body_with_non_none_return_emits_default_value() {
         class_defs: vec![(
             "Animal".to_string(),
             pycc_mir::HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Animal".to_string(),
                 bases: Vec::new(),

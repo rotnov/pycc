@@ -236,6 +236,7 @@ pub fn builtin_exception_class_defs() -> Vec<(String, HirClassDef)> {
                 Vec::new()
             };
             let def = HirClassDef {
+                class_attrs: Vec::new(),
                 // Part 2 of #543 (#739): the original flat seven keep `None`
                 // (resolved by name, table-independent, through
                 // `resolve_exception_tag`); the 16-member `OSError` family

@@ -536,6 +536,7 @@ fn lowered_attr_set_value(slot_ty: Ty, value: HirExpr) -> MirExpr {
         class_defs: vec![(
             "Holder".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Holder".to_string(),
                 bases: Vec::new(),

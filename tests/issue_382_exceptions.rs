@@ -147,6 +147,7 @@ fn generic_rewrite_fixture(
         body: vec![HirStmt::Return(None)],
     };
     let d_class = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "D".to_string(),
         bases: vec![],

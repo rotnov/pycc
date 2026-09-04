@@ -71,6 +71,7 @@ fn point_module(extra_items: Vec<HirItem>) -> HirModule {
         class_defs: vec![(
             "Point".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Point".to_string(),
                 bases: Vec::new(),
@@ -204,6 +205,7 @@ fn a_method_call_with_arguments_lowers_each_argument_after_self() {
         class_defs: vec![(
             "Counter".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Counter".to_string(),
                 bases: Vec::new(),
@@ -573,6 +575,7 @@ fn attr_set_on_a_read_only_property_panics_with_an_internal_error() {
         class_defs: vec![(
             "Box".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Box".to_string(),
                 bases: Vec::new(),
@@ -632,6 +635,7 @@ fn enum_member_attr_get_lowers_to_synthetic_global() {
     // #379: `Color.RED` lowers to `MirExpr::Name` reading the
     // synthetic `<Class>.<Member>.enum_member` global.
     let class_def = pycc_hir::HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Color".to_string(),
         bases: vec![],

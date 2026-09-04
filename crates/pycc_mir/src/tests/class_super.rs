@@ -134,6 +134,7 @@ fn super_module() -> HirModule {
             (
                 "A".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
@@ -160,6 +161,7 @@ fn super_module() -> HirModule {
             (
                 "B".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
@@ -269,6 +271,7 @@ fn super_attr_get_naming_an_instance_attr_panics_with_an_internal_error() {
             (
                 "A".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
@@ -292,6 +295,7 @@ fn super_attr_get_naming_an_instance_attr_panics_with_an_internal_error() {
             (
                 "B".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
@@ -363,6 +367,7 @@ fn super_property_lowers_to_call_to_base_getter() {
             (
                 "A".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
@@ -390,6 +395,7 @@ fn super_property_lowers_to_call_to_base_getter() {
             (
                 "B".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
