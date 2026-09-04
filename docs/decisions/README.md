@@ -232,3 +232,4 @@ current.
 | [D-223](./D-223-reject-except-star-exceptiongroup-at-compile-time.md) | Reject `except* ExceptionGroup:` at compile time instead of CPython's runtime `TypeError` | accepted |
 | [D-224](./D-224-restrict-class-level-attributes-to-scalar.md) | Restrict class-level attributes to scalar compile-time constants | accepted |
 | [D-225](./D-225-synthesize-an-implicit-zero-argument-constructor.md) | Synthesize an implicit zero-argument constructor for a class with no `__init__` | accepted |
+| [D-226](./D-226-infer-an-un-annotated-class-attribute-s-type.md) | Infer an un-annotated class attribute's type from its literal | accepted |

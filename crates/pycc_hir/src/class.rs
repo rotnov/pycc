@@ -59,6 +59,7 @@
 //! recursion into a nested `if`/`while`/`for`), matching this same minimal,
 //! single-pass scope.
 
+mod attrs;
 mod body;
 mod enum_class;
 mod init;
@@ -66,7 +67,8 @@ mod mro;
 mod protocol;
 
 use crate::{HirExpr, HirItem, HirStmt, Ty, lower_arg_list, unsupported};
-use body::{ClassBodyInput, ClassBodyOutput, reject_class_attr_collisions, walk_class_body};
+use attrs::{ClassAttrCollisionInput, reject_class_attr_collisions};
+use body::{ClassBodyInput, ClassBodyOutput, walk_class_body};
 use enum_class::lower_enum_class;
 use init::{ensure_init, synthesize_dataclass_init};
 use mro::{resolve_mro, validate_bases};
@@ -198,9 +200,11 @@ pub struct HirClassDef {
     /// instance allocated once at module-init time (see `pycc_codegen`'s
     /// per-member init sequence).
     pub enum_members: Vec<(String, EnumMemberValue)>,
-    /// PEP 526 (#911, Part 1 of #885): annotated class-level attributes
-    /// (`MIN_WIDTH: int = -1024`, `LIMIT: ClassVar[int] = 8`), in source
-    /// order. Each entry is `(attribute_name, type, constant_value)`.
+    /// Class-level attributes in source order, in either spelling: the
+    /// annotated one PEP 526 gives (`MIN_WIDTH: int = -1024`,
+    /// `LIMIT: ClassVar[int] = 8`, #911, Part 1 of #885) and the bare
+    /// `X = 1`, whose type is inferred from the literal (#910, Part 2).
+    /// Each entry is `(attribute_name, type, constant_value)`.
     ///
     /// **Storage model.** A class attribute is a *compile-time constant*: it
     /// occupies no instance slot and has no runtime representation at all.
@@ -1135,15 +1139,18 @@ pub(crate) fn lower_class(
     // after the walk, not at the `AnnAssign` site: `attrs` is populated only
     // when the walk reaches `__init__`, so a class attribute declared before
     // `__init__` would see an empty `attrs` and slip through.
-    reject_class_attr_collisions(
-        &class_attrs,
-        &attrs,
-        &properties,
-        &class_name,
-        &mro,
+    reject_class_attr_collisions(&ClassAttrCollisionInput {
+        class_attrs: &class_attrs,
+        attrs: &attrs,
+        properties: &properties,
+        methods: &methods,
+        static_methods: &static_methods,
+        class_methods: &class_methods,
+        class_name: &class_name,
+        mro: &mro,
         defined_classes,
-        def.range.into(),
-    )?;
+        range: def.range.into(),
+    })?;
     // #378 (PR-18): synthesize `__init__`, `__eq__`, and `__repr__` for a
     // `@dataclass` class from its (merged) field list. The synthesized
     // methods flow through the existing method infrastructure as ordinary
@@ -3830,8 +3837,11 @@ mod tests {
 
     #[test]
     fn a_dataclass_with_a_non_method_non_annassign_statement_is_rejected() {
-        // An `Assign` statement (`y = 5`) in a dataclass body is neither an
-        // `AnnAssign` (field) nor a `FunctionDef` (method) nor `Pass`.
+        // #910 accepts a bare `y = 5` as an inferred class attribute, but
+        // only outside a `@dataclass`: in one, a bare assignment is a
+        // class-level default for a field declared elsewhere, not a
+        // constant, so it still falls through to the catch-all. This is the
+        // one site exercising that gate's `is_dataclass` arm.
         assert_c0001("@dataclass\nclass C:\n    x: int\n    y = 5\n");
     }
 

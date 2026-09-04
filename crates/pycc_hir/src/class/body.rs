@@ -13,13 +13,14 @@
 //! Enum and protocol class bodies never reach this walk -- `lower_class`
 //! returns through `lower_enum_class`/`lower_protocol_class` before it.
 
+use super::attrs::{lower_class_attr, lower_unannotated_class_attr, strip_class_var};
 use super::{
     CONTAINER_METHOD_NAMES, ClassAnnotationInfo, ClassAttrValue, HirClassDef, MethodKind,
     PropertyDef, classify_decorator, collect_init_attrs, is_declaration_body, is_scalar_slot_type,
     lower_method,
 };
 use crate::{HirItem, Ty, unsupported};
-use pycc_ast::{Expr, Number, Stmt};
+use pycc_ast::{Expr, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
 /// The read-only inputs the class-body walk needs from [`super::lower_class`].
@@ -66,7 +67,8 @@ pub(super) struct ClassBodyOutput {
     pub(super) dataclass_fields: Vec<(String, Ty)>,
     /// Names of `@abstractmethod`s declared in this body (#380).
     pub(super) abstract_methods: Vec<String>,
-    /// PEP 526 (#911): annotated class-level attributes, in source order.
+    /// Class-level attributes in source order, in either the annotated
+    /// PEP 526 spelling (#911) or the bare `X = 1` one (#910).
     pub(super) class_attrs: Vec<(String, Ty, ClassAttrValue)>,
 }
 
@@ -237,10 +239,37 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             dataclass_fields.push((field_name, field_ty));
             continue;
         }
+        // #910 (Part 2 of #885): an un-annotated assignment with a literal
+        // right-hand side is a class attribute whose type is inferred from
+        // that literal. A `@dataclass` body is excluded deliberately: a bare
+        // `x = 1` there is a class-level default for a field declared
+        // elsewhere in Python's own model, not a constant, so it falls
+        // through to the catch-all below and stays `C0001` (#378).
+        if let Stmt::Assign(assign) = stmt
+            && !is_dataclass
+        {
+            class_attrs.push(lower_unannotated_class_attr(
+                assign,
+                class_name,
+                &class_attrs,
+            )?);
+            continue;
+        }
         let Stmt::FunctionDef(method_def) = stmt else {
+            // #910 reworded this, and split it in two. A bare assignment is
+            // now an accepted class-level attribute -- but *only* outside a
+            // `@dataclass`, where it still falls through to here. A single
+            // wording would therefore have to be wrong for one of the two
+            // callers, so each states what its own body actually accepts.
             return Err(unsupported(
-                "a class body statement must be a method definition (`def ...`) -- no \
-                 other statement kind is supported yet",
+                if is_dataclass {
+                    "a `@dataclass` body statement must be a field declaration (`x: int`) or a \
+                     method definition (`def ...`) -- no other statement kind is supported yet"
+                } else {
+                    "a class body statement must be a method definition (`def ...`) or a \
+                     class-level attribute assignment (`X = 1`, `X: int = 1`) -- no other \
+                     statement kind is supported yet"
+                },
                 pycc_ast::stmt_range(stmt),
             ));
         };
@@ -621,331 +650,6 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
         abstract_methods,
         class_attrs,
     })
-}
-
-/// #911: Strips a class-body-only `ClassVar[...]` wrapper from an annotation.
-///
-/// Returns the inner annotation and whether a wrapper was present. Unlike
-/// `Final`/`Annotated`, `ClassVar` is **not** unwrapped by the shared
-/// `pycc_hir::func::annotation_to_ty` -- it is valid only here, on a class
-/// body attribute declaration, so `annotation_to_ty` rejects it outright and
-/// this is the one caller that strips it first.
-///
-/// A bare `ClassVar` (no subscript) and a multi-argument `ClassVar[T, U]` are
-/// both `C0001`, mirroring `Final`'s own "takes exactly one type argument".
-fn strip_class_var(annotation: &Expr) -> Result<(&Expr, bool), Diagnostic> {
-    match annotation {
-        Expr::Name(name) if name.id.as_str() == "ClassVar" => Err(unsupported(
-            "a bare `ClassVar` is not a valid annotation -- write `ClassVar[<type>]` with \
-             exactly one type argument",
-            pycc_ast::expr_range(annotation),
-        )),
-        Expr::Subscript(sub) if matches!(sub.value.as_ref(), Expr::Name(n) if n.id.as_str() == "ClassVar") =>
-        {
-            if matches!(sub.slice.as_ref(), Expr::Tuple(_)) {
-                return Err(unsupported(
-                    "ClassVar takes exactly one type argument",
-                    pycc_ast::expr_range(&sub.slice),
-                ));
-            }
-            Ok((sub.slice.as_ref(), true))
-        }
-        other => Ok((other, false)),
-    }
-}
-
-/// #911: Lowers one annotated class-body attribute declaration
-/// (`MIN_WIDTH: int = -1024`, `LIMIT: ClassVar[int] = 8`) into a
-/// `(name, type, constant value)` entry for [`HirClassDef::class_attrs`].
-///
-/// `annotation` is the `ClassVar`-stripped annotation; `already` is the
-/// entries accumulated so far in this body, for duplicate detection.
-///
-/// **Named invariant -- class attributes are restricted to scalar slot
-/// types.** Beyond D-154's single-word storage constraint, this is what
-/// keeps `__set_name__` untriggerable per #585/D-213: rejecting a
-/// non-scalar annotation rejects a descriptor-valued class attribute
-/// (`x: SomeDescriptor = SomeDescriptor()`) along with it, so
-/// `__set_name__`'s own precondition never arises. Relaxing this
-/// restriction requires revisiting #585 in the same change.
-fn lower_class_attr(
-    ann: &pycc_ast::StmtAnnAssign,
-    annotation: &Expr,
-    class_name: &str,
-    type_param: Option<&str>,
-    aliases: &[(String, Ty)],
-    class_name_defs: &[ClassAnnotationInfo],
-    already: &[(String, Ty, ClassAttrValue)],
-) -> Result<(String, Ty, ClassAttrValue), Diagnostic> {
-    let Expr::Name(target_name) = ann.target.as_ref() else {
-        return Err(unsupported(
-            "a class-level attribute annotation must target a bare name (`X: int = 1`), not an \
-             attribute access, subscript, or other expression",
-            pycc_ast::expr_range(&ann.target),
-        ));
-    };
-    let attr_name = target_name.id.to_string();
-    if already.iter().any(|(name, _, _)| name == &attr_name) {
-        return Err(unsupported(
-            format!(
-                "class attribute `{attr_name}` is already defined in class `{class_name}` -- \
-                 duplicate class attribute names are not allowed"
-            ),
-            ann.range,
-        ));
-    }
-    // PEP 591 (#383): `Final[X]` unwraps to `X` inside `annotation_to_ty`,
-    // carrying no finality with it -- a `Final` class attribute would
-    // therefore be silently accepted as an ordinary rebindable one. Class
-    // attributes are already write-rejected outright in Part 1, but
-    // accepting the spelling would imply a finality guarantee this pass does
-    // not model, so `Final[...]` on a class-body attribute stays out of
-    // scope (see `docs/TYPE_SYSTEM.md`'s own `Final` scope statement).
-    if matches!(annotation, Expr::Name(n) if n.id.as_str() == "Final")
-        || matches!(annotation, Expr::Subscript(sub)
-            if matches!(sub.value.as_ref(), Expr::Name(n) if n.id.as_str() == "Final"))
-    {
-        return Err(unsupported(
-            format!(
-                "`Final` on the class-level attribute `{attr_name}` is not supported yet -- \
-                 write a plain scalar annotation (`{attr_name}: int = 1`) instead"
-            ),
-            ann.range,
-        ));
-    }
-    let attr_ty = crate::annotation_to_ty(
-        annotation,
-        type_param,
-        Some(class_name),
-        aliases,
-        class_name_defs,
-    )?;
-    // A type parameter has no compile-time constant value to fold, so a
-    // generic class's own `T` is rejected here even though it *is* one of
-    // `is_scalar_slot_type`'s accepted types.
-    if matches!(attr_ty, Ty::Param(_)) {
-        return Err(unsupported(
-            format!(
-                "class attribute `{attr_name}` is annotated with the type parameter `{}` -- a \
-                 class attribute is a compile-time constant, and a type parameter has no \
-                 constant value to fold",
-                attr_ty.name()
-            ),
-            ann.range,
-        ));
-    }
-    if !is_scalar_slot_type(&attr_ty) {
-        return Err(unsupported(
-            format!(
-                "class attribute `{attr_name}` has type `{}`, which is not a scalar slot type \
-                 -- only `int`, `float`, `bool`, and `str` are supported (a class attribute is \
-                 a compile-time constant folded at every read; restricting it to scalars is \
-                 also what keeps `__set_name__` untriggerable, see #585)",
-                attr_ty.name()
-            ),
-            ann.range,
-        ));
-    }
-    let Some(value) = &ann.value else {
-        return Err(unsupported(
-            format!(
-                "class attribute `{attr_name}` has no value -- a class attribute is a \
-                 compile-time constant and must be initialized with a literal \
-                 (`{attr_name}: int = 1`)"
-            ),
-            ann.range,
-        ));
-    };
-    let attr_value = class_attr_value(value, &attr_ty, &attr_name, ann.range.into())?;
-    Ok((attr_name, attr_ty, attr_value))
-}
-
-/// #911: Extracts the compile-time constant value of a class attribute from
-/// its right-hand side, checking it against the declared annotation.
-///
-/// Accepted shapes are deliberately wider than the enum-member extractor's
-/// (`class/enum_class.rs`): a unary `+`/`-` applied to a numeric literal is
-/// accepted too, because the motivating example in #885 is
-/// `MIN_WIDTH: int = -1024`, which parses as `UnaryOp(USub,
-/// NumberLiteral(1024))` and not as a literal at all.
-fn class_attr_value(
-    value: &Expr,
-    attr_ty: &Ty,
-    attr_name: &str,
-    range: std::ops::Range<u32>,
-) -> Result<ClassAttrValue, Diagnostic> {
-    let bad_shape = || {
-        unsupported(
-            format!(
-                "class attribute `{attr_name}` must be initialized with a literal -- only an \
-                 `int`, `float`, `str`, or `bool` literal (optionally with a unary `+`/`-` on a \
-                 number) is supported, because a class attribute is a compile-time constant"
-            ),
-            range.clone(),
-        )
-    };
-    let mismatch = |found: &str| {
-        unsupported(
-            format!(
-                "class attribute `{attr_name}` is annotated `{}` but is initialized with a \
-                 `{found}` literal",
-                attr_ty.name()
-            ),
-            range.clone(),
-        )
-    };
-    // Unary `+`/`-` on a numeric literal, unwrapped to a signed number.
-    let (negate, literal) = match value {
-        Expr::UnaryOp(unary) => {
-            let sign = match unary.op {
-                pycc_ast::UnaryOp::USub => true,
-                pycc_ast::UnaryOp::UAdd => false,
-                _ => return Err(bad_shape()),
-            };
-            if !matches!(unary.operand.as_ref(), Expr::NumberLiteral(_)) {
-                return Err(bad_shape());
-            }
-            (sign, unary.operand.as_ref())
-        }
-        other => (false, other),
-    };
-    match literal {
-        Expr::NumberLiteral(number) => match &number.value {
-            Number::Int(i) => {
-                let Some(magnitude) = i.as_i64() else {
-                    return Err(unsupported(
-                        format!(
-                            "class attribute `{attr_name}` has an integer value that does not \
-                             fit in i64 -- only i64-range values are supported"
-                        ),
-                        range,
-                    ));
-                };
-                let signed = if negate { -magnitude } else { magnitude };
-                match attr_ty {
-                    Ty::Int => Ok(ClassAttrValue::Int(signed)),
-                    // An `int` literal under a `float` annotation widens,
-                    // matching Python's own numeric tower (`x: float = 1`).
-                    Ty::Float => Ok(ClassAttrValue::Float(signed as f64)),
-                    _ => Err(mismatch("int")),
-                }
-            }
-            Number::Float(f) => {
-                let signed = if negate { -*f } else { *f };
-                match attr_ty {
-                    Ty::Float => Ok(ClassAttrValue::Float(signed)),
-                    _ => Err(mismatch("float")),
-                }
-            }
-            Number::Complex { .. } => Err(bad_shape()),
-        },
-        // `negate` is `true` only when the operand was a `NumberLiteral`
-        // (checked above), so no sign can reach these two arms.
-        Expr::BooleanLiteral(b) => match attr_ty {
-            Ty::Bool => Ok(ClassAttrValue::Bool(b.value)),
-            _ => Err(mismatch("bool")),
-        },
-        Expr::StringLiteral(s) => match attr_ty {
-            Ty::Str => Ok(ClassAttrValue::Str(s.value.to_str().to_string())),
-            _ => Err(mismatch("str")),
-        },
-        _ => Err(bad_shape()),
-    }
-}
-
-/// #911: Rejects a class attribute that collides with an instance attribute
-/// slot or a `@property` of the same name, in either declaration order.
-///
-/// This runs **after** the body walk rather than at the `AnnAssign` site:
-/// `attrs` is populated by `collect_init_attrs` when the walk reaches
-/// `__init__`, so a class attribute declared *before* `__init__` would see an
-/// empty `attrs` and slip through a statement-site check.
-///
-/// The direction checked here is exactly one way round: every entry of *this*
-/// class's `class_attrs` against this class's own `attrs`/`properties` and
-/// against every MRO base's `attrs`/`properties`. The reverse direction --
-/// this class's `attrs` (or `properties`) shadowing an *ancestor's*
-/// `class_attrs` -- is deliberately **not** checked here, because the write
-/// itself is what is ill-formed there, and `pycc_types::class::check_attr_set`
-/// already rejects it with `T0044` through `lookup_class_attr_through_mro`'s
-/// full-MRO walk, pointing at the offending assignment rather than at the
-/// class as a whole.
-///
-/// A collision is `C0001`, not `T0052`: `T0052`'s existing condition fires
-/// only when a redeclaration's `Ty` *differs*, and a same-typed class
-/// attribute shadowing an instance slot is just as broken -- the read would
-/// fold to a constant while the write targeted a slot.
-pub(super) fn reject_class_attr_collisions(
-    class_attrs: &[(String, Ty, ClassAttrValue)],
-    attrs: &[(String, Ty)],
-    properties: &[PropertyDef],
-    class_name: &str,
-    mro: &[String],
-    defined_classes: &[(String, HirClassDef)],
-    range: std::ops::Range<u32>,
-) -> Result<(), Diagnostic> {
-    for (attr_name, _, _) in class_attrs {
-        if attrs.iter().any(|(name, _)| name == attr_name) {
-            return Err(class_attr_collision(
-                class_name,
-                attr_name,
-                "instance attribute",
-                range,
-            ));
-        }
-        if properties.iter().any(|p| &p.name == attr_name) {
-            return Err(class_attr_collision(
-                class_name,
-                attr_name,
-                "`@property`",
-                range,
-            ));
-        }
-        for base in mro.iter().skip(1) {
-            // Every class in the MRO was placed there by `compute_c3_mro`,
-            // which only references classes from `defined_classes` -- so
-            // this lookup always succeeds. `.expect()`'s panic path lives in
-            // libcore, outside this crate's instrumented regions (D-014).
-            let (_, base_def) = defined_classes
-                .iter()
-                .find(|(name, _)| name == base)
-                .expect("every class in the MRO must be in defined_classes");
-            if base_def.attrs.iter().any(|(name, _)| name == attr_name) {
-                return Err(class_attr_collision(
-                    class_name,
-                    attr_name,
-                    &format!("instance attribute inherited from `{base}`"),
-                    range,
-                ));
-            }
-            if base_def.properties.iter().any(|p| &p.name == attr_name) {
-                return Err(class_attr_collision(
-                    class_name,
-                    attr_name,
-                    &format!("`@property` inherited from `{base}`"),
-                    range,
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// The single `C0001` a [`reject_class_attr_collisions`] collision produces.
-fn class_attr_collision(
-    class_name: &str,
-    attr_name: &str,
-    what: &str,
-    range: std::ops::Range<u32>,
-) -> Diagnostic {
-    unsupported(
-        format!(
-            "class attribute `{class_name}.{attr_name}` collides with an {what} of the same \
-             name -- a class attribute is folded to a constant at every read, so it can never \
-             share a name with a value that lives in an instance slot or behind a descriptor"
-        ),
-        range,
-    )
 }
 
 #[cfg(test)]

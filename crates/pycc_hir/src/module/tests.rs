@@ -31,21 +31,36 @@ fn assert_c0001(diagnostic: &Diagnostic, message: &str, span: Span) {
     assert_eq!(diagnostic.span, Some(span));
 }
 
-const CLASS_BODY_GAP: &str = "a class body statement must be a method definition (`def ...`) -- no \
+const CLASS_BODY_GAP: &str = "a class body statement must be a method definition (`def ...`) or \
+                              a class-level attribute assignment (`X = 1`, `X: int = 1`) -- no \
                               other statement kind is supported yet";
+/// The re-vehicled class-body rejection these tests ride on (#910).
+///
+/// `x = 1` in a class body used to be `C0001`; #910 accepts it as an
+/// inferred class attribute, so these tests need a statement kind that is
+/// still rejected. A single-line `async def` is one, and its span is the
+/// whole 31-byte statement -- two distinct method names keep `span_of`'s
+/// occurrence-0 lookup unambiguous in the two dual-diagnostic tests.
+const ASYNC_METHOD_M: &str = "async def m(self) -> None: pass";
+const ASYNC_METHOD_N: &str = "async def n(self) -> None: pass";
+const ASYNC_METHOD_GAP: &str = "an async method is not supported yet";
 const IMPORT_OS_GAP: &str = "import of module `os` is not supported yet";
 
 #[test]
 fn issue_864_reproduction_reports_both_class_body_gaps_in_source_order() {
-    let source = "class A:\n    x = 1\nclass B:\n    y = \"a\"\ndef f(a: int) -> int:\n    \
+    let source = "class A:\n    async def m(self) -> None: pass\nclass B:\n    async def n(self) -> None: pass\ndef f(a: int) -> int:\n    \
                   return a + \"s\"\n";
     let diagnostics = lower_all_err(source);
     assert_eq!(diagnostics.len(), 2);
-    assert_c0001(&diagnostics[0], CLASS_BODY_GAP, span_of(source, "x = 1", 0));
+    assert_c0001(
+        &diagnostics[0],
+        ASYNC_METHOD_GAP,
+        span_of(source, ASYNC_METHOD_M, 0),
+    );
     assert_c0001(
         &diagnostics[1],
-        CLASS_BODY_GAP,
-        span_of(source, "y = \"a\"", 0),
+        ASYNC_METHOD_GAP,
+        span_of(source, ASYNC_METHOD_N, 0),
     );
     // The type error on line 6 is the type checker's, which does not run
     // after an HIR failure (D-219 decision A).
@@ -94,7 +109,7 @@ fn an_import_gap_and_a_later_unrelated_gap_are_both_reported() {
 
 #[test]
 fn every_cascade_of_a_skipped_class_is_silent_and_transitive() {
-    let source = "class A:\n    x = 1\n\
+    let source = "class A:\n    async def m(self) -> None: pass\n\
                   class B(A):\n    def __init__(self) -> None:\n        self.v = 1\n\
                   def g(a: A) -> int:\n    return 1\n\
                   x: A = A()\n\
@@ -105,7 +120,11 @@ fn every_cascade_of_a_skipped_class_is_silent_and_transitive() {
                   class E(Alias):\n    def __init__(self) -> None:\n        self.v = 1\n";
     let diagnostics = lower_all_err(source);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
-    assert_c0001(&diagnostics[0], CLASS_BODY_GAP, span_of(source, "x = 1", 0));
+    assert_c0001(
+        &diagnostics[0],
+        ASYNC_METHOD_GAP,
+        span_of(source, ASYNC_METHOD_M, 0),
+    );
 }
 
 #[test]
@@ -222,24 +241,36 @@ fn a_rejected_alias_colliding_with_a_valid_class_does_not_poison_the_class() {
 
 #[test]
 fn a_successful_class_rebinding_un_poisons_the_name() {
-    let source = "class A:\n    x = 1\n\
+    let source = "class A:\n    async def m(self) -> None: pass\n\
                   class A:\n    def __init__(self) -> None:\n        self.v = 1\n    def m(self) -> A:\n        return self\n\
                   def f(a: A) -> int:\n    return 1\n";
     let diagnostics = lower_all_err(source);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
-    assert_c0001(&diagnostics[0], CLASS_BODY_GAP, span_of(source, "x = 1", 0));
+    assert_c0001(
+        &diagnostics[0],
+        ASYNC_METHOD_GAP,
+        span_of(source, ASYNC_METHOD_M, 0),
+    );
 }
 
 #[test]
 fn a_twice_rejected_then_accepted_class_leaves_no_duplicate_poison_behind() {
-    let source = "class A:\n    x = 1\n\
-                  class A:\n    y = 2\n\
+    let source = "class A:\n    async def m(self) -> None: pass\n\
+                  class A:\n    async def n(self) -> None: pass\n\
                   class A:\n    def __init__(self) -> None:\n        self.v = 1\n\
                   def f(a: A) -> int:\n    return 1\n";
     let diagnostics = lower_all_err(source);
     assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
-    assert_c0001(&diagnostics[0], CLASS_BODY_GAP, span_of(source, "x = 1", 0));
-    assert_c0001(&diagnostics[1], CLASS_BODY_GAP, span_of(source, "y = 2", 0));
+    assert_c0001(
+        &diagnostics[0],
+        ASYNC_METHOD_GAP,
+        span_of(source, ASYNC_METHOD_M, 0),
+    );
+    assert_c0001(
+        &diagnostics[1],
+        ASYNC_METHOD_GAP,
+        span_of(source, ASYNC_METHOD_N, 0),
+    );
 }
 
 #[test]
@@ -259,12 +290,16 @@ fn a_skipped_def_leaves_no_binding_for_a_later_class_to_collide_with() {
 fn a_rejected_alias_after_a_valid_class_un_poisons_nothing_and_reports_once() {
     // `type X = A` after a skipped `A` is a silent cascade that poisons `X`;
     // a later `class X:` that lowers un-poisons it, so `def f(x: X)` lowers.
-    let source = "class A:\n    x = 1\ntype X = A\n\
+    let source = "class A:\n    async def m(self) -> None: pass\ntype X = A\n\
                   class X:\n    def __init__(self) -> None:\n        self.v = 1\n\
                   def f(x: X) -> int:\n    return 1\n";
     let diagnostics = lower_all_err(source);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
-    assert_c0001(&diagnostics[0], CLASS_BODY_GAP, span_of(source, "x = 1", 0));
+    assert_c0001(
+        &diagnostics[0],
+        ASYNC_METHOD_GAP,
+        span_of(source, ASYNC_METHOD_M, 0),
+    );
 }
 
 #[test]
@@ -382,10 +417,14 @@ fn post_loop_phases_are_skipped_when_anything_was_collected() {
     // seeding or tag assignment is attempted on the partial table.
     let source = "def f() -> None:\n    raise ValueError(\"x\")\n\
                   class E(ValueError):\n    def __init__(self) -> None:\n        self.v = 1\n\
-                  class A:\n    x = 1\n";
+                  class A:\n    async def m(self) -> None: pass\n";
     let diagnostics = lower_all_err(source);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
-    assert_c0001(&diagnostics[0], CLASS_BODY_GAP, span_of(source, "x = 1", 0));
+    assert_c0001(
+        &diagnostics[0],
+        ASYNC_METHOD_GAP,
+        span_of(source, ASYNC_METHOD_M, 0),
+    );
 }
 
 #[test]
@@ -396,19 +435,23 @@ fn a_shadowing_class_that_fails_to_lower_still_takes_the_shadow_gate() {
     // lowers and un-poisons the name, leaving exactly one diagnostic. Had
     // the gate looked at what actually lowered, the seeded synthetic class
     // would have made the rebinding a second "defined more than once".
-    let source = "class ValueError:\n    x = 1\n\
+    let source = "class ValueError:\n    async def m(self) -> None: pass\n\
                   class ValueError:\n    def __init__(self) -> None:\n        self.v = 1\n\
                   def f(e: ValueError) -> int:\n    return 1\n";
     let diagnostics = lower_all_err(source);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
-    assert_c0001(&diagnostics[0], CLASS_BODY_GAP, span_of(source, "x = 1", 0));
+    assert_c0001(
+        &diagnostics[0],
+        ASYNC_METHOD_GAP,
+        span_of(source, ASYNC_METHOD_M, 0),
+    );
 }
 
 #[test]
 fn lower_checked_is_the_first_element_view_of_lower_all() {
     let fixtures = [
         "import os\nimport sys\n",
-        "class A:\n    x = 1\nclass B:\n    y = \"a\"\n",
+        "class A:\n    async def m(self) -> None: pass\nclass B:\n    async def n(self) -> None: pass\n",
         "def f(a: Foo) -> int:\n    return 1\n",
         "def h(*args: int) -> int:\n    return 0\n",
     ];
