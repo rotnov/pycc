@@ -2173,6 +2173,9 @@ fn lower_method(
             false,
             true,
             false,
+            // #795 (PEP 654): a method body always starts `Outside` any
+            // enclosing `except*` clause -- see `func.rs`'s own constant.
+            crate::stmt::ExceptStarCtx::Outside,
             Some(class_name),
             type_param,
             class_defs,

@@ -33,6 +33,38 @@ never a merge gate.
 
 ---
 
+## 2026-09-03 — A Ruby checker's test suite reported seven failures that were only a locale
+
+What happened: while running the full local gate set for #795, `ruby
+scripts/test_check_roadmap_evidence.rb` exited 1 with six failures and one
+error, every one of them `ArgumentError: invalid byte sequence in US-ASCII`
+raised from `blockquote_content` at `scripts/check_roadmap_evidence.rb:2578`.
+The failures were treated as possibly diff-caused and investigated in detail —
+including across a context compaction — before the cause turned out to be that
+the shell had no UTF-8 locale, so Ruby defaulted `Encoding.default_external` to
+US-ASCII and every non-ASCII character in the fixtures became a byte-sequence
+error. Re-running the identical command as `LC_ALL=en_US.UTF-8 ruby
+scripts/test_check_roadmap_evidence.rb` exits 0 with 247 runs, 1270 assertions
+and zero failures.
+
+Root cause: an environment-shaped failure whose message names a source line in
+the checker, which reads exactly like a defect the current diff introduced. The
+diff touched none of the affected code, and nothing in the failure output says
+"locale".
+
+What fixed it: nothing in the repository — the command was re-run under an
+explicit UTF-8 locale and the whole suite passed.
+
+Lesson: when a Ruby or Python checker fails with an encoding error
+(`invalid byte sequence in US-ASCII`, `UnicodeDecodeError` on an ASCII codec),
+re-run the identical command once under `LC_ALL=en_US.UTF-8` before
+investigating the diff. If it passes, the failure is the ambient locale and the
+diff is not implicated. This repository's documents and fixtures are full of
+non-ASCII characters (`◐`, em dashes, box drawing), so its checkers and their
+test harnesses are only meaningful under a UTF-8 locale; run them that way by
+default rather than diagnosing the same class again.
+
+
 ## 2026-09-03 — Fixed one mirror arm per review round, three rounds running
 
 What happened: `poisonable_names` in `crates/pycc_hir/src/module.rs` decides,

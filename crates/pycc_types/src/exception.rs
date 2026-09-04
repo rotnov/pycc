@@ -174,6 +174,34 @@ pub(super) fn check_try_star_stmt(
         if let Some(exc_types) = &handler.exc_type {
             for exc_type in exc_types {
                 let builtin = is_unshadowed_builtin_exception(&body_env, local_names, exc_type);
+                if builtin && matches!(exc_type.as_str(), "ExceptionGroup" | "BaseExceptionGroup") {
+                    // #795 (PEP 654): CPython *accepts* `except*
+                    // ExceptionGroup:` at compile time and raises
+                    // `TypeError: catching ExceptionGroup with except* is not
+                    // allowed. Use except instead.` at handler-match time
+                    // instead. pycc cannot model that today -- D-173
+                    // propagates a raised exception through global runtime
+                    // state rather than an allocated group instance, so there
+                    // is no materialized value to type-test at match time --
+                    // so this is a deliberate, documented divergence:
+                    // `C0001` ("valid Python this compiler does not implement
+                    // yet"), which is the honest code precisely because the
+                    // program *is* valid Python. #903 tracks delivering the
+                    // real runtime `TypeError`; the narrowing ADR beside
+                    // D-202 records the divergence.
+                    //
+                    // Gated on `builtin` so a module that shadows the name
+                    // (`class ExceptionGroup: ...`) keeps reaching the
+                    // existing user-class path below rather than being
+                    // rejected for a name it does not actually mean.
+                    return Err(Diagnostic::error(
+                        "C0001",
+                        format!(
+                            "catching `{exc_type}` with `except*` is not supported yet — CPython rejects it at runtime with a `TypeError`, which this compiler cannot raise yet; use a plain `except` clause instead"
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
                 if !builtin {
                     let Some(def) = user_exception_class(&body_env, local_names, exc_type) else {
                         return Err(Diagnostic::error(
@@ -184,6 +212,30 @@ pub(super) fn check_try_star_stmt(
                             Span::new(0, 0),
                         ));
                     };
+                    if let Some(group) = derived_group_ancestor(def) {
+                        // #795 (PEP 654), second round: CPython's runtime
+                        // `TypeError` fires for *any* class whose MRO reaches
+                        // `BaseExceptionGroup`, not only for the two group
+                        // names themselves, so a user-defined subclass must be
+                        // refused here exactly like the exact names above are.
+                        // Without this the compiler would silently lower
+                        // `except* G:` (with `class G(ExceptionGroup)`) into
+                        // ordinary tag matching and produce the wrong runtime
+                        // answer -- the very outcome the divergence recorded
+                        // beside D-202 exists to prevent. Placed before
+                        // `reject_own_constructor` so a group subclass that
+                        // also declares its own `__init__` reports the group
+                        // divergence, which is the reason the program can
+                        // never be compiled, rather than the constructor gap,
+                        // which #703 will eventually close.
+                        return Err(Diagnostic::error(
+                            "C0001",
+                            format!(
+                                "catching `{exc_type}` with `except*` is not supported yet — it derives from `{group}`, and CPython rejects catching a group class with `except*` at runtime with a `TypeError` this compiler cannot raise yet; use a plain `except` clause instead"
+                            ),
+                            Span::new(0, 0),
+                        ));
+                    }
                     reject_own_constructor(&body_env, def)?;
                 }
             }
@@ -600,6 +652,32 @@ fn user_exception_class<'e>(
     env.classes
         .get(name)
         .filter(|def| def.exception_type_tag.is_some())
+}
+
+/// The builtin group class a user exception class derives from, if any
+/// (#795, PEP 654).
+///
+/// `def.mro`'s first entry is the class's own name (both `compute_c3_mro`
+/// and the synthetic builtin table build it that way), so the scan skips it:
+/// this asks what the class *inherits*, not what it is named.
+///
+/// Unlike the exact-name check in `check_try_star_stmt`, this needs no
+/// shadow gate. `def` only ever reaches here through `user_exception_class`,
+/// which resolves nothing without an `exception_type_tag`, and HIR lowering
+/// assigns that tag only when the class's MRO reaches a *seeded* builtin
+/// exception class -- seeding a module withholds entirely once the module
+/// defines a class of its own under a builtin exception name. So in a module
+/// that shadows `ExceptionGroup` with an unrelated class of its own, no class
+/// is tagged at all and `except* G:` reports `T0021` well before this scan
+/// runs (see `a_subclass_of_a_shadowed_exception_group_class_reports_t0021`
+/// in `except_star_tests`). A group name reaching this point is therefore
+/// always the builtin one.
+fn derived_group_ancestor(def: &HirClassDef) -> Option<&str> {
+    def.mro
+        .iter()
+        .skip(1)
+        .find(|ancestor| matches!(ancestor.as_str(), "ExceptionGroup" | "BaseExceptionGroup"))
+        .map(String::as_str)
 }
 
 /// Rejects a raisable user exception class that declares (or inherits from a

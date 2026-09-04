@@ -1,10 +1,96 @@
 //! Lowering for `except` handler clauses.
+//!
+//! piece of threaded context, and the first that is not a `bool`. It records
+//! where the statement being lowered sits relative to the nearest enclosing
+//! `except*` clause body, and it governs `Stmt::Return`, `Stmt::Break`, and
+//! `Stmt::Continue` -- but, unlike `in_finally`, *not* uniformly:
+//!
+//! - `Stmt::Return` is rejected in **both** inside states, so an intervening
+//!   loop does not rescue it.
+//! - `Stmt::Break`/`Stmt::Continue` are rejected only in
+//!   `InsideUnshielded`; a loop entered *within* the clause body demotes the
+//!   context to `InsideLoopShielded` and they lower normally from there.
+//!
+//! That asymmetry is CPython's, not a design choice, and it is the reason
+//! this piece of context needs three states where `in_finally` needs two.
+//! Verified directly against CPython 3.14.6 by `compile()`-ing each shape:
+//! `for i in range(3): break` inside an `except*` clause compiles, while the
+//! same loop containing `return 1` still raises `SyntaxError: 'break',
+//! 'continue' and 'return' cannot appear in an except* block`. (Note that a
+//! *naive* reading predicts the opposite grouping from PEP 765's, where the
+//! loop shields all three -- the two rules genuinely differ, so neither flag
+//! can be derived from the other.)
+//!
+//! Two further differences from `in_finally`:
+//!
+//! - It is **propagated** into a `finally`, never cleared: CPython rejects a
+//!   `return` in a `finally` that is itself nested inside an `except*`
+//!   clause body. A try-star's own `finalbody` is not inside its own
+//!   handlers, so the incoming value is already `Outside` there and
+//!   `return`-in-a-try-star's-`finally` stays accepted (as PEP 765's own
+//!   `L0001` rejection, not this one).
+//! - When both restrictions apply, the `except*` message wins. That matches
+//!   CPython's own precedence: the `except*` failure is a fatal
+//!   `SyntaxError` while the PEP 765 restriction is only a
+//!   `SyntaxWarning`, so the `except*` guards run first in all three arms.
+//!
+//! Like `in_loop`/`in_finally`, entering a function body resets it -- to the
+//! constant `ExceptStarCtx::Outside`, never a conditional on the enclosing
+//! context, since a `return` inside a `def` nested in an `except*` body is
+//! accepted by CPython and a conditional reset would be an unreachable
+//! branch under this repository's 100%-region coverage gate.
+//!
+//! `Stmt::Return`'s guard carries an `in_function` conjunct for the same
+//! reason the PEP 765 one does: at module scope CPython's fatal error is the
+//! pre-existing `SyntaxError: 'return' outside function`, so pycc defers to
+//! its own `T0024`. `Stmt::Break`/`Stmt::Continue` carry no matching
+//! `in_loop` conjunct, because CPython reports the `except*` error even when
+//! no enclosing loop exists at all.
 
 use super::lower_body;
 use crate::class::ClassAnnotationInfo;
 use crate::{HirExceptHandler, Ty, unsupported};
 use pycc_ast::{ExceptHandler, Expr};
 use pycc_diag::Diagnostic;
+
+/// #795 (PEP 654): where the statement being lowered sits relative to the
+/// nearest enclosing `except*` clause body. This is this module's fourth
+/// piece of threaded context, and unlike the three `bool`s beside it, it has
+/// three states rather than two -- an intervening loop *demotes* the context
+/// instead of clearing it, because CPython shields a `break`/`continue` with
+/// such a loop but does not shield a `return`.
+///
+/// Verified directly against CPython 3.14.6's own compiler (see the module
+/// doc comment above for the full table): `for i in range(3): break` inside
+/// an `except*` clause body compiles, while the same loop containing
+/// `return 1` still raises `SyntaxError: 'break', 'continue' and 'return'
+/// cannot appear in an except* block`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ExceptStarCtx {
+    /// Not inside any `except*` clause body -- the state every function body
+    /// and every module top level starts in.
+    Outside,
+    /// Inside an `except*` clause body with no intervening loop: `return`,
+    /// `break`, and `continue` are all rejected.
+    InsideUnshielded,
+    /// Inside an `except*` clause body, but behind at least one loop entered
+    /// within it: `break`/`continue` are shielded and lower normally, while
+    /// `return` is still rejected.
+    InsideLoopShielded,
+}
+
+impl ExceptStarCtx {
+    /// The value to thread into the body of a `while`/`for` loop entered
+    /// from this context. `Outside` stays `Outside` (a loop does not put
+    /// anything inside an `except*`); either inside state becomes
+    /// `InsideLoopShielded`, which is idempotent for a second nested loop.
+    pub(crate) fn shielded_by_loop(self) -> Self {
+        match self {
+            Self::Outside => Self::Outside,
+            Self::InsideUnshielded | Self::InsideLoopShielded => Self::InsideLoopShielded,
+        }
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lower_except_handler(
@@ -13,6 +99,11 @@ pub(super) fn lower_except_handler(
     in_loop: bool,
     in_function: bool,
     in_finally: bool,
+    // #795 (PEP 654): already derived by the caller, because `is_star` is a
+    // property of the enclosing `StmtTry` rather than of this handler --
+    // `InsideUnshielded` for an `except*` clause, the incoming context
+    // unchanged for a plain `except` clause.
+    except_star: ExceptStarCtx,
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
@@ -64,6 +155,7 @@ pub(super) fn lower_except_handler(
         in_loop,
         in_function,
         in_finally,
+        except_star,
         class_name,
         type_param,
         class_defs,
@@ -533,5 +625,196 @@ mod tests {
             result.is_err(),
             "lowering should fail for unsupported expression in raise cause"
         );
+    }
+}
+
+/// #795 (PEP 654): the `ExceptStarCtx` threading added to this module's
+/// sibling `stmt.rs`, exercised through this crate's *own* instrumented
+/// build. `tests/diagnostics/l0001_*_except_star.py` pins the rendered
+/// diagnostics through the public CLI, but `cargo llvm-cov` scores regions
+/// per instantiation grouped by definition location, so a branch reached
+/// only from an integration test still reports as missed for this crate's
+/// `--cfg test` instance -- these tests close that gap (the same rationale
+/// `crates/pycc_types/src/exception/except_star_tests.rs` records at
+/// length).
+#[cfg(test)]
+mod except_star_context_tests {
+    fn lower(source: &str) -> Result<crate::HirModule, pycc_diag::Diagnostic> {
+        let module = pycc_parser::parse(source).expect("test fixture must parse");
+        crate::lower_checked(&module)
+    }
+
+    fn expect_error(source: &str) -> pycc_diag::Diagnostic {
+        lower(source).expect_err("source must be rejected during lowering")
+    }
+
+    #[test]
+    fn a_return_directly_in_an_except_star_clause_is_rejected() {
+        let diagnostic = expect_error(
+            "def f() -> int:\n    try:\n        pass\n    except* ValueError:\n        return 1\n    return 0\n",
+        );
+        assert_eq!(diagnostic.code, "L0001");
+        assert_eq!(diagnostic.message, "'return' in an 'except*' block");
+    }
+
+    #[test]
+    fn a_return_behind_a_for_loop_in_an_except_star_clause_is_still_rejected() {
+        // `InsideLoopShielded`: a loop shields `break`/`continue` but never
+        // `return` -- verified against CPython 3.14.6.
+        let diagnostic = expect_error(
+            "def f() -> int:\n    try:\n        pass\n    except* ValueError:\n        for i in range(3):\n            return 1\n    return 0\n",
+        );
+        assert_eq!(diagnostic.message, "'return' in an 'except*' block");
+    }
+
+    #[test]
+    fn a_return_behind_a_while_loop_in_an_except_star_clause_is_still_rejected() {
+        // The `Stmt::While` arm's own demotion site, distinct from the two
+        // in `stmt/for_loop.rs` above.
+        let diagnostic = expect_error(
+            "def f() -> int:\n    try:\n        pass\n    except* ValueError:\n        while True:\n            return 1\n    return 0\n",
+        );
+        assert_eq!(diagnostic.message, "'return' in an 'except*' block");
+    }
+
+    #[test]
+    fn a_return_behind_a_for_range_loop_in_an_except_star_clause_is_still_rejected() {
+        // `lower_for`'s `ForRange` demotion site (the `ForList` site is
+        // covered by `a_break_behind_a_for_list_loop_...` below).
+        let diagnostic = expect_error(
+            "def f() -> int:\n    try:\n        pass\n    except* ValueError:\n        for i in range(0, 3, 1):\n            return 1\n    return 0\n",
+        );
+        assert_eq!(diagnostic.message, "'return' in an 'except*' block");
+    }
+
+    #[test]
+    fn a_break_directly_in_an_except_star_clause_is_rejected() {
+        let diagnostic = expect_error(
+            "def f() -> None:\n    try:\n        pass\n    except* ValueError:\n        break\n",
+        );
+        assert_eq!(diagnostic.code, "L0001");
+        assert_eq!(diagnostic.message, "'break' in an 'except*' block");
+    }
+
+    #[test]
+    fn a_continue_directly_in_an_except_star_clause_is_rejected() {
+        let diagnostic = expect_error(
+            "def f() -> None:\n    try:\n        pass\n    except* ValueError:\n        continue\n",
+        );
+        assert_eq!(diagnostic.code, "L0001");
+        assert_eq!(diagnostic.message, "'continue' in an 'except*' block");
+    }
+
+    #[test]
+    fn a_break_behind_a_for_range_loop_in_an_except_star_clause_is_shielded() {
+        // The demotion's whole point: CPython *accepts* this program, so
+        // pycc must fall through to its pre-existing "not implemented yet"
+        // `C0001` for loop control flow rather than reporting `L0001`.
+        let diagnostic = expect_error(
+            "def f() -> None:\n    try:\n        pass\n    except* ValueError:\n        for i in range(3):\n            break\n",
+        );
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("`break` inside a loop"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_break_behind_a_for_list_loop_in_an_except_star_clause_is_shielded() {
+        let diagnostic = expect_error(
+            "def f(xs: list[int]) -> None:\n    try:\n        pass\n    except* ValueError:\n        for x in xs:\n            break\n",
+        );
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn a_continue_behind_a_loop_in_an_except_star_clause_is_shielded() {
+        let diagnostic = expect_error(
+            "def f() -> None:\n    try:\n        pass\n    except* ValueError:\n        for i in range(3):\n            continue\n",
+        );
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("`continue` inside a loop"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_break_in_an_except_star_clause_inside_an_outer_loop_is_still_rejected() {
+        // Only a loop entered *within* the clause body shields; an enclosing
+        // loop outside the `try` does not.
+        let diagnostic = expect_error(
+            "def f() -> None:\n    while True:\n        try:\n            pass\n        except* ValueError:\n            break\n",
+        );
+        assert_eq!(diagnostic.message, "'break' in an 'except*' block");
+    }
+
+    #[test]
+    fn a_finally_nested_in_an_except_star_clause_propagates_the_context() {
+        // Unlike `in_finally`, the `except*` context is propagated into a
+        // `finally`, never cleared -- and it wins over the PEP 765 message,
+        // matching CPython's own precedence.
+        let diagnostic = expect_error(
+            "def f() -> None:\n    while True:\n        try:\n            pass\n        except* ValueError:\n            try:\n                pass\n            finally:\n                break\n",
+        );
+        assert_eq!(diagnostic.message, "'break' in an 'except*' block");
+    }
+
+    #[test]
+    fn a_try_star_s_own_finally_may_still_return() {
+        // The incoming context is `Outside` for a try-star's own
+        // `finalbody`, so propagating (rather than clearing) it leaves this
+        // pre-existing PEP 765 behavior untouched: the `finally` message,
+        // not the `except*` one.
+        let diagnostic = expect_error(
+            "def f() -> int:\n    try:\n        pass\n    except* ValueError:\n        pass\n    finally:\n        return 1\n",
+        );
+        assert_eq!(diagnostic.message, "'return' in a 'finally' block");
+    }
+
+    #[test]
+    fn a_return_in_an_except_star_clause_at_module_level_lowers_successfully() {
+        // The `in_function` conjunct's false arm: with no enclosing
+        // function, lowering succeeds and the pre-existing `T0024`
+        // type-check reports `'return' outside a function` instead (see
+        // `tests/diagnostics/d0024_return_in_except_star_at_module_level.py`).
+        lower("try:\n    pass\nexcept* ValueError:\n    return 1\n")
+            .expect("lowering must defer to the pre-existing T0024 check");
+    }
+
+    #[test]
+    fn a_nested_function_in_an_except_star_clause_may_return() {
+        // The constant `ExceptStarCtx::Outside` on function entry: CPython
+        // accepts a `return` inside a `def` nested in an `except*` body.
+        // Nested `def`s are not supported yet, so this asserts the *reason*
+        // is the unsupported-nesting `C0001`, not `L0001`.
+        let diagnostic = expect_error(
+            "def f() -> None:\n    try:\n        pass\n    except* ValueError:\n        def g() -> int:\n            return 1\n",
+        );
+        assert_ne!(diagnostic.code, "L0001");
+    }
+
+    #[test]
+    fn a_plain_except_clause_propagates_rather_than_setting_the_context() {
+        // `handler_except_star`'s `else` arm: an ordinary `try`/`except`
+        // nested inside an `except*` clause body does not shield its
+        // contents, and an ordinary `try`/`except` outside one does not
+        // manufacture a context either.
+        let diagnostic = expect_error(
+            "def f() -> int:\n    try:\n        pass\n    except* ValueError:\n        try:\n            pass\n        except TypeError:\n            return 1\n    return 0\n",
+        );
+        assert_eq!(diagnostic.message, "'return' in an 'except*' block");
+        lower("def f() -> int:\n    try:\n        pass\n    except ValueError:\n        return 1\n    return 0\n")
+            .expect("a plain `except` clause must still accept a `return`");
+    }
+
+    #[test]
+    fn an_ordinary_loop_outside_any_except_star_stays_outside() {
+        // `shielded_by_loop`'s `Outside` arm.
+        lower("def f() -> None:\n    for i in range(3):\n        print(i)\n")
+            .expect("an ordinary loop must lower successfully");
     }
 }

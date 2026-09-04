@@ -520,6 +520,8 @@ fn lower_top_level_item<'a>(
             false,
             false,
             false,
+            // #795 (PEP 654): module top level is `Outside` by definition.
+            stmt::ExceptStarCtx::Outside,
             None,
             None,
             &class_name_defs,

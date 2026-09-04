@@ -1341,15 +1341,14 @@
         },
         {
           "category": "an `except*` clause body containing a direct `return`, `break`, or `continue`",
-          "kind": "core",
-          "reason": "PEP 654 disallows these directly inside an except* clause body for the same reason CPython disallows them directly inside a finally block, but pycc currently has no check rejecting them -- an over-acceptance gap found by #795 and not yet fixed.",
-          "issue": 795
+          "kind": "out-of-scope",
+          "reason": "Rejected as intended since #795: HIR lowering reports L0001 (\"'return' in an 'except*' block\", and likewise for `break`/`continue`), matching CPython's own `SyntaxError: 'break', 'continue' and 'return' cannot appear in an except* block`. A loop entered within the clause body shields `break`/`continue` but not `return`, and a module-level `return` still reports the pre-existing T0024 -- both verified against CPython 3.14.6. Not provable by the conformance fixture, which must be valid Python the pinned oracle can run; the behaviour is pinned by the public-CLI diagnostic fixtures tests/diagnostics/l0001_return_in_except_star.py, l0001_return_in_loop_in_except_star.py, l0001_break_in_except_star.py, l0001_continue_in_except_star.py, l0001_break_in_except_star_inside_loop.py, l0001_break_in_except_star_in_finally.py, and d0024_return_in_except_star_at_module_level.py, so this is out-of-scope rather than a core gap -- the same basis as rule 11's `except A, B as e:` entry."
         },
         {
-          "category": "`except* ExceptionGroup:` and `except* BaseExceptionGroup:` naming the group types themselves as the handler's type",
+          "category": "`except* ExceptionGroup:`, `except* BaseExceptionGroup:`, and an `except*` handler naming a user class derived from either group type",
           "kind": "core",
-          "reason": "CPython raises TypeError for these since splitting a group by \"is this member itself a group\" is not a meaningful partition, but pycc's check_try_star_stmt validates handler types only via ordinary builtin/user exception class existence checks, with no special case rejecting these two names -- an over-acceptance gap found by #795 and not yet fixed.",
-          "issue": 795
+          "reason": "CPython accepts both names at compile time and raises TypeError (\"catching ExceptionGroup with except* is not allowed. Use except instead.\") at handler-match time. The same TypeError fires for a user subclass (class G(ExceptionGroup)) as for the group class itself. Since #795, pycc rejects all of them at compile time with C0001 instead -- a deliberate divergence recorded in D-223 (which narrows D-202), because D-173 propagates a raised exception through global runtime state rather than a materialized group instance, so there is no value to type-test at match time and no mechanism for raising a TypeError from generated except* dispatch. Still a core gap: the observable behaviour differs from CPython's. Tracked by #903; the compile-time rejection is pinned by tests/diagnostics/c0001_except_star_exception_group.py, c0001_except_star_base_exception_group_in_tuple.py, and c0001_except_star_exception_group_subclass.py.",
+          "issue": 903
         },
         {
           "category": "D-202's six deliberate simplifications (ExceptionGroup identity through subgroup/split reconstruction, restrictions on dynamic non-literal member lists, and related narrowings)",

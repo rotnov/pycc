@@ -223,17 +223,17 @@ For each newly observed upstream release:
     `ExceptionGroup.subgroup()`/`.split()` (deferred to
     [#775](https://github.com/rotnov/pycc/issues/775)) and two
     over-acceptance gaps [#795](https://github.com/rotnov/pycc/issues/795)
-    later found (a direct `return`/`break`/`continue` inside an `except*`
-    body, and `except* ExceptionGroup:`/`except* BaseExceptionGroup:` not
-    being rejected); PEP 572's fixture restricts the walrus value to
+    later found are closed, but the second closes as a `C0001` rejection
+    diverging from CPython's runtime `TypeError` (D-223; still open: #903);
+    PEP 572's fixture restricts the walrus value to
     `int`/`float`/`bool`/`None` (new diagnostic `T0050`) and skips a walrus
     nested inside a comprehension, matching CPython's own
-    comprehension-scope-skip semantics per #774's recorded scope cut. All are
-    `core` gaps under [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md)
-    -- including PEP 654's six [D-202](./decisions/D-202-pep-654-except-star-and-exceptiongroup.md)
+    comprehension-scope-skip semantics per #774's recorded scope cut. Those are
+    `core` gaps under [D-177](./decisions/D-177-scope-matrix-acceptance-to-proven-semantics.md), and a `core` gap
+    forces `◐` -- including PEP 654's six [D-202](./decisions/D-202-pep-654-except-star-and-exceptiongroup.md)
     simplifications, which D-202 records as independently revisitable rather
-    than a permanent non-goal (breadth manifest has the full reasoning) --
-    and a `core` gap forces `◐`.
+    than a permanent non-goal. #795's `return`/`break`/`continue` gap is the
+    exception: pycc matches the oracle, so the manifest records `out-of-scope`.
 
 ## Python 3.0–3.2 (foundations)
 

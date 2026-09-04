@@ -227,6 +227,36 @@ reaching codegen. `BaseExceptionGroup`'s hierarchy parent is treated as
 `Exception` rather than modeled as a separate `BaseException`-only branch
 (D-202) -- see the decision entry for the full simplification list.
 
+Two further `except*` rejections close the over-acceptance gaps #795
+recorded (see D-223, which narrows D-202):
+
+- A `return`, `break`, or `continue` inside an `except*` clause body is
+  rejected during HIR lowering with `L0001` (`'return' in an 'except*'
+  block`, and likewise for the other two), matching CPython's own
+  `SyntaxError: 'break', 'continue' and 'return' cannot appear in an except*
+  block`. A loop entered *within* the clause body shields `break`/`continue`
+  but never `return`, exactly as CPython's compiler behaves; at module scope
+  a `return` reports the pre-existing `T0024` instead, again matching
+  CPython's own precedence. One residual hole: a `return` guarded by `if
+  TYPE_CHECKING:` is erased by the constant-fold before lowering sees it and
+  so is still accepted -- a pre-existing, general property of that fold
+  rather than anything specific to `except*`, tracked by
+  [#905](https://github.com/rotnov/pycc/issues/905).
+- `except* ExceptionGroup:` and `except* BaseExceptionGroup:`, and any
+  `except*` handler naming a user class whose MRO reaches either of them
+  (`class G(ExceptionGroup): ...` then `except* G:`), are rejected at
+  compile time with `C0001`. This is a **deliberate divergence**: CPython
+  accepts both at compile time and raises `TypeError: catching ExceptionGroup
+  with except* is not allowed. Use except instead.` when the handler is
+  matched -- for a subclass exactly as for the group class itself, which is
+  why the compile-time refusal covers subclasses too. pycc has no
+  materialized group value at match time (D-173
+  propagates a raised exception through global runtime state rather than an
+  allocated instance) and no mechanism for raising a `TypeError` from inside
+  generated `except*` dispatch, so the program is refused as valid-Python-not-
+  implemented-yet instead. [#903](https://github.com/rotnov/pycc/issues/903)
+  tracks delivering the real runtime behavior.
+
 Converted runtime failure paths include integer floor division/modulo by
 zero, float true/floor division and modulo by zero, list index out of range,
 missing dictionary keys, and a zero-step `range()` (#150). They set the

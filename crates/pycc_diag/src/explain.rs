@@ -102,10 +102,11 @@ the diagnostic's span and message come directly from the underlying parse \
 error. L0001 is also reused, without a parser \"expected set\", for a \
 post-parse context violation caught during HIR lowering rather than \
 parsing: `break`/`continue` outside a loop, `async for` outside an async \
-function, `yield`/`yield from` outside a function, and `return`/`break`/ \
-`continue` inside a `finally` block that would exit it (PEP 765) -- CPython \
-classifies all of these as `SyntaxError` too (a `SyntaxWarning` as of \
-CPython 3.14 for the `finally` case specifically), even though pycc only \
+function, `yield`/`yield from` outside a function, `return`/`break`/ \
+`continue` inside a `finally` block that would exit it (PEP 765), and \
+`return`/`break`/`continue` inside an `except*` clause body (PEP 654) -- \
+CPython classifies all of these as `SyntaxError` too (a `SyntaxWarning` as \
+of CPython 3.14 for the `finally` case specifically), even though pycc only \
 detects them one lowering stage later than the grammar itself. `T0024` \
 (\"`return` outside a function\") is the closest existing precedent for this \
 same \"keyword valid only in a specific context\" family but deliberately \
@@ -265,7 +266,10 @@ too, but pycc catches it during type checking rather than parsing, so it \
 keeps its own `T0xxx` code instead of joining `L0001`'s reused \
 context-violation family (`break`/`continue`/`async for`/`yield` outside \
 their valid context); this is a deliberate, accepted inconsistency, not an \
-oversight.",
+oversight. T0024 also takes precedence over L0001's `finally` (PEP 765) and \
+`except*` (PEP 654) restrictions: a `return` at module level inside either \
+construct reports T0024, matching CPython, whose own fatal error there is \
+`'return' outside function` rather than the construct-specific one.",
         example: "\
 return 1
 ",
