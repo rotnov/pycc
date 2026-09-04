@@ -33,6 +33,32 @@ never a merge gate.
 
 ---
 
+## 2026-09-05 — Wrote an enumeration into a diagnostic and let nothing check it
+
+What happened: the same change's return-position diagnostic ends with a list of
+the positions where the rejected construct *is* supported. The list was written
+from the plan's own framing and named three of the four positions the change had
+actually implemented, omitting module-scope annotated assignments. Every test
+around it asserted the message string verbatim, so the tests locked the wrong
+list in rather than catching it, and it took an external reviewer to notice that
+the compiler accepts a position its own advice says it does not.
+
+Root cause: an enumeration inside a message is a factual claim about behaviour,
+but it was treated as prose. Asserting a message's exact text proves the message
+is stable, never that what it says is true.
+
+What fixed it: widening the list at every site that repeats it, and adding a
+test that exercises each item the message names — one program per named
+position, each required to lower — so the enumeration and the behaviour it
+describes are checked against each other rather than each against itself.
+
+Lesson: when a user-facing string enumerates cases, capabilities, or supported
+forms, pair it with a test that exercises every item it names. A test asserting
+the string's bytes is not that test. The same applies to a documentation table
+or a decision record that lists what a change supports: list membership is a
+claim, and a claim with no executing check drifts silently.
+
+
 ## 2026-09-05 — Attached a positional message inside a position-blind helper, and let review find the sites
 
 What happened: #918 added a bare-container advice message ("a bare `list` type

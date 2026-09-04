@@ -2,11 +2,10 @@
 
 ## Overall status
 
-Delivered as PR #930 (`feat/issue-918-container-annotations`, head `a7bf16ce`
+Delivered as PR #930 (`feat/issue-918-container-annotations`, head `c3b036f7`
 plus this snapshot's own commit), based on `origin/main` at `c639e682`,
 re-fetched and unmoved. State re-resolved immediately before this snapshot was
-committed: open, not a draft, `MERGEABLE`, `mergeStateStatus` `BLOCKED` only
-because required checks were still running, all four review threads answered and
+committed: open, not a draft, `MERGEABLE`, all six review threads answered and
 resolved, CI green on every check that had reported. It carries `Fixes #918` and
 the GraphQL `closingIssuesReferences` query reports `totalCount: 1` naming only
 #918.
@@ -61,7 +60,7 @@ correct as of that commit and the renumber is its own auditable commit.
 ## Process artefacts
 
 A `/harden batch` pass over `.harden/findings/issue-918.jsonl` (nine findings,
-four rounds at the time of the pass; thirteen over five rounds now) clustered
+four rounds at the time of the pass; fifteen over six rounds now) clustered
 into seven classes. One ships a guard, delegated as #929;
 six terminate at "build nothing, deliberately" — four because
 `references/rule-audit.md` disqualifies a further textual artefact in topics
@@ -90,6 +89,21 @@ also carries a lesson, in the retrospective's 2026-09-05 entry — the review
 named four affected positions and an inventory of one file per position found a
 fifth.
 
+A sixth round on `48ed1ab6` produced two findings, both reproduced against a
+control before being accepted and split by whether Part 1 introduced them. The
+return-position diagnostic's enumeration of the positions that *do* work omitted
+module-scope annotated assignments, which D-228 lowers — a false claim in a
+message this change added, fixed in `c3b036f7` at every site that repeats the
+list and now pinned by a test that lowers a container in each of the five named
+positions. The second, a module binding shadowing a container builtin, is real
+and reproduced but was filed as #932 rather than fixed: it is not a regression
+of previously-correct behaviour, its consequence is bounded to accepting a
+program CPython rejects at run time, and the fix needs plumbing and a scoping
+decision the report does not settle. Both are round-6 lines in the findings
+pile — fifteen findings over six rounds — with the refuted one carrying the
+scope reasoning; neither opens an incident topic, since the reviewer caught each
+at zero cost.
+
 The occurrence-4 discriminator that
 `.harden/incidents/reviewer-flags-a-later-phase-deliverable/2026-09-02-issue-868.md`
 pre-registered is **resolved**: grepping this session's transcript for
@@ -112,32 +126,41 @@ four files.
    container, so `T[int]`, `int[str]` and `Self[int]` are all accepted silently.
    Pre-existing on `c639e682`, found while inventorying the bare-container
    advice, and deliberately out of scope here.
+5. **#932** was also filed from this task: a module-level function, value or
+   import binding named after a container builtin does not suppress the
+   container dispatch, so `def list(...)` followed by `x: list[int]` still
+   lowers as `Ty::List(Int)`. Newly reachable rather than pre-existing — before
+   Part 1 every parameterized container annotation was rejected — but scoped
+   out because the fix needs a module-binding set threaded through
+   `annotation_to_ty`'s ~19 call sites plus a decision on which binding kinds
+   and which orderings participate.
 
 ## Gates
 
-Run from a single-writer baseline at `d1d22692`. Coverage:
-`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
-exit 0, TOTAL 52,528 lines / 2,359 functions / 34,381 regions, all 100.00% with
-zero uncovered. `cargo clippy --workspace --all-targets -- -D warnings` exit 0
-and `cargo test --workspace` exit 0 on the same commit. Every doc and policy
-gate — decisions index `--check`, roadmap evidence, README milestone projection,
-CI permissions, agent assets, `check-site.sh`, the `scripts/` unittest suite
-including the branch-protection baseline, and the harden findings pile — was
-re-run on the final head `a7bf16ce` and returned 0, with each exit status
-captured directly rather than through a pipeline. `git diff --name-only
-d1d22692..HEAD -- crates src Cargo.toml Cargo.lock` is empty, so the two commits
-after the coverage baseline are prose only and cannot move it.
+Run from a single-writer baseline at `c3b036f7`, the head that ships here.
+Coverage: `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions
+100` exit 0, TOTAL 52,528 lines / 2,359 functions / 34,381 regions, all 100.00%
+with zero uncovered. `cargo fmt --all -- --check`, `cargo clippy --workspace
+--all-targets -- -D warnings` and `cargo test --workspace` all exit 0 on the same
+commit. Every doc and policy gate — decisions index `--check`, roadmap evidence,
+README milestone projection, CI permissions, agent assets and policies,
+`check-site.sh`, `check_status_page_freshness.rb c639e682 HEAD`, the conformance
+breadth check, the `scripts/` unittest suite including the branch-protection
+baseline, and the harden findings pile — returned 0 on that same head, with each
+exit status captured directly rather than through a pipeline.
 
-An earlier coverage run was killed rather than trusted: it had been started
-before the round-5 fixes landed, so it would have measured a tree that was about
-to change. The numbers above are from the single run taken after `d1d22692` was
-committed and no other writer shared the worktree.
+The earlier baseline at `d1d22692` was discarded rather than carried forward.
+`git diff --name-only d1d22692..c3b036f7 -- crates src Cargo.toml Cargo.lock`
+names three files, so the round-6 fix moved the Rust tree and the old measurement
+no longer describes it. Two coverage runs were killed for the same reason before
+this one: each had been started before a fix round landed, so each would have
+measured a tree that was about to change.
 
-One commit lands after that measurement: this snapshot itself, together with the
-retrospective entry and the round-5 findings lines. All three are prose, so
-`git diff --name-only d1d22692..HEAD -- crates src Cargo.toml Cargo.lock` is
-empty and no gate that reads the Rust tree is affected; the doc gates are re-run
-once more on the final head before the merge.
+One commit lands after the measurement: this snapshot itself, together with the
+retrospective entry and the round-6 findings lines. All three are prose, so
+`git diff --name-only c3b036f7..HEAD -- crates src Cargo.toml Cargo.lock` is
+empty — executed, not asserted — and no gate that reads the Rust tree is
+affected; the doc gates are re-run once more on the final head before the merge.
 
 Both Ruby checkers need `LC_ALL=en_US.UTF-8 RUBYOPT=-EUTF-8` in this shell; that
 is a local locale artifact, not a repository defect.
