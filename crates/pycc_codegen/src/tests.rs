@@ -4152,7 +4152,7 @@ fn a_list_result_binop_is_not_yet_supported() {
 #[test]
 fn compiles_a_function_with_a_list_int_parameter_and_list_int_return_value() {
     // `def f(x: list[int]) -> list[int]: return x` -- no real source
-    // program can produce this shape. Since D-227 (issue #918) the
+    // program can produce this shape. Since D-228 (issue #918) the
     // *parameter* half is producible from real source (see
     // `tests/issue_918_container_annotations.rs`); the `-> list[int]`
     // half is not, because `lower_return_annotation` rejects a container
@@ -5786,7 +5786,7 @@ fn compiles_a_function_with_a_set_int_parameter_and_set_int_return_value() {
     // The `set[int]` counterpart of `compiles_a_function_with_a_dict_
     // str_int_parameter_and_dict_str_int_return_value` above, for the
     // identical reason: no real source program can produce this shape.
-    // Since D-227 (issue #918) an annotated `set[int]` *parameter* does
+    // Since D-228 (issue #918) an annotated `set[int]` *parameter* does
     // reach codegen from real source, but a `-> set[int]` return
     // annotation is rejected in lowering (issue #925), so the combined
     // shape below is still hand-built. This MIR shape must still compile
@@ -6146,7 +6146,7 @@ fn compiles_a_function_with_a_tuple_parameter_and_tuple_return_value() {
     // The tuple counterpart of `compiles_a_function_with_a_set_int_
     // parameter_and_set_int_return_value` above, for the identical
     // reason: no real source program can produce this shape. Since
-    // D-227 (issue #918) an annotated `tuple[...]` *parameter* does
+    // D-228 (issue #918) an annotated `tuple[...]` *parameter* does
     // reach codegen from real source, but a `-> tuple[...]` return
     // annotation is rejected in lowering (issue #925), so the combined
     // shape below is still hand-built. This MIR shape must still compile *cleanly*
@@ -10474,7 +10474,7 @@ fn compiles_a_function_with_a_dict_str_int_parameter_and_dict_str_int_return_val
     // The `dict[str, int]` counterpart of `compiles_a_function_with_a_
     // list_int_parameter_and_list_int_return_value` above, for the
     // identical reason: no real source program can produce this shape.
-    // Since D-227 (issue #918) an annotated `dict[str, int]` *parameter*
+    // Since D-228 (issue #918) an annotated `dict[str, int]` *parameter*
     // does reach codegen from real source, but a `-> dict[str, int]`
     // return annotation is rejected in lowering (issue #925), so the
     // combined shape below is still hand-built. This MIR shape must still

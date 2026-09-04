@@ -553,7 +553,7 @@ pub(crate) fn infer_expr_in(
             // future PR widening codegen to e.g. `list[str]` only has to
             // relax this one check.
             let list_ty = Ty::List(Box::new(elem_ty));
-            // The gate itself lives in `pycc_hir` (D-227): lowering a written
+            // The gate itself lives in `pycc_hir` (D-228): lowering a written
             // `list[T]` annotation builds the same `Ty` one crate lower down
             // and has to reject exactly the same shapes. `Span::new(0, 0)` is
             // what this call site passed before the gate moved, kept so the
@@ -662,7 +662,7 @@ pub(crate) fn infer_expr_in(
                 // order, so an earlier element's type gate is reported ahead
                 // of a later element's own inference failure (an undefined
                 // name, say). `pycc_hir` exposes the element-shaped entry
-                // point for exactly this reason (D-227).
+                // point for exactly this reason (D-228).
                 pycc_hir::check_tuple_element_ty(&this_ty, Span::new(0, 0))?;
                 elem_tys.push(this_ty);
             }

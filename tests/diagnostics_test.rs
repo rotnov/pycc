@@ -870,7 +870,7 @@ fn no_diagnostic_fixture_renders_an_ast_debug_dump() {
     );
 }
 
-// D-227 (issue #918): parameterized container type annotations. There is no
+// D-228 (issue #918): parameterized container type annotations. There is no
 // fixture auto-discovery in this harness -- every `.py`/`.expected.txt` pair
 // needs its own registration below or it silently never runs.
 

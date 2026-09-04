@@ -2787,7 +2787,7 @@ fn emit_expr_unchecked<'ctx>(
                 // This panic is reachable today, which is why it is tracked
                 // as issue #926: D-146's private-helper return-type solver
                 // can infer a container return type for an *un-annotated*
-                // helper and reach here. D-227 (issue #918) deliberately does
+                // helper and reach here. D-228 (issue #918) deliberately does
                 // not widen that -- it rejects a container *return*
                 // annotation in `pycc_hir::lower_return_annotation` with
                 // `C0001` rather than opening a second route to this line.
@@ -4834,7 +4834,7 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         // `list[T]` but `list[int]` before codegen ever runs, so `list`'s
         // element type is `int` for every `ForList` that can reach this
         // crate. Deliberately not derived from `bindings[list]` instead:
-        // that entry can be absent. Before D-227 (issue #918) the reason
+        // that entry can be absent. Before D-228 (issue #918) the reason
         // given here was that `list` could never be a list-typed function
         // *parameter* at all; that is no longer true -- `def f(xs:
         // list[int])` now lowers and reaches codegen. The binding can still

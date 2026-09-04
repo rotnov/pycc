@@ -47,7 +47,7 @@ rule: it fires whenever HIR lowering reaches a syntactically valid Python \
 statement, expression, or annotation shape that this pycc version's frontend \
 does not yet lower -- a `with` statement, a tuple-unpacking assignment, an \
 unrecognized import shape, or a type annotation this version's lowering \
-does not recognize, for example. Since D-227 (issue #918) the \
+does not recognize, for example. Since D-228 (issue #918) the \
 parameterized container annotations `list[T]`, `set[T]`, `dict[K, V]` \
 and `tuple[A, B, ...]` *are* lowered in parameter, local-variable and \
 type-alias positions, so C0001 no longer covers every \
@@ -886,7 +886,7 @@ Python typing but outside this version's fixed-arity tuple representation \
 (D-116) are also rejected here: the empty tuple `tuple[()]`, which arrives \
 as a zero-element subscript, and the homogeneous-variadic `tuple[int, ...]`, \
 whose length is not known at compile time. Both remain reserved for a later \
-slice (D-227, issue #918); write the explicit fixed-arity form, e.g. \
+slice (D-228, issue #918); write the explicit fixed-arity form, e.g. \
 `tuple[int, int]`, in the meantime. The `...` rejection is checked for every \
 container family before arity is, so the ill-typed `list[...]` and \
 `dict[str, ...]` spellings report the same `...` message rather than an \

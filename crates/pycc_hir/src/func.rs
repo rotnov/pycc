@@ -245,7 +245,7 @@ pub(crate) fn lower_return_annotation(
     match returns {
         Some(ann) => {
             let ty = annotation_to_ty(ann, type_param, class_name, aliases, class_defs)?;
-            // D-227 (issue #918) lowers container annotations in parameter,
+            // D-228 (issue #918) lowers container annotations in parameter,
             // local-variable and type-alias positions only.
             // Return position is deliberately excluded and tracked separately
             // as issue #925: a container-typed *call result* already reaches
@@ -277,7 +277,7 @@ pub(crate) fn lower_return_annotation(
 }
 
 /// The four builtin container types this version lowers from a parameterized
-/// annotation (D-227, issue #918). `frozenset[T]` and `type[T]` are absent on
+/// annotation (D-228, issue #918). `frozenset[T]` and `type[T]` are absent on
 /// purpose: neither has a `Ty` variant, and adding one would have to clear
 /// D-109's 16-byte `size_of::<Ty>()` ceiling first.
 const CONTAINER_ANNOTATION_NAMES: [&str; 4] = ["list", "set", "dict", "tuple"];
@@ -297,7 +297,7 @@ fn bare_container_example(name: &str) -> Option<&'static str> {
 }
 
 /// Lowers a parameterized builtin container annotation -- `list[T]`,
-/// `set[T]`, `dict[K, V]` or `tuple[A, B, ...]` -- to its `Ty` (D-227,
+/// `set[T]`, `dict[K, V]` or `tuple[A, B, ...]` -- to its `Ty` (D-228,
 /// issue #918).
 ///
 /// Three checks run in a fixed order, so the reported diagnostic always
@@ -508,7 +508,7 @@ pub(crate) fn annotation_to_ty(
                     .find(|(alias_name, _)| alias_name == other)
                     .map(|(_, ty)| ty.clone())
                     .ok_or_else(|| {
-                        // D-227 (issue #918): a *bare* builtin container name
+                        // D-228 (issue #918): a *bare* builtin container name
                         // gets its own message naming the parameterized form
                         // that now works. Reached only here, after a
                         // user-defined class and the alias table have both
@@ -659,7 +659,7 @@ pub(crate) fn annotation_to_ty(
                             return Ok(return_ty.clone());
                         }
                     }
-                    // D-227 (issue #918): the four builtin container types are
+                    // D-228 (issue #918): the four builtin container types are
                     // lowered here, from a *parameterized* annotation only --
                     // the bare `list`/`dict`/`set`/`tuple` spelling still falls
                     // through the `Expr::Name` arm's `other =>` branch and gets

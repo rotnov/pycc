@@ -9888,7 +9888,7 @@ fn a_tuple_literal_propagates_an_ill_typed_element_s_error() {
 
 #[test]
 fn a_tuple_literal_reports_an_earlier_element_s_t0039_before_a_later_undefined_name() {
-    // D-227 decision 4: `check_tuple_element_ty` runs per element *inside*
+    // D-228 decision 4: `check_tuple_element_ty` runs per element *inside*
     // this loop rather than as a whole-`Ty` postcheck, so the composed
     // `(1, "a", undefined_name)` shape pins which diagnostic wins. The gate
     // fires on element 1 before element 2 is ever inferred, so `T0039` is
@@ -14883,7 +14883,7 @@ fn check_generic_function_rejects_two_distinct_type_parameters() {
 fn check_generic_function_rejects_container_position_type_parameter() {
     // Defense in depth, same rationale as the two-type-parameter test
     // above. `crates/pycc_hir`'s `annotation_to_ty` does lower a
-    // `list[T]`-shaped annotation since D-227 (issue #918), but it
+    // `list[T]`-shaped annotation since D-228 (issue #918), but it
     // rejects a `Ty::Param` element there itself, with this same `T0042`
     // code and wording and a real span -- precisely because
     // `substitute_ty` is not recursive. So a container-position type

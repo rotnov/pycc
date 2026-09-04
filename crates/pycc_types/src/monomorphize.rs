@@ -93,7 +93,7 @@ fn mangle_generic_instantiation(fn_name: &str, type_param_name: &str, concrete: 
 /// a *recursive* container walk: `generic_type_param_name` (called by every
 /// public entry point before this function ever runs, both here and in
 /// `check_generic_function`) already rejects any container-position
-/// `Ty::Param` with `T0042`, and since D-227 (issue #918) container
+/// `Ty::Param` with `T0042`, and since D-228 (issue #918) container
 /// *annotation* lowering rejects one earlier still, in `pycc_hir`, with the
 /// same code -- deliberately, precisely because this function is not
 /// recursive. So by the time `substitute_ty` runs, `ty` is

@@ -705,7 +705,7 @@ pub(crate) fn unknown_annotation_name_message(name: &str) -> String {
 }
 
 /// The `C0001` message for a *bare* builtin container annotation -- `list`,
-/// `set`, `dict` or `tuple` written with no type arguments (D-227, issue
+/// `set`, `dict` or `tuple` written with no type arguments (D-228, issue
 /// #918). Split out from [`unknown_annotation_name_message`] because a bare
 /// container is no longer an unknown name: the parameterized form now lowers,
 /// so the actionable advice is "write `list[int]`", not "this name means

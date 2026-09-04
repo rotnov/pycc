@@ -375,7 +375,7 @@ fn cascade_name_round_trips_both_message_builders() {
     assert_eq!(cascade_name(&diagnostics[0]), Some("Foo"));
     let diagnostics = lower_all_err("class D(Base):\n    def m(self) -> int:\n        return 1\n");
     assert_eq!(cascade_name(&diagnostics[0]), Some("Base"));
-    // The bare-container builder (D-227) is the one `C0001` producer that is
+    // The bare-container builder (D-228) is the one `C0001` producer that is
     // intentionally unclassifiable -- pinned here against the real producer,
     // not just the builder, so a future rewording cannot silently make it
     // cascade-shaped.
@@ -406,7 +406,7 @@ fn cascade_name_rejects_every_other_diagnostic_shape() {
         ),
         // Neither prefix.
         ("C0001", CLASS_BODY_GAP),
-        // D-227 (issue #918): the bare-container message is a `C0001` that
+        // D-228 (issue #918): the bare-container message is a `C0001` that
         // deliberately is *not* cascade-shaped -- it starts with "a bare `",
         // so neither parser claims it. A bare `list` annotation must not
         // poison the name `list` the way an unknown class name does: nothing

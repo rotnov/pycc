@@ -1,10 +1,10 @@
-//! Shared element-type gates for pycc's container types (D-227, issue #918).
+//! Shared element-type gates for pycc's container types (D-228, issue #918).
 //!
 //! Before #918 the only way a `Ty::List`/`Ty::Dict`/`Ty::Set`/`Ty::Tuple`
 //! could come into existence was by inferring a container *literal*'s type in
 //! `pycc_types`, so the four codegen-capability gates (`T0034`, `T0036`,
 //! `T0038`, `T0039`) lived there, next to the inference that produced the
-//! type. Lowering a written `list[int]`-style annotation (D-227) creates the
+//! type. Lowering a written `list[int]`-style annotation (D-228) creates the
 //! same types in `pycc_hir`, which sits *below* `pycc_types` in the crate
 //! graph and so cannot call into it. The gates therefore move down here and
 //! `pycc_types` calls in, keeping a single definition of "which container

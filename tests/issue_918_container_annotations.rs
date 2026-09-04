@@ -1,4 +1,4 @@
-// D-227 (issue #918), Part 1: parameterized container type annotations
+// D-228 (issue #918), Part 1: parameterized container type annotations
 // (`list[T]`, `set[T]`, `dict[K, V]`, `tuple[A, B, ...]`) end to end through
 // the real `pycc build` CLI -- parser -> hir -> types -> mir -> codegen ->
 // link -> run.
@@ -7,7 +7,7 @@
 // rejected by design in Part 1 and tracked as issue #925 (see
 // `tests/diagnostics/c0001_container_return_annotation.py` for that rejection's
 // own fixture). It does contain a container-typed protocol *method*
-// parameter: D-227 decision 10's gate covers protocol *attributes* only, and
+// parameter: D-228 decision 10's gate covers protocol *attributes* only, and
 // a protocol method's parameter is an ordinary parameter position. Every
 // expected stdout below was verified against CPython 3.14 on the same
 // source.
@@ -150,7 +150,7 @@ print(run())
 
 #[test]
 fn a_container_annotation_lowers_in_a_protocol_method_parameter_and_runs() {
-    // D-227 decision 10 gates protocol *attributes* only. A protocol
+    // D-228 decision 10 gates protocol *attributes* only. A protocol
     // *method*'s parameter is an ordinary parameter position, so a
     // container-typed one lowers, builds and runs -- this is the end-to-end
     // half of the asymmetry pinned in `pycc_hir` by

@@ -1685,7 +1685,7 @@ fn every_supported_annotation_type_lowers_correctly() {
 
 #[test]
 fn an_unsupported_annotation_type_returns_a_capability_error() {
-    // D-227 (issue #918): `list[int]` now lowers, so a *bare* `list` gets its
+    // D-228 (issue #918): `list[int]` now lowers, so a *bare* `list` gets its
     // own message naming the parameterized form to write instead, rather than
     // the generic unknown-name message. `frozenset` keeps the generic one --
     // it has no `Ty` variant, so there is no parameterized form to suggest.
@@ -2234,7 +2234,7 @@ fn a_set_literal_with_an_unsupported_element_propagates_the_element_error() {
 fn subscripted_type_annotation_with_unknown_base_is_rejected() {
     // #435 (Part D): subscripted type annotations (`ClassName[type_arg]`)
     // are now supported for known class names (PEP 560
-    // `__class_getitem__`). D-227 (issue #918) additionally lowers the four
+    // `__class_getitem__`). D-228 (issue #918) additionally lowers the four
     // builtin container families, so this test now pins a name that is
     // neither -- `frozenset[int]`, which has no `Ty` variant and so still
     // falls through to the bare-name recursion and its unknown-name message.
@@ -6359,7 +6359,7 @@ fn a_derived_class_attribute_with_no_mro_collision_lowers_at_the_hir_seam() {
     );
 }
 
-// --- D-227 / issue #918: parameterized container annotations ---------------
+// --- D-228 / issue #918: parameterized container annotations ---------------
 
 /// Lowers `source` and returns the single diagnostic it must fail with.
 fn container_annotation_err(source: &str) -> Diagnostic {
@@ -6372,7 +6372,7 @@ fn a_parameterized_container_annotation_lowers_in_every_supported_position() {
     // The §6 positions Part 1 covers, exercised through the real lowering
     // entry point: a parameter, a module-level `AnnAssign`, a local
     // `AnnAssign` and a PEP 695 `type` alias. A protocol *attribute*'s type
-    // is *not* one of them: it is rejected with `C0001` (D-227 decision 10).
+    // is *not* one of them: it is rejected with `C0001` (D-228 decision 10).
     // A protocol *method*'s parameter is, and is covered by its own test
     // below.
     for source in [
@@ -6392,7 +6392,7 @@ fn a_parameterized_container_annotation_lowers_in_every_supported_position() {
 #[test]
 fn a_container_annotation_reports_a_later_unlowerable_argument_before_an_earlier_element_gate() {
     // The annotation path's ordering is the mirror image of the tuple-literal
-    // path's (D-227 decision 4): here every type argument is lowered by
+    // path's (D-228 decision 4): here every type argument is lowered by
     // `annotation_to_ty` first, and `check_container_ty` only runs afterwards
     // as a whole-`Ty` postcheck. So a *later* argument that cannot be lowered
     // at all wins over an *earlier* argument's element-type gate, while the
@@ -6625,7 +6625,7 @@ fn a_type_alias_named_list_still_wins_over_the_builtin_container() {
 
 #[test]
 fn a_malformed_container_return_annotation_reports_its_own_defect_first() {
-    // D-227 decision 9's position gate is not the first check a container
+    // D-228 decision 9's position gate is not the first check a container
     // return annotation meets. `lower_return_annotation` lowers the
     // annotation through `annotation_to_ty` *before* applying its own
     // position check, so decisions 1 and 2 fire first: a bad element type
@@ -6674,7 +6674,7 @@ fn a_container_protocol_attribute_is_rejected_but_a_scalar_one_still_lowers() {
 #[test]
 fn a_container_annotation_lowers_in_a_protocol_method_parameter() {
     // The counterpart to the test above, pinning the deliberate asymmetry of
-    // D-227 decision 10. The gate lives only in the protocol body's
+    // D-228 decision 10. The gate lives only in the protocol body's
     // `AnnAssign` arm, so it rejects a container-typed protocol *attribute*
     // (which no class could ever satisfy -- every class attribute slot is
     // restricted to `is_scalar_slot_type`). A protocol *method*'s parameter

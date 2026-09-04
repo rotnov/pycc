@@ -188,7 +188,7 @@ pub(super) fn lower_protocol_class(
                     &[],
                     class_name_defs,
                 )?;
-                // D-227 (issue #918): a container-typed protocol
+                // D-228 (issue #918): a container-typed protocol
                 // *attribute* is rejected because no class could ever
                 // satisfy it. Every path by which a class establishes an
                 // instance attribute restricts the slot to

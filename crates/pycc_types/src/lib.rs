@@ -2922,7 +2922,7 @@ fn t0042(message: impl Into<String>) -> Diagnostic {
 ///
 /// Defense in depth, not a reachable frontend path: `crates/pycc_hir/src/func.rs`'s
 /// `lower_function` already enforces at most one PEP 695 `TypeVar` per
-/// function (Task 1), and since D-227 (issue #918) `annotation_to_ty`
+/// function (Task 1), and since D-228 (issue #918) `annotation_to_ty`
 /// rejects a `Ty::Param` element inside the container annotations it does
 /// lower -- with this same `T0042` code and wording, but a real span -- so a
 /// real `def f[T](x: list[T])` or `def f[T, U](...)` still cannot reach
