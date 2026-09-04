@@ -397,13 +397,25 @@
         {
           "category": "iteration over the enum class in definition order",
           "evidence": "pep_0435_enum.py"
+        },
+        {
+          "category": "`Enum` subclass with string members",
+          "evidence": "pep_0435_enum.py"
+        },
+        {
+          "category": "`StrEnum` subclass",
+          "evidence": "pep_0435_enum.py"
+        },
+        {
+          "category": "`auto()` member values in both `Enum` and `StrEnum`",
+          "evidence": "pep_0435_enum.py"
         }
       ],
       "not_proven": [
         {
-          "category": "`IntEnum`, `Flag`, `IntFlag`, and `auto()`",
+          "category": "`IntEnum`, `Flag`, and `IntFlag`",
           "kind": "core",
-          "reason": "Only the plain `Enum` base with explicit integer values is exercised."
+          "reason": "Only the `Enum` and `StrEnum` bases are exercised."
         },
         {
           "category": "member aliasing, `@unique`, and functional-API construction",
