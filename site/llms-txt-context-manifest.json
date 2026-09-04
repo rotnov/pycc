@@ -9,7 +9,7 @@
       "section": "Project",
       "representation": "markdown",
       "local_path": "site/index.html.md",
-      "budget_bytes": 16384
+      "budget_bytes": 13312
     },
     {
       "label": "README",
@@ -17,7 +17,7 @@
       "section": "Project",
       "representation": "markdown",
       "local_path": "README.md",
-      "budget_bytes": 32768
+      "budget_bytes": 18432
     },
     {
       "label": "Specification index",
@@ -25,7 +25,7 @@
       "section": "Specifications",
       "representation": "markdown",
       "local_path": "docs/SPEC.md",
-      "budget_bytes": 16384
+      "budget_bytes": 10240
     },
     {
       "label": "Compiler architecture",
@@ -33,7 +33,7 @@
       "section": "Specifications",
       "representation": "markdown",
       "local_path": "docs/ARCHITECTURE.md",
-      "budget_bytes": 32768
+      "budget_bytes": 20480
     },
     {
       "label": "Python standards matrix",
@@ -41,7 +41,7 @@
       "section": "Specifications",
       "representation": "markdown",
       "local_path": "docs/PYTHON_STANDARDS.md",
-      "budget_bytes": 45056
+      "budget_bytes": 43008
     },
     {
       "label": "Roadmap",
@@ -49,7 +49,7 @@
       "section": "Specifications",
       "representation": "markdown",
       "local_path": "docs/ROADMAP.md",
-      "budget_bytes": 196608
+      "budget_bytes": 168960
     }
   ]
 }

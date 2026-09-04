@@ -2294,6 +2294,7 @@ if llms_urls != manifest_urls:
 # plain-text, not HTML UI.
 seen_local = set()
 total_bytes = 0
+total_budget_bytes = 0
 for label, url in non_optional:
     doc = manifest_by_url[url]
     representation = doc.get("representation", "")
@@ -2340,12 +2341,36 @@ for label, url in non_optional:
         )
     seen_local.add(doc["local_path"])
     total_bytes += actual_bytes
+    total_budget_bytes += budget_bytes
 
 budget_ceiling = budget_kib * 1024
 if total_bytes > budget_ceiling:
     raise SystemExit(
         f"llms.txt non-optional expansion is {total_bytes} bytes, exceeding the "
         f"{budget_ceiling}-byte ({budget_kib} KiB) aggregate budget (issue #207)"
+    )
+
+# Issue #923: the per-resource budgets must partition the aggregate ceiling,
+# not oversubscribe it. Before this check the six budget_bytes values summed to
+# 339968 against a 278528-byte ceiling -- oversubscribed by 61440 -- so a
+# document could stay inside its own budget while the expansion as a whole was
+# already over the ceiling, and the per-resource budgets were decorative for
+# any document with slack elsewhere in the manifest. Requiring the sum to fit
+# makes every per-resource budget a real, individually enforceable allocation
+# and makes an over-budget failure name the document responsible.
+#
+# This invariant makes the aggregate check above provably unreachable: if every
+# actual is within its own budget and the budgets sum within the ceiling, the
+# actuals sum within the ceiling too. That check is deliberately retained as
+# documented defense-in-depth -- it is the direct statement of the contract
+# docs/WEBSITE.md publishes, and it keeps the ceiling enforced even if this
+# invariant is later weakened or the loop above stops accumulating correctly.
+if total_budget_bytes > budget_ceiling:
+    raise SystemExit(
+        f"llms.txt per-resource budgets sum to {total_budget_bytes} bytes, "
+        f"exceeding the {budget_ceiling}-byte ({budget_kib} KiB) aggregate "
+        f"budget; per-resource budgets must partition the ceiling, not "
+        f"oversubscribe it (issue #923)"
     )
 
 # Reject duplicate HTML+Markdown representations of the same page in the
