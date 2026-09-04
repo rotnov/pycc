@@ -461,7 +461,38 @@ pub(crate) fn resolve_attr_get(
             return Ok(ty.clone());
         }
     }
+    // #911 (Part 1 of #885): a class-level attribute (`MIN_WIDTH: int =
+    // -1024`) read through an instance. Checked *after* the instance slots
+    // so a real slot always wins -- the two can never actually collide,
+    // because `pycc_hir` rejects a class attribute that shares a name with
+    // an instance slot or a `@property` in either declaration order, but the
+    // ordering keeps that invariant from being load-bearing here.
+    if let Some(ty) = lookup_class_attr_through_mro(env, class_name, attr) {
+        return Ok(ty);
+    }
     Err(t0044_unknown_member("attribute", class_name, attr))
+}
+
+/// #911 (Part 1 of #885): looks a class-level attribute up through
+/// `class_name`'s MRO, most-derived first, returning its declared type.
+///
+/// A class attribute occupies no instance slot -- `pycc_mir` folds every
+/// read of it to the constant recorded in `HirClassDef::class_attrs` -- so
+/// this walk is deliberately separate from the `attrs` walk above rather
+/// than merged into it.
+pub(crate) fn lookup_class_attr_through_mro(
+    env: &Environment,
+    class_name: &str,
+    attr: &str,
+) -> Option<Ty> {
+    let class_def = expect_class(env, class_name);
+    for mro_class in &class_def.mro {
+        let mro_def = expect_class(env, mro_class);
+        if let Some((_, ty, _)) = mro_def.class_attrs.iter().find(|(name, _, _)| name == attr) {
+            return Some(ty.clone());
+        }
+    }
+    None
 }
 
 /// #436: Resolves a call to a `@staticmethod` or `@classmethod` through
@@ -656,6 +687,42 @@ pub(crate) fn check_attr_set(
     value: &HirExpr,
 ) -> Result<(), Diagnostic> {
     let base_ty = infer_expr_in(env, local_names, base)?;
+    // #911 (Part 1 of #885): every write path to a class-level attribute is
+    // rejected. A class attribute is a compile-time constant folded at each
+    // read (`pycc_mir` never allocates a slot for it), so `obj.X = 5` has
+    // nowhere to write -- and CPython's own semantics here (the write
+    // creates an *instance* attribute that shadows the class one, leaving
+    // the class attribute itself untouched) are not modelled at all. This
+    // check runs before the property walk and before `resolve_attr_get`, and
+    // covers every write that reaches the type checker: `obj.X = 5` and
+    // `self.X = 5` in a method other than `__init__`.
+    //
+    // A `self.X = 5` inside `__init__` splits by where `X` was declared.
+    // When the *same* class declares it, `collect_init_attrs` turns the
+    // write into an instance slot and HIR's own
+    // `reject_class_attr_collisions` (see `pycc_hir::class::body`) rejects
+    // that shape first with C0001. When an *ancestor* declares it, HIR does
+    // not look in that direction at all, and this check is the only thing
+    // that rejects it -- which is why `lookup_class_attr_through_mro` must
+    // stay a full-MRO walk and must not be narrowed to the class's own
+    // `class_attrs`. `pycc_mir`'s instance-read fold (`fold_class_attr` in
+    // the MRO loop of `pycc_mir::expr`) walks the same MRO and would
+    // otherwise fold the read of a genuinely written slot to the ancestor's
+    // constant.
+    if let Ty::Instance(class_name) = &base_ty
+        && let Some(class_attr_ty) = lookup_class_attr_through_mro(env, class_name, attr)
+    {
+        return Err(Diagnostic::error(
+            "T0044",
+            format!(
+                "cannot assign to `{attr}`: it is a class-level attribute of class \
+                 `{class_name}` (declared `{}`), which is a compile-time constant with no \
+                 storage to write to",
+                class_attr_ty.name()
+            ),
+            Span::new(0, 0),
+        ));
+    }
     // #432/#377: walk the MRO for property lookup first (matching
     // `resolve_attr_get`'s own properties-first-across-full-MRO logic and
     // the MIR lowering's own logic), across ALL classes in the MRO, then
@@ -1271,6 +1338,7 @@ mod tests {
             class_defs: vec![(
                 "Point".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "Point".to_string(),
                     bases: Vec::new(),
@@ -1688,6 +1756,7 @@ mod tests {
             class_defs: vec![(
                 "Point".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "Point".to_string(),
                     bases: Vec::new(),
@@ -1769,6 +1838,7 @@ mod tests {
             class_defs: vec![(
                 "Point".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "Point".to_string(),
                     bases: Vec::new(),
@@ -2050,6 +2120,7 @@ mod tests {
         hir.class_defs.push((
             "Counter".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Counter".to_string(),
                 bases: Vec::new(),
@@ -2172,6 +2243,7 @@ mod tests {
         env.bind_class(
             "Ghost".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Ghost".to_string(),
                 bases: Vec::new(),
@@ -2215,6 +2287,7 @@ mod tests {
         env.bind_class(
             "Ghost".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Ghost".to_string(),
                 bases: Vec::new(),
@@ -2291,6 +2364,7 @@ mod tests {
         env.bind_class(
             "Derived".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Derived".to_string(),
                 bases: vec!["GhostBase".to_string()],
@@ -2339,6 +2413,7 @@ mod tests {
             env.bind_class(
                 "A".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
@@ -2366,6 +2441,7 @@ mod tests {
             env.bind_class(
                 "B".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
@@ -2409,6 +2485,7 @@ mod tests {
             env.bind_class(
                 "A".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
@@ -2432,6 +2509,7 @@ mod tests {
             env.bind_class(
                 "B".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
@@ -2473,6 +2551,7 @@ mod tests {
             env.bind_class(
                 "A".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
@@ -2496,6 +2575,7 @@ mod tests {
             env.bind_class(
                 "B".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
@@ -2534,6 +2614,7 @@ mod tests {
             env.bind_class(
                 "A".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
@@ -2557,6 +2638,7 @@ mod tests {
             env.bind_class(
                 "B".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
@@ -2588,6 +2670,7 @@ mod tests {
             env.bind_class(
                 "A".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "A".to_string(),
                     bases: vec![],
@@ -2611,6 +2694,7 @@ mod tests {
             env.bind_class(
                 "B".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "B".to_string(),
                     bases: vec!["A".to_string()],
@@ -2693,6 +2777,7 @@ mod tests {
             class_defs: vec![(
                 "Box".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "Box".to_string(),
                     bases: Vec::new(),
@@ -2756,6 +2841,7 @@ mod tests {
             class_defs: vec![(
                 "Box".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "Box".to_string(),
                     bases: Vec::new(),
@@ -3113,6 +3199,7 @@ mod tests {
                 (
                     "Animal".to_string(),
                     HirClassDef {
+                        class_attrs: Vec::new(),
                         exception_type_tag: None,
                         name: "Animal".to_string(),
                         bases: Vec::new(),
@@ -3139,6 +3226,7 @@ mod tests {
                 (
                     "Dog".to_string(),
                     HirClassDef {
+                        class_attrs: Vec::new(),
                         exception_type_tag: None,
                         name: "Dog".to_string(),
                         bases: vec!["Animal".to_string()],
@@ -3267,6 +3355,7 @@ mod tests {
                 (
                     "Base".to_string(),
                     HirClassDef {
+                        class_attrs: Vec::new(),
                         exception_type_tag: None,
                         name: "Base".to_string(),
                         bases: Vec::new(),
@@ -3290,6 +3379,7 @@ mod tests {
                 (
                     "Derived".to_string(),
                     HirClassDef {
+                        class_attrs: Vec::new(),
                         exception_type_tag: None,
                         name: "Derived".to_string(),
                         bases: vec!["Base".to_string()],
@@ -3416,6 +3506,7 @@ mod tests {
                 (
                     "Base".to_string(),
                     HirClassDef {
+                        class_attrs: Vec::new(),
                         exception_type_tag: None,
                         name: "Base".to_string(),
                         bases: Vec::new(),
@@ -3442,6 +3533,7 @@ mod tests {
                 (
                     "Derived".to_string(),
                     HirClassDef {
+                        class_attrs: Vec::new(),
                         exception_type_tag: None,
                         name: "Derived".to_string(),
                         bases: vec!["Base".to_string()],
@@ -3593,6 +3685,7 @@ mod tests {
             class_defs: vec![(
                 "C".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "C".to_string(),
                     bases: Vec::new(),
@@ -3789,6 +3882,7 @@ mod tests {
         env.bind_class(
             "C".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "C".to_string(),
                 bases: Vec::new(),
@@ -3834,6 +3928,7 @@ mod tests {
         env.bind_class(
             "C".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "C".to_string(),
                 bases: Vec::new(),
@@ -3866,6 +3961,7 @@ mod tests {
         env.bind_class(
             "Derived".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Derived".to_string(),
                 bases: vec!["Ghost".to_string()],
@@ -3906,6 +4002,7 @@ mod tests {
         env.bind_class(
             "C".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "C".to_string(),
                 bases: Vec::new(),
@@ -3941,6 +4038,7 @@ mod tests {
         env.bind_class(
             "C".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "C".to_string(),
                 bases: Vec::new(),
@@ -4313,6 +4411,7 @@ mod tests {
             class_defs: vec![(
                 "EqPoint".to_string(),
                 pycc_hir::HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "EqPoint".to_string(),
                     bases: Vec::new(),
@@ -4406,6 +4505,7 @@ mod tests {
             class_defs: vec![(
                 "PlainEq".to_string(),
                 pycc_hir::HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "PlainEq".to_string(),
                     bases: Vec::new(),
@@ -4705,6 +4805,7 @@ mod tests {
 
         // --- Protocol "P": requires attribute `x: int` ---
         let proto_def = HirClassDef {
+            class_attrs: Vec::new(),
             exception_type_tag: None,
             name: "P".to_string(),
             bases: Vec::new(),
@@ -4753,6 +4854,7 @@ mod tests {
             }))],
         };
         let c_def = HirClassDef {
+            class_attrs: Vec::new(),
             exception_type_tag: None,
             name: "C".to_string(),
             bases: Vec::new(),
@@ -4820,6 +4922,7 @@ mod tests {
         env.bind_class(
             "Ghost".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Ghost".to_string(),
                 bases: Vec::new(),

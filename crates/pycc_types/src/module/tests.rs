@@ -71,6 +71,7 @@ fn minimal_class_def(
     attrs: &[(&str, Ty)],
 ) -> HirClassDef {
     HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: name.to_string(),
         bases: bases.iter().map(|s| s.to_string()).collect(),

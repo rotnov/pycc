@@ -13,6 +13,7 @@ use pycc_hir::{HirClassDef, HirExpr, HirItem, HirModule, HirStmt, Ty};
 fn isinstance_with_runtime_checkable_protocol_evaluates_to_true() {
     use pycc_hir::{HirClassDef, ProtocolMember};
     let proto_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Drawable".to_string(),
         bases: Vec::new(),
@@ -37,6 +38,7 @@ fn isinstance_with_runtime_checkable_protocol_evaluates_to_true() {
         is_abstract: false,
     };
     let class_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Circle".to_string(),
         bases: Vec::new(),
@@ -71,6 +73,7 @@ fn isinstance_with_runtime_checkable_protocol_evaluates_to_true() {
 fn isinstance_with_runtime_checkable_protocol_evaluates_to_false_for_missing_method() {
     use pycc_hir::{HirClassDef, ProtocolMember};
     let proto_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Drawable".to_string(),
         bases: Vec::new(),
@@ -95,6 +98,7 @@ fn isinstance_with_runtime_checkable_protocol_evaluates_to_false_for_missing_met
         is_abstract: false,
     };
     let class_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Circle".to_string(),
         bases: Vec::new(),
@@ -129,6 +133,7 @@ fn isinstance_with_runtime_checkable_protocol_evaluates_to_false_for_missing_met
 fn isinstance_with_runtime_checkable_protocol_evaluates_to_false_for_non_instance() {
     use pycc_hir::{HirClassDef, ProtocolMember};
     let proto_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Drawable".to_string(),
         bases: Vec::new(),
@@ -164,6 +169,7 @@ fn isinstance_with_runtime_checkable_protocol_evaluates_to_false_for_non_instanc
 fn isinstance_with_runtime_checkable_protocol_evaluates_to_false_for_unknown_class() {
     use pycc_hir::{HirClassDef, ProtocolMember};
     let proto_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Drawable".to_string(),
         bases: Vec::new(),
@@ -199,6 +205,7 @@ fn isinstance_with_runtime_checkable_protocol_evaluates_to_false_for_unknown_cla
 fn isinstance_with_runtime_checkable_protocol_attribute_member() {
     use pycc_hir::{HirClassDef, ProtocolMember};
     let proto_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "HasX".to_string(),
         bases: Vec::new(),
@@ -222,6 +229,7 @@ fn isinstance_with_runtime_checkable_protocol_attribute_member() {
         is_abstract: false,
     };
     let class_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Point".to_string(),
         bases: Vec::new(),
@@ -258,6 +266,7 @@ fn isinstance_with_runtime_checkable_protocol_attribute_found_via_property() {
     // (line 2063) in the attribute presence check.
     use pycc_hir::{HirClassDef, PropertyDef, ProtocolMember};
     let proto_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "HasX".to_string(),
         bases: Vec::new(),
@@ -281,6 +290,7 @@ fn isinstance_with_runtime_checkable_protocol_attribute_found_via_property() {
         is_abstract: false,
     };
     let class_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Point".to_string(),
         bases: Vec::new(),
@@ -321,6 +331,7 @@ fn isinstance_with_runtime_checkable_protocol_attribute_missing_returns_false() 
     // attribute is not found in the class's MRO.
     use pycc_hir::{HirClassDef, ProtocolMember};
     let proto_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "HasX".to_string(),
         bases: Vec::new(),
@@ -344,6 +355,7 @@ fn isinstance_with_runtime_checkable_protocol_attribute_missing_returns_false() 
         is_abstract: false,
     };
     let class_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "NoX".to_string(),
         bases: Vec::new(),
@@ -380,6 +392,7 @@ fn isinstance_with_runtime_checkable_protocol_attribute_missing_in_mro_returns_f
     // is not found in the `classes` map.
     use pycc_hir::{HirClassDef, ProtocolMember};
     let proto_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "HasX".to_string(),
         bases: Vec::new(),
@@ -405,6 +418,7 @@ fn isinstance_with_runtime_checkable_protocol_attribute_missing_in_mro_returns_f
     // The class's MRO includes "Ghost" which is NOT in the classes
     // map, exercising the `else { false }` branch.
     let class_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "WithGhost".to_string(),
         bases: Vec::new(),
@@ -443,6 +457,7 @@ fn isinstance_with_runtime_checkable_protocol_method_missing_in_mro_returns_fals
     // covered by `isinstance_with_runtime_checkable_protocol_attribute_missing_in_mro_returns_false`.
     use pycc_hir::{HirClassDef, ProtocolMember};
     let proto_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "HasDraw".to_string(),
         bases: Vec::new(),
@@ -470,6 +485,7 @@ fn isinstance_with_runtime_checkable_protocol_method_missing_in_mro_returns_fals
     // map, exercising the `?`-None path in the method arm's
     // `find_map` closure.
     let class_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "WithGhostMethod".to_string(),
         bases: Vec::new(),
@@ -531,6 +547,7 @@ fn method_call_on_protocol_typed_parameter_resolves_via_class_def_of() {
         class_defs: vec![(
             "P".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "P".to_string(),
                 bases: Vec::new(),
@@ -583,6 +600,7 @@ fn protocol_typed_annassign_binds_concrete_type() {
             (
                 "P".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "P".to_string(),
                     bases: Vec::new(),
@@ -606,6 +624,7 @@ fn protocol_typed_annassign_binds_concrete_type() {
             (
                 "C".to_string(),
                 HirClassDef {
+                    class_attrs: Vec::new(),
                     exception_type_tag: None,
                     name: "C".to_string(),
                     bases: Vec::new(),
@@ -647,6 +666,7 @@ fn isinstance_with_protocol_target_goes_through_lower_isinstance() {
     // path.
     use pycc_hir::ProtocolMember;
     let proto_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Drawable".to_string(),
         bases: Vec::new(),
@@ -671,6 +691,7 @@ fn isinstance_with_protocol_target_goes_through_lower_isinstance() {
         is_abstract: false,
     };
     let class_def = HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Circle".to_string(),
         bases: Vec::new(),

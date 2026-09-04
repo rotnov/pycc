@@ -272,6 +272,7 @@ fn raising_a_user_exception_class_panics_if_the_synthetic_init_is_somehow_unregi
     env.bind_class(
         "Ghost".to_string(),
         HirClassDef {
+            class_attrs: Vec::new(),
             exception_type_tag: Some(0),
             name: "Ghost".to_string(),
             bases: Vec::new(),

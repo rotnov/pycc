@@ -33,6 +33,7 @@ fn isinstance_lowers_to_bool_literal_for_user_class() {
         class_defs: vec![(
             "D".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "D".to_string(),
                 bases: vec![],
@@ -85,6 +86,7 @@ fn issubclass_lowers_to_bool_literal_for_same_class() {
         class_defs: vec![(
             "D".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "D".to_string(),
                 bases: vec![],
@@ -200,6 +202,7 @@ fn issubclass_with_user_class_vs_builtin_lowers_to_false() {
         class_defs: vec![(
             "D".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "D".to_string(),
                 bases: vec![],

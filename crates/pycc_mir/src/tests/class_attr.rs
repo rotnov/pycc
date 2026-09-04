@@ -71,6 +71,7 @@ fn point_module(extra_items: Vec<HirItem>) -> HirModule {
         class_defs: vec![(
             "Point".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Point".to_string(),
                 bases: Vec::new(),
@@ -204,6 +205,7 @@ fn a_method_call_with_arguments_lowers_each_argument_after_self() {
         class_defs: vec![(
             "Counter".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Counter".to_string(),
                 bases: Vec::new(),
@@ -573,6 +575,7 @@ fn attr_set_on_a_read_only_property_panics_with_an_internal_error() {
         class_defs: vec![(
             "Box".to_string(),
             HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Box".to_string(),
                 bases: Vec::new(),
@@ -632,6 +635,7 @@ fn enum_member_attr_get_lowers_to_synthetic_global() {
     // #379: `Color.RED` lowers to `MirExpr::Name` reading the
     // synthetic `<Class>.<Member>.enum_member` global.
     let class_def = pycc_hir::HirClassDef {
+        class_attrs: Vec::new(),
         exception_type_tag: None,
         name: "Color".to_string(),
         bases: vec![],
@@ -682,4 +686,157 @@ fn enum_member_attr_get_lowers_to_synthetic_global() {
             ty: Ty::None,
         }))
     );
+}
+
+// -- #911 (Part 1 of #885): class-level attribute folding ------------------
+//
+// A class attribute is a compile-time constant: every read folds to its
+// literal and the base expression is discarded (`pycc_types` restricts the
+// base to a bare name, so evaluating it has no observable effect). Both
+// interception points are exercised here -- the class-name read, which runs
+// *before* `lower_expr` because the base is a class name rather than a value
+// binding, and the instance read, which runs after the property walk and
+// before the `mro_attrs` slot lookup whose miss panics.
+
+/// A `Limit` class carrying one class attribute of each `ClassAttrValue`
+/// variant plus a single instance slot, so the fold and the slot layout can
+/// be asserted against each other.
+fn limit_module(extra_items: Vec<HirItem>) -> HirModule {
+    use pycc_hir::ClassAttrValue;
+
+    let self_ty = Ty::Instance(Box::new("Limit".to_string()));
+    let init = HirItem::Function {
+        name: "Limit.__init__".to_string(),
+        params: vec![("self".to_string(), self_ty)],
+        return_ty: Ty::None,
+        body: vec![
+            HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "n".to_string(),
+                value: HirExpr::IntLiteral(0),
+            },
+            HirStmt::Return(None),
+        ],
+    };
+    let mut items = vec![init];
+    items.extend(extra_items);
+    HirModule {
+        seeded_builtin_exception_classes: false,
+        items,
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: vec![(
+            "Limit".to_string(),
+            HirClassDef {
+                class_attrs: vec![
+                    ("LIMIT".to_string(), Ty::Int, ClassAttrValue::Int(8)),
+                    ("SCALE".to_string(), Ty::Float, ClassAttrValue::Float(1.5)),
+                    ("DEBUG".to_string(), Ty::Bool, ClassAttrValue::Bool(true)),
+                    (
+                        "KIND".to_string(),
+                        Ty::Str,
+                        ClassAttrValue::Str("k".to_string()),
+                    ),
+                ],
+                exception_type_tag: None,
+                name: "Limit".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Limit".to_string()],
+                attrs: vec![("n".to_string(), Ty::Int)],
+                methods: vec![("__init__".to_string(), "Limit.__init__".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        )],
+    }
+}
+
+/// The four class-attribute reads, as top-level assignments, in declaration
+/// order -- so one fixture pins every `ClassAttrValue` variant's fold.
+fn class_attr_reads(base: HirExpr) -> Vec<HirStmt> {
+    ["LIMIT", "SCALE", "DEBUG", "KIND"]
+        .into_iter()
+        .map(|attr| HirStmt::Assign {
+            target: format!("v_{attr}"),
+            value: HirExpr::AttrGet {
+                base: Box::new(base.clone()),
+                attr: attr.to_string(),
+            },
+        })
+        .collect()
+}
+
+fn folded_values(items: &[MirItem]) -> Vec<MirExpr> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            MirItem::TopLevelStmt(MirStmt::Assign { target, value })
+                if target.starts_with("v_") =>
+            {
+                Some(value.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn expected_folds() -> Vec<MirExpr> {
+    vec![
+        MirExpr::IntLiteral(8),
+        MirExpr::FloatLiteral(1.5),
+        MirExpr::BoolLiteral(true),
+        MirExpr::StringLiteral("k".to_string()),
+    ]
+}
+
+#[test]
+fn a_class_name_class_attribute_read_folds_to_its_constant() {
+    let hir = limit_module(
+        class_attr_reads(HirExpr::Name("Limit".to_string()))
+            .into_iter()
+            .map(HirItem::TopLevelStmt)
+            .collect(),
+    );
+    let mir = build(&hir);
+    assert_eq!(folded_values(&mir.items), expected_folds());
+}
+
+#[test]
+fn an_instance_class_attribute_read_folds_to_its_constant() {
+    let mut items = vec![HirItem::TopLevelStmt(HirStmt::Assign {
+        target: "p".to_string(),
+        value: HirExpr::Call {
+            callee: "Limit".to_string(),
+            args: vec![],
+        },
+    })];
+    items.extend(
+        class_attr_reads(HirExpr::Name("p".to_string()))
+            .into_iter()
+            .map(HirItem::TopLevelStmt),
+    );
+    let hir = limit_module(items);
+    let mir = build(&hir);
+    assert_eq!(folded_values(&mir.items), expected_folds());
+
+    // D-154: the fold happens instead of a slot read, so the instance still
+    // allocates exactly the one word its single `__init__` slot needs.
+    let attr_count = mir.items.iter().find_map(|item| match item {
+        MirItem::TopLevelStmt(MirStmt::Assign {
+            value: MirExpr::Instantiate(instantiate),
+            ..
+        }) => Some(instantiate.attr_count),
+        _ => None,
+    });
+    assert_eq!(attr_count, Some(1));
 }

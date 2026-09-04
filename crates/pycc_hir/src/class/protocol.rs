@@ -243,6 +243,7 @@ pub(super) fn lower_protocol_class(
     }
     Ok((
         HirClassDef {
+            class_attrs: Vec::new(),
             exception_type_tag: None,
             name: class_name,
             bases,

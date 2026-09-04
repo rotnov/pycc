@@ -321,6 +321,7 @@ mod tests {
             })
             .expect("test fixture must contain a class definition");
         let fake_a = HirClassDef {
+            class_attrs: Vec::new(),
             exception_type_tag: None,
             name: "A".to_string(),
             bases: Vec::new(),

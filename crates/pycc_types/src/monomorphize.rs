@@ -1792,7 +1792,14 @@ pub(crate) fn instantiate_generic_class_methods(
                 )
             })
             .collect::<Vec<_>>();
+        // #911: a class attribute is a compile-time constant with no
+        // instance slot, so monomorphization carries it through unchanged
+        // -- its type is already a non-`Param` scalar (a `Param(_)`
+        // annotation is rejected at lowering), so there is nothing to
+        // substitute. Omitting the field here would silently drop every
+        // class attribute from a monomorphized generic class.
         let new_class_def = HirClassDef {
+            class_attrs: class_def.class_attrs.clone(),
             exception_type_tag: None,
             name: mangled_class.clone(),
             bases: Vec::new(),

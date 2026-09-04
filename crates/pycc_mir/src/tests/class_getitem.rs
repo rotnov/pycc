@@ -57,6 +57,7 @@ fn class_getitem_hir(hook_kind: &str, extra_items: Vec<HirItem>) -> HirModule {
         class_defs: vec![(
             "C".to_string(),
             pycc_hir::HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "C".to_string(),
                 bases: Vec::new(),

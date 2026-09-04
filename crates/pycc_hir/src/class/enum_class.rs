@@ -226,6 +226,7 @@ pub(super) fn lower_enum_class(
     // runtime-instantiated objects.
     Ok((
         HirClassDef {
+            class_attrs: Vec::new(),
             exception_type_tag: None,
             name: class_name,
             bases,

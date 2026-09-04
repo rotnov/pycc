@@ -507,6 +507,7 @@ fn user_exception_class(name: &str, mro: &[&str], tag: Option<u8>) -> (String, H
     (
         name.to_string(),
         HirClassDef {
+            class_attrs: Vec::new(),
             exception_type_tag: tag,
             name: name.to_string(),
             bases: mro
@@ -835,6 +836,7 @@ fn print_of_a_non_exception_class_instance_is_not_rewritten_to_exception_message
         class_defs: vec![(
             "Point".to_string(),
             pycc_hir::HirClassDef {
+                class_attrs: Vec::new(),
                 exception_type_tag: None,
                 name: "Point".to_string(),
                 bases: Vec::new(),

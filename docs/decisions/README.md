@@ -230,3 +230,4 @@ current.
 | [D-221](./D-221-the-conformance-harness-is-the-root-file-plus-its.md) | The conformance harness is `tests/conformance.rs` plus `tests/conformance/*.rs`; every harness text-reader audits the concatenation (#729) | accepted |
 | [D-222](./D-222-project-modules-link-at-the-hir-level-into-one.md) | Project modules link at the HIR level into one whole-program HirModule | accepted |
 | [D-223](./D-223-reject-except-star-exceptiongroup-at-compile-time.md) | Reject `except* ExceptionGroup:` at compile time instead of CPython's runtime `TypeError` | accepted |
+| [D-224](./D-224-restrict-class-level-attributes-to-scalar.md) | Restrict class-level attributes to scalar compile-time constants | accepted |
