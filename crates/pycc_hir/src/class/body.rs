@@ -859,8 +859,17 @@ fn class_attr_value(
 /// This runs **after** the body walk rather than at the `AnnAssign` site:
 /// `attrs` is populated by `collect_init_attrs` when the walk reaches
 /// `__init__`, so a class attribute declared *before* `__init__` would see an
-/// empty `attrs` and slip through a statement-site check. Both the class's
-/// own tables and every base's (through the MRO) are checked.
+/// empty `attrs` and slip through a statement-site check.
+///
+/// The direction checked here is exactly one way round: every entry of *this*
+/// class's `class_attrs` against this class's own `attrs`/`properties` and
+/// against every MRO base's `attrs`/`properties`. The reverse direction --
+/// this class's `attrs` (or `properties`) shadowing an *ancestor's*
+/// `class_attrs` -- is deliberately **not** checked here, because the write
+/// itself is what is ill-formed there, and `pycc_types::class::check_attr_set`
+/// already rejects it with `T0044` through `lookup_class_attr_through_mro`'s
+/// full-MRO walk, pointing at the offending assignment rather than at the
+/// class as a whole.
 ///
 /// A collision is `C0001`, not `T0052`: `T0052`'s existing condition fires
 /// only when a redeclaration's `Ty` *differs*, and a same-typed class

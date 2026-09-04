@@ -695,11 +695,20 @@ pub(crate) fn check_attr_set(
     // the class attribute itself untouched) are not modelled at all. This
     // check runs before the property walk and before `resolve_attr_get`, and
     // covers every write that reaches the type checker: `obj.X = 5` and
-    // `self.X = 5` in a method other than `__init__`. A `self.X = 5` inside
-    // `__init__` never reaches here -- `collect_init_attrs` would turn it
-    // into an instance slot, so HIR's own `reject_class_attr_collisions`
-    // (see `pycc_hir::class::body`) rejects that shape first with C0001.
-    // The two checks are complementary, not redundant.
+    // `self.X = 5` in a method other than `__init__`.
+    //
+    // A `self.X = 5` inside `__init__` splits by where `X` was declared.
+    // When the *same* class declares it, `collect_init_attrs` turns the
+    // write into an instance slot and HIR's own
+    // `reject_class_attr_collisions` (see `pycc_hir::class::body`) rejects
+    // that shape first with C0001. When an *ancestor* declares it, HIR does
+    // not look in that direction at all, and this check is the only thing
+    // that rejects it -- which is why `lookup_class_attr_through_mro` must
+    // stay a full-MRO walk and must not be narrowed to the class's own
+    // `class_attrs`. `pycc_mir`'s instance-read fold (`fold_class_attr` in
+    // the MRO loop of `pycc_mir::expr`) walks the same MRO and would
+    // otherwise fold the read of a genuinely written slot to the ancestor's
+    // constant.
     if let Ty::Instance(class_name) = &base_ty
         && let Some(class_attr_ty) = lookup_class_attr_through_mro(env, class_name, attr)
     {

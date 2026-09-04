@@ -305,7 +305,9 @@ pub(crate) fn annotation_to_ty(
         // the wrapper before calling this function, so the class-body
         // position never reaches this arm.
         Expr::Name(name) if name.id.as_str() == "ClassVar" => Err(unsupported(
-            "`ClassVar` is only valid on a class-body attribute declaration              (`X: ClassVar[int] = 1` inside a `class` body), and takes exactly one type argument",
+            "`ClassVar` is only valid on a class-body attribute declaration \
+             (`X: ClassVar[int] = 1` inside a `class` body), and takes exactly \
+             one type argument",
             pycc_ast::expr_range(annotation),
         )),
         Expr::Name(name) if name.id.as_str() == "Self" && class_name.is_some() => {

@@ -4,8 +4,8 @@
 
 Base: `origin/main` at `ef991f70` -- re-fetched immediately before this file was
 committed and unchanged since the branch was cut.
-Branch: `autopilot/iter-2026-09-04-03`, head `8643e819` at the moment this
-snapshot was written (the commit adding this file is its child).
+Branch: `autopilot/iter-2026-09-04-03`. Head is the reviewer-fix commit that
+carries this revision of this file; `9811c6c4` is its parent.
 Pull request: [#917](https://github.com/rotnov/pycc/pull/917), open, `MERGEABLE`,
 not a draft, one closing reference (`Fixes #911`), verified through
 `gh pr view 917 --json closingIssuesReferences`.
@@ -33,9 +33,14 @@ published as [comment 5539081675](https://github.com/rotnov/pycc/issues/885#issu
   `pycc_mir` folds at every read -- through the class name and through an
   instance -- so it occupies no instance slot and shifts no other attribute's
   slot index (D-154). `pycc_codegen` and `pycc_rt` are untouched.
-- Collisions with an instance slot or an `@property`, in this class or anywhere
-  in its MRO and in either declaration order, are rejected with `C0001` after
-  the whole class-body walk (at the `AnnAssign` site `attrs` is still empty).
+- A class attribute colliding with an instance slot or an `@property` -- the
+  class's own, or any inherited through its MRO, in either declaration order --
+  is rejected with `C0001` after the whole class-body walk (at the `AnnAssign`
+  site `attrs` is still empty). The mirror-image shape, a subclass `__init__`
+  declaring an instance slot whose name an *ancestor* holds as a class
+  attribute, is rejected one layer later by `pycc_types`'
+  `check_attr_set`/`lookup_class_attr_through_mro` with `T0044`, which points at
+  the offending assignment; both directions carry a test.
 - Per AGENTS.md's decomposability rule (D-185), the class-body walk was extracted
   first, in its own commit, from `crates/pycc_hir/src/class.rs` (5,212 lines) into
   `crates/pycc_hir/src/class/body.rs` (935 lines). `class.rs` lands at 4,401 lines,
@@ -60,11 +65,13 @@ was posted on #585
 The same constraint binds Part 2 (#910), which must accept a literal right-hand
 side only.
 
-## Commits (merge base `ef991f70` .. `8643e819`)
+## Commits (merge base `ef991f70` .. `HEAD`)
 
 - `7cf046d8` Extract the class-body walk into `class/body.rs` (D-185)
 - `99873243` Add the `HirClassDef::class_attrs` field and `ClassAttrValue` (#911)
 - `8643e819` Fold annotated scalar class attributes at compile time (#911)
+- `9811c6c4` Record the #911 checkpoint and the `llvm-cov` instantiation lesson
+- `HEAD` Address the pinned reviewer's two findings (#911)
 
 The branch was force-pushed once after the PR was opened, to rewrite `7cf046d8`'s
 message: the phrase "does **not** close #548" contains a GitHub closing keyword
@@ -74,8 +81,8 @@ reports exactly one closing reference.
 
 ## Gates
 
-All green at `8643e819`; every exit status was captured directly rather than
-through a pipe. Full numbers are in the PR's own
+All green, re-run after the reviewer fixes; every exit status was
+captured directly rather than through a pipe. Full numbers are in the PR's own
 [gate-results comment](https://github.com/rotnov/pycc/pull/917#issuecomment-5539948852).
 Headline: `cargo test --workspace` 4,412 passed across 76 suites, and
 `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
@@ -104,6 +111,27 @@ mirroring the end-to-end cases. No threshold was lowered and no
 `--ignore-filename-regex` entry was added. A retrospective entry was written
 because the diagnosis was already in the repository and was not consulted.
 
+## Pinned local reviewer (D-068)
+
+The iEvo `deep-reviewer` reviewed the full committed range from the merge base
+through `HEAD` in a fresh context, with all new files staged. Verdict: ready to
+commit, no P0/P1, two actionable findings, both fixed in this branch's head commit:
+
+1. `reject_class_attr_collisions`'s doc comment claimed both directions were
+   checked; only one is. The comment now states the checked direction exactly
+   and names `check_attr_set` as the guard for the reverse one, the companion
+   comment in `pycc_types::class` was corrected the same way (it had credited
+   HIR for a rejection it does not perform), and
+   `a_subclass_init_writing_an_inherited_class_attribute_name_is_rejected` pins
+   the shape so a future narrowing of that MRO walk cannot silently reintroduce
+   a miscompile. Keeping `T0044` here rather than unifying to `C0001` is
+   deliberate: there is a single offending statement with a specific reason, so
+   the write-site diagnostic is the better one.
+2. A stray run of internal spaces inside the `ClassVar` diagnostic string in
+   `func.rs` (a literal that had been hand-wrapped without a continuation).
+   Reformatted to the sibling arm's backslash-continuation style; no fixture
+   pins the full text.
+
 ## Known follow-ups
 
 Filed in milestone v0.4, all linked to #885, each with a test in
@@ -128,7 +156,7 @@ stop reporting the diagnostic they assert and will need new fixtures.
 ## Where a fresh session should look to resume
 
 1. `gh pr view 917 --repo rotnov/pycc` for the current state, then the CI checks
-   for the `8643e819` head. The PR was opened without waiting on CI.
+   for its current head. The PR was opened without waiting on CI.
 2. The plan comment on #885 (comment 5539081675) is the authoritative
    specification for this work item and for #910.
 3. `docs/decisions/D-224-...` for the scalar-restriction invariant, and

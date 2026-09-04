@@ -30131,6 +30131,31 @@ fn writing_a_class_attribute_is_rejected_by_check_attr_set() {
 }
 
 #[test]
+fn a_subclass_init_writing_an_inherited_class_attribute_name_is_rejected() {
+    // The one shape `pycc_hir::class::body::reject_class_attr_collisions`
+    // does *not* cover: the class attribute lives on an ancestor and the
+    // subclass's `__init__` declares an instance slot of the same name, so
+    // HIR sees no collision within either class's own tables. Only
+    // `check_attr_set`'s full-MRO `lookup_class_attr_through_mro` walk stops
+    // it -- without which `pycc_mir`'s instance-read fold would walk the same
+    // MRO and fold `d.LIMIT` to the ancestor's `1` while the write targeted a
+    // real slot. Narrowing that walk to the class's own `class_attrs` must
+    // fail this test. The message names the receiver's own class (`Derived`),
+    // since the lookup starts there and walks up to `Base`'s declaration.
+    let err = check_source(
+        "class Base:\n    LIMIT: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass Derived(Base):\n    def __init__(self) -> None:\n        self.LIMIT = 5\n",
+    )
+    .expect_err("a subclass write to an inherited class-attribute name must be rejected");
+    assert_eq!(err.code, "T0044");
+    assert!(
+        err.message
+            .contains("it is a class-level attribute of class `Derived`"),
+        "unexpected diagnostic: {}",
+        err.message
+    );
+}
+
+#[test]
 fn a_class_attribute_class_pattern_keyword_is_rejected() {
     // PEP 634: a class attribute has no per-instance value to match against.
     let err = check_source(&class_attr_source(
