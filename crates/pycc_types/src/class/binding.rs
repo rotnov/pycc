@@ -167,7 +167,9 @@ pub(crate) fn resolve_instantiation(
         .unwrap_or_else(|| {
             panic!(
                 "pycc_types: internal error: no `__init__` found in class `{class_name}`'s MRO -- \
-             pycc_hir::lower_class should have rejected this before it reached pycc_types"
+             pycc_hir guarantees an `__init__` for every class it lowers through `lower_class`, \
+             by inheritance or by synthesis; an enum class early-returns at \
+             `crates/pycc_hir/src/class.rs:1070` and is a known hole tracked by #921"
             )
         });
     // The resolved `__init__` coming from a *synthetic* ancestor means
@@ -271,9 +273,11 @@ mod tests {
     #[test]
     #[should_panic(expected = "no `__init__` found in class `Ghost`'s MRO")]
     fn resolve_instantiation_panics_when_no_init_is_in_the_mro() {
-        // #432: `lower_class` rejects a class with no `__init__` anywhere
-        // in its MRO before it reaches `pycc_types`, so this panic is an
-        // internal error. This test bypasses the normal entry point and
+        // #432 / #912: `pycc_hir` guarantees an `__init__` for every class
+        // it lowers through `lower_class`, by inheritance or by synthesis,
+        // so this panic is an internal error. (An enum class early-returns
+        // at `crates/pycc_hir/src/class.rs:1070` and is a known hole
+        // tracked by #921.) This test bypasses the normal entry point and
         // binds a class whose MRO contains no `__init__` method. The MRO
         // also includes `Phantom` (not registered), exercising the `?`
         // arm of the `find_map` closure -- `Ghost` is found but has no

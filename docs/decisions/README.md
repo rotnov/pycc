@@ -231,3 +231,4 @@ current.
 | [D-222](./D-222-project-modules-link-at-the-hir-level-into-one.md) | Project modules link at the HIR level into one whole-program HirModule | accepted |
 | [D-223](./D-223-reject-except-star-exceptiongroup-at-compile-time.md) | Reject `except* ExceptionGroup:` at compile time instead of CPython's runtime `TypeError` | accepted |
 | [D-224](./D-224-restrict-class-level-attributes-to-scalar.md) | Restrict class-level attributes to scalar compile-time constants | accepted |
+| [D-225](./D-225-synthesize-an-implicit-zero-argument-constructor.md) | Synthesize an implicit zero-argument constructor for a class with no `__init__` | accepted |

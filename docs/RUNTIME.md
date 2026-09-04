@@ -94,7 +94,12 @@ private constant and by the runtime's own `raise_builtin` from a
 Two shapes stay rejected. A user exception class that declares its own
 `__init__` -- or inherits one from a non-synthetic ancestor -- is `C0001`: the
 message string is the only payload the exception object carries, so the
-class's own fields would be silently dropped. And `except MyError as e:` is
+class's own fields would be silently dropped. "Non-synthetic" is D-188
+provenance, not authorship of the constructor body: since #912/D-225 a
+user-declared ancestor with no `__init__` of its own carries a *synthesized*
+implicit one, and that ancestor is still non-synthetic, so
+`class Base: pass` / `class MyError(Base, Exception): pass` keeps this
+rejection rather than escaping it. And `except MyError as e:` is
 `C0001` rather than merely unimplemented: binding would give `e` a
 `Ty::Instance`, which every consumer reads as a `PyInstanceObj`, while the
 value the runtime holds is a `PyExceptionObj`. Both wait on Part 3 of #541

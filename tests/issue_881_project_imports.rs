@@ -143,11 +143,15 @@ fn a_relative_import_from_a_bare_file_name_entry_names_the_current_directory() {
 #[test]
 fn a_dependency_lowering_gap_is_reported_against_the_dependency() {
     let scratch = ScratchDir::new("issue_881").unwrap();
-    write(&scratch, "helper.py", "class Bare:\n    pass\n");
+    write(
+        &scratch,
+        "helper.py",
+        "async def bare() -> None:\n    pass\n",
+    );
     let entry = write(
         &scratch,
         "main.py",
-        "from helper import Bare\n\n\ndef main() -> None:\n    print(1)\n",
+        "from helper import bare\n\n\ndef main() -> None:\n    print(1)\n",
     );
     let result = check(&entry);
     assert_eq!(result.code, 1, "{}", result.both());
@@ -281,11 +285,11 @@ fn checking_two_paths_reports_each_program_once() {
     // `a` and again while checking `b` -- the two runs are independent
     // programs, and the combined output is exactly their concatenation.
     let scratch = ScratchDir::new("issue_881").unwrap();
-    let a = write(&scratch, "a.py", "class Bare:\n    pass\n");
+    let a = write(&scratch, "a.py", "async def bare() -> None:\n    pass\n");
     let b = write(
         &scratch,
         "b.py",
-        "from a import Bare\n\n\ndef main() -> None:\n    print(1)\n",
+        "from a import bare\n\n\ndef main() -> None:\n    print(1)\n",
     );
     let only_a = check(&a);
     let only_b = check(&b);
@@ -334,11 +338,15 @@ fn a_namespace_directory_on_the_way_to_a_module_is_allowed() {
 #[test]
 fn a_build_failure_in_a_dependency_reaches_stderr() {
     let scratch = ScratchDir::new("issue_881").unwrap();
-    write(&scratch, "helper.py", "class Bare:\n    pass\n");
+    write(
+        &scratch,
+        "helper.py",
+        "async def bare() -> None:\n    pass\n",
+    );
     let entry = write(
         &scratch,
         "main.py",
-        "from helper import Bare\n\n\ndef main() -> None:\n    print(1)\n",
+        "from helper import bare\n\n\ndef main() -> None:\n    print(1)\n",
     );
     let binary = scratch.join("prog");
     let result = run(

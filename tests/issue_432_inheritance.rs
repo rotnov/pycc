@@ -210,15 +210,17 @@ fn unknown_base_class_is_a_build_error() {
     );
 }
 
-/// #432: a class with no `__init__` and no base class providing one is
-/// rejected with a clear error.
+/// #432 / #912: a class with no `__init__` and no base class providing one
+/// used to be rejected with a `C0001`. Since D-225 it gets an implicit
+/// zero-argument constructor synthesized instead, so it builds, instantiates
+/// and dispatches its own methods.
 #[test]
-fn class_without_init_and_no_base_init_is_a_build_error() {
+fn class_without_init_and_no_base_init_builds_and_runs() {
     let dir = ScratchDir::new("432_no_init").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,
         "no_init.py",
-        "class C:\n    def f(self) -> int:\n        return 1\n",
+        "class C:\n    def f(self) -> int:\n        return 1\nc = C()\nprint(c.f())\n",
     );
     let out = dir.join("no_init");
 
@@ -227,13 +229,15 @@ fn class_without_init_and_no_base_init_is_a_build_error() {
         .output()
         .unwrap();
     assert!(
-        !output.status.success(),
-        "pycc build should fail for a class without __init__"
+        output.status.success(),
+        "pycc build should succeed for a class without __init__, got: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("C0001"),
-        "stderr should contain C0001, got: {stderr}"
+
+    let run = Command::new(&out).output().unwrap();
+    assert_eq!(
+        run.stdout, b"1\n",
+        "the implicitly-constructed instance should dispatch its own method"
     );
 }
 
