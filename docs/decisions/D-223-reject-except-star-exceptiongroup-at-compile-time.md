@@ -1,10 +1,10 @@
 ---
-id: D-222
+id: D-223
 title: "Reject `except* ExceptionGroup:` at compile time instead of CPython's runtime `TypeError`"
 status: accepted
 ---
 
-## D-222: Reject `except* ExceptionGroup:` at compile time instead of CPython's runtime `TypeError`
+## D-223: Reject `except* ExceptionGroup:` at compile time instead of CPython's runtime `TypeError`
 - Status: accepted
 - Context: [#795](https://github.com/rotnov/pycc/issues/795) found two PEP 654
   over-acceptance gaps left by

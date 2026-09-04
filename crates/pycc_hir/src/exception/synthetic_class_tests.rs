@@ -211,7 +211,7 @@ fn lowering_records_provenance_for_the_seeded_names() {
 // -- the all-or-nothing shadow pre-scan ------------------------------
 
 fn shadows(source: &str) -> bool {
-    module_shadows_builtin_exception_name(&parse(source))
+    shadowed_builtin_exception_name(&parse(source)).is_some()
 }
 
 #[test]

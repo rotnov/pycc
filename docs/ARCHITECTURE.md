@@ -46,7 +46,7 @@ closure to the deployment artifact under `auto` or `allowlist`; `deny` and
 |---|---|
 | `pycc` | CLI driver, orchestration, incremental engine |
 | `pycc_lexer` / `pycc_parser` / `pycc_ast` | Frontend. Grammar reference: CPython 3.14 `Grammar/python.gram` |
-| `pycc_hir` | Desugared, name-resolved tree + scope graph |
+| `pycc_hir` | Desugared, name-resolved tree + scope graph; also whole-program linking (`lower_module` per file, then `link`/`finalize`, #898/D-222). Filesystem-free by design: it publishes `ProjectImportRequest`s and the driver answers them through `ResolvedImports`, so path policy (source roots, `pycc.toml`, canonicalisation, cycle detection) lives in the driver's `src/modules.rs` |
 | `pycc_types` | Type checker, inference, trait/protocol solver |
 | `pycc_own` | Ownership, escape, Send/Sync-style thread checks |
 | `pycc_mir` | Typed SSA IR + optimization passes |
@@ -59,8 +59,9 @@ closure to the deployment artifact under `auto` or `allowlist`; `deny` and
 | `pycc_testkit` | Conformance/differential test harness (see TESTING.md) |
 
 The implemented v0.1 frontend currently uses `ruff_python_parser` to produce
-the AST. `pycc_hir::lower_all` (the driver's entry; `lower_checked` is its
-first-diagnostic view) preserves module statement order and lowers
+the AST. `pycc_hir::lower_all` (the single-file entry, now exactly
+`finalize(lower_module(m, &ResolvedImports::default())?.hir)`; `lower_checked`
+is its first-diagnostic view) preserves module statement order and lowers
 primitive literals and annotations, assignments, arithmetic, comparisons,
 calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. A first
 `list[int]` slice (D-105, PR-10) lowers list literals, read-only subscript

@@ -6,9 +6,9 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 
 | Command | Does |
 |---|---|
-| `pycc build [PATH] -o OUT` | compile to a deployment artifact; debug by default, unless `--release` or a neighboring `pycc.toml`'s `opt = "release"` says otherwise (see `--release` below) |
-| `pycc run [PATH] [-- args]` | build + execute |
-| `pycc check PATH...` | frontend only: parse + HIR + types for every explicit file; reports every diagnostic the failing pass found for that file (parser fan-out since #864 Part 1, D-217; HIR lowering per top-level item with cascade suppression since Part 2, D-219; the type checker one per failing function, solver-first, since Part 3, D-220); no codegen |
+| `pycc build [PATH] -o OUT` | compile to a deployment artifact; `PATH` and every project module it imports (see "Project imports" below) are linked into one program; debug by default, unless `--release` or a neighboring `pycc.toml`'s `opt = "release"` says otherwise (see `--release` below) |
+| `pycc run [PATH] [-- args]` | build + execute; every imported module's top-level statements run before the entry file's, in dependency order |
+| `pycc check PATH...` | frontend only: parse + HIR + link + types for every explicit file *and its import closure*; reports every diagnostic the failing pass found, each rendered against the file that owns it (parser fan-out since #864 Part 1, D-217; HIR lowering per top-level item with cascade suppression since Part 2, D-219; the type checker one per failing item, solver-first, since Part 3, D-220; per-file attribution across a linked program since #898, D-222); no codegen |
 | `pycc test` | run project tests compiled (pytest-style discovery, subset) |
 | `pycc explain CODE` | long-form doc for a diagnostic (`pycc explain T0021`) |
 | `pycc init [NAME]` | scaffold `pycc.toml` + `src/main.py`; refuses to overwrite an existing `pycc.toml`, non-directory `src`, or `src/main.py` (exit 2, nothing written) |
@@ -93,9 +93,37 @@ same error. Otherwise the solver's per-function diagnostics are reported in
 item order, then every checker entry -- per-function or module-level --
 whose function the solver did not flag, in the checker's order. If the
 solver passes, the checker's list against the solved signatures is reported
-on its own. Directory discovery,
-an omitted path meaning the current project, and `pycc.toml` project loading
-arrive with multi-file projects in v0.4. The ownership pass joins `check` when
+on its own.
+
+### Project imports
+
+Since #898 (D-222) `check`, `build`, and `run` resolve
+`from <project module> import <name>` across files. The dotted module name
+resolves against a *source root*: the directory named by a `pycc.toml`'s
+`[project].entry` (searched for in the entry file's directory and its
+ancestors), or -- with no `pycc.toml` -- the first directory above the entry
+file's own package chain (the walk stops at the first directory with no
+`__init__.py`). A stdlib module name always wins over a same-named project
+file. Relative imports (`from .mod import x`) resolve against the importer's
+package. The two mechanisms are ordered, not exclusive: when a `pycc.toml`
+is found but the directory named by its `[project].entry` cannot be
+canonicalized, or is not an ancestor of the checked file, discovery falls
+back to the package walk rather than reporting a diagnostic. Root discovery
+is lazy: a file with no project import never pays for it.
+
+A dependency's diagnostics render against the dependency's own path, and an
+unreadable or undecodable dependency is exit 2 exactly like an unreadable
+input named on the command line. `pycc check a.py b.py` still processes each
+path independently, so when `b.py` imports `a.py`, `a.py`'s diagnostics print
+once under each path -- a cross-invocation incremental cache is a later v0.4
+item. Type diagnostics are attributed per item, so a diagnostic from a
+dependency's function or top-level statement names that file; a pre-check or
+module-level solver failure names the entry file. All `pycc_types` spans
+remain `0,0` until #877.
+
+Directory discovery, an omitted path meaning the current project, and
+`pycc.toml` project *mode* (its `[project].entry` as the default build
+target) remain deferred. The ownership pass joins `check` when
 `pycc_own` is introduced in v0.5.
 
 Paths are parsed in the operating system's native representation, so Unix
@@ -127,7 +155,7 @@ directory once project mode exists.
 ## Key flags
 
 ```
---release           LLVM's O3-equivalent whole-module optimization pipeline (D-094); no explicit flag or neighboring pycc.toml `opt = "release"` default builds debug (unoptimized). True cross-file LTO awaits v0.4's multi-file support (one module per compilation today); aggressive RC elision (v0.5's `pycc_own`) and per-config asserts are not implemented yet.
+--release           LLVM's O3-equivalent whole-module optimization pipeline (D-094); no explicit flag or neighboring pycc.toml `opt = "release"` default builds debug (unoptimized). True cross-file LTO awaits v0.4's separate compilation (one linked program per compilation today: the entry file and its whole import closure are linked into a single module before optimization, #898/D-222); aggressive RC elision (v0.5's `pycc_own`) and per-config asserts are not implemented yet.
 --target TRIPLE     cross-compile: currently proven same-OS/cross-arch only (e.g. macOS x64⟷arm64, D-026); cross-OS targets not yet supported
 --emit mir|llvm-ir|obj|asm
 --int hybrid|native|bigint    int repr override (default hybrid, D-001) — native = documented CPython deviation

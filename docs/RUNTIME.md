@@ -228,7 +228,7 @@ reaching codegen. `BaseExceptionGroup`'s hierarchy parent is treated as
 (D-202) -- see the decision entry for the full simplification list.
 
 Two further `except*` rejections close the over-acceptance gaps #795
-recorded (see D-222, which narrows D-202):
+recorded (see D-223, which narrows D-202):
 
 - A `return`, `break`, or `continue` inside an `except*` clause body is
   rejected during HIR lowering with `L0001` (`'return' in an 'except*'

@@ -10,7 +10,7 @@ of this snapshot, and CI is watched by the dispatching session rather than
 by the implementing agent. The plan this followed is
 <https://github.com/rotnov/pycc/issues/795#issuecomment-5524700517>. The new
 decision record is
-[D-222](../decisions/D-222-reject-except-star-exceptiongroup-at-compile-time.md),
+[D-223](../decisions/D-223-reject-except-star-exceptiongroup-at-compile-time.md),
 which narrows -- without editing -- the accepted
 [D-202](../decisions/D-202-pep-654-except-star-and-exceptiongroup.md).
 
@@ -41,7 +41,7 @@ silently:
   has no mechanism to raise it. `check_try_star_stmt` in
   `crates/pycc_types/src/exception.rs` now rejects both names -- and any
   user class whose MRO reaches either of them -- at compile time with
-  `C0001` and a message that says why. D-222 records that choice
+  `C0001` and a message that says why. D-223 records that choice
   and why a compile-time `C0001` is the honest form of the divergence.
 
 Ten new `tests/diagnostics/` fixture pairs cover both gaps plus the
@@ -54,7 +54,7 @@ Documentation updated in the same change: `docs/PYTHON_STANDARDS.md` rule 12
 gains the `out-of-scope` carve-out for this gap (edited line-count-neutrally
 because the conformance-breadth manifest fail-closed-checks
 `matrix_line: 348`), and `docs/ROADMAP.md`'s exception-handling section
-gains a dated `2026-09-03 / #795 / D-222` paragraph. `docs/RUNTIME.md` and
+gains a dated `2026-09-03 / #795 / D-223` paragraph. `docs/RUNTIME.md` and
 the `L0001`/`C0001` explain text in `crates/pycc_diag/src/explain.rs` (with
 its `docs/DIAGNOSTICS.md` counterpart) describe the two new rejections. No
 conformance matrix row moves: PEP 654 stays `◐`.
@@ -90,7 +90,7 @@ an ambient-locale artefact, not a diff defect, and re-running it under
 
 - [#903](https://github.com/rotnov/pycc/issues/903) (v0.4) tracks raising a
   real runtime `TypeError` for `except* ExceptionGroup`, which is what would
-  let D-222 be superseded rather than narrowed further.
+  let D-223 be superseded rather than narrowed further.
 
 ## Where a fresh session should resume
 

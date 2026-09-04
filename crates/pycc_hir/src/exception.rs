@@ -64,7 +64,7 @@ const FIRST_OSERROR_FAMILY_TAG: usize = 7;
 /// independent of whether a `HirClassDef` for it is present in the class
 /// table. Used by `pycc_types::exception::is_unshadowed_builtin_exception` to
 /// decide which builtin names may be treated as "unshadowed" even when the
-/// class table withheld seeding (see `module_shadows_builtin_exception_name`)
+/// class table withheld seeding (see `shadowed_builtin_exception_name`)
 /// -- the flat seven may be, by the same table-independent-resolution
 /// property that keeps `resolve_exception_tag` correct for them; the sixteen
 /// `OSError`-family names, which carry no such fallback, may not.
@@ -189,7 +189,7 @@ pub const EXCEPTION_INIT_MANGLED_NAME: &str = "Exception.__init__";
 /// Lowering seeds them only into a module that actually references one of
 /// the 25 names and shadows none of them -- see this module's
 /// (crate-private) `module_references_builtin_exception_name` and
-/// `module_shadows_builtin_exception_name`.
+/// `shadowed_builtin_exception_name`.
 ///
 /// The definitions are derived from [`BUILTIN_EXCEPTION_CLASSES`] and
 /// [`builtin_exception_parent`], so the hierarchy has exactly one source of
@@ -411,30 +411,45 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
 /// import against `pycc_std`'s registry, which contains none of the 25
 /// names, so an `import ValueError` is rejected as an unresolvable module
 /// before any class-table collision could be reached.
-pub(crate) fn module_shadows_builtin_exception_name(module: &ModModule) -> bool {
-    module.body.iter().any(|stmt| match stmt {
-        Stmt::ClassDef(class_def) => is_builtin_exception_class(class_def.name.as_str()),
-        Stmt::FunctionDef(function_def) => is_builtin_exception_class(function_def.name.as_str()),
-        Stmt::TypeAlias(type_alias) => expr_binds_builtin_exception_name(&type_alias.name),
-        Stmt::AnnAssign(ann_assign) => expr_binds_builtin_exception_name(&ann_assign.target),
-        Stmt::Assign(assign) => assign.targets.iter().any(expr_binds_builtin_exception_name),
-        _ => false,
+/// The first of the 25 builtin exception names the module's top level
+/// binds, in source order, or `None` when it binds none -- the same scan
+/// that used to answer only "does the module shadow one", but naming it so
+/// `program::link` can report which name a module defines when it cannot
+/// be linked with a module that was seeded (#898).
+pub(crate) fn shadowed_builtin_exception_name(module: &ModModule) -> Option<String> {
+    module.body.iter().find_map(|stmt| match stmt {
+        Stmt::ClassDef(class_def) => builtin_exception_name(class_def.name.as_str()),
+        Stmt::FunctionDef(function_def) => builtin_exception_name(function_def.name.as_str()),
+        Stmt::TypeAlias(type_alias) => expr_bound_builtin_exception_name(&type_alias.name),
+        Stmt::AnnAssign(ann_assign) => expr_bound_builtin_exception_name(&ann_assign.target),
+        Stmt::Assign(assign) => assign
+            .targets
+            .iter()
+            .find_map(expr_bound_builtin_exception_name),
+        _ => None,
     })
 }
 
-/// Whether `expr`, used as an assignment target, binds one of the 25
-/// builtin exception names. Recurses through the unpacking-target shapes
+fn builtin_exception_name(name: &str) -> Option<String> {
+    is_builtin_exception_class(name).then(|| name.to_string())
+}
+
+/// The first of the 25 builtin exception names `expr`, used as an
+/// assignment target, binds. Recurses through the unpacking-target shapes
 /// (`a, b = ...`, `[a, b] = ...`, `*rest`) so a name buried in one is still
 /// seen. Any other target shape (an attribute, a subscript) rebinds
 /// something other than a bare module-level name, so it cannot shadow one
 /// of the 25.
-fn expr_binds_builtin_exception_name(expr: &Expr) -> bool {
+fn expr_bound_builtin_exception_name(expr: &Expr) -> Option<String> {
     match expr {
-        Expr::Name(name) => is_builtin_exception_class(name.id.as_str()),
-        Expr::Tuple(tuple) => tuple.elts.iter().any(expr_binds_builtin_exception_name),
-        Expr::List(list) => list.elts.iter().any(expr_binds_builtin_exception_name),
-        Expr::Starred(starred) => expr_binds_builtin_exception_name(&starred.value),
-        _ => false,
+        Expr::Name(name) => builtin_exception_name(name.id.as_str()),
+        Expr::Tuple(tuple) => tuple
+            .elts
+            .iter()
+            .find_map(expr_bound_builtin_exception_name),
+        Expr::List(list) => list.elts.iter().find_map(expr_bound_builtin_exception_name),
+        Expr::Starred(starred) => expr_bound_builtin_exception_name(&starred.value),
+        _ => None,
     }
 }
 

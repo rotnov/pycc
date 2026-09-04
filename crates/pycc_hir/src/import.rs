@@ -7,33 +7,223 @@
 //! `lower_type_alias_stmt`, and `lower_legacy_type_alias_ann_assign` are
 //! each called exactly once, and `import_local_name` twice, all from
 //! `module::lower_top_level_item` -- which is why `lib.rs` re-exports them `pub(crate)`
-//! rather than making them public. The dependency runs the other way for
+//! rather than making them public. The project-import request/answer types
+//! (`ProjectImportRequest`, `ResolvedImports`, #898) are the one public
+//! surface here: the driver's `src/modules.rs` fills them in. The dependency runs the other way for
 //! annotations: the two alias lowerings call `annotation_to_ty`, which
 //! lives in the sibling `func` module.
 
 use crate::class::ClassAnnotationInfo;
-use crate::{ImportBinding, Ty, annotation_to_ty, unresolved_symbol, unsupported};
-use pycc_ast::{Expr, Stmt};
+use crate::{
+    HirClassDef, HirItem, HirModule, ImportBinding, ProjectBindingKind, Ty, annotation_to_ty,
+    is_builtin_exception_class, top_level_bound_names, unresolved_symbol, unsupported,
+};
+use pycc_ast::{Expr, ModModule, Stmt, StmtImportFrom};
 use pycc_diag::{Diagnostic, Span};
+use std::collections::HashMap;
+
+/// One module-level import statement that `pycc_std`'s registry does not
+/// answer, so the driver must resolve it on the filesystem before
+/// `module::lower_module` runs (#898, D-222). `pycc_hir` itself never
+/// touches the filesystem: this is the request half of the contract, and
+/// [`ResolvedImports`] is the answer half.
+///
+/// `names` is empty exactly for a bare `import m` (which binds a module
+/// namespace, a shape Part 1 only recognizes) and lists every imported
+/// name, in source order, for `from ... import a, b`. `module` is `None`
+/// only for a relative `from . import x` with no module segment. `span` is
+/// the whole statement's span and is the key the driver answers under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectImportRequest {
+    pub level: u32,
+    pub module: Option<String>,
+    pub names: Vec<String>,
+    pub span: Span,
+}
+
+/// Scans a parsed module's top-level statements for the imports the driver
+/// must resolve: every relative `from` import, and every absolute
+/// `import`/`from ... import` naming a module `pycc_std::resolve_module`
+/// rejects. Everything else (stdlib imports, multi-name `import a, b`,
+/// `import ... as ...`, non-import statements) is left to
+/// [`lower_import_stmt`]'s own single-file dispatch, so a module with no
+/// project import yields an empty list and lowers exactly as before.
+pub fn project_import_requests(module: &ModModule) -> Vec<ProjectImportRequest> {
+    module
+        .body
+        .iter()
+        .filter_map(project_import_request)
+        .collect()
+}
+
+fn project_import_request(stmt: &Stmt) -> Option<ProjectImportRequest> {
+    match stmt {
+        Stmt::Import(import) => {
+            let [alias] = import.names.as_slice() else {
+                return None;
+            };
+            if alias.asname.is_some() || pycc_std::resolve_module(alias.name.as_str()).is_some() {
+                return None;
+            }
+            Some(ProjectImportRequest {
+                level: 0,
+                module: Some(alias.name.to_string()),
+                names: Vec::new(),
+                span: statement_span(import.range),
+            })
+        }
+        Stmt::ImportFrom(import) => {
+            let module = import.module.as_ref().map(ToString::to_string);
+            if import.level == 0
+                && module
+                    .as_deref()
+                    .is_some_and(|name| pycc_std::resolve_module(name).is_some())
+            {
+                return None;
+            }
+            Some(ProjectImportRequest {
+                level: import.level,
+                module,
+                names: import
+                    .names
+                    .iter()
+                    .map(|alias| alias.name.to_string())
+                    .collect(),
+                span: statement_span(import.range),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn statement_span<R>(range: R) -> Span
+where
+    std::ops::Range<u32>: From<R>,
+{
+    let range = std::ops::Range::<u32>::from(range);
+    Span::new(range.start, range.end)
+}
+
+/// A project module the driver loaded and lowered ahead of the module that
+/// imports it: its display path (the non-canonical path diagnostics
+/// render), its lowered HIR, and the names of its submodules (a
+/// `pkg/name.py` file or `pkg/name/` directory next to a package's
+/// `__init__.py`; always empty for a plain `.py` module) so `from pkg
+/// import name` can tell a submodule from a top-level definition.
+#[derive(Debug, Clone)]
+pub struct ResolvedModule<'a> {
+    pub display_path: String,
+    pub hir: &'a HirModule,
+    pub submodule_names: Vec<String>,
+}
+
+/// The driver's answer to one [`ProjectImportRequest`].
+#[derive(Debug, Clone)]
+pub enum ResolvedImport<'a> {
+    /// `from m import ...`: `m` resolved to a project file that lowered
+    /// successfully, so its names can be bound.
+    Module(ResolvedModule<'a>),
+    /// `import m`: `m` resolved to a project file or package directory.
+    /// Part 1 recognizes the shape but binds no module namespace
+    /// (`C0001`); the driver does not load the file.
+    Found,
+    /// The import cannot be satisfied. `code` and `message` are exactly
+    /// what [`lower_import_stmt`] reports at the statement's span: a
+    /// `T0021` for a CPython-rejected import (a relative import outside a
+    /// package, a target that resolves nowhere), an `E0108` for an import
+    /// cycle, or a `C0001` for a shape the compiler does not support yet
+    /// (a namespace package, an absolute module that resolves nowhere).
+    NotFound { code: &'static str, message: String },
+}
+
+/// The driver's answers for every [`ProjectImportRequest`] of one module,
+/// keyed by statement span, plus every already-lowered module by display
+/// path so a re-export (`from pkg import Point` where `pkg/__init__.py`
+/// itself did `from .geometry import Point`) can be followed to the module
+/// that defines the name. A request absent from the map lowers exactly as
+/// a single-file compilation would (`lower_all` passes an empty map), which
+/// is what keeps single-file behaviour byte-identical.
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedImports<'a> {
+    by_span: HashMap<Span, ResolvedImport<'a>>,
+    modules: HashMap<String, &'a HirModule>,
+}
+
+impl<'a> ResolvedImports<'a> {
+    /// Records the answer for the request at `span`.
+    pub fn insert(&mut self, span: Span, resolved: ResolvedImport<'a>) {
+        self.by_span.insert(span, resolved);
+    }
+
+    /// Registers an already-lowered module under its display path so
+    /// `ImportBinding::Project` re-exports pointing at it can be followed.
+    pub fn add_module(&mut self, display_path: String, hir: &'a HirModule) {
+        self.modules.insert(display_path, hir);
+    }
+
+    fn get(&self, span: Span) -> Option<&ResolvedImport<'a>> {
+        self.by_span.get(&span)
+    }
+
+    /// The module a `Project` binding's `module_path` names. Every such
+    /// binding was created from a module already registered here (the
+    /// driver loads and registers a dependency before the module importing
+    /// it), so the lookup cannot miss for a binding the driver produced;
+    /// the `.expect` follows the crate's coverage convention.
+    fn origin(&self, module_path: &str) -> &'a HirModule {
+        self.modules
+            .get(module_path)
+            .copied()
+            .expect("a Project binding's origin module is registered before its importer lowers")
+    }
+}
+
+/// What one import statement contributes to the importing module's tables:
+/// the bindings it records, plus -- for a project import of a class or type
+/// alias -- the class definitions (the class and its whole MRO) and alias
+/// entries the importer's own lowering needs in scope to resolve
+/// annotations and base classes. `module::lower_module` strips the copied
+/// classes and aliases again before building its `HirModule`, so
+/// `program::link` sees each definition exactly once.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct LoweredImport {
+    pub(crate) bindings: Vec<ImportBinding>,
+    pub(crate) classes: Vec<(String, HirClassDef)>,
+    pub(crate) aliases: Vec<(String, Ty)>,
+}
 
 /// Recognizes a module-level `Stmt::Import`/`Stmt::ImportFrom` and resolves
-/// it against `pycc_std`'s registry (D-136/D-137). Returns `Ok(None)` for
-/// any other statement kind, leaving it to the caller's own dispatch --
-/// mirroring `lower_type_alias_stmt`'s shape exactly.
+/// it against `pycc_std`'s registry (D-136/D-137) or, for a statement the
+/// driver answered in `resolved`, against the loaded project module (#898).
+/// Returns `Ok(None)` for any other statement kind, leaving it to the
+/// caller's own dispatch -- mirroring `lower_type_alias_stmt`'s shape
+/// exactly.
 ///
 /// D-137 is fail-closed: every recognized-but-out-of-scope shape (multiple
-/// names in one `import` statement, an `as` alias, a relative import, an
-/// unresolvable module) is `C0001`, the same generic "statement kind not
-/// supported yet" diagnostic the crate already uses for every other
-/// unimplemented statement kind -- matching the plan's explicit instruction
-/// to reuse `C0001` rather than add a new code for "we recognize this is an
-/// import but don't support this particular shape." A recognized module
-/// with one unresolvable symbol inside an otherwise-valid `from math import
-/// ...` list is instead `C0002` (D-136's own decision text), distinguishing
-/// "we don't support this import shape at all" from "we support `math`,
-/// just not `math.<this-symbol>`" -- and it fails the whole statement, not
-/// a partial bind of the names that did resolve.
-pub(crate) fn lower_import_stmt(stmt: &Stmt) -> Result<Option<Vec<ImportBinding>>, Diagnostic> {
+/// names in one `import` statement, an `as` alias, a relative import the
+/// driver did not resolve, an unresolvable module) is `C0001`, the same
+/// generic "statement kind not supported yet" diagnostic the crate already
+/// uses for every other unimplemented statement kind -- matching the plan's
+/// explicit instruction to reuse `C0001` rather than add a new code for "we
+/// recognize this is an import but don't support this particular shape." A
+/// recognized module with one unresolvable symbol inside an otherwise-valid
+/// `from math import ...` list is instead `C0002` (D-136's own decision
+/// text), distinguishing "we don't support this import shape at all" from
+/// "we support `math`, just not `math.<this-symbol>`" -- and it fails the
+/// whole statement, not a partial bind of the names that did resolve.
+///
+/// A project import follows the same fail-closed split (D-222): a name the
+/// origin module does not define is `T0021` (CPython's own `ImportError`
+/// class of failure), while a name that *is* a submodule, a bare `import m`
+/// of a project file, `import *`, and `as` aliasing are `C0001` capability
+/// gaps. The lookup order for `from m import n` is: submodule probe, class,
+/// top-level function, type alias, a name `m` itself imported (a
+/// re-export, followed to the defining module), then any other top-level
+/// bound name.
+pub(crate) fn lower_import_stmt(
+    stmt: &Stmt,
+    resolved: &ResolvedImports<'_>,
+) -> Result<Option<LoweredImport>, Diagnostic> {
     match stmt {
         Stmt::Import(import) => {
             let [alias] = import.names.as_slice() else {
@@ -49,18 +239,48 @@ pub(crate) fn lower_import_stmt(stmt: &Stmt) -> Result<Option<Vec<ImportBinding>
                 ));
             }
             let module_name = alias.name.as_str();
+            if matches!(
+                resolved.get(statement_span(import.range)),
+                Some(ResolvedImport::Found)
+            ) {
+                return Err(unsupported(
+                    format!(
+                        "module namespace bindings (`import {module_name}`) are not supported yet"
+                    ),
+                    import.range,
+                ));
+            }
             let Some(module) = pycc_std::resolve_module(module_name) else {
                 return Err(unsupported(
                     format!("import of module `{module_name}` is not supported yet"),
                     import.range,
                 ));
             };
-            Ok(Some(vec![ImportBinding::Module {
-                local_name: module_name.to_string(),
-                module,
-            }]))
+            Ok(Some(LoweredImport {
+                bindings: vec![ImportBinding::Module {
+                    local_name: module_name.to_string(),
+                    module,
+                }],
+                ..LoweredImport::default()
+            }))
         }
         Stmt::ImportFrom(import) => {
+            match resolved.get(statement_span(import.range)) {
+                Some(ResolvedImport::Module(module)) => {
+                    return lower_project_from_import(import, module, resolved).map(Some);
+                }
+                Some(ResolvedImport::NotFound { code, message }) => {
+                    return Err(Diagnostic::error(
+                        code,
+                        message.clone(),
+                        statement_span(import.range),
+                    ));
+                }
+                // `Found` is only ever the answer to a bare `import m`;
+                // an unanswered `from` import lowers as a single-file
+                // compilation would.
+                Some(ResolvedImport::Found) | None => {}
+            }
             if import.level != 0 {
                 return Err(unsupported(
                     "a relative import (`from . import ...`) is not supported yet",
@@ -88,22 +308,10 @@ pub(crate) fn lower_import_stmt(stmt: &Stmt) -> Result<Option<Vec<ImportBinding>
                     import.range,
                 ));
             };
-            if import.names.is_empty()
-                || import.names.iter().any(|alias| alias.name.as_str() == "*")
-            {
-                return Err(unsupported(
-                    "`from ... import *` (wildcard import) is not supported yet",
-                    import.range,
-                ));
-            }
+            check_from_import_shape(import)?;
             let mut bound = Vec::with_capacity(import.names.len());
             for alias in &import.names {
-                if alias.asname.is_some() {
-                    return Err(unsupported(
-                        "`from ... import x as y` aliasing is not supported yet",
-                        import.range,
-                    ));
-                }
+                check_alias_shape(import, alias)?;
                 let symbol_name = alias.name.as_str();
                 let Some(symbol) = pycc_std::resolve_symbol(module, symbol_name) else {
                     return Err(unresolved_symbol(
@@ -119,9 +327,189 @@ pub(crate) fn lower_import_stmt(stmt: &Stmt) -> Result<Option<Vec<ImportBinding>
                     symbol,
                 });
             }
-            Ok(Some(bound))
+            Ok(Some(LoweredImport {
+                bindings: bound,
+                ..LoweredImport::default()
+            }))
         }
         _ => Ok(None),
+    }
+}
+
+/// `C0001` for `from ... import *` -- shared by the stdlib and project
+/// arms so both reject the wildcard identically.
+fn check_from_import_shape(import: &StmtImportFrom) -> Result<(), Diagnostic> {
+    if import.names.is_empty() || import.names.iter().any(|alias| alias.name.as_str() == "*") {
+        return Err(unsupported(
+            "`from ... import *` (wildcard import) is not supported yet",
+            import.range,
+        ));
+    }
+    Ok(())
+}
+
+/// `C0001` for `from ... import x as y` -- shared like
+/// `check_from_import_shape`.
+fn check_alias_shape(import: &StmtImportFrom, alias: &pycc_ast::Alias) -> Result<(), Diagnostic> {
+    if alias.asname.is_some() {
+        return Err(unsupported(
+            "`from ... import x as y` aliasing is not supported yet",
+            import.range,
+        ));
+    }
+    Ok(())
+}
+
+/// The project arm of [`lower_import_stmt`]: binds every name of a
+/// `from m import a, b` against the loaded module `m`.
+fn lower_project_from_import(
+    import: &StmtImportFrom,
+    module: &ResolvedModule<'_>,
+    resolved: &ResolvedImports<'_>,
+) -> Result<LoweredImport, Diagnostic> {
+    check_from_import_shape(import)?;
+    let mut lowered = LoweredImport::default();
+    for alias in &import.names {
+        check_alias_shape(import, alias)?;
+        let name = alias.name.as_str();
+        if module
+            .submodule_names
+            .iter()
+            .any(|submodule| submodule == name)
+        {
+            return Err(unsupported(
+                "module namespace bindings (`from pkg import submodule`) are not supported yet",
+                import.range,
+            ));
+        }
+        if !bind_project_name(name, module, resolved, &mut lowered) {
+            let module_name = match &import.module {
+                Some(module_name) => format!("module `{module_name}` (`{}`)", module.display_path),
+                None => format!("package `{}`", module.display_path),
+            };
+            return Err(Diagnostic::error(
+                "T0021",
+                format!("{module_name} has no top-level name `{name}`"),
+                statement_span(import.range),
+            ));
+        }
+    }
+    Ok(lowered)
+}
+
+/// Looks `name` up in `module`'s top level in the documented order and,
+/// when found, records the binding (and any class/alias copies it needs)
+/// into `lowered`. Returns `false` when the module has no such name.
+fn bind_project_name(
+    name: &str,
+    module: &ResolvedModule<'_>,
+    resolved: &ResolvedImports<'_>,
+    lowered: &mut LoweredImport,
+) -> bool {
+    let origin = module.hir;
+    let is_synthetic = |class_name: &str| {
+        origin.seeded_builtin_exception_classes && is_builtin_exception_class(class_name)
+    };
+    let project = |kind| ImportBinding::Project {
+        local_name: name.to_string(),
+        module_path: module.display_path.clone(),
+        kind,
+    };
+    if origin
+        .class_defs
+        .iter()
+        .any(|(class_name, _)| class_name == name && !is_synthetic(class_name))
+    {
+        copy_class_with_ancestors(origin, name, &mut lowered.classes);
+        lowered.bindings.push(project(ProjectBindingKind::Class));
+        return true;
+    }
+    if origin
+        .items
+        .iter()
+        .any(|item| matches!(item, HirItem::Function { name: function_name, .. } if function_name == name))
+    {
+        lowered.bindings.push(project(ProjectBindingKind::Function));
+        return true;
+    }
+    if let Some(alias) = origin
+        .type_aliases
+        .iter()
+        .find(|(alias_name, _)| alias_name == name)
+    {
+        lowered.aliases.push(alias.clone());
+        lowered
+            .bindings
+            .push(project(ProjectBindingKind::TypeAlias));
+        return true;
+    }
+    if let Some(binding) = origin
+        .imports
+        .iter()
+        .find(|binding| import_local_name(binding) == name)
+    {
+        // A re-export: `pkg/__init__.py` did `from .geometry import Point`
+        // and the importer asks `pkg` for `Point`. The recorded binding
+        // already names the defining module, so copy the class/alias from
+        // there and keep pointing at it (one hop always suffices). A
+        // re-exported stdlib binding is cloned as-is.
+        if let ImportBinding::Project {
+            module_path, kind, ..
+        } = binding
+        {
+            let defining = resolved.origin(module_path);
+            match kind {
+                ProjectBindingKind::Class => {
+                    copy_class_with_ancestors(defining, name, &mut lowered.classes);
+                }
+                ProjectBindingKind::TypeAlias => {
+                    let alias = defining
+                        .type_aliases
+                        .iter()
+                        .find(|(alias_name, _)| alias_name == name)
+                        .expect("a TypeAlias binding names an alias its origin module defines");
+                    lowered.aliases.push(alias.clone());
+                }
+                ProjectBindingKind::Function | ProjectBindingKind::Variable => {}
+            }
+        }
+        lowered.bindings.push(binding.clone());
+        return true;
+    }
+    if top_level_bound_names(&origin.items).contains(name) {
+        lowered.bindings.push(project(ProjectBindingKind::Variable));
+        return true;
+    }
+    false
+}
+
+/// Copies `name`'s class definition and every class in its MRO (which
+/// starts with the class itself) from `origin` into `classes`, skipping
+/// any already copied. `class::lower_class` looks every MRO entry of a base
+/// up in the importer's class table (`.expect("every class in the MRO must
+/// be in defined_classes")`), so a class cannot be imported without its
+/// ancestors; the seeded builtin exception ancestors come along too and
+/// `module::lower_module` reconciles them with the importer's own seeding.
+fn copy_class_with_ancestors(
+    origin: &HirModule,
+    name: &str,
+    classes: &mut Vec<(String, HirClassDef)>,
+) {
+    let (_, def) = origin
+        .class_defs
+        .iter()
+        .find(|(class_name, _)| class_name == name)
+        .expect("a class binding names a class its origin module defines");
+    for ancestor in &def.mro {
+        if classes.iter().any(|(copied, _)| copied == ancestor) {
+            continue;
+        }
+        let entry = origin
+            .class_defs
+            .iter()
+            .find(|(class_name, _)| class_name == ancestor)
+            .expect("every class in an MRO is in its module's class table");
+        classes.push(entry.clone());
     }
 }
 
@@ -237,8 +625,11 @@ pub(crate) fn lower_legacy_type_alias_ann_assign(
 /// match on both variants at its own call site.
 pub(crate) fn import_local_name(binding: &ImportBinding) -> &str {
     match binding {
-        ImportBinding::Module { local_name, .. } | ImportBinding::Symbol { local_name, .. } => {
-            local_name
-        }
+        ImportBinding::Module { local_name, .. }
+        | ImportBinding::Symbol { local_name, .. }
+        | ImportBinding::Project { local_name, .. } => local_name,
     }
 }
+
+#[cfg(test)]
+mod tests;

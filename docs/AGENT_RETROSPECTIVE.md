@@ -65,6 +65,94 @@ test harnesses are only meaningful under a UTF-8 locale; run them that way by
 default rather than diagnosing the same class again.
 
 
+## 2026-09-03 — Fixed one mirror arm per review round, three rounds running
+
+What happened: `poisonable_names` in `crates/pycc_hir/src/module.rs` decides,
+per statement kind, what names a failed statement would have bound. #898 made
+imports answerable for the first time, and the answer was wrong in three
+consecutive review rounds — round 2 returned an import's source-side name
+instead of its locally bound one, round 3 revealed there was no `Stmt::Import`
+arm at all, round 5 revealed the `Stmt::ImportFrom` arm still short-circuited
+for every stdlib module. Each round's fix was correct and each was scoped to
+exactly the one arm just reported.
+
+Root cause: the arms hand-mirror `import::lower_import_stmt`'s success
+conditions, and nothing tied a mirror to its original. Fixing the reported arm
+by reading the corresponding branch of the original answers the finding
+without ever asking the question the finding is an instance of — "which other
+arm answers this same question from a stale copy of the rule?".
+
+What fixed it: after round 5, the invariant itself was asserted rather than
+re-checked by hand. `a_failing_import_poisons_and_a_lowering_one_does_not`
+walks a corpus with one row per rejection branch of `lower_import_stmt` and
+derives the expected answer by *calling* `lower_all`, so the mirror cannot
+drift from its original for any shape in the corpus. Both historical defects
+were reconstructed and the test rejects each.
+
+Lesson: when a review finding says a hand-written mirror of another function's
+rule is wrong, the fix is not the arm — it is a test that derives the mirror's
+expected answer by calling the original. Repairing the reported site alone
+guarantees the next round finds the next site, and three rounds of that cost
+more than the test would have. This is the same class
+`.harden/incidents/new-case-misses-branching-sites/` has been counting since
+2026-08-23; its fourth recurrence file records the escalation from prose to a
+required-CI test.
+
+---
+
+## 2026-09-03 — Chased a workspace-wide coverage gap that only existed in one crate's own test binary
+
+What happened: while delivering #898, the `--fail-under-regions 100` gate kept
+failing on regions in `crates/pycc_hir/src/import.rs` that the driver's own
+integration tests plainly executed. Several rounds were spent re-reading those
+tests and adding more CLI fixtures, none of which moved the number.
+
+Root cause: `cargo llvm-cov` counts regions **per crate compilation**, not per
+source file. `pycc_hir` is compiled twice — once into its own unit-test binary
+and once into the `pycc` driver build — and a construct exercised only through
+the driver stays uncovered in `pycc_hir`'s own compilation. The summary table
+adds both compilations together, so the totals looked contradictory.
+
+What fixed it: `cargo llvm-cov --json --output-path` names each compilation in
+the mangled function names under `functions[].regions`, which identified the
+uncovered copy immediately; the fix was a mirror unit test inside `pycc_hir`,
+not another driver test. (`--show-missing-lines` under-reports here;
+`--text --output-dir DIR` writes per-file annotated text with `^0` markers.)
+
+Lesson: when a region looks covered by an integration test but the gate
+disagrees, ask *which compilation* is uncovered before writing another test.
+Read the JSON output for the mangled name, and expect to need a mirror test in
+the owning crate's own unit tests — a downstream test never covers the
+upstream crate's own test-binary compilation.
+
+
+## 2026-09-03 — Asked a reviewer to strengthen assertions on a branch no assertion can reach
+
+What happened: a review pass on #898 flagged two tests
+(`crates/pycc_hir/src/import/tests.rs`) whose names claimed they verified the
+import dedup guard in `crates/pycc_hir/src/module.rs` while asserting only
+that the bindings lower. The reflex was to strengthen the assertions.
+
+Root cause: nobody had checked whether the branch was observable at all.
+Deleting both `continue` guards and running the full workspace suite left all
+74 test binaries green — every copy the guards skip is recorded in
+`imported_*_indices` and removed again by `strip_imported` before anything
+downstream sees the module, so no assertion on the lowered HIR can
+discriminate. Turns were about to be spent writing an assertion that cannot
+exist.
+
+What fixed it: the mutation run itself. The guards were kept (they hold an
+invariant that Part 2's per-module namespaces will make load-bearing) with a
+comment recording that they are deliberately not mutation-sensitive in Part 1,
+and the two tests were renamed to what they actually verify.
+
+Lesson: a test that *hits* a line is not a test that *checks* the branch.
+Before strengthening a test to cover a guard, mutate the guard out and run the
+suite — it costs one run and answers whether an assertion is even possible.
+When the answer is "no observable difference", say so in the comment next to
+the code rather than leaving the next reader to rediscover it.
+
+
 ## 2026-09-02 — Three review rounds spent chasing one stale claim, one phrasing at a time
 
 What happened: while delivering #729 (splitting `tests/conformance.rs` into a

@@ -252,6 +252,17 @@ pub fn resolve_module(name: &str) -> Option<StdModule> {
     }
 }
 
+/// Every name `module` exports, in registry order -- exactly the names a
+/// `from <module> import *` would have bound. [`resolve_symbol`] answers
+/// "is this one name exported"; a caller reasoning about the whole
+/// statement (HIR's failed-import poisoning) needs the set instead.
+pub fn module_symbol_names(module: StdModule) -> impl Iterator<Item = &'static str> {
+    REGISTRY
+        .iter()
+        .filter(move |sym| sym.module == module)
+        .map(|sym| sym.name)
+}
+
 /// Resolves a symbol name inside an already-bound module (e.g.
 /// `resolve_symbol(StdModule::Math, "sqrt")`) to its registered
 /// [`StdSymbol`], or `None` if the module is recognized but this particular
@@ -580,5 +591,27 @@ mod tests {
         let type_checking_sym2 = type_checking_sym;
         assert_eq!(type_checking_sym, type_checking_sym2);
         assert!(format!("{type_checking_sym:?}").contains("TypeCheckingMarker"));
+    }
+
+    #[test]
+    fn module_symbol_names_lists_exactly_one_modules_exports() {
+        let math: Vec<_> = module_symbol_names(StdModule::Math).collect();
+        assert!(math.contains(&"sqrt"), "{math:?}");
+        assert!(
+            math.iter()
+                .all(|name| resolve_symbol(StdModule::Math, name).is_some()),
+            "{math:?}"
+        );
+        for name in &math {
+            assert!(
+                REGISTRY
+                    .iter()
+                    .any(|sym| sym.module == StdModule::Math && sym.name == *name),
+                "{name} is not a `math` export"
+            );
+        }
+        let typing: Vec<_> = module_symbol_names(StdModule::Typing).collect();
+        assert!(typing.contains(&"cast"), "{typing:?}");
+        assert!(!typing.contains(&"sqrt"), "{typing:?}");
     }
 }

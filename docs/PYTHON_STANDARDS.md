@@ -224,7 +224,7 @@ For each newly observed upstream release:
     [#775](https://github.com/rotnov/pycc/issues/775)) and two
     over-acceptance gaps [#795](https://github.com/rotnov/pycc/issues/795)
     later found are closed, but the second closes as a `C0001` rejection
-    diverging from CPython's runtime `TypeError` (D-222; still open: #903);
+    diverging from CPython's runtime `TypeError` (D-223; still open: #903);
     PEP 572's fixture restricts the walrus value to
     `int`/`float`/`bool`/`None` (new diagnostic `T0050`) and skips a walrus
     nested inside a comprehension, matching CPython's own
