@@ -37,10 +37,12 @@ use pycc_diag::{Diagnostic, Span};
 ///
 /// This is deliberately *element*-shaped rather than a whole-`Ty` postcheck.
 /// `pycc_types`' tuple-literal inference calls it from inside its own
-/// element loop, immediately after inferring each element, so a later
-/// element's own inference failure (an undefined name, say) is still
-/// reported ahead of an earlier element's type gate. Folding it into a
-/// whole-`Ty` check would silently reorder those diagnostics.
+/// element loop, immediately after inferring each element, so the elements
+/// are gated in source order: an earlier element's type gate is reported
+/// ahead of a later element's own inference failure (an undefined name,
+/// say). Folding it into a whole-`Ty` check would silently reorder those
+/// diagnostics -- `(1, "a", undefined_name)` would report the undefined
+/// name instead of `T0039`.
 pub fn check_tuple_element_ty(element: &Ty, span: Span) -> Result<(), Diagnostic> {
     if matches!(element, Ty::Int | Ty::Bool | Ty::Float) {
         return Ok(());

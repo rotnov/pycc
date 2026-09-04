@@ -9887,6 +9887,29 @@ fn a_tuple_literal_propagates_an_ill_typed_element_s_error() {
 }
 
 #[test]
+fn a_tuple_literal_reports_an_earlier_element_s_t0039_before_a_later_undefined_name() {
+    // D-227 decision 4: `check_tuple_element_ty` runs per element *inside*
+    // this loop rather than as a whole-`Ty` postcheck, so the composed
+    // `(1, "a", undefined_name)` shape pins which diagnostic wins. The gate
+    // fires on element 1 before element 2 is ever inferred, so `T0039` is
+    // reported and the undefined name is never reached. Folding the
+    // per-element gate into a whole-`Ty` postcheck like `T0034`/`T0036`/
+    // `T0038` would silently flip this to `T0021`.
+    let env = Environment::new();
+    let expr = HirExpr::TupleLiteral(vec![
+        HirExpr::IntLiteral(1),
+        HirExpr::StringLiteral("a".to_string()),
+        HirExpr::Name("undefined".to_string()),
+    ]);
+    let err = infer_expr(&env, &expr).unwrap_err();
+    assert_eq!(err.code, "T0039");
+    assert_eq!(
+        err.message,
+        "tuple element type `str` is not compiled yet (D-116) -- only int/bool/float elements are"
+    );
+}
+
+#[test]
 fn tuple_index_with_a_literal_in_range_int_infers_the_positional_element_type() {
     let hir = HirModule {
         seeded_builtin_exception_classes: false,

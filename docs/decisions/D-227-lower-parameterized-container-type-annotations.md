@@ -41,7 +41,9 @@ status: accepted
      `pycc_hir::func::annotation_to_ty`, which makes them available in every
      position that routes through it: function parameters, local and
      module-level `AnnAssign`, PEP 695 `type X = ...` and legacy
-     `X: TypeAlias = ...` aliases, and protocol members.
+     `X: TypeAlias = ...` aliases. A protocol member's annotation also
+     routes through it, but decision 10's gate then rejects a container
+     result, so a container type is *not* usable there.
   2. **Validate arity explicitly**, with a new diagnostic `T0053`: `list` and
      `set` take exactly one type argument, `dict` exactly two, `tuple` at
      least one. `T0053` also rejects two legal-Python spellings this version's
@@ -57,8 +59,9 @@ status: accepted
   4. **Two entry points, not one.** `check_container_ty` is a whole-`Ty` check
      for list/dict/set; `check_tuple_element_ty` is per-element. `T0039`
      fires from *inside* `pycc_types`' tuple-literal inference loop, not as a
-     postcheck, so that a later element's own inference failure (an undefined
-     name) is still reported ahead of an earlier element's type gate. Folding
+     postcheck, so that the elements are gated in source order and an
+     earlier element's type gate is reported ahead of a later element's own
+     inference failure (an undefined name). Folding
      the two together would silently reorder diagnostics — `(1, "a",
      undefined_name)` would report the undefined name instead of `T0039`.
   5. **Both gates take a `Span`.** The four existing literal call sites keep

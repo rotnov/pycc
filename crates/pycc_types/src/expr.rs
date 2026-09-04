@@ -658,11 +658,11 @@ pub(crate) fn infer_expr_in(
             for element in elements {
                 let this_ty = infer_expr_in(env, local_names, element)?;
                 // Per-element, *inside* the loop, not a whole-`Ty` postcheck
-                // like the three arms above: a later element's own inference
-                // failure (an undefined name, say) must still be reported
-                // ahead of an earlier element's type gate. `pycc_hir` exposes
-                // the element-shaped entry point for exactly this reason
-                // (D-227).
+                // like the three arms above: the elements are gated in source
+                // order, so an earlier element's type gate is reported ahead
+                // of a later element's own inference failure (an undefined
+                // name, say). `pycc_hir` exposes the element-shaped entry
+                // point for exactly this reason (D-227).
                 pycc_hir::check_tuple_element_ty(&this_ty, Span::new(0, 0))?;
                 elem_tys.push(this_ty);
             }

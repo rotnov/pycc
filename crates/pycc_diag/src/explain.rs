@@ -49,13 +49,14 @@ does not yet lower -- a `with` statement, a tuple-unpacking assignment, an \
 unrecognized import shape, or a type annotation this version's lowering \
 does not recognize, for example. Since D-227 (issue #918) the \
 parameterized container annotations `list[T]`, `set[T]`, `dict[K, V]` \
-and `tuple[A, B, ...]` *are* lowered in parameter, local-variable, type-\
-alias and protocol-member positions, so C0001 no longer covers every \
+and `tuple[A, B, ...]` *are* lowered in parameter, local-variable and \
+type-alias positions, so C0001 no longer covers every \
 annotation more complex than a bare name; what it still covers there is \
 the bare, unparameterized `list`/`set`/`dict`/`tuple` spelling (whose \
-message names the parameterized form to write instead) and a container \
+message names the parameterized form to write instead), a container \
 annotation in return position, which stays reserved for a later slice \
-(issue #925). It also fires for calls to known Python 3.14 \
+(issue #925), and a protocol member whose type is a container, which \
+structural conformance checking has no case for yet. It also fires for calls to known Python 3.14 \
 callable builtins that this compiler version does not implement (e.g. \
 `ValueError(\"x\")`, `Exception(\"msg\")`, `int(\"5\")`, `range(10)` as a \
 standalone call) -- these are valid Python, not name-resolution failures \

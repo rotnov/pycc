@@ -246,7 +246,7 @@ pub(crate) fn lower_return_annotation(
         Some(ann) => {
             let ty = annotation_to_ty(ann, type_param, class_name, aliases, class_defs)?;
             // D-227 (issue #918) lowers container annotations in parameter,
-            // local-variable, type-alias and protocol-member positions only.
+            // local-variable and type-alias positions only.
             // Return position is deliberately excluded and tracked separately
             // as issue #925: a container-typed *call result* already reaches
             // an unhandled codegen case today (issue #926, via D-146's
@@ -258,7 +258,7 @@ pub(crate) fn lower_return_annotation(
                     format!(
                         "a container return type annotation (`{}`) is not supported yet -- \
                          container annotations are currently supported in parameter, \
-                         local-variable, type-alias and protocol-member positions only",
+                         local-variable and type-alias positions only",
                         ty.name()
                     ),
                     pycc_ast::expr_range(ann),
@@ -676,7 +676,9 @@ pub(crate) fn annotation_to_ty(
                     // nothing and keeps the user's own definition winning.)
                     if known_class.is_none()
                         && CONTAINER_ANNOTATION_NAMES.contains(&base_name.id.as_str())
-                        && !aliases.iter().any(|(name, _)| name == base_name.id.as_str())
+                        && !aliases
+                            .iter()
+                            .any(|(name, _)| name == base_name.id.as_str())
                     {
                         return container_annotation_to_ty(
                             base_name.id.as_str(),

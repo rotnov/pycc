@@ -6369,9 +6369,10 @@ fn container_annotation_err(source: &str) -> Diagnostic {
 
 #[test]
 fn a_parameterized_container_annotation_lowers_in_every_supported_position() {
-    // Parameter, local `AnnAssign`, PEP 695 type alias, legacy `TypeAlias`
-    // and protocol-member positions -- the four §6 sites Part 1 covers,
-    // exercised through the real lowering entry point.
+    // The §6 positions Part 1 covers, exercised through the real lowering
+    // entry point: a parameter, a module-level `AnnAssign`, a local
+    // `AnnAssign` and a PEP 695 `type` alias. A protocol member's type is
+    // *not* one of them: it is rejected with `C0001` (D-227 decision 10).
     for source in [
         "def f(x: list[int]) -> None:\n    return\n",
         "def f(x: dict[str, int]) -> None:\n    return\n",
@@ -6384,6 +6385,26 @@ fn a_parameterized_container_annotation_lowers_in_every_supported_position() {
         let module = pycc_parser_test_helper::parse(source);
         assert!(lower_checked(&module).is_ok(), "should lower: {source:?}");
     }
+}
+
+#[test]
+fn a_container_annotation_reports_a_later_unlowerable_argument_before_an_earlier_element_gate() {
+    // The annotation path's ordering is the mirror image of the tuple-literal
+    // path's (D-227 decision 4): here every type argument is lowered by
+    // `annotation_to_ty` first, and `check_container_ty` only runs afterwards
+    // as a whole-`Ty` postcheck. So a *later* argument that cannot be lowered
+    // at all wins over an *earlier* argument's element-type gate, while the
+    // literal path reports the earlier element's `T0039` first (pinned by
+    // `a_tuple_literal_reports_an_earlier_element_s_t0039_before_a_later_undefined_name`
+    // in `pycc_types`). Both orderings are pinned so that folding either
+    // entry point into the other becomes a visible test failure.
+    let err =
+        container_annotation_err("def f(x: tuple[int, str, Undefined]) -> None:\n    return\n");
+    assert_eq!(err.code, "C0001");
+    assert_eq!(
+        err.message,
+        "type annotation `Undefined` is not supported yet"
+    );
 }
 
 #[test]
@@ -6542,15 +6563,20 @@ fn a_container_return_annotation_is_rejected_naming_the_positions_that_do_work()
         assert_eq!(
             diagnostic.message,
             format!(
-                "a container return type annotation (`{family}`) is not supported yet -- container annotations are currently supported in parameter, local-variable, type-alias and protocol-member positions only"
+                "a container return type annotation (`{family}`) is not supported yet -- container annotations are currently supported in parameter, local-variable and type-alias positions only"
             ),
             "{family}"
         );
     }
     // Reached through a type alias too, not only a literal annotation.
-    let diagnostic = container_annotation_err("type Ints = list[int]\ndef f() -> Ints:\n    return None\n");
+    let diagnostic =
+        container_annotation_err("type Ints = list[int]\ndef f() -> Ints:\n    return None\n");
     assert_eq!(diagnostic.code, "C0001");
-    assert!(diagnostic.message.contains("a container return type annotation (`list[int]`)"));
+    assert!(
+        diagnostic
+            .message
+            .contains("a container return type annotation (`list[int]`)")
+    );
 }
 
 #[test]
@@ -6564,7 +6590,9 @@ fn a_user_defined_class_named_list_still_wins_over_the_builtin_container() {
     );
     assert_eq!(diagnostic.code, "T0044");
     assert!(
-        diagnostic.message.contains("class `list` does not define `__class_getitem__`"),
+        diagnostic
+            .message
+            .contains("class `list` does not define `__class_getitem__`"),
         "{}",
         diagnostic.message
     );
