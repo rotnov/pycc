@@ -1,10 +1,10 @@
-error[C0001]: a class body statement must be a method definition (`def ...`) -- no other statement kind is supported yet
+error[C0001]: an async method is not supported yet
  --> tests/diagnostics/c0001_issue_864_repro.py:2:5
   |
-2 |     x = 1
-  |     ^^^^^ a class body statement must be a method definition (`def ...`) -- no other statement kind is supported yet
-error[C0001]: a class body statement must be a method definition (`def ...`) -- no other statement kind is supported yet
+2 |     async def m(self) -> None: pass
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ an async method is not supported yet
+error[C0001]: an async method is not supported yet
  --> tests/diagnostics/c0001_issue_864_repro.py:4:5
   |
-4 |     y = "a"
-  |     ^^^^^^^ a class body statement must be a method definition (`def ...`) -- no other statement kind is supported yet
+4 |     async def n(self) -> None: pass
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ an async method is not supported yet

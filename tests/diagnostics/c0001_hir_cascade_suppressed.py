@@ -1,6 +1,6 @@
 import os
 class A:
-    x = 1
+    async def m(self) -> None: pass
 class B(A):
     def __init__(self) -> None:
         self.v = 1

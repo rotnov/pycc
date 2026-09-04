@@ -1,6 +1,6 @@
 class A:
-    x = 1
+    async def m(self) -> None: pass
 class B:
-    y = "a"
+    async def n(self) -> None: pass
 def f(a: int) -> int:
     return a + "s"
