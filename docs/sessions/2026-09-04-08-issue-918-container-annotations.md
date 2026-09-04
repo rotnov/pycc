@@ -1,4 +1,4 @@
-# 2026-09-04 (08) — #918 Part 1: parameterized container annotations lower in every non-return position
+# 2026-09-04 (08) — #918 Part 1: parameterized container annotations lower in parameter, variable and type-alias positions
 
 ## Overall status
 
@@ -6,9 +6,12 @@ Delivered as PR #930 (`feat/issue-918-container-annotations`, head `c3b036f7`
 plus this snapshot's own commit), based on `origin/main` at `c639e682`,
 re-fetched and unmoved. State re-resolved immediately before this snapshot was
 committed: open, not a draft, `MERGEABLE`, all six review threads answered and
-resolved, CI green on every check that had reported. It carries `Fixes #918` and
-the GraphQL `closingIssuesReferences` query reports `totalCount: 1` naming only
-#918.
+resolved, CI green on every check that had reported. It deliberately does not
+carry a closing keyword for #918: Part 1 is one of two decomposed parts, and
+#925 (Part 2) must close before the parent does, so the body reads "Part 1 of
+#918; #918 stays open" and the GraphQL `closingIssuesReferences` query reports
+`totalCount: 0`. A round-7 review found the original `Fixes #918` and it was
+removed before merge.
 
 `pycc_hir::func::annotation_to_ty` now lowers `list[T]`, `set[T]`, `dict[K, V]`
 and `tuple[A, B, ...]` in parameter, local and module `AnnAssign`, PEP 695, and
@@ -116,7 +119,9 @@ four files.
 
 1. **#925 (Part 2, return position)** needs its own `issue-to-plan` run against
    the post-merge tree — not against this branch, since the Part 1 lowering it
-   builds on only exists after #930 merges.
+   builds on only exists after #930 merges. **#918 stays open after this merge
+   by design** and is closed by whoever merges #925, not re-triaged as
+   still-current Part 1 work: every Part 1 criterion is delivered here.
 2. **#929** is the CI-governance follow-up and needs the two-PR staged shape;
    read its body before starting, the digest pin is the whole cost.
 3. **#926** (a private helper returning a list literal panics in codegen) is
@@ -156,8 +161,9 @@ no longer describes it. Two coverage runs were killed for the same reason before
 this one: each had been started before a fix round landed, so each would have
 measured a tree that was about to change.
 
-One commit lands after the measurement: this snapshot itself, together with the
-retrospective entry and the round-6 findings lines. All three are prose, so
+Only prose lands after the measurement: this snapshot itself, the retrospective
+entry, the round-6 and round-7 findings lines, and round 7's narrowing of
+D-228's title and of the PR body's closing reference. All of it is prose, so
 `git diff --name-only c3b036f7..HEAD -- crates src Cargo.toml Cargo.lock` is
 empty — executed, not asserted — and no gate that reads the Rust tree is
 affected; the doc gates are re-run once more on the final head before the merge.

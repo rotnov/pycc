@@ -1,10 +1,10 @@
 ---
 id: D-228
-title: "Lower parameterized container type annotations in every position but return"
+title: "Lower parameterized container type annotations in parameter, local- and module-variable and type-alias positions"
 status: accepted
 ---
 
-## D-228: Lower parameterized container type annotations in every position but return
+## D-228: Lower parameterized container type annotations in parameter, local- and module-variable and type-alias positions
 
 - Status: accepted (issue [#918](https://github.com/rotnov/pycc/issues/918), Part 1).
 - Context:

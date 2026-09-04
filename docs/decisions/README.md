@@ -234,4 +234,4 @@ current.
 | [D-225](./D-225-synthesize-an-implicit-zero-argument-constructor.md) | Synthesize an implicit zero-argument constructor for a class with no `__init__` | accepted |
 | [D-226](./D-226-infer-an-un-annotated-class-attribute-s-type.md) | Infer an un-annotated class attribute's type from its literal | accepted |
 | [D-227](./D-227-partition-the-llms-txt-context-ceiling-across.md) | Partition the llms.txt context ceiling across per-resource budgets | accepted |
-| [D-228](./D-228-lower-parameterized-container-type-annotations.md) | Lower parameterized container type annotations in every position but return | accepted |
+| [D-228](./D-228-lower-parameterized-container-type-annotations.md) | Lower parameterized container type annotations in parameter, local- and module-variable and type-alias positions | accepted |
