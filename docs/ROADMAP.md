@@ -4,7 +4,7 @@ Milestone = shippable + demo-able. Acceptance criteria are binary; a milestone i
 
 ## Current delivery status
 
-Last reviewed on 2026-08-26. This section describes the repository tree in the
+Last reviewed on 2026-09-04. This section describes the repository tree in the
 commit that contains it: behavior and evidence from that same commit count,
 while work that exists only in another open pull request or unmerged branch
 remains work in flight.
