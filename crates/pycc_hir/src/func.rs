@@ -295,6 +295,19 @@ pub(crate) fn annotation_to_ty(
         // to the enclosing class's instance type — the same type `self` has.
         // Outside a class (`class_name` is `None`), `"Self"` falls through to
         // the alias/C0001 path below, matching CPython's own scoping rule.
+        // #911 (Part 1 of #885): `ClassVar` is a *class-body-only* annotation
+        // wrapper -- PEP 526 defines it as "this name is a class variable,
+        // not an instance one", which is meaningless on a parameter, a
+        // return type, or a local `AnnAssign`. It is deliberately **not**
+        // unwrapped here the way `Final`/`Annotated` are: silently accepting
+        // `def f(x: ClassVar[int])` would make the spelling look supported
+        // when it carries no meaning at all. `pycc_hir::class::body` strips
+        // the wrapper before calling this function, so the class-body
+        // position never reaches this arm.
+        Expr::Name(name) if name.id.as_str() == "ClassVar" => Err(unsupported(
+            "`ClassVar` is only valid on a class-body attribute declaration              (`X: ClassVar[int] = 1` inside a `class` body), and takes exactly one type argument",
+            pycc_ast::expr_range(annotation),
+        )),
         Expr::Name(name) if name.id.as_str() == "Self" && class_name.is_some() => {
             Ok(Ty::Instance(Box::new(class_name.unwrap().to_string())))
         }
@@ -375,6 +388,15 @@ pub(crate) fn annotation_to_ty(
                 ));
             };
             match base_name.id.as_str() {
+                // #911: see the bare-`ClassVar` arm above -- `ClassVar[T]`
+                // is legal only on a class-body attribute declaration, where
+                // `pycc_hir::class::body::strip_class_var` removes it before
+                // this function ever sees it.
+                "ClassVar" => Err(unsupported(
+                    "`ClassVar` is only valid on a class-body attribute declaration \
+                     (`X: ClassVar[int] = 1` inside a `class` body)",
+                    pycc_ast::expr_range(annotation),
+                )),
                 "Annotated" => {
                     let Expr::Tuple(tuple) = sub.slice.as_ref() else {
                         return Err(unsupported(

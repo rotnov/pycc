@@ -1643,6 +1643,28 @@ fn check_class_pattern(
         bindings.extend(check_pattern(env, local_names, pat, &param_ty)?);
     }
     for (attr, pat) in keyword {
+        // #911 (Part 1 of #885): a class-level attribute is a compile-time
+        // constant with no instance storage, so `case W(MIN_WIDTH=x)` has no
+        // per-instance value to match against -- every instance of `W` would
+        // bind the same constant, making the sub-pattern either always or
+        // never matching. Reject it rather than silently binding `Ty::Infer`
+        // through the `unwrap_or` below.
+        if class_def
+            .class_attrs
+            .iter()
+            .any(|(name, _, _)| name == attr)
+        {
+            return Err(Diagnostic::error(
+                "T0044",
+                format!(
+                    "`{attr}` is a class-level attribute of class `{}`, not an instance \
+                     attribute -- it is a compile-time constant and cannot be matched as a \
+                     class-pattern keyword sub-pattern",
+                    class_def.name
+                ),
+                Span::new(0, 0),
+            ));
+        }
         let attr_ty = class_def
             .attrs
             .iter()

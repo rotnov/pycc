@@ -1,6 +1,6 @@
 class A:
-    x: int = 1
+    x = 1
 class B:
-    y: str = "a"
+    y = "a"
 def f(a: int) -> int:
     return a + "s"

@@ -10,7 +10,7 @@ use super::{
     HirClassDef, InstantiateExpr, MirExpr, MirFStringPart, binop_result_ty, lookup, mro_class_def,
     try_lower_enum_member_attr,
 };
-use pycc_hir::{BinOpKind, FStringPart, HirExpr, Ty, UnaryOpKind};
+use pycc_hir::{BinOpKind, ClassAttrValue, FStringPart, HirExpr, Ty, UnaryOpKind};
 use std::collections::HashMap;
 
 pub(super) fn lower_expr(
@@ -628,6 +628,17 @@ pub(super) fn lower_expr(
             {
                 return enum_member_expr;
             }
+            // #911 (Part 1 of #885): `W.MIN_WIDTH` -- a class-level attribute
+            // read through the class name. Intercepted before `lower_expr`
+            // for the same reason the enum-member read above is: the base is
+            // a class name, not a value binding, so lowering it as an
+            // expression would fail.
+            if let HirExpr::Name(class_name) = base.as_ref()
+                && let Some(class_def) = classes.get(class_name.as_str())
+                && let Some(folded) = fold_class_attr(class_def, attr)
+            {
+                return folded;
+            }
             let base = lower_expr(base, scopes, classes, current_class);
             let class_def = class_def_of(&base, classes);
             // #432: walk the MRO for property lookup first (matching
@@ -642,6 +653,23 @@ pub(super) fn lower_expr(
                         args: vec![base],
                         ty,
                     };
+                }
+            }
+            // #911 (Part 1 of #885): `w.MIN_WIDTH` / `self.MIN_WIDTH` -- a
+            // class-level attribute read through an instance. Folded to its
+            // constant *before* the `mro_attrs` lookup below, whose miss
+            // panics: a class attribute deliberately never enters
+            // `mro_attrs`/`mro_attr_count`, so it occupies no instance slot
+            // and does not change any other attribute's slot index or the
+            // allocation size of the class's instances.
+            //
+            // Discarding the already-lowered `base` here is sound because
+            // `pycc_types` restricts a class-attribute read's base to a bare
+            // name -- evaluating it has no observable effect.
+            for mro_class in &class_def.mro {
+                let mro_def = mro_class_def(mro_class, classes);
+                if let Some(folded) = fold_class_attr(mro_def, attr) {
+                    return folded;
                 }
             }
             let flat_attrs = mro_attrs(class_def, classes);
@@ -1053,4 +1081,24 @@ pub(super) fn pre_bind_named_expr_targets(
             }
         }
     }
+}
+
+/// #911 (Part 1 of #885): folds a class-level attribute read into the
+/// literal recorded in `HirClassDef::class_attrs`, or `None` when
+/// `class_def` declares no attribute of that name.
+///
+/// A class attribute has no runtime storage at all -- no instance slot, no
+/// module global (unlike an enum member's singleton), and no `pycc_codegen`
+/// footprint -- so every read is resolved here, at MIR-lowering time.
+fn fold_class_attr(class_def: &HirClassDef, attr: &str) -> Option<MirExpr> {
+    let (_, _, value) = class_def
+        .class_attrs
+        .iter()
+        .find(|(name, _, _)| name == attr)?;
+    Some(match value {
+        ClassAttrValue::Int(i) => MirExpr::IntLiteral(*i),
+        ClassAttrValue::Float(f) => MirExpr::FloatLiteral(*f),
+        ClassAttrValue::Bool(b) => MirExpr::BoolLiteral(*b),
+        ClassAttrValue::Str(s) => MirExpr::StringLiteral(s.clone()),
+    })
 }

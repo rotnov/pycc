@@ -1042,6 +1042,17 @@ pub(crate) fn infer_expr_in(
                 if let Some(ty) = enum_member_attr_type(class_def, class_name, attr) {
                     return Ok(ty);
                 }
+                // #911 (Part 1 of #885): `W.MIN_WIDTH` -- reading a
+                // class-level attribute through the class name itself. This
+                // is the *only* class-name attribute read pycc supports;
+                // everything else still falls through to the `T0044` below.
+                if let Some((_, ty, _)) = class_def
+                    .class_attrs
+                    .iter()
+                    .find(|(name, _, _)| name == attr)
+                {
+                    return Ok(ty.clone());
+                }
                 return Err(Diagnostic::error(
                     "T0044",
                     format!(
@@ -1054,6 +1065,27 @@ pub(crate) fn infer_expr_in(
                 ));
             }
             let base_ty = infer_expr_in(env, local_names, base)?;
+            // #911 (Part 1 of #885): a class-attribute read is folded to its
+            // constant by `pycc_mir`, which *discards* the base expression.
+            // That is only sound when evaluating the base has no observable
+            // effect, so the base is restricted to a bare name (`w.LIMIT`,
+            // `self.LIMIT`). `make_window().LIMIT` would otherwise drop the
+            // call, so it is rejected here rather than silently mis-compiled.
+            if !matches!(base.as_ref(), HirExpr::Name(_))
+                && let Ty::Instance(class_name) = &base_ty
+                && class::lookup_class_attr_through_mro(env, class_name, attr).is_some()
+            {
+                return Err(Diagnostic::error(
+                    "T0044",
+                    format!(
+                        "the class-level attribute `{class_name}.{attr}` can only be read \
+                         through a plain name (`obj.{attr}`, `self.{attr}`) or through the \
+                         class itself (`{class_name}.{attr}`) -- it is folded to a constant \
+                         at compile time, which would discard the base expression"
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
             class::resolve_attr_get(env, &base_ty, attr)
         }
         HirExpr::MethodCall { base, method, args } => {

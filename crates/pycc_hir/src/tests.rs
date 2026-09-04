@@ -6204,3 +6204,126 @@ fn no_capability_message_renders_an_ast_debug_dump() {
         );
     }
 }
+
+// -- #911 (Part 1 of #885): class-level attributes at the lowering seam ----
+//
+// The end-to-end suite (`tests/issue_911_class_attrs.rs`) drives these same
+// shapes through the compiled `pycc` binary. These crate-local tests pin the
+// same behavior directly at `lower_checked`, the seam that actually owns it:
+// `class::body`'s `AnnAssign` arm, `func::annotation_to_ty`'s two `ClassVar`
+// rejections, and `lower_class`'s post-walk collision reconciliation.
+
+#[test]
+fn an_annotated_class_body_attribute_lowers_to_a_class_attr() {
+    let module = pycc_parser_test_helper::parse(
+        "class C:\n    X: int = 1\n    K: str = \"a\"\n    S: float = -1.5\n    D: bool = True\n\n    def __init__(self) -> None:\n        self.n = 0\n",
+    );
+    let hir = lower_checked(&module).expect("the class body must lower");
+    let (_, class_def) = hir
+        .class_defs
+        .iter()
+        .find(|(name, _)| name == "C")
+        .expect("class `C` must be lowered");
+
+    assert_eq!(
+        class_def.class_attrs,
+        vec![
+            ("X".to_string(), Ty::Int, ClassAttrValue::Int(1)),
+            (
+                "K".to_string(),
+                Ty::Str,
+                ClassAttrValue::Str("a".to_string())
+            ),
+            ("S".to_string(), Ty::Float, ClassAttrValue::Float(-1.5)),
+            ("D".to_string(), Ty::Bool, ClassAttrValue::Bool(true)),
+        ]
+    );
+    // D-154: a class attribute is a compile-time constant, so it must never
+    // appear among the instance attribute slots.
+    assert_eq!(class_def.attrs, vec![("n".to_string(), Ty::Int)]);
+}
+
+#[test]
+fn a_class_var_wrapped_class_body_attribute_lowers_to_the_same_class_attr() {
+    let module = pycc_parser_test_helper::parse(
+        "from typing import ClassVar\n\n\nclass C:\n    X: ClassVar[int] = 7\n\n    def __init__(self) -> None:\n        self.n = 0\n",
+    );
+    let hir = lower_checked(&module).expect("the class body must lower");
+    let (_, class_def) = hir
+        .class_defs
+        .iter()
+        .find(|(name, _)| name == "C")
+        .expect("class `C` must be lowered");
+
+    assert_eq!(
+        class_def.class_attrs,
+        vec![("X".to_string(), Ty::Int, ClassAttrValue::Int(7))]
+    );
+}
+
+#[test]
+fn a_bare_class_var_class_body_annotation_propagates_the_strip_error() {
+    // `strip_class_var`'s own error propagating out of the `AnnAssign` arm,
+    // before the annotation is ever resolved.
+    assert_capability_error_message(
+        "class C:\n    X: ClassVar = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n",
+        "a bare `ClassVar` is not a valid annotation",
+    );
+}
+
+#[test]
+fn a_class_var_in_a_dataclass_body_is_rejected_at_lowering() {
+    assert_capability_error_message(
+        "@dataclass\nclass C:\n    x: int\n    LIMIT: ClassVar[int] = 8\n",
+        "`ClassVar` in a `@dataclass` body is not supported yet",
+    );
+}
+
+#[test]
+fn a_class_var_annotation_outside_a_class_body_is_rejected_at_lowering() {
+    // Both `annotation_to_ty` arms: the bare name and the subscripted form.
+    assert_capability_error_message(
+        "def f(x: ClassVar) -> int:\n    return 1\n",
+        "only valid on a class-body attribute declaration",
+    );
+    assert_capability_error_message(
+        "def f(x: ClassVar[int]) -> int:\n    return 1\n",
+        "only valid on a class-body attribute declaration",
+    );
+}
+
+#[test]
+fn a_class_attribute_colliding_with_an_instance_slot_is_rejected_at_lowering() {
+    // `lower_class`'s post-walk `reject_class_attr_collisions` call, in both
+    // declaration orders -- the check deliberately does not run at the
+    // `AnnAssign` site, where `attrs` is still empty.
+    assert_capability_error_message(
+        "class C:\n    x: int = 1\n\n    def __init__(self) -> None:\n        self.x = 2\n",
+        "collides with an instance attribute",
+    );
+    assert_capability_error_message(
+        "class C:\n    def __init__(self) -> None:\n        self.x = 2\n\n    x: int = 1\n",
+        "collides with an instance attribute",
+    );
+}
+
+#[test]
+fn a_derived_class_attribute_with_no_mro_collision_lowers_at_the_hir_seam() {
+    // The "this base is clean, keep walking" path through
+    // `reject_class_attr_collisions`: every rejection test returns on the
+    // first base it inspects, so none of them completes a loop iteration.
+    let module = pycc_parser_test_helper::parse(
+        "class Base:\n    def __init__(self) -> None:\n        self.n = 3\n\n    @property\n    def twice(self) -> int:\n        return self.n * 2\n\n\nclass Derived(Base):\n    LIMIT: int = 7\n\n    def __init__(self) -> None:\n        self.n = 5\n",
+    );
+    let hir = lower_checked(&module).expect("the derived class must lower");
+    let (_, derived) = hir
+        .class_defs
+        .iter()
+        .find(|(name, _)| name == "Derived")
+        .expect("class `Derived` must be lowered");
+
+    assert_eq!(
+        derived.class_attrs,
+        vec![("LIMIT".to_string(), Ty::Int, ClassAttrValue::Int(7))]
+    );
+}

@@ -461,7 +461,38 @@ pub(crate) fn resolve_attr_get(
             return Ok(ty.clone());
         }
     }
+    // #911 (Part 1 of #885): a class-level attribute (`MIN_WIDTH: int =
+    // -1024`) read through an instance. Checked *after* the instance slots
+    // so a real slot always wins -- the two can never actually collide,
+    // because `pycc_hir` rejects a class attribute that shares a name with
+    // an instance slot or a `@property` in either declaration order, but the
+    // ordering keeps that invariant from being load-bearing here.
+    if let Some(ty) = lookup_class_attr_through_mro(env, class_name, attr) {
+        return Ok(ty);
+    }
     Err(t0044_unknown_member("attribute", class_name, attr))
+}
+
+/// #911 (Part 1 of #885): looks a class-level attribute up through
+/// `class_name`'s MRO, most-derived first, returning its declared type.
+///
+/// A class attribute occupies no instance slot -- `pycc_mir` folds every
+/// read of it to the constant recorded in `HirClassDef::class_attrs` -- so
+/// this walk is deliberately separate from the `attrs` walk above rather
+/// than merged into it.
+pub(crate) fn lookup_class_attr_through_mro(
+    env: &Environment,
+    class_name: &str,
+    attr: &str,
+) -> Option<Ty> {
+    let class_def = expect_class(env, class_name);
+    for mro_class in &class_def.mro {
+        let mro_def = expect_class(env, mro_class);
+        if let Some((_, ty, _)) = mro_def.class_attrs.iter().find(|(name, _, _)| name == attr) {
+            return Some(ty.clone());
+        }
+    }
+    None
 }
 
 /// #436: Resolves a call to a `@staticmethod` or `@classmethod` through
@@ -656,6 +687,33 @@ pub(crate) fn check_attr_set(
     value: &HirExpr,
 ) -> Result<(), Diagnostic> {
     let base_ty = infer_expr_in(env, local_names, base)?;
+    // #911 (Part 1 of #885): every write path to a class-level attribute is
+    // rejected. A class attribute is a compile-time constant folded at each
+    // read (`pycc_mir` never allocates a slot for it), so `obj.X = 5` has
+    // nowhere to write -- and CPython's own semantics here (the write
+    // creates an *instance* attribute that shadows the class one, leaving
+    // the class attribute itself untouched) are not modelled at all. This
+    // check runs before the property walk and before `resolve_attr_get`, and
+    // covers every write that reaches the type checker: `obj.X = 5` and
+    // `self.X = 5` in a method other than `__init__`. A `self.X = 5` inside
+    // `__init__` never reaches here -- `collect_init_attrs` would turn it
+    // into an instance slot, so HIR's own `reject_class_attr_collisions`
+    // (see `pycc_hir::class::body`) rejects that shape first with C0001.
+    // The two checks are complementary, not redundant.
+    if let Ty::Instance(class_name) = &base_ty
+        && let Some(class_attr_ty) = lookup_class_attr_through_mro(env, class_name, attr)
+    {
+        return Err(Diagnostic::error(
+            "T0044",
+            format!(
+                "cannot assign to `{attr}`: it is a class-level attribute of class \
+                 `{class_name}` (declared `{}`), which is a compile-time constant with no \
+                 storage to write to",
+                class_attr_ty.name()
+            ),
+            Span::new(0, 0),
+        ));
+    }
     // #432/#377: walk the MRO for property lookup first (matching
     // `resolve_attr_get`'s own properties-first-across-full-MRO logic and
     // the MIR lowering's own logic), across ALL classes in the MRO, then

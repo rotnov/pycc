@@ -1,6 +1,6 @@
 import os
 class A:
-    x: int = 1
+    x = 1
 class B(A):
     def __init__(self) -> None:
         self.v = 1

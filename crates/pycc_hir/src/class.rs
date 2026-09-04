@@ -62,7 +62,7 @@ mod mro;
 mod protocol;
 
 use crate::{HirExpr, HirItem, HirStmt, Ty, lower_arg_list, unsupported};
-use body::{ClassBodyInput, ClassBodyOutput, walk_class_body};
+use body::{ClassBodyInput, ClassBodyOutput, reject_class_attr_collisions, walk_class_body};
 use enum_class::lower_enum_class;
 use mro::{resolve_mro, validate_bases};
 use protocol::lower_protocol_class;
@@ -1115,6 +1115,7 @@ pub(crate) fn lower_class(
         class_methods,
         mut dataclass_fields,
         abstract_methods,
+        class_attrs,
     } = walk_class_body(&ClassBodyInput {
         body: &def.body,
         class_name: &class_name,
@@ -1125,6 +1126,19 @@ pub(crate) fn lower_class(
         mro: &mro,
         defined_classes,
     })?;
+    // #911: the class-attribute/instance-slot collision check runs here,
+    // after the walk, not at the `AnnAssign` site: `attrs` is populated only
+    // when the walk reaches `__init__`, so a class attribute declared before
+    // `__init__` would see an empty `attrs` and slip through.
+    reject_class_attr_collisions(
+        &class_attrs,
+        &attrs,
+        &properties,
+        &class_name,
+        &mro,
+        defined_classes,
+        def.range.into(),
+    )?;
     // #378 (PR-18): synthesize `__init__`, `__eq__`, and `__repr__` for a
     // `@dataclass` class from its (merged) field list. The synthesized
     // methods flow through the existing method infrastructure as ordinary
@@ -1338,7 +1352,7 @@ pub(crate) fn lower_class(
     }
     Ok((
         HirClassDef {
-            class_attrs: Vec::new(),
+            class_attrs,
             exception_type_tag: None,
             name: class_name,
             bases,

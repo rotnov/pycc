@@ -30051,3 +30051,96 @@ fn a_try_star_except_handler_reached_after_a_try_body_kill_is_rejected() {
     );
     assert_eq!(err.code, "T0021");
 }
+
+// -- #911 (Part 1 of #885): class-level attributes at the checking seam ----
+//
+// `tests/issue_911_class_attrs.rs` drives these same programs through the
+// compiled `pycc` binary; the tests below pin the same contract directly at
+// this crate's own seams -- `class::resolve_attr_get`'s class-attribute
+// fallback, `class::check_attr_set`'s write rejection, `expr`'s class-name
+// read and its plain-name base restriction, and `check_class_pattern`'s
+// keyword rejection.
+
+/// A class with one class attribute of each supported scalar type, plus a
+/// single instance slot. `body` is appended at module level.
+fn class_attr_source(body: &str) -> String {
+    format!(
+        "class C:\n    X: int = 1\n    K: str = \"a\"\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\n{body}"
+    )
+}
+
+#[test]
+fn a_class_attribute_read_through_an_instance_type_checks() {
+    // `resolve_attr_get`'s class-attribute fallback, reached only after the
+    // property walk and the instance-slot walk both miss.
+    check_source(&class_attr_source("c = C()\nprint(c.X)\nprint(c.K)\n"))
+        .expect("an instance read of a class attribute must type-check");
+}
+
+#[test]
+fn a_class_attribute_read_through_the_class_name_type_checks() {
+    // `infer_expr_in`'s class-name attribute arm -- the only class-name
+    // attribute read pycc supports.
+    check_source(&class_attr_source("print(C.X)\n"))
+        .expect("a class-name read of a class attribute must type-check");
+}
+
+#[test]
+fn an_unknown_class_name_attribute_on_a_class_with_class_attributes_is_t0044() {
+    let err = check_source(&class_attr_source("print(C.nope)\n"))
+        .expect_err("an unknown class-name attribute must be rejected");
+    assert_eq!(err.code, "T0044");
+}
+
+#[test]
+fn a_class_attribute_read_off_a_non_name_base_is_rejected() {
+    // The fold discards the base expression, so the base is restricted to a
+    // bare name; a call-shaped base would otherwise be silently dropped.
+    let err = check_source(
+        "class C:\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\ndef make() -> C:\n    return C()\n\n\nprint(make().X)\n",
+    )
+    .expect_err("a call-shaped base must be rejected");
+    assert_eq!(err.code, "T0044");
+    assert!(
+        err.message
+            .contains("can only be read through a plain name"),
+        "unexpected diagnostic: {}",
+        err.message
+    );
+}
+
+#[test]
+fn writing_a_class_attribute_is_rejected_by_check_attr_set() {
+    // Both writes that actually reach `check_attr_set`: through an instance
+    // binding, and through `self` in a method other than `__init__` (a write
+    // inside `__init__` is rejected earlier, by `pycc_hir`).
+    for source in [
+        class_attr_source("c = C()\nc.X = 5\n"),
+        "class C:\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n    def bump(self) -> None:\n        self.X = 5\n"
+            .to_string(),
+    ] {
+        let err = check_source(&source).expect_err("a class-attribute write must be rejected");
+        assert_eq!(err.code, "T0044");
+        assert!(
+            err.message
+                .contains("it is a class-level attribute of class `C`"),
+            "unexpected diagnostic: {}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn a_class_attribute_class_pattern_keyword_is_rejected() {
+    // PEP 634: a class attribute has no per-instance value to match against.
+    let err = check_source(&class_attr_source(
+        "c = C()\nmatch c:\n    case C(X=v):\n        print(v)\n    case _:\n        print(0)\n",
+    ))
+    .expect_err("a class-attribute class-pattern keyword must be rejected");
+    assert_eq!(err.code, "T0044");
+    assert!(
+        err.message.contains("not an instance attribute"),
+        "unexpected diagnostic: {}",
+        err.message
+    );
+}

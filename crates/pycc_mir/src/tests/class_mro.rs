@@ -500,3 +500,87 @@ fn mro_attrs_overrides_type_for_a_redeclared_attribute_with_a_different_type() {
         "re-declared attribute should use the most-derived type (Float)"
     );
 }
+
+#[test]
+fn class_level_attributes_occupy_no_instance_slot_in_the_mro_layout() {
+    // #911 (Part 1 of #885): a class-level attribute is a compile-time
+    // constant folded at every read -- it must never reach the flat
+    // `mro_attrs` slot layout, in this class or in an inheriting one.
+    // The e2e suite can only observe that the *values* read back
+    // correctly, which a layout that over-allocates would still satisfy;
+    // this asserts the slot count itself, which is the actual D-154
+    // contract (`Instantiate` allocates exactly `mro_attr_count` words).
+    use pycc_hir::{ClassAttrValue, HirClassDef};
+    use std::collections::HashMap;
+
+    fn class_def(name: &str, bases: Vec<String>, mro: Vec<String>) -> HirClassDef {
+        HirClassDef {
+            name: name.to_string(),
+            bases,
+            mro,
+            attrs: Vec::new(),
+            methods: Vec::new(),
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            type_param: None,
+            enum_members: Vec::new(),
+            class_attrs: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: Vec::new(),
+            abstract_methods: Vec::new(),
+            is_abstract: false,
+            exception_type_tag: None,
+        }
+    }
+
+    let mut base = class_def("Base", Vec::new(), vec!["Base".to_string()]);
+    base.attrs = vec![("w".to_string(), Ty::Int)];
+    base.class_attrs = vec![("LIMIT".to_string(), Ty::Int, ClassAttrValue::Int(8))];
+    let mut derived = class_def(
+        "Derived",
+        vec!["Base".to_string()],
+        vec!["Derived".to_string(), "Base".to_string()],
+    );
+    derived.attrs = vec![("h".to_string(), Ty::Int)];
+    derived.class_attrs = vec![
+        (
+            "KIND".to_string(),
+            Ty::Str,
+            ClassAttrValue::Str("d".to_string()),
+        ),
+        ("SCALE".to_string(), Ty::Float, ClassAttrValue::Float(1.5)),
+        ("DEBUG".to_string(), Ty::Bool, ClassAttrValue::Bool(false)),
+    ];
+
+    let mut classes: HashMap<String, HirClassDef> = HashMap::new();
+    classes.insert("Base".to_string(), base.clone());
+    classes.insert("Derived".to_string(), derived.clone());
+
+    // `Base` declares one instance attribute and one class attribute.
+    assert_eq!(
+        crate::class::mro_attrs(&base, &classes),
+        vec![("w".to_string(), Ty::Int)]
+    );
+    assert_eq!(crate::class::mro_attr_count(&base, &classes), 1);
+    // `Derived` inherits `Base`'s single slot and adds one of its own --
+    // neither its own three class attributes nor `Base`'s inherited one
+    // widen the layout.
+    assert_eq!(
+        crate::class::mro_attrs(&derived, &classes),
+        vec![("w".to_string(), Ty::Int), ("h".to_string(), Ty::Int)]
+    );
+    assert_eq!(crate::class::mro_attr_count(&derived, &classes), 2);
+    // The class attributes themselves survive the clone into `classes`
+    // unchanged (`ClassAttrValue` is structurally comparable).
+    assert_eq!(classes["Derived"].class_attrs, derived.class_attrs);
+    assert_ne!(
+        ClassAttrValue::Int(8),
+        ClassAttrValue::Float(8.0),
+        "{:?}",
+        ClassAttrValue::Bool(true)
+    );
+}
