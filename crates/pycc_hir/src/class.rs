@@ -59,6 +59,7 @@
 //! recursion into a nested `if`/`while`/`for`), matching this same minimal,
 //! single-pass scope.
 
+mod attrs;
 mod body;
 mod enum_class;
 mod init;
@@ -66,7 +67,8 @@ mod mro;
 mod protocol;
 
 use crate::{HirExpr, HirItem, HirStmt, Ty, lower_arg_list, unsupported};
-use body::{ClassBodyInput, ClassBodyOutput, reject_class_attr_collisions, walk_class_body};
+use attrs::reject_class_attr_collisions;
+use body::{ClassBodyInput, ClassBodyOutput, walk_class_body};
 use enum_class::lower_enum_class;
 use init::{ensure_init, synthesize_dataclass_init};
 use mro::{resolve_mro, validate_bases};
