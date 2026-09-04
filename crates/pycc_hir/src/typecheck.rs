@@ -43,7 +43,7 @@ pub fn is_builtin_type_name(name: &str) -> bool {
 /// `Enum` (without any import) is also accepted, matching pycc's existing
 /// textual-resolution precedent for `math.sqrt`.
 pub fn is_enum_base_name(name: &str) -> bool {
-    name == "Enum"
+    name == "Enum" || name == "StrEnum"
 }
 
 /// Returns `true` if `name` is the builtin `Protocol` base name recognized

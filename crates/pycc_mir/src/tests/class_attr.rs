@@ -645,7 +645,10 @@ fn enum_member_attr_get_lowers_to_synthetic_global() {
         static_methods: vec![],
         class_methods: vec![],
         type_param: None,
-        enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+        enum_members: vec![
+            ("RED".to_string(), pycc_hir::EnumMemberValue::Int(1)),
+            ("GREEN".to_string(), pycc_hir::EnumMemberValue::Int(2)),
+        ],
         is_dataclass: false,
         dataclass_fields: Vec::new(),
         is_protocol: false,

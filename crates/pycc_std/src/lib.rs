@@ -98,6 +98,14 @@ pub enum StdSymbolKind {
     /// decorator. It is not a first-class value — referencing it as a
     /// value or calling it is rejected by the type checker (#380, PR-20).
     DecoratorMarker,
+    /// PEP 435 (#892): `enum.auto`, the member-value placeholder usable only
+    /// inside an enum class body (`RED = auto()`). Like every other marker
+    /// kind it has no value of its own -- `class/enum_class.rs` recognizes
+    /// the call syntactically and derives the member's value from the
+    /// class's own value type and its preceding members; naming `auto`
+    /// anywhere else is the same "marker is not a value" error every other
+    /// marker kind produces.
+    EnumAutoMarker,
     /// An annotation-only marker symbol (`typing.Final`, `typing.Annotated`)
     /// that is only valid as a bare-name annotation subscript
     /// (`Final[X]`, `Annotated[X, ...]`, PEP 591/593). Unlike the other
@@ -180,6 +188,16 @@ const REGISTRY: &[StdSymbol] = &[
         module: StdModule::Enum,
         name: "Enum",
         kind: StdSymbolKind::EnumMarker,
+    },
+    StdSymbol {
+        module: StdModule::Enum,
+        name: "StrEnum",
+        kind: StdSymbolKind::EnumMarker,
+    },
+    StdSymbol {
+        module: StdModule::Enum,
+        name: "auto",
+        kind: StdSymbolKind::EnumAutoMarker,
     },
     StdSymbol {
         module: StdModule::Typing,
@@ -397,7 +415,12 @@ mod tests {
     #[test]
     fn resolve_symbol_rejects_unregistered_symbol_in_enum_module() {
         assert_eq!(resolve_symbol(StdModule::Enum, "IntEnum"), None);
-        assert_eq!(resolve_symbol(StdModule::Enum, "auto"), None);
+        let auto_sym = resolve_symbol(StdModule::Enum, "auto").expect("enum.auto is registered");
+        assert_eq!(auto_sym.kind, StdSymbolKind::EnumAutoMarker);
+        assert!(format!("{auto_sym:?}").contains("EnumAutoMarker"));
+        let str_enum_sym =
+            resolve_symbol(StdModule::Enum, "StrEnum").expect("enum.StrEnum is registered");
+        assert_eq!(str_enum_sym.kind, StdSymbolKind::EnumMarker);
     }
 
     #[test]

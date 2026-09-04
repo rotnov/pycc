@@ -24839,7 +24839,10 @@ fn match_enum_exhaustive_type_checks() {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             type_param: None,
-            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+            enum_members: vec![
+                ("RED".to_string(), pycc_hir::EnumMemberValue::Int(1)),
+                ("GREEN".to_string(), pycc_hir::EnumMemberValue::Int(2)),
+            ],
             is_dataclass: false,
             dataclass_fields: Vec::new(),
             is_protocol: false,
@@ -24892,7 +24895,10 @@ fn match_enum_non_exhaustive_reports_t0030() {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             type_param: None,
-            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+            enum_members: vec![
+                ("RED".to_string(), pycc_hir::EnumMemberValue::Int(1)),
+                ("GREEN".to_string(), pycc_hir::EnumMemberValue::Int(2)),
+            ],
             is_dataclass: false,
             dataclass_fields: Vec::new(),
             is_protocol: false,
@@ -24937,7 +24943,10 @@ fn match_enum_exhaustive_with_other_class_pattern() {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             type_param: None,
-            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+            enum_members: vec![
+                ("RED".to_string(), pycc_hir::EnumMemberValue::Int(1)),
+                ("GREEN".to_string(), pycc_hir::EnumMemberValue::Int(2)),
+            ],
             is_dataclass: false,
             dataclass_fields: Vec::new(),
             is_protocol: false,
@@ -25334,7 +25343,10 @@ fn check_exhaustive_enum_all_covered() {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             type_param: None,
-            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+            enum_members: vec![
+                ("RED".to_string(), pycc_hir::EnumMemberValue::Int(1)),
+                ("GREEN".to_string(), pycc_hir::EnumMemberValue::Int(2)),
+            ],
             is_dataclass: false,
             dataclass_fields: Vec::new(),
             is_protocol: false,
@@ -25376,7 +25388,10 @@ fn check_exhaustive_enum_partial_not_exhaustive() {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             type_param: None,
-            enum_members: vec![("RED".to_string(), 1), ("GREEN".to_string(), 2)],
+            enum_members: vec![
+                ("RED".to_string(), pycc_hir::EnumMemberValue::Int(1)),
+                ("GREEN".to_string(), pycc_hir::EnumMemberValue::Int(2)),
+            ],
             is_dataclass: false,
             dataclass_fields: Vec::new(),
             is_protocol: false,
@@ -25485,7 +25500,10 @@ fn collect_bool_patterns_with_non_bool_pattern_is_noop() {
 
 #[test]
 fn collect_enum_member_patterns_with_non_class_pattern_is_noop() {
-    let members = [("RED".to_string(), 1), ("GREEN".to_string(), 2)];
+    let members = [
+        ("RED".to_string(), pycc_hir::EnumMemberValue::Int(1)),
+        ("GREEN".to_string(), pycc_hir::EnumMemberValue::Int(2)),
+    ];
     let mut covered: HashSet<&str> = HashSet::new();
     collect_enum_member_patterns(&HirPattern::Wildcard, "Color", &members, &mut covered);
     collect_enum_member_patterns(

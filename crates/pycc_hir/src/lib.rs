@@ -12,7 +12,7 @@ mod program;
 mod stmt;
 mod typecheck;
 
-pub use class::{HirClassDef, PropertyDef, ProtocolMember};
+pub use class::{EnumMemberValue, HirClassDef, PropertyDef, ProtocolMember};
 pub use exception::{
     BUILTIN_EXCEPTION_CLASSES, EXCEPTION_GROUP_TYPE_TAG, EXCEPTION_INIT_MANGLED_NAME,
     FIRST_USER_EXCEPTION_TYPE_TAG, HirExceptHandler, MAX_USER_EXCEPTION_CLASSES,

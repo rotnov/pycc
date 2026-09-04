@@ -83,6 +83,24 @@ use pycc_diag::{Diagnostic, Span};
 /// failure into a clear, immediate one.
 const CONTAINER_METHOD_NAMES: [&str; 4] = ["append", "pop", "get", "add"];
 
+/// PEP 435 (#892): the value assigned to one enum member. Members may be
+/// `int`- or `str`-valued; `class/enum_class.rs` requires every member of
+/// one class to use the same variant, so the variant in use also fixes that
+/// class's `value` attribute type (`Ty::Int` or `Ty::Str`).
+///
+/// This lives here, next to `HirClassDef`, rather than in
+/// `class/enum_class.rs`: it is part of `HirClassDef`'s own public shape,
+/// read by `pycc_types`, `pycc_mir`, and `pycc_codegen`, while
+/// `class/enum_class.rs` only populates it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnumMemberValue {
+    /// An integer-valued member (`RED = 1`).
+    Int(i64),
+    /// A string-valued member (`RED = "red"`), from either a plain `Enum`
+    /// whose members are strings or an `enum.StrEnum` subclass.
+    Str(String),
+}
+
 /// A single class's declared shape (D-154): its attribute slots, in
 /// first-`__init__`-assignment source order, and its method table (method
 /// name -> the mangled `HirItem::Function` name in `HirModule::items` its
@@ -141,17 +159,19 @@ pub struct HirClassDef {
     pub type_param: Option<String>,
     /// PEP 435 (#379, PR-19): the enum members of an enum class
     /// (`class Color(Enum): RED = 1; GREEN = 2`), in source order. Each
-    /// entry is `(member_name, value)` where `value` is the integer
-    /// literal assigned to the member. Empty for a non-enum class; a
+    /// entry is `(member_name, value)` where `value` is the `int` or `str`
+    /// literal assigned to the member (#892). Empty for a non-enum class; a
     /// non-empty vec marks this class as an enum class. An enum class has
     /// `bases = []` and `mro = [self_name]` (the `Enum` base is consumed
     /// as a marker, not a real base), no `__init__` requirement, and
-    /// `attrs = [("value", Ty::Int), ("name", Ty::Str)]` so existing
+    /// `attrs = [("value", <Ty::Int or Ty::Str>), ("name", Ty::Str)]` --
+    /// `value`'s type follows the class's own member-value type (#892), and
+    /// every member of one class must share it -- so existing
     /// `resolve_attr_get`/MIR slot resolution handle `member.value`/
     /// `member.name` unchanged. Each member is a compile-time singleton
     /// instance allocated once at module-init time (see `pycc_codegen`'s
     /// per-member init sequence).
-    pub enum_members: Vec<(String, i64)>,
+    pub enum_members: Vec<(String, EnumMemberValue)>,
     /// PEP 557/681 (#378, PR-18): `true` when this class is decorated with
     /// `@dataclass` or `@dataclass_transform(...)`. A dataclass class
     /// auto-generates `__init__`, `__eq__`, and `__repr__` from its
@@ -835,6 +855,11 @@ pub(crate) fn lower_class(
     // must be the sole base. A generic enum (`class C[T](Enum):`) is also
     // rejected -- enums are never generic.
     let is_enum = bases.len() == 1 && crate::is_enum_base_name(&bases[0]);
+    // #892: `StrEnum` fixes the class's member-value type to `str` before
+    // any member is read, so the marker base's own spelling has to be
+    // captured here -- `bases.clear()` below consumes it, and
+    // `lower_enum_class` is not called until well after that point.
+    let is_str_enum = is_enum && bases[0] == "StrEnum";
     if is_enum {
         if type_param.is_some() {
             return Err(unsupported(
@@ -994,7 +1019,7 @@ pub(crate) fn lower_class(
     let mut properties: Vec<PropertyDef> = Vec::new();
     let mut static_methods: Vec<(String, String)> = Vec::new();
     let mut class_methods: Vec<(String, String)> = Vec::new();
-    let enum_members: Vec<(String, i64)> = Vec::new();
+    let enum_members: Vec<(String, EnumMemberValue)> = Vec::new();
     let mut dataclass_fields: Vec<(String, Ty)> = Vec::new();
     let mut abstract_methods: Vec<String> = Vec::new();
     let mut init_seen = false;
@@ -1002,7 +1027,7 @@ pub(crate) fn lower_class(
     // not method definitions. Handle this in a separate function before the
     // regular class-body loop below, which rejects non-`def` statements.
     if is_enum {
-        return lower_enum_class(def, class_name, bases, mro, type_param);
+        return lower_enum_class(def, class_name, bases, mro, type_param, is_str_enum);
     }
     // #380 (PR-20): a protocol class body contains method definitions
     // (with `...` or `pass` bodies) and annotated assignments

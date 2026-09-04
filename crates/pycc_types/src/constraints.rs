@@ -373,7 +373,8 @@ pub(crate) fn collect_expr_constraints(
                     }
                     pycc_std::StdSymbolKind::ProtocolMarker
                     | pycc_std::StdSymbolKind::AbcMarker
-                    | pycc_std::StdSymbolKind::DecoratorMarker => Err(marker_is_not_a_value(name)),
+                    | pycc_std::StdSymbolKind::DecoratorMarker
+                    | pycc_std::StdSymbolKind::EnumAutoMarker => Err(marker_is_not_a_value(name)),
                 };
             }
             // Issue #359 (Part 2 of #118): a maybe-bound name (assigned
