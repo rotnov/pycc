@@ -33,6 +33,61 @@ never a merge gate.
 
 ---
 
+## 2026-09-04 — Resolved a rebase conflict whole-file, silently discarding a hunk that never conflicted
+
+What happened: rebasing the #918 branch onto `origin/main` conflicted in
+`docs/ROADMAP.md`. The conflict was resolved with
+`git checkout --ours docs/ROADMAP.md`. That also discarded a *non-conflicting*
+hunk the same commit contributed — the `protocol *attributes*` narrowing at
+line 151, authored deliberately one commit earlier. The rebase completed, the
+tree was clean, and every gate stayed green: a deleted sentence breaks nothing
+mechanical. Recovered in `fb31f624` only by re-reading the diff against the
+pre-rebase head by hand.
+
+Root cause: `git checkout --ours <file>` is whole-file. Its name reads as "keep
+my side of the conflict"; its behaviour is "discard this commit's version of
+this entire file", conflicting hunks and clean hunks alike. Nothing prints.
+
+What fixed it: re-authoring the lost hunk, after noticing it was missing.
+
+Lesson: after any rebase whose conflicts were resolved with a whole-file
+operation (`--ours`, `--theirs`, or an editor overwrite), run
+`git range-diff <old-base>..<pre-rebase-head> <new-base>..<HEAD>` before
+continuing. Every dropped hunk shows up there as a `-` line and nowhere else —
+not in `git status`, not in the gates, not in the file's own readability.
+
+---
+
+## 2026-09-04 — Correctly resolved a decision number, then had it taken by a merge landing mid-review
+
+What happened: #918's decision record was numbered `D-227` by the documented
+procedure — resolving the next free number against the tree at authoring time.
+PR #928 merged mid-review and claimed `D-227` for its own record. Two accepted
+decision records would have reached `main` sharing an id. Caught only because
+`scripts/generate_decisions_index.py --check` was re-run by hand near the end of
+the session; renumbered to `D-228` in `f81d3445`.
+
+Root cause: the number is resolved once, against a tree that then moves. The
+repository already ships a fail-closed uniqueness checker
+(`generate_decisions_index.py`'s `check_unique_ids`), but
+`grep -rn "generate_decisions_index" .github/workflows/` returns nothing — the
+checker is wired to no gate at all, so nothing revalidates the number after the
+base moves.
+
+What fixed it: `git mv` of the record and its frontmatter `id:` to `D-228`, plus
+`rotnov/pycc` issue 929 to wire the existing checker into `ci.yml`'s `governance`
+job (it needs the D-080 two-PR staged-fixture procedure, since `ci.yml` is pinned
+by whole-file SHA-256).
+
+Lesson: a decision number is not settled until the pull request merges. Re-run
+`python3 scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md --check`
+immediately before opening the pull request and again immediately before merging,
+the same way `docs/sessions/` entries re-resolve their remote references. Until
+issue 929 lands, that re-run is the only thing standing between a mid-review merge
+and a corrupted decision log.
+
+---
+
 ## 2026-09-04 — Reported a gate sweep as complete while `cargo fmt` was never in it
 
 What happened: the #918 orchestrating session collected eleven gates to green on
@@ -62,6 +117,86 @@ workflow file and tick each one off that list; a gate missing from a hand-writte
 list produces no output at all, which is indistinguishable from a gate that
 passed. Corollary: the more carefully a report enumerates the gates it did run,
 the more convincing it looks, and the less that says about coverage.
+
+
+---
+
+## 2026-09-04 — Aligned six copies of a new rule to each other instead of to the code
+
+What happened: #918's own decision record introduced a rule — "a parameterized
+container annotation is rejected in a protocol member" — and it was restated at
+six sites (the ADR, two doc comments, an inline comment, `explain.rs`, and
+`docs/PYTHON_STANDARDS.md`). The rule as implemented gates protocol *attributes*
+only; a protocol method's parameter lowers a container normally, which was
+reproduced compiling and running end to end. Three review rounds were spent on
+it.
+
+Root cause: round 1's fix made the replicas agree with *each other* rather than
+with `lower_protocol_class`. Six mutually consistent sentences read as verified,
+which made rounds 2 and 3 harder rather than easier — the false agreement was
+itself the obstacle.
+
+What fixed it: reading the gate's actual control flow and narrowing every site to
+"attribute", commits `fe1e9806` through `e7fe78f7`.
+
+Lesson: when a rule about new behaviour appears at more than one site, the
+authoritative statement is the code, never the most recently edited prose.
+Re-derive each replica from the implementation independently; a consistency pass
+across the replicas proves only that they were copied from one another.
+
+The relative order of this entry's event against the `cargo fmt` entry above
+cannot be recovered from either one's content — both span the same review
+window.
+
+---
+
+## 2026-09-04 — Typed the review brief freehand instead of composing it from its template
+
+What happened: round 1 of #918's review flagged the absent `docs/sessions/`
+handoff file as a completeness gap of the diff. It is written in the pull request
+that delivers the work, after the review loop, so it cannot exist when the loop
+runs. Refuted at the cost of one verification step — the fourth time this exact
+class has appeared (#866, #867, #868, #918).
+
+Root cause: `.claude/skills/issue-implement/references/review-brief.md` exists
+precisely to carry these exclusions, and `issue-implement/SKILL.md:376` says
+"Compose the brief from references/review-brief.md ... do not retype the
+exclusions from memory". The template was never opened during this session's
+review dispatch — confirmed by grepping the session transcript. The brief was
+typed freehand, which is the thing that sentence forbids by name.
+
+What fixed it: refuting the finding. The class itself is unfixed.
+
+Lesson: when a skill step names a file to compose from, open that file. A step
+that says "do not retype this from memory" is describing a failure that has
+already happened three times, and reading the four-line template costs less than
+one refutation round. The next recurrence should stop rewording and generate the
+brief mechanically instead.
+
+---
+
+## 2026-09-04 — Implemented every code item in a plan and treated the plan as discharged
+
+What happened: #918's published plan enumerated, alongside its code changes, a
+regression test pinning the ellipsis-before-arity check order for `tuple[...]`.
+The ordering is load-bearing — `tuple[int, ...]` has a legal arity of 2, so an
+arity check alone accepts it and silently lowers `tuple[int, EllipsisType]`.
+Every code change in the plan was implemented; the named test was not written,
+and was added later at `crates/pycc_types/src/tests.rs:9868`.
+
+Root cause: the session's todo list was seeded from the plan's *code* work items,
+so the clause naming a test never became a trackable entry. AGENTS.md Completion
+check item 6 already covers this case by name — "a plan's own enumerated non-code
+deliverables are a list of this kind" — and its own guard is the todo list, which
+only works if the list is built before the first item is started.
+
+What fixed it: writing the test once the omission was found.
+
+Lesson: when seeding a todo list from a plan, read the plan for *clauses*, not for
+code changes. A sentence directing that a test be written, an issue be filed, or a
+measurement be recorded is an item; prose that merely explains a code change is
+not. Doing that extraction after the code is written is too late — by then the
+plan reads as done.
 
 ---
 
