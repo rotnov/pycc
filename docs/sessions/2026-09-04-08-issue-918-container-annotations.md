@@ -2,11 +2,14 @@
 
 ## Overall status
 
-Delivered as PR #930 (`feat/issue-918-container-annotations`, head `d1d22692`
-plus this snapshot's own commit),
-based on `origin/main` at `c639e682`. State at the time this snapshot was written:
-open, not a draft, `MERGEABLE`, CI in progress. It carries `Fixes #918` and the
-GraphQL `closingIssuesReferences` query reports `totalCount: 1` naming only #918.
+Delivered as PR #930 (`feat/issue-918-container-annotations`, head `a7bf16ce`
+plus this snapshot's own commit), based on `origin/main` at `c639e682`,
+re-fetched and unmoved. State re-resolved immediately before this snapshot was
+committed: open, not a draft, `MERGEABLE`, `mergeStateStatus` `BLOCKED` only
+because required checks were still running, all four review threads answered and
+resolved, CI green on every check that had reported. It carries `Fixes #918` and
+the GraphQL `closingIssuesReferences` query reports `totalCount: 1` naming only
+#918.
 
 `pycc_hir::func::annotation_to_ty` now lowers `list[T]`, `set[T]`, `dict[K, V]`
 and `tuple[A, B, ...]` in parameter, local and module `AnnAssign`, PEP 695, and
@@ -104,6 +107,11 @@ four files.
    read its body before starting, the digest pin is the whole cost.
 3. **#926** (a private helper returning a list literal panics in codegen) is
    adjacent and still open.
+4. **#931** was filed from this task: `annotation_to_ty`'s subscript
+   fallthrough discards every type argument when the base is not a recognized
+   container, so `T[int]`, `int[str]` and `Self[int]` are all accepted silently.
+   Pre-existing on `c639e682`, found while inventorying the bare-container
+   advice, and deliberately out of scope here.
 
 ## Gates
 
@@ -115,8 +123,10 @@ and `cargo test --workspace` exit 0 on the same commit. Every doc and policy
 gate — decisions index `--check`, roadmap evidence, README milestone projection,
 CI permissions, agent assets, `check-site.sh`, the `scripts/` unittest suite
 including the branch-protection baseline, and the harden findings pile — was
-re-run on `d1d22692` and returned 0, with each exit status captured directly
-rather than through a pipeline.
+re-run on the final head `a7bf16ce` and returned 0, with each exit status
+captured directly rather than through a pipeline. `git diff --name-only
+d1d22692..HEAD -- crates src Cargo.toml Cargo.lock` is empty, so the two commits
+after the coverage baseline are prose only and cannot move it.
 
 An earlier coverage run was killed rather than trusted: it had been started
 before the round-5 fixes landed, so it would have measured a tree that was about
