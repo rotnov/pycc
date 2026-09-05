@@ -42,9 +42,9 @@ workflow. All four ruby gates exited 0 with the step added.
 
 ## Follow-ups
 
-- Retrospective candidate: #929 duplicated the still-open #622 because the
-  filer skipped a dedup search against the open list; recorded here rather than
-  as an issue (D-192 non-milestone ceiling is in force).
+- The dedup lapse that let #929 duplicate the still-open #622 is recorded as
+  a `docs/AGENT_RETROSPECTIVE.md` entry in this same change, not as an issue
+  (it is a process observation, which D-192 routes to the retrospective).
 - None required for #929. `docs/ROADMAP.md` has no cell enumerating the
   individual `governance` steps, so it was not edited.
 

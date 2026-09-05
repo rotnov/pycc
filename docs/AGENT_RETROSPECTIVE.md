@@ -33,6 +33,39 @@ never a merge gate.
 
 ---
 
+## 2026-09-05 — Filed an issue without searching the open list, duplicating one two weeks old
+
+**What happened:** while working #925 I filed #929 ("wire
+`generate_decisions_index.py --check` into CI") from a `.harden` incident
+record, then selected it as the next task and dispatched an implementer. Only
+during the following non-milestone inventory did I find #622, open since
+2026-08-19 with no comments, asking for the same gate plus two further
+criteria (correct D-151's false "already wired" claim by a deliberately chosen
+mechanism, and prove the gate with a violator). The implementer was already
+running against the narrower #929 text, so the extra criteria had to be
+applied afterwards from a single-writer baseline and the pull request
+re-scoped to close both.
+
+**Root cause:** the filing step started from an incident record and went
+straight to `gh issue create`. The dedup search that `pycc-feedback` and D-022
+both require before filing was skipped because the source felt authoritative
+-- an incident file reads like a fact, not like a claim someone may already
+have tracked. A title-keyword search of the open list (`gh issue list --search
+"generate_decisions_index"`) would have returned #622 in one call.
+
+**What fixed it:** applying #622's remaining criteria on the same branch after
+the implementer returned, adding `Fixes #622` beside `Fixes #929`, and verifying
+`closingIssuesReferences.totalCount` is 2. Cost: one extra review round and a
+re-scoped pull request; no wasted implementation.
+
+**Lesson:** a dedup search is part of filing, whatever the source of the
+observation. Search the open list by the affected script or file name before
+`gh issue create`, and treat an incident record, a review finding, or a session
+log as a *claim* that something is untracked, not as proof of it. When a
+duplicate surfaces after an implementer is already dispatched, do not message
+the running agent -- wait for its return, then apply the extra criteria from a
+single-writer baseline (AGENTS.md's one-writer-per-worktree rule).
+
 ## 2026-09-05 — Invented a schema for a machine-checked data file instead of reading one existing line
 
 **What happened:** while recording a review finding for #925, I appended a
