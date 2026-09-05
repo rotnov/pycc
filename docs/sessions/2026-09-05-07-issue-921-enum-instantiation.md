@@ -27,10 +27,25 @@ pull request left) before this snapshot was written; the rebase was clean.
 ## Overall status
 
 Implemented [#921](https://github.com/rotnov/pycc/issues/921) on
-`autopilot/iter-2026-09-05-10` per the plan published on the issue: a
-Rust change across `pycc_hir`, `pycc_types` and `pycc_mir` plus tests and
-documentation. One pull request, body carrying `Fixes #921`; the
-orchestrating session watches CI and merges.
+`autopilot/iter-2026-09-05-10` per the plan published on the issue
+(comment `5552977996`): a Rust change across `pycc_hir`, `pycc_types` and
+`pycc_mir` plus tests and documentation. One pull request, body carrying
+`Fixes #921`; the orchestrating session watches CI and merges.
+
+A concurrent actor opened [#942](https://github.com/rotnov/pycc/pull/942)
+(`feat/issue-921-enum-instantiation`, head `5fbc7b65`, 2026-09-05T16:44:32Z)
+for the same issue from a second plan comment (`5553043236`), while this
+branch was being implemented. #942 adds the same `HirClassDef.is_enum` flag
+but rejects the call only in `pycc_types` with a `Span::new(0, 0)` diagnostic
+that renders at `1:1`; this branch additionally carries the spanned
+`pycc_hir` rejection at the call expression (the issue's span acceptance
+item), byte-exact `tests/diagnostics/` fixtures, and the project-import
+case. #942 also claims `docs/sessions/2026-09-05-06-...`, which is why this
+snapshot is `07`. #942's own review surfaced a pre-existing seam,
+[#941](https://github.com/rotnov/pycc/issues/941) (`class Foo(Color): pass`
+then `Foo()` compiles and aborts at run time), which neither branch fixes.
+Choosing between the two pull requests is the orchestrating session's call;
+both cannot merge as-is (both edit the same struct literals).
 
 ## What the change is
 
