@@ -70,8 +70,8 @@ def load_manifest(path)
     raise "manifest version must be 1, got #{manifest["manifest_version"]}"
   end
   pages = manifest["canonical_pages"]
-  unless pages.is_a?(Array) && pages.length == 5
-    raise "manifest must contain exactly 5 canonical pages, got #{pages&.length}"
+  unless pages.is_a?(Array) && pages.length == 7
+    raise "manifest must contain exactly 7 canonical pages, got #{pages&.length}"
   end
   pages.each do |page|
     %w[id local_route expected_http_status source_artifact
@@ -237,7 +237,8 @@ def check_resource_budgets(budget, repo_root)
   # HTML: per-page max
   html_budget = budget["resource_budgets"]["html"]["max_bytes_per_page"]
   %w[index.html status/index.html architecture/index.html
-     python-aot-compilers/index.html ai-native/index.html].each do |rel|
+     python-aot-compilers/index.html ai-native/index.html
+     language-support/index.html diagnostics/index.html].each do |rel|
     path = File.join(site_dir, rel)
     if File.file?(path)
       size = File.size(path)

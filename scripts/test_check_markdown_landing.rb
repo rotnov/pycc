@@ -107,16 +107,14 @@ class TestCheckMarkdownLanding < Minitest::Test
     refute_equal 0, status, "accepted Markdown without a pipeline heading:\n#{output}"
   end
 
-  def test_rejects_missing_v0_4_unstarted_claim
-    # Removing "is unstarted" leaves the "Honest status" bullet claiming only
-    # that v0.4 is next, silently dropping the fact that it has not started
-    # yet — the exact one-sided drift issue #206's contract exists to catch.
+  def test_rejects_stale_v0_4_status
+    # A publication must not reinstate the superseded pre-project-import status.
     md = live_markdown.sub(
-      "v0.4 (multi-file projects, imports, incremental compilation) is unstarted",
-      "v0.4 (multi-file projects, imports, incremental compilation) is next"
+      "v0.4 is in progress. Cross-file project from imports have landed. Bare/submodule imports, namespace handling, broader project CLI behavior, and incremental compilation remain incomplete.",
+      "v0.4 has not started"
     )
     status, output = run_checker(live_html, md)
-    refute_equal 0, status, "accepted Markdown that dropped the v0.4-unstarted claim:\n#{output}"
+    refute_equal 0, status, "accepted Markdown that regressed the v0.4 boundary:\n#{output}"
   end
 
   # --- Negative: wrong title ---

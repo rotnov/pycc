@@ -82,6 +82,8 @@ REQUIRED_CANONICAL_PAGES = {
     "https://rotnov.github.io/pycc/architecture/",
     "https://rotnov.github.io/pycc/python-aot-compilers/",
     "https://rotnov.github.io/pycc/ai-native/",
+        "https://rotnov.github.io/pycc/language-support/",
+        "https://rotnov.github.io/pycc/diagnostics/",
 }
 
 REQUIRED_SOURCE_CLASSES = {

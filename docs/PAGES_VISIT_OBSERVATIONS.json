@@ -14,7 +14,9 @@
       "https://rotnov.github.io/pycc/status/",
       "https://rotnov.github.io/pycc/architecture/",
       "https://rotnov.github.io/pycc/python-aot-compilers/",
-      "https://rotnov.github.io/pycc/ai-native/"
+      "https://rotnov.github.io/pycc/ai-native/",
+      "https://rotnov.github.io/pycc/language-support/",
+      "https://rotnov.github.io/pycc/diagnostics/"
     ],
     "primary_conversion": {
       "description": "click from a canonical Pages page to https://github.com/rotnov/pycc",

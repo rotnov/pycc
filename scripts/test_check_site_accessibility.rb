@@ -295,6 +295,23 @@ class TestCheckSiteAccessibility < Minitest::Test
     end
   end
 
+  def test_each_execution_route_requires_its_own_accessibility_report
+    %w[language-support diagnostics].each do |id|
+      Dir.mktmpdir do |tmp|
+        manifest = load_default_manifest
+        base_url = "http://127.0.0.1:9999/"
+        write_healthy_lhrs(tmp, manifest, base_url)
+        report = File.join(tmp, id, "replicate-1.json")
+        File.delete(report)
+        failures = validate_all_lhrs(manifest, tmp, base_url)
+        assert(failures.any? { |f| f.include?(id) && f.include?("LHR file missing") })
+        FileUtils.cp(File.join(tmp, "home", "replicate-1.json"), report)
+        failures = validate_all_lhrs(manifest, tmp, base_url)
+        assert(failures.any? { |f| f.include?(id) && f.include?("Url") })
+      end
+    end
+  end
+
   def test_lhr_gate_fails_when_one_page_has_aria_violation
     Dir.mktmpdir do |tmp|
       manifest = load_default_manifest

@@ -215,6 +215,16 @@ class TestMeasurementContract(unittest.TestCase):
         with self.assertRaises(ObservationError):
             validate_artifact(artifact)
 
+    def test_rejects_either_missing_execution_evidence_route(self) -> None:
+        for slug in ("language-support", "diagnostics"):
+            with self.subTest(slug=slug):
+                artifact = _base_artifact()
+                artifact["measurement_contract"]["canonical_pages"].remove(
+                    f"https://rotnov.github.io/pycc/{slug}/"
+                )
+                with self.assertRaises(ObservationError):
+                    validate_artifact(artifact)
+
     def test_rejects_wrong_primary_conversion_url(self) -> None:
         artifact = _base_artifact()
         artifact["measurement_contract"]["primary_conversion"]["target_url"] = "https://example.com"

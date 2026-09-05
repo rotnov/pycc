@@ -19,8 +19,12 @@ indexable explanation of pycc:
 - the project is pre-alpha, and design targets are not presented as released
   features.
 
-The canonical landing page links to four crawlable evidence pages:
+The canonical landing page links to six crawlable evidence pages:
 
+- `/language-support/` shows one exact PEP 526 pycc/CPython execution and a
+  curated, non-exhaustive map of tested scope and gaps;
+- `/diagnostics/` shows exact human and JSON output for one T0021 occurrence,
+  including the real help field and the current span/renderer limitations;
 - `/status/` describes implemented behavior, enforced gates, remaining v0.1
   scope, and the next planned delivery slice;
 - `/architecture/` separates the working compiler path and current crates from
@@ -44,9 +48,9 @@ stable human and JSON frontend diagnostics, while `pycc build` and `pycc run`
 lower the same implemented language surface through MIR → LLVM → host linker →
 native executable. `docs/ROADMAP.md`'s v0.1, v0.2, and v0.3 acceptance
 criteria are all met — v0.3 (classes, pattern matching, and custom
-exceptions) as of 2026-08-26, released as the `v0.3.0` tag; v0.4
-(multi-file projects, imports, and incremental compilation) has not started —
-and the project remains pre-alpha because the documented representation and
+exceptions) as of 2026-08-26, released as the `v0.3.0` tag; v0.4 is in progress: cross-file project from imports have landed (D-222).
+Bare/submodule imports, namespace handling, broader project CLI behavior,
+and incremental compilation remain incomplete. The project remains pre-alpha because the documented representation and
 lifetime gaps, the full multi-version conformance testkit, and named demos
 remain unfinished. These facts must
 move with the authoritative roadmap whenever implementation depth changes; see
@@ -163,7 +167,8 @@ metadata.
 
 `site/robots.txt` and `site/sitemap.xml` must use the same canonical origin.
 The sitemap lists the landing page plus `/status/`, `/architecture/`,
-`/python-aot-compilers/`, and `/ai-native/`. Every sitemap URL entry contains
+`/python-aot-compilers/`, `/ai-native/`, `/language-support/`, and
+`/diagnostics/`. Every sitemap URL entry contains
 exactly one `lastmod`, equal to that page's JSON-LD `WebPage.dateModified`, and
 both values advance when main content, structured data, or important links
 materially change. `scripts/check_sitemap_lastmod.rb` enforces a deterministic
@@ -366,6 +371,10 @@ viewports up to 680 CSS pixels, the footer must stack into one grid column and
 its navigation group must wrap within the available width; the validator and
 an independent negative mutation preserve that footer contract as the
 evidence-page link set grows.
+Each canonical page has one visible primary navigation containing all six
+evidence-route links and the repository link exactly once. The parsed
+primary-navigation inventory is checked separately from footer/source links;
+per-page mutations prevent footer links from masking a missing primary link.
 
 ## Tested quick-start example binding
 
@@ -424,12 +433,17 @@ Full HTML/Markdown parity for the output pane and provenance note remains
 The shared evidence-hero mechanism is implemented by
 `site/evidence-heroes.json`, `scripts/check-site.sh`, and
 `scripts/test-check-site.sh` under [#564](https://github.com/rotnov/pycc/issues/564)
-and D-186. Dedicated Language Support and Diagnostics pages remain
-[#565](https://github.com/rotnov/pycc/issues/565)'s scope.
+and D-186. Dedicated Language Support and Diagnostics pages extend that
+contract under [D-230](./decisions/D-230-bind-public-evidence-to-ordered-immutable-executions.md).
+Language and Status also project D-229's current future-import directive
+boundary separately from that historical transcript; their shared scope check
+preserves the module-prologue restriction, three core annotation gaps and partial
+PEP 563 acceptance. The observed-green subset has its own fixture and CI links;
+it does not expand the historical PEP 526 transcript's claim.
 
 ## Versioned evidence-hero contract
 
-`site/evidence-heroes.json` schema version `1.0.0` is the canonical ordered
+`site/evidence-heroes.json` schema version `2.0.0` is the canonical ordered
 inventory for the landing, language, diagnostics, performance, architecture,
 status, comparison, and provenance heroes. Every record has the same required
 field set and one allowlisted evidence kind. The state vocabulary is closed:
@@ -437,7 +451,7 @@ field set and one allowlisted evidence kind. The state vocabulary is closed:
 Missing, delayed, unaccepted, or not-yet-authored proof is `unavailable`; it is
 never rewritten as a zero, a failure, or a decorative terminal transcript.
 
-The landing record is the only accepted evidence hero in version 1. It binds
+The unchanged landing record uses the bounded version-1 adapter. It binds
 `tests/fixtures/quick_start.py`,
 `tests/quick_start.rs::quick_start_fixture_builds_and_prints_the_documented_sequence`,
 and `tests/fixtures/quick_start.expected.txt` to their canonical LF SHA-256
@@ -449,9 +463,19 @@ Rust 1.97.1, LLVM 22, the debug profile, and no extra compiler flags. The hero
 links to the exact source, test, snapshot, commit, run, and five jobs, not to a
 moving `main` branch.
 
-The other seven records remain explicitly `unavailable`. Language,
-Diagnostics, and Performance have no published route until #565/#567 provide
-real artifacts. Architecture, Status, Comparison, and Provenance retain their
+Language and Diagnostics now carry accepted ordered executions from source
+commit `0d94ad8f30b27131a5da381a034d55165558e56a`, successful CI run
+`33969157527`, and five exact Tier-1 jobs. The complete tested merge tree
+matches the preserved source tree. D-230 defines the closed fields, immutable
+attestation, exact source/output projection and current-scope distinction.
+`check_site_evidence.py` preserves the legacy inventory checks;
+`site_execution_evidence.py` supplies one shared validator and ordered
+projection path for both new heroes, invoked by `check-site.sh` with the same
+path overrides. The public checker never runs the compiler or oracle.
+
+The other five records remain explicitly `unavailable`. Performance has no
+published route until #567 provides real artifacts. Architecture, Status,
+Comparison, and Provenance retain their
 useful explanatory pages, but the first screen now says that its unique
 commit-bound hero is unavailable and links to the responsible issue. This
 state does not invalidate the pages' separately owned semantic source
@@ -480,7 +504,16 @@ exact stdout, artifact paths and SHA-256 identities, full commit and run,
 environment, limitations, immutable links, and every Tier-1 job tuple. A
 projection may not claim a stronger state than its manifest record.
 
-Mutation tests remove every required field from the accepted record, replace
+The two new HTML pages bind visible ordered code blocks, statuses, provenance
+and adjacent limitations to immutable blobs. Their central Markdown/LLM
+summaries share exact commands, results, states and limitations, with canonical
+links to complete details instead of duplicate full-page mirrors. The pages
+use US English (`en-US`, `inLanguage=en-US`, `og:locale=en_US`). PEP 526 scope
+is checked against the current breadth declaration, while the run remains
+historical. One passing fixture is not full Python 3.14 compatibility, and
+stable diagnostic bytes do not establish class correctness for all inputs.
+
+Mutation tests remove every required field from the accepted records, replace
 each of the eight evidence kinds, add invented output to every unavailable
 record, mix a diagnostic snapshot with the landing source, drift commit or
 platform data, replace an exact link with `main`, delete the fixture/test/
@@ -613,7 +646,7 @@ The supported consumer contract is now explicit and enforced:
   `## Specifications` sections are non-optional (expanded by a default
   consumer). The `## Optional` section holds human-navigation and larger
   resources (the canonical HTML landing, the GitHub repository UI page, the
-  four evidence-page HTML representations, and the MIT license) that a client
+  six evidence-page HTML representations, and the MIT license) that a client
   expands only when it explicitly requests more context.
 - **Representation preference.** Non-optional inference links are
   Markdown/plain-text-first: tracked Markdown documents use
@@ -864,9 +897,11 @@ runner, making the gate fully reproducible.
 
 ### Canonical pages and 404 cohort
 
-The gate checks the 5 canonical pages (landing, status, architecture,
-python-aot-compilers, AI-native experiment) plus the 404 error page. Each
-page is measured with 5 Lighthouse replicates, and the median of each
+The gate checks the 7 canonical pages (landing, status, architecture,
+python-aot-compilers, AI-native experiment, language support, diagnostics)
+plus the 404 error page. Each
+canonical page is measured with 5 Lighthouse replicates; the 404 cohort is
+checked for HTTP identity and resource budgets, not Lighthouse metrics. The median of each
 metric across the replicates is compared against the budget thresholds.
 The 5-replicate median strategy dampens single-run variance inherent to
 lab-based browser performance measurement.

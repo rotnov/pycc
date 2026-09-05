@@ -64,7 +64,7 @@
             "name": "pycc — AOT compiler for typed Python to native binaries",
             "description": "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM; AI-created and human-managed.",
             "inLanguage": "en",
-            "dateModified": "2026-08-29",
+            "dateModified": "2026-09-05",
             "additionalProperty": [
               {
                 "@type": "PropertyValue",
@@ -126,6 +126,8 @@
         <span>pycc</span>
       </a>
       <nav class="site-nav" aria-label="Primary navigation">
+        <a href="language-support/">Language</a>
+        <a href="diagnostics/">Diagnostics</a>
         <a href="status/">Status</a>
         <a href="architecture/">Architecture</a>
         <a href="python-aot-compilers/">Compare</a>
@@ -262,6 +264,10 @@ i = <span class="code-number">0</span>
           </details>
         </div>
       </section>
+
+      <p>Inspect the <a href="language-support/">tested language subset</a> and
+        <a href="diagnostics/">actual compiler diagnostics</a> for exact source,
+        outputs, and the limits of each claim.</p>
 
       <section class="contract" aria-label="pycc design contract">
         <div>
@@ -457,7 +463,7 @@ i = <span class="code-number">0</span>
               <li><span aria-hidden="true">✓</span> v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)</li>
               <li><span aria-hidden="true">✓</span> v0.2 acceptance criteria also met (2026-08-04)</li>
               <li><span aria-hidden="true">✓</span> v0.3 acceptance criteria met and released as <code>v0.3.0</code> (2026-08-26): classes, inheritance, pattern matching, and exceptions, with conformance clearing 38 of 37 required matrix rows across all 39 required PEP numbers</li>
-              <li><span aria-hidden="true">→</span> v0.4 (multi-file projects, imports, incremental compilation) is next and has not started</li>
+              <li><span aria-hidden="true">→</span> v0.4 is in progress. Cross-file project from imports have landed. Bare/submodule imports, namespace handling, broader project CLI behavior, and incremental compilation remain incomplete.</li>
             </ul>
           </div>
         </div>
@@ -502,6 +508,8 @@ i = <span class="code-number">0</span>
       </a>
       <p>An AI-created, human-managed AOT compiler for typed Python. Pre-alpha.</p>
       <div>
+        <a href="language-support/">Language</a>
+        <a href="diagnostics/">Diagnostics</a>
         <a href="status/">Status</a>
         <a href="architecture/">Architecture</a>
         <a href="python-aot-compilers/">Compare</a>

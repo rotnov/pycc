@@ -122,6 +122,8 @@
       <nav class="site-nav" aria-label="Primary navigation">
         <a aria-current="page" href="../status/">Status</a>
         <a href="../architecture/">Architecture</a>
+        <a href="../language-support/">Language</a>
+        <a href="../diagnostics/">Diagnostics</a>
         <a href="../python-aot-compilers/">Compare</a>
         <a href="../ai-native/">AI experiment</a>
         <a class="nav-cta" href="https://github.com/rotnov/pycc">GitHub ↗</a>
@@ -142,7 +144,7 @@
         data-evidence-kind="required-checks-snapshot"
         data-evidence-state="unavailable"
       >
-        <p class="eyebrow">Evidence page · Updated 2026-08-26</p>
+        <p class="eyebrow">Evidence page · Updated 2026-09-05</p>
         <h1>What pycc can do <span>today.</span></h1>
         <p class="page-lede">
           pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14.
@@ -155,11 +157,15 @@
             data-evidence-kind="required-checks-snapshot"
             data-evidence-state="unavailable"
           ><strong>Evidence hero</strong> unavailable · commit-bound snapshot tracked in <a href="https://github.com/rotnov/pycc/issues/566">#566</a></span>
-          <span><strong>Milestone</strong> v0.3 acceptance criteria met, released as v0.3.0; v0.4 not started</span>
+          <span><strong>Milestone</strong> v0.3 acceptance criteria met, released as v0.3.0; v0.4 in progress</span>
           <span><strong>Acceptance</strong> v0.1, v0.2, and v0.3 all fully met</span>
           <span><strong>Readiness</strong> pre-alpha</span>
         </div>
       </header>
+
+      <p>For bounded execution proof, see the <a href="../language-support/">tested language subset</a>
+        and <a href="../diagnostics/">actual compiler diagnostics</a>. These fixture results do not
+        replace this page's still-unavailable commit-bound status snapshot.</p>
 
       <div class="prose-layout">
         <aside class="toc" aria-label="On this page">
@@ -220,9 +226,10 @@
                   <code>T0021</code>, <code>T0022</code>,
                   <code>T0023</code>, and <code>T0024</code>. A
                   <code>from __future__ import annotations</code> line now
-                  compiles as a no-op, and a future feature CPython rejects
-                  reports the same <code>L0001</code> with CPython's wording.
+                  compiles as a no-op, and an unknown module-level future feature
+                  reports <code>L0001</code> with CPython's wording.
                 </p>
+                <p>In the module prologue, <code>from __future__ import annotations</code> is accepted as a compile-time no-op and binds no feature name. The PEP 563 subset proves that this directive leaves supported own-class method annotations and already-defined-class function annotations working. Later-defined forward references, string annotations, and runtime <code>__annotations__</code> introspection remain unsupported. This is partial evidence, not whole-PEP acceptance. The <a href="../language-support/">language support map</a> links the directive's contract, production tests, and observed-green subset evidence separately from its historical PEP 526 hero.</p>
               </div>
               <div class="evidence-card">
                 <span>Portability</span>
@@ -387,20 +394,16 @@
 
           <section id="next">
             <p class="section-kicker">Planned next</p>
-            <h2>v0.4 — multi-file projects and incremental compilation — is next.</h2>
+            <h2>v0.4 — multi-file projects and incremental compilation — is in progress.</h2>
             <p>
               v0.1, v0.2, and v0.3's acceptance criteria are all met, and
               v0.3 is released as the <code>v0.3.0</code> tag — see
               <a href="#implemented">Implemented now</a> above for what that
-              covers today. The conformance matrix clears 38 of the 37
-              <code>PYTHON_STANDARDS.md</code> rows v0.3 required (exceeding
-              the floor by one), encompassing all 39 required distinct PEP
-              numbers, with a 0-row and 0-PEP gap on both axes. The
-              previously-outstanding exception rows — PEP 3151
-              (<code>OSError</code> hierarchy), PEP 654
-              (<code>except*</code>), and PEP 758 (parenthesis-free
-              multi-type <code>except</code>) — flipped once their fixtures
-              were observed green on Tier-1 CI; see
+              covers today. The conformance matrix has 39 evidence-backed
+              <code>PYTHON_STANDARDS.md</code> rows: 2 whole-PEP acceptances
+              and 37 tested subsets, encompassing 40 distinct PEP numbers.
+              The v0.3 floors of 37 rows and 39 PEPs remain met; these counts
+              do not establish full Python compatibility. See
               <a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">the roadmap's v0.3 section</a>
               for the itemized evidence.
             </p>
@@ -408,10 +411,9 @@
               v0.4 — multi-file projects, imports, namespace packages, an
               incremental compilation cache, parallel codegen, and native
               <code>os</code>/<code>pathlib</code>/<code>json</code>/<code>datetime</code>
-              support — is the next milestone on the
+              support — is in progress on the
               <a href="https://github.com/rotnov/pycc/blob/main/docs/DELIVERY_PLAN.md">delivery plan</a>.
-              It has not started: no issue has been selected, no branch
-              opened, and no implementation plan written. Its acceptance
+              v0.4 is in progress. Cross-file project from imports have landed. Bare/submodule imports, namespace handling, broader project CLI behavior, and incremental compilation remain incomplete. Its acceptance
               criteria are a Tier-2 corpus (<code>black</code>,
               <code>isort</code>, <code>attrs</code>, <code>click</code>)
               compiling at 80% or more of files, an incremental rebuild of
@@ -470,6 +472,8 @@
       <p>An AI-created, human-managed AOT compiler for typed Python. Pre-alpha.</p>
       <div>
         <a href="../ai-native/">AI experiment</a>
+        <a href="../language-support/">Language</a>
+        <a href="../diagnostics/">Diagnostics</a>
         <a href="../python-aot-compilers/">Compare</a>
         <a href="../llms.txt">LLM guide</a>
         <a href="https://github.com/rotnov/pycc">GitHub</a>

@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "evidence_states": [
     "all-Tier-1",
     "partial",
@@ -98,22 +98,150 @@
       "evidence_id": "language-support-v1",
       "kind": "language-conformance",
       "route": "/language-support/",
-      "page_path": null,
-      "fixture": null,
-      "test": null,
-      "command": null,
-      "snapshot": null,
-      "repository": null,
-      "attestation": null,
-      "environment": null,
-      "state": "unavailable",
-      "limitations": "No language-support hero artifact has been accepted yet. Issue #565 owns the fixture-backed page and its CPython comparison.",
+      "page_path": "site/language-support/index.html",
+      "fixture": {
+        "path": "tests/fixtures/pep_0526_var_annotations.py",
+        "sha256": "8f28ccee9c0d8af26126840278cf5da36206a77991b43c3ada43436895ce3bf6",
+        "scope": {
+          "source": "tests/fixtures/conformance-breadth-manifest.json",
+          "proven": [
+            "annotated assignment with an initializer (`doubled: int = ...`)",
+            "a bare annotation without an initializer (`total: int`)"
+          ],
+          "not_proven": [
+            {
+              "category": "parenthesized annotated targets (`(x): int = 1`)",
+              "kind": "core"
+            },
+            {
+              "category": "module- and class-level `__annotations__` recording",
+              "kind": "core"
+            },
+            {
+              "category": "annotated attribute and subscript targets (`obj.x: int`, `d['k']: int`)",
+              "kind": "core"
+            }
+          ]
+        }
+      },
+      "test": {
+        "path": "tests/site_evidence.rs",
+        "sha256": "efea2d699c9d3807975b659c2b02663114d2e1f5bd98bcc9eb675f00e6803497",
+        "names": [
+          "language_commands_match_cpython_3_14_7_and_canonical_stdout"
+        ]
+      },
+      "command": {
+        "cwd": "repository-root",
+        "executions": [
+          {
+            "id": "pycc",
+            "argv": [
+              "pycc",
+              "run",
+              "tests/fixtures/pep_0526_var_annotations.py"
+            ],
+            "profile": "debug",
+            "flags": [],
+            "exit_status": 0,
+            "stdout": {
+              "artifact": "stdout"
+            },
+            "stderr": {
+              "empty": true
+            }
+          },
+          {
+            "id": "cpython",
+            "argv": [
+              "python3.14",
+              "tests/fixtures/pep_0526_var_annotations.py"
+            ],
+            "profile": "not-applicable",
+            "flags": [],
+            "exit_status": 0,
+            "stdout": {
+              "artifact": "stdout"
+            },
+            "stderr": {
+              "empty": true
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "artifacts": [
+          {
+            "id": "stdout",
+            "path": "tests/fixtures/pep_0526_var_annotations.expected.txt",
+            "sha256": "238903180cc104ec2c5d8b3f20c5bc61b389ec0a967df8cc208cdc7cd454174f",
+            "text": "15\n",
+            "format": "text"
+          }
+        ]
+      },
+      "repository": {
+        "commit": "0d94ad8f30b27131a5da381a034d55165558e56a",
+        "tree": "26bf9fe465c50d8065b1e0260e6100dc3e68f193",
+        "url": "https://github.com/rotnov/pycc/commit/0d94ad8f30b27131a5da381a034d55165558e56a"
+      },
+      "attestation": {
+        "workflow": "CI",
+        "run_id": 33969157527,
+        "run_url": "https://github.com/rotnov/pycc/actions/runs/33969157527",
+        "source_head": "0d94ad8f30b27131a5da381a034d55165558e56a",
+        "tested_commit": "321e66ff71f1eb4dedcd34d606f98994ad198758",
+        "tested_tree": "26bf9fe465c50d8065b1e0260e6100dc3e68f193",
+        "base_commit": "4eca5e24e09d6972b5717f35652e5201dde2a02f"
+      },
+      "environment": {
+        "python": "3.14.7",
+        "rust": "1.97.1",
+        "llvm": "22",
+        "profile": "debug",
+        "platforms": [
+          {
+            "runner": "macos-14",
+            "architecture": "aarch64-apple-darwin",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505690"
+          },
+          {
+            "runner": "macos-15-intel",
+            "architecture": "x86_64-apple-darwin",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505701"
+          },
+          {
+            "runner": "ubuntu-latest",
+            "architecture": "x86_64-unknown-linux-gnu",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505789"
+          },
+          {
+            "runner": "ubuntu-24.04-arm",
+            "architecture": "aarch64-unknown-linux-gnu",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505756"
+          },
+          {
+            "runner": "windows-latest",
+            "architecture": "x86_64-pc-windows-msvc",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505712"
+          }
+        ]
+      },
+      "state": "all-Tier-1",
+      "limitations": "One passing fixture does not establish full Python 3.14 compatibility. all-Tier-1 means platform coverage for this fixture, not whole-language acceptance. The displayed pycc run uses debug, not release.",
       "stable_links": {
-        "owner": "https://github.com/rotnov/pycc/issues/565"
+        "fixture": "https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/fixtures/pep_0526_var_annotations.py",
+        "test": "https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/site_evidence.rs",
+        "commit": "https://github.com/rotnov/pycc/commit/0d94ad8f30b27131a5da381a034d55165558e56a",
+        "run": "https://github.com/rotnov/pycc/actions/runs/33969157527",
+        "stdout": "https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/fixtures/pep_0526_var_annotations.expected.txt"
       },
       "projections": {
         "markdown": "site/index.html.md",
-        "llm": "site/llms.txt"
+        "llm": "site/llms.txt",
+        "html": "site/language-support/index.html",
+        "structured_data": "site/language-support/index.html",
+        "social": "site/language-support/index.html"
       }
     },
     {
@@ -121,22 +249,159 @@
       "evidence_id": "diagnostics-v1",
       "kind": "compiler-diagnostic",
       "route": "/diagnostics/",
-      "page_path": null,
-      "fixture": null,
-      "test": null,
-      "command": null,
-      "snapshot": null,
-      "repository": null,
-      "attestation": null,
-      "environment": null,
-      "state": "unavailable",
-      "limitations": "No diagnostics hero artifact has been accepted yet. Issue #565 owns the exact compiler-generated diagnostic projection.",
+      "page_path": "site/diagnostics/index.html",
+      "fixture": {
+        "path": "tests/diagnostics/d0021_range_argument_type.py",
+        "sha256": "d506adc49080f18a29cb5731c5fbc364ae42e08316955cee74fd28f3db5d304b",
+        "scope": {
+          "source": "docs/DIAGNOSTICS.md",
+          "proven": [
+            "T0021 range argument rejection; exact human and JSON serialization"
+          ],
+          "not_proven": [
+            {
+              "category": "precise type-checker spans and human help rendering",
+              "kind": "core"
+            },
+            {
+              "category": "diagnostic-class correctness for all inputs",
+              "kind": "core"
+            }
+          ]
+        }
+      },
+      "test": {
+        "path": "tests/site_evidence.rs",
+        "sha256": "efea2d699c9d3807975b659c2b02663114d2e1f5bd98bcc9eb675f00e6803497",
+        "names": [
+          "diagnostics_commands_match_human_and_json_snapshots"
+        ]
+      },
+      "command": {
+        "cwd": "repository-root",
+        "executions": [
+          {
+            "id": "human",
+            "argv": [
+              "pycc",
+              "check",
+              "tests/diagnostics/d0021_range_argument_type.py"
+            ],
+            "profile": "frontend",
+            "flags": [],
+            "exit_status": 1,
+            "stdout": {
+              "artifact": "human"
+            },
+            "stderr": {
+              "empty": true
+            }
+          },
+          {
+            "id": "json",
+            "argv": [
+              "pycc",
+              "check",
+              "tests/diagnostics/d0021_range_argument_type.py",
+              "--error-format",
+              "json"
+            ],
+            "profile": "frontend",
+            "flags": [
+              "--error-format",
+              "json"
+            ],
+            "exit_status": 1,
+            "stdout": {
+              "artifact": "json"
+            },
+            "stderr": {
+              "empty": true
+            }
+          }
+        ]
+      },
+      "snapshot": {
+        "artifacts": [
+          {
+            "id": "human",
+            "path": "tests/diagnostics/d0021_range_argument_type.expected.txt",
+            "sha256": "a5e96a42106cd99ef65e2d131a5d29ea4770f081dc392a16223028eb98ec9651",
+            "text": "error[T0021]: range stop expects `int`, got `str`\n --> tests/diagnostics/d0021_range_argument_type.py:1:1\n  |\n1 | for item in range(\"three\"):\n  | ^ range stop expects `int`, got `str`\n",
+            "format": "text"
+          },
+          {
+            "id": "json",
+            "path": "tests/diagnostics/d0021_range_argument_type.expected.json",
+            "sha256": "5e6a833bb6550e44c0516becd21f19c89213eb8cbdb27a72807465d1b45dd0ba",
+            "text": "{\"code\":\"T0021\",\"format_version\":1,\"help\":[\"pass an `int` value\"],\"message\":\"range stop expects `int`, got `str`\",\"severity\":\"error\",\"spans\":[{\"col\":1,\"file\":\"tests/diagnostics/d0021_range_argument_type.py\",\"label\":\"range stop expects `int`, got `str`\",\"len\":0,\"line\":1}]}\n",
+            "format": "json"
+          }
+        ]
+      },
+      "repository": {
+        "commit": "0d94ad8f30b27131a5da381a034d55165558e56a",
+        "tree": "26bf9fe465c50d8065b1e0260e6100dc3e68f193",
+        "url": "https://github.com/rotnov/pycc/commit/0d94ad8f30b27131a5da381a034d55165558e56a"
+      },
+      "attestation": {
+        "workflow": "CI",
+        "run_id": 33969157527,
+        "run_url": "https://github.com/rotnov/pycc/actions/runs/33969157527",
+        "source_head": "0d94ad8f30b27131a5da381a034d55165558e56a",
+        "tested_commit": "321e66ff71f1eb4dedcd34d606f98994ad198758",
+        "tested_tree": "26bf9fe465c50d8065b1e0260e6100dc3e68f193",
+        "base_commit": "4eca5e24e09d6972b5717f35652e5201dde2a02f"
+      },
+      "environment": {
+        "python": "3.14.7",
+        "rust": "1.97.1",
+        "llvm": "22",
+        "profile": "debug",
+        "platforms": [
+          {
+            "runner": "macos-14",
+            "architecture": "aarch64-apple-darwin",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505690"
+          },
+          {
+            "runner": "macos-15-intel",
+            "architecture": "x86_64-apple-darwin",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505701"
+          },
+          {
+            "runner": "ubuntu-latest",
+            "architecture": "x86_64-unknown-linux-gnu",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505789"
+          },
+          {
+            "runner": "ubuntu-24.04-arm",
+            "architecture": "aarch64-unknown-linux-gnu",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505756"
+          },
+          {
+            "runner": "windows-latest",
+            "architecture": "x86_64-pc-windows-msvc",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505712"
+          }
+        ]
+      },
+      "state": "all-Tier-1",
+      "limitations": "Human output has no help line. The type checker uses a placeholder 1:1, zero-length span; the caret does not precisely highlight the argument. Exact serialization for this fixture does not establish diagnostic-class correctness for all inputs.",
       "stable_links": {
-        "owner": "https://github.com/rotnov/pycc/issues/565"
+        "fixture": "https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/diagnostics/d0021_range_argument_type.py",
+        "test": "https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/site_evidence.rs",
+        "commit": "https://github.com/rotnov/pycc/commit/0d94ad8f30b27131a5da381a034d55165558e56a",
+        "run": "https://github.com/rotnov/pycc/actions/runs/33969157527",
+        "human": "https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/diagnostics/d0021_range_argument_type.expected.txt",
+        "json": "https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/diagnostics/d0021_range_argument_type.expected.json"
       },
       "projections": {
         "markdown": "site/index.html.md",
-        "llm": "site/llms.txt"
+        "llm": "site/llms.txt",
+        "html": "site/diagnostics/index.html",
+        "structured_data": "site/diagnostics/index.html",
+        "social": "site/diagnostics/index.html"
       }
     },
     {

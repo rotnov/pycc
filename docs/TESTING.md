@@ -202,6 +202,75 @@ must reject a program before code generation. In
 lock the public diagnostic. This focused oracle case does not replace the
 planned multi-version conformance harness.
 
+## Website execution evidence preparation
+
+`tests/site_evidence.rs` binds the proposed Language and Diagnostics
+transcripts to the real CLI from the repository root. The non-oracle
+`language_command_matches_canonical_stdout` test runs exactly
+`pycc run tests/fixtures/pep_0526_var_annotations.py` and checks exit 0,
+empty stderr, and `tests/fixtures/pep_0526_var_annotations.expected.txt`.
+This is the default debug `run` path, not a release run. The unchanged
+`pep_0526_var_annotations_matches_cpython_3_14_7_byte_for_byte` conformance
+test separately covers both build profiles; one fixture proves neither all
+of PEP 526 nor full Python 3.14 compatibility (D-177).
+
+`language_commands_match_cpython_3_14_7_and_canonical_stdout` independently
+executes the same pycc command and
+`python3.14 tests/fixtures/pep_0526_var_annotations.py`, after requiring
+exactly `Python 3.14.7` from the oracle's successful, stderr-free version
+probe. It checks both exit codes, both stderr streams, both stdout streams
+against the canonical snapshot, and the independent pycc/CPython comparison.
+It is ignored by default under D-080: the existing Tier-1
+`cargo test --workspace -- --include-ignored` steps execute it after oracle
+setup, while the isolated coverage step needs no oracle. Windows uses
+the existing `python3.14.exe` alias. Only the D-082 CR-before-LF translation
+is removed from CPython output; pycc output is never normalized. Checked-out
+text snapshots receive the same narrow Git-autocrlf normalization.
+Non-oracle controls exercise a missing executable and a real non-oracle
+version process; synthetic version-probe cases reject wrong patches,
+malformed bytes, extra whitespace, nonzero exit, and stderr. These controls
+are not evidence of a successful CPython run and never enable a fallback.
+
+`diagnostics_commands_match_human_and_json_snapshots` executes exactly
+`pycc check tests/diagnostics/d0021_range_argument_type.py` and the same
+command with `--error-format json`. Both must return exit 1, empty stderr,
+and the existing `.expected.txt`/`.expected.json` bytes on stdout. The
+test also checks the actual JSON code, message, span and help fields against
+the human transcript's code/message/location: the span remains the 1:1,
+zero-length placeholder, JSON help is populated, and human output has no
+help line (D-043, D-152). The existing diagnostics test remains unchanged.
+
+Run the focused ordinary suite with `cargo test --test site_evidence`; with
+the pinned oracle installed, use
+`cargo test --test site_evidence -- --include-ignored`. Use the isolated
+TMPDIR procedure below for repeated runs. The preserved preparation commit is
+`0d94ad8f30b27131a5da381a034d55165558e56a`; successful CI run `33969157527`
+executed the proof on all five Tier-1 targets. Language and Diagnostics now
+publish these accepted historical executions under D-230. The website gate
+remains offline: `scripts/site_execution_evidence_test.py` mutates the public
+`check-site.sh` inputs to verify closed nested fields, preserved Git blobs,
+provenance, command/status/output identity, visible transcripts, H1s and
+limitations. The shared parser omits exactly one final newline from each
+snapshot pane, never arbitrary whitespace. Page-cohort mutation tests cover
+both new canonical routes; Lighthouse and narrow-width no-JS/JS checks are
+browser evidence, not compiler conformance or field measurements. Run these
+historical-blob controls through `scripts/test-check-site.sh` in a full-history
+checkout, as the Pages workflow does. They are deliberately outside shallow
+governance's `test_*.py` discovery; `scripts/test_site_execution_wiring.py`
+checks the shell invocation, Pages validation invocation and full-history
+checkout without reading Git objects. The Pages push and pull-request path
+filters enumerate the ten direct execution-evidence dependencies exactly once
+per event; wiring controls reject independent removals and duplicates.
+Permissions, checkout depth, thresholds, required checks and `ci.yml`
+classification remain unchanged.
+The current Language/Status directive note follows D-229 and the annotation
+semantics owner separately from the immutable D-230 transcript. Positive and
+mutation controls preserve its module-prologue, no-binding, three core annotation
+gaps and partial PEP 563 acceptance boundaries after integrating issues #919 and
+#937. Public
+CLI mutations also reject each new hero's limitations or source transcript
+wrapped in `noscript`: evidence must be visible with JavaScript enabled too.
+
 ## Differential fuzzing (planned)
 
 A generator would produce well-typed programs (type-directed generation — always compile-clean), weighted toward: arithmetic edges (overflow → bigint promotion paths), string unicode edges, collection aliasing, control-flow + exceptions, match patterns. Mismatch → auto-minimize (creduce-style) → auto-file issue with repro. This would run continuously on a dedicated runner. No fuzzing harness exists on current `main`.
