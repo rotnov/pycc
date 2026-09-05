@@ -69,7 +69,12 @@ status: accepted
   in it: an enum class early-returns through `lower_enum_class` before
   `ensure_init` runs and still reaches `pycc_mir` with no constructor, which
   panics; that is [#921](https://github.com/rotnov/pycc/issues/921) and is
-  deliberately not fixed here. The #541 Part 2 exception rules are unchanged
+  deliberately not fixed here. *Follow-up (2026-09-05): #921 closed the hole
+  -- calling an enum class is `C0001` at the call site, reported by
+  `pycc_hir::class::enum_call` with a span-less guard in
+  `pycc_types::class::resolve_instantiation` behind it, and
+  `HirClassDef.is_enum` records the enum provenance; the invariant above now
+  holds without a hole.* The #541 Part 2 exception rules are unchanged
   but now reachable in a new shape: a user-declared ancestor with a
   *synthesized* `__init__` is still a non-synthetic ancestor under
   [D-188](./D-188-synthesize-hirclassdefs-for-the-builtin-exception.md)

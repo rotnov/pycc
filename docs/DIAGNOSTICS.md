@@ -141,7 +141,17 @@ of such a class to a name (`e = MyError("boom")`, for a user subclass
 whose MRO reaches a builtin exception without overriding its inherited
 constructor) reports `cannot instantiate exception class \`...\` as a
 value` -- `raise MyError("boom")` stays the one supported construction
-(Part 3 of issue #541).
+(Part 3 of issue #541). Calling an enum class by name (`Color()`, `Color(1)`)
+is `C0001` (``calling an enum class (`Color(...)`) is not supported yet --
+refer to a member by name (`Color.<MEMBER>`) instead``), reported at the call
+expression by HIR lowering's per-item scan (`pycc_hir::class::enum_call`, with
+a span-less guard of the same text in `pycc_types::class::resolve_instantiation`
+behind it); issue #921. The zero-argument form, which CPython rejects with a
+`TypeError`, is deliberately not `T0021`: pycc models no enum constructor to
+report an arity error against -- the whole `EnumType.__call__` value-lookup
+call form is the unimplemented construct, and the zero-argument spelling is one
+misuse of it. When value lookup is implemented, CPython's arity and
+`ValueError` outcomes become `T0021` in that slice.
 
 ## Quality bar
 
