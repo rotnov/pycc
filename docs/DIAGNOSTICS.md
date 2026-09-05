@@ -99,7 +99,15 @@ segment is fine), and a top-level name two linked modules both define
 (``top-level name `helper` is already defined by `colA.py`; a separate
 namespace per module is not supported yet``, lifted by Part 3 of #881). A
 program that seeds the builtin exception classes in one module while another
-shadows one of their names is rejected the same way. An import failure
+shadows one of their names is rejected the same way. A protocol class in
+return-annotation position (``a protocol class (`P`) as a return type
+annotation is not supported yet -- a protocol type is currently supported in
+parameter and variable positions only``,
+[#934](https://github.com/rotnov/pycc/issues/934)) is rejected at the
+annotation's own span, on a module-level function, a method, and a protocol
+member declaration alike; the check runs after the annotation lowers, so a
+nested `list[P]` or `P | None` still reports its own element-type gate first.
+An import failure
 CPython itself would raise on is `T0021`, not `C0001`. A `from __future__
 import ...` is a compiler directive, not a module (#919, D-229): its nine no-op
 features lower to nothing, a name CPython rejects is `L0001`, and the one

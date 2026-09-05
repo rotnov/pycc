@@ -124,7 +124,12 @@ pub(super) fn class_def_of<'c>(
     // own class def. This is used for method/attribute resolution on
     // protocol-typed variables that were not monomorphized (e.g. a
     // protocol-typed local variable inside a function body that doesn't
-    // take a protocol parameter).
+    // take a protocol parameter). A protocol's own class def declares no
+    // methods, so a method call on a genuinely protocol-typed value would
+    // panic in `expr.rs`; that used to be reachable through a `-> P`
+    // function's result until `pycc_hir` started rejecting the annotation
+    // with `C0001` (#934). A protocol-typed *variable* is bound to its
+    // value's concrete type before it gets here (`stmt.rs`).
     let ty = expr.ty();
     let class_name = match &ty {
         Ty::Instance(name) => name.as_str(),

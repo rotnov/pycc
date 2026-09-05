@@ -146,16 +146,17 @@ pub(super) fn call_result_scalar<'ctx>(
         // arm really is a defensive backstop for malformed, hand-built
         // MIR.
         //
-        // `Ty::Protocol` is not: a function annotated to return a
-        // `Protocol` subclass is accepted by the front end today (see
-        // `pycc_types`'s own
-        // `protocol_function_returning_protocol_covers_param_name_none`).
-        // This arm is unreached for that type only because MIR lowering
-        // panics first when the protocol-typed value is used --
-        // `pycc_mir::expr`'s "method not declared on class ... or any
-        // base in its MRO" internal error, tracked as #934. When that
-        // lowering gap closes, this arm becomes reachable from real
-        // source and needs a real implementation, not a panic.
+        // `Ty::Protocol` joined them with #934: a function annotated to
+        // return a `Protocol` subclass used to be accepted by the front
+        // end and then abort inside `pycc_mir` (or here, for an unused
+        // result), so this arm was a genuine reachability gap rather than
+        // a backstop. `pycc_hir::func::lower_return_annotation` now
+        // rejects a protocol class in return position with `C0001`, so no
+        // type-checked source can produce a protocol-typed call result any
+        // more; like the other two, this arm now guards hand-built MIR
+        // only. If a later slice lifts that gate (D-166 gives a protocol
+        // no runtime representation, so it would have to bind a concrete
+        // type first), this arm needs a real implementation, not a panic.
         //
         // All three are covered by one `#[should_panic]` unit test per
         // variant in `pycc_codegen` rather than by any `.py` input.

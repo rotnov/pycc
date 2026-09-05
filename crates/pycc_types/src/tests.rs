@@ -12,6 +12,10 @@ use super::*;
 // carries the import these tests inherited through `use super::*`.
 use crate::binop::numeric_result_type;
 
+// #934: the protocol-return re-cover tests live in their own file so this
+// already-oversized module does not grow (AGENTS.md decomposability rule).
+mod protocol_return;
+
 #[test]
 fn v0_1_slice_always_type_checks() {
     let hir = HirModule {
@@ -23417,17 +23421,6 @@ fn protocol_instantiation_is_c0001() {
 }
 
 #[test]
-fn protocol_typed_return_with_non_conforming_is_t0046() {
-    // This exercises the protocol return-type mismatch path with
-    // a non-conforming class.
-    let err = check_source(
-            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass D:\n    def __init__(self) -> None:\n        self.x = 0\ndef ret_proto() -> P:\n    return D()\n",
-        )
-        .unwrap_err();
-    assert_eq!(err.code, "T0046");
-}
-
-#[test]
 fn protocol_typed_annassign_mismatch_is_t0046() {
     // This exercises the protocol annotation mismatch path in
     // AnnAssign checking.
@@ -23551,30 +23544,6 @@ fn isinstance_inside_generic_function_triggers_rewrite_special_case() {
 }
 
 #[test]
-fn protocol_function_returning_protocol_covers_param_name_none() {
-    // A function with a protocol return type but no protocol-typed
-    // parameters is NOT classified for monomorphization
-    // (has_protocol_param only checks parameters). It is kept as-is
-    // and remains callable after monomorphization.
-    let result = check_source(
-        "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\nc = C()\ndef ret_proto() -> P:\n    return C()\ndef caller() -> None:\n    x = ret_proto()\n    print(x.foo())\ncaller()\n",
-    );
-    assert!(result.is_ok());
-    let resolved = result.unwrap();
-    let has_ret_proto = resolved.items.iter().any(|item| {
-        if let HirItem::Function { name, .. } = item {
-            name == "ret_proto"
-        } else {
-            false
-        }
-    });
-    assert!(
-        has_ret_proto,
-        "protocol-return-only function must not be dropped by monomorphization"
-    );
-}
-
-#[test]
 fn protocol_call_with_protocol_typed_arg_covers_non_instance_break() {
     // This exercises the break when arg_ty is Ok(Protocol) instead
     // of Ok(Instance) in rewrite_protocol_calls_in_expr.
@@ -23584,19 +23553,6 @@ fn protocol_call_with_protocol_typed_arg_covers_non_instance_break() {
     // This may or may not succeed depending on whether the
     // monomorphization handles protocol-typed args gracefully.
     // We just need to exercise the code path.
-    let _ = result;
-}
-
-#[test]
-fn protocol_call_with_protocol_returned_arg_covers_empty_substitutions() {
-    // Exercises the false branch of `if !substitutions.is_empty()` in
-    // rewrite_protocol_calls_in_expr. A protocol-return-only function
-    // (make_proto) produces a protocol-typed local (x) whose inferred
-    // type is Ty::Protocol, not Ty::Instance, so no substitution is
-    // generated and the call is left unrewritten.
-    let result = check_source(
-        "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\ndef make_proto() -> P:\n    return C()\ndef proto_fn(p: P) -> int:\n    return p.foo()\ndef caller() -> None:\n    x = make_proto()\n    print(proto_fn(x))\ncaller()\n",
-    );
     let _ = result;
 }
 
@@ -24370,19 +24326,6 @@ fn protocol_argument_mismatch_emits_t0046() {
     // a non-conforming class is passed to a protocol-typed parameter.
     let err = check_source(
             "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\ndef bar(p: P) -> int:\n    return p.foo()\nbar(C())\n",
-        )
-        .unwrap_err();
-    assert_eq!(err.code, "T0046");
-}
-
-#[test]
-fn protocol_reassignment_mismatch_emits_t0046() {
-    // This exercises the assignable_error call (line 3648) when
-    // a variable previously bound to a protocol type (via a
-    // function returning the protocol) is reassigned with a
-    // non-conforming concrete class.
-    let err = check_source(
-            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\n    def foo(self) -> int:\n        return 1\nclass D:\n    def __init__(self) -> None:\n        self.x = 0\ndef get_p() -> P:\n    return C()\ndef caller() -> None:\n    x = get_p()\n    x = D()\ncaller()\n",
         )
         .unwrap_err();
     assert_eq!(err.code, "T0046");
