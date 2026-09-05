@@ -33,6 +33,42 @@ never a merge gate.
 
 ---
 
+## 2026-09-05 — Delivered a full implementation of an issue a concurrent actor planned and merged twenty minutes behind my plan
+
+**What happened:** iteration 10 implemented
+[#921](https://github.com/rotnov/pycc/issues/921) end to end as PR
+[#943](https://github.com/rotnov/pycc/pull/943) (41 files, coverage green).
+While it ran, the concurrent automated actor recorded in the entry below
+posted its own plan comment on #921 about twenty minutes after mine, then
+opened and merged PR [#942](https://github.com/rotnov/pycc/pull/942) for the
+same issue (`e6781b2c`, 2026-09-05T17:04Z). #943 was closed as superseded;
+the only part of it that survived was its better diagnostic span, refiled as
+[#944](https://github.com/rotnov/pycc/issues/944). The implementation, its
+D-068 review round, and its fix loop -- roughly seventy minutes -- were spent
+on a duplicate. This happened on the same day as, and after, the #937/#939
+collision below, whose lesson had not yet been applied to the running loop.
+
+**Root cause:** the plan comment was treated as the claim, and nothing
+re-read the target issue for a competing plan comment or an open pull request
+between publishing that plan and dispatching the implementer, nor at any point
+during the implementation itself. The lesson below covers dispatch and push
+only; the gap here was the long stretch in between, where a competing claim
+arrived and went unnoticed until GitHub reported the issue closed.
+
+**What fixed it:** closed #943, kept its one non-duplicated improvement as
+the follow-up issue #944, and moved on to the next issue with the re-check
+built into its brief -- this iteration's #941 brief names four fixed points
+at which to re-run the issue and pull-request queries.
+
+**Lesson:** re-check the target issue for competing claims at four points,
+not two: when the plan is published, when the implementer starts, at the
+first commit, and immediately before the push. The check is
+`gh issue view <n> --json state,comments` (a new comment from another actor
+is a claim to read, not noise) plus `gh pr list --state open --search <n>`.
+If a competing plan or pull request exists at any of those points, yield to
+it: stop, diff the competing change against the local one, and file only the
+genuine delta as a follow-up issue rather than finishing a duplicate.
+
 ## 2026-09-05 — Implemented an issue a parallel session was already delivering
 
 **What happened:** `issue-select` picked #937 (flip the PEP 563 row after its

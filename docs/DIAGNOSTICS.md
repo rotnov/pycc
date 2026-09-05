@@ -146,7 +146,14 @@ reports `cannot call enum class \`...\`` from the same
 `resolve_instantiation` ladder (issue #921): members are compile-time
 singletons reached by name (`Color.RED`), and by-value lookup is the
 not-yet-implemented construct; the zero-argument form is a CPython
-`TypeError` too and is named as such rather than as unsupported.
+`TypeError` too and is named as such rather than as unsupported. Naming
+an enum class as a base (`class Foo(Color): pass`) is rejected from
+`validate_bases` on the class header (issue #941): when the enum has
+members the message names CPython's own `TypeError: <enum 'Foo'> cannot
+extend <enum 'Color'>`, and when it is a member-less docstring-only enum
+-- a shape CPython does allow extending -- the message reads
+`cannot inherit from member-less enum class \`...\` -- ... not supported
+yet`.
 
 ## Quality bar
 
