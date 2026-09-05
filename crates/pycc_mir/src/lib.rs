@@ -898,8 +898,11 @@ fn lower_item(
             // `<ClassName>.<method>` name so `lower_expr`'s `Super` arm
             // can resolve the next class in the MRO. A top-level function
             // name contains no `.`, so `current_class` is `None` for those.
-            let current_class: Option<&str> =
-                name.split('.').next().filter(|prefix| *prefix != name);
+            let current_class: Option<&str> = name
+                .split('.')
+                .next()
+                .filter(|prefix| *prefix != name)
+                .map(|prefix| resolve_method_owner_class(prefix, classes));
             scopes.push(params.iter().cloned().collect());
             let mut body = lower_stmt_sequence(body, scopes, classes, current_class);
             scopes.pop();
@@ -917,6 +920,36 @@ fn lower_item(
             set_frame_function(std::slice::from_mut(&mut stmt), "<module>");
             MirItem::TopLevelStmt(stmt)
         }
+    }
+}
+
+/// #953: Recovers the class a mangled method name belongs to.
+///
+/// The first dotted component of `<ClassName>.<method>` is normally the
+/// class itself, and PEP 695's own generic-class methods
+/// (`0gen_C__T_int.method`) keep that property because the *class* is what
+/// carries the `0gen_` prefix there. A protocol-parameter method
+/// specialization mangles the whole method name instead
+/// (`0gen_C.take__P_C`, `pycc_types::monomorphize`), so its first
+/// component is `0gen_C` -- not a registered class. Resolving by lookup
+/// rather than by naive prefix keeps both conventions working:
+/// `classes`'s own key wins when it exists, a `0gen_`-stripped remainder
+/// is tried next, and the raw prefix is returned unchanged otherwise so
+/// this function can never change behavior for a name that resolves
+/// today.
+fn resolve_method_owner_class<'a>(
+    prefix: &'a str,
+    classes: &HashMap<String, HirClassDef>,
+) -> &'a str {
+    if classes.contains_key(prefix) {
+        return prefix;
+    }
+    match prefix
+        .strip_prefix("0gen_")
+        .filter(|stripped| classes.contains_key(*stripped))
+    {
+        Some(stripped) => stripped,
+        None => prefix,
     }
 }
 
@@ -942,6 +975,16 @@ fn source_frame_name(mangled: &str) -> String {
         .or_else(|| mangled.strip_suffix(".static"))
         .or_else(|| mangled.strip_suffix(".setter"))
         .unwrap_or(mangled);
+    // #953: a protocol-parameter method specialization is named
+    // `0gen_<Class>.<method>__<P>_<C>`; stripping the leading `0gen_`
+    // keeps the class-qualified split below meaningful instead of
+    // rendering the whole mangled string as the frame name. The
+    // substitution suffix itself stays (the frame reads `take__P_C`):
+    // trimming it by string surgery is not safe for a dunder method,
+    // whose own name already contains `__`.
+    let without_suffix = without_suffix
+        .strip_prefix("0gen_")
+        .unwrap_or(without_suffix);
     match without_suffix.split_once('.') {
         Some((_class_name, method_name)) => method_name.to_string(),
         None => without_suffix.to_string(),

@@ -794,7 +794,11 @@ fn bind_local_types_in_body(env: &mut Environment, local_names: &[&str], body: &
     }
 }
 
-fn bind_local_types_in_stmt(env: &mut Environment, local_names: &[&str], stmt: &HirStmt) {
+pub(crate) fn bind_local_types_in_stmt(
+    env: &mut Environment,
+    local_names: &[&str],
+    stmt: &HirStmt,
+) {
     match stmt {
         HirStmt::Assign { target, value } => {
             bind_named_expr_types_in_expr(env, local_names, value);

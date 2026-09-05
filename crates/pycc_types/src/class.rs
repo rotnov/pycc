@@ -359,10 +359,28 @@ fn t0047_super_instance_attr(attr: &str, declaring_class: &str) -> Diagnostic {
 /// mismatch code -- an instantiation call and a method call are both, at
 /// their core, "call this mangled function with these arguments," the same
 /// shape an ordinary function call already validates.
+///
+/// #953: `structural` selects the assignability predicate applied to each
+/// argument. `Some(env)` uses the environment-aware
+/// [`is_assignable_env`], so a concrete class instance is accepted for a
+/// protocol-typed parameter when it structurally conforms (PEP 544);
+/// `None` keeps the plain nominal [`is_assignable`]. Only the two
+/// instance-method-call sites in `class/method_call.rs` pass `Some`: the
+/// static-method, class-method, `super()`, constructor and exception-
+/// constructor sites still pass `None`, because accepting a conforming
+/// concrete argument there needs protocol monomorphization support that
+/// does not exist yet for those lowering shapes, and flipping one of them
+/// without that support produces a `pycc_mir`/`pycc_codegen` panic rather
+/// than a working program (see the #953 follow-up issue). The diagnostics
+/// themselves -- both the arity `T0021` and the per-argument `T0021` --
+/// are identical either way: a non-conforming argument keeps today's
+/// message, and `T0046` (`assignable_error`) stays reserved for the
+/// assignment/conformance positions that already use it.
 pub(crate) fn check_call_args(
     callee: &str,
     arg_tys: &[Ty],
     param_tys: &[Ty],
+    structural: Option<&Environment>,
 ) -> Result<(), Diagnostic> {
     if arg_tys.len() != param_tys.len() {
         return Err(Diagnostic::error(
@@ -377,7 +395,11 @@ pub(crate) fn check_call_args(
         .with_help(format!("pass exactly {} argument(s)", param_tys.len())));
     }
     for (i, (arg_ty, param_ty)) in arg_tys.iter().zip(param_tys.iter()).enumerate() {
-        if !is_assignable(arg_ty.clone(), param_ty.clone()) {
+        let assignable = match structural {
+            Some(env) => is_assignable_env(env, arg_ty, param_ty),
+            None => is_assignable(arg_ty.clone(), param_ty.clone()),
+        };
+        if !assignable {
             return Err(Diagnostic::error(
                 "T0021",
                 format!(
@@ -528,7 +550,7 @@ pub(crate) fn resolve_static_or_class_method_call(
                      static_methods table but was not registered as an ordinary function"
                 )
             });
-            check_call_args(method, arg_tys, param_tys)?;
+            check_call_args(method, arg_tys, param_tys, None)?;
             return Ok(return_ty.clone());
         }
     }
@@ -546,7 +568,7 @@ pub(crate) fn resolve_static_or_class_method_call(
                 )
             });
             let method_param_tys = &param_tys[1..]; // exclude `cls`
-            check_call_args(method, arg_tys, method_param_tys)?;
+            check_call_args(method, arg_tys, method_param_tys, None)?;
             return Ok(return_ty.clone());
         }
     }
@@ -654,7 +676,7 @@ pub(crate) fn resolve_super_method_call(
         if let Some((_, mangled)) = mro_def.methods.iter().find(|(name, _)| name == method) {
             let (param_tys, return_ty) = env.lookup_function(mangled).unwrap();
             let method_param_tys = &param_tys[1..]; // exclude `self`
-            check_call_args(method, arg_tys, method_param_tys)?;
+            check_call_args(method, arg_tys, method_param_tys, None)?;
             return Ok(return_ty.clone());
         }
     }

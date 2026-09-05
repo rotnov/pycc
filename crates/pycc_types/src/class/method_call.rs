@@ -68,7 +68,7 @@ pub(crate) fn resolve_method_call(
             } = member
                 && member_name == method
             {
-                check_call_args(method, arg_tys, proto_param_tys)?;
+                check_call_args(method, arg_tys, proto_param_tys, Some(env))?;
                 return Ok(proto_return_ty.clone());
             }
         }
@@ -109,7 +109,7 @@ pub(crate) fn resolve_method_call(
                 )
             });
             let method_param_tys = &param_tys[1..]; // exclude `self`
-            check_call_args(method, arg_tys, method_param_tys)?;
+            check_call_args(method, arg_tys, method_param_tys, Some(env))?;
             return Ok(return_ty.clone());
         }
     }
