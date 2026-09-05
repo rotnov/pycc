@@ -3279,13 +3279,15 @@ fn a_none_typed_call_result_can_be_stored_and_printed() {
 #[test]
 #[should_panic(expected = "a `<inferred>`-typed call result is not supported yet")]
 fn an_infer_typed_call_result_used_as_a_nested_expression_is_not_supported() {
-    // Exercises `emit_expr`'s `Call` arm's own defensive `other =>`
-    // catch-all on `ty` -- `Ty::Infer` (an HIR-only inference
-    // placeholder no real MIR ever carries this far, same rationale as
-    // `ty_to_basic_type`'s own `an_infer_typed_return_value_is_not_yet_
-    // supported` test above) is the one `Ty` variant left that still
-    // reaches it, now that Task 10 gives `Ty::None` its own explicit
-    // (non-panicking) case there (see the test directly above).
+    // Exercises the first of the three unsupported variants named by
+    // `call_result_scalar`'s explicit rejection arm. #925 replaced that
+    // function's catch-all with `Ty::Infer | Ty::Param(_) |
+    // Ty::Protocol(_)` and no `_ =>` fallback, so the compiler -- not a
+    // comment -- guarantees every other variant has a real arm; the
+    // other two are pinned by the two tests below. `Ty::Infer` is an
+    // HIR-only inference placeholder no real MIR ever carries this far,
+    // same rationale as `ty_to_basic_type`'s own
+    // `an_infer_typed_return_value_is_not_yet_supported` test above.
     //
     // Task 5 (D-089) updated this catch-all to name the type via
     // `Ty::name()` instead of a bare `{:?}`, so `Ty::Infer` renders as
@@ -3312,6 +3314,71 @@ fn an_infer_typed_call_result_used_as_a_nested_expression_is_not_supported() {
     let dir = pycc_scratch::ScratchDir::new("infer_typed_call_result_panics")
         .expect("failed to create scratch dir");
     let obj_path = dir.join("infer_typed_call_result_panics.o");
+    let _ = compile_to_object(&mir, &obj_path, None, false);
+}
+
+/// The second and third variants named by `call_result_scalar`'s explicit
+/// rejection arm. Neither is reachable from real source in return position --
+/// `T0042` rejects a type parameter inside a container annotation and a bare
+/// `Ty::Param` call result is substituted at the call site under D-134, and a
+/// protocol name is not a constructible return value -- so both are pinned at
+/// the MIR level, exactly as `Ty::Infer` is above. Written as one test per
+/// variant rather than one test for the whole or-pattern so that the arm's
+/// coverage does not depend on how llvm-cov counts an or-pattern's regions.
+
+#[test]
+#[should_panic(expected = "a `T`-typed call result is not supported yet")]
+fn a_param_typed_call_result_is_not_supported() {
+    let mir = MirModule {
+        items: vec![
+            MirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::IntLiteral(1)))],
+            },
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::Call {
+                    callee: "f".to_string(),
+                    args: vec![],
+                    ty: Ty::Param(Box::new("T".to_string())),
+                },
+            }),
+        ],
+        class_defs: Vec::new(),
+    };
+    let dir = pycc_scratch::ScratchDir::new("param_typed_call_result_panics")
+        .expect("failed to create scratch dir");
+    let obj_path = dir.join("param_typed_call_result_panics.o");
+    let _ = compile_to_object(&mir, &obj_path, None, false);
+}
+
+#[test]
+#[should_panic(expected = "a `P`-typed call result is not supported yet")]
+fn a_protocol_typed_call_result_is_not_supported() {
+    let mir = MirModule {
+        items: vec![
+            MirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::IntLiteral(1)))],
+            },
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::Call {
+                    callee: "f".to_string(),
+                    args: vec![],
+                    ty: Ty::Protocol(Box::new("P".to_string())),
+                },
+            }),
+        ],
+        class_defs: Vec::new(),
+    };
+    let dir = pycc_scratch::ScratchDir::new("protocol_typed_call_result_panics")
+        .expect("failed to create scratch dir");
+    let obj_path = dir.join("protocol_typed_call_result_panics.o");
     let _ = compile_to_object(&mir, &obj_path, None, false);
 }
 
@@ -4151,13 +4218,12 @@ fn a_list_result_binop_is_not_yet_supported() {
 
 #[test]
 fn compiles_a_function_with_a_list_int_parameter_and_list_int_return_value() {
-    // `def f(x: list[int]) -> list[int]: return x` -- no real source
-    // program can produce this shape. Since D-228 (issue #918) the
-    // *parameter* half is producible from real source (see
-    // `tests/issue_918_container_annotations.rs`); the `-> list[int]`
-    // half is not, because `lower_return_annotation` rejects a container
-    // return annotation with `C0001` (return position is issue #925).
-    // The MIR shape below therefore still has to be hand-built, and Task 5
+    // `def f(x: list[int]) -> list[int]: return x`. Both halves are
+    // producible from real source now: the *parameter* half since D-228
+    // (issue #918), and the `-> list[int]` half since #925 removed the
+    // return-position `C0001` (see
+    // `tests/issue_925_container_returns.rs`). The MIR shape below is
+    // kept hand-built as the direct codegen-level pin, and Task 5
     // (D-089) requires this MIR shape to compile *cleanly* rather than
     // panic: `ty_to_basic_type`'s `List(_)` arm (parameter type, and
     // transitively the return type via `compile_to_object`'s `fn_type`
@@ -4232,16 +4298,11 @@ fn passing_a_list_value_as_a_function_argument_marshals_it_like_a_pointer() {
     // the exact shape `incref_if_str_duplicate` dispatches on, and
     // `build_call_to` calls that helper on every argument.
     //
-    // Both functions return `int`, not `list[int]`: `emit_expr`'s `Call`
-    // arm dispatches its *result* on the declared `Ty`, and that match
-    // has no `Ty::List` arm -- it panics honestly through its catch-all
-    // ("a `list[int]`-typed call result is not supported yet"). That is
-    // correct and deliberately left alone here: D-105's own first scope
-    // cut means no v0.2 function can be *annotated* to return
-    // `list[int]` in the first place, so the gap is unreachable rather
-    // than a hole this task should fill. Only the argument side is
-    // exercised, which is the side that actually has a `Scalar::List`
-    // arm to verify.
+    // Both functions return `int`, not `list[int]`: this test is about
+    // the *argument* side, which is the side that has a `Scalar::List`
+    // arm to verify here. The result side gained its own `Ty::List` arm
+    // in #925 (`call_result_scalar`), covered by
+    // `a_list_typed_call_result_is_returned_as_a_pointer` below.
     let list_int = || Ty::List(Box::new(Ty::Int));
     let mir = MirModule {
         items: vec![
@@ -5785,11 +5846,11 @@ fn for_set_over_an_unbound_name_is_an_internal_error() {
 fn compiles_a_function_with_a_set_int_parameter_and_set_int_return_value() {
     // The `set[int]` counterpart of `compiles_a_function_with_a_dict_
     // str_int_parameter_and_dict_str_int_return_value` above, for the
-    // identical reason: no real source program can produce this shape.
-    // Since D-228 (issue #918) an annotated `set[int]` *parameter* does
-    // reach codegen from real source, but a `-> set[int]` return
-    // annotation is rejected in lowering (issue #925), so the combined
-    // shape below is still hand-built. This MIR shape must still compile
+    // identical reason. Since D-228 (issue #918) an annotated `set[int]`
+    // *parameter* reaches codegen from real source, and since #925 a
+    // `-> set[int]` return annotation does too; the combined shape below
+    // is kept hand-built as the direct codegen-level pin, independent of
+    // the front end. This MIR shape must still compile
     // *cleanly* -- `ty_to_basic_type`'s `Set(_)` arm and `emit_expr`'s
     // `Name` arm's `Set(_)` arm must agree on the same pointer
     // representation, and `MirStmt::Return`'s own `Scalar::Set`
@@ -6145,11 +6206,11 @@ fn a_tuple_typed_module_binding_gets_a_struct_backed_global_slot() {
 fn compiles_a_function_with_a_tuple_parameter_and_tuple_return_value() {
     // The tuple counterpart of `compiles_a_function_with_a_set_int_
     // parameter_and_set_int_return_value` above, for the identical
-    // reason: no real source program can produce this shape. Since
-    // D-228 (issue #918) an annotated `tuple[...]` *parameter* does
-    // reach codegen from real source, but a `-> tuple[...]` return
-    // annotation is rejected in lowering (issue #925), so the combined
-    // shape below is still hand-built. This MIR shape must still compile *cleanly*
+    // reason. Since D-228 (issue #918) an annotated `tuple[...]`
+    // *parameter* reaches codegen from real source, and since #925 a
+    // `-> tuple[...]` return annotation does too; the combined shape
+    // below is kept hand-built as the direct codegen-level pin,
+    // independent of the front end. This MIR shape must still compile *cleanly*
     // -- `ty_to_basic_type`'s `Tuple(_)` arm, `emit_expr`'s `Name` arm's
     // `Ty::Tuple(_)` arm, and `MirStmt::Return`'s own `Scalar::Tuple`
     // pass-through must all agree on the same by-value struct
@@ -10473,11 +10534,11 @@ fn a_dict_set_with_a_non_str_key_is_an_internal_error() {
 fn compiles_a_function_with_a_dict_str_int_parameter_and_dict_str_int_return_value() {
     // The `dict[str, int]` counterpart of `compiles_a_function_with_a_
     // list_int_parameter_and_list_int_return_value` above, for the
-    // identical reason: no real source program can produce this shape.
-    // Since D-228 (issue #918) an annotated `dict[str, int]` *parameter*
-    // does reach codegen from real source, but a `-> dict[str, int]`
-    // return annotation is rejected in lowering (issue #925), so the
-    // combined shape below is still hand-built. This MIR shape must still
+    // identical reason. Since D-228 (issue #918) an annotated
+    // `dict[str, int]` *parameter* reaches codegen from real source, and
+    // since #925 a `-> dict[str, int]` return annotation does too; the
+    // combined shape below is kept hand-built as the direct
+    // codegen-level pin. This MIR shape must still
     // compile *cleanly* -- `ty_to_basic_type`'s `Dict(_)` arm and
     // `emit_expr`'s `Name` arm's `Dict(_)` arm must agree on the same
     // pointer representation, and `MirStmt::Return`'s own `Scalar::
@@ -14977,4 +15038,129 @@ fn optional_float_bare_none_return_constructs_a_correctly_typed_absent_struct() 
     link_object_with_runtime(&obj_path, &bin_path);
     let output = Command::new(&bin_path).output().expect("binary should run");
     assert_eq!(output.stdout, b"True\nFalse\n");
+}
+
+// --- #925 (Part 2 of #918): container-typed call results -------------------
+
+/// Builds `def make() -> <ty>: return <literal>` followed by a top-level
+/// `x = make()` and one `print(...)` of `probe(x)`, then compiles, links and
+/// runs it, returning the program's stdout.
+///
+/// These four tests live inline in the crate rather than only in
+/// `tests/issue_925_container_returns.rs` on purpose: llvm-cov takes the
+/// maximum over instantiations rather than their union, so an arm reached only
+/// from an integration test can still leave a region uncovered (the #603
+/// precedent recorded in `docs/TESTING.md`). Each one is what actually pins
+/// its `call_result_scalar` arm.
+fn run_container_return(label: &str, ty: Ty, literal: MirExpr, probe: MirExpr) -> Vec<u8> {
+    let mir = MirModule {
+        items: vec![
+            MirItem::Function {
+                name: "make".to_string(),
+                params: vec![],
+                return_ty: ty.clone(),
+                body: vec![MirStmt::Return(Some(literal))],
+            },
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::Call {
+                    callee: "make".to_string(),
+                    args: vec![],
+                    ty,
+                },
+            }),
+            MirItem::TopLevelStmt(print_expr(probe)),
+        ],
+        class_defs: Vec::new(),
+    };
+    let dir = pycc_scratch::ScratchDir::new(label).expect("failed to create scratch dir");
+    let obj_path = dir.join(format!("{label}.o"));
+    compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    let bin_path = dir.join(label);
+    link_object_with_runtime(&obj_path, &bin_path);
+    let output = Command::new(&bin_path).output().expect("binary should run");
+    assert!(output.status.success(), "{label} should exit successfully");
+    output.stdout
+}
+
+#[test]
+fn a_list_typed_call_result_is_returned_as_a_pointer() {
+    // `call_result_scalar`'s `Ty::List` arm: the call site's basic value is
+    // the same opaque pointer a `list[int]` name carries, so `len(x)` on the
+    // returned value works without any conversion at the seam.
+    let stdout = run_container_return(
+        "call_returns_list",
+        Ty::List(Box::new(Ty::Int)),
+        MirExpr::ListLiteral(vec![
+            MirExpr::IntLiteral(1),
+            MirExpr::IntLiteral(2),
+            MirExpr::IntLiteral(3),
+        ]),
+        MirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::List(Box::new(Ty::Int)),
+            }],
+            ty: Ty::Int,
+        },
+    );
+    assert_eq!(stdout, b"3\n");
+}
+
+#[test]
+fn a_dict_typed_call_result_is_returned_as_a_pointer() {
+    // `call_result_scalar`'s `Ty::Dict` arm.
+    let stdout = run_container_return(
+        "call_returns_dict",
+        dict_str_int(),
+        MirExpr::DictLiteral(vec![(
+            MirExpr::StringLiteral("a".to_string()),
+            MirExpr::IntLiteral(7),
+        )]),
+        MirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![dict_name("x")],
+            ty: Ty::Int,
+        },
+    );
+    assert_eq!(stdout, b"1\n");
+}
+
+#[test]
+fn a_set_typed_call_result_is_returned_as_a_pointer() {
+    // `call_result_scalar`'s `Ty::Set` arm.
+    let stdout = run_container_return(
+        "call_returns_set",
+        set_int(),
+        MirExpr::SetLiteral(vec![MirExpr::IntLiteral(4), MirExpr::IntLiteral(5)]),
+        MirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![set_name("x")],
+            ty: Ty::Int,
+        },
+    );
+    assert_eq!(stdout, b"2\n");
+}
+
+#[test]
+fn a_tuple_typed_call_result_is_returned_as_a_struct() {
+    // `call_result_scalar`'s `Ty::Tuple` arm -- the one family whose result
+    // is `.into_struct_value()` rather than `.into_pointer_value()` (D-115's
+    // by-value SSA struct), so it is the arm a copy-paste of the other three
+    // would get wrong.
+    let tuple_ty = Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int]));
+    let stdout = run_container_return(
+        "call_returns_tuple",
+        tuple_ty.clone(),
+        MirExpr::TupleLiteral(vec![MirExpr::IntLiteral(8), MirExpr::IntLiteral(9)]),
+        MirExpr::Subscript {
+            base: Box::new(MirExpr::Name {
+                name: "x".to_string(),
+                ty: tuple_ty,
+            }),
+            index: Box::new(MirExpr::IntLiteral(1)),
+        },
+    );
+    assert_eq!(stdout, b"9\n");
 }

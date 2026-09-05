@@ -245,27 +245,18 @@ pub(crate) fn lower_return_annotation(
 ) -> Result<Ty, Diagnostic> {
     match returns {
         Some(ann) => {
-            let ty = annotation_to_ty(ann, type_param, class_name, aliases, class_defs)?;
-            // D-228 (issue #918) lowers container annotations in parameter,
-            // local- and module-variable and type-alias positions only.
-            // Return position is deliberately excluded and tracked separately
-            // as issue #925: a container-typed *call result* already reaches
-            // an unhandled codegen case today (issue #926, via D-146's
-            // private-helper return-type solver), so accepting the annotation
-            // here would widen a known panic's reachability rather than add a
-            // working feature. Rejecting it keeps Part 1 diagnostic-complete.
-            if matches!(ty, Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::Tuple(_)) {
-                return Err(unsupported(
-                    format!(
-                        "a container return type annotation (`{}`) is not supported yet -- \
-                         container annotations are currently supported in parameter, \
-                         local- and module-variable and type-alias positions only",
-                        ty.name()
-                    ),
-                    pycc_ast::expr_range(ann),
-                ));
-            }
-            Ok(ty)
+            // Return position lowers a parameterized container annotation
+            // exactly like every other position (#925, Part 2 of #918).
+            // D-228 (Part 1) deliberately excluded it while a container-typed
+            // call result still reached an unhandled codegen case; #925 added
+            // the codegen arms that closed that gap, so the exclusion is gone
+            // and no return-position check remains here. Element-type and
+            // arity gates still fire on this annotation's own span, because
+            // they run inside `annotation_to_ty` below.
+            Ok(
+                annotation_to_ty(ann, type_param, class_name, aliases, class_defs)
+                    .map_err(|error| with_bare_container_advice(error, ann))?,
+            )
         }
         None if is_public => Err(Diagnostic::error(
             "T0001",
@@ -302,14 +293,16 @@ fn bare_container_example(name: &str) -> Option<&'static str> {
 /// #918) -- for the callers whose annotation position actually lowers a
 /// container.
 ///
-/// Only these do: a function or method parameter, a local or module-level
-/// `AnnAssign`, and a type alias. Return, class-attribute,
-/// dataclass-field and protocol-attribute positions each reject `list[int]`
-/// with a `C0001` of their own, so advising the parameterized form there
-/// would walk the user straight into a second error. They opt out simply by
-/// not calling this, which is why the advice is an opt-in upgrade rather
-/// than a position argument threaded through `annotation_to_ty`: a position
-/// added later is correct without touching this file.
+/// Only these do: a function or method parameter, a function or method
+/// return annotation (#925), a local or module-level `AnnAssign`, and a type
+/// alias. Class-attribute, dataclass-field and protocol-attribute positions
+/// each reject `list[int]` with a `C0001` of their own, so advising the
+/// parameterized form there would walk the user straight into a second
+/// error. They opt out simply by not calling this, which is why the advice
+/// is an opt-in upgrade rather than a position argument threaded through
+/// `annotation_to_ty`: a position added later is correct without touching
+/// this file -- return position joined the advising set that way, by adding
+/// one `map_err` in `lower_return_annotation`.
 ///
 /// Discarding `error` in the upgrade arm is sound because a bare
 /// `Expr::Name` has exactly one failure mode in `annotation_to_ty` -- the
