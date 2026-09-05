@@ -1049,6 +1049,18 @@ fn c0001_protocol_return_annotation() {
     assert_diagnostic_matches_fixture("c0001_protocol_return_annotation");
 }
 
+// #948: the same gate reached through a *self-referential* protocol member.
+// `def clone(self) -> P` inside `class P(Protocol)` used to resolve to
+// `Ty::Instance("P")` -- the enclosing-class-name arm of `annotation_to_ty`
+// ran before the `class_defs` protocol lookup -- so the gate never saw a
+// `Ty::Protocol` and every conforming concrete class was rejected instead
+// with a spurious `T0046` rendered at the module's first line. The caret is
+// on the annotation, and the message is #934's own, unchanged.
+#[test]
+fn c0001_protocol_self_return() {
+    assert_diagnostic_matches_fixture("c0001_protocol_self_return");
+}
+
 #[test]
 fn t0044_user_class_named_list_subscript() {
     assert_diagnostic_matches_fixture("t0044_user_class_named_list_subscript");
