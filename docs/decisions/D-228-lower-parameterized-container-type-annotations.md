@@ -171,6 +171,32 @@ status: accepted
       method is rejected by decision 9's return-position gate, not by this
       one.
 
+  11. **`T0053` publishes structured `help`; the other codes this change
+      introduces do not.** `docs/DIAGNOSTICS.md`'s quality bar lists the arity
+      family among the ones that populate `Diagnostic::help`
+      ([D-152](./D-152-populate-diagnostic-help-for-arity-type.md)), and that
+      bar is a standing contract on the family rather than a snapshot of the
+      tree D-152 measured: a new arity diagnostic joins the populated set at
+      its own introduction, or the contract silently acquires a counterexample
+      (a review finding on the delivering pull request, which shipped all
+      three arms with `"help": []`). All three `T0053` construction arms
+      qualify under D-152's own selection rule, each stating a determinate,
+      safe replacement: the exact expected count for the arity arm, "at least
+      one element type" for the empty `tuple[()]`, and the per-family
+      imperative decision 2 already computes for the `...` arm. That arm's
+      advice is therefore built as a reason plus an imperative and the
+      imperative alone becomes the `help`, so a JSON or IDE consumer reads an
+      instruction rather than a second copy of the message. The other codes
+      this change introduces stay at `help: None`, also by D-152's rule and
+      by its own naming: `T0034`/`T0036`/`T0038`/`T0039` and the
+      bare-container messages are container-capability "not supported yet"
+      limitations with no single replacement, and `T0042` is the generic
+      instantiation-rejection helper D-152 names among its excluded shapes.
+      Because the human format never renders `help`, the arms' `.expected.txt`
+      fixtures cannot observe this: each arm also carries an
+      `.expected.json` fixture wired through
+      `assert_json_diagnostic_matches_fixture`.
+
   This decision **supersedes, as to annotation syntax only**:
   - **D-105 cut 1** ("No annotation syntax for `list[T]` in v0.2") in full;
   - **D-116 cut 3's** deferral of "a `tuple[...]` annotation syntax", and

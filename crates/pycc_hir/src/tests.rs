@@ -6501,36 +6501,50 @@ fn a_container_annotation_reports_a_later_unlowerable_argument_before_an_earlier
 fn a_container_annotation_validates_its_arity_before_its_element_types() {
     // `T0053` is an arity check that runs first, so a wrong-arity annotation
     // never reports a misleading element-type diagnostic.
-    for (source, expected) in [
+    for (source, expected, expected_help) in [
         (
             "def f(x: list[int, str]) -> None:\n    return\n",
             "container type annotation `list[...]` takes exactly 1 type argument, got 2",
+            "write exactly 1 type argument, e.g. `list[int]`",
         ),
         (
             "def f(x: set[int, int]) -> None:\n    return\n",
             "container type annotation `set[...]` takes exactly 1 type argument, got 2",
+            "write exactly 1 type argument, e.g. `set[int]`",
         ),
         (
             "def f(x: dict[int]) -> None:\n    return\n",
             "container type annotation `dict[...]` takes exactly 2 type arguments, got 1",
+            "write exactly 2 type arguments, e.g. `dict[str, int]`",
         ),
         (
             "def f(x: dict[int, str, bool]) -> None:\n    return\n",
             "container type annotation `dict[...]` takes exactly 2 type arguments, got 3",
+            "write exactly 2 type arguments, e.g. `dict[str, int]`",
         ),
         (
             "def f(x: list[()]) -> None:\n    return\n",
             "container type annotation `list[...]` takes exactly 1 type argument, got 0",
+            "write exactly 1 type argument, e.g. `list[int]`",
         ),
         (
             "def f(x: tuple[()]) -> None:\n    return\n",
             "container type annotation `tuple[...]` takes at least 1 type argument -- the empty tuple `tuple[()]` is not supported yet",
+            "write at least one element type, e.g. `tuple[int]`",
         ),
     ] {
         let diagnostic = container_annotation_err(source);
         assert_eq!(diagnostic.code, "T0053", "{source:?}");
         assert_eq!(diagnostic.message, expected, "{source:?}");
         assert!(diagnostic.span.is_some(), "{source:?}");
+        // `docs/DIAGNOSTICS.md`'s quality bar publishes structured help for
+        // the arity family (D-152); the human format never renders it, so it
+        // is pinned here as well as in `tests/diagnostics/*.expected.json`.
+        assert_eq!(
+            diagnostic.help.as_deref(),
+            Some(expected_help),
+            "{source:?}"
+        );
     }
 }
 
@@ -6586,27 +6600,38 @@ fn a_variadic_ellipsis_type_argument_is_rejected_in_every_family() {
     // would answer a question the user did not ask -- it changes the
     // container rather than correcting its type arguments (review finding on
     // this pull request).
-    for (source, expected) in [
+    for (source, expected, expected_help) in [
         (
             "def f(x: tuple[int, ...]) -> None:\n    return\n",
             "the `...` type argument in `tuple[...]` is not supported yet -- a homogeneous-variadic container has no compile-time length, so write an explicit fixed-arity annotation such as `tuple[int, int]` instead",
+            "write an explicit fixed-arity annotation such as `tuple[int, int]`",
         ),
         (
             "def f(x: list[...]) -> None:\n    return\n",
             "the `...` type argument in `list[...]` is not supported yet -- `...` is not a type argument here; write the element type, e.g. `list[int]`",
+            "write the element type, e.g. `list[int]`",
         ),
         (
             "def f(x: set[...]) -> None:\n    return\n",
             "the `...` type argument in `set[...]` is not supported yet -- `...` is not a type argument here; write the element type, e.g. `set[int]`",
+            "write the element type, e.g. `set[int]`",
         ),
         (
             "def f(x: dict[str, ...]) -> None:\n    return\n",
             "the `...` type argument in `dict[...]` is not supported yet -- `...` is not a type argument here; write the element type, e.g. `dict[str, int]`",
+            "write the element type, e.g. `dict[str, int]`",
         ),
     ] {
         let diagnostic = container_annotation_err(source);
         assert_eq!(diagnostic.code, "T0053", "{source:?}");
         assert_eq!(diagnostic.message, expected, "{source:?}");
+        // The per-family imperative is also the structured `help` (D-152), so
+        // a JSON consumer reads the fix rather than only the prose sentence.
+        assert_eq!(
+            diagnostic.help.as_deref(),
+            Some(expected_help),
+            "{source:?}"
+        );
     }
 }
 

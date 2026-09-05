@@ -422,20 +422,32 @@ fn container_annotation_to_ty(
         // gets the length explanation and a fixed-arity `tuple`. For
         // `list`/`set`/`dict`, `...` is simply not a type, and recommending a
         // `tuple` there would change the container the user asked for.
-        let advice = if family == "tuple" {
-            "a homogeneous-variadic container has no compile-time length, so write an \
-             explicit fixed-arity annotation such as `tuple[int, int]` instead"
-                .to_string()
+        //
+        // The advice is split into the reason and the imperative fix, because
+        // the fix is also published as structured `help` (D-152's "the message
+        // already embeds the fix" family): the message keeps the whole
+        // sentence, while `help` carries the imperative alone so a JSON or IDE
+        // consumer reads an instruction rather than a restatement.
+        let (advice, help) = if family == "tuple" {
+            let help = "write an explicit fixed-arity annotation such as `tuple[int, int]`";
+            (
+                format!(
+                    "a homogeneous-variadic container has no compile-time length, so {help} instead"
+                ),
+                help.to_string(),
+            )
         } else {
             let example = bare_container_example(family)
                 .expect("`family` is one of `CONTAINER_ANNOTATION_NAMES`");
-            format!("`...` is not a type argument here; write the element type, e.g. `{example}`")
+            let help = format!("write the element type, e.g. `{example}`");
+            (format!("`...` is not a type argument here; {help}"), help)
         };
         return Err(Diagnostic::error(
             "T0053",
             format!("the `...` type argument in `{family}[...]` is not supported yet -- {advice}"),
             span,
-        ));
+        )
+        .with_help(help));
     }
     let exact_arity = match family {
         "list" | "set" => Some(1usize),
@@ -445,6 +457,8 @@ fn container_annotation_to_ty(
     };
     match exact_arity {
         Some(expected) if args.len() != expected => {
+            let example = bare_container_example(family)
+                .expect("`family` is one of `CONTAINER_ANNOTATION_NAMES`");
             return Err(Diagnostic::error(
                 "T0053",
                 format!(
@@ -453,14 +467,19 @@ fn container_annotation_to_ty(
                     args.len()
                 ),
                 span,
-            ));
+            )
+            .with_help(format!(
+                "write exactly {expected} type argument{}, e.g. `{example}`",
+                if expected == 1 { "" } else { "s" }
+            )));
         }
         None if args.is_empty() => {
             return Err(Diagnostic::error(
                 "T0053",
                 "container type annotation `tuple[...]` takes at least 1 type argument -- the empty tuple `tuple[()]` is not supported yet".to_string(),
                 span,
-            ));
+            )
+            .with_help("write at least one element type, e.g. `tuple[int]`"));
         }
         _ => {}
     }

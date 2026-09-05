@@ -909,6 +909,34 @@ fn t0053_local_annotation_arity() {
     assert_diagnostic_matches_fixture("t0053_local_annotation_arity");
 }
 
+// `docs/DIAGNOSTICS.md`'s quality bar puts the arity family among the ones
+// that publish structured `help` (D-152). The human format never renders it,
+// so the `.expected.txt` fixtures above cannot see it: each of `T0053`'s three
+// construction arms therefore also has a `.expected.json` fixture pinning the
+// `help` array, and the empty-`help` regression this covers is exactly what a
+// human-format-only fixture would have shipped silently (review finding on
+// this pull request).
+
+#[test]
+fn t0053_list_two_args_json_publishes_help() {
+    assert_json_diagnostic_matches_fixture("t0053_list_two_args");
+}
+
+#[test]
+fn t0053_dict_one_arg_json_publishes_help() {
+    assert_json_diagnostic_matches_fixture("t0053_dict_one_arg");
+}
+
+#[test]
+fn t0053_tuple_empty_json_publishes_help() {
+    assert_json_diagnostic_matches_fixture("t0053_tuple_empty");
+}
+
+#[test]
+fn t0053_tuple_variadic_ellipsis_json_publishes_help() {
+    assert_json_diagnostic_matches_fixture("t0053_tuple_variadic_ellipsis");
+}
+
 #[test]
 fn t0034_list_str_annotation() {
     assert_diagnostic_matches_fixture("t0034_list_str_annotation");
