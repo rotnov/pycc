@@ -1387,7 +1387,7 @@
           "evidence": "pep_0563_lazy_annotations.py"
         },
         {
-          "category": "a method parameter annotated with its own enclosing class (`other: Node` inside `class Node`), the self-referential annotation the directive defers in CPython",
+          "category": "the directive accepted alongside a method parameter annotated with its own enclosing class (`other: Node` inside `class Node`) -- the same shape the PEP 649/749 row proves, shown here to be unaffected by the no-op directive",
           "evidence": "pep_0563_lazy_annotations.py"
         },
         {
@@ -1410,7 +1410,7 @@
         {
           "category": "`__annotations__` introspection (the stringified annotation values the directive produces)",
           "kind": "core",
-          "reason": "Not exercised by the fixture and not implemented: pycc has no `__annotations__` attribute on functions, classes, or modules, so the directive's observable effect on introspection cannot be compared against the oracle."
+          "reason": "Not exercised by the fixture and not implemented: pycc has no runtime `__annotations__` object on functions, classes, or modules, so the directive's observable effect on introspection (stringified values) cannot be compared against the oracle. D-164 rejected runtime introspection only as the mechanism for dataclass field discovery, which reads annotations statically instead; it did not declare a runtime annotation object a permanent non-goal, so under D-177 this stays `core` rather than `out-of-scope`."
         }
       ]
     }
