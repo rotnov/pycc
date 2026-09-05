@@ -59,7 +59,24 @@ status: accepted
   shared-mutable-tail conflict this migration exists to remove.
 - Consequences: `scripts/generate_decisions_index.py --check` is wired into CI as a
   new required-check step, so a decision file added without regenerating the index
-  fails the build rather than silently drifting. Every skill, `AGENTS.md`, and spec
+  fails the build rather than silently drifting. **Correction (2026-09-05, #622/#929):**
+  the preceding sentence was never true when this decision was accepted -- no workflow
+  under `.github/` referenced `scripts/generate_decisions_index.py`, and
+  `scripts/test_generate_decisions_index.py` exercised the generator only against
+  temporary directories, so `docs/decisions/README.md` could drift from
+  `docs/decisions/` (and two files could claim one `D-NNN` id, as happened with
+  `D-227` during #918/#928) with no gate catching it. The gate now exists: the
+  `governance` job in `.github/workflows/ci.yml` runs
+  `python3 -B scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md --check`
+  (PR #936), bound into the base-owned D-171 audit's `D171_GOVERNANCE_POLICY_STEPS`
+  allowlist, locked in by `CiWiringTest` in `scripts/test_generate_decisions_index.py`,
+  and proved by deliberate violators (a stale index and a duplicate id both exit 1;
+  the clean tree exits 0). This is a factual erratum, not a superseding decision: the
+  decision itself -- per-decision files, a generated index, freshness enforced by
+  `--check` -- is unchanged, and this note follows the repository's own precedent of
+  dated inline correction notes (D-086, D-109, D-116, D-119, D-127) for a claim that
+  did not hold, rather than a new ADR, which is reserved for changing a decision's
+  substance. Every skill, `AGENTS.md`, and spec
   document's own reference to a specific decision now resolves to that decision's own
   file directly, no anchor needed. A future decision is added by creating
   `docs/decisions/D-1NN-<slug>.md` directly in this format and regenerating the index —

@@ -44,7 +44,7 @@
   `ruby scripts/check_roadmap_evidence.rb`.
 - When milestone decomposition, dependencies, or execution order changes, update `docs/DELIVERY_PLAN.md` together with the roadmap.
 - When adding, removing, renaming, or changing the purpose of a specification document under `docs/`, update `docs/SPEC.md` so it remains the reliable specification map.
-- Record irreversible or project-wide design choices as a new file under `docs/decisions/` (see `docs/decisions/TEMPLATE.md`), then regenerate `docs/decisions/README.md` with `python3 scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md` (append `--check` to verify freshness without rewriting). Do not silently rewrite an accepted decision; add a new decision that supersedes it.
+- Record irreversible or project-wide design choices as a new file under `docs/decisions/` (see `docs/decisions/TEMPLATE.md`), then regenerate `docs/decisions/README.md` with `python3 scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md` (append `--check` to verify freshness without rewriting; CI's `governance` job runs that `--check` on every pull request, so a stale index or a duplicate `D-NNN` id fails `ci-gate`). Do not silently rewrite an accepted decision; add a new decision that supersedes it.
 - Every normative documentation claim should be enforceable where practical by a test, benchmark, or CI check, following the lifecycle rules in `docs/SPEC.md`.
 - If a code change genuinely has no documentation impact, explicitly verify that conclusion rather than skipping the docs review by default.
 
