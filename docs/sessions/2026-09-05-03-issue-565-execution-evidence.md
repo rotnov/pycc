@@ -14,7 +14,7 @@ merge, account, analytics or repository-setting change.
 
 ## Delivered contract and evidence
 
-[D-229](../decisions/D-229-bind-public-evidence-to-ordered-immutable-executions.md)
+[D-230](../decisions/D-230-bind-public-evidence-to-ordered-immutable-executions.md)
 supersedes D-186's schema shape with version `2.0.0`: one ordered execution
 model and projection path handles Language and Diagnostics. The public
 `check-site.sh` entrypoint and environment overrides remain intact; its

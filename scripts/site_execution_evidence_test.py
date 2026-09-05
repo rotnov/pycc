@@ -5,6 +5,7 @@ import hashlib
 import html
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -63,6 +64,26 @@ class ExecutionEvidenceTests(unittest.TestCase):
     def test_healthy_public_cli(self):
         self.run_case()
 
+    def test_current_future_import_scope_is_distinct_from_historical_hero(self):
+        expected = ("In the module prologue, from __future__ import annotations is accepted as a "
+                    "compile-time no-op and binds no feature name. String annotations and "
+                    "references to classes defined later remain unsupported. PEP 563 "
+                    "acceptance remains pending in #937.")
+        for relative in ("language-support/index.html", "status/index.html"):
+            with self.subTest(page=relative):
+                source = (ROOT / "site" / relative).read_text()
+                visible = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", source)).split())
+                self.assertIn(expected, visible)
+
+    def test_current_future_import_limitations_cannot_be_removed(self):
+        for relative in ("language-support/index.html", "status/index.html"):
+            for old, new in (("In the module prologue", "At module level"),
+                             ("compile-time no-op and binds no feature name", "fully compatible annotation implementation"),
+                             ("references to classes defined later remain unsupported", "references to classes defined later are supported"),
+                             ("PEP 563 acceptance remains pending in #937.", "PEP 563 is fully accepted.")):
+                with self.subTest(page=relative, claim=old):
+                    self.run_case(lambda doc, site, root: self.edit(site, relative, old, new), "current future-import scope")
+
     def test_primary_navigation_cannot_be_satisfied_by_footer_links(self):
         for relative in ("index.html", "status/index.html", "architecture/index.html",
                          "python-aot-compilers/index.html", "ai-native/index.html",
@@ -80,6 +101,18 @@ class ExecutionEvidenceTests(unittest.TestCase):
                         self.assertIn(href, navigation)
                         path.write_text(source[:start] + navigation.replace(href, 'href="#omitted"', 1) + source[end:])
                     self.run_case(mutate, "primary navigation")
+
+    def test_noscript_cannot_supply_visible_limitations_or_transcripts(self):
+        for slug in ("language-support", "diagnostics"):
+            for pattern, diagnostic in ((r'<p class="evidence-limitations">.*?</p>', "visible provenance/limitation"),
+                                        (r'<code data-execution="source">.*?</code>', "visible ordered")):
+                with self.subTest(slug=slug, content=pattern):
+                    def mutate(doc, site, root):
+                        relative = f"{slug}/index.html"
+                        source = (site / relative).read_text()
+                        content = re.search(pattern, source, re.S).group()
+                        self.edit(site, relative, content, f"<noscript>{content}</noscript>")
+                    self.run_case(mutate, diagnostic)
 
     def test_mobile_navigation_and_provenance_must_remain_usable(self):
         for old, new in [("/* Evidence identifiers wrap without hiding source text. */\n  overflow-wrap: anywhere;", "overflow-wrap: normal;"),

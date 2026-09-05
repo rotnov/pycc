@@ -1,6 +1,9 @@
 //! Module-level `import` statements and type-alias declarations: the
 //! statement kinds `module::lower_all` resolves before it walks a module's
-//! remaining items (D-135 for aliases, D-136/D-137 for stdlib imports).
+//! remaining items (D-135 for aliases, D-136/D-137 for stdlib imports,
+//! D-229 for the `from __future__ import ...` compiler directive, which
+//! lowers to nothing and is never treated as a module -- see
+//! [`is_future_import`] and [`future_prologue_len`]).
 //!
 //! Extracted from `lib.rs` per AGENTS.md's file-decomposition rule (issue
 //! #547, Part 2). This is a low-fan-in cohesion unit: `lower_import_stmt`,
@@ -73,6 +76,13 @@ fn project_import_request(stmt: &Stmt) -> Option<ProjectImportRequest> {
             })
         }
         Stmt::ImportFrom(import) => {
+            // A `from __future__ import ...` is a compiler directive, not a
+            // module (D-229): the driver must never probe the project for a
+            // sibling `__future__.py`, which CPython would only reach at
+            // run time, *after* applying the directive.
+            if is_future_import(import) {
+                return None;
+            }
             let module = import.module.as_ref().map(ToString::to_string);
             if import.level == 0
                 && module
@@ -94,6 +104,129 @@ fn project_import_request(stmt: &Stmt) -> Option<ProjectImportRequest> {
         }
         _ => None,
     }
+}
+
+/// `true` for an absolute `from __future__ import ...` (#919, D-229). A
+/// relative `from .__future__ import x` is an ordinary project import of
+/// a module that happens to carry the name.
+pub(crate) fn is_future_import(import: &StmtImportFrom) -> bool {
+    import.level == 0
+        && import
+            .module
+            .as_ref()
+            .is_some_and(|module| module.as_str() == "__future__")
+}
+
+/// The `__future__` features CPython 3.14 accepts that lower to nothing
+/// here: every one is either mandatory since Python 3.0 (already the
+/// language's behaviour) or, for `annotations`, already how pycc evaluates
+/// annotations -- statically, at compile time. Exactly
+/// `__future__.all_feature_names` minus [`BARRY_AS_FLUFL`].
+const NOOP_FUTURE_FEATURES: &[&str] = &[
+    "nested_scopes",
+    "generators",
+    "division",
+    "absolute_import",
+    "with_statement",
+    "print_function",
+    "unicode_literals",
+    "generator_stop",
+    "annotations",
+];
+
+/// The one valid `__future__` feature that is *not* a no-op: it changes
+/// the grammar (`<>` becomes the inequality operator and `!=` a syntax
+/// error), which the vendored parser does not implement, so it stays a
+/// `C0001` capability gap rather than an `L0001`.
+const BARRY_AS_FLUFL: &str = "barry_as_FLUFL";
+
+/// `true` when `name` is a `__future__` feature the compiler accepts as a
+/// no-op -- shared by [`lower_import_stmt`] and `module::poisonable_names`
+/// so the poison mirror cannot drift from the lowering's success condition.
+pub(crate) fn is_noop_future_feature(name: &str) -> bool {
+    NOOP_FUTURE_FEATURES.contains(&name)
+}
+
+/// Where a top-level statement sits relative to CPython's future-import
+/// prologue: a `from __future__ import ...` is valid only in the
+/// [`Prologue`](Self::Prologue), and a `Body` one is a `SyntaxError`
+/// (`L0001`) regardless of the names it lists. Computed once per module by
+/// [`future_prologue_len`] and threaded down to [`lower_import_stmt`]; only
+/// ever matched, so no other trait is derived (each unused derive would be
+/// an uncovered region under D-014).
+#[derive(Clone, Copy)]
+pub(crate) enum FuturePosition {
+    Prologue,
+    Body,
+}
+
+/// The number of leading statements of `body` that may precede or be a
+/// future import: an optional docstring at index 0 (a bare
+/// `Expr::StringLiteral` expression statement, the same shape
+/// `class.rs`'s `__init_subclass__` walk accepts; an f-string or bytes
+/// literal is *not* a docstring, matching CPython 3.14) followed by a
+/// contiguous run of `from __future__ import ...` statements. A statement
+/// at index `>= future_prologue_len(body)` is in [`FuturePosition::Body`].
+/// The run is contiguous, so in `future / "doc" / future` the second
+/// import is a `Body` one, exactly as CPython reports it.
+pub(crate) fn future_prologue_len(body: &[Stmt]) -> usize {
+    body.iter()
+        .enumerate()
+        .position(|(index, stmt)| match stmt {
+            Stmt::Expr(expr_stmt) => {
+                !(index == 0 && matches!(*expr_stmt.value, Expr::StringLiteral(_)))
+            }
+            Stmt::ImportFrom(import) => !is_future_import(import),
+            _ => true,
+        })
+        .unwrap_or(body.len())
+}
+
+/// The `__future__` arm of [`lower_import_stmt`] (#919, D-229). The
+/// precedence ladder is CPython 3.14's, verified against `compile()`:
+/// (1) a future import after the prologue is a position `SyntaxError`
+/// whatever it names; (2) names are checked left to right -- `braces` is
+/// `not a chance`, `*` and any other unknown name is `future feature <name>
+/// is not defined` -- all `L0001` via `context_invalid`, CPython's wording
+/// verbatim; then, for a statement CPython would accept, (3) an `as` alias
+/// is the same `C0001` every other `from ... import x as y` reports (CPython
+/// binds a `_Feature` object pycc never models), and (4) `barry_as_FLUFL`
+/// is a `C0001` naming the feature. Everything left contributes nothing:
+/// no binding, no `HirItem`, and no name is bound -- a deliberate,
+/// recorded divergence from CPython, which binds each feature name to its
+/// `__future__._Feature` object.
+fn lower_future_import(
+    import: &StmtImportFrom,
+    position: FuturePosition,
+) -> Result<LoweredImport, Diagnostic> {
+    if let FuturePosition::Body = position {
+        return Err(crate::context_invalid(
+            "from __future__ imports must occur at the beginning of the file",
+            import.range,
+        ));
+    }
+    for alias in &import.names {
+        let name = alias.name.as_str();
+        if name == "braces" {
+            return Err(crate::context_invalid("not a chance", import.range));
+        }
+        if !(is_noop_future_feature(name) || name == BARRY_AS_FLUFL) {
+            return Err(crate::context_invalid(
+                format!("future feature {name} is not defined"),
+                import.range,
+            ));
+        }
+    }
+    for alias in &import.names {
+        check_alias_shape(import, alias)?;
+        if alias.name.as_str() == BARRY_AS_FLUFL {
+            return Err(unsupported(
+                "the `barry_as_FLUFL` future feature (`<>` in place of `!=`) is not supported yet",
+                import.range,
+            ));
+        }
+    }
+    Ok(LoweredImport::default())
 }
 
 fn statement_span<R>(range: R) -> Span
@@ -220,9 +353,15 @@ pub(crate) struct LoweredImport {
 /// top-level function, type alias, a name `m` itself imported (a
 /// re-export, followed to the defining module), then any other top-level
 /// bound name.
+///
+/// A `from __future__ import ...` (D-229) takes neither arm: it is routed
+/// to [`lower_future_import`] before the stdlib registry is consulted, and
+/// `position` (from [`future_prologue_len`]) is what decides whether it is
+/// where CPython allows it at all.
 pub(crate) fn lower_import_stmt(
     stmt: &Stmt,
     resolved: &ResolvedImports<'_>,
+    position: FuturePosition,
 ) -> Result<Option<LoweredImport>, Diagnostic> {
     match stmt {
         Stmt::Import(import) => {
@@ -280,6 +419,13 @@ pub(crate) fn lower_import_stmt(
                 // an unanswered `from` import lowers as a single-file
                 // compilation would.
                 Some(ResolvedImport::Found) | None => {}
+            }
+            // No answer is ever recorded for a future import
+            // (`project_import_request` skips it), so this always runs
+            // before the registry fallback below can report `__future__`
+            // as an unsupported module.
+            if is_future_import(import) {
+                return lower_future_import(import, position).map(Some);
             }
             if import.level != 0 {
                 return Err(unsupported(

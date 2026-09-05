@@ -73,7 +73,13 @@ target type, issue #767), and a `cast` whose target type would change the \
 value's runtime representation (`cast(str, 5)`, `cast(int, some_bool)`; \
 D-198, issue #767) are the current instances -- for the same reason: the \
 construct is valid Python that a later slice can implement, not a by-design \
-rejection. The construct remains reserved and stops \
+rejection. Two `from __future__ import ...` shapes are C0001 for the same \
+reason (issue #919, D-229): `barry_as_FLUFL`, a valid feature that changes \
+the grammar (`<>` in place of `!=`) and that the vendored parser does not \
+implement, and `from __future__ import x as y`, the generic aliasing gap \
+(CPython binds a `_Feature` object pycc never models); the nine no-op \
+features lower to nothing, and a feature name CPython itself rejects is \
+`L0001`, not C0001. The construct remains reserved and stops \
 producing C0001 the moment the corresponding roadmap slice is implemented; \
 until then the diagnostic's span points at the unsupported node and the \
 message names the construct in Python terms, so it stays actionable rather \
@@ -114,8 +120,13 @@ error. L0001 is also reused, without a parser \"expected set\", for a \
 post-parse context violation caught during HIR lowering rather than \
 parsing: `break`/`continue` outside a loop, `async for` outside an async \
 function, `yield`/`yield from` outside a function, `return`/`break`/ \
-`continue` inside a `finally` block that would exit it (PEP 765), and \
-`return`/`break`/`continue` inside an `except*` clause body (PEP 654) -- \
+`continue` inside a `finally` block that would exit it (PEP 765), \
+`return`/`break`/`continue` inside an `except*` clause body (PEP 654), and \
+a `from __future__ import ...` CPython rejects: an unknown feature name \
+including `*` (`future feature <name> is not defined`), `braces` (`not a \
+chance`), or a future import after the docstring-and-future-imports \
+prologue (`from __future__ imports must occur at the beginning of the \
+file`) -- \
 CPython classifies all of these as `SyntaxError` too (a `SyntaxWarning` as \
 of CPython 3.14 for the `finally` case specifically), even though pycc only \
 detects them one lowering stage later than the grammar itself. `T0024` \

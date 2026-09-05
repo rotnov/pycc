@@ -246,7 +246,7 @@ the pinned oracle installed, use
 TMPDIR procedure below for repeated runs. The preserved preparation commit is
 `0d94ad8f30b27131a5da381a034d55165558e56a`; successful CI run `33969157527`
 executed the proof on all five Tier-1 targets. Language and Diagnostics now
-publish these accepted historical executions under D-229. The website gate
+publish these accepted historical executions under D-230. The website gate
 remains offline: `scripts/site_execution_evidence_test.py` mutates the public
 `check-site.sh` inputs to verify closed nested fields, preserved Git blobs,
 provenance, command/status/output identity, visible transcripts, H1s and
@@ -260,6 +260,12 @@ governance's `test_*.py` discovery; `scripts/test_site_execution_wiring.py`
 checks the shell invocation, Pages validation invocation and full-history
 checkout without reading Git objects. No workflow or permission change is
 needed for this publication.
+The current Language/Status directive note follows D-229 and the annotation
+semantics owner separately from the immutable D-230 transcript. Positive and
+mutation controls preserve its module-prologue, no-binding, unsupported-annotation
+and pending PEP 563 acceptance boundaries after integrating issue #919. Public
+CLI mutations also reject each new hero's limitations or source transcript
+wrapped in `noscript`: evidence must be visible with JavaScript enabled too.
 
 ## Differential fuzzing (planned)
 

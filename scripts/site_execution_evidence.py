@@ -2,7 +2,7 @@
 
 The source commit is deliberately an ancestor, not the publication commit.
 Git's immutable blobs establish historical bytes; scope is checked separately
-against the current breadth declaration. D-229 owns this incompatible v2 shape.
+against the current breadth declaration. D-230 owns this incompatible v2 shape.
 """
 
 import hashlib
@@ -18,6 +18,12 @@ TESTED = "321e66ff71f1eb4dedcd34d606f98994ad198758"
 BASE = "4eca5e24e09d6972b5717f35652e5201dde2a02f"
 RUN = 33969157527
 REPO = "https://github.com/rotnov/pycc"
+CURRENT_FUTURE_SCOPE = (
+    "In the module prologue, from __future__ import annotations is accepted as a "
+    "compile-time no-op and binds no feature name. String annotations and "
+    "references to classes defined later remain unsupported. PEP 563 "
+    "acceptance remains pending in #937."
+)
 RUN_URL = f"{REPO}/actions/runs/{RUN}"
 PLATFORMS = [
     ("macos-14", "aarch64-apple-darwin", 101314505690),
@@ -209,7 +215,7 @@ class VisibleExecutionParser(HTMLParser):
             self.language = attrs.get("lang")
         if tag == "meta" and attrs.get("property") == "og:locale":
             self.locales.append(attrs.get("content"))
-        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template"} or "hidden" in attrs or attrs.get("aria-hidden") == "true" or bool(re.search(r"display\s*:\s*none|visibility\s*:\s*hidden", attrs.get("style", "")))
+        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or attrs.get("aria-hidden") == "true" or bool(re.search(r"display\s*:\s*none|visibility\s*:\s*hidden", attrs.get("style", "")))
         in_hero = bool(self.stack and self.stack[-1][2]) or attrs.get("data-evidence-role") == "hero"
         starts_nav = tag == "nav" and "site-nav" in attrs.get("class", "").split()
         in_nav = bool(self.stack and self.stack[-1][4]) or starts_nav

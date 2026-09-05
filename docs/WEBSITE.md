@@ -434,7 +434,11 @@ The shared evidence-hero mechanism is implemented by
 `site/evidence-heroes.json`, `scripts/check-site.sh`, and
 `scripts/test-check-site.sh` under [#564](https://github.com/rotnov/pycc/issues/564)
 and D-186. Dedicated Language Support and Diagnostics pages extend that
-contract under [D-229](./decisions/D-229-bind-public-evidence-to-ordered-immutable-executions.md).
+contract under [D-230](./decisions/D-230-bind-public-evidence-to-ordered-immutable-executions.md).
+Language and Status also project D-229's current future-import directive
+boundary separately from that historical transcript; their shared scope check
+preserves the module-prologue restriction, annotation gaps and pending PEP 563
+acceptance.
 
 ## Versioned evidence-hero contract
 
@@ -461,7 +465,7 @@ moving `main` branch.
 Language and Diagnostics now carry accepted ordered executions from source
 commit `0d94ad8f30b27131a5da381a034d55165558e56a`, successful CI run
 `33969157527`, and five exact Tier-1 jobs. The complete tested merge tree
-matches the preserved source tree. D-229 defines the closed fields, immutable
+matches the preserved source tree. D-230 defines the closed fields, immutable
 attestation, exact source/output projection and current-scope distinction.
 `check_site_evidence.py` preserves the legacy inventory checks;
 `site_execution_evidence.py` supplies one shared validator and ordered

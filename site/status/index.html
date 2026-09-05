@@ -224,8 +224,12 @@
                   Parser failures use <code>L0001</code>; byte-exact CLI
                   snapshots cover <code>T0001</code>, <code>T0002</code>,
                   <code>T0021</code>, <code>T0022</code>,
-                  <code>T0023</code>, and <code>T0024</code>.
+                  <code>T0023</code>, and <code>T0024</code>. A
+                  <code>from __future__ import annotations</code> line now
+                  compiles as a no-op, and an unknown module-level future feature
+                  reports <code>L0001</code> with CPython's wording.
                 </p>
+                <p>In the module prologue, <code>from __future__ import annotations</code> is accepted as a compile-time no-op and binds no feature name. String annotations and references to classes defined later remain unsupported. PEP 563 acceptance remains pending in #937. The <a href="../language-support/">language support map</a> links the directive's contract and production tests separately from its historical PEP 526 hero.</p>
               </div>
               <div class="evidence-card">
                 <span>Portability</span>

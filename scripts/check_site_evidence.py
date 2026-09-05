@@ -534,6 +534,10 @@ for page_id, hero in hero_by_page.items():
         html_text = html_path.read_text()
         navigation = site_execution_evidence.VisibleExecutionParser()
         navigation.feed(html_text)
+        if page_id in {"language", "status"}:
+            visible = " ".join("".join(navigation.visible_text).split())
+            if site_execution_evidence.CURRENT_FUTURE_SCOPE not in visible:
+                fail(f"hero {page_id!r} current future-import scope or limitations drifted")
         prefix = "" if page_id == "landing" else "../"
         expected_navigation = [
             prefix + item["route"].lstrip("/")

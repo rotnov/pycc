@@ -29,7 +29,9 @@
 //! is reported. HIR failures still stop the pipeline before the type
 //! checker (`src/frontend.rs`), so no partial module is ever type-checked.
 
-use crate::import::ResolvedImports;
+use crate::import::{
+    FuturePosition, ResolvedImports, future_prologue_len, is_future_import, is_noop_future_feature,
+};
 use crate::{
     HirClassDef, HirItem, HirModule, ImportBinding, Ty, builtin_exception_class_defs, class,
     exception, import_local_name, killed_names, lower_function, lower_import_stmt,
@@ -189,8 +191,17 @@ pub fn lower_module(
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     // Small and searched linearly; insertion order keeps tests deterministic.
     let mut poisoned: Vec<String> = Vec::new();
-    for stmt in &module.body {
-        match lower_top_level_item(stmt, &mut state, resolved) {
+    // D-229: CPython allows a `from __future__ import ...` only in the
+    // module's prologue (docstring, then future imports); every later
+    // statement is `Body`, and a future import there is an `L0001`.
+    let prologue_len = future_prologue_len(&module.body);
+    for (index, stmt) in module.body.iter().enumerate() {
+        let position = if index < prologue_len {
+            FuturePosition::Prologue
+        } else {
+            FuturePosition::Body
+        };
+        match lower_top_level_item(stmt, &mut state, resolved, position) {
             Ok(()) => {
                 // P5: an item that binds a poisoned name and lowers
                 // un-poisons it. `retain`, never `position` + `remove`, so a
@@ -270,6 +281,7 @@ fn lower_top_level_item<'a>(
     stmt: &'a Stmt,
     state: &mut ModuleState<'a>,
     resolved: &ResolvedImports<'_>,
+    position: FuturePosition,
 ) -> Result<(), Diagnostic> {
     // #380 (PR-20): build the projected class slice `annotation_to_ty`
     // uses to resolve cross-class annotations; #611 (PEP 560) added the
@@ -327,7 +339,7 @@ fn lower_top_level_item<'a>(
         state.aliases.push((name, ty));
         return Ok(());
     }
-    if let Some(mut lowered) = lower_import_stmt(stmt, resolved)? {
+    if let Some(mut lowered) = lower_import_stmt(stmt, resolved, position)? {
         // Same reverse-direction check as the two type-alias arms above,
         // for `import ...`/`from ... import ...` (a single statement can
         // bind more than one local name, e.g. `from math import sqrt,
@@ -644,6 +656,27 @@ pub(crate) fn poisonable_names(stmt: &Stmt) -> Vec<&str> {
                 .collect()
         }
         Stmt::ImportFrom(import) => {
+            // D-229: a `from __future__ import ...` lowers (to nothing) when
+            // every name is a no-op feature and none carries an `asname`;
+            // `barry_as_FLUFL` is CPython-accepted but pycc-rejected, so it
+            // poisons like any other failing shape. This mirror is
+            // position-blind -- it sees one statement, not its index -- so
+            // a *late* future import fails with the position `L0001` and
+            // poisons nothing. That is a recorded divergence from D-222's
+            // "a failing import poisons what it would have bound" rule and
+            // is harmless: an accepted future import binds nothing either,
+            // so no later diagnostic can be a cascade of it. Likewise a
+            // `from __future__ import *` poisons the literal name `*` below
+            // (the stdlib arm expands a wildcard to the module's export
+            // list; `__future__` has none to expand), which no later
+            // statement can name.
+            if is_future_import(import)
+                && import.names.iter().all(|alias| {
+                    alias.asname.is_none() && is_noop_future_feature(alias.name.as_str())
+                })
+            {
+                return Vec::new();
+            }
             // A `level == 0` statement naming a module `pycc_std` resolves
             // takes `lower_import_stmt`'s stdlib arm; everything else (a
             // relative import, an unresolvable module) takes the project arm
