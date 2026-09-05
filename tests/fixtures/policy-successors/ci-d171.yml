@@ -102,6 +102,9 @@ jobs:
           ruby scripts/check_readme_coverage_badge.rb
           ruby scripts/test_check_readme_coverage_badge.rb
 
+      - name: Check decisions index freshness and id uniqueness
+        run: python3 -B scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md --check
+
       - name: Install LLVM 22 for offline alpha skill contract evals
         if: needs.classify-changes.outputs.agent == 'true'
         run: |
