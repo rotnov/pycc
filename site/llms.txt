@@ -24,8 +24,7 @@ CPython output on all five Tier-1 targets, `pycc check` clears its
 <75ms/1000 LOC throughput floor, and diagnostic output matches the stable CLI
 specification's example. v0.2 (collections, generics) and v0.3 (classes,
 inheritance, pattern matching, exceptions) are also met, with v0.3 released
-as the `v0.3.0` tag; v0.4 (multi-file projects, imports, incremental
-compilation) is the next milestone and has not started. Documented
+as the `v0.3.0` tag; v0.4 is in progress. Cross-file project from imports have landed. Bare/submodule imports, namespace handling, broader project CLI behavior, and incremental compilation remain incomplete. Documented
 representation and lifetime gaps, the full multi-version conformance matrix,
 differential fuzzing, corpus testing, and production readiness remain
 roadmap work; design targets must not be interpreted as released features.
@@ -36,8 +35,8 @@ Canonical machine-readable contract: https://rotnov.github.io/pycc/evidence-hero
 Unavailable means no accepted unique hero artifact; it is not zero or failed evidence.
 
 <!-- evidence-hero: landing | landing-quick-start-v1 | native-build-output | all-Tier-1 | / -->
-<!-- evidence-hero: language | language-support-v1 | language-conformance | unavailable | /language-support/ -->
-<!-- evidence-hero: diagnostics | diagnostics-v1 | compiler-diagnostic | unavailable | /diagnostics/ -->
+<!-- evidence-hero: language | language-support-v1 | language-conformance | all-Tier-1 | /language-support/ -->
+<!-- evidence-hero: diagnostics | diagnostics-v1 | compiler-diagnostic | all-Tier-1 | /diagnostics/ -->
 <!-- evidence-hero: performance | performance-v1 | benchmark | unavailable | /performance/ -->
 <!-- evidence-hero: architecture | architecture-trace-v1 | compiler-pipeline-trace | unavailable | /architecture/ -->
 <!-- evidence-hero: status | status-snapshot-v1 | required-checks-snapshot | unavailable | /status/ -->
@@ -91,6 +90,10 @@ Exact landing stdout:
 55
 ```
 
+language-support-v1 — all-Tier-1: `pycc run tests/fixtures/pep_0526_var_annotations.py` (exit 0, empty stderr); `python3.14 tests/fixtures/pep_0526_var_annotations.py` (exit 0, empty stderr). Both stdout streams: `15\n`. One passing fixture does not establish full Python 3.14 compatibility. all-Tier-1 means platform coverage for this fixture, not whole-language acceptance. The displayed pycc run uses debug, not release. [Exact source, snapshots, SHA-256 identities, toolchain and five jobs](https://rotnov.github.io/pycc/language-support/).
+
+diagnostics-v1 — all-Tier-1: `pycc check tests/diagnostics/d0021_range_argument_type.py` (exit 1, empty stderr); `pycc check tests/diagnostics/d0021_range_argument_type.py --error-format json` (exit 1, empty stderr). Human stdout: T0021; JSON stdout includes ``"help":["pass an `int` value"]``. Human output has no help line. The type checker uses a placeholder 1:1, zero-length span; the caret does not precisely highlight the argument. Exact serialization for this fixture does not establish diagnostic-class correctness for all inputs. [Exact source, snapshots, SHA-256 identities, toolchain and five jobs](https://rotnov.github.io/pycc/diagnostics/).
+
 ## Project (Markdown-first)
 
 - [Markdown landing](https://rotnov.github.io/pycc/index.html.md): Clean text equivalent of the landing page for agents and constrained clients.
@@ -103,7 +106,10 @@ Exact landing stdout:
 - [Python standards matrix](https://raw.githubusercontent.com/rotnov/pycc/main/docs/PYTHON_STANDARDS.md): Targeted Python 3.14 language standards and implementation status.
 - [Roadmap](https://raw.githubusercontent.com/rotnov/pycc/main/docs/ROADMAP.md): Delivery stages and acceptance criteria toward v1.0.
 
-## Optional (HTML pages and human navigation — larger context when expanded)
+## Optional
+
+- [Language support](https://rotnov.github.io/pycc/language-support/): One fixture and its current scope, not full compatibility.
+- [Diagnostics](https://rotnov.github.io/pycc/diagnostics/): Exact human and JSON output with limitations. (HTML pages and human navigation — larger context when expanded)
 
 - [Canonical website](https://rotnov.github.io/pycc/): Human-readable project overview and current status.
 - [Source repository](https://github.com/rotnov/pycc): Public source, tests, issues, pull requests, and development history.

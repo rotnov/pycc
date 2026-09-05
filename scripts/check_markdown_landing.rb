@@ -114,7 +114,7 @@ SECTION_CONTRACT = {
       "v0.1 acceptance criteria met",
       "v0.2 acceptance criteria also met",
       "v0.3 acceptance criteria met and released as",
-      "v0.4 (multi-file projects, imports, incremental compilation) is unstarted",
+      "v0.4 is in progress. Cross-file project from imports have landed. Bare/submodule imports, namespace handling, broader project CLI behavior, and incremental compilation remain incomplete.",
     ],
   },
   "evidence pages" => {

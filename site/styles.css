@@ -407,6 +407,8 @@ h1 span {
 }
 
 .hero-provenance {
+  /* Evidence identifiers wrap without hiding source text. */
+  overflow-wrap: anywhere;
   margin: 0;
   color: var(--ink-faint);
   font-size: 0.75rem;
@@ -938,6 +940,31 @@ footer > div a:hover {
   color: var(--acid);
 }
 
+.execution-hero {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.execution-hero code {
+  overflow-wrap: anywhere;
+}
+
+.execution-hero .code-window {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.execution-hero pre code {
+  overflow-wrap: normal;
+}
+
+.execution-hero .code-window pre {
+  min-height: 0;
+  padding: 18px;
+  overflow: visible;
+}
+
 .page-hero {
   max-width: 980px;
   padding: 104px 0 92px;
@@ -1302,8 +1329,18 @@ footer > div a:hover {
 }
 
 @media (max-width: 980px) {
-  .site-nav a:not(.nav-cta) {
-    display: none;
+  .site-header {
+    height: auto;
+    min-height: 88px;
+    gap: 20px;
+    padding-block: 18px;
+    flex-wrap: wrap;
+  }
+
+  .site-nav {
+    /* Keep every evidence route available without JavaScript. */
+    flex-wrap: wrap;
+    gap: 12px 20px;
   }
 
   .hero {
@@ -1383,11 +1420,11 @@ footer > div a:hover {
   }
 
   .site-header {
-    height: 72px;
+    min-height: 72px;
   }
 
   .site-nav {
-    gap: 0;
+    gap: 12px 18px;
   }
 
   .site-nav .nav-cta {

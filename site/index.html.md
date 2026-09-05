@@ -27,10 +27,10 @@ accepted; it never means a zero or a failed measurement.
 
 <!-- evidence-hero: landing | landing-quick-start-v1 | native-build-output | all-Tier-1 | / -->
 - **Home:** `all-Tier-1` — real source → build → native binary → stdout evidence.
-<!-- evidence-hero: language | language-support-v1 | language-conformance | unavailable | /language-support/ -->
-- **Language support:** `unavailable` — fixture-backed CPython comparison is tracked in [#565](https://github.com/rotnov/pycc/issues/565).
-<!-- evidence-hero: diagnostics | diagnostics-v1 | compiler-diagnostic | unavailable | /diagnostics/ -->
-- **Diagnostics:** `unavailable` — exact compiler diagnostic projection is tracked in [#565](https://github.com/rotnov/pycc/issues/565).
+<!-- evidence-hero: language | language-support-v1 | language-conformance | all-Tier-1 | /language-support/ -->
+language-support-v1 — all-Tier-1: `pycc run tests/fixtures/pep_0526_var_annotations.py` (exit 0, empty stderr); `python3.14 tests/fixtures/pep_0526_var_annotations.py` (exit 0, empty stderr). Both stdout streams: `15\n`. One passing fixture does not establish full Python 3.14 compatibility. all-Tier-1 means platform coverage for this fixture, not whole-language acceptance. The displayed pycc run uses debug, not release. [Exact source, snapshots, SHA-256 identities, toolchain and five jobs](https://rotnov.github.io/pycc/language-support/).
+<!-- evidence-hero: diagnostics | diagnostics-v1 | compiler-diagnostic | all-Tier-1 | /diagnostics/ -->
+diagnostics-v1 — all-Tier-1: `pycc check tests/diagnostics/d0021_range_argument_type.py` (exit 1, empty stderr); `pycc check tests/diagnostics/d0021_range_argument_type.py --error-format json` (exit 1, empty stderr). Human stdout: T0021; JSON stdout includes ``"help":["pass an `int` value"]``. Human output has no help line. The type checker uses a placeholder 1:1, zero-length span; the caret does not precisely highlight the argument. Exact serialization for this fixture does not establish diagnostic-class correctness for all inputs. [Exact source, snapshots, SHA-256 identities, toolchain and five jobs](https://rotnov.github.io/pycc/diagnostics/).
 <!-- evidence-hero: performance | performance-v1 | benchmark | unavailable | /performance/ -->
 - **Performance:** `unavailable` — reproducible benchmark evidence is tracked in [#567](https://github.com/rotnov/pycc/issues/567).
 <!-- evidence-hero: architecture | architecture-trace-v1 | compiler-pipeline-trace | unavailable | /architecture/ -->
@@ -158,7 +158,7 @@ roadmap work.
 - v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)
 - v0.2 acceptance criteria also met
 - v0.3 acceptance criteria met and released as `v0.3.0`
-- v0.4 (multi-file projects, imports, incremental compilation) is unstarted
+- v0.4 is in progress. Cross-file project from imports have landed. Bare/submodule imports, namespace handling, broader project CLI behavior, and incremental compilation remain incomplete.
 
 The landing page's code example uses only implemented v0.1 language features
 (statement-form `if`, `while`, recursive calls, `print`) and matches the
@@ -167,6 +167,9 @@ Other examples and CLI commands on the website are design targets unless
 explicitly identified as implemented behavior.
 
 ## Evidence pages
+
+- [Language support](https://rotnov.github.io/pycc/language-support/): One fixture, independently compared with CPython, with explicit limits.
+- [Diagnostics](https://rotnov.github.io/pycc/diagnostics/): Exact human and JSON output, help and span boundaries.
 
 - [Current implementation status](https://rotnov.github.io/pycc/status/):
   working language and CLI surface, enforced CI and coverage, missing v0.1

@@ -78,7 +78,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     load_budget(DEFAULT_BUDGET)
   end
 
-  # Write a full set of healthy LHR replicates for all 5 pages.
+  # Write a full set of healthy LHR replicates for all canonical pages.
   def write_healthy_lhrs(dir, manifest, base_url)
     manifest["canonical_pages"].each do |page|
       page_dir = File.join(dir, page["id"])
@@ -471,6 +471,24 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
     end
   end
 
+  def test_each_execution_route_requires_its_own_performance_reports
+    %w[language-support diagnostics].each do |id|
+      Dir.mktmpdir do |tmp|
+        manifest = load_default_manifest
+        budget = load_default_budget
+        base_url = "http://127.0.0.1:9999/"
+        write_healthy_lhrs(tmp, manifest, base_url)
+        report = File.join(tmp, id, "replicate-3.json")
+        File.delete(report)
+        failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
+        assert(failures.any? { |f| f.include?(id) && f.include?("LHR file missing") })
+        FileUtils.cp(File.join(tmp, "home", "replicate-3.json"), report)
+        failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
+        assert(failures.any? { |f| f.include?(id) && f.include?("duplicate report reuse") }, failures.inspect)
+      end
+    end
+  end
+
   def test_lhr_gate_fails_closed_on_partial_metric
     Dir.mktmpdir do |tmp|
       manifest = load_default_manifest
@@ -781,7 +799,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       manifest = load_default_manifest
       # Remove one page to narrow the set
       mutated = JSON.parse(JSON.generate(manifest))
-      mutated["canonical_pages"] = mutated["canonical_pages"][0..3]
+      mutated["canonical_pages"].pop
 
       exit_code = pages_perf_budget_main(
         ["--skip-lighthouse",
@@ -887,10 +905,9 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       FileUtils.cp_r(File.join(real_site, "."), site_dir)
 
       # Add an unexpected .jpg file large enough to push the total
-      # image payload over the budget.  The existing og.png is
-      # ~1.44 MB and the budget is 1.5 MB, so a 200 KB jpg exceeds it.
+      # image payload over the budget independently of the current og.png size.
       path = File.join(site_dir, "hero.jpg")
-      File.binwrite(path, "x" * 200_000)
+      File.binwrite(path, "x" * (budget["resource_budgets"]["images"]["max_bytes_total_per_page"] + 1))
 
       failures = check_resource_budgets(budget, tmp)
       refute_empty failures
@@ -916,12 +933,11 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       FileUtils.cp_r(File.join(real_site, "."), site_dir)
 
       # Add an unexpected .jpg in a nested subdirectory to verify
-      # Find.find recursively scans.  The existing og.png is ~1.44 MB
-      # and the budget is 1.5 MB, so a 200 KB jpg exceeds it.
+      # Find.find recursively scans, independently of the current og.png size.
       subdir = File.join(site_dir, "images")
       FileUtils.mkdir_p(subdir)
       path = File.join(subdir, "nested.jpg")
-      File.binwrite(path, "x" * 200_000)
+      File.binwrite(path, "x" * (budget["resource_budgets"]["images"]["max_bytes_total_per_page"] + 1))
 
       failures = check_resource_budgets(budget, tmp)
       refute_empty failures

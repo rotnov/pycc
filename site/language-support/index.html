@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pycc language support — pre-alpha Python AOT evidence</title>
+<meta name="description" content="pycc is a pre-alpha AOT compiler for typed Python. Inspect one PEP 526 fixture, its CPython 3.14.7 comparison, and the limits of current language support.">
+<meta name="pycc:evidence-id" content="language-support-v1">
+<meta name="pycc:evidence-kind" content="language-conformance">
+<meta name="pycc:evidence-state" content="all-Tier-1">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+<meta name="theme-color" content="#101310"><meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://rotnov.github.io/pycc/language-support/">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta property="og:type" content="website"><meta property="og:site_name" content="pycc"><meta property="og:locale" content="en_US">
+<meta property="og:url" content="https://rotnov.github.io/pycc/language-support/"><meta property="og:title" content="pycc language support — pre-alpha Python AOT evidence">
+<meta property="og:description" content="pycc is a pre-alpha AOT compiler for typed Python. Inspect one PEP 526 fixture, its CPython 3.14.7 comparison, and the limits of current language support." data-evidence-id="language-support-v1" data-evidence-kind="language-conformance" data-evidence-state="all-Tier-1">
+<meta property="og:image" content="https://rotnov.github.io/pycc/og.png"><meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
+<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="pycc language support — pre-alpha Python AOT evidence">
+<meta name="twitter:description" content="pycc is a pre-alpha AOT compiler for typed Python. Inspect one PEP 526 fixture, its CPython 3.14.7 comparison, and the limits of current language support." data-evidence-id="language-support-v1" data-evidence-kind="language-conformance" data-evidence-state="all-Tier-1">
+<meta name="twitter:image" content="https://rotnov.github.io/pycc/og.png"><meta name="twitter:image:alt" content="pycc — typed Python in, native binaries out">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebPage",
+      "@id": "https://rotnov.github.io/pycc/language-support/#webpage",
+      "url": "https://rotnov.github.io/pycc/language-support/",
+      "name": "pycc language support — pre-alpha Python AOT evidence",
+      "description": "pycc is a pre-alpha AOT compiler for typed Python. Inspect one PEP 526 fixture, its CPython 3.14.7 comparison, and the limits of current language support.",
+      "inLanguage": "en-US",
+      "dateModified": "2026-09-05",
+      "additionalProperty": [
+        {
+          "@type": "PropertyValue",
+          "propertyID": "pycc:evidence-id",
+          "value": "language-support-v1"
+        },
+        {
+          "@type": "PropertyValue",
+          "propertyID": "pycc:evidence-kind",
+          "value": "language-conformance"
+        },
+        {
+          "@type": "PropertyValue",
+          "propertyID": "pycc:evidence-state",
+          "value": "all-Tier-1"
+        }
+      ],
+      "isPartOf": {
+        "@id": "https://rotnov.github.io/pycc/#webpage"
+      },
+      "about": {
+        "@id": "https://rotnov.github.io/pycc/#project"
+      },
+      "breadcrumb": {
+        "@id": "https://rotnov.github.io/pycc/language-support/#breadcrumb"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://rotnov.github.io/pycc/language-support/#breadcrumb",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "pycc",
+          "item": "https://rotnov.github.io/pycc/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Language support",
+          "item": "https://rotnov.github.io/pycc/language-support/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body class="content-page">
+<a class="skip-link" href="#main-content">Skip to content</a>
+<header class="site-header"><a class="brand" href="../" aria-label="pycc home"><span class="brand-mark" aria-hidden="true">&gt;_</span><span>pycc</span></a><nav class="site-nav" aria-label="Primary navigation"><a href="../status/">Status</a><a href="../architecture/">Architecture</a><a aria-current="page" href="../language-support/">Language</a><a href="../diagnostics/">Diagnostics</a><a href="../python-aot-compilers/">Compare</a><a href="../ai-native/">AI experiment</a><a class="nav-cta" href="https://github.com/rotnov/pycc">GitHub ↗</a></nav></header>
+<main id="main-content">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../">pycc</a><span aria-hidden="true">/</span><span>Language support</span></nav>
+<section class="page-hero prose execution-hero" data-evidence-role="hero" data-evidence-id="language-support-v1" data-evidence-kind="language-conformance" data-evidence-state="all-Tier-1">
+<p class="eyebrow">Pre-alpha · Updated 2026-09-05</p>
+<h1>Python language support, with evidence.</h1>
+<p class="page-lede">pycc is a pre-alpha AOT compiler for typed Python. Inspect one PEP 526 fixture, its CPython 3.14.7 comparison, and the limits of current language support.</p>
+<p data-evidence-id="language-support-v1" data-evidence-kind="language-conformance" data-evidence-state="all-Tier-1"><strong>language-support-v1</strong> · language-conformance · all-Tier-1</p>
+<p class="evidence-limitations">One passing fixture does not establish full Python 3.14 compatibility. all-Tier-1 means platform coverage for this fixture, not whole-language acceptance. The displayed pycc run uses debug, not release.</p>
+<h2>Execution transcript</h2>
+<h3>source</h3>
+<div class="code-window" role="group" aria-label="source" tabindex="0"><pre><code data-execution="source">def compute(base: int) -&gt; int:
+    doubled: int = base * 2
+    total: int
+    total = doubled + base
+    return total
+
+
+print(compute(5))</code></pre></div>
+<h3>pycc command</h3>
+<div class="code-window" role="group" aria-label="pycc-command" tabindex="0"><pre><code data-execution="pycc-command">pycc run tests/fixtures/pep_0526_var_annotations.py</code></pre></div>
+<h3>pycc stdout</h3>
+<div class="code-window" role="group" aria-label="pycc-stdout" tabindex="0"><pre><code data-execution="pycc-stdout">15</code></pre></div>
+<h3>pycc stderr (empty)</h3>
+<div class="code-window" role="group" aria-label="pycc-stderr" tabindex="0"><pre><code data-execution="pycc-stderr"></code></pre></div>
+<h3>pycc exit</h3>
+<div class="code-window" role="group" aria-label="pycc-exit" tabindex="0"><pre><code data-execution="pycc-exit">0</code></pre></div>
+<h3>cpython command</h3>
+<div class="code-window" role="group" aria-label="cpython-command" tabindex="0"><pre><code data-execution="cpython-command">python3.14 tests/fixtures/pep_0526_var_annotations.py</code></pre></div>
+<h3>cpython stdout</h3>
+<div class="code-window" role="group" aria-label="cpython-stdout" tabindex="0"><pre><code data-execution="cpython-stdout">15</code></pre></div>
+<h3>cpython stderr (empty)</h3>
+<div class="code-window" role="group" aria-label="cpython-stderr" tabindex="0"><pre><code data-execution="cpython-stderr"></code></pre></div>
+<h3>cpython exit</h3>
+<div class="code-window" role="group" aria-label="cpython-exit" tabindex="0"><pre><code data-execution="cpython-exit">0</code></pre></div>
+<h2>Immutable execution provenance</h2>
+<p>Working directory: repository-root. Rust 1.97.1; LLVM 22; CPython 3.14.7; debug build; no extra compiler flags. Windows uses the established <code>python3.14.exe</code> alias. Only CPython's CR-before-LF translation is normalized.</p>
+<p>Source commit <code>0d94ad8f30b27131a5da381a034d55165558e56a</code>, tree <code>26bf9fe465c50d8065b1e0260e6100dc3e68f193</code>. CI run 33969157527 checked out merge commit <code>321e66ff71f1eb4dedcd34d606f98994ad198758</code>, whose complete tree equals the source tree; base <code>4eca5e24e09d6972b5717f35652e5201dde2a02f</code>. These are historical execution facts, not a claim that the publication commit was already tested.</p>
+<p>Registered production test: <code>language_commands_match_cpython_3_14_7_and_canonical_stdout</code>.</p>
+<ul><li><code>tests/fixtures/pep_0526_var_annotations.py</code> · SHA-256 <code>8f28ccee9c0d8af26126840278cf5da36206a77991b43c3ada43436895ce3bf6</code></li>
+<li><code>tests/site_evidence.rs</code> · SHA-256 <code>efea2d699c9d3807975b659c2b02663114d2e1f5bd98bcc9eb675f00e6803497</code></li>
+<li><code>tests/fixtures/pep_0526_var_annotations.expected.txt</code> · SHA-256 <code>238903180cc104ec2c5d8b3f20c5bc61b389ec0a967df8cc208cdc7cd454174f</code></li></ul>
+<p><a href="https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/fixtures/pep_0526_var_annotations.py">fixture</a> · <a href="https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/site_evidence.rs">test</a> · <a href="https://github.com/rotnov/pycc/commit/0d94ad8f30b27131a5da381a034d55165558e56a">commit</a> · <a href="https://github.com/rotnov/pycc/actions/runs/33969157527">run</a> · <a href="https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/fixtures/pep_0526_var_annotations.expected.txt">stdout</a></p>
+<ul><li><a href="https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505690">macos-14 / aarch64-apple-darwin</a></li>
+<li><a href="https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505701">macos-15-intel / x86_64-apple-darwin</a></li>
+<li><a href="https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505789">ubuntu-latest / x86_64-unknown-linux-gnu</a></li>
+<li><a href="https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505756">ubuntu-24.04-arm / aarch64-unknown-linux-gnu</a></li>
+<li><a href="https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505712">windows-latest / x86_64-pc-windows-msvc</a></li></ul>
+</section>
+<article class="prose execution-hero"><section id="support-map"><h2>A curated, non-exhaustive support map</h2><p>This is a map of named tested subsets, not a promise that every program in a feature family works. <a href="https://github.com/rotnov/pycc/blob/main/docs/PYTHON_STANDARDS.md">Current Python standards</a> and the <a href="https://github.com/rotnov/pycc/blob/main/tests/fixtures/conformance-breadth-manifest.json">current breadth declaration</a> own the full evolving scope.</p>
+<h3>Implemented: named tested subsets</h3><p>The displayed PEP 526 fixture proves annotated assignment with an initializer (<code>doubled: int = ...</code>) and a bare annotation without an initializer (<code>total: int</code>). Its separate <a href="https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/conformance.rs">registered conformance test</a> checks debug and release builds; those builds are not the displayed debug run.</p>
+<h3>Partial: core gaps remain</h3><p>PEP 526 remains a subset row (◐), not whole-PEP acceptance (D-177). The fixture does not prove parenthesized annotated targets, module- and class-level <code>__annotations__</code> recording, or annotated attribute and subscript targets. The current declaration classifies all three as core gaps. Its explanatory reasons are not a second frozen implementation claim here.</p>
+<h3>Experimental</h3><p>No separately accepted experimental language hero is established by this evidence.</p>
+<h3>Not yet supported</h3><p>General union annotations and arbitrary container representations are outside the current implemented subset. Native container support is restricted to <code>list[int]</code>, <code>dict[str, int]</code>, <code>set[int]</code>, and scalar tuples; Optional is limited to int, float, and bool. A green subset fixture does not remove these boundaries. Broader compatibility, CPython interop, and incremental compilation remain roadmap work.</p><p>Permanent non-goals are different from missing implementation: dynamic <code>eval</code>/<code>exec</code>, monkey-patching, and runtime class creation are rejected by design. Consult the <a href="https://github.com/rotnov/pycc/blob/main/docs/PYTHON_STANDARDS.md">rejected-by-design list</a>. Planned syntax is not a runnable quick start.</p></section>
+<section><h2>Keep the evidence in context</h2><p>Read <a href="../language-support/">language support and its limits</a>, <a href="../diagnostics/">exact compiler diagnostics</a>, <a href="../status/">current implementation status</a>, and the <a href="../architecture/">compiler architecture</a>. The <a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">current roadmap</a> describes evolving scope; links labeled current may advance beyond this historical run.</p></section>
+</article>
+<aside class="ai-disclosure" aria-label="Project authorship"><p><strong>Built entirely by AI.</strong> <strong>Managed by a human.</strong></p><p>AI agents write the specifications, code, tests, documentation, reviews, and automation. No project code is handwritten by a human.</p></aside>
+</main>
+<footer><a class="brand" href="../" aria-label="pycc home"><span class="brand-mark" aria-hidden="true">&gt;_</span><span>pycc</span></a><p>An AI-created, human-managed AOT compiler for typed Python. Pre-alpha.</p><div><a aria-current="page" href="../language-support/">Language</a><a href="../diagnostics/">Diagnostics</a><a href="../llms.txt">LLM guide</a><a href="https://github.com/rotnov/pycc">GitHub</a></div></footer>
+</body>
+</html>

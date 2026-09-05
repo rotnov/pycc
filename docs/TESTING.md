@@ -243,10 +243,23 @@ help line (D-043, D-152). The existing diagnostics test remains unchanged.
 Run the focused ordinary suite with `cargo test --test site_evidence`; with
 the pinned oracle installed, use
 `cargo test --test site_evidence -- --include-ignored`. Use the isolated
-TMPDIR procedure below for repeated runs. These are preparation artifacts,
-not accepted public heroes: Language and Diagnostics remain `unavailable`
-under D-186 until their source revision and actual successful Tier-1 run
-receive the separately reviewed immutable attestation.
+TMPDIR procedure below for repeated runs. The preserved preparation commit is
+`0d94ad8f30b27131a5da381a034d55165558e56a`; successful CI run `33969157527`
+executed the proof on all five Tier-1 targets. Language and Diagnostics now
+publish these accepted historical executions under D-229. The website gate
+remains offline: `scripts/site_execution_evidence_test.py` mutates the public
+`check-site.sh` inputs to verify closed nested fields, preserved Git blobs,
+provenance, command/status/output identity, visible transcripts, H1s and
+limitations. The shared parser omits exactly one final newline from each
+snapshot pane, never arbitrary whitespace. Page-cohort mutation tests cover
+both new canonical routes; Lighthouse and narrow-width no-JS/JS checks are
+browser evidence, not compiler conformance or field measurements. Run these
+historical-blob controls through `scripts/test-check-site.sh` in a full-history
+checkout, as the Pages workflow does. They are deliberately outside shallow
+governance's `test_*.py` discovery; `scripts/test_site_execution_wiring.py`
+checks the shell invocation, Pages validation invocation and full-history
+checkout without reading Git objects. No workflow or permission change is
+needed for this publication.
 
 ## Differential fuzzing (planned)
 

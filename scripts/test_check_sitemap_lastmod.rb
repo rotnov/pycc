@@ -47,6 +47,10 @@ class TestCheckSitemapLastmod < Minitest::Test
       (site_dir / "python-aot-compilers" / "index.html").write("<html></html>")
       (site_dir / "ai-native").mkpath
       (site_dir / "ai-native" / "index.html").write("<html></html>")
+      %w[language-support diagnostics].each do |slug|
+        (site_dir / slug).mkpath
+        (site_dir / slug / "index.html").write("<html></html>")
+      end
       # Init a git repo so git log works.
       `git -C "#{root}" init -q 2>/dev/null`
       `git -C "#{root}" add -A 2>/dev/null`
@@ -79,6 +83,10 @@ class TestCheckSitemapLastmod < Minitest::Test
       (site_dir / "python-aot-compilers" / "index.html").write("<html></html>")
       (site_dir / "ai-native").mkpath
       (site_dir / "ai-native" / "index.html").write("<html></html>")
+      %w[language-support diagnostics].each do |slug|
+        (site_dir / slug).mkpath
+        (site_dir / slug / "index.html").write("<html></html>")
+      end
       `git -C "#{root}" init -q 2>/dev/null`
       `git -C "#{root}" add -A 2>/dev/null`
       `git -C "#{root}" -c user.email=test@test -c user.name=test \
@@ -211,6 +219,10 @@ class TestCheckSitemapLastmod < Minitest::Test
       (site_dir / "python-aot-compilers" / "index.html").write("<html></html>")
       (site_dir / "ai-native").mkpath
       (site_dir / "ai-native" / "index.html").write("<html></html>")
+      %w[language-support diagnostics].each do |slug|
+        (site_dir / slug).mkpath
+        (site_dir / slug / "index.html").write("<html></html>")
+      end
       `git -C "#{root}" init -q 2>/dev/null`
       `git -C "#{root}" add -A 2>/dev/null`
       `git -C "#{root}" -c user.email=test@test -c user.name=test commit -q -m init 2>/dev/null`

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pycc diagnostics — pre-alpha compiler output evidence</title>
+<meta name="description" content="pycc is a pre-alpha AOT compiler for typed Python. Inspect real T0021 human and JSON output, emitted help, placeholder spans, and diagnostic limitations.">
+<meta name="pycc:evidence-id" content="diagnostics-v1">
+<meta name="pycc:evidence-kind" content="compiler-diagnostic">
+<meta name="pycc:evidence-state" content="all-Tier-1">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+<meta name="theme-color" content="#101310"><meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://rotnov.github.io/pycc/diagnostics/">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<meta property="og:type" content="website"><meta property="og:site_name" content="pycc"><meta property="og:locale" content="en_US">
+<meta property="og:url" content="https://rotnov.github.io/pycc/diagnostics/"><meta property="og:title" content="pycc diagnostics — pre-alpha compiler output evidence">
+<meta property="og:description" content="pycc is a pre-alpha AOT compiler for typed Python. Inspect real T0021 human and JSON output, emitted help, placeholder spans, and diagnostic limitations." data-evidence-id="diagnostics-v1" data-evidence-kind="compiler-diagnostic" data-evidence-state="all-Tier-1">
+<meta property="og:image" content="https://rotnov.github.io/pycc/og.png"><meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
+<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="pycc diagnostics — pre-alpha compiler output evidence">
+<meta name="twitter:description" content="pycc is a pre-alpha AOT compiler for typed Python. Inspect real T0021 human and JSON output, emitted help, placeholder spans, and diagnostic limitations." data-evidence-id="diagnostics-v1" data-evidence-kind="compiler-diagnostic" data-evidence-state="all-Tier-1">
+<meta name="twitter:image" content="https://rotnov.github.io/pycc/og.png"><meta name="twitter:image:alt" content="pycc — typed Python in, native binaries out">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebPage",
+      "@id": "https://rotnov.github.io/pycc/diagnostics/#webpage",
+      "url": "https://rotnov.github.io/pycc/diagnostics/",
+      "name": "pycc diagnostics — pre-alpha compiler output evidence",
+      "description": "pycc is a pre-alpha AOT compiler for typed Python. Inspect real T0021 human and JSON output, emitted help, placeholder spans, and diagnostic limitations.",
+      "inLanguage": "en-US",
+      "dateModified": "2026-09-05",
+      "additionalProperty": [
+        {
+          "@type": "PropertyValue",
+          "propertyID": "pycc:evidence-id",
+          "value": "diagnostics-v1"
+        },
+        {
+          "@type": "PropertyValue",
+          "propertyID": "pycc:evidence-kind",
+          "value": "compiler-diagnostic"
+        },
+        {
+          "@type": "PropertyValue",
+          "propertyID": "pycc:evidence-state",
+          "value": "all-Tier-1"
+        }
+      ],
+      "isPartOf": {
+        "@id": "https://rotnov.github.io/pycc/#webpage"
+      },
+      "about": {
+        "@id": "https://rotnov.github.io/pycc/#project"
+      },
+      "breadcrumb": {
+        "@id": "https://rotnov.github.io/pycc/diagnostics/#breadcrumb"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://rotnov.github.io/pycc/diagnostics/#breadcrumb",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "pycc",
+          "item": "https://rotnov.github.io/pycc/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Diagnostics",
+          "item": "https://rotnov.github.io/pycc/diagnostics/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body class="content-page">
+<a class="skip-link" href="#main-content">Skip to content</a>
+<header class="site-header"><a class="brand" href="../" aria-label="pycc home"><span class="brand-mark" aria-hidden="true">&gt;_</span><span>pycc</span></a><nav class="site-nav" aria-label="Primary navigation"><a href="../status/">Status</a><a href="../architecture/">Architecture</a><a href="../language-support/">Language</a><a aria-current="page" href="../diagnostics/">Diagnostics</a><a href="../python-aot-compilers/">Compare</a><a href="../ai-native/">AI experiment</a><a class="nav-cta" href="https://github.com/rotnov/pycc">GitHub ↗</a></nav></header>
+<main id="main-content">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../">pycc</a><span aria-hidden="true">/</span><span>Diagnostics</span></nav>
+<section class="page-hero prose execution-hero" data-evidence-role="hero" data-evidence-id="diagnostics-v1" data-evidence-kind="compiler-diagnostic" data-evidence-state="all-Tier-1">
+<p class="eyebrow">Pre-alpha · Updated 2026-09-05</p>
+<h1>Compiler diagnostics, exactly as emitted.</h1>
+<p class="page-lede">pycc is a pre-alpha AOT compiler for typed Python. Inspect real T0021 human and JSON output, emitted help, placeholder spans, and diagnostic limitations.</p>
+<p data-evidence-id="diagnostics-v1" data-evidence-kind="compiler-diagnostic" data-evidence-state="all-Tier-1"><strong>diagnostics-v1</strong> · compiler-diagnostic · all-Tier-1</p>
+<p class="evidence-limitations">Human output has no help line. The type checker uses a placeholder 1:1, zero-length span; the caret does not precisely highlight the argument. Exact serialization for this fixture does not establish diagnostic-class correctness for all inputs.</p>
+<h2>Execution transcript</h2>
+<h3>source</h3>
+<div class="code-window" role="group" aria-label="source" tabindex="0"><pre><code data-execution="source">for item in range(&quot;three&quot;):
+    print(item)</code></pre></div>
+<h3>human command</h3>
+<div class="code-window" role="group" aria-label="human-command" tabindex="0"><pre><code data-execution="human-command">pycc check tests/diagnostics/d0021_range_argument_type.py</code></pre></div>
+<h3>human stdout</h3>
+<div class="code-window" role="group" aria-label="human-stdout" tabindex="0"><pre><code data-execution="human-stdout">error[T0021]: range stop expects `int`, got `str`
+ --&gt; tests/diagnostics/d0021_range_argument_type.py:1:1
+  |
+1 | for item in range(&quot;three&quot;):
+  | ^ range stop expects `int`, got `str`</code></pre></div>
+<h3>human stderr (empty)</h3>
+<div class="code-window" role="group" aria-label="human-stderr" tabindex="0"><pre><code data-execution="human-stderr"></code></pre></div>
+<h3>human exit</h3>
+<div class="code-window" role="group" aria-label="human-exit" tabindex="0"><pre><code data-execution="human-exit">1</code></pre></div>
+<h3>json command</h3>
+<div class="code-window" role="group" aria-label="json-command" tabindex="0"><pre><code data-execution="json-command">pycc check tests/diagnostics/d0021_range_argument_type.py --error-format json</code></pre></div>
+<h3>json stdout</h3>
+<div class="code-window" role="group" aria-label="json-stdout" tabindex="0"><pre><code data-execution="json-stdout">{&quot;code&quot;:&quot;T0021&quot;,&quot;format_version&quot;:1,&quot;help&quot;:[&quot;pass an `int` value&quot;],&quot;message&quot;:&quot;range stop expects `int`, got `str`&quot;,&quot;severity&quot;:&quot;error&quot;,&quot;spans&quot;:[{&quot;col&quot;:1,&quot;file&quot;:&quot;tests/diagnostics/d0021_range_argument_type.py&quot;,&quot;label&quot;:&quot;range stop expects `int`, got `str`&quot;,&quot;len&quot;:0,&quot;line&quot;:1}]}</code></pre></div>
+<h3>json stderr (empty)</h3>
+<div class="code-window" role="group" aria-label="json-stderr" tabindex="0"><pre><code data-execution="json-stderr"></code></pre></div>
+<h3>json exit</h3>
+<div class="code-window" role="group" aria-label="json-exit" tabindex="0"><pre><code data-execution="json-exit">1</code></pre></div>
+<h2>Immutable execution provenance</h2>
+<p>Working directory: repository-root. Rust 1.97.1; LLVM 22; CPython 3.14.7; debug build; no extra compiler flags. The JSON execution explicitly selects <code>--error-format json</code>. CPython 3.14.7 was installed in CI but is not a dependency of either diagnostic command.</p>
+<p>Source commit <code>0d94ad8f30b27131a5da381a034d55165558e56a</code>, tree <code>26bf9fe465c50d8065b1e0260e6100dc3e68f193</code>. CI run 33969157527 checked out merge commit <code>321e66ff71f1eb4dedcd34d606f98994ad198758</code>, whose complete tree equals the source tree; base <code>4eca5e24e09d6972b5717f35652e5201dde2a02f</code>. These are historical execution facts, not a claim that the publication commit was already tested.</p>
+<p>Registered production test: <code>diagnostics_commands_match_human_and_json_snapshots</code>.</p>
+<ul><li><code>tests/diagnostics/d0021_range_argument_type.py</code> · SHA-256 <code>d506adc49080f18a29cb5731c5fbc364ae42e08316955cee74fd28f3db5d304b</code></li>
+<li><code>tests/site_evidence.rs</code> · SHA-256 <code>efea2d699c9d3807975b659c2b02663114d2e1f5bd98bcc9eb675f00e6803497</code></li>
+<li><code>tests/diagnostics/d0021_range_argument_type.expected.txt</code> · SHA-256 <code>a5e96a42106cd99ef65e2d131a5d29ea4770f081dc392a16223028eb98ec9651</code></li>
+<li><code>tests/diagnostics/d0021_range_argument_type.expected.json</code> · SHA-256 <code>5e6a833bb6550e44c0516becd21f19c89213eb8cbdb27a72807465d1b45dd0ba</code></li></ul>
+<p><a href="https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/diagnostics/d0021_range_argument_type.py">fixture</a> · <a href="https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/site_evidence.rs">test</a> · <a href="https://github.com/rotnov/pycc/commit/0d94ad8f30b27131a5da381a034d55165558e56a">commit</a> · <a href="https://github.com/rotnov/pycc/actions/runs/33969157527">run</a> · <a href="https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/diagnostics/d0021_range_argument_type.expected.txt">human</a> · <a href="https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/diagnostics/d0021_range_argument_type.expected.json">json</a></p>
+<ul><li><a href="https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505690">macos-14 / aarch64-apple-darwin</a></li>
+<li><a href="https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505701">macos-15-intel / x86_64-apple-darwin</a></li>
+<li><a href="https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505789">ubuntu-latest / x86_64-unknown-linux-gnu</a></li>
+<li><a href="https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505756">ubuntu-24.04-arm / aarch64-unknown-linux-gnu</a></li>
+<li><a href="https://github.com/rotnov/pycc/actions/runs/33969157527/job/101314505712">windows-latest / x86_64-pc-windows-msvc</a></li></ul>
+</section>
+<article class="prose execution-hero"><section id="diagnostic-limits"><h2>What the output does—and does not—prove</h2><p>The human transcript is the actual stdout of a rejected range argument. JSON separately carries <code>"help":["pass an `int` value"]</code>. The human renderer does not print a help line. No automatic repair is offered here; <code>--fix</code> is not implemented.</p><p>The line 1, column 1 caret comes from a zero-length placeholder span, not precise argument highlighting. Stable serialization is evidence for these exact bytes, not evidence that every valid, invalid, unsupported, or type-incorrect program is classified correctly. Known classification boundaries and gaps are recorded in the <a href="https://github.com/rotnov/pycc/blob/main/docs/DIAGNOSTICS.md">current diagnostics registry</a>.</p>
+<h2>Explore the actual contracts</h2><p><code>pycc explain T0021</code> is an implemented explanation lookup, not another occurred diagnostic. Read its <a href="https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/crates/pycc_diag/src/explain.rs">registered explanation and tests</a> and the <a href="https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/slice0.rs">CLI explanation tests</a>; no explanation transcript is invented here.</p><p>Additional real snapshots include <a href="https://github.com/rotnov/pycc/blob/0d94ad8f30b27131a5da381a034d55165558e56a/tests/diagnostics/quick_start_type_error.expected.txt">a function argument type mismatch</a> and the <a href="https://github.com/rotnov/pycc/tree/0d94ad8f30b27131a5da381a034d55165558e56a/tests/diagnostics">diagnostic fixture collection</a>. The <a href="https://github.com/rotnov/pycc/blob/main/docs/CLI_SPEC.md">current CLI contract</a> defines exit codes and output formats.</p></section>
+<section><h2>Keep the evidence in context</h2><p>Read <a href="../language-support/">language support and its limits</a>, <a href="../diagnostics/">exact compiler diagnostics</a>, <a href="../status/">current implementation status</a>, and the <a href="../architecture/">compiler architecture</a>. The <a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">current roadmap</a> describes evolving scope; links labeled current may advance beyond this historical run.</p></section>
+</article>
+<aside class="ai-disclosure" aria-label="Project authorship"><p><strong>Built entirely by AI.</strong> <strong>Managed by a human.</strong></p><p>AI agents write the specifications, code, tests, documentation, reviews, and automation. No project code is handwritten by a human.</p></aside>
+</main>
+<footer><a class="brand" href="../" aria-label="pycc home"><span class="brand-mark" aria-hidden="true">&gt;_</span><span>pycc</span></a><p>An AI-created, human-managed AOT compiler for typed Python. Pre-alpha.</p><div><a href="../language-support/">Language</a><a aria-current="page" href="../diagnostics/">Diagnostics</a><a href="../llms.txt">LLM guide</a><a href="https://github.com/rotnov/pycc">GitHub</a></div></footer>
+</body>
+</html>

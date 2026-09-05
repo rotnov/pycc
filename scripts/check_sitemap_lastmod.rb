@@ -32,6 +32,8 @@ CANONICAL_TO_SOURCE = {
   "https://rotnov.github.io/pycc/python-aot-compilers/" =>
     "site/python-aot-compilers/index.html",
   "https://rotnov.github.io/pycc/ai-native/" => "site/ai-native/index.html",
+  "https://rotnov.github.io/pycc/language-support/" => "site/language-support/index.html",
+  "https://rotnov.github.io/pycc/diagnostics/" => "site/diagnostics/index.html",
 }.freeze
 
 def git_last_commit_date(file_path)

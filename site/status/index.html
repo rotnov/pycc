@@ -59,7 +59,7 @@
             "name": "pycc status — what the Python AOT compiler can do today",
             "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete through v0.3 (released as v0.3.0) and what's planned next, and the CI evidence behind each claim.",
             "inLanguage": "en",
-            "dateModified": "2026-09-04",
+            "dateModified": "2026-09-05",
             "additionalProperty": [
               {
                 "@type": "PropertyValue",
@@ -122,6 +122,8 @@
       <nav class="site-nav" aria-label="Primary navigation">
         <a aria-current="page" href="../status/">Status</a>
         <a href="../architecture/">Architecture</a>
+        <a href="../language-support/">Language</a>
+        <a href="../diagnostics/">Diagnostics</a>
         <a href="../python-aot-compilers/">Compare</a>
         <a href="../ai-native/">AI experiment</a>
         <a class="nav-cta" href="https://github.com/rotnov/pycc">GitHub ↗</a>
@@ -142,7 +144,7 @@
         data-evidence-kind="required-checks-snapshot"
         data-evidence-state="unavailable"
       >
-        <p class="eyebrow">Evidence page · Updated 2026-08-26</p>
+        <p class="eyebrow">Evidence page · Updated 2026-09-05</p>
         <h1>What pycc can do <span>today.</span></h1>
         <p class="page-lede">
           pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14.
@@ -155,11 +157,15 @@
             data-evidence-kind="required-checks-snapshot"
             data-evidence-state="unavailable"
           ><strong>Evidence hero</strong> unavailable · commit-bound snapshot tracked in <a href="https://github.com/rotnov/pycc/issues/566">#566</a></span>
-          <span><strong>Milestone</strong> v0.3 acceptance criteria met, released as v0.3.0; v0.4 not started</span>
+          <span><strong>Milestone</strong> v0.3 acceptance criteria met, released as v0.3.0; v0.4 in progress</span>
           <span><strong>Acceptance</strong> v0.1, v0.2, and v0.3 all fully met</span>
           <span><strong>Readiness</strong> pre-alpha</span>
         </div>
       </header>
+
+      <p>For bounded execution proof, see the <a href="../language-support/">tested language subset</a>
+        and <a href="../diagnostics/">actual compiler diagnostics</a>. These fixture results do not
+        replace this page's still-unavailable commit-bound status snapshot.</p>
 
       <div class="prose-layout">
         <aside class="toc" aria-label="On this page">
@@ -384,7 +390,7 @@
 
           <section id="next">
             <p class="section-kicker">Planned next</p>
-            <h2>v0.4 — multi-file projects and incremental compilation — is next.</h2>
+            <h2>v0.4 — multi-file projects and incremental compilation — is in progress.</h2>
             <p>
               v0.1, v0.2, and v0.3's acceptance criteria are all met, and
               v0.3 is released as the <code>v0.3.0</code> tag — see
@@ -405,10 +411,9 @@
               v0.4 — multi-file projects, imports, namespace packages, an
               incremental compilation cache, parallel codegen, and native
               <code>os</code>/<code>pathlib</code>/<code>json</code>/<code>datetime</code>
-              support — is the next milestone on the
+              support — is in progress on the
               <a href="https://github.com/rotnov/pycc/blob/main/docs/DELIVERY_PLAN.md">delivery plan</a>.
-              It has not started: no issue has been selected, no branch
-              opened, and no implementation plan written. Its acceptance
+              v0.4 is in progress. Cross-file project from imports have landed. Bare/submodule imports, namespace handling, broader project CLI behavior, and incremental compilation remain incomplete. Its acceptance
               criteria are a Tier-2 corpus (<code>black</code>,
               <code>isort</code>, <code>attrs</code>, <code>click</code>)
               compiling at 80% or more of files, an incremental rebuild of
@@ -467,6 +472,8 @@
       <p>An AI-created, human-managed AOT compiler for typed Python. Pre-alpha.</p>
       <div>
         <a href="../ai-native/">AI experiment</a>
+        <a href="../language-support/">Language</a>
+        <a href="../diagnostics/">Diagnostics</a>
         <a href="../python-aot-compilers/">Compare</a>
         <a href="../llms.txt">LLM guide</a>
         <a href="https://github.com/rotnov/pycc">GitHub</a>

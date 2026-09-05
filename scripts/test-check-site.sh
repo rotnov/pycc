@@ -35,6 +35,13 @@ restore_fixtures() {
     "$fixture_root/evidence-root/tests/fixtures/quick_start.expected.txt"
   cp "$repo_root/tests/quick_start.rs" \
     "$fixture_root/evidence-root/tests/quick_start.rs"
+  cp "$repo_root/tests/site_evidence.rs" "$fixture_root/evidence-root/tests/site_evidence.rs"
+  cp "$repo_root/tests/fixtures/pep_0526_var_annotations.py" "$fixture_root/evidence-root/tests/fixtures/"
+  cp "$repo_root/tests/fixtures/pep_0526_var_annotations.expected.txt" "$fixture_root/evidence-root/tests/fixtures/"
+  cp "$repo_root/tests/fixtures/conformance-breadth-manifest.json" "$fixture_root/evidence-root/tests/fixtures/"
+  cp "$repo_root/tests/diagnostics/d0021_range_argument_type.py" "$fixture_root/evidence-root/tests/diagnostics/"
+  cp "$repo_root/tests/diagnostics/d0021_range_argument_type.expected.txt" "$fixture_root/evidence-root/tests/diagnostics/"
+  cp "$repo_root/tests/diagnostics/d0021_range_argument_type.expected.json" "$fixture_root/evidence-root/tests/diagnostics/"
   cp "$repo_root/tests/diagnostics/quick_start_type_error.expected.txt" \
     "$fixture_root/evidence-root/tests/diagnostics/quick_start_type_error.expected.txt"
 }
@@ -179,7 +186,7 @@ for field in ("schema_version", "evidence_states", "heroes"):
         f"missing root field {field}",
         lambda doc, field=field: doc.pop(field),
     )
-rejected("unsupported schema_version", lambda doc: doc.__setitem__("schema_version", "2.0.0"))
+rejected("unsupported schema_version", lambda doc: doc.__setitem__("schema_version", "9.0.0"))
 rejected("mutated evidence-state vocabulary", lambda doc: doc["evidence_states"].append("verified"))
 rejected("missing one required hero", lambda doc: doc["heroes"].pop())
 
@@ -257,7 +264,7 @@ for field in ("runner", "architecture", "job_url"):
 
 rejected(
     "unavailable hero missing owner link",
-    lambda doc: doc["heroes"][1]["stable_links"].pop("owner"),
+    lambda doc: doc["heroes"][3]["stable_links"].pop("owner"),
 )
 
 # Every allowlisted kind has a negative mutation.  A validator that checks only
@@ -272,7 +279,7 @@ for index, hero in enumerate(json.loads((repo_root / "site/evidence-heroes.json"
 
 # Unavailable heroes must not grow decorative evidence.  Their owner issue is
 # the only stable link until a child issue lands a real artifact.
-for index in range(1, 8):
+for index in range(3, 8):
     rejected(
         f"unavailable {index} carries invented snapshot",
         lambda doc, index=index: doc["heroes"][index].__setitem__(
@@ -1160,7 +1167,9 @@ for content_page in \
   status/index.html \
   architecture/index.html \
   python-aot-compilers/index.html \
-  ai-native/index.html
+  ai-native/index.html \
+  language-support/index.html \
+  diagnostics/index.html
 do
   if [ ! -f "$fixture_root/site/$content_page" ]; then
     echo "Site fixture is missing required evidence page: $content_page" >&2
@@ -1245,9 +1254,9 @@ mutations = (
     ),
     (
         site_dir / "index.html",
-        "v0.4 (multi-file projects, imports, incremental compilation) is next and has not started",
-        "v0.4 (multi-file projects, imports, incremental compilation) is already well underway.",
-        "landing page that overclaims v0.4 progress that has not started",
+        "v0.4 is in progress. Cross-file project from imports have landed. Bare/submodule imports, namespace handling, broader project CLI behavior, and incremental compilation remain incomplete.",
+        "v0.4 has not started.",
+        "landing page that regresses the current v0.4 boundary",
     ),
     (
         site_dir / "status" / "index.html",
@@ -1285,9 +1294,9 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "It has not started: no issue has been selected, no branch",
-        "v0.4 work is already well underway.",
-        "status page that overclaims v0.4 progress that has not started",
+        "v0.4 is in progress. Cross-file project from imports have landed. Bare/submodule imports, namespace handling, broader project CLI behavior, and incremental compilation remain incomplete.",
+        "v0.4 is fully complete.",
+        "status page that overclaims v0.4 completion",
     ),
     (
         site_dir / "status" / "index.html",
@@ -2029,7 +2038,7 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-29</lastmod>"""
+    <lastmod>2026-09-05</lastmod>"""
 assert entry in content
 path.write_text(content.replace(entry, entry + "\n    <lastmod>2026-07-30</lastmod>", 1))
 PY
@@ -2051,9 +2060,9 @@ content = path.read_text()
 # a lastmod, so replacing a bare date literal would silently mutate whichever
 # entry comes first in document order instead of the one named here.
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-29</lastmod>"""
+    <lastmod>2026-09-05</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-29", "not-a-date"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-09-05", "not-a-date"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -2070,9 +2079,9 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-29</lastmod>"""
+    <lastmod>2026-09-05</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-29", "9999-12-31"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-09-05", "9999-12-31"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -2089,9 +2098,9 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/python-aot-compilers/</loc>
-    <lastmod>2026-08-21</lastmod>"""
+    <lastmod>2026-09-05</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-21", "2026-07-27"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-09-05", "2026-07-27"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -3100,7 +3109,9 @@ for required_file in \
   architecture/index.html \
   python-aot-compilers/index.html \
   python-aot-compilers/claims.json \
-  ai-native/index.html
+  ai-native/index.html \
+  language-support/index.html \
+  diagnostics/index.html
 do
   target="$fixture_root/site/$required_file"
   rm -f "$target"
@@ -4210,5 +4221,9 @@ if ! SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null
   exit 1
 fi
 restore_fixtures
+
+# These immutable-blob controls need the full-history Pages checkout. Keep the
+# shallow governance discovery suite limited to their wiring contract.
+python3 -B "$repo_root/scripts/site_execution_evidence_test.py"
 
 echo "Website validator self-tests passed."
