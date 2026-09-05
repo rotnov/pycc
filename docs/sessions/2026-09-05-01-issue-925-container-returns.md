@@ -23,9 +23,13 @@ Two seams, matching the two halves of the Part-1 split:
   by-value struct. The old `other => panic!` catch-all is gone: the match now
   ends in `Ty::Infer | Ty::Param(_) | Ty::Protocol(_)`, so a `Ty` variant added
   later is a compile error here rather than a runtime panic. That is what makes
-  the "only these three remain unreachable" claim behind
+  the "only these three remain unhandled" claim behind
   [#926](https://github.com/rotnov/pycc/issues/926) mechanical rather than a
-  comment.
+  comment. The three are unhandled for two different reasons: `Ty::Infer` and
+  `Ty::Param` cannot be produced by type-checked source at all, while
+  `Ty::Protocol` is accepted by the front end and is unreached only because MIR
+  lowering panics first — filed as
+  [#934](https://github.com/rotnov/pycc/issues/934).
 - **HIR.** `lower_return_annotation` no longer runs D-228's return-position
   `C0001`; it lowers the annotation exactly like every other position and joins
   the set that advises the parameterized form for a bare `list`/`dict`/`set`/

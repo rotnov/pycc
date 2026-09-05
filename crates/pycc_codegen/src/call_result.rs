@@ -135,13 +135,30 @@ pub(super) fn call_result_scalar<'ctx>(
         ),
         // Exhaustive by construction: no catch-all. Every `Ty` variant
         // above yields a real `Scalar`, and these three are the only
-        // ones left. None is reachable from real, type-checked source --
-        // `Ty::Infer` is an HIR-only placeholder that never survives to
-        // MIR (an unresolvable helper is `T0021` at type-check time) and
-        // `Ty::Param` is substituted at each call site before codegen
-        // (D-134) -- so this arm is a defensive backstop for malformed,
-        // hand-built MIR, covered by one `#[should_panic]` unit test
-        // per variant in `pycc_codegen` rather than by any `.py` input.
+        // ones left. Each is unreached today, but for two different
+        // reasons, and the distinction matters.
+        //
+        // `Ty::Infer` and `Ty::Param` cannot be produced by real,
+        // type-checked source at all -- `Ty::Infer` is an HIR-only
+        // placeholder that never survives to MIR (an unresolvable helper
+        // is `T0021` at type-check time) and `Ty::Param` is substituted
+        // at each call site before codegen (D-134). For those two this
+        // arm really is a defensive backstop for malformed, hand-built
+        // MIR.
+        //
+        // `Ty::Protocol` is not: a function annotated to return a
+        // `Protocol` subclass is accepted by the front end today (see
+        // `pycc_types`'s own
+        // `protocol_function_returning_protocol_covers_param_name_none`).
+        // This arm is unreached for that type only because MIR lowering
+        // panics first when the protocol-typed value is used --
+        // `pycc_mir::expr`'s "method not declared on class ... or any
+        // base in its MRO" internal error, tracked as #934. When that
+        // lowering gap closes, this arm becomes reachable from real
+        // source and needs a real implementation, not a panic.
+        //
+        // All three are covered by one `#[should_panic]` unit test per
+        // variant in `pycc_codegen` rather than by any `.py` input.
         //
         // Listing the variants instead of writing `other =>` is the
         // point: a `Ty` variant added later is a compile error here
