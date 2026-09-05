@@ -237,6 +237,7 @@ pub(super) fn lower_enum_class(
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             type_param,
+            is_enum: true,
             enum_members,
             is_dataclass: false,
             dataclass_fields: Vec::new(),
@@ -339,6 +340,10 @@ mod tests {
         // statement) is a no-op in an enum body, not a member assignment.
         let hir = lower_ok("class Color(Enum):\n    \"A color.\"\n    RED = 1\n    GREEN = 2\n");
         let (_, class_def) = &hir.class_defs[0];
+        assert!(
+            class_def.is_enum,
+            "#921: `lower_enum_class` marks its class"
+        );
         assert_eq!(class_def.enum_members.len(), 2);
         assert_eq!(class_def.enum_members[0].0, "RED");
     }
@@ -444,6 +449,9 @@ mod tests {
         let hir = lower_ok("class E(Enum):\n    \"Just a docstring.\"\n");
         let (_, class_def) = &hir.class_defs[0];
         assert!(class_def.enum_members.is_empty());
+        // #921: the empty member table is not the enum marker; the
+        // provenance flag is, and it is set for a member-less enum too.
+        assert!(class_def.is_enum);
         assert_eq!(class_def.attrs[0], ("value".to_string(), Ty::Int));
     }
 
@@ -454,6 +462,7 @@ mod tests {
         let hir = lower_ok("class E(StrEnum):\n    \"Just a docstring.\"\n");
         let (_, class_def) = &hir.class_defs[0];
         assert!(class_def.enum_members.is_empty());
+        assert!(class_def.is_enum, "#921: `StrEnum` shares the enum marker");
         assert_eq!(class_def.attrs[0], ("value".to_string(), Ty::Str));
     }
 
