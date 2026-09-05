@@ -107,6 +107,11 @@ parameter and variable positions only``,
 annotation's own span, on a module-level function, a method, and a protocol
 member declaration alike; the check runs after the annotation lowers, so a
 nested `list[P]` or `P | None` still reports its own element-type gate first.
+Both spellings of a protocol member returning its *own* protocol reach that
+same gate with that same message ([#948](https://github.com/rotnov/pycc/issues/948)):
+the protocol's own name (`def clone(self) -> P: ...`, PEP 649/749) and `Self`
+(PEP 673). A self-referential parameter or attribute is not rejected -- a
+protocol type is supported in those positions.
 An import failure
 CPython itself would raise on is `T0021`, not `C0001`. A `from __future__
 import ...` is a compiler directive, not a module (#919, D-229): its nine no-op
