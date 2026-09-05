@@ -76,8 +76,9 @@ fn pep_0649_deferred_ann_matches_cpython_3_14_7_byte_for_byte() {
 // directive contributes nothing and the file runs as if it were absent. The
 // fixture exercises only what pycc supports today (a method annotated with
 // its own class, a function annotated with an already-defined class); a
-// forward reference to a later-defined name and a string annotation are
-// recorded `core` gaps, so the matrix row stays `☐` until the follow-up flip.
+// forward reference to a later-defined name, a string annotation, and
+// `__annotations__` introspection are the row's recorded `core` gaps in the
+// breadth manifest, so the matrix row is `◐` (#937), not `✅`.
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
 fn pep_0563_lazy_annotations_matches_cpython_3_14_7_byte_for_byte() {

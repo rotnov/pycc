@@ -239,12 +239,16 @@ For each newly observed upstream release:
     directive as a compile-time no-op, authors the flat fixture
     `pep_0563_lazy_annotations.py`, registers it as an `#[ignore]`d
     dual-profile test, and corrects the row's previously phantom `py37/`
-    path -- but the row stays `☐` under rule 5 until the fixture is observed
-    green on a completed `main` run, which
-    [#937](https://github.com/rotnov/pycc/issues/937) tracks together with
-    the manifest entry. The fixture deliberately exercises no forward
-    reference to a later-defined name and no string annotation, because
-    pycc rejects both today; #937 records them as `core` gaps.
+    path. [#937](https://github.com/rotnov/pycc/issues/937) then flipped the
+    row to `◐` once the fixture was observed green across all 5 Tier-1
+    targets in both profiles on run
+    [33972731538](https://github.com/rotnov/pycc/actions/runs/33972731538)
+    (`main` push for `51808cd8b1261d87900601679e33a8a5416ec6dc`, PR #938's
+    merge). Not `✅`: the fixture deliberately exercises no forward
+    reference to a later-defined name (PEP 563's distinguishing case) and
+    no string annotation, because pycc rejects both with `C0001` today
+    (#889), and no `__annotations__` introspection; the manifest records
+    all three as `core` gaps, which force `◐` under D-177.
 
 ## Python 3.0–3.2 (foundations)
 
@@ -314,7 +318,7 @@ For each newly observed upstream release:
 | [557](https://peps.python.org/pep-0557/) | **dataclasses** | sem | `pep_0557_dataclasses.py` | ◐ |
 | [560](https://peps.python.org/pep-0560/) | `__class_getitem__` dispatch for value-position subscripts | typing | `pep_0560_class_getitem.py` (authored by [#610](https://github.com/rotnov/pycc/issues/610); observed green across all 5 Tier-1 targets in both profiles on run [32494747082](https://github.com/rotnov/pycc/actions/runs/32494747082), the completed run for `82d63301`) | ◐ |
 | [562](https://peps.python.org/pep-0562/) | Module `__getattr__` | sem | `py37/pep_0562_mod_getattr.py` | ☐ |
-| [563](https://peps.python.org/pep-0563/) | `from __future__ import annotations` (superseded by 649) | typing | `pep_0563_lazy_annotations.py` | ☐ |
+| [563](https://peps.python.org/pep-0563/) | `from __future__ import annotations` (superseded by 649) | typing | `pep_0563_lazy_annotations.py` | ◐ |
 | — | `dict` insertion order guaranteed (`dict[str, int]`, D-123) | sem | `dict_order.py` | ◐ |
 
 ## Python 3.8
