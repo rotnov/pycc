@@ -3,11 +3,11 @@
 ## Overall status
 
 Delivered as PR #930 (`feat/issue-918-container-annotations`, whose last
-commit touching the Rust tree is `69e000f6`; every later commit on the branch,
-including this snapshot's own, is documentation), based on `origin/main` at
-`c639e682`,
+commit touching the Rust tree is `bb80b5b3`, the round-9 fix; every later commit
+on the branch, including this snapshot's own, is documentation), based on
+`origin/main` at `c639e682`,
 re-fetched and unmoved. State re-resolved immediately before this snapshot was
-committed: open, not a draft, `MERGEABLE`, all nine review threads answered and
+committed: open, not a draft, `MERGEABLE`, all ten review threads answered and
 resolved, CI green on every check that had reported. It deliberately does not
 carry a closing keyword for #918: Part 1 is one of two decomposed parts, and
 #925 (Part 2) must close before the parent does, so the body reads "Part 1 of
@@ -135,16 +135,31 @@ missing exactly where it is actionable. The upgrade now peels those two wrappers
 recursively, mirroring `annotation_to_ty`'s own arms so a malformed wrapper keeps
 its own arity diagnostic.
 
-Eighteen findings over eight rounds. Rounds 5 through 8 are all the same class —
-a user-facing artefact asserting a support contract nothing checks — and round 8
-is the first the position inventory could not have caught: the inventory
-enumerates positions, and a wrapper sits *inside* a position it already listed.
+Round 9 found the same class a third time over on a third axis. `T0053` shipped
+all three of its construction arms with `"help": []` while
+`docs/DIAGNOSTICS.md`'s quality bar lists the arity family among the ones that
+populate it — a contract asserted about diagnostic *families*, which neither a
+position inventory nor a shape inventory reaches. It is fixed rather than filed,
+on a rule the round settled and worth stating as a rule: **fix what this pull
+request's own diff introduced; file what predates it.** `git grep T0053
+c639e682 -- crates` finds nothing, so D-152's "48 sites left at `help: None` by
+design" grandfathers the tree it measured and does not license a new member of a
+populated family. Recorded as D-228 decision 11.
+
+Nineteen findings over nine rounds. Rounds 5 through 9 are all the same class —
+a user-facing artefact asserting a support contract nothing checks — on three
+different axes: positions (5, 6, 7), a wrapper *shape* inside an already-listed
+position (8), and a diagnostic family (9). Each axis is invisible to an
+inventory over the previous one, which is the whole finding.
 `references/rule-audit.md` disqualifies a further textual artefact at three, so
 the guard worth building is mechanical, and it must range over annotation
-*shapes* as well as positions. It is filed as a checklist item on the standing
-agent-tooling umbrella issue #806 rather than built here: one source list of the
-forms the lowering accepts, and a CI check that every artefact enumerating them
-agrees with it.
+*shapes* and over the help-populated diagnostic families as well as over
+positions. It is filed as a checklist item on the standing agent-tooling
+umbrella issue #806 rather than built here: one source list of the forms the
+lowering accepts plus a CI check that every artefact enumerating them agrees
+with it, and — for the family axis — an assertion that every family
+`docs/DIAGNOSTICS.md` calls help-populated has at least one fixture with a
+non-empty `help` array.
 
 ## Where a fresh session should resume
 
@@ -190,11 +205,14 @@ reason each time: a fix round moved the Rust tree, so the old measurement no
 longer described it. Two coverage runs were also killed mid-flight before a
 round-6 measurement, each having been started before a fix landed.
 
-Only prose lands after the measurement: this snapshot itself, the retrospective
-entry, and the round-6 through round-8 findings lines. All of it is prose, so
-`git diff --name-only 69e000f6..HEAD -- crates src Cargo.toml Cargo.lock` is
-empty — executed, not asserted — and no gate that reads the Rust tree is
-affected; the doc gates are re-run once more on the final head before the merge.
+The round-9 fix `bb80b5b3` moved the Rust tree again, so the coverage gate was
+re-measured on it rather than carried forward — the same discipline every
+earlier round applied. Only prose lands after that measurement: this snapshot
+itself, the retrospective entry, and the round-6 through round-9 findings lines.
+All of it is prose, so `git diff --name-only bb80b5b3..HEAD -- crates src
+Cargo.toml Cargo.lock` is empty — executed, not asserted — and no gate that
+reads the Rust tree is affected; the doc gates are re-run once more on the final
+head before the merge.
 
 Both Ruby checkers need `LC_ALL=en_US.UTF-8 RUBYOPT=-EUTF-8` in this shell; that
 is a local locale artifact, not a repository defect.

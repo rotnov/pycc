@@ -33,6 +33,39 @@ never a merge gate.
 
 ---
 
+## 2026-09-05 — Read a decision's "left at None by design" as covering code that decision never saw
+
+**What happened.** Round 9 of PR #930's review reported that all three arms
+of the pull request's own new `T0053` published `"help": []`, while
+`docs/DIAGNOSTICS.md`'s quality bar lists the arity family among the ones
+that populate structured help. The first reading of D-152 treated its
+"48 sites left at `help: None` by design" as settling the question — a
+documented exclusion, therefore not a defect.
+
+**Root cause.** A decision's census of a tree is evidence about that tree,
+not a licence granted to code written afterwards. D-152 enumerated the
+sites that existed when it landed; `T0053` did not exist then, and the
+quality bar it must satisfy is a standing contract on a *family*. Reading
+the census as the contract inverts which of the two documents is
+normative.
+
+**What fixed it.** One command settled it: `git grep T0053 c639e682 --
+crates` returns nothing, so the code is the branch's own. That turned the
+question from "is this exclusion documented?" into "did this diff break a
+contract?", which has a single answer. All three arms now carry
+`.with_help(...)`, D-228 records the per-site split as decision 11, and
+each arm gained an `.expected.json` fixture, since the human format never
+renders `help` and the existing `.expected.txt` fixtures therefore could
+not observe it.
+
+**Lesson.** Before accepting a documented exclusion as cover for the code
+in front of you, check whether that code existed when the exclusion was
+written — `git grep <symbol> <base-commit>` is the whole check. More
+generally, the stopping rule a long review loop needs is not a round cap:
+**fix what this change's own diff introduced; file what predates it.** It
+is decidable against the base commit, so it never turns into a judgment
+call about scope.
+
 ## 2026-09-05 — Inventoried the positions and missed the wrapper sitting inside one
 
 What happened: after a review round found a support enumeration disagreeing with
