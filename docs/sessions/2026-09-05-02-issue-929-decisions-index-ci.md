@@ -19,6 +19,16 @@ Delivered in the pull request that carries this snapshot, branched from
   moved from `verdict: pending` to `shipped`, pointing at the CI step, with the
   manual both-direction verification recorded.
 - `.harden/findings/issue-929.jsonl` holds the review rounds.
+- `docs/decisions/D-151-decompose-the-decisions-log-into-per-decision-files.md`:
+  a dated inline correction note on the Consequences claim that the `--check`
+  was "wired into CI as a new required-check step" -- it never was until this
+  change. This closes #622 as well, which had been open since 2026-08-19 and
+  was filed for the same gap; #929 was filed as an unnoticed duplicate of it.
+  #622's second criterion asked for a deliberate choice between a factual
+  erratum and a superseding decision: erratum, because the decision's substance
+  (per-decision files, generated index, `--check` freshness) is unchanged and
+  only the factual wiring claim was false, matching the repository's existing
+  dated-correction precedent (D-086, D-109, D-116, D-119, D-127).
 
 ## Correction to the issue body
 
@@ -32,6 +42,9 @@ workflow. All four ruby gates exited 0 with the step added.
 
 ## Follow-ups
 
+- Retrospective candidate: #929 duplicated the still-open #622 because the
+  filer skipped a dedup search against the open list; recorded here rather than
+  as an issue (D-192 non-milestone ceiling is in force).
 - None required for #929. `docs/ROADMAP.md` has no cell enumerating the
   individual `governance` steps, so it was not edited.
 
