@@ -146,5 +146,47 @@ class MainCheckModeTests(unittest.TestCase):
             self.assertEqual(exit_code, 1)
 
 
+class CiWiringTest(unittest.TestCase):
+    """The checker is only a merge gate while required CI actually runs it.
+
+    Issue #929: `--check` existed, with `check_unique_ids` and
+    `check_filename_matches_id`, and was wired to nothing, so a real `D-227`
+    id collision (a merge landing mid-review of #918) reached review with
+    every required check green. The step lives in `governance`, which
+    `ci-gate` -- the required branch-protection check -- needs
+    unconditionally. These tests fail if either half of that binding is
+    removed, or if the step is downgraded to advisory.
+    """
+
+    WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml"
+    STEP = "scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md --check"
+
+    def setUp(self) -> None:
+        self.text = self.WORKFLOW.read_text(encoding="utf-8")
+
+    def _job_body(self, name: str) -> str:
+        start = self.text.index(f"\n  {name}:\n")
+        rest = self.text[start + 1 :]
+        lines = rest.split("\n")
+        body = [lines[0]]
+        for line in lines[1:]:
+            # A new top-level job starts at exactly two spaces of indent.
+            if line.startswith("  ") and not line.startswith("   ") and line.rstrip().endswith(":"):
+                break
+            body.append(line)
+        return "\n".join(body)
+
+    def test_the_governance_job_runs_the_index_check(self) -> None:
+        self.assertIn(self.STEP, self._job_body("governance"))
+
+    def test_ci_gate_requires_the_governance_job(self) -> None:
+        gate = self._job_body("ci-gate")
+        self.assertIn("- governance", gate)
+        self.assertIn("needs.governance.result != 'success'", gate)
+
+    def test_the_index_check_is_not_wired_as_advisory(self) -> None:
+        self.assertNotIn("continue-on-error", self._job_body("governance"))
+
+
 if __name__ == "__main__":
     unittest.main()

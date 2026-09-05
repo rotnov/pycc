@@ -249,9 +249,10 @@ PY3147_ORACLE_CI_WORKFLOW_SHA256 =
 # D-171 change-aware routing successor. This exact staged workflow adds the
 # base-reviewed classifier, cancellation-compatible governance, conditional
 # heavy jobs, and the fail-closed ci-gate truth table while retaining every
-# existing hard-gate body.
+# existing hard-gate body. Rotated by #929/#622 when the governance job
+# gained the decisions-index freshness step.
 D171_CHANGE_AWARE_CI_WORKFLOW_SHA256 =
-  "7c136cc8eec7db6bc904e12b5f9ddff628ef5722da41cbe33c7182e39f2f81db"
+  "ff27b9e0fa889182210053c2b95a226979453437d90f67ccbf71c3dc3a675e3c"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
@@ -1278,10 +1279,15 @@ D171_GOVERNANCE_POLICY_STEPS = {
     ruby scripts/test_check_roadmap_evidence.rb
     ruby scripts/check_roadmap_evidence.rb
   SHELL
-  "Check README coverage badge binding (issue" => <<~'SHELL'.strip
+  "Check README coverage badge binding (issue" => <<~'SHELL'.strip,
     ruby scripts/check_readme_coverage_badge.rb
     ruby scripts/test_check_readme_coverage_badge.rb
   SHELL
+  # Issue #929 / #622: the decisions-index freshness and id-uniqueness gate.
+  # Listed here so the base-owned audit, not only the head-controlled
+  # `CiWiringTest`, rejects a head that conditions, replaces, or drops it.
+  "Check decisions index freshness and id uniqueness" =>
+    "python3 -B scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md --check"
 }.freeze
 D171_GOVERNANCE_AGENT_STEPS = {
   "Install LLVM 22 for offline alpha skill contract evals" => <<~'SHELL'.strip,

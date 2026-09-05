@@ -14,8 +14,11 @@ enforce the normal delivery path.
   `governance`, and requires every unselected conditional job to be skipped.
   `governance` is where unconditional repository-policy gates live, so a new
   one is added as a step there rather than as its own required context --
-  issue #595 wired `scripts/check_conformance_breadth.py` in that way, and the
-  required-check list above is unchanged as a result. Prefer that placement:
+  issue #595 wired `scripts/check_conformance_breadth.py` in that way, issue
+  #929 wired `scripts/generate_decisions_index.py --check` (decisions-index
+  freshness and `D-NNN` id uniqueness, after a real `D-227` collision reached
+  review with every check green) the same way, and the required-check list
+  above is unchanged as a result. Prefer that placement:
   a separate required context for a gate `ci-gate` already fans in is a second
   control over the same contract, editable independently of the first.
   Compiler routing fans in

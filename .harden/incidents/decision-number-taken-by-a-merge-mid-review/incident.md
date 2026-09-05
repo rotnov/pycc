@@ -11,9 +11,9 @@ type: process
 termination: precommit — delegated to rotnov/pycc issue 929
 related: []
 fixture: none — the artefact is a static CI step with a binary outcome; proven by feeding it a colliding tree (see Verify), not by the arena
-artifact: deferred — one step in ci.yml's governance job, specified in rotnov/pycc issue 929
-verify: manual, both directions observed in this session — a `git archive` of a colliding `docs/decisions` tree makes `generate_decisions_index.py --check` exit 1, and the clean tree exits 0; what stays pending is the artefact (the CI step), not the verification — see Verify and `verdict: pending`
-verdict: pending
+artifact: .github/workflows/ci.yml governance job, step "Check decisions index freshness and id uniqueness" (issue 929 activation pull request)
+verify: manual, both directions observed against the activation tree — a copied `docs/decisions` tree carrying a second `D-228` file makes `generate_decisions_index.py --check` exit 1 naming the duplicate, a copied tree with an appended index line exits 1 as out of date, and the clean tree exits 0 — see Verify
+verdict: shipped
 ---
 
 # Incident: a decision number resolved correctly, then was taken by a merge landing mid-review
@@ -101,4 +101,26 @@ id named, and the current `main` tree must exit 0. The negative direction is
 already observed (the `git archive` reproduction above); the positive direction is
 observed on every clean run of the checker in this session.
 
-`verdict: pending` until issue 929's activation pull request merges.
+Recorded in the issue 929 activation pull request (branch
+`feat/issue-929-decisions-index-ci`), against a scratch copy of that tree's
+`docs/decisions`:
+
+- duplicate id — a second file carrying `D-228` in its frontmatter:
+  `duplicate decision id D-228: claimed by both D-228-duplicate-copy.md and
+  D-228-lower-parameterized-container-type-annotations.md`, exit 1;
+- stale index — one line appended to `README.md`: `README.md is out of date
+  with its source files:` followed by the diff, exit 1;
+- clean tree: exit 0.
+
+**Correction to the "Delegated rather than built here" paragraph above.** The
+D-080 two-pull-request cost it cites does not apply at the current tip:
+`scripts/check_roadmap_evidence.rb`'s `validate_evidence` returns early through
+`d171_routed_workflow?` for any `ci.yml` that carries a `classify-changes` or
+`governance` job, so the `REVIEWED_PERF_CI_WORKFLOW_SHA256S` byte pin is never
+consulted for the live workflow and the step landed in a single pull request
+with every ruby gate green. Delegating was still the right call for the #918
+change — the step is a separate seam — but the stated cost was stale.
+
+`verdict: shipped` once that pull request merges; the frontmatter is set ahead
+of the merge because the artefact and its verification travel in the same
+change.

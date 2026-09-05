@@ -1232,10 +1232,37 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # `ci.yml` (see `test_tier1_workflow_authorization_uses_active_d171_routing`
   # above, which now covers the identical live bytes). The fixture file is
   # retained as audit evidence of that provenance, not because its shape is
-  # untested elsewhere.
-  def test_d215_rustfmt_gate_fixture_is_accepted_by_d171_routing
-    assert validate_d171_ci_routing(
+  # untested elsewhere. Its bytes are historical and stay frozen: the D-171
+  # routing contract has since grown by exactly one governance policy step
+  # (#929/#622's decisions-index freshness check), so the fixture is rejected
+  # for that missing step and for nothing else -- adding that one step back
+  # makes it acceptable again.
+  def test_d215_rustfmt_gate_fixture_predates_only_the_decisions_index_step
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_d171_ci_routing(
+        D215_RUSTFMT_GATE_WORKFLOW_FIXTURE.read,
+        D215_RUSTFMT_GATE_WORKFLOW_FIXTURE.to_s
+      )
+    end
+    assert_includes error.message,
+                    'governance step "Check decisions index freshness and id uniqueness"'
+
+    stream = Psych.parse_stream(
       D215_RUSTFMT_GATE_WORKFLOW_FIXTURE.read,
+      filename: D215_RUSTFMT_GATE_WORKFLOW_FIXTURE.to_s
+    )
+    workflow = yaml_value(
+      stream.children.first.root,
+      D215_RUSTFMT_GATE_WORKFLOW_FIXTURE.to_s
+    )
+    workflow.dig("jobs", "governance", "steps") << {
+      "name" => "Check decisions index freshness and id uniqueness",
+      "run" => D171_GOVERNANCE_POLICY_STEPS.fetch(
+        "Check decisions index freshness and id uniqueness"
+      )
+    }
+    assert validate_d171_ci_routing(
+      workflow.to_yaml,
       D215_RUSTFMT_GATE_WORKFLOW_FIXTURE.to_s
     )
   end
@@ -4511,7 +4538,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
       "Check agent policy",
       "Check workflow permission policy",
       "Check roadmap evidence",
-      "Check README coverage badge binding (issue"
+      "Check README coverage badge binding (issue",
+      "Check decisions index freshness and id uniqueness"
     ]
 
     policy_steps.each do |step_name|
