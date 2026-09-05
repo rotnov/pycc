@@ -476,3 +476,35 @@ fn a_type_alias_reached_through_two_modules_lowers_and_binds() {
         ]
     );
 }
+
+#[test]
+fn an_imported_alias_to_a_class_the_importer_never_copied_still_accepts_a_subscript() {
+    // #931 step 2b: `bind_project_name`'s TypeAlias branch pushes the alias
+    // (`A` -> `Ty::Instance("G")`) but only the Class branch runs
+    // `copy_class_with_ancestors`, so `G` is absent from the importer's
+    // `class_defs`. The subscript arm resolves `A` through the alias table
+    // to a class-shaped `Ty` it cannot look up, and fails open exactly as it
+    // did before #931 rather than rejecting `A[int]` as a non-class alias.
+    // The missing copy itself is a pre-existing #881-area gap.
+    let fixture = Fixture::new(
+        "class G[T]:\n    def __init__(self) -> None:\n        self.v = 1\n\ntype A = G\n",
+    );
+    let lowered = fixture.lower_ok("from dep import A\n\ndef f(x: A[int]) -> int:\n    return 1\n");
+    let HirItem::Function { params, .. } = &lowered.hir.items[0] else {
+        panic!("expected a function item: {:?}", lowered.hir.items[0]);
+    };
+    assert_eq!(params[0].1, Ty::Instance(Box::new("G".to_string())));
+    // Proof that `G` really is absent here: the bare name is unknown.
+    let diagnostic = fixture.first_error(
+        "from dep import A\n\ndef f(x: G) -> int:\n    return 1\n",
+        &[],
+    );
+    assert_eq!(diagnostic.code, "C0001", "{}", diagnostic.message);
+    assert!(
+        diagnostic
+            .message
+            .contains("type annotation `G` is not supported yet"),
+        "{}",
+        diagnostic.message
+    );
+}

@@ -128,6 +128,25 @@ fn every_cascade_of_a_skipped_class_is_silent_and_transitive() {
 }
 
 #[test]
+fn a_subscripted_annotation_on_a_skipped_class_is_a_silent_cascade_too() {
+    // D-219 for the subscripted spelling (#931): `x: Foo[int]` after a
+    // failed `class Foo:` still produces the exact unknown-name `C0001` that
+    // `cascade_name` parses back, so the module reports exactly one
+    // diagnostic, the class's own. The #931 reject fires only for a base
+    // that *resolves*, which an undefined name never does.
+    let source = "class Foo:\n    async def m(self) -> None: pass\n\
+                  x: Foo[int] = Foo()\n\
+                  def g(a: Foo[int]) -> Foo[int]:\n    return a\n";
+    let diagnostics = lower_all_err(source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_c0001(
+        &diagnostics[0],
+        ASYNC_METHOD_GAP,
+        span_of(source, ASYNC_METHOD_M, 0),
+    );
+}
+
+#[test]
 fn non_cascade_shapes_after_a_skipped_import_stay_reported() {
     // The rejected `import os` poisons `os`, so the bare annotation `p: os`
     // is suppressed as a cascade. This supersedes "correction 7", which read

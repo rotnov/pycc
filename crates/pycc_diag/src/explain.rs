@@ -591,7 +591,16 @@ by a first assignment inside `__init__`, and a method is only ever one of \
 the class body's own `def`s, so any other name is unknown at compile time. \
 A mismatched argument count or type at an instantiation or method call site \
 is a separate condition and reuses `T0021` instead, exactly like an \
-ordinary function call.",
+ordinary function call. The same code also covers CPython's `TypeError: \
+... is not subscriptable` for `Base[...]` (PEP 560, #610/#611): in value or \
+annotation position on a class that defines no `__class_getitem__` anywhere \
+in its MRO and is not a PEP 695 generic class, and (#931) in annotation \
+position when the base resolves to something that is not a class at all -- \
+a PEP 695 type parameter (`T[int]`), a builtin scalar (`int[str]`), `Self` \
+inside a class, or a `type` alias to a non-class type (`type A = int` then \
+`A[str]`) -- where the type argument used to be silently discarded. A \
+`type A = C` alias to a class behaves exactly as `C[...]` would; an \
+undefined base keeps its `C0001`; `Any[...]` keeps `T0002`.",
         example: "\
 class Point:
     def __init__(self, x: int) -> None:
