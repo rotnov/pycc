@@ -242,11 +242,22 @@ recorded (see D-223, which narrows D-202):
   block`. A loop entered *within* the clause body shields `break`/`continue`
   but never `return`, exactly as CPython's compiler behaves; at module scope
   a `return` reports the pre-existing `T0024` instead, again matching
-  CPython's own precedence. One residual hole: a `return` guarded by `if
-  TYPE_CHECKING:` is erased by the constant-fold before lowering sees it and
-  so is still accepted -- a pre-existing, general property of that fold
-  rather than anything specific to `except*`, tracked by
-  [#905](https://github.com/rotnov/pycc/issues/905).
+  CPython's own precedence. A `return` guarded by `if TYPE_CHECKING:` used
+  to be erased by the constant-fold before lowering saw it and so stayed
+  accepted -- a pre-existing, general property of that fold rather than
+  anything specific to `except*`. Since
+  [#905](https://github.com/rotnov/pycc/issues/905) the guarded body is
+  re-walked for `L0001` context violations only (and stays silent wherever
+  lowering would have reported a `C0001`, so a guarded body may still
+  contain unimplemented constructs). That walk is syntactic and
+  statement-level, so it deliberately still accepts a module-scope `return`
+  (pycc reports `T0024` there, matching CPython), a `yield` that is not the
+  whole of an expression statement (`x = (yield 3)`), a nested `def`/`class`
+  body, a `from __future__ import ...`, and any body whose enclosing
+  statement's non-body parts do not themselves lower (`match` cases, a
+  `while`/`for` with an `else`, a non-lowering test, a non-bare-name `for`
+  target or unsupported iterable, an `except` handler whose type is not a
+  bare name or a non-empty tuple of bare names).
 - `except* ExceptionGroup:` and `except* BaseExceptionGroup:`, and any
   `except*` handler naming a user class whose MRO reaches either of them
   (`class G(ExceptionGroup): ...` then `except* G:`), are rejected at

@@ -106,10 +106,31 @@ status: accepted
     so a group subclass that also declares its own `__init__` reports the
     group divergence (the reason it can never be compiled) rather than the
     constructor gap (which #703 will close).
-  - The `L0001` half of #795 is not airtight: a `return` inside an `except*`
-    clause body that sits under `if TYPE_CHECKING:` is erased by the
-    constant-fold before lowering ever sees it, so it is still accepted. That
-    is a pre-existing, general property of the fold rather than anything this
-    entry introduces — the same hole swallows a `break` in a `finally` — and
-    it is tracked separately by
-    [#905](https://github.com/rotnov/pycc/issues/905).
+  - The `L0001` half of #795 used not to be airtight: a `return` inside an
+    `except*` clause body that sat under `if TYPE_CHECKING:` was erased by
+    the constant-fold before lowering ever saw it, so it was still accepted.
+    That was a pre-existing, general property of the fold rather than
+    anything this entry introduced — the same hole swallowed a `break` in a
+    `finally` — and it was closed by
+    [#905](https://github.com/rotnov/pycc/issues/905), which re-walks a
+    `TYPE_CHECKING`-guarded body for `L0001` context violations only
+    (`crates/pycc_hir/src/stmt/type_checking.rs`), staying silent wherever
+    lowering would have reported a `C0001` so that #790's own purpose — a
+    guarded body may contain constructs pycc does not implement — survives
+    intact.
+  - #905's walk is syntactic and statement-level, so five residual gaps
+    remain under the guard, each accepted deliberately rather than
+    overlooked: a module-scope `return` (CPython's fatal error there is
+    `'return' outside function`, which is pycc's separate `T0024` pass); a
+    `yield` that is not the whole of an expression statement (`x = (yield
+    3)` is a `Stmt::Assign`, which the walker does not visit); the body of a
+    nested `def`/`class`; a `from __future__ import ...` (#919's own
+    `L0001`s, out of scope there); and every body whose enclosing
+    statement's non-body parts do not lower — `match` cases, a `while`/`for`
+    with an `else` clause, a non-lowering `while`/`if` test, a non-bare-name
+    `for` target or an unsupported iterable, and an `except` handler whose
+    type is neither a bare name nor a non-empty tuple of bare names. That
+    last group is the walker's second contract rule: it recurses into a body
+    only after the real lowering helpers accept the sub-parts around it, so
+    it can never report an `L0001` that unguarded code would not have
+    reached.
