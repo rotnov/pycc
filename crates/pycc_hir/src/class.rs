@@ -193,7 +193,11 @@ pub struct HirClassDef {
     /// (`lower_class` early-returns into `lower_enum_class` ahead of
     /// D-225's `ensure_init`), so
     /// `pycc_types::class::binding::resolve_instantiation` rejects any call
-    /// to it (`Color()`, `Color(1)`) with `C0001` before its MRO walk.
+    /// to it (`Color()`, `Color(1)`) with `C0001` before its MRO walk. The
+    /// guard reads the flag off the named class only: an ordinary class
+    /// that lists an enum class as a base (`class Foo(Color): pass`) is
+    /// still accepted by `mro::validate_bases`, gets a synthesized
+    /// `__init__`, and `Foo()` aborts at runtime -- tracked by #941.
     pub is_enum: bool,
     /// PEP 435 (#379, PR-19): the enum members of an enum class
     /// (`class Color(Enum): RED = 1; GREEN = 2`), in source order. Each

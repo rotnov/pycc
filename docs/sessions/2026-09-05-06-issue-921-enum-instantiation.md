@@ -8,7 +8,8 @@ on a PEP 435 enum class aborted the compiler at
 (`internal error: no `__init__` found in class `Color`'s MRO`), because
 `lower_enum_class` deliberately lowers an enum with no constructor and
 D-225's `ensure_init` never sees it. Implemented from the plan published as
-issue comment 5553043236, against `origin/main` `2c92a74b` (#940 merged).
+issue comment 5553043236, against `origin/main` `2c92a74b` (#940 merged)
+and rebased cleanly onto `cf7cc40f` (PR #935's merge) before review.
 The pull request delivering this snapshot carries `Fixes #921`.
 
 ## What this pull request changes
@@ -43,6 +44,14 @@ The pull request delivering this snapshot carries `Fixes #921`.
 
 ## Noticed and deferred
 
+- Subclassing an enum class (`class Foo(Color): pass`) is accepted by
+  `validate_bases`, and `Foo()` aborts the compiled program at runtime
+  (`pycc_rt: invalid encoded int word 0x0`); CPython rejects the class
+  definition. Found by this pull request's D-068 deep-review (P1), reproduced,
+  and filed as [#941](https://github.com/rotnov/pycc/issues/941) rather than
+  folded in here: it is a distinct HIR-lowering seam from #921's
+  instantiation guard and pre-dates this diff, so per the one-issue-per-gap
+  rule it gets its own pull request.
 - By-value member lookup (`Color(1)` compiling) is a separate feature
   (MIR/codegen plus a runtime `ValueError` path).
 - Real source spans for `pycc_types` diagnostics: #877. The new diagnostic
