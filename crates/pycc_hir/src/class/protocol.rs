@@ -207,10 +207,14 @@ pub(super) fn lower_protocol_class(
                 // like any other parameter and runs end to end (measured
                 // against CPython 3.14, pinned by the
                 // `issue_918_container_annotations` integration test). Nor
-                // does it extend to a protocol method's *return* type, which
-                // lowers and runs end to end since #925 removed the
-                // return-position gate that once rejected it -- this gate
-                // covers attributes only.
+                // does it extend to a protocol method's *return* type: a
+                // container return type lowers and runs end to end since
+                // #925 removed the return-position gate that once rejected
+                // it -- this gate covers attributes only. (A *protocol* return
+                // type, `def clone(self) -> P: ...`, is rejected separately by
+                // `crate::func::lower_return_annotation`'s own #934 gate,
+                // which is the shared return-annotation seam and not part of
+                // this attribute check.)
                 //
                 // Non-container attribute types keep their existing
                 // behaviour exactly: `Ty::Instance`, `Ty::Optional`,
