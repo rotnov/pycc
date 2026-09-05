@@ -114,8 +114,13 @@ error. L0001 is also reused, without a parser \"expected set\", for a \
 post-parse context violation caught during HIR lowering rather than \
 parsing: `break`/`continue` outside a loop, `async for` outside an async \
 function, `yield`/`yield from` outside a function, `return`/`break`/ \
-`continue` inside a `finally` block that would exit it (PEP 765), and \
-`return`/`break`/`continue` inside an `except*` clause body (PEP 654) -- \
+`continue` inside a `finally` block that would exit it (PEP 765), \
+`return`/`break`/`continue` inside an `except*` clause body (PEP 654), and \
+a `from __future__ import ...` CPython rejects: an unknown feature name \
+including `*` (`future feature <name> is not defined`), `braces` (`not a \
+chance`), or a future import after the docstring-and-future-imports \
+prologue (`from __future__ imports must occur at the beginning of the \
+file`) -- \
 CPython classifies all of these as `SyntaxError` too (a `SyntaxWarning` as \
 of CPython 3.14 for the `finally` case specifically), even though pycc only \
 detects them one lowering stage later than the grammar itself. `T0024` \

@@ -183,6 +183,31 @@ fn l0001_yield_outside_function() {
     assert_diagnostic_matches_fixture("l0001_yield_outside_function");
 }
 
+// `from __future__ import ...` (#919, D-229): the two shapes CPython 3.14
+// rejects as a `SyntaxError` are `L0001` with CPython's own wording; the two
+// it accepts but pycc does not model are `C0001` capability gaps. The
+// accepted no-op shapes are exercised end to end by
+// `tests/issue_919_future_import.rs`.
+#[test]
+fn l0001_future_feature_not_defined() {
+    assert_diagnostic_matches_fixture("l0001_future_feature_not_defined");
+}
+
+#[test]
+fn l0001_future_import_not_at_beginning() {
+    assert_diagnostic_matches_fixture("l0001_future_import_not_at_beginning");
+}
+
+#[test]
+fn c0001_future_barry_as_flufl() {
+    assert_diagnostic_matches_fixture("c0001_future_barry_as_flufl");
+}
+
+#[test]
+fn c0001_future_import_alias() {
+    assert_diagnostic_matches_fixture("c0001_future_import_alias");
+}
+
 #[test]
 fn l0001_yield_from_outside_function() {
     assert_diagnostic_matches_fixture("l0001_yield_from_outside_function");

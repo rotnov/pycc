@@ -769,6 +769,17 @@ const IMPORT_SHAPES: &[&str] = &[
     "from math import sqrt as s\n",   // `asname`
     "from math import *\n",           // wildcard
     "from os import path\n",          // module `pycc_std` does not resolve
+    // The `__future__` directive (D-229): accepted, then its rejection
+    // branches. Single statements only: `body[0]` is what is inspected
+    // below but the *whole* module is lowered, so a two-statement row (a
+    // late future import, say) would break the biconditional -- the
+    // position case has its own test.
+    "from __future__ import annotations\n",
+    "from __future__ import annotations, division\n",
+    "from __future__ import annotations as ann\n", // `asname`
+    "from __future__ import notafeature\n",        // not a CPython feature
+    "from __future__ import barry_as_FLUFL\n",     // CPython-valid, pycc `C0001`
+    "from __future__ import *\n",                  // wildcard
 ];
 
 #[test]
@@ -788,4 +799,265 @@ fn a_failing_import_poisons_and_a_lowering_one_does_not() {
             source.trim_end()
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// `from __future__ import ...` (#919, D-229): a compiler directive that lowers
+// to nothing, with CPython 3.14's `SyntaxError`s reported as `L0001`.
+// ---------------------------------------------------------------------------
+
+/// `__future__.all_feature_names` on CPython 3.14 minus `barry_as_FLUFL`.
+const NOOP_FUTURE_FEATURES: &[&str] = &[
+    "nested_scopes",
+    "generators",
+    "division",
+    "absolute_import",
+    "with_statement",
+    "print_function",
+    "unicode_literals",
+    "generator_stop",
+    "annotations",
+];
+
+fn lower_all_ok(source: &str) -> HirModule {
+    lower_all(&parse(source))
+        .unwrap_or_else(|diagnostics| panic!("must lower: {:?}", diagnostics[0].message))
+}
+
+fn assert_l0001(diagnostic: &Diagnostic, message: &str, span: Span) {
+    assert_eq!(diagnostic.code, "L0001");
+    assert_eq!(diagnostic.message, message);
+    assert_eq!(diagnostic.span, Some(span));
+}
+
+#[test]
+fn each_noop_future_feature_lowers_to_nothing() {
+    // One name per statement, so a name accidentally dropped from the
+    // accepted set fails by name rather than hiding behind the others.
+    for name in NOOP_FUTURE_FEATURES {
+        let source = format!("from __future__ import {name}\nx: int = 1\n");
+        let hir = lower_all_ok(&source);
+        assert!(hir.imports.is_empty(), "`{name}` must bind nothing");
+        assert_eq!(hir.items.len(), 1, "`{name}` must contribute no item");
+    }
+}
+
+#[test]
+fn a_multi_name_future_import_lowers_to_nothing() {
+    let hir = lower_all_ok("from __future__ import annotations, division\n");
+    assert!(hir.imports.is_empty());
+    assert!(hir.items.is_empty());
+}
+
+#[test]
+fn the_issue_919_reproduction_lowers() {
+    let hir =
+        lower_all_ok("from __future__ import annotations\n\ndef f(x: int) -> int:\n    return x\n");
+    assert!(hir.imports.is_empty());
+    assert_eq!(hir.items.len(), 1);
+}
+
+#[test]
+fn barry_as_flufl_is_a_c0001_naming_the_feature() {
+    let source = "from __future__ import barry_as_FLUFL\n";
+    let diagnostics = lower_all_err(source);
+    assert_eq!(diagnostics.len(), 1);
+    assert_c0001(
+        &diagnostics[0],
+        "the `barry_as_FLUFL` future feature (`<>` in place of `!=`) is not supported yet",
+        span_of(source, source.trim_end(), 0),
+    );
+}
+
+#[test]
+fn an_unknown_future_feature_is_an_l0001_with_cpythons_wording() {
+    for (source, message) in [
+        (
+            "from __future__ import notafeature\n",
+            "future feature notafeature is not defined",
+        ),
+        (
+            "from __future__ import *\n",
+            "future feature * is not defined",
+        ),
+        ("from __future__ import braces\n", "not a chance"),
+        // Names are checked left to right: the unknown one wins over a
+        // no-op one after it.
+        (
+            "from __future__ import bogus, annotations\n",
+            "future feature bogus is not defined",
+        ),
+        // ... and over a `barry_as_FLUFL` before it -- the name pass runs
+        // before the capability pass.
+        (
+            "from __future__ import barry_as_FLUFL, bogus\n",
+            "future feature bogus is not defined",
+        ),
+    ] {
+        let diagnostics = lower_all_err(source);
+        assert_eq!(diagnostics.len(), 1, "{source}");
+        assert_l0001(
+            &diagnostics[0],
+            message,
+            span_of(source, source.trim_end(), 0),
+        );
+    }
+}
+
+#[test]
+fn an_aliased_future_feature_is_the_generic_alias_c0001() {
+    // CPython accepts `annotations as ann` and binds a `_Feature` object
+    // pycc never models, so this is a capability gap, not a syntax error.
+    let source = "from __future__ import annotations as ann\n";
+    let diagnostics = lower_all_err(source);
+    assert_eq!(diagnostics.len(), 1);
+    assert_c0001(
+        &diagnostics[0],
+        "`from ... import x as y` aliasing is not supported yet",
+        span_of(source, source.trim_end(), 0),
+    );
+    // The alias check runs before the `barry_as_FLUFL` one.
+    let source = "from __future__ import barry_as_FLUFL as b\n";
+    let diagnostics = lower_all_err(source);
+    assert_c0001(
+        &diagnostics[0],
+        "`from ... import x as y` aliasing is not supported yet",
+        span_of(source, source.trim_end(), 0),
+    );
+}
+
+#[test]
+fn an_aliased_unknown_future_feature_is_still_the_l0001() {
+    // The name pass precedes the alias pass: CPython rejects the name
+    // before it ever binds anything.
+    let source = "from __future__ import notafeature as n\n";
+    let diagnostics = lower_all_err(source);
+    assert_eq!(diagnostics.len(), 1);
+    assert_l0001(
+        &diagnostics[0],
+        "future feature notafeature is not defined",
+        span_of(source, source.trim_end(), 0),
+    );
+}
+
+#[test]
+fn a_future_import_may_follow_a_docstring_or_another_future_import() {
+    let hir = lower_all_ok("\"\"\"doc\"\"\"\nfrom __future__ import annotations\nx: int = 1\n");
+    assert!(hir.imports.is_empty());
+    let hir = lower_all_ok(
+        "from __future__ import annotations\nfrom __future__ import division\nx: int = 1\n",
+    );
+    assert!(hir.imports.is_empty());
+    // An implicitly concatenated string is one `StringLiteral` node, so
+    // it is a docstring too.
+    let hir = lower_all_ok("\"a\" \"b\"\nfrom __future__ import annotations\n");
+    assert!(hir.imports.is_empty());
+}
+
+#[test]
+fn a_future_import_after_any_other_statement_is_a_position_l0001() {
+    const MESSAGE: &str = "from __future__ imports must occur at the beginning of the file";
+    for source in [
+        "import math\nfrom __future__ import annotations\n",
+        "x: int = 1\nfrom __future__ import annotations\n",
+        // The position check precedes every name check ...
+        "x: int = 1\nfrom __future__ import notafeature\n",
+        // ... and the alias check.
+        "import math\nfrom __future__ import annotations as ann\n",
+        // The prologue is contiguous: a docstring *between* two future
+        // imports ends it.
+        "from __future__ import annotations\n\"\"\"doc\"\"\"\nfrom __future__ import division\n",
+        // An f-string at index 0 is not a docstring (a bytes literal is
+        // not one either, but pycc rejects the literal itself first, so
+        // that shape is pinned on `future_prologue_len` below instead).
+        "f\"doc\"\nfrom __future__ import annotations\n",
+        // A bare string that is not at index 0 is not a docstring either.
+        "x: int = 1\n\"doc\"\nfrom __future__ import annotations\n",
+    ] {
+        let diagnostics = lower_all_err(source);
+        // The *last* future import is the late one.
+        let start = source
+            .rfind("from __future__")
+            .expect("every fixture has a future import");
+        let end = start + source[start..].trim_end().len();
+        assert_l0001(
+            &diagnostics[0],
+            MESSAGE,
+            Span::new(start as u32, end as u32),
+        );
+        // The statement contributed nothing, so nothing is poisoned and the
+        // late import is the only diagnostic.
+        assert_eq!(diagnostics.len(), 1, "{source}");
+    }
+}
+
+#[test]
+fn future_prologue_len_counts_the_docstring_and_the_contiguous_future_run() {
+    for (source, expected) in [
+        ("", 0),
+        ("\"doc\"\n", 1),
+        (
+            "\"doc\"\nfrom __future__ import annotations\nx: int = 1\n",
+            2,
+        ),
+        ("x: int = 1\nfrom __future__ import annotations\n", 0),
+        (
+            "from __future__ import annotations\nx: int = 1\nfrom __future__ import division\n",
+            1,
+        ),
+        (
+            "from __future__ import annotations\nfrom __future__ import division\n",
+            2,
+        ),
+        // A relative `from .__future__ import x` is not the directive.
+        ("from .__future__ import annotations\n", 0),
+        ("f\"doc\"\nfrom __future__ import annotations\n", 0),
+        ("b\"doc\"\nfrom __future__ import annotations\n", 0),
+    ] {
+        assert_eq!(
+            future_prologue_len(&parse(source).body),
+            expected,
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
+fn a_rejected_future_import_poisons_the_names_it_would_have_bound() {
+    // `from __future__ import notafeature` fails, so a later read of
+    // `notafeature` is a cascade of that failure and is suppressed: the
+    // `L0001` is the only diagnostic.
+    let source =
+        "from __future__ import notafeature\ndef f(a: notafeature) -> int:\n    return 1\n";
+    let diagnostics = lower_all_err(source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, "L0001");
+    // `poisonable_names` is asname-aware for the failing shapes ...
+    let module = parse("from __future__ import notafeature as n\n");
+    assert_eq!(poisonable_names(&module.body[0]), vec!["n"]);
+    // ... poisons `barry_as_FLUFL` because pycc rejects it ...
+    let module = parse("from __future__ import annotations, barry_as_FLUFL\n");
+    assert_eq!(
+        poisonable_names(&module.body[0]),
+        vec!["annotations", "barry_as_FLUFL"]
+    );
+    // ... poisons the literal `*` for a wildcard (nothing to expand) ...
+    let module = parse("from __future__ import *\n");
+    assert_eq!(poisonable_names(&module.body[0]), vec!["*"]);
+    // ... and poisons nothing for a shape that lowers.
+    let module = parse("from __future__ import annotations, division\n");
+    assert!(poisonable_names(&module.body[0]).is_empty());
+}
+
+#[test]
+fn a_bare_import_of_dunder_future_is_unchanged() {
+    // Only the `from` form is the directive; `import __future__` still
+    // takes the ordinary `Stmt::Import` path.
+    let source = "import __future__\n";
+    let diagnostics = lower_all_err(source);
+    assert_c0001(
+        &diagnostics[0],
+        "import of module `__future__` is not supported yet",
+        span_of(source, source.trim_end(), 0),
+    );
 }
