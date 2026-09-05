@@ -21,10 +21,16 @@
 //!
 //! The *parameter* position is not gated -- `Ty::Protocol` is supported there
 //! (D-166) -- so a protocol member declared `def same(self, other: P) -> bool`
-//! and a conforming class spelling the parameter the same way now compile and
-//! run. Before this fix that program failed with the self-contradictory
-//! `T0046: ... parameter 1 has type `P`, expected `P``, one side
-//! `Ty::Protocol("P")` and the other `Ty::Instance("P")`.
+//! and a conforming class spelling the parameter the same way now pass the
+//! conformance check and the program compiles and runs. Before this fix it
+//! failed with the self-contradictory `T0046: ... parameter 1 has type `P`,
+//! expected `P``, one side `Ty::Protocol("P")` and the other
+//! `Ty::Instance("P")`. What that does *not* buy is calling the member
+//! through a protocol-typed receiver: `p.same(C())` is still `T0021`, because
+//! `pycc_types`' `check_call_args` uses plain assignability rather than the
+//! environment-aware conformance path. That limitation is pre-existing,
+//! untouched here, and recorded in `docs/TYPE_SYSTEM.md`; the test below
+//! therefore dispatches through a *second*, non-self-referential member.
 //!
 //! Unit tests beside the gate (`pycc_hir::class::protocol_return_tests`) pin
 //! the lowered `Ty` for every member position; these prove the binary reports
@@ -148,12 +154,32 @@ fn the_self_spelling_is_c0001_on_the_member_annotation() {
     );
 }
 
+/// ... and stops `pycc build` at the same seam, leaving no binary, exactly
+/// as the bare-name spelling does.
+#[test]
+fn building_the_self_spelling_is_c0001_and_leaves_no_binary() {
+    let dir = ScratchDir::new("948_self_build").expect("failed to create scratch dir");
+    let entry = write(&dir, "prog.py", &self_return_program("Self"));
+    assert_self_return_rejected(
+        &dir,
+        "build",
+        &entry,
+        24,
+        "    def clone(self) -> Self: ...",
+    );
+}
+
 /// A protocol whose member declares a *self-referential parameter*, plus a
-/// concrete class spelling that parameter the same way, is accepted and runs:
+/// concrete class spelling that parameter the same way, conforms and runs:
 /// the parameter position supports `Ty::Protocol` (D-166), and dispatch goes
 /// through the conforming class's own method table. Before this fix the two
 /// sides were `Ty::Protocol("P")` and `Ty::Instance("P")` and conformance
 /// failed with `T0046: ... parameter 1 has type `P`, expected `P``.
+///
+/// The executed call is `p.value()`, not `p.same(...)`: what this pins is
+/// that the self-referential member no longer blocks conformance, not that
+/// such a member is callable. Calling it with a concrete argument is a
+/// separate, pre-existing `T0021` (see the module doc comment).
 #[test]
 fn a_self_referential_protocol_parameter_conforms_and_runs() {
     let dir = ScratchDir::new("948_param").expect("failed to create scratch dir");
