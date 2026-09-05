@@ -3357,6 +3357,11 @@ fn a_param_typed_call_result_is_not_supported() {
 #[test]
 #[should_panic(expected = "a `P`-typed call result is not supported yet")]
 fn a_protocol_typed_call_result_is_not_supported() {
+    // Hand-built MIR is the only way to reach this arm since #934:
+    // `pycc_hir` rejects a `-> P` annotation with `C0001`, so no
+    // type-checked source produces a protocol-typed call result. The test
+    // stays because the arm stays -- it is the compile-time-exhaustive
+    // rejection of a `Ty` variant codegen has no representation for.
     let mir = MirModule {
         items: vec![
             MirItem::Function {

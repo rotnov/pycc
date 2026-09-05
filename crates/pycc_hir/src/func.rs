@@ -249,14 +249,38 @@ pub(crate) fn lower_return_annotation(
             // exactly like every other position (#925, Part 2 of #918).
             // D-228 (Part 1) deliberately excluded it while a container-typed
             // call result still reached an unhandled codegen case; #925 added
-            // the codegen arms that closed that gap, so the exclusion is gone
-            // and no return-position check remains here. Element-type and
-            // arity gates still fire on this annotation's own span, because
-            // they run inside `annotation_to_ty` below.
-            Ok(
-                annotation_to_ty(ann, type_param, class_name, aliases, class_defs)
-                    .map_err(|error| with_bare_container_advice(error, ann))?,
-            )
+            // the codegen arms that closed that gap, so that exclusion is
+            // gone. Element-type and arity gates still fire on this
+            // annotation's own span, because they run inside
+            // `annotation_to_ty` below.
+            let ty = annotation_to_ty(ann, type_param, class_name, aliases, class_defs)
+                .map_err(|error| with_bare_container_advice(error, ann))?;
+            // #934: the one return-position check that remains. A protocol
+            // is a compile-time-only interface with no runtime
+            // representation (D-166); a protocol-typed *parameter* or
+            // *variable* is bound to the concrete class of the value it
+            // receives (monomorphization, `pycc_mir`'s binding of the
+            // inferred type), but a call to a `-> P` function has no
+            // concrete type to bind, so every shape of such a function
+            // used to type-check and then abort inside `pycc_mir` or
+            // `pycc_codegen`. Rejecting the annotation here closes all of
+            // them at once: this function is the single seam for a
+            // module-level function, a method, and a protocol member
+            // declaration. The check runs *after* `annotation_to_ty` so a
+            // `-> list[P]` still reports D-105's `T0034` first, exactly as
+            // D-228 pins for containers; `-> P | None` is `T0049` for the
+            // same reason, so only a top-level `Ty::Protocol` reaches here.
+            if let Ty::Protocol(protocol) = &ty {
+                return Err(unsupported(
+                    format!(
+                        "a protocol class (`{protocol}`) as a return type annotation is not \
+                         supported yet -- a protocol type is currently supported in parameter \
+                         and variable positions only"
+                    ),
+                    pycc_ast::expr_range(ann),
+                ));
+            }
+            Ok(ty)
         }
         None if is_public => Err(Diagnostic::error(
             "T0001",
@@ -864,3 +888,6 @@ pub(crate) fn annotation_to_ty(
         )),
     }
 }
+
+#[cfg(test)]
+mod return_annotation_tests;

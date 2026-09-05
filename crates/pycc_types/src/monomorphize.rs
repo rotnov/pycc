@@ -123,11 +123,12 @@ fn substitute_ty_protocol(ty: &Ty, protocol_name: &str, concrete: &Ty) -> Ty {
 
 /// #380 (PR-20): Returns `true` if a function signature has any
 /// `Ty::Protocol` parameters, indicating it needs monomorphization at
-/// each call site. A protocol *return* type alone does not require
-/// monomorphization — the return type is resolved through the type
-/// checker's normal assignment logic, and dropping such a function
-/// would leave call sites referencing a nonexistent function.
-fn has_protocol_param(params: &[(String, Ty)], _return_ty: &Ty) -> bool {
+/// each call site. Only parameters are consulted: a protocol *return*
+/// annotation never reaches this crate any more -- `pycc_hir` rejects
+/// `-> P` with `C0001` (#934), because a call to such a function has no
+/// concrete type to specialize on. The return type is therefore not an
+/// input here (it used to be threaded through as an unused parameter).
+fn has_protocol_param(params: &[(String, Ty)]) -> bool {
     params.iter().any(|(_, ty)| matches!(ty, Ty::Protocol(_)))
 }
 
@@ -1908,13 +1909,8 @@ fn monomorphize_protocol_params(
     let protocol_funcs: HashMap<String, HirItem> = items
         .iter()
         .filter_map(|item| {
-            if let HirItem::Function {
-                name,
-                params,
-                return_ty,
-                ..
-            } = item
-                && has_protocol_param(params, return_ty)
+            if let HirItem::Function { name, params, .. } = item
+                && has_protocol_param(params)
             {
                 return Some((name.clone(), item.clone()));
             }
@@ -2505,11 +2501,8 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     if generics.is_empty()
         && !hir.class_defs.iter().any(|(_, cd)| cd.type_param.is_some())
         && !hir.items.iter().any(|item| {
-            if let HirItem::Function {
-                params, return_ty, ..
-            } = item
-            {
-                has_protocol_param(params, return_ty)
+            if let HirItem::Function { params, .. } = item {
+                has_protocol_param(params)
             } else {
                 false
             }

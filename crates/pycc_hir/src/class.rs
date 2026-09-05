@@ -65,6 +65,8 @@ mod enum_class;
 mod init;
 mod mro;
 mod protocol;
+#[cfg(test)]
+mod protocol_return_tests;
 
 use crate::{HirExpr, HirItem, HirStmt, Ty, lower_arg_list, unsupported};
 use attrs::{ClassAttrCollisionInput, reject_class_attr_collisions};

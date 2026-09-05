@@ -1040,6 +1040,15 @@ fn c0001_protocol_container_attribute() {
     assert_diagnostic_matches_fixture("c0001_protocol_container_attribute");
 }
 
+// #934: the issue's own program verbatim. Exactly one diagnostic is expected:
+// the CLI lowers each top-level item once (D-219), the type checker never
+// runs after an HIR failure, and `main`'s `p: P = make()` is not an HIR
+// cascade because calls are not resolved at HIR.
+#[test]
+fn c0001_protocol_return_annotation() {
+    assert_diagnostic_matches_fixture("c0001_protocol_return_annotation");
+}
+
 #[test]
 fn t0044_user_class_named_list_subscript() {
     assert_diagnostic_matches_fixture("t0044_user_class_named_list_subscript");
