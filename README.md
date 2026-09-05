@@ -25,7 +25,7 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > nbody-vs-CPython speedup floor on every target, and conformance covers ≥15
 > [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md) matrix rows
 > (17 distinct PEPs). v0.3's own acceptance criteria are now also met:
-> conformance reaches 38 rows/39 PEPs, `T0030`/`T0031` are complete, and
+> conformance reached 38 rows/39 PEPs (39 rows/40 PEPs since [#937](https://github.com/rotnov/pycc/issues/937)), `T0030`/`T0031` are complete, and
 > `pycc explain` is implemented; see [`docs/ROADMAP.md`](./docs/ROADMAP.md).
 > The frontend performance measurement and isolated greater-than-2% regression
 > gate are required through `ci-gate` independently of that compiler sequence.

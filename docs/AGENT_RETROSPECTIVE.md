@@ -33,6 +33,36 @@ never a merge gate.
 
 ---
 
+## 2026-09-05 — Implemented an issue a parallel session was already delivering
+
+**What happened:** `issue-select` picked #937 (flip the PEP 563 row after its
+fixture was observed green on `main`), an advisor round upheld it, and an
+implementer was dispatched into a fresh worktree. While it worked, another
+session delivered the same issue as PR #939, merged at 15:24 UTC. My PR #940
+opened minutes later, and the CI monitor's first event was `CONFLICTS`: the
+two branches had edited the same six files the same way. An implementation
+round, a D-068 review round, and two fix commits were spent on a duplicate.
+
+**Root cause:** the selection pass checked the *issue* state and the *open
+pull request* inventory once, at baseline, and never again. The concurrent
+actor recorded in earlier entries opened and merged #939 inside that window.
+Nothing between "dispatch the implementer" and "push the branch" re-read
+either the issue's state or the pull-request list, so the collision surfaced
+only when GitHub computed mergeability against the already-moved `main`.
+
+**What fixed it:** reset the branch onto the new `main`, kept only the two
+factual corrections #939 did not carry (README's present-tense "reaches 38
+rows/39 PEPs" and D-229's "stays `☐` until #937 flips it" bullet), and
+narrowed #940 to that residue.
+
+**Lesson:** the D-078 checkpoint is not a one-time read when another actor
+merges to `main` mid-session. Re-run `gh issue view <n> --json state` and
+`gh pr list --search <n>` at two more points: immediately before dispatching
+an implementer, and immediately before pushing the branch. A closed issue or
+a fresh pull request naming the same number at either point means stop and
+diff against it rather than push. The cost of the two extra queries is
+seconds; the cost of skipping them was the whole round.
+
 ## 2026-09-05 — Filed an issue without searching the open list, duplicating one two weeks old
 
 **What happened:** while working #925 I filed #929 ("wire
