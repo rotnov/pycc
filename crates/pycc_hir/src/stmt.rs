@@ -90,6 +90,7 @@
 
 mod exception;
 mod for_loop;
+mod type_checking;
 
 use crate::class::ClassAnnotationInfo;
 use crate::expr::{
@@ -97,6 +98,10 @@ use crate::expr::{
     lower_list_comp_assign, lower_range_call, lower_set_comp_assign,
 };
 use crate::int_boundary::check_boundary_literal;
+use crate::stmt::type_checking::{
+    break_context_violation, check_guarded_body, continue_context_violation,
+    return_context_violation,
+};
 use crate::{
     CompIter, HirExpr, HirMatchCase, HirPattern, HirStmt, Ty, annotation_to_ty, context_invalid,
     unsupported,
@@ -367,6 +372,22 @@ pub(crate) fn lower_stmt(
             // test documents the fold in the HIR itself rather than
             // silently keeping the original (never evaluated) test
             // expression around.
+            //
+            // #905: the fold hides the body from `lower_body`, and with it
+            // every context check `lower_stmt` performs -- CPython rejects a
+            // `return` in a `finally` or a `break` with no loop at compile
+            // time whether or not the branch ever runs. Re-check the body
+            // for exactly those violations (and nothing else) before it is
+            // discarded; see `type_checking`'s own module doc comment for
+            // the contract that keeps this silent on capability gaps.
+            check_guarded_body(
+                &if_stmt.body,
+                in_loop,
+                in_function,
+                in_finally,
+                except_star,
+                class_name,
+            )?;
             HirStmt::If {
                 test: HirExpr::BoolLiteral(false),
                 body: vec![],
@@ -448,55 +469,21 @@ pub(crate) fn lower_stmt(
             class_defs,
         )?,
         Stmt::Return(ret) => {
-            if except_star != ExceptStarCtx::Outside && in_function {
-                // #795 (PEP 654): CPython rejects `return` anywhere inside an
-                // `except*` clause body, including behind an intervening
-                // loop -- `SyntaxError: 'break', 'continue' and 'return'
-                // cannot appear in an except* block`. `L0001` is reused for
-                // this post-parse context violation, exactly like the PEP 765
-                // `finally` checks below, and this check runs *first*
-                // because CPython's own precedence makes the `except*` error
-                // the fatal one while the `finally` restriction is only a
-                // `SyntaxWarning`.
-                //
-                // The `in_function` conjunct mirrors the `finally` arm's own
-                // precedence, verified against CPython 3.14.6: a `return` in
-                // an `except*` clause at module scope reports `SyntaxError:
-                // 'return' outside function`, not the `except*` message, so
-                // without it pycc would shadow its pre-existing `T0024`.
-                return Err(context_invalid(
-                    "'return' in an 'except*' block",
-                    pycc_ast::stmt_range(stmt),
-                ));
-            }
-            if in_finally && in_function {
-                // PEP 765 (issue #738, Part 1 of #543): a `return` that
-                // would exit a `finally` block is rejected outright, not
-                // merely a lint -- CPython treats it as valid syntax up
-                // through 3.13 (a `SyntaxWarning` in 3.14) but this compiler
-                // never accepted the permissive reading. `L0001` is reused
-                // (not a new code) for exactly this class of post-parse
-                // context violation, matching the sibling `break`/`continue`
-                // checks below.
-                //
-                // The `in_function` guard matches CPython's own precedence,
-                // verified directly against `python3.14 -W all`: a `return`
-                // in a `finally` with NO enclosing function at all (e.g. at
-                // module scope) makes CPython raise the pre-existing
-                // `SyntaxError: 'return' outside function` as the actual
-                // fatal error -- the finally-specific `SyntaxWarning` prints
-                // too, but does not by itself block compilation, and CPython
-                // still fails the module on the "outside function" error
-                // regardless of the finally warning's wording. Without this
-                // guard, pycc would report the wrong diagnostic (the
-                // finally-specific message) instead of deferring to the
-                // pre-existing `T0024` ("`return` outside a function") path
-                // this module already relies on for every other top-level
-                // `return`.
-                return Err(context_invalid(
-                    "'return' in a 'finally' block",
-                    pycc_ast::stmt_range(stmt),
-                ));
+            // #795 (PEP 654) and PEP 765 (#738, Part 1 of #543): both
+            // rules, their `in_function` conjuncts and their relative
+            // precedence live in `return_context_violation`, which #905's
+            // `TYPE_CHECKING` walker calls too so the rule exists once.
+            // `L0001` is reused (not a new code) for this class of
+            // post-parse context violation.
+            //
+            // The `except*` check runs first because CPython's own
+            // precedence makes it the fatal `SyntaxError` while the PEP 765
+            // restriction is only a `SyntaxWarning`; the `in_function`
+            // conjunct on both matches CPython 3.14.6, which reports the
+            // pre-existing `SyntaxError: 'return' outside function` at
+            // module scope -- pycc defers to its own `T0024` there.
+            if let Some(message) = return_context_violation(in_function, in_finally, except_star) {
+                return Err(context_invalid(message, pycc_ast::stmt_range(stmt)));
             }
             HirStmt::Return(
                 ret.value
@@ -506,86 +493,44 @@ pub(crate) fn lower_stmt(
             )
         }
         Stmt::Break(_) => {
-            if except_star == ExceptStarCtx::InsideUnshielded {
-                // #795 (PEP 654): unlike `return` above, a `break` directly
-                // in an `except*` clause body is rejected *regardless* of
-                // whether an enclosing loop exists -- CPython reports the
-                // `except*` error even for `try: ... except* E: break` with
-                // no loop anywhere, where the pre-existing `'break' outside
-                // loop` error would otherwise apply. Hence no `in_loop`
-                // conjunct here, and hence the `InsideLoopShielded` state:
-                // once a loop is entered *within* the clause body, CPython
-                // accepts the `break` and this compiler falls through to its
-                // existing `in_loop` handling.
-                return Err(context_invalid(
-                    "'break' in an 'except*' block",
-                    pycc_ast::stmt_range(stmt),
-                ));
-            }
-            if in_finally && in_loop {
-                // See the `Stmt::Return` arm above for the general PEP 765
-                // rationale. The `in_loop` guard matches CPython's own
-                // precedence, verified directly against `python3.14 -W all`:
-                // a `break` in a `finally` with NO enclosing loop at all
-                // makes CPython raise the pre-existing `SyntaxError: 'break'
-                // outside loop` as the actual fatal error (the
-                // finally-specific `SyntaxWarning` prints too, but is not by
-                // itself fatal) -- so this diagnostic only applies once a
-                // valid loop target genuinely exists for the `break` to
-                // escape to (the classic `while: try: finally: break` case).
-                // When that loop is instead defined *inside* the `finally`
-                // (shielding it), `in_finally` is already reset to `false`
-                // by the time this arm runs, so this branch is not reached
-                // and the classic `in_loop` handling below applies as usual.
-                return Err(context_invalid(
-                    "'break' in a 'finally' block",
-                    pycc_ast::stmt_range(stmt),
-                ));
-            }
-            return Err(if in_loop {
-                // A real enclosing loop -- valid Python, break/continue
-                // control-flow codegen is just not implemented yet.
-                unsupported(
-                    "statement kind not supported yet: `break` inside a loop",
-                    pycc_ast::stmt_range(stmt),
-                )
-            } else {
-                // No enclosing loop -- CPython rejects this as a
-                // `SyntaxError`, not "valid but unimplemented" (D-148). This
-                // is also the fatal error CPython reports for a `break`
-                // directly in a `finally` with no loop anywhere (see above).
-                context_invalid("'break' outside loop", pycc_ast::stmt_range(stmt))
-            });
+            // The three `L0001` rules -- #795 (PEP 654)'s `except*` ban,
+            // PEP 765's `finally` ban, and D-148's pre-existing "no
+            // enclosing loop" check -- live in `break_context_violation`,
+            // shared with #905's `TYPE_CHECKING` walker. Their precedence
+            // is CPython's: the `except*` error is fatal regardless of any
+            // enclosing loop (hence no `in_loop` conjunct, and hence
+            // `ExceptStarCtx::InsideLoopShielded`), while the `finally`
+            // restriction only applies once a valid loop target genuinely
+            // exists for the `break` to escape to; with no loop at all
+            // CPython's fatal error is `'break' outside loop`. A loop
+            // defined *inside* the `finally` has already reset `in_finally`
+            // to `false` by the time this arm runs.
+            //
+            // `None` means valid Python that this compiler simply does not
+            // implement yet -- a `break` with a real enclosing loop -- which
+            // is a `C0001` capability gap, not a context violation.
+            return Err(
+                match break_context_violation(in_loop, in_finally, except_star) {
+                    Some(message) => context_invalid(message, pycc_ast::stmt_range(stmt)),
+                    None => unsupported(
+                        "statement kind not supported yet: `break` inside a loop",
+                        pycc_ast::stmt_range(stmt),
+                    ),
+                },
+            );
         }
         Stmt::Continue(_) => {
-            if except_star == ExceptStarCtx::InsideUnshielded {
-                // See the `Stmt::Break` arm above -- identical rationale and
-                // identical CPython precedence.
-                return Err(context_invalid(
-                    "'continue' in an 'except*' block",
-                    pycc_ast::stmt_range(stmt),
-                ));
-            }
-            if in_finally && in_loop {
-                // See the `Stmt::Break` arm above -- identical rationale and
-                // CPython precedence (`SyntaxError: 'continue' not properly
-                // in loop` is the fatal error when no loop target exists).
-                return Err(context_invalid(
-                    "'continue' in a 'finally' block",
-                    pycc_ast::stmt_range(stmt),
-                ));
-            }
-            return Err(if in_loop {
-                unsupported(
-                    "statement kind not supported yet: `continue` inside a loop",
-                    pycc_ast::stmt_range(stmt),
-                )
-            } else {
-                context_invalid(
-                    "'continue' not properly in loop",
-                    pycc_ast::stmt_range(stmt),
-                )
-            });
+            // See the `Stmt::Break` arm above -- identical rationale,
+            // identical CPython precedence, identical shared predicate.
+            return Err(
+                match continue_context_violation(in_loop, in_finally, except_star) {
+                    Some(message) => context_invalid(message, pycc_ast::stmt_range(stmt)),
+                    None => unsupported(
+                        "statement kind not supported yet: `continue` inside a loop",
+                        pycc_ast::stmt_range(stmt),
+                    ),
+                },
+            );
         }
         Stmt::Match(match_stmt) => lower_match(
             match_stmt,
@@ -925,21 +870,33 @@ pub(crate) fn lower_elif_else_clauses(
         // own doc comment) -- the guarded body is dead at runtime either
         // way, and CPython's `elif` is just sugar for a nested `if` inside
         // the enclosing `else`.
-        Some(test) if is_type_checking_guard(test) => Ok(vec![HirStmt::If {
-            test: HirExpr::BoolLiteral(false),
-            body: vec![],
-            orelse: lower_elif_else_clauses(
-                rest,
-                aliases,
+        Some(test) if is_type_checking_guard(test) => {
+            // #905: and the same context re-check as the leading
+            // `if TYPE_CHECKING:` fold in `lower_stmt`.
+            check_guarded_body(
+                &first.body,
                 in_loop,
                 in_function,
                 in_finally,
                 except_star,
                 class_name,
-                type_param,
-                class_defs,
-            )?,
-        }]),
+            )?;
+            Ok(vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(false),
+                body: vec![],
+                orelse: lower_elif_else_clauses(
+                    rest,
+                    aliases,
+                    in_loop,
+                    in_function,
+                    in_finally,
+                    except_star,
+                    class_name,
+                    type_param,
+                    class_defs,
+                )?,
+            }])
+        }
         Some(test) => Ok(vec![HirStmt::If {
             test: lower_expr(test, in_function, class_name)?,
             body: lower_body(

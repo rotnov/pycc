@@ -1095,3 +1095,24 @@ fn t0044_subscript_annotation_class_attribute() {
 fn t0044_subscript_annotation_return() {
     assert_diagnostic_matches_fixture("t0044_subscript_annotation_return");
 }
+
+// Issue #905: #790's `if TYPE_CHECKING:` constant-fold used to swallow the
+// context checks above along with the rest of the guarded body. These three
+// fixtures pin the byte-exact rendering of the re-check for one violation
+// from each of its three sources -- `lower_stmt`'s shared `return` predicate,
+// its shared `break` predicate, and the `lower_expr` delegation.
+
+#[test]
+fn l0001_return_inside_finally_type_checking() {
+    assert_diagnostic_matches_fixture("l0001_return_inside_finally_type_checking");
+}
+
+#[test]
+fn l0001_break_outside_loop_type_checking() {
+    assert_diagnostic_matches_fixture("l0001_break_outside_loop_type_checking");
+}
+
+#[test]
+fn l0001_yield_outside_function_type_checking() {
+    assert_diagnostic_matches_fixture("l0001_yield_outside_function_type_checking");
+}
