@@ -69,7 +69,10 @@ status: accepted
   - `tests/fixtures/pep_0563_lazy_annotations.py` is authored and registered
     as an `#[ignore]`d dual-profile conformance test; the matrix row stays
     `☐` under rule 5 until [#937](https://github.com/rotnov/pycc/issues/937)
-    flips it.
+    flips it. (Update 2026-09-05: #937 flipped the row to `◐` in PR #939
+    after the fixture was observed green on `main` run 33972731538, the push
+    run for `51808cd8`, PR #938's merge; see rule 13 of
+    `docs/PYTHON_STANDARDS.md`.)
 - Alternatives:
   - A `pycc_std` registry entry for `__future__` -- rejected with the
     issue's own reasoning: the directive has no module surface, and a

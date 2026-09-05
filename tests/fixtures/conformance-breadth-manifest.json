@@ -1411,6 +1411,11 @@
           "category": "`__annotations__` introspection (the stringified annotation values the directive produces)",
           "kind": "core",
           "reason": "Not exercised by the fixture and not implemented: pycc has no runtime `__annotations__` object on functions, classes, or modules, so the directive's observable effect on introspection (stringified values) cannot be compared against the oracle. D-164 rejected runtime introspection only as the mechanism for dataclass field discovery, which reads annotations statically instead; it did not declare a runtime annotation object a permanent non-goal, so under D-177 this stays `core` rather than `out-of-scope`."
+        },
+        {
+          "category": "feature-name binding: reading `annotations` after the import (CPython binds it to a `__future__._Feature` object)",
+          "kind": "out-of-scope",
+          "reason": "Deliberate divergence recorded by D-229: pycc binds nothing, so a later read of `annotations` is `T0021` where CPython prints the feature object. The fixture never reads the name, so the directive is proven only as an accepted no-op for this program, not as a binding-equivalent import."
         }
       ]
     }
