@@ -58,6 +58,17 @@ hand against the local CPython 3.14.6 — the pinned 3.14.7 oracle is CI-only).
   because pycc rejects a bytes-literal expression statement itself (`C0001`)
   before the position `L0001`; the shape is pinned on `future_prologue_len`
   instead.
+- First CI round on PR #938 failed `pages-accessibility` with a
+  `site/status/index.html` body SHA-256 mismatch: the status-page paragraph
+  was added without rotating the four pins the 2026-08-28 retrospective entry
+  enumerates (sitemap `lastmod`, JSON-LD `dateModified`, `check-site.sh`'s
+  `PAGE_SPECS["status"]["date_modified"]`, and the manifest's
+  `source_artifact_sha256`). Rotated all four in a follow-up commit; the
+  `check_sitemap_lastmod.rb` failure was latent locally because the file was
+  still uncommitted when `check-site.sh` first ran. The two
+  `test_check_pages_performance_budget.rb` image-budget failures seen locally
+  reproduce on a clean `origin/main` checkout (environment-specific, not this
+  diff).
 
 ## Known follow-ups
 
