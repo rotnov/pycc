@@ -315,17 +315,57 @@ fn bare_container_example(name: &str) -> Option<&'static str> {
 /// `Expr::Name` has exactly one failure mode in `annotation_to_ty` -- the
 /// alias-table miss that builds `unknown_annotation_name_message` -- so the
 /// message being replaced is always that one.
+///
+/// The name is reached through [`strip_transparent_wrappers`], because
+/// `annotation_to_ty` propagates that same failure out of `Final[list]` and
+/// `Annotated[list, "meta"]` unchanged while accepting `Final[list[int]]`:
+/// matching only the outermost expression would drop the advice in exactly
+/// the positions that can act on it.
 pub(crate) fn with_bare_container_advice(error: Diagnostic, annotation: &Expr) -> Diagnostic {
-    let Expr::Name(name) = annotation else {
+    let stripped = strip_transparent_wrappers(annotation);
+    let Expr::Name(name) = stripped else {
         return error;
     };
     match bare_container_example(name.id.as_str()) {
+        // The span is the bare name, not the wrapper: that is the token the
+        // user replaces, and it is where `annotation_to_ty` already pointed.
         Some(example) => unsupported(
             crate::module::bare_container_annotation_message(name.id.as_str(), example),
-            pycc_ast::expr_range(annotation),
+            pycc_ast::expr_range(stripped),
         ),
         None => error,
     }
+}
+
+/// Peels the wrappers `annotation_to_ty` lowers by recursing into their
+/// inner type, so a diagnostic about that inner type can be recognized from
+/// the outside.
+///
+/// Only `Final[X]` (PEP 591) and `Annotated[X, ...]` (PEP 593) qualify: both
+/// lower to `X` itself. The shapes accepted here mirror `annotation_to_ty`'s
+/// own arms exactly -- `Final` takes one argument, `Annotated` takes a tuple
+/// of at least two -- so a malformed wrapper keeps its own diagnostic rather
+/// than being reported against whatever it wraps.
+fn strip_transparent_wrappers(annotation: &Expr) -> &Expr {
+    let Expr::Subscript(sub) = annotation else {
+        return annotation;
+    };
+    let Expr::Name(base) = sub.value.as_ref() else {
+        return annotation;
+    };
+    let inner = match base.id.as_str() {
+        "Final" => match sub.slice.as_ref() {
+            Expr::Tuple(tuple) if tuple.elts.len() != 1 => return annotation,
+            Expr::Tuple(tuple) => &tuple.elts[0],
+            other => other,
+        },
+        "Annotated" => match sub.slice.as_ref() {
+            Expr::Tuple(tuple) if tuple.elts.len() >= 2 => &tuple.elts[0],
+            _ => return annotation,
+        },
+        _ => return annotation,
+    };
+    strip_transparent_wrappers(inner)
 }
 
 /// Lowers a parameterized builtin container annotation -- `list[T]`,

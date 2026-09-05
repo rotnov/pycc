@@ -107,7 +107,14 @@ status: accepted
      exactly as `x: Foo` is after a failed `class Foo:`. `frozenset` and
      `type` keep the generic unknown-name message everywhere — neither has a
      `Ty` variant, so steering a user toward `frozenset[int]` would point at a
-     form this version rejects just as hard.
+     form this version rejects just as hard. The upgrade peels the wrappers
+     `annotation_to_ty` lowers by recursing into their inner type — `Final[X]`
+     (PEP 591) and `Annotated[X, ...]` (PEP 593) — because the failure it
+     propagates out of `Final[list]` describes the *inner* name while
+     `Final[list[int]]` is accepted in the same position, so matching only the
+     outermost expression dropped the advice exactly where it is actionable.
+     A malformed wrapper keeps its own arity diagnostic: the peel mirrors
+     `annotation_to_ty`'s own arms rather than accepting any `Final[...]`.
   8. **A user-defined class, type alias, or PEP 695 type parameter named
      `list` still wins.** The container branch is checked *after* the
      known-class lookup and is gated on both the alias table and `type_param`,

@@ -1756,6 +1756,57 @@ fn the_bare_container_advice_appears_only_where_the_parameterized_form_lowers() 
     }
 }
 
+/// D-228 (issue #918) round-8 review finding: `annotation_to_ty` lowers
+/// `Final[X]` and `Annotated[X, ...]` by recursing into `X`, so the bare-name
+/// failure it propagates out of `Final[list]` describes the *inner* name.
+/// Matching only the outermost expression dropped the advice in exactly the
+/// positions that can act on it -- `Final[list[int]]` is accepted there.
+#[test]
+fn the_bare_container_advice_survives_transparent_wrappers() {
+    const ADVICE: &str = "a bare `list` type annotation is not supported yet -- write the parameterized form, \
+         e.g. `list[int]`";
+
+    for source in [
+        "from typing import Final\n\nxs: Final[list] = []\n",
+        "from typing import Annotated\n\nxs: Annotated[list, \"meta\"] = []\n",
+        // A one-element subscript tuple is the same `Final[X]` shape.
+        "from typing import Final\n\nxs: Final[list,] = []\n",
+        // Wrappers nest, so the peel is recursive.
+        "from typing import Annotated, Final\n\nxs: Final[Annotated[list, \"m\"]] = []\n",
+        "from typing import Final\n\ndef f(xs: Final[list]) -> None:\n    return\n",
+    ] {
+        assert_capability_error_message(source, ADVICE);
+    }
+
+    // The parameterized form really is accepted through the wrapper, which is
+    // what makes the advice actionable rather than a second dead end.
+    lower_checked(&pycc_parser_test_helper::parse(
+        "from typing import Final\n\nxs: Final[list[int]] = [1]\n",
+    ))
+    .expect("`Final[list[int]]` lowers in module-variable position");
+
+    // A malformed wrapper keeps its own diagnostic: the peel mirrors
+    // `annotation_to_ty`'s arms exactly, so it never reports a wrapper's own
+    // arity error against whatever the wrapper happens to contain.
+    assert_capability_error_message(
+        "from typing import Annotated\n\nxs: Annotated[list] = []\n",
+        "Annotated requires at least two arguments: the type and at least one metadata element",
+    );
+    assert_capability_error_message(
+        "from typing import Final\n\nxs: Final[list, int] = []\n",
+        "Final takes exactly one type argument",
+    );
+    // Neither a dotted base nor an unrecognized one is a transparent wrapper.
+    assert_capability_error_message(
+        "import typing\n\nxs: typing.Final[list] = []\n",
+        "a subscripted type annotation's base must be a bare class name",
+    );
+    assert_capability_error_message(
+        "xs: Foo[list] = []\n",
+        "type annotation `Foo` is not supported yet",
+    );
+}
+
 #[test]
 fn a_non_bare_name_annotation_returns_a_capability_error() {
     assert_capability_error_message(
