@@ -807,6 +807,10 @@ fn a_failing_import_poisons_and_a_lowering_one_does_not() {
 // ---------------------------------------------------------------------------
 
 /// `__future__.all_feature_names` on CPython 3.14 minus `barry_as_FLUFL`.
+/// Deliberately a copy of `import::NOOP_FUTURE_FEATURES` rather than an
+/// import of it: this is a parity check of the production list against
+/// CPython's, so sharing the constant would make the test tautological.
+/// A CPython release that changes the feature set updates both lists.
 const NOOP_FUTURE_FEATURES: &[&str] = &[
     "nested_scopes",
     "generators",
