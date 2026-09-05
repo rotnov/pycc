@@ -2,10 +2,10 @@
 
 ## Overall status
 
-Delivered as PR #930 (`feat/issue-918-container-annotations`, head `c3b036f7`
+Delivered as PR #930 (`feat/issue-918-container-annotations`, head `69e000f6`
 plus this snapshot's own commit), based on `origin/main` at `c639e682`,
 re-fetched and unmoved. State re-resolved immediately before this snapshot was
-committed: open, not a draft, `MERGEABLE`, all six review threads answered and
+committed: open, not a draft, `MERGEABLE`, all nine review threads answered and
 resolved, CI green on every check that had reported. It deliberately does not
 carry a closing keyword for #918: Part 1 is one of two decomposed parts, and
 #925 (Part 2) must close before the parent does, so the body reads "Part 1 of
@@ -115,6 +115,31 @@ template and from today's tracer report, so the template was never opened during
 this session's review dispatch. Gap type is compliance, and the topic is now at
 four files.
 
+A seventh round on `1412119a` produced two findings, both in this PR's own diff
+and both fixed in `5d8b3fee`. The body carried a closing keyword adjoined to
+#918, which would have closed the decomposed parent while Part 2 (#925) is still
+open; the earlier `closingIssuesReferences` check had confirmed the reference was
+armed as intended but never asked whether the intent was correct. And D-228's
+title claimed "every position but return" while the same ADR keeps six positions
+unsupported; it now names the positions the `C0001` message, `explain.rs`,
+`docs/PYTHON_STANDARDS.md` and the breadth manifest already enumerate.
+
+An eighth round on the same head produced one, fixed in `69e000f6`: the
+bare-container advice was lost through `Final[list]` and `Annotated[list,
+"meta"]`, which `annotation_to_ty` lowers by recursing into the inner type, so
+the propagated failure described the inner name while the outer expression was a
+`Subscript`. `Final[list[int]]` compiles in the same position, so the advice was
+missing exactly where it is actionable. The upgrade now peels those two wrappers
+recursively, mirroring `annotation_to_ty`'s own arms so a malformed wrapper keeps
+its own arity diagnostic.
+
+Eighteen findings over eight rounds. Rounds 5 through 8 are all the same class —
+a user-facing artefact asserting a support contract nothing checks — and round 8
+is the first the position inventory could not have caught: the inventory
+enumerates positions, and a wrapper sits *inside* a position it already listed.
+`references/rule-audit.md` disqualifies a further textual artefact at three, so
+the guard worth building is mechanical.
+
 ## Where a fresh session should resume
 
 1. **#925 (Part 2, return position)** needs its own `issue-to-plan` run against
@@ -142,9 +167,9 @@ four files.
 
 ## Gates
 
-Run from a single-writer baseline at `c3b036f7`, the head that ships here.
+Run from a single-writer baseline at `69e000f6`, the head that ships here.
 Coverage: `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions
-100` exit 0, TOTAL 52,528 lines / 2,359 functions / 34,381 regions, all 100.00%
+100` exit 0, TOTAL 52,564 lines / 2,360 functions / 34,398 regions, all 100.00%
 with zero uncovered. `cargo fmt --all -- --check`, `cargo clippy --workspace
 --all-targets -- -D warnings` and `cargo test --workspace` all exit 0 on the same
 commit. Every doc and policy gate — decisions index `--check`, roadmap evidence,
@@ -154,17 +179,14 @@ breadth check, the `scripts/` unittest suite including the branch-protection
 baseline, and the harden findings pile — returned 0 on that same head, with each
 exit status captured directly rather than through a pipeline.
 
-The earlier baseline at `d1d22692` was discarded rather than carried forward.
-`git diff --name-only d1d22692..c3b036f7 -- crates src Cargo.toml Cargo.lock`
-names three files, so the round-6 fix moved the Rust tree and the old measurement
-no longer describes it. Two coverage runs were killed for the same reason before
-this one: each had been started before a fix round landed, so each would have
-measured a tree that was about to change.
+Every earlier baseline was discarded rather than carried forward, for the same
+reason each time: a fix round moved the Rust tree, so the old measurement no
+longer described it. Two coverage runs were also killed mid-flight before a
+round-6 measurement, each having been started before a fix landed.
 
 Only prose lands after the measurement: this snapshot itself, the retrospective
-entry, the round-6 and round-7 findings lines, and round 7's narrowing of
-D-228's title and of the PR body's closing reference. All of it is prose, so
-`git diff --name-only c3b036f7..HEAD -- crates src Cargo.toml Cargo.lock` is
+entry, and the round-6 through round-8 findings lines. All of it is prose, so
+`git diff --name-only 69e000f6..HEAD -- crates src Cargo.toml Cargo.lock` is
 empty — executed, not asserted — and no gate that reads the Rust tree is
 affected; the doc gates are re-run once more on the final head before the merge.
 
