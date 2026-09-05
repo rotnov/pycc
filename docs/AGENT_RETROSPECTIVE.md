@@ -66,6 +66,18 @@ duplicate surfaces after an implementer is already dispatched, do not message
 the running agent -- wait for its return, then apply the extra criteria from a
 single-writer baseline (AGENTS.md's one-writer-per-worktree rule).
 
+A related observation from the same pull request's review, recorded here
+because it fails D-192's filing bar (the failure it describes has never
+occurred): the base-owned `audit` binds a governance step's `name` and `run`
+text, never the script it executes. Every governance step -- the decisions
+index check, the conformance-breadth check, the agent-policy validator, the
+ruby and python suites -- runs head-controlled code at `contents: read`, so a
+head that no-ops a checker and adds the violation it would have caught passes
+CI; that class is caught only by review of the diff, which is D-171/D-172's
+deliberate trust boundary. Reviewers of a pull request that edits any
+`scripts/` checker alongside the material it checks should read both halves
+together.
+
 ## 2026-09-05 — Invented a schema for a machine-checked data file instead of reading one existing line
 
 **What happened:** while recording a review finding for #925, I appended a
@@ -289,8 +301,12 @@ base moves.
 
 What fixed it: `git mv` of the record and its frontmatter `id:` to `D-228`, plus
 `rotnov/pycc` issue 929 to wire the existing checker into `ci.yml`'s `governance`
-job (it needs the D-080 two-PR staged-fixture procedure, since `ci.yml` is pinned
-by whole-file SHA-256).
+job. (Correction, 2026-09-05: the parenthetical originally here claimed #929
+needs the D-080 two-PR staged-fixture procedure because `ci.yml` is pinned by
+whole-file SHA-256. It is not: `validate_evidence` returns early through
+`d171_routed_workflow?` for the live `ci.yml`, so the byte pin is never reached,
+and PR #936 landed the step and its audit rule in one pull request with every
+check green.)
 
 Lesson: a decision number is not settled until the pull request merges. Re-run
 `python3 scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md --check`
