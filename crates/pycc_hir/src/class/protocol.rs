@@ -299,6 +299,7 @@ pub(super) fn lower_protocol_class(
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             type_param,
+            is_enum: false,
             enum_members: Vec::new(),
             is_dataclass: false,
             dataclass_fields: Vec::new(),

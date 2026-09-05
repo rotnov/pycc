@@ -252,6 +252,7 @@ pub fn builtin_exception_class_defs() -> Vec<(String, HirClassDef)> {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 type_param: None,
+                is_enum: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),

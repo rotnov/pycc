@@ -185,11 +185,25 @@ pub struct HirClassDef {
     /// with the concrete type, reusing PR-13's `Ty::Param` call-site-
     /// substitution mechanism (D-133/D-134).
     pub type_param: Option<String>,
+    /// PEP 435 (#921): `true` iff `lower_enum_class` produced this class
+    /// (its marker base was `Enum` or `StrEnum`). This -- not
+    /// `enum_members` being non-empty -- is the enum marker: a
+    /// docstring-only enum body (#744) is an enum with an empty member
+    /// table. An enum class has no `__init__` in its MRO by design
+    /// (`lower_class` early-returns into `lower_enum_class` ahead of
+    /// D-225's `ensure_init`), so
+    /// `pycc_types::class::binding::resolve_instantiation` rejects any call
+    /// to it (`Color()`, `Color(1)`) with `C0001` before its MRO walk.
+    pub is_enum: bool,
     /// PEP 435 (#379, PR-19): the enum members of an enum class
     /// (`class Color(Enum): RED = 1; GREEN = 2`), in source order. Each
     /// entry is `(member_name, value)` where `value` is the `int` or `str`
-    /// literal assigned to the member (#892). Empty for a non-enum class; a
-    /// non-empty vec marks this class as an enum class. An enum class has
+    /// literal assigned to the member (#892). Empty for a non-enum class
+    /// and for a member-less (docstring-only, #744) enum class alike --
+    /// `is_enum` is the enum marker; this is only the member list. The
+    /// consumers that key on a non-empty table (`pycc_types::enum_lower`,
+    /// match exhaustiveness, `pycc_mir::matching`) are about members, so an
+    /// empty table is correct for them by construction. An enum class has
     /// `bases = []` and `mro = [self_name]` (the `Enum` base is consumed
     /// as a marker, not a real base), no `__init__` requirement, and
     /// `attrs = [("value", <Ty::Int or Ty::Str>), ("name", Ty::Str)]` --
@@ -1360,6 +1374,7 @@ pub(crate) fn lower_class(
             static_methods,
             class_methods,
             type_param,
+            is_enum: false,
             enum_members,
             is_dataclass,
             dataclass_fields,
@@ -2513,6 +2528,7 @@ mod tests {
                 type_param: None,
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
+                is_enum: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),

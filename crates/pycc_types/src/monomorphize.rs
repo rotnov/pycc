@@ -1813,6 +1813,7 @@ pub(crate) fn instantiate_generic_class_methods(
             properties: monomorphized_properties,
             static_methods: mangled_static_methods,
             class_methods: mangled_class_methods,
+            is_enum: false,
             enum_members: Vec::new(),
             is_dataclass: false,
             dataclass_fields: Vec::new(),

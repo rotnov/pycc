@@ -242,6 +242,7 @@ fn lowers_match_with_class_pattern_to_mir() {
         static_methods: Vec::new(),
         class_methods: Vec::new(),
         type_param: None,
+        is_enum: false,
         enum_members: Vec::new(),
         is_dataclass: false,
         dataclass_fields: Vec::new(),

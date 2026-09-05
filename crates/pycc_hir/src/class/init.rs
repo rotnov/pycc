@@ -110,6 +110,12 @@ mod tests {
                 .expect("both classes are lowered")
         };
         assert!(own_init("A"), "`A` synthesizes its own constructor");
+        // #921: an ordinary class lowered through `lower_class` never
+        // carries the enum provenance marker.
+        assert!(
+            hir.class_defs.iter().all(|(_, cd)| !cd.is_enum),
+            "only `lower_enum_class` sets `is_enum`"
+        );
         assert!(
             !own_init("B"),
             "`B` must reuse `A`'s inherited constructor, not synthesize its own \
