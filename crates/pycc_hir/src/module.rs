@@ -695,6 +695,10 @@ const UNKNOWN_ANNOTATION_SUFFIX: &str = "` is not supported yet";
 const UNKNOWN_BASE_PREFIX: &str = "class `";
 const UNKNOWN_BASE_INFIX: &str = "` inherits from unknown class `";
 const UNKNOWN_BASE_SUFFIX: &str = "` -- base classes must be defined earlier in the same module";
+const BARE_CONTAINER_PREFIX: &str = "a bare `";
+const BARE_CONTAINER_INFIX: &str =
+    "` type annotation is not supported yet -- write the parameterized form, e.g. `";
+const BARE_CONTAINER_SUFFIX: &str = "`";
 
 /// The `C0001` message for a bare annotation name that is neither a known
 /// class nor a type alias (`func::annotation_to_ty`'s bare-name arm). The
@@ -702,6 +706,29 @@ const UNKNOWN_BASE_SUFFIX: &str = "` -- base classes must be defined earlier in 
 /// test round-trips the two so the wording cannot drift apart.
 pub(crate) fn unknown_annotation_name_message(name: &str) -> String {
     format!("{UNKNOWN_ANNOTATION_PREFIX}{name}{UNKNOWN_ANNOTATION_SUFFIX}")
+}
+
+/// The `C0001` message for a *bare* builtin container annotation -- `list`,
+/// `set`, `dict` or `tuple` written with no type arguments (D-228, issue
+/// #918). Split out from [`unknown_annotation_name_message`] because a bare
+/// container is no longer an unknown name: the parameterized form now lowers,
+/// so the actionable advice is "write `list[int]`", not "this name means
+/// nothing here".
+///
+/// Cascade-shaped like the other two, and parsed back by [`cascade_name`]
+/// through its own prefix/infix/suffix triple. That is load-bearing rather
+/// than cosmetic: the classifier's job is not to decide whether *this*
+/// diagnostic poisons a name, it is to name the annotation so `lower_module`
+/// can suppress this diagnostic when a *failed earlier item* already poisoned
+/// that same name. A module whose `class list:` fails to lower poisons the
+/// name `list`, and a later `x: list` must be suppressed exactly as `x: Foo`
+/// is after a failed `class Foo:`.
+///
+/// `frozenset` and `type` deliberately keep the generic unknown-name message:
+/// neither has a `Ty` variant, so steering a user toward `frozenset[int]`
+/// would point at a form this version rejects just as hard.
+pub(crate) fn bare_container_annotation_message(name: &str, example: &str) -> String {
+    format!("{BARE_CONTAINER_PREFIX}{name}{BARE_CONTAINER_INFIX}{example}{BARE_CONTAINER_SUFFIX}")
 }
 
 /// The `C0001` message for a base class that is not defined earlier in the
@@ -712,22 +739,31 @@ pub(crate) fn unknown_base_message(class_name: &str, base_name: &str) -> String 
 }
 
 /// Classifies a failed item's diagnostic (D-219, P2): `Some(name)` when it
-/// is one of the two cascade-shaped `C0001`s -- the bare-name annotation
-/// message naming `name`, or the unknown-base message whose base is `name`
-/// -- and `None` for every other diagnostic. Only `lower_module` decides
-/// whether `name` is actually poisoned; a `Some` for an un-poisoned name is
-/// an ordinary, reported gap.
+/// is one of the three cascade-shaped `C0001`s -- the bare-name annotation
+/// message naming `name`, the unknown-base message whose base is `name`, or
+/// the bare-container message naming `name` -- and `None` for every other
+/// diagnostic. Only `lower_module` decides whether `name` is actually
+/// poisoned; a `Some` for an un-poisoned name is an ordinary, reported gap.
 pub(crate) fn cascade_name(diagnostic: &Diagnostic) -> Option<&str> {
     if diagnostic.code != "C0001" {
         return None;
     }
-    unknown_annotation_name(&diagnostic.message).or_else(|| unknown_base_name(&diagnostic.message))
+    unknown_annotation_name(&diagnostic.message)
+        .or_else(|| unknown_base_name(&diagnostic.message))
+        .or_else(|| bare_container_name(&diagnostic.message))
 }
 
 fn unknown_annotation_name(message: &str) -> Option<&str> {
     message
         .strip_prefix(UNKNOWN_ANNOTATION_PREFIX)?
         .strip_suffix(UNKNOWN_ANNOTATION_SUFFIX)
+}
+
+fn bare_container_name(message: &str) -> Option<&str> {
+    let (name, _) = message
+        .strip_prefix(BARE_CONTAINER_PREFIX)?
+        .split_once(BARE_CONTAINER_INFIX)?;
+    Some(name)
 }
 
 fn unknown_base_name(message: &str) -> Option<&str> {

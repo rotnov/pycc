@@ -1,0 +1,268 @@
+---
+id: D-228
+title: "Lower parameterized container type annotations in parameter, local- and module-variable and type-alias positions"
+status: accepted
+---
+
+## D-228: Lower parameterized container type annotations in parameter, local- and module-variable and type-alias positions
+
+- Status: accepted (issue [#918](https://github.com/rotnov/pycc/issues/918), Part 1).
+- Context:
+  [D-105](./D-105-v0-2-s-list-t-thin-slice-scope-cuts-and-runtime.md) cut 1
+  deliberately shipped `list[T]` with **no annotation syntax at all**: a
+  `list[int]` value could only come into existence through bare-name local
+  inference (`x = [1, 2, 3]`), never as an annotated parameter or return
+  type, and `x: list[int] = []` was rejected by `annotation_to_ty`'s "only a
+  bare name type annotation is supported so far" error. D-121/D-122 (dict and
+  set) and [D-116](./D-116-tuple-v0-2-scope-int-bool-float-elements-only.md)
+  cut 3 each inherited that same deferral by explicit reference, so all four
+  container families reached v0.4 with real codegen but no way to *write*
+  their types.
+
+  The practical consequence was worse than a missing convenience. Because a
+  container type could never be written, it could never cross a function
+  boundary from real source: `pycc_types`' signature solver is scalar-only, so
+  a container argument had no way to be declared, and users hit a
+  capability diagnostic naming only the head name (`type annotation
+  \`list\` is not supported yet`) that gave no hint the parameterized form was
+  the missing piece rather than lists themselves.
+
+  A naive fix — lowering `Expr::Subscript` on the four builtin names straight
+  to the corresponding `Ty` — was prototyped and **panics**: `list[str]` and
+  `list[list[int]]` reach unhandled codegen cases, and wrong-arity forms
+  (`dict[int]`, `list[int, str]`, `tuple[()]`) are either accepted silently or
+  crash while destructuring the type-argument list. The element-type gates
+  that make container *literals* safe (`T0034`/`T0036`/`T0038`/`T0039`) lived
+  in `pycc_types`, one crate *above* the `pycc_hir` lowering that would now
+  produce the very same types, so they could not simply be called.
+
+- Decision:
+  1. **Lower `list[T]`, `set[T]`, `dict[K, V]` and `tuple[A, B, ...]`** in
+     `pycc_hir::func::annotation_to_ty`, which makes them available in every
+     position that routes through it: function parameters, local and
+     module-level `AnnAssign`, PEP 695 `type X = ...` and legacy
+     `X: TypeAlias = ...` aliases. A protocol *method*'s parameters route
+     through the ordinary parameter path and are therefore covered too. A
+     protocol *attribute*'s annotation also routes through
+     `annotation_to_ty`, but decision 10's gate then rejects a container
+     result, so a container type is *not* usable in that one position.
+  2. **Validate the shape explicitly**, with a new diagnostic `T0053`, in two
+     ordered steps rather than one. First, scan for an `...` type argument and
+     reject it; second, check arity: `list` and `set` take exactly one type
+     argument, `dict` exactly two, `tuple` at least one. That order is
+     load-bearing rather than incidental — the homogeneous-variadic
+     `tuple[int, ...]` has a legal arity of two, so an arity check alone would
+     accept it and lower a `tuple[int, EllipsisType]`. The arity step also
+     rejects the empty `tuple[()]` (which arrives as a zero-element
+     `Expr::Tuple`), the other legal-Python spelling this version's fixed-arity
+     `Ty::Tuple` cannot represent. The `...` message's advice is per family:
+     `tuple[X, ...]` means something in Python, so it alone gets the
+     compile-time-length explanation and a fixed-arity `tuple[int, int]`,
+     while `list`/`set`/`dict` are told to write that family's own element
+     type — recommending a `tuple` there would change the container rather
+     than correct its type arguments (a review finding on the delivering pull
+     request). Both steps run *before* element types, so a
+     malformed annotation never reports a misleading element-type error.
+  3. **Share the element-type gates** rather than duplicating them. The four
+     capability checks move down into a new `pycc_hir::container` module and
+     `pycc_types` calls *in*. The crate dependency runs `pycc_types` →
+     `pycc_hir` and never the reverse, so this is the only direction that
+     works. The helper is `pub` and re-exported from `pycc_hir`'s root.
+  4. **Two entry points, not one.** `check_container_ty` is a whole-`Ty` check
+     for list/dict/set; `check_tuple_element_ty` is per-element. `T0039`
+     fires from *inside* `pycc_types`' tuple-literal inference loop, not as a
+     postcheck, so that the elements are gated in source order and an
+     earlier element's type gate is reported ahead of a later element's own
+     inference failure (an undefined name). Folding
+     the two together would silently reorder diagnostics — `(1, "a",
+     undefined_name)` would report the undefined name instead of `T0039`.
+  5. **Both gates take a `Span`.** The four existing literal call sites keep
+     passing `Span::new(0, 0)` so their rendered output is byte-identical to
+     the previous release; annotation lowering passes the annotation's real
+     source range, so the newly reachable annotation diagnostics carry a real
+     caret (the precedent is `T0049` in the same function).
+  6. **Reject a `Ty::Param` element in `pycc_hir`**, with `T0042` — the same
+     code and wording `pycc_types`' own signature scan uses, but with a real
+     span instead of that scan's `Span::new(0, 0)`. This is not merely a
+     nicer caret: `substitute_ty` is not recursive, so a `Ty::Param` nested
+     inside a container would never be substituted at a call site. The
+     downstream scan remains as defense in depth.
+  7. **Split the bare-container `C0001` message, as an opt-in the annotation
+     position makes.** A bare `list`/`set`/`dict`/`tuple` gets its own message
+     naming the parameterized form to write (`a bare \`list\` type annotation
+     is not supported yet -- write the parameterized form, e.g.
+     \`list[int]\``) — but only in the positions that actually lower a
+     container: a parameter, a local or module-level `AnnAssign`, and a type
+     alias. `annotation_to_ty` itself keeps emitting the generic unknown-name
+     message, and those three callers upgrade it through
+     `func::with_bare_container_advice`. Return, class-attribute,
+     dataclass-field, container-element and protocol-attribute positions each
+     reject the parameterized form with a `C0001` of their own, so advising it
+     there would name a form that fails too; they opt out by not calling the
+     upgrade, which also makes any position added later correct by default.
+     The message *is* cascade-shaped
+     ([D-219](./D-219-classify-a-failed-item-s-cascade-by-parsing-its.md)):
+     `list` is an ordinary bindable name, so a module whose `class list:`
+     fails to lower poisons it, and the later `x: list` must be suppressed
+     exactly as `x: Foo` is after a failed `class Foo:`. `frozenset` and
+     `type` keep the generic unknown-name message everywhere — neither has a
+     `Ty` variant, so steering a user toward `frozenset[int]` would point at a
+     form this version rejects just as hard. The upgrade peels the wrappers
+     `annotation_to_ty` lowers by recursing into their inner type — `Final[X]`
+     (PEP 591) and `Annotated[X, ...]` (PEP 593) — because the failure it
+     propagates out of `Final[list]` describes the *inner* name while
+     `Final[list[int]]` is accepted in the same position, so matching only the
+     outermost expression dropped the advice exactly where it is actionable.
+     A malformed wrapper keeps its own arity diagnostic: the peel mirrors
+     `annotation_to_ty`'s own arms rather than accepting any `Final[...]`.
+  8. **A user-defined class, type alias, or PEP 695 type parameter named
+     `list` still wins.** The container branch is checked *after* the
+     known-class lookup and is gated on both the alias table and `type_param`,
+     so `class list:`, `type list = int` and `def f[list](...)` all keep the
+     behaviour they had before this decision. The type-parameter arm was a
+     review finding on the delivering pull request: the bare-name path already
+     gave `type_param` precedence, and the subscript path did not, so
+     `def f[list](x: list[int])` lowered as the builtin and silently dropped
+     the function's genericity. Subscripting a type parameter still discards
+     the argument (`x: list[int]` becomes `Ty::Param("list")`), which is the
+     pre-existing behaviour of `def f[T](x: T[int])` and out of scope here.
+  9. **Container types are rejected in return position**, with `C0001`
+     naming the positions that do work. This is deliberate, not an oversight:
+     a container-typed *call result* already reaches an unhandled codegen case
+     today via [D-146](./D-146-infer-a-private-helper-s-return-type-from-its.md)'s
+     private-helper return-type solver (tracked as issue
+     [#926](https://github.com/rotnov/pycc/issues/926)), so accepting the
+     annotation would widen a known panic's reachability rather than add a
+     working feature. Return position is issue
+     [#925](https://github.com/rotnov/pycc/issues/925).
+
+     The position gate is *not* the first diagnostic a malformed container
+     return type reports. `lower_return_annotation` lowers the annotation
+     before applying its own position check, so decisions 1 and 2 fire first:
+     `def f() -> list[str]` reports the element gate `T0034`, and
+     `def f() -> tuple[int, ...]` reports `T0053`, not this `C0001`. Only a
+     container that would otherwise have lowered cleanly reaches the position
+     check. That precedence is measured and pinned by
+     `a_malformed_container_return_annotation_reports_its_own_defect_first`
+     rather than left to inference, because it is the diagnostic a user
+     actually sees.
+  10. **Container types are rejected as protocol attributes**, with `C0001`.
+      The protocol-attribute `AnnAssign` branch ran no type gate at all
+      before this decision — not by design, but because no annotation syntax
+      could produce a container `Ty` there, unlike the two class-body
+      attribute sites, which both run `is_scalar_slot_type`. It is rejected
+      because such an attribute is *unsatisfiable*: every path by which a
+      class establishes an instance attribute restricts the slot to
+      `is_scalar_slot_type` — the annotated class-body attribute, the
+      dataclass field and the `self.x = ...` assignment in a hand-written
+      `__init__` — because a slot is a single `i64` word
+      ([D-154](./D-154-class-instance-runtime-layout-stays-opaque.md)).
+      No class could therefore ever declare a matching container-typed
+      attribute. Every non-container attribute type (`Ty::Instance`,
+      `Ty::Optional`, `Ty::None`, `Ty::Protocol`) is unaffected, which is why
+      this is a container check and not a reuse of `is_scalar_slot_type`.
+
+      This gate covers protocol **attributes** only. A protocol *method*'s
+      parameter is an ordinary parameter position: `def f(self, xs:
+      list[int])` in a protocol body lowers through `lower_arg_list` and runs
+      end to end, measured against CPython 3.14. The asymmetry is deliberate
+      — a parameter type is a signature type, not an instance slot — and is
+      pinned by tests on both sides. A container *return* type in a protocol
+      method is rejected by decision 9's return-position gate, not by this
+      one.
+
+  11. **`T0053` publishes structured `help`; the other codes this change
+      introduces do not.** `docs/DIAGNOSTICS.md`'s quality bar lists the arity
+      family among the ones that populate `Diagnostic::help`
+      ([D-152](./D-152-populate-diagnostic-help-for-arity-type.md)), and that
+      bar is a standing contract on the family rather than a snapshot of the
+      tree D-152 measured: a new arity diagnostic joins the populated set at
+      its own introduction, or the contract silently acquires a counterexample
+      (a review finding on the delivering pull request, which shipped all
+      three arms with `"help": []`). All three `T0053` construction arms
+      qualify under D-152's own selection rule, each stating a determinate,
+      safe replacement: the exact expected count for the arity arm, "at least
+      one element type" for the empty `tuple[()]`, and the per-family
+      imperative decision 2 already computes for the `...` arm. That arm's
+      advice is therefore built as a reason plus an imperative and the
+      imperative alone becomes the `help`, so a JSON or IDE consumer reads an
+      instruction rather than a second copy of the message. The other codes
+      this change introduces stay at `help: None`, also by D-152's rule and
+      by its own naming: `T0034`/`T0036`/`T0038`/`T0039` and the
+      bare-container messages are container-capability "not supported yet"
+      limitations with no single replacement, and `T0042` is the generic
+      instantiation-rejection helper D-152 names among its excluded shapes.
+      Because the human format never renders `help`, the arms' `.expected.txt`
+      fixtures cannot observe this: each arm also carries an
+      `.expected.json` fixture wired through
+      `assert_json_diagnostic_matches_fixture`.
+
+  This decision **supersedes, as to annotation syntax only**:
+  - **D-105 cut 1** ("No annotation syntax for `list[T]` in v0.2") in full;
+  - **D-116 cut 3's** deferral of "a `tuple[...]` annotation syntax", and
+    **D-116 cut 4's** parenthetical claim that "there is no annotation syntax
+    for any of the four container types".
+
+  It does **not** touch D-105's or D-116's other cuts, and does not touch
+  D-115/D-122 at all: D-116 cuts 1 (int/bool/float elements only) and 2
+  (literal, non-negative, in-range tuple indices) remain in force unchanged,
+  and the one-shipped-shape element restrictions for list/dict/set are exactly
+  what this decision's shared gates now enforce in *both* the literal and the
+  annotation path.
+
+- Alternatives:
+  - *Put the shared gate in `pycc_types` and have `pycc_hir` call it.*
+    Impossible: `pycc_types` depends on `pycc_hir`, so this inverts the crate
+    graph.
+  - *Duplicate the four checks in `pycc_hir`.* Rejected: two copies of "which
+    container shapes does this version compile" is exactly the drift the
+    element gates exist to prevent, and the whole point of #918 is that a
+    literal and an annotation must agree.
+  - *One unified whole-`Ty` gate.* Rejected for the diagnostic-ordering
+    reason in decision 4 above; measured, not assumed.
+  - *A dedicated `"list" | "set" | "dict" | "tuple"` match arm ahead of the
+    known-class lookup.* Simpler, and what #918's plan proposed, but it
+    shadows a user's own `class list`. Silently retyping `x: list[int]` as a
+    builtin list when the user defined their own `list` is a miscompile, not
+    merely a worse diagnostic, so the ordering in decision 8 was chosen
+    instead; it costs nothing on the lowering path.
+  - *Accept container return types too.* Rejected as decision 9 explains: it
+    widens issue #926's panic rather than shipping a feature. Splitting it out
+    as #925 keeps Part 1 diagnostic-complete.
+  - *Accept container-typed protocol attributes.* Rejected as decision 10
+    explains.
+  - *Also lower `frozenset[T]` and `type[T]`.* Rejected: neither has a `Ty`
+    variant, and adding one has to clear
+    [D-109](./D-109-keep-size-of-ty-at-16-bytes.md)'s 16-byte
+    `size_of::<Ty>()` ceiling first — a separate decision.
+
+- Consequences:
+  - *Easier:* a container value can now cross a function boundary from real
+    Python source. Measured end to end for all four families (`list[int]`,
+    `dict[str, int]`, `set[int]`, and a heterogeneous scalar-element
+    `tuple[int, bool, float]`), producing byte-identical stdout to CPython
+    3.14 — see `tests/issue_918_container_annotations.rs`.
+  - *Easier:* the element-type rule now has exactly one definition, so
+    widening codegen to, say, `list[str]` is a single-site change that
+    correctly relaxes both the literal and the annotation path at once.
+  - *Harder:* `annotation_to_ty` grows a second recursion site, so an
+    annotation's lowering cost is now proportional to its nesting depth rather
+    than constant. Measured, not assumed: the five-replicate paired
+    `check_bench` comparison this gate runs (predecessor `12650781` against
+    this change) moved the aggregate median from 8463.34 ns to 8511.59 ns, a
+    +0.57% delta against the gate's 7.00% threshold, and the absolute D-084
+    throughput floor measured 34.36 ms/1000 LOC against its 75 ms budget.
+  - *Unchanged, deliberately:* the pre-existing codegen panics for container
+    truthiness (`if xs:`) and string conversion (`print(xs)`) are neither
+    fixed nor widened. They are reachable today from a bare container literal
+    with no annotation at all — verified at identical panic sites
+    (`pycc_codegen/src/lib.rs:4024`/`4036`/`4048`/`4074` and
+    `:1528`/`1540`/`1580`) with and without an annotation — so this decision
+    adds no new route to them.
+  - *Irreversible-ish:* `T0053` is now a published diagnostic code, and the
+    bare-container `C0001` wording is now a fixture-pinned public contract.
+  - *Known inconsistency, recorded rather than fixed:* `type_arg_name_to_ty`
+    (`pycc_hir/src/expr.rs`) and `cast_target_ty`/`cast_target_name`
+    (`pycc_types/src/class.rs`) still accept scalars only, so a container type
+    cannot be written as a PEP 695 class type argument or a `cast()` target
+    even though it can now be written as an annotation.

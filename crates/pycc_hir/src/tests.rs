@@ -1685,9 +1685,125 @@ fn every_supported_annotation_type_lowers_correctly() {
 
 #[test]
 fn an_unsupported_annotation_type_returns_a_capability_error() {
+    // D-228 (issue #918): `list[int]` now lowers, so a *bare* `list` gets its
+    // own message naming the parameterized form to write instead, rather than
+    // the generic unknown-name message. `frozenset` keeps the generic one --
+    // it has no `Ty` variant, so there is no parameterized form to suggest.
     assert_capability_error_message(
         "def f(x: list) -> None:\n    return\n",
-        "type annotation `list` is not supported yet",
+        "a bare `list` type annotation is not supported yet -- write the parameterized form, e.g. `list[int]`",
+    );
+    assert_capability_error_message(
+        "def f(x: frozenset) -> None:\n    return\n",
+        "type annotation `frozenset` is not supported yet",
+    );
+}
+
+#[test]
+fn each_bare_container_annotation_names_its_own_parameterized_form() {
+    // Every arm of `bare_container_example`, including `tuple`'s deliberately
+    // two-element suggestion (a one-element example would read as if `tuple`
+    // were homogeneous).
+    for (bare, example) in [
+        ("list", "list[int]"),
+        ("set", "set[int]"),
+        ("dict", "dict[str, int]"),
+        ("tuple", "tuple[int, int]"),
+    ] {
+        assert_capability_error_message(
+            &format!("def f(x: {bare}) -> None:\n    return\n"),
+            &format!(
+                "a bare `{bare}` type annotation is not supported yet -- write the parameterized form, e.g. `{example}`"
+            ),
+        );
+    }
+}
+
+/// D-228 (issue #918) review finding: the bare-container advice names a form
+/// that only some annotation positions accept, so it is opted into by those
+/// positions rather than emitted unconditionally by `annotation_to_ty`. This
+/// is the affected-site inventory for that split, measured position by
+/// position: every position whose parameterized form is rejected must get the
+/// generic message instead, or the advice walks the user into a second error.
+#[test]
+fn the_bare_container_advice_appears_only_where_the_parameterized_form_lowers() {
+    const ADVICE: &str = "a bare `list` type annotation is not supported yet -- write the parameterized form, \
+         e.g. `list[int]`";
+    const GENERIC: &str = "type annotation `list` is not supported yet";
+
+    // `list[int]` lowers here, so the advice is actionable.
+    for source in [
+        "def f(x: list) -> None:\n    return\n",
+        "def f() -> None:\n    xs: list = []\n",
+        "xs: list = []\n",
+        "type X = list\n",
+        "X: TypeAlias = list\n",
+    ] {
+        assert_capability_error_message(source, ADVICE);
+    }
+
+    // `list[int]` is rejected here by a `C0001` of its own -- the #925 return
+    // gate, the scalar-slot rule for class attributes and dataclass fields,
+    // and D-228's own protocol-attribute gate -- so the advice would name a
+    // form that fails too.
+    for source in [
+        "def f() -> list:\n    return []\n",
+        "class C:\n    xs: list\n",
+        "from dataclasses import dataclass\n\n\n@dataclass\nclass C:\n    xs: list\n",
+        "from typing import Protocol\n\n\nclass P(Protocol):\n    xs: list\n",
+    ] {
+        assert_capability_error_message(source, GENERIC);
+    }
+}
+
+/// D-228 (issue #918) round-8 review finding: `annotation_to_ty` lowers
+/// `Final[X]` and `Annotated[X, ...]` by recursing into `X`, so the bare-name
+/// failure it propagates out of `Final[list]` describes the *inner* name.
+/// Matching only the outermost expression dropped the advice in exactly the
+/// positions that can act on it -- `Final[list[int]]` is accepted there.
+#[test]
+fn the_bare_container_advice_survives_transparent_wrappers() {
+    const ADVICE: &str = "a bare `list` type annotation is not supported yet -- write the parameterized form, \
+         e.g. `list[int]`";
+
+    for source in [
+        "from typing import Final\n\nxs: Final[list] = []\n",
+        "from typing import Annotated\n\nxs: Annotated[list, \"meta\"] = []\n",
+        // A one-element subscript tuple is the same `Final[X]` shape.
+        "from typing import Final\n\nxs: Final[list,] = []\n",
+        // Wrappers nest, so the peel is recursive.
+        "from typing import Annotated, Final\n\nxs: Final[Annotated[list, \"m\"]] = []\n",
+        "from typing import Final\n\ndef f(xs: Final[list]) -> None:\n    return\n",
+    ] {
+        assert_capability_error_message(source, ADVICE);
+    }
+
+    // The parameterized form really is accepted through the wrapper, which is
+    // what makes the advice actionable rather than a second dead end.
+    lower_checked(&pycc_parser_test_helper::parse(
+        "from typing import Final\n\nxs: Final[list[int]] = [1]\n",
+    ))
+    .expect("`Final[list[int]]` lowers in module-variable position");
+
+    // A malformed wrapper keeps its own diagnostic: the peel mirrors
+    // `annotation_to_ty`'s arms exactly, so it never reports a wrapper's own
+    // arity error against whatever the wrapper happens to contain.
+    assert_capability_error_message(
+        "from typing import Annotated\n\nxs: Annotated[list] = []\n",
+        "Annotated requires at least two arguments: the type and at least one metadata element",
+    );
+    assert_capability_error_message(
+        "from typing import Final\n\nxs: Final[list, int] = []\n",
+        "Final takes exactly one type argument",
+    );
+    // Neither a dotted base nor an unrecognized one is a transparent wrapper.
+    assert_capability_error_message(
+        "import typing\n\nxs: typing.Final[list] = []\n",
+        "a subscripted type annotation's base must be a bare class name",
+    );
+    assert_capability_error_message(
+        "xs: Foo[list] = []\n",
+        "type annotation `Foo` is not supported yet",
     );
 }
 
@@ -1994,7 +2110,10 @@ fn an_annotated_assignment_with_an_unsupported_annotation_returns_a_capability_e
     // Exercises the `annotation_to_ty(...)?` early-return branch inside
     // the new AnnAssign arm specifically (as opposed to the already
     // covered function-parameter/return-annotation call sites).
-    assert_capability_error_message("x: list\n", "type annotation `list` is not supported yet");
+    assert_capability_error_message(
+        "x: list\n",
+        "a bare `list` type annotation is not supported yet",
+    );
 }
 
 #[test]
@@ -2203,13 +2322,13 @@ fn a_set_literal_with_an_unsupported_element_propagates_the_element_error() {
 fn subscripted_type_annotation_with_unknown_base_is_rejected() {
     // #435 (Part D): subscripted type annotations (`ClassName[type_arg]`)
     // are now supported for known class names (PEP 560
-    // `__class_getitem__`). `list[int]` is still rejected because `list`
-    // itself is not a recognized type annotation in pycc (only
-    // int/float/bool/str and user-defined class names are), not because
-    // subscript syntax is universally rejected.
+    // `__class_getitem__`). D-228 (issue #918) additionally lowers the four
+    // builtin container families, so this test now pins a name that is
+    // neither -- `frozenset[int]`, which has no `Ty` variant and so still
+    // falls through to the bare-name recursion and its unknown-name message.
     assert_capability_error_message(
-        "x: list[int] = []\n",
-        "type annotation `list` is not supported yet",
+        "x: frozenset[int] = frozenset()\n",
+        "type annotation `frozenset` is not supported yet",
     );
 }
 
@@ -6326,4 +6445,467 @@ fn a_derived_class_attribute_with_no_mro_collision_lowers_at_the_hir_seam() {
         derived.class_attrs,
         vec![("LIMIT".to_string(), Ty::Int, ClassAttrValue::Int(7))]
     );
+}
+
+// --- D-228 / issue #918: parameterized container annotations ---------------
+
+/// Lowers `source` and returns the single diagnostic it must fail with.
+fn container_annotation_err(source: &str) -> Diagnostic {
+    let module = pycc_parser_test_helper::parse(source);
+    lower_checked(&module).expect_err("expected the container annotation to be rejected")
+}
+
+#[test]
+fn a_parameterized_container_annotation_lowers_in_every_supported_position() {
+    // The §6 positions Part 1 covers, exercised through the real lowering
+    // entry point: a parameter, a module-level `AnnAssign`, a local
+    // `AnnAssign` and a PEP 695 `type` alias. A protocol *attribute*'s type
+    // is *not* one of them: it is rejected with `C0001` (D-228 decision 10).
+    // A protocol *method*'s parameter is, and is covered by its own test
+    // below.
+    for source in [
+        "def f(x: list[int]) -> None:\n    return\n",
+        "def f(x: dict[str, int]) -> None:\n    return\n",
+        "def f(x: set[int]) -> None:\n    return\n",
+        "def f(x: tuple[int, bool, float]) -> None:\n    return\n",
+        "x: list[int] = [1]\n",
+        "def f() -> None:\n    y: dict[str, int] = {\"a\": 1}\n    return\n",
+        "type Ints = list[int]\ndef f(x: Ints) -> None:\n    return\n",
+    ] {
+        let module = pycc_parser_test_helper::parse(source);
+        assert!(lower_checked(&module).is_ok(), "should lower: {source:?}");
+    }
+}
+
+#[test]
+fn a_container_annotation_reports_a_later_unlowerable_argument_before_an_earlier_element_gate() {
+    // The annotation path's ordering is the mirror image of the tuple-literal
+    // path's (D-228 decision 4): here every type argument is lowered by
+    // `annotation_to_ty` first, and `check_container_ty` only runs afterwards
+    // as a whole-`Ty` postcheck. So a *later* argument that cannot be lowered
+    // at all wins over an *earlier* argument's element-type gate, while the
+    // literal path reports the earlier element's `T0039` first (pinned by
+    // `a_tuple_literal_reports_an_earlier_element_s_t0039_before_a_later_undefined_name`
+    // in `pycc_types`). Both orderings are pinned so that folding either
+    // entry point into the other becomes a visible test failure.
+    let err =
+        container_annotation_err("def f(x: tuple[int, str, Undefined]) -> None:\n    return\n");
+    assert_eq!(err.code, "C0001");
+    assert_eq!(
+        err.message,
+        "type annotation `Undefined` is not supported yet"
+    );
+}
+
+#[test]
+fn a_container_annotation_validates_its_arity_before_its_element_types() {
+    // `T0053` is an arity check that runs first, so a wrong-arity annotation
+    // never reports a misleading element-type diagnostic.
+    for (source, expected, expected_help) in [
+        (
+            "def f(x: list[int, str]) -> None:\n    return\n",
+            "container type annotation `list[...]` takes exactly 1 type argument, got 2",
+            "write exactly 1 type argument, e.g. `list[int]`",
+        ),
+        (
+            "def f(x: set[int, int]) -> None:\n    return\n",
+            "container type annotation `set[...]` takes exactly 1 type argument, got 2",
+            "write exactly 1 type argument, e.g. `set[int]`",
+        ),
+        (
+            "def f(x: dict[int]) -> None:\n    return\n",
+            "container type annotation `dict[...]` takes exactly 2 type arguments, got 1",
+            "write exactly 2 type arguments, e.g. `dict[str, int]`",
+        ),
+        (
+            "def f(x: dict[int, str, bool]) -> None:\n    return\n",
+            "container type annotation `dict[...]` takes exactly 2 type arguments, got 3",
+            "write exactly 2 type arguments, e.g. `dict[str, int]`",
+        ),
+        (
+            "def f(x: list[()]) -> None:\n    return\n",
+            "container type annotation `list[...]` takes exactly 1 type argument, got 0",
+            "write exactly 1 type argument, e.g. `list[int]`",
+        ),
+        (
+            "def f(x: tuple[()]) -> None:\n    return\n",
+            "container type annotation `tuple[...]` takes at least 1 type argument -- the empty tuple `tuple[()]` is not supported yet",
+            "write at least one element type, e.g. `tuple[int]`",
+        ),
+    ] {
+        let diagnostic = container_annotation_err(source);
+        assert_eq!(diagnostic.code, "T0053", "{source:?}");
+        assert_eq!(diagnostic.message, expected, "{source:?}");
+        assert!(diagnostic.span.is_some(), "{source:?}");
+        // `docs/DIAGNOSTICS.md`'s quality bar publishes structured help for
+        // the arity family (D-152); the human format never renders it, so it
+        // is pinned here as well as in `tests/diagnostics/*.expected.json`.
+        assert_eq!(
+            diagnostic.help.as_deref(),
+            Some(expected_help),
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
+fn a_failing_inner_annotation_propagates_out_of_the_container_position() {
+    // The recursive `annotation_to_ty(arg, ..)?` inside
+    // `container_annotation_to_ty` is the one error path in that function
+    // reached by neither the `T0053` arity check that runs before it nor the
+    // `T0042`/element-type gates that run after it: the inner annotation is
+    // not lowerable at all. The inner diagnostic is propagated verbatim,
+    // carrying the *inner* annotation's own span rather than the whole
+    // subscript's, so the caret points at the part the user must change.
+    for (source, expected) in [
+        (
+            // The generic message, not the bare-container advice: a container
+            // *element* is one of the positions that rejects the
+            // parameterized form (`list[list[int]]` is `T0034`), so it does
+            // not opt into `with_bare_container_advice`. The parameter
+            // position's own upgrade cannot reach this diagnostic either --
+            // its annotation is the whole `list[list]` subscript, not a bare
+            // name.
+            "def f(x: list[list]) -> None:\n    return\n",
+            "type annotation `list` is not supported yet",
+        ),
+        (
+            "def f(x: dict[str, 3]) -> None:\n    return\n",
+            "only a bare name type annotation is supported so far, got a number literal",
+        ),
+    ] {
+        let diagnostic = container_annotation_err(source);
+        assert_eq!(diagnostic.code, "C0001", "{source:?}");
+        assert_eq!(diagnostic.message, expected, "{source:?}");
+        let span = diagnostic.span.expect("inner annotation span");
+        let inner_start = source.rfind("[").expect("subscript") as u32 + 1;
+        assert!(
+            span.start >= inner_start,
+            "span should start inside the subscript, not at the container name: {source:?}"
+        );
+    }
+}
+
+#[test]
+fn a_variadic_ellipsis_type_argument_is_rejected_in_every_family() {
+    // The `...` path becomes reachable for the first time with #918, so its
+    // text is pinned rather than assumed to be covered elsewhere. Checked
+    // ahead of arity so `tuple[int, ...]` (arity 2, which `tuple` would
+    // otherwise accept) reports the variadic form specifically.
+    //
+    // The advice is per family, and that is the point of covering all four
+    // here: `tuple[X, ...]` is the one spelling that means something in
+    // Python, so only it gets the compile-time-length explanation and a
+    // fixed-arity `tuple`. Recommending a `tuple` for a `list`/`set`/`dict`
+    // would answer a question the user did not ask -- it changes the
+    // container rather than correcting its type arguments (review finding on
+    // this pull request).
+    for (source, expected, expected_help) in [
+        (
+            "def f(x: tuple[int, ...]) -> None:\n    return\n",
+            "the `...` type argument in `tuple[...]` is not supported yet -- a homogeneous-variadic container has no compile-time length, so write an explicit fixed-arity annotation such as `tuple[int, int]` instead",
+            "write an explicit fixed-arity annotation such as `tuple[int, int]`",
+        ),
+        (
+            "def f(x: list[...]) -> None:\n    return\n",
+            "the `...` type argument in `list[...]` is not supported yet -- `...` is not a type argument here; write the element type, e.g. `list[int]`",
+            "write the element type, e.g. `list[int]`",
+        ),
+        (
+            "def f(x: set[...]) -> None:\n    return\n",
+            "the `...` type argument in `set[...]` is not supported yet -- `...` is not a type argument here; write the element type, e.g. `set[int]`",
+            "write the element type, e.g. `set[int]`",
+        ),
+        (
+            "def f(x: dict[str, ...]) -> None:\n    return\n",
+            "the `...` type argument in `dict[...]` is not supported yet -- `...` is not a type argument here; write the element type, e.g. `dict[str, int]`",
+            "write the element type, e.g. `dict[str, int]`",
+        ),
+    ] {
+        let diagnostic = container_annotation_err(source);
+        assert_eq!(diagnostic.code, "T0053", "{source:?}");
+        assert_eq!(diagnostic.message, expected, "{source:?}");
+        // The per-family imperative is also the structured `help` (D-152), so
+        // a JSON consumer reads the fix rather than only the prose sentence.
+        assert_eq!(
+            diagnostic.help.as_deref(),
+            Some(expected_help),
+            "{source:?}"
+        );
+    }
+}
+
+/// A PEP 695 type parameter named after a builtin container shadows it, the
+/// same way a user-defined class or a type alias of that name does. Review
+/// finding on this pull request: the subscript arm consulted `known_class`
+/// and the alias table but not `type_param`, so `def f[list](x: list[int])`
+/// lowered as the builtin and silently dropped the function's genericity.
+///
+/// What the annotation lowers to instead -- `Ty::Param("list")`, discarding
+/// the `[int]` argument -- is the pre-existing behaviour of subscripting any
+/// type parameter (`def f[T](x: T[int])` does the same on the base commit)
+/// and is deliberately not changed here; only the container shadowing is.
+#[test]
+fn a_type_parameter_shadows_a_builtin_container_of_the_same_name() {
+    // The control shares the loop: with a type parameter that does *not*
+    // shadow it, the same annotation is the builtin container.
+    for (source, expected) in [
+        (
+            "def f[list](x: list[int]) -> None:\n    return\n",
+            Ty::Param(Box::new("list".to_string())),
+        ),
+        (
+            "def f[T](x: list[int]) -> None:\n    return\n",
+            Ty::List(Box::new(Ty::Int)),
+        ),
+    ] {
+        let module = pycc_parser_test_helper::parse(source);
+        let hir = lower_checked(&module).expect("lowers");
+        let HirItem::Function { params, .. } = &hir.items[0] else {
+            panic!("expected a function item for {source:?}");
+        };
+        assert_eq!(params[0].1, expected, "{source:?}");
+    }
+}
+
+#[test]
+fn a_container_annotation_runs_the_same_element_gate_as_a_container_literal() {
+    for (source, code, message) in [
+        (
+            "def f(x: list[str]) -> None:\n    return\n",
+            "T0034",
+            "list[str] is not compiled yet (D-105) -- only list[int] is",
+        ),
+        (
+            "def f(x: dict[int, int]) -> None:\n    return\n",
+            "T0036",
+            "dict[int, int] is not compiled yet (D-122) -- only dict[str, int] is",
+        ),
+        (
+            "def f(x: set[str]) -> None:\n    return\n",
+            "T0038",
+            "set[str] is not compiled yet (D-122) -- only set[int] is",
+        ),
+        (
+            "def f(x: tuple[int, str]) -> None:\n    return\n",
+            "T0039",
+            "tuple element type `str` is not compiled yet (D-116) -- only int/bool/float elements are",
+        ),
+        (
+            "def f(x: list[list[int]]) -> None:\n    return\n",
+            "T0034",
+            "list[list[int]] is not compiled yet (D-105) -- only list[int] is",
+        ),
+    ] {
+        let diagnostic = container_annotation_err(source);
+        assert_eq!(diagnostic.code, code, "{source:?}");
+        assert_eq!(diagnostic.message, message, "{source:?}");
+        // Unlike the literal call sites, which keep `Span::new(0, 0)`, the
+        // annotation path carries the annotation's real range.
+        assert_ne!(diagnostic.span, Some(Span::new(0, 0)), "{source:?}");
+    }
+}
+
+#[test]
+fn a_type_parameter_inside_a_container_annotation_is_rejected_with_a_real_span() {
+    // D-133/D-134: `substitute_ty` is not recursive, so a `Ty::Param` nested
+    // inside a container would never be substituted at a call site. Rejected
+    // here, in `pycc_hir`, with `pycc_types`' own `T0042` wording but a real
+    // span rather than that scan's `Span::new(0, 0)`.
+    let diagnostic = container_annotation_err("def f[T](x: list[T]) -> None:\n    return\n");
+    assert_eq!(diagnostic.code, "T0042");
+    assert_eq!(
+        diagnostic.message,
+        "type parameter `T` used inside a container position is not supported yet -- v0.2 only instantiates a bare type-parameter position, matching D-105's own fixed-container-element-type restriction"
+    );
+    assert_ne!(diagnostic.span, Some(Span::new(0, 0)));
+}
+
+#[test]
+fn a_container_return_annotation_is_rejected_naming_the_positions_that_do_work() {
+    // Deliberate, not an oversight: a container-typed call result already
+    // reaches an unhandled codegen case (issue #926), so accepting the
+    // annotation would widen a known panic rather than add a feature.
+    // Return position is issue #925.
+    for family in ["list[int]", "dict[str, int]", "set[int]", "tuple[int, int]"] {
+        let diagnostic =
+            container_annotation_err(&format!("def f() -> {family}:\n    return None\n"));
+        assert_eq!(diagnostic.code, "C0001", "{family}");
+        assert_eq!(
+            diagnostic.message,
+            format!(
+                "a container return type annotation (`{family}`) is not supported yet -- container annotations are currently supported in parameter, local- and module-variable and type-alias positions only"
+            ),
+            "{family}"
+        );
+    }
+    // Reached through a type alias too, not only a literal annotation.
+    let diagnostic =
+        container_annotation_err("type Ints = list[int]\ndef f() -> Ints:\n    return None\n");
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic
+            .message
+            .contains("a container return type annotation (`list[int]`)")
+    );
+}
+
+#[test]
+fn every_position_the_container_return_advice_names_really_lowers_a_container() {
+    // The C0001 return-position message enumerates the positions that *do*
+    // work, so each one is pinned here: a message that names a position the
+    // compiler rejects, or omits one it accepts, is misleading guidance.
+    for source in [
+        // Parameter.
+        "def f(x: list[int]) -> None:\n    return\n",
+        // Local variable.
+        "def f() -> None:\n    x: list[int] = []\n    return\n",
+        // Module variable.
+        "x: list[int] = []\n",
+        // PEP 695 type alias.
+        "type Ints = list[int]\ndef f(x: Ints) -> None:\n    return\n",
+        // Legacy `TypeAlias` assignment.
+        "Ints: TypeAlias = list[int]\ndef f(x: Ints) -> None:\n    return\n",
+    ] {
+        let module = pycc_parser_test_helper::parse(source);
+        assert!(
+            lower_checked(&module).is_ok(),
+            "the return-position advice names this position as supported: {source:?}"
+        );
+    }
+}
+
+#[test]
+fn a_user_defined_class_named_list_still_wins_over_the_builtin_container() {
+    // The container branch is checked *after* the known-class lookup, so a
+    // user's own `class list` is not silently retyped as a builtin list.
+    // Without `__class_getitem__` the subscript is the PEP 560 error, exactly
+    // as it was before #918.
+    let diagnostic = container_annotation_err(
+        "class list:\n    def __init__(self) -> None:\n        self.v = 0\n\ndef f(x: list[int]) -> None:\n    return\n",
+    );
+    assert_eq!(diagnostic.code, "T0044");
+    assert!(
+        diagnostic
+            .message
+            .contains("class `list` does not define `__class_getitem__`"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn a_type_alias_named_list_still_wins_over_the_builtin_container() {
+    // The alias table is consulted before the container branch for the same
+    // reason: `type list = int` legally shadows the builtin in Python, so
+    // `list[int]` must not be reinterpreted as a builtin container here.
+    // The pre-#918 behaviour this preserves: the subscript falls through to
+    // the bare-name recursion, the alias resolves it to `int`, and the type
+    // argument is discarded -- so `x: list[int] = 1` still lowers to `Int`,
+    // not to a builtin `Ty::List`.
+    let module = pycc_parser_test_helper::parse("type list = int\nx: list = 1\n");
+    assert!(lower_checked(&module).is_ok());
+    let module = pycc_parser_test_helper::parse("type list = int\nx: list[int] = 1\n");
+    let lowered = lower_checked(&module).expect("the alias resolves the annotation");
+    assert!(
+        matches!(
+            &lowered.items[0],
+            HirItem::TopLevelStmt(HirStmt::AnnAssign { annotation, .. }) if *annotation == Ty::Int
+        ),
+        "the alias must win over the builtin container: {:?}",
+        lowered.items[0]
+    );
+}
+
+#[test]
+fn a_malformed_container_return_annotation_reports_its_own_defect_first() {
+    // D-228 decision 9's position gate is not the first check a container
+    // return annotation meets. `lower_return_annotation` lowers the
+    // annotation through `annotation_to_ty` *before* applying its own
+    // position check, so decisions 1 and 2 fire first: a bad element type
+    // reports its element gate and an `...` argument reports `T0053`. Only a
+    // container that would otherwise have lowered cleanly ever reaches the
+    // `C0001` that names the working positions -- pinned by
+    // `a_container_return_annotation_is_rejected_naming_the_positions_that_do_work`
+    // above. Measured, not inferred: this is the diagnostic a user sees.
+    for (source, code) in [
+        ("def f() -> list[str]:\n    return None\n", "T0034"),
+        ("def f() -> set[str]:\n    return None\n", "T0038"),
+        ("def f() -> dict[int, int]:\n    return None\n", "T0036"),
+        ("def f() -> tuple[int, str]:\n    return None\n", "T0039"),
+        ("def f() -> tuple[int, ...]:\n    return None\n", "T0053"),
+        ("def f() -> dict[str]:\n    return None\n", "T0053"),
+    ] {
+        let diagnostic = container_annotation_err(source);
+        assert_eq!(diagnostic.code, code, "{source}");
+    }
+}
+
+#[test]
+fn a_container_protocol_attribute_is_rejected_but_a_scalar_one_still_lowers() {
+    // The protocol-attribute `AnnAssign` branch ran no type gate at all
+    // before #918, because no annotation syntax could produce a container
+    // `Ty` there. A container-typed protocol attribute is unsatisfiable --
+    // no class can declare a container-typed attribute slot at all -- so it
+    // is rejected, while every non-container attribute type keeps working
+    // exactly as before. The asymmetry with a protocol *method*'s
+    // parameter, which does lower, is deliberate and pinned by
+    // `a_container_annotation_lowers_in_a_protocol_method_parameter`.
+    let diagnostic = container_annotation_err(
+        "from typing import Protocol\n\n\nclass P(Protocol):\n    xs: list[int]\n",
+    );
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "protocol attribute `P.xs` has container type `list[int]`, which is not supported yet -- no class could satisfy it, because every class attribute slot is restricted to a scalar type (`int`, `float`, `bool`, `str`); a container type in a protocol method's parameter is supported"
+    );
+    let module = pycc_parser_test_helper::parse(
+        "from typing import Protocol\n\n\nclass P(Protocol):\n    n: int\n",
+    );
+    assert!(lower_checked(&module).is_ok());
+}
+
+#[test]
+fn a_container_annotation_lowers_in_a_protocol_method_parameter() {
+    // The counterpart to the test above, pinning the deliberate asymmetry of
+    // D-228 decision 10. The gate lives only in the protocol body's
+    // `AnnAssign` arm, so it rejects a container-typed protocol *attribute*
+    // (which no class could ever satisfy -- every class attribute slot is
+    // restricted to `is_scalar_slot_type`). A protocol *method*'s parameter
+    // is an ordinary parameter position: it routes through
+    // `crate::lower_arg_list` -> `annotation_to_ty` with no container gate,
+    // and the resulting program builds and runs (pinned end to end by
+    // `tests/issue_918_container_annotations.rs`). Extending the gate to
+    // method parameters would reject code this compiler compiles correctly.
+    for (source, expected) in [
+        (
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    def f(self, xs: list[int]) -> None: ...\n",
+            "list[int]",
+        ),
+        (
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    def f(self, xs: set[int]) -> None: ...\n",
+            "set[int]",
+        ),
+        (
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    def f(self, xs: dict[str, int]) -> None: ...\n",
+            "dict[str, int]",
+        ),
+        (
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    def f(self, xs: tuple[int, bool]) -> None: ...\n",
+            "tuple[int, bool]",
+        ),
+    ] {
+        let module = pycc_parser_test_helper::parse(source);
+        let lowered = lower_checked(&module).expect("a protocol method parameter should lower");
+        let def = &lowered.class_defs[0].1;
+        let ProtocolMember::Method {
+            name, param_tys, ..
+        } = &def.protocol_members[0]
+        else {
+            panic!("expected a method member: {:?}", def.protocol_members);
+        };
+        assert_eq!(name, "f");
+        assert_eq!(param_tys.len(), 1);
+        assert_eq!(param_tys[0].name(), expected);
+    }
 }

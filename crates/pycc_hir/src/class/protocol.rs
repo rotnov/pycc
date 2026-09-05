@@ -188,6 +188,50 @@ pub(super) fn lower_protocol_class(
                     &[],
                     class_name_defs,
                 )?;
+                // D-228 (issue #918): a container-typed protocol
+                // *attribute* is rejected because no class could ever
+                // satisfy it. Every path by which a class establishes an
+                // instance attribute restricts the slot to
+                // `is_scalar_slot_type`: the annotated class-body attribute
+                // (`class/attrs.rs`), the dataclass field (`class/body.rs`)
+                // and the `self.x = ...` assignment in a hand-written
+                // `__init__` (`slot_ty_from_init_rhs`), because a slot is a
+                // single `i64` word (D-154). A container-typed protocol
+                // attribute is therefore unsatisfiable, not merely
+                // unimplemented.
+                //
+                // This gate deliberately does *not* extend to a protocol
+                // *method*'s parameters. A parameter type is a signature
+                // type, not an instance slot, so `def f(self, xs: list[int])`
+                // in a protocol body lowers through `crate::lower_arg_list`
+                // like any other parameter and runs end to end (measured
+                // against CPython 3.14, pinned by the
+                // `issue_918_container_annotations` integration test). A
+                // container *return* type in a protocol method is rejected
+                // by the separate return-position gate (issue #925), not
+                // here.
+                //
+                // Non-container attribute types keep their existing
+                // behaviour exactly: `Ty::Instance`, `Ty::Optional`,
+                // `Ty::None` and `Ty::Protocol` attributes are all still
+                // accepted, which is why this is a container check and not a
+                // reuse of `is_scalar_slot_type`.
+                if matches!(
+                    attr_ty,
+                    Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::Tuple(_)
+                ) {
+                    return Err(unsupported(
+                        format!(
+                            "protocol attribute `{class_name}.{attr_name}` has container type \
+                             `{}`, which is not supported yet -- no class could satisfy it, \
+                             because every class attribute slot is restricted to a scalar type \
+                             (`int`, `float`, `bool`, `str`); a container type in a protocol \
+                             method's parameter is supported",
+                            attr_ty.name()
+                        ),
+                        ann.range,
+                    ));
+                }
                 // A protocol attribute cannot have a default value.
                 if ann.value.is_some() {
                     return Err(unsupported(

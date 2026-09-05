@@ -4152,10 +4152,12 @@ fn a_list_result_binop_is_not_yet_supported() {
 #[test]
 fn compiles_a_function_with_a_list_int_parameter_and_list_int_return_value() {
     // `def f(x: list[int]) -> list[int]: return x` -- no real source
-    // program can produce this shape (`pycc_hir::annotation_to_ty`
-    // rejects every annotation but a bare name, and D-105's first scope
-    // cut keeps it that way for v0.2, so an annotated `list[int]`
-    // parameter or return type never reaches codegen), but Task 5
+    // program can produce this shape. Since D-228 (issue #918) the
+    // *parameter* half is producible from real source (see
+    // `tests/issue_918_container_annotations.rs`); the `-> list[int]`
+    // half is not, because `lower_return_annotation` rejects a container
+    // return annotation with `C0001` (return position is issue #925).
+    // The MIR shape below therefore still has to be hand-built, and Task 5
     // (D-089) requires this MIR shape to compile *cleanly* rather than
     // panic: `ty_to_basic_type`'s `List(_)` arm (parameter type, and
     // transitively the return type via `compile_to_object`'s `fn_type`
@@ -5783,10 +5785,11 @@ fn for_set_over_an_unbound_name_is_an_internal_error() {
 fn compiles_a_function_with_a_set_int_parameter_and_set_int_return_value() {
     // The `set[int]` counterpart of `compiles_a_function_with_a_dict_
     // str_int_parameter_and_dict_str_int_return_value` above, for the
-    // identical reason: no real source program can produce this shape
-    // (`pycc_hir::annotation_to_ty` rejects every annotation but a
-    // bare name, so an annotated `set[int]` parameter or return type
-    // never reaches codegen), but this MIR shape must still compile
+    // identical reason: no real source program can produce this shape.
+    // Since D-228 (issue #918) an annotated `set[int]` *parameter* does
+    // reach codegen from real source, but a `-> set[int]` return
+    // annotation is rejected in lowering (issue #925), so the combined
+    // shape below is still hand-built. This MIR shape must still compile
     // *cleanly* -- `ty_to_basic_type`'s `Set(_)` arm and `emit_expr`'s
     // `Name` arm's `Set(_)` arm must agree on the same pointer
     // representation, and `MirStmt::Return`'s own `Scalar::Set`
@@ -6142,10 +6145,11 @@ fn a_tuple_typed_module_binding_gets_a_struct_backed_global_slot() {
 fn compiles_a_function_with_a_tuple_parameter_and_tuple_return_value() {
     // The tuple counterpart of `compiles_a_function_with_a_set_int_
     // parameter_and_set_int_return_value` above, for the identical
-    // reason: no real source program can produce this shape
-    // (`pycc_hir::annotation_to_ty` rejects every annotation but a bare
-    // name, so an annotated `tuple[...]` parameter or return type never
-    // reaches codegen), but this MIR shape must still compile *cleanly*
+    // reason: no real source program can produce this shape. Since
+    // D-228 (issue #918) an annotated `tuple[...]` *parameter* does
+    // reach codegen from real source, but a `-> tuple[...]` return
+    // annotation is rejected in lowering (issue #925), so the combined
+    // shape below is still hand-built. This MIR shape must still compile *cleanly*
     // -- `ty_to_basic_type`'s `Tuple(_)` arm, `emit_expr`'s `Name` arm's
     // `Ty::Tuple(_)` arm, and `MirStmt::Return`'s own `Scalar::Tuple`
     // pass-through must all agree on the same by-value struct
@@ -10469,10 +10473,11 @@ fn a_dict_set_with_a_non_str_key_is_an_internal_error() {
 fn compiles_a_function_with_a_dict_str_int_parameter_and_dict_str_int_return_value() {
     // The `dict[str, int]` counterpart of `compiles_a_function_with_a_
     // list_int_parameter_and_list_int_return_value` above, for the
-    // identical reason: no real source program can produce this shape
-    // (`pycc_hir::annotation_to_ty` rejects every annotation but a
-    // bare name, so an annotated `dict[str, int]` parameter or return
-    // type never reaches codegen), but this MIR shape must still
+    // identical reason: no real source program can produce this shape.
+    // Since D-228 (issue #918) an annotated `dict[str, int]` *parameter*
+    // does reach codegen from real source, but a `-> dict[str, int]`
+    // return annotation is rejected in lowering (issue #925), so the
+    // combined shape below is still hand-built. This MIR shape must still
     // compile *cleanly* -- `ty_to_basic_type`'s `Dict(_)` arm and
     // `emit_expr`'s `Name` arm's `Dict(_)` arm must agree on the same
     // pointer representation, and `MirStmt::Return`'s own `Scalar::

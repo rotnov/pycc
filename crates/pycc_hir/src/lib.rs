@@ -1,6 +1,7 @@
 use pycc_diag::{Diagnostic, Span};
 
 mod class;
+mod container;
 mod exception;
 mod expr;
 mod func;
@@ -13,6 +14,7 @@ mod stmt;
 mod typecheck;
 
 pub use class::{ClassAttrValue, EnumMemberValue, HirClassDef, PropertyDef, ProtocolMember};
+pub use container::{check_container_ty, check_tuple_element_ty};
 pub use exception::{
     BUILTIN_EXCEPTION_CLASSES, EXCEPTION_GROUP_TYPE_TAG, EXCEPTION_INIT_MANGLED_NAME,
     FIRST_USER_EXCEPTION_TYPE_TAG, HirExceptHandler, MAX_USER_EXCEPTION_CLASSES,
@@ -21,6 +23,7 @@ pub use exception::{
 };
 pub(crate) use func::{
     annotation_to_ty, lower_arg_list, lower_function, lower_return_annotation, type_param_name,
+    with_bare_container_advice,
 };
 pub use hir_module::{
     HirModule, ImportBinding, ProjectBindingKind, killed_names, top_level_bound_names,

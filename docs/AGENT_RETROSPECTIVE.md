@@ -33,6 +33,357 @@ never a merge gate.
 
 ---
 
+## 2026-09-05 — Read a decision's "left at None by design" as covering code that decision never saw
+
+**What happened.** Round 9 of PR #930's review reported that all three arms
+of the pull request's own new `T0053` published `"help": []`, while
+`docs/DIAGNOSTICS.md`'s quality bar lists the arity family among the ones
+that populate structured help. The first reading of D-152 treated its
+"48 sites left at `help: None` by design" as settling the question — a
+documented exclusion, therefore not a defect.
+
+**Root cause.** A decision's census of a tree is evidence about that tree,
+not a licence granted to code written afterwards. D-152 enumerated the
+sites that existed when it landed; `T0053` did not exist then, and the
+quality bar it must satisfy is a standing contract on a *family*. Reading
+the census as the contract inverts which of the two documents is
+normative.
+
+**What fixed it.** One command settled it: `git grep T0053 c639e682 --
+crates` returns nothing, so the code is the branch's own. That turned the
+question from "is this exclusion documented?" into "did this diff break a
+contract?", which has a single answer. All three arms now carry
+`.with_help(...)`, D-228 records the per-site split as decision 11, and
+each arm gained an `.expected.json` fixture, since the human format never
+renders `help` and the existing `.expected.txt` fixtures therefore could
+not observe it.
+
+**Lesson.** Before accepting a documented exclusion as cover for the code
+in front of you, check whether that code existed when the exclusion was
+written — `git grep <symbol> <base-commit>` is the whole check. More
+generally, the stopping rule a long review loop needs is not a round cap:
+**fix what this change's own diff introduced; file what predates it.** It
+is decidable against the base commit, so it never turns into a judgment
+call about scope.
+
+## 2026-09-05 — Inventoried the positions and missed the wrapper sitting inside one
+
+What happened: after a review round found a support enumeration disagreeing with
+the implementation, the repair built an inventory of every *position* the
+enumeration names and checked each one. A later round then found the same class
+of defect one level down: the advice a bare container name produces was silently
+lost when that name sat inside `Final[...]` or `Annotated[...]`. The helper
+matched the annotation expression against a bare name, and a wrapper subscript
+is not a bare name, so the specific advice degraded to the generic capability
+error — inside a position the inventory had already listed and marked correct.
+
+Root cause: the inventory ranged over the wrong axis. Positions are where an
+annotation appears; shapes are what an annotation is. A check that enumerates
+one axis exhaustively proves nothing about the other, and the wrapper case is
+invisible to a position-level sweep precisely because it lives inside a position
+already accounted for.
+
+What fixed it: peeling the transparent wrappers before matching, reporting
+against the inner span, and a test covering both wrappers, their nesting, their
+malformed forms, and a non-wrapper subscript that must not be peeled.
+
+Lesson: when a repair answers "did I cover every X?", ask what axis X is, and
+whether the defect could recur one level inside a single X. An exhaustive sweep
+over one dimension reads like completeness and is not. Where two dimensions
+exist, the durable guard is mechanical and ranges over both — filed here as a
+checklist item on the agent-tooling umbrella (#806) rather than re-swept by hand.
+
+
+## 2026-09-05 — Verified the closing mechanism was armed, never that it should be
+
+What happened: a pull request delivering Part 1 of a decomposed issue carried
+`Fixes #918` in its body. The `closingIssuesReferences` query was run before
+merge exactly as the repository's own rule requires, returned `totalCount: 1`,
+and that was recorded as the check passing. It was the wrong intent: the parent
+issue must stay open until Part 2 closes, so the correct answer was zero. A
+review round caught it.
+
+Root cause: the check answers "which issues will this merge close?" and it was
+read as "is the closing mechanism wired correctly?". The number came back
+non-zero, which looks like confirmation, so nothing prompted the second
+question — whether closing that issue was the intended outcome at all.
+
+What fixed it: rewriting the body to "Part 1 of #918; #918 stays open until #925
+(Part 2) closes" — a phrasing that references the issue without adjoining a
+closing keyword — and re-running the query for the expected `totalCount: 0`. The
+first read after the edit returned the stale previous value; a second read a
+short while later returned the correct one, so treat that field as eventually
+consistent and re-read rather than re-editing.
+
+Lesson: a verification that confirms a mechanism is armed never asks whether the
+intent behind it is correct. Pair every such query with the expected value
+written down *before* running it, so a passing mechanism with the wrong intent
+cannot read as a green check.
+
+
+## 2026-09-05 — Wrote an enumeration into a diagnostic and let nothing check it
+
+What happened: the same change's return-position diagnostic ends with a list of
+the positions where the rejected construct *is* supported. The list was written
+from the plan's own framing and named three of the four positions the change had
+actually implemented, omitting module-scope annotated assignments. Every test
+around it asserted the message string verbatim, so the tests locked the wrong
+list in rather than catching it, and it took an external reviewer to notice that
+the compiler accepts a position its own advice says it does not.
+
+Root cause: an enumeration inside a message is a factual claim about behaviour,
+but it was treated as prose. Asserting a message's exact text proves the message
+is stable, never that what it says is true.
+
+What fixed it: widening the list at every site that repeats it, and adding a
+test that exercises each item the message names — one program per named
+position, each required to lower — so the enumeration and the behaviour it
+describes are checked against each other rather than each against itself.
+
+Lesson: when a user-facing string enumerates cases, capabilities, or supported
+forms, pair it with a test that exercises every item it names. A test asserting
+the string's bytes is not that test. The same applies to a documentation table
+or a decision record that lists what a change supports: list membership is a
+claim, and a claim with no executing check drifts silently.
+
+
+## 2026-09-05 — Attached a positional message inside a position-blind helper, and let review find the sites
+
+What happened: #918 added a bare-container advice message ("a bare `list` type
+annotation is not supported yet -- write the parameterized form, e.g.
+`list[int]`") inside `annotation_to_ty`, the shared lowering helper every
+annotation position calls. The advice is only true where the parameterized form
+actually lowers. `annotation_to_ty` cannot know which position it is serving, so
+the advice was emitted at every one of them — including the return position, the
+class-attribute and dataclass-field slots, the protocol-attribute gate, and
+inside a container's own element position, where `list[int]` is itself rejected
+and the advice therefore recommends code the compiler refuses. The external
+reviewer named four of those sites. Enumerating the positions myself afterwards,
+one file per position, found a fifth the review had not.
+
+Root cause: the message was written where it was convenient to raise the error,
+not where the fact it asserts is known. A helper with roughly twenty call sites
+was made to speak about the caller's context.
+
+What fixed it: inverting the default. `annotation_to_ty` now emits only the
+position-blind generic message; the five positions where the parameterized form
+lowers opt into the advice through `with_bare_container_advice`. The
+position-blind default is correct for a call site that forgets to opt in, so a
+future position added without thought degrades to a true message rather than a
+false one.
+
+Lesson: before adding a diagnostic whose text is true only in some contexts,
+enumerate the call sites of the function that will emit it and record a line per
+site saying whether the claim holds there — the same affected-site inventory
+`issue-to-plan` already requires for a documentation rule, applied to code.
+Then choose the default so that an unenumerated site gets the weaker true
+message, not the stronger false one. Opt-in beats opt-out for any claim that
+depends on the caller.
+
+---
+
+## 2026-09-04 — Resolved a rebase conflict whole-file, silently discarding a hunk that never conflicted
+
+What happened: rebasing the #918 branch onto `origin/main` conflicted in
+`docs/ROADMAP.md`. The conflict was resolved with
+`git checkout --ours docs/ROADMAP.md`. That also discarded a *non-conflicting*
+hunk the same commit contributed — the `protocol *attributes*` narrowing at
+line 151, authored deliberately one commit earlier. The rebase completed, the
+tree was clean, and every gate stayed green: a deleted sentence breaks nothing
+mechanical. Recovered in `fb31f624` only by re-reading the diff against the
+pre-rebase head by hand.
+
+Root cause: `git checkout --ours <file>` is whole-file. Its name reads as "keep
+my side of the conflict"; its behaviour is "discard this commit's version of
+this entire file", conflicting hunks and clean hunks alike. Nothing prints.
+
+What fixed it: re-authoring the lost hunk, after noticing it was missing.
+
+Lesson: after any rebase whose conflicts were resolved with a whole-file
+operation (`--ours`, `--theirs`, or an editor overwrite), run
+`git range-diff <old-base>..<pre-rebase-head> <new-base>..<HEAD>` before
+continuing. Every dropped hunk shows up there as a `-` line and nowhere else —
+not in `git status`, not in the gates, not in the file's own readability.
+
+---
+
+## 2026-09-04 — Correctly resolved a decision number, then had it taken by a merge landing mid-review
+
+What happened: #918's decision record was numbered `D-227` by the documented
+procedure — resolving the next free number against the tree at authoring time.
+PR #928 merged mid-review and claimed `D-227` for its own record. Two accepted
+decision records would have reached `main` sharing an id. Caught only because
+`scripts/generate_decisions_index.py --check` was re-run by hand near the end of
+the session; renumbered to `D-228` in `f81d3445`.
+
+Root cause: the number is resolved once, against a tree that then moves. The
+repository already ships a fail-closed uniqueness checker
+(`generate_decisions_index.py`'s `check_unique_ids`), but
+`grep -rn "generate_decisions_index" .github/workflows/` returns nothing — the
+checker is wired to no gate at all, so nothing revalidates the number after the
+base moves.
+
+What fixed it: `git mv` of the record and its frontmatter `id:` to `D-228`, plus
+`rotnov/pycc` issue 929 to wire the existing checker into `ci.yml`'s `governance`
+job (it needs the D-080 two-PR staged-fixture procedure, since `ci.yml` is pinned
+by whole-file SHA-256).
+
+Lesson: a decision number is not settled until the pull request merges. Re-run
+`python3 scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md --check`
+immediately before opening the pull request and again immediately before merging,
+the same way `docs/sessions/` entries re-resolve their remote references. Until
+issue 929 lands, that re-run is the only thing standing between a mid-review merge
+and a corrupted decision log.
+
+---
+
+## 2026-09-04 — Reported a gate sweep as complete while `cargo fmt` was never in it
+
+What happened: the #918 orchestrating session collected eleven gates to green on
+the implementation commit, listed them all explicitly with individually captured
+exit statuses, and declared the change ready for review. A later fix agent, doing
+its own pre-completion pass, found that `cargo fmt --all -- --check` failed at
+that exact commit — a required CI gate (`ci.yml`) had been red the whole time,
+in `func.rs` and two `tests.rs` assertions. It was confirmed by re-running fmt in
+a throwaway worktree pinned to that commit, so it was not an artifact of later
+edits.
+
+Root cause: the gate list was assembled by hand each time from what the previous
+task happened to run, rather than derived from the workflow file. A gate that is
+never invoked cannot fail, so a hand-assembled sweep reports green with exactly
+the same shape whether it covers ten of eleven gates or all eleven. Enumerating
+the gates that *were* run — even carefully, even with real exit statuses — is
+evidence about those gates only, and says nothing about the ones absent from the
+list. The absence is invisible precisely because nothing prints when a command is
+not run.
+
+What fixed it: `cargo fmt --all` on the branch, and thereafter deriving the gate
+list from `.github/workflows/ci.yml` instead of from memory of the last task.
+
+Lesson: a gate sweep is complete only against an enumerated source of truth, not
+against recall. Before declaring gates green, read the required checks out of the
+workflow file and tick each one off that list; a gate missing from a hand-written
+list produces no output at all, which is indistinguishable from a gate that
+passed. Corollary: the more carefully a report enumerates the gates it did run,
+the more convincing it looks, and the less that says about coverage.
+
+
+---
+
+## 2026-09-04 — Aligned six copies of a new rule to each other instead of to the code
+
+What happened: #918's own decision record introduced a rule — "a parameterized
+container annotation is rejected in a protocol member" — and it was restated at
+six files (the ADR, `crates/pycc_hir/src/func.rs`, `explain.rs`,
+`crates/pycc_hir/src/class/protocol.rs`, `docs/PYTHON_STANDARDS.md`, and
+`docs/TYPE_SYSTEM.md`), and was wrong in every one of them. The rule as implemented gates protocol *attributes*
+only; a protocol method's parameter lowers a container normally, which was
+reproduced compiling and running end to end. Three review rounds were spent on
+it.
+
+Root cause: round 1's fix made the replicas agree with *each other* rather than
+with `lower_protocol_class`. Six mutually consistent files read as verified,
+which made rounds 2 and 3 harder rather than easier — the false agreement was
+itself the obstacle.
+
+What fixed it: reading the gate's actual control flow and narrowing every site to
+"attribute", commits `fe1e9806` through `e7fe78f7`.
+
+Lesson: when a rule about new behaviour appears at more than one site, the
+authoritative statement is the code, never the most recently edited prose.
+Re-derive each replica from the implementation independently; a consistency pass
+across the replicas proves only that they were copied from one another.
+
+The relative order of this entry's event against the `cargo fmt` entry above
+cannot be recovered from either one's content — both span the same review
+window.
+
+---
+
+## 2026-09-04 — Typed the review brief freehand instead of composing it from its template
+
+What happened: round 1 of #918's review flagged the absent `docs/sessions/`
+handoff file as a completeness gap of the diff. It is written in the pull request
+that delivers the work, after the review loop, so it cannot exist when the loop
+runs. Refuted at the cost of one verification step — the fourth time this exact
+class has appeared (#866, #867, #868, #918).
+
+Root cause: `.claude/skills/issue-implement/references/review-brief.md` exists
+precisely to carry these exclusions, and `issue-implement/SKILL.md:376` says
+"Compose the brief from references/review-brief.md ... do not retype the
+exclusions from memory". The template was never opened during this session's
+review dispatch — confirmed by grepping the session transcript. The brief was
+typed freehand, which is the thing that sentence forbids by name.
+
+What fixed it: refuting the finding. The class itself is unfixed.
+
+Lesson: when a skill step names a file to compose from, open that file. A step
+that says "do not retype this from memory" is describing a failure that has
+already happened three times, and reading the four-line template costs less than
+one refutation round. The next recurrence should stop rewording and generate the
+brief mechanically instead.
+
+---
+
+## 2026-09-04 — Implemented every code item in a plan and treated the plan as discharged
+
+What happened: #918's published plan enumerated, alongside its code changes, a
+regression test pinning the ellipsis-before-arity check order for `tuple[...]`.
+The ordering is load-bearing — `tuple[int, ...]` has a legal arity of 2, so an
+arity check alone accepts it and silently lowers `tuple[int, EllipsisType]`.
+Every code change in the plan was implemented; the named test was not written,
+and was added later at `crates/pycc_hir/src/tests.rs`'s `a_variadic_ellipsis_type_argument_is_rejected_in_every_family`.
+
+Root cause: the session's todo list was seeded from the plan's *code* work items,
+so the clause naming a test never became a trackable entry. AGENTS.md Completion
+check item 6 already covers this case by name — "a plan's own enumerated non-code
+deliverables are a list of this kind" — and its own guard is the todo list, which
+only works if the list is built before the first item is started.
+
+What fixed it: writing the test once the omission was found.
+
+Lesson: when seeding a todo list from a plan, read the plan for *clauses*, not for
+code changes. A sentence directing that a test be written, an issue be filed, or a
+measurement be recorded is an item; prose that merely explains a code change is
+not. Doing that extraction after the code is written is too late — by then the
+plan reads as done.
+
+---
+
+## 2026-09-04 — Dispatched the pinned reviewer nested inside another agent, and it was orphaned twice
+
+What happened: the #918 D-068 review was dispatched as `ievo:deep-reviewer` from
+inside a general-purpose agent rather than from the orchestrating session. That
+inner reviewer was interrupted mid-run and produced no verdict and no findings —
+twice. Both times the outer agent reported substantive findings from its *own*
+source reading, and the orchestrator initially relayed those to the user as the
+reviewer's output. The review gate had not run at all. Separately, the outer
+agent's own report arrived after a writer agent had already started editing the
+same worktree, so for roughly an hour two writers shared the tree and every gate
+verdict collected in that window was void per AGENTS.md — including the green
+ones.
+
+Root cause: two distinct failures with one shared shape. A nested dispatch has no
+independent notification path to the orchestrator, so when the parent stops the
+child's result is unrecoverable — and with `SendMessage` unavailable the parent
+cannot be resumed to retrieve it. And an agent's report is not a termination: the
+writer was dispatched on the strength of a report from an agent whose child was
+still live.
+
+What fixed it: killing both agents, taking sole ownership of the worktree,
+committing the pending work, re-running the entire gate set from a single-writer
+baseline, and dispatching the pinned reviewer directly from the orchestrating
+session, where its completion notification reaches the session that needs it.
+
+Lesson: dispatch the pinned reviewer from the session that will act on its
+verdict, never nested inside another agent — a nested reviewer's findings are
+unreachable the moment its parent stops. And when an agent reports findings it
+attributes to a tool or subagent it invoked, confirm the tool actually produced
+them before relaying them onward; "my reviewer found X" and "I found X while
+trying to run my reviewer" are different claims with the same shape, and only one
+of them satisfies a review gate.
+
+
 ## 2026-09-04 — Committed a review-findings pile without the read-back its own procedure mandates, and found an earlier one had been silently lost
 
 What happened: the #923 session collected the deep-review findings into

@@ -9887,6 +9887,29 @@ fn a_tuple_literal_propagates_an_ill_typed_element_s_error() {
 }
 
 #[test]
+fn a_tuple_literal_reports_an_earlier_element_s_t0039_before_a_later_undefined_name() {
+    // D-228 decision 4: `check_tuple_element_ty` runs per element *inside*
+    // this loop rather than as a whole-`Ty` postcheck, so the composed
+    // `(1, "a", undefined_name)` shape pins which diagnostic wins. The gate
+    // fires on element 1 before element 2 is ever inferred, so `T0039` is
+    // reported and the undefined name is never reached. Folding the
+    // per-element gate into a whole-`Ty` postcheck like `T0034`/`T0036`/
+    // `T0038` would silently flip this to `T0021`.
+    let env = Environment::new();
+    let expr = HirExpr::TupleLiteral(vec![
+        HirExpr::IntLiteral(1),
+        HirExpr::StringLiteral("a".to_string()),
+        HirExpr::Name("undefined".to_string()),
+    ]);
+    let err = infer_expr(&env, &expr).unwrap_err();
+    assert_eq!(err.code, "T0039");
+    assert_eq!(
+        err.message,
+        "tuple element type `str` is not compiled yet (D-116) -- only int/bool/float elements are"
+    );
+}
+
+#[test]
 fn tuple_index_with_a_literal_in_range_int_infers_the_positional_element_type() {
     let hir = HirModule {
         seeded_builtin_exception_classes: false,
@@ -14859,9 +14882,13 @@ fn check_generic_function_rejects_two_distinct_type_parameters() {
 #[test]
 fn check_generic_function_rejects_container_position_type_parameter() {
     // Defense in depth, same rationale as the two-type-parameter test
-    // above: `crates/pycc_hir`'s `annotation_to_ty` never lowers a
-    // `list[T]`-shaped annotation from real source at all, so this can
-    // only be exercised via a hand-built `HirItem`.
+    // above. `crates/pycc_hir`'s `annotation_to_ty` does lower a
+    // `list[T]`-shaped annotation since D-228 (issue #918), but it
+    // rejects a `Ty::Param` element there itself, with this same `T0042`
+    // code and wording and a real span -- precisely because
+    // `substitute_ty` is not recursive. So a container-position type
+    // parameter still cannot reach this function from real source, and
+    // this can only be exercised via a hand-built `HirItem`.
     let func = HirItem::Function {
         name: "f".to_string(),
         params: vec![(
@@ -29079,7 +29106,8 @@ fn a_walrus_with_an_optional_str_value_is_rejected_with_t0050() {
     // only exercises the recursive `true` return). A real parsed program
     // can never reach this: `annotation_to_ty` (`pycc_hir/src/func.rs`) is
     // the one place a `Ty::Optional` is ever constructed from source, and
-    // it rejects every inner type but `int` at lowering time with T0049,
+    // it rejects every inner type but `int`/`float`/`bool` at lowering
+    // time with T0049,
     // before `pycc_types` ever runs -- so `Ty::Optional(Ty::Str)` only
     // exists as a hand-built `Environment` binding here, bypassing
     // `check_source`/lowering entirely to reach the type-checker's own

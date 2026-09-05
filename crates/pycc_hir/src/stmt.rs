@@ -324,7 +324,8 @@ pub(crate) fn lower_stmt(
                 ));
             }
             let annotation =
-                annotation_to_ty(&ann.annotation, type_param, class_name, aliases, class_defs)?;
+                annotation_to_ty(&ann.annotation, type_param, class_name, aliases, class_defs)
+                    .map_err(|error| crate::with_bare_container_advice(error, &ann.annotation))?;
             let value = ann
                 .value
                 .as_deref()

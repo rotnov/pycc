@@ -516,7 +516,7 @@ pub(crate) fn infer_expr_in(
             if elements.is_empty() {
                 return Err(Diagnostic::error(
                     "T0021",
-                    "an empty list literal's element type cannot be inferred without an annotation (list[T] annotations are not supported yet, D-105)".to_string(),
+                    "an empty list literal's element type cannot be inferred from the literal alone -- inferring it from a `list[T]` annotation is not supported yet (issue #927)".to_string(),
                     Span::new(0, 0),
                 ));
             }
@@ -552,17 +552,14 @@ pub(crate) fn infer_expr_in(
             // homogeneity check) is fully generic over any scalar `Ty`; a
             // future PR widening codegen to e.g. `list[str]` only has to
             // relax this one check.
-            if elem_ty != Ty::Int {
-                return Err(Diagnostic::error(
-                    "T0034",
-                    format!(
-                        "list[{}] is not compiled yet (D-105) -- only list[int] is",
-                        elem_ty.name()
-                    ),
-                    Span::new(0, 0),
-                ));
-            }
-            Ok(Ty::List(Box::new(elem_ty)))
+            let list_ty = Ty::List(Box::new(elem_ty));
+            // The gate itself lives in `pycc_hir` (D-228): lowering a written
+            // `list[T]` annotation builds the same `Ty` one crate lower down
+            // and has to reject exactly the same shapes. `Span::new(0, 0)` is
+            // what this call site passed before the gate moved, kept so the
+            // rendered diagnostic is unchanged.
+            pycc_hir::check_container_ty(&list_ty, Span::new(0, 0))?;
+            Ok(list_ty)
         }
         // PR-11 Task 3 (D-123): mirrors `ListLiteral`'s own homogeneity
         // check above, extended to a key/value pair, plus a `dict[str,
@@ -572,7 +569,7 @@ pub(crate) fn infer_expr_in(
             let Some((first_key, first_value)) = pairs.first() else {
                 return Err(Diagnostic::error(
                     "T0021",
-                    "an empty dict literal's key/value types cannot be inferred without an annotation (dict[K, V] annotations are not supported yet)".to_string(),
+                    "an empty dict literal's key/value types cannot be inferred from the literal alone -- inferring them from a `dict[K, V]` annotation is not supported yet (issue #927)".to_string(),
                     Span::new(0, 0),
                 ));
             };
@@ -599,16 +596,8 @@ pub(crate) fn infer_expr_in(
                 }
             }
             let dict_ty = Ty::Dict(Box::new((key_ty, val_ty)));
-            if dict_ty != Ty::Dict(Box::new((Ty::Str, Ty::Int))) {
-                return Err(Diagnostic::error(
-                    "T0036",
-                    format!(
-                        "{} is not compiled yet (D-122) -- only dict[str, int] is",
-                        dict_ty.name()
-                    ),
-                    Span::new(0, 0),
-                ));
-            }
+            // Shared with annotation lowering -- see the `ListLiteral` arm.
+            pycc_hir::check_container_ty(&dict_ty, Span::new(0, 0))?;
             Ok(dict_ty)
         }
         // PR-11 Task 7 (D-123): mirrors `ListLiteral`'s own homogeneity
@@ -625,7 +614,7 @@ pub(crate) fn infer_expr_in(
             let Some(first) = elements.first() else {
                 return Err(Diagnostic::error(
                     "T0021",
-                    "an empty set literal's element type cannot be inferred without an annotation (set[T] annotations are not supported yet)".to_string(),
+                    "an empty set literal's element type cannot be inferred from the literal alone -- inferring it from a `set[T]` annotation is not supported yet (issue #927)".to_string(),
                     Span::new(0, 0),
                 ));
             };
@@ -648,16 +637,8 @@ pub(crate) fn infer_expr_in(
                 }
             }
             let set_ty = Ty::Set(Box::new(elem_ty));
-            if set_ty != Ty::Set(Box::new(Ty::Int)) {
-                return Err(Diagnostic::error(
-                    "T0038",
-                    format!(
-                        "{} is not compiled yet (D-122) -- only set[int] is",
-                        set_ty.name()
-                    ),
-                    Span::new(0, 0),
-                ));
-            }
+            // Shared with annotation lowering -- see the `ListLiteral` arm.
+            pycc_hir::check_container_ty(&set_ty, Span::new(0, 0))?;
             Ok(set_ty)
         }
         // PR-11b Task 3 (D-116): unlike `ListLiteral`/`DictLiteral`/
@@ -669,23 +650,20 @@ pub(crate) fn infer_expr_in(
             if elements.is_empty() {
                 return Err(Diagnostic::error(
                     "T0021",
-                    "an empty tuple literal's element types cannot be inferred without an annotation (tuple[...] annotations are not supported yet)".to_string(),
+                    "an empty tuple literal's element types cannot be inferred from the literal alone -- inferring them from a `tuple[...]` annotation is not supported yet (issue #927)".to_string(),
                     Span::new(0, 0),
                 ));
             }
             let mut elem_tys = Vec::with_capacity(elements.len());
             for element in elements {
                 let this_ty = infer_expr_in(env, local_names, element)?;
-                if !matches!(this_ty, Ty::Int | Ty::Bool | Ty::Float) {
-                    return Err(Diagnostic::error(
-                        "T0039",
-                        format!(
-                            "tuple element type `{}` is not compiled yet (D-116) -- only int/bool/float elements are",
-                            this_ty.name()
-                        ),
-                        Span::new(0, 0),
-                    ));
-                }
+                // Per-element, *inside* the loop, not a whole-`Ty` postcheck
+                // like the three arms above: the elements are gated in source
+                // order, so an earlier element's type gate is reported ahead
+                // of a later element's own inference failure (an undefined
+                // name, say). `pycc_hir` exposes the element-shaped entry
+                // point for exactly this reason (D-228).
+                pycc_hir::check_tuple_element_ty(&this_ty, Span::new(0, 0))?;
                 elem_tys.push(this_ty);
             }
             Ok(Ty::Tuple(Box::new(elem_tys)))
