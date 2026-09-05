@@ -308,3 +308,38 @@ fn a_non_protocol_parameter_and_a_missing_argument_are_both_skipped() {
     );
     assert!(call(&env, "same", vec![HirExpr::IntLiteral(1)], &protocol_funcs).is_none());
 }
+
+#[test]
+fn a_static_method_still_uses_nominal_assignability() {
+    // `check_call_args`' `structural: None` arm, reached through the
+    // static-method call site (#954).
+    let err = check_source(&format!(
+        "{PRELUDE}class H:\n    @staticmethod\n    def take(p: P) -> int:\n        return 1\ndef main() -> None:\n    print(H.take(C()))\nmain()\n"
+    ))
+    .unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert_eq!(err.message, "argument 1 of `take` expects `P`, got `C`");
+}
+
+#[test]
+fn a_class_method_still_uses_nominal_assignability() {
+    let err = check_source(&format!(
+        "{PRELUDE}class H:\n    @classmethod\n    def take(cls, p: P) -> int:\n        return 1\ndef main() -> None:\n    print(H.take(C()))\nmain()\n"
+    ))
+    .unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert_eq!(err.message, "argument 1 of `take` expects `P`, got `C`");
+}
+
+#[test]
+fn a_super_forwarding_call_still_uses_nominal_assignability() {
+    // `resolve_super_method_call`'s own `check_call_args` site keeps the
+    // nominal predicate too, so a concrete argument forwarded through
+    // `super()` is still `T0021` (#954).
+    let err = check_source(&format!(
+        "{PRELUDE}class Base:\n    def take(self, p: P) -> int:\n        return 1\nclass Sub(Base):\n    def go(self) -> int:\n        return super().take(C())\ndef main() -> None:\n    print(Sub().go())\nmain()\n"
+    ))
+    .unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert_eq!(err.message, "argument 1 of `take` expects `P`, got `C`");
+}
