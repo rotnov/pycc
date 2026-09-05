@@ -141,7 +141,12 @@ of such a class to a name (`e = MyError("boom")`, for a user subclass
 whose MRO reaches a builtin exception without overriding its inherited
 constructor) reports `cannot instantiate exception class \`...\` as a
 value` -- `raise MyError("boom")` stays the one supported construction
-(Part 3 of issue #541).
+(Part 3 of issue #541). Calling an enum class (`Color()`, `Color(1)`)
+reports `cannot call enum class \`...\`` from the same
+`resolve_instantiation` ladder (issue #921): members are compile-time
+singletons reached by name (`Color.RED`), and by-value lookup is the
+not-yet-implemented construct; the zero-argument form is a CPython
+`TypeError` too and is named as such rather than as unsupported.
 
 ## Quality bar
 
