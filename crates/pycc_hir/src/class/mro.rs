@@ -333,6 +333,7 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             enum_members: Vec::new(),
+            is_enum: false,
             is_dataclass: false,
             dataclass_fields: Vec::new(),
             is_protocol: false,

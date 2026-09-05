@@ -61,6 +61,7 @@
 
 mod attrs;
 mod body;
+pub(crate) mod enum_call;
 mod enum_class;
 mod init;
 mod mro;
@@ -188,10 +189,15 @@ pub struct HirClassDef {
     /// PEP 435 (#379, PR-19): the enum members of an enum class
     /// (`class Color(Enum): RED = 1; GREEN = 2`), in source order. Each
     /// entry is `(member_name, value)` where `value` is the `int` or `str`
-    /// literal assigned to the member (#892). Empty for a non-enum class; a
-    /// non-empty vec marks this class as an enum class. An enum class has
-    /// `bases = []` and `mro = [self_name]` (the `Enum` base is consumed
-    /// as a marker, not a real base), no `__init__` requirement, and
+    /// literal assigned to the member (#892). Empty for a non-enum class
+    /// *and* for a member-less enum class (`class E(Enum): "doc"`, accepted
+    /// since #744), so emptiness does not decide whether a class is an
+    /// enum -- `is_enum` records that provenance (#921). Keying the member
+    /// table on `!enum_members.is_empty()`, as `pycc_types::enum_lower`
+    /// does, stays correct: a member-less enum has nothing to unroll or
+    /// allocate, and that key is not to be "fixed" to `is_enum`. An enum
+    /// class has `bases = []` and `mro = [self_name]` (the `Enum` base is
+    /// consumed as a marker, not a real base), no `__init__` requirement, and
     /// `attrs = [("value", <Ty::Int or Ty::Str>), ("name", Ty::Str)]` --
     /// `value`'s type follows the class's own member-value type (#892), and
     /// every member of one class must share it -- so existing
@@ -200,6 +206,16 @@ pub struct HirClassDef {
     /// instance allocated once at module-init time (see `pycc_codegen`'s
     /// per-member init sequence).
     pub enum_members: Vec<(String, EnumMemberValue)>,
+    /// PEP 435 (#921): `true` exactly when this class was lowered by
+    /// `lower_enum_class` -- the enum's provenance marker, regardless of how
+    /// many members it declares (D-188: provenance is recorded, never
+    /// inferred from shape). Every other construction site sets `false`,
+    /// including a monomorphized generic class (a generic enum is rejected
+    /// at lowering). An enum class is constructor-less by design, so
+    /// `pycc_types::class::resolve_instantiation` rejects a call to it with
+    /// `C0001` on this flag, behind `pycc_hir`'s own spanned rejection of
+    /// the same call shape (`class::enum_call`).
+    pub is_enum: bool,
     /// Class-level attributes in source order, in either spelling: the
     /// annotated one PEP 526 gives (`MIN_WIDTH: int = -1024`,
     /// `LIMIT: ClassVar[int] = 8`, #911, Part 1 of #885) and the bare
@@ -1361,6 +1377,7 @@ pub(crate) fn lower_class(
             class_methods,
             type_param,
             enum_members,
+            is_enum: false,
             is_dataclass,
             dataclass_fields,
             is_protocol: false,
@@ -2514,6 +2531,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_enum: false,
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
                 is_protocol: false,

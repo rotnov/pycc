@@ -548,6 +548,7 @@ fn lowered_attr_set_value(slot_ty: Ty, value: HirExpr) -> MirExpr {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_enum: false,
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
                 is_protocol: false,

@@ -1,0 +1,5 @@
+error[C0001]: calling an enum class (`Color(...)`) is not supported yet -- refer to a member by name (`Color.<MEMBER>`) instead
+ --> tests/diagnostics/c0001_enum_class_call_no_args.py:10:9
+   |
+10 |     c = Color()
+   |         ^^^^^^^ calling an enum class (`Color(...)`) is not supported yet -- refer to a member by name (`Color.<MEMBER>`) instead

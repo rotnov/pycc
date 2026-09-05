@@ -300,6 +300,7 @@ pub(super) fn lower_protocol_class(
             class_methods: Vec::new(),
             type_param,
             enum_members: Vec::new(),
+            is_enum: false,
             is_dataclass: false,
             dataclass_fields: Vec::new(),
             is_protocol: true,

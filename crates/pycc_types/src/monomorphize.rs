@@ -1814,6 +1814,7 @@ pub(crate) fn instantiate_generic_class_methods(
             static_methods: mangled_static_methods,
             class_methods: mangled_class_methods,
             enum_members: Vec::new(),
+            is_enum: false,
             is_dataclass: false,
             dataclass_fields: Vec::new(),
             is_protocol: false,

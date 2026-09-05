@@ -145,6 +145,21 @@ pub(crate) fn resolve_instantiation(
             Span::new(0, 0),
         ));
     }
+    // #921: an enum class is constructor-less by design (its members are
+    // compile-time singletons; `pycc_hir::lower_enum_class` early-returns
+    // before `ensure_init`, D-225), so `Color()`/`Color(1)` has no
+    // `__init__` to resolve. `pycc_hir::class::enum_call` already rejects
+    // every CLI-reachable spelling at the call expression's span; this is
+    // the span-less defense-in-depth guard that makes the MRO panic below a
+    // true invariant. Keyed on the `is_enum` provenance flag, never on
+    // `enum_members` emptiness: a docstring-only enum has no members.
+    if class_def.is_enum {
+        return Err(Diagnostic::error(
+            "C0001",
+            pycc_hir::enum_class_call_message(class_name),
+            Span::new(0, 0),
+        ));
+    }
     // #432: walk the MRO to find the first class with an `__init__` method.
     // #714: also record whether that ancestor is itself a *synthetic*
     // (seeded) class -- see the check just below, which must not key on the
@@ -170,9 +185,10 @@ pub(crate) fn resolve_instantiation(
         .unwrap_or_else(|| {
             panic!(
                 "pycc_types: internal error: no `__init__` found in class `{class_name}`'s MRO -- \
-             pycc_hir guarantees an `__init__` for every class it lowers through `lower_class`, \
-             by inheritance or by synthesis; an enum class early-returns at \
-             `pycc_hir::lower_enum_class` and is a known hole tracked by #921"
+             pycc_hir guarantees an `__init__` for every non-enum class it lowers through \
+             `lower_class`, by inheritance or by synthesis, and an enum class is rejected \
+             by the `is_enum` guard just above (and by `pycc_hir::class::enum_call` before \
+             that, #921)"
             )
         });
     // The resolved `__init__` coming from a *synthetic* ancestor means
@@ -249,6 +265,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_enum: false,
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
                 is_protocol: false,
@@ -274,13 +291,58 @@ mod tests {
     }
 
     #[test]
+    fn resolve_instantiation_rejects_an_enum_class_with_c0001() {
+        // #921: the span-less defense-in-depth guard. `pycc_hir`'s own
+        // spanned scan catches every CLI-reachable enum call first, so the
+        // guard is reachable only by binding an `is_enum` class directly.
+        // The class carries a member for realism, but the guard keys on the
+        // provenance flag alone.
+        let mut env = crate::Environment::new();
+        env.bind_class(
+            "Color".to_string(),
+            HirClassDef {
+                class_attrs: Vec::new(),
+                exception_type_tag: None,
+                name: "Color".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Color".to_string()],
+                attrs: vec![
+                    ("value".to_string(), crate::Ty::Int),
+                    ("name".to_string(), crate::Ty::Str),
+                ],
+                methods: Vec::new(),
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                enum_members: vec![("RED".to_string(), pycc_hir::EnumMemberValue::Int(1))],
+                is_enum: true,
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        );
+        let diagnostic = super::resolve_instantiation(&env, "Color", &[crate::Ty::Int])
+            .expect_err("an enum class call must be rejected, not resolved");
+        assert_eq!(diagnostic.code, "C0001");
+        assert_eq!(
+            diagnostic.message,
+            pycc_hir::enum_class_call_message("Color")
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "no `__init__` found in class `Ghost`'s MRO")]
     fn resolve_instantiation_panics_when_no_init_is_in_the_mro() {
-        // #432 / #912: `pycc_hir` guarantees an `__init__` for every class
-        // it lowers through `lower_class`, by inheritance or by synthesis,
-        // so this panic is an internal error. (An enum class early-returns
-        // at `pycc_hir::lower_enum_class` and is a known hole
-        // tracked by #921.) This test bypasses the normal entry point and
+        // #432 / #912: `pycc_hir` guarantees an `__init__` for every
+        // non-enum class it lowers through `lower_class`, by inheritance or
+        // by synthesis, and an enum class (`is_enum`) is rejected by the
+        // guard ahead of the MRO walk (#921), so this panic is an internal
+        // error. This test bypasses the normal entry point and
         // binds a class whose MRO contains no `__init__` method. The MRO
         // also includes `Phantom` (not registered), exercising the `?`
         // arm of the `find_map` closure -- `Ghost` is found but has no
@@ -302,6 +364,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 enum_members: Vec::new(),
+                is_enum: false,
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
                 is_protocol: false,

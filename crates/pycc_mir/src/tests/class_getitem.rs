@@ -69,6 +69,7 @@ fn class_getitem_hir(hook_kind: &str, extra_items: Vec<HirItem>) -> HirModule {
                 static_methods,
                 class_methods,
                 enum_members: Vec::new(),
+                is_enum: false,
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
                 is_protocol: false,

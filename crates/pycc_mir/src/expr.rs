@@ -150,10 +150,11 @@ pub(super) fn lower_expr(
                     .unwrap_or_else(|| {
                         panic!(
                             "pycc_mir: internal error: no `__init__` found in class `{callee}`'s \
-                         MRO -- pycc_hir guarantees an `__init__` for every class it lowers \
-                         through `lower_class`, by inheritance or by synthesis; an enum class \
-                         early-returns at `pycc_hir::lower_enum_class` and is a known \
-                         hole tracked by #921"
+                         MRO -- pycc_hir guarantees an `__init__` for every non-enum class it \
+                         lowers through `lower_class`, by inheritance or by synthesis, and a \
+                         call to an enum class never reaches MIR: `pycc_hir::class::enum_call` \
+                         and `pycc_types::class::resolve_instantiation` reject it with `C0001` \
+                         (#921)"
                         )
                     });
                 return MirExpr::Instantiate(Box::new(InstantiateExpr {

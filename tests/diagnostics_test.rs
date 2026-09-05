@@ -1044,3 +1044,16 @@ fn c0001_protocol_container_attribute() {
 fn t0044_user_class_named_list_subscript() {
     assert_diagnostic_matches_fixture("t0044_user_class_named_list_subscript");
 }
+
+/// #921: calling an enum class with no arguments is `C0001` at the call
+/// expression, not a `pycc_types` panic.
+#[test]
+fn c0001_enum_class_call_no_args() {
+    assert_diagnostic_matches_fixture("c0001_enum_class_call_no_args");
+}
+
+/// #921: the value-lookup spelling `Color(1)` is the same `C0001`.
+#[test]
+fn c0001_enum_class_call_value() {
+    assert_diagnostic_matches_fixture("c0001_enum_class_call_value");
+}

@@ -159,6 +159,7 @@ fn generic_rewrite_fixture(
         class_methods: vec![],
         type_param: None,
         enum_members: vec![],
+        is_enum: false,
         is_dataclass: false,
         dataclass_fields: vec![],
         is_protocol: false,

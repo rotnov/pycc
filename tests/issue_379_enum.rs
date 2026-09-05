@@ -378,3 +378,103 @@ fn enum_loop_nested_inside_for_range_unrolls() {
         "nested enum loop should unroll inside a for-range body"
     );
 }
+
+// -- #921: calling an enum class is `C0001`, never a panic -----------------
+
+/// Runs one `pycc` subcommand on `src` and captures its exit code and both
+/// output streams. `check_fails`/`build_and_run` above only observe success,
+/// so a panic (exit 101) would be indistinguishable from a diagnostic
+/// (exit 1) through them.
+fn run_capturing(args: &[&str]) -> (Option<i32>, String) {
+    let output = Command::new(pycc_bin()).args(args).output().unwrap();
+    let both = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (output.status.code(), both)
+}
+
+fn assert_enum_call_rejected(code: Option<i32>, output: &str, class_name: &str) {
+    assert_eq!(code, Some(1), "expected a diagnostic exit, got:\n{output}");
+    assert!(output.contains("error[C0001]"), "{output}");
+    assert!(
+        output.contains(&format!("calling an enum class (`{class_name}(...)`)")),
+        "{output}"
+    );
+    assert!(!output.contains("panicked"), "{output}");
+    assert!(!output.contains("internal error"), "{output}");
+}
+
+/// #921: `Color()`, `Color(1)`, a docstring-only enum's `E()` and a
+/// `StrEnum` call all exit 1 with `C0001` at the call site under `pycc
+/// check`; before the fix every one of them panicked in `pycc_types`.
+#[test]
+fn enum_class_call_is_rejected_not_panicked() {
+    let dir = ScratchDir::new("921_check").expect("failed to create scratch dir");
+    let cases: [(&str, &str, &str); 4] = [
+        (
+            "no_args.py",
+            "from enum import Enum\n\nclass Color(Enum):\n    RED = 1\n\ndef main() -> None:\n    c = Color()\n    print(c.value)\n\nmain()\n",
+            "Color",
+        ),
+        (
+            "value.py",
+            "from enum import Enum\n\nclass Color(Enum):\n    RED = 1\n\ndef main() -> None:\n    c = Color(1)\n    print(c.value)\n\nmain()\n",
+            "Color",
+        ),
+        (
+            "docstring_only.py",
+            "from enum import Enum\n\nclass E(Enum):\n    \"An enum with no members yet.\"\n\ne = E()\n",
+            "E",
+        ),
+        (
+            "str_enum.py",
+            "from enum import StrEnum\n\nclass Kind(StrEnum):\n    AXIAL = \"axial\"\n\nk = Kind(\"axial\")\n",
+            "Kind",
+        ),
+    ];
+    for (name, source, class_name) in cases {
+        let src = write_fixture(&dir, name, source);
+        let (code, output) = run_capturing(&["check", src.to_str().unwrap()]);
+        assert_enum_call_rejected(code, &output, class_name);
+    }
+}
+
+/// #921: `pycc build` stops at the same diagnostic, proving the matching
+/// `pycc_mir` "no `__init__` in the MRO" panic is unreachable for an enum
+/// class and no artifact is produced.
+#[test]
+fn enum_class_call_build_exits_with_the_diagnostic() {
+    let dir = ScratchDir::new("921_build").expect("failed to create scratch dir");
+    let src = write_fixture(
+        &dir,
+        "build.py",
+        "from enum import Enum\n\nclass Color(Enum):\n    RED = 1\n\nprint(Color(1).value)\n",
+    );
+    let out = dir.join("should_not_exist");
+    let (code, output) =
+        run_capturing(&["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_enum_call_rejected(code, &output, "Color");
+    assert!(!out.exists(), "no output artifact may be produced");
+}
+
+/// #921: an enum class pulled in by a project import (#898) is known to the
+/// scan only through `HirClassDef::is_enum` -- a docstring-only enum has
+/// no members to key on -- so `from colors import Color` / `Color()` in the
+/// entry module is rejected at the call rather than panicking.
+#[test]
+fn imported_docstring_only_enum_class_call_is_rejected() {
+    let dir = ScratchDir::new("921_import").expect("failed to create scratch dir");
+    let pkg = dir.join("pkg");
+    std::fs::create_dir_all(&pkg).unwrap();
+    write_fixture(
+        &pkg,
+        "colors.py",
+        "from enum import Enum\n\nclass Color(Enum):\n    \"Members arrive later.\"\n",
+    );
+    let entry = write_fixture(&pkg, "main.py", "from colors import Color\n\nc = Color()\n");
+    let (code, output) = run_capturing(&["check", entry.to_str().unwrap()]);
+    assert_enum_call_rejected(code, &output, "Color");
+    assert!(output.contains("main.py:3:5"), "{output}");
+}

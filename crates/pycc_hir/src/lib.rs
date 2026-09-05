@@ -13,6 +13,7 @@ mod program;
 mod stmt;
 mod typecheck;
 
+pub use class::enum_call::enum_class_call_message;
 pub use class::{ClassAttrValue, EnumMemberValue, HirClassDef, PropertyDef, ProtocolMember};
 pub use container::{check_container_ty, check_tuple_element_ty};
 pub use exception::{

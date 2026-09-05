@@ -104,8 +104,10 @@ pub struct LoweredModule {
 }
 
 /// Lowers every top-level item of a parsed module, collecting one
-/// diagnostic per failing item (in source order) and skipping that item;
-/// the `Err` is never empty (D-219, Part 2 of #864). The single-file
+/// diagnostic per failing item (in source order) plus, per item, one
+/// `C0001` for every call to an enum class it contains (#921,
+/// `class::enum_call`), and skipping a failing item; the `Err` is never
+/// empty (D-219, Part 2 of #864). The single-file
 /// entry: exactly `lower_module` with no project imports answered,
 /// followed by `program::finalize` -- the same phases in the same order as
 /// before #898, so the result is byte-identical.
@@ -116,8 +118,12 @@ pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
 
 /// The per-module walk (#898): lowers every top-level item against the
 /// driver's answers for the module's project imports, collecting one
-/// diagnostic per failing item (in source order) and skipping that item;
-/// the `Err` is never empty (D-219). The result still needs
+/// diagnostic per failing item (in source order) and skipping that item,
+/// then -- for every item, lowered or skipped -- one `C0001` per call to an
+/// enum class inside it (#921, `class::enum_call`; the second per-item
+/// collection source, appended right after the item's own diagnostic so
+/// the list stays in loop order); the `Err` is never empty (D-219). The
+/// result still needs
 /// `program::link` (even for a single module) and `program::finalize`
 /// before it is a complete program: the exception type tags and the
 /// synthetic `Exception.__init__` are program-wide and assigned there.
@@ -195,13 +201,18 @@ pub fn lower_module(
     // module's prologue (docstring, then future imports); every later
     // statement is `Body`, and a future import there is an `L0001`.
     let prologue_len = future_prologue_len(&module.body);
+    // #921: the module's own enum classes, known before the loop so a call
+    // inside a `def` that precedes `class Color(Enum):` is still scanned
+    // against it (see `class::enum_call`).
+    let syntactic_enum_classes = class::enum_call::syntactic_enum_class_names(&module.body);
     for (index, stmt) in module.body.iter().enumerate() {
         let position = if index < prologue_len {
             FuturePosition::Prologue
         } else {
             FuturePosition::Body
         };
-        match lower_top_level_item(stmt, &mut state, resolved, position) {
+        let outcome = lower_top_level_item(stmt, &mut state, resolved, position);
+        match outcome {
             Ok(()) => {
                 // P5: an item that binds a poisoned name and lowers
                 // un-poisons it. `retain`, never `position` + `remove`, so a
@@ -229,6 +240,31 @@ pub fn lower_module(
                 }
             }
         }
+        // #921: the second per-item collection source. Scanned after the
+        // item's own outcome (Ok or Err alike) so the item's diagnostic
+        // precedes its enum-call diagnostics and the whole list stays in
+        // loop order (D-217 rule 3, never re-sorted). The name set is the
+        // syntactic pre-collection plus every enum class known to `state`
+        // at this point (an enum a project import pulled in, keyed on the
+        // `is_enum` provenance flag, never on `enum_members` emptiness),
+        // minus the poisoned names: a call to an enum class that itself
+        // failed to lower is a cascade of that skip (D-219, P2).
+        let enum_class_names: Vec<String> = syntactic_enum_classes
+            .iter()
+            .cloned()
+            .chain(
+                state
+                    .class_defs
+                    .iter()
+                    .filter(|(_, class_def)| class_def.is_enum)
+                    .map(|(name, _)| name.clone()),
+            )
+            .filter(|name| !poisoned.iter().any(|poisoned_name| poisoned_name == name))
+            .collect();
+        diagnostics.extend(class::enum_call::reject_enum_class_calls(
+            stmt,
+            &enum_class_names,
+        ));
     }
     if !diagnostics.is_empty() {
         return Err(diagnostics);
