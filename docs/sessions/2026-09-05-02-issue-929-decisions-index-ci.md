@@ -19,6 +19,14 @@ Delivered in the pull request that carries this snapshot, branched from
   moved from `verdict: pending` to `shipped`, pointing at the CI step, with the
   manual both-direction verification recorded.
 - `.harden/findings/issue-929.jsonl` holds the review rounds.
+- `scripts/check_roadmap_evidence.rb`: the step is listed in
+  `D171_GOVERNANCE_POLICY_STEPS`, so the base-owned `audit` job (D-171) rejects
+  a head that conditions (`if:`), replaces, or drops it -- the head-controlled
+  `CiWiringTest` alone could not (Codex review thread on PR #936, a P1 that
+  held: `if: false` on the step left every check green). The
+  `ci-d171.yml` fixture gained the step and
+  `D171_CHANGE_AWARE_CI_WORKFLOW_SHA256` rotated, as #862 did for rustfmt; the
+  frozen D-215 fixture is now asserted to predate exactly this one step.
 - `docs/decisions/D-151-decompose-the-decisions-log-into-per-decision-files.md`:
   a dated inline correction note on the Consequences claim that the `--check`
   was "wired into CI as a new required-check step" -- it never was until this

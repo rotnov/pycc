@@ -68,7 +68,8 @@ status: accepted
   `D-227` during #918/#928) with no gate catching it. The gate now exists: the
   `governance` job in `.github/workflows/ci.yml` runs
   `python3 -B scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md --check`
-  (PR #936), locked in by `CiWiringTest` in `scripts/test_generate_decisions_index.py`
+  (PR #936), bound into the base-owned D-171 audit's `D171_GOVERNANCE_POLICY_STEPS`
+  allowlist, locked in by `CiWiringTest` in `scripts/test_generate_decisions_index.py`,
   and proved by deliberate violators (a stale index and a duplicate id both exit 1;
   the clean tree exits 0). This is a factual erratum, not a superseding decision: the
   decision itself -- per-decision files, a generated index, freshness enforced by
