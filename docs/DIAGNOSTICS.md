@@ -20,7 +20,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 |---|---|---|
 | `C0001` | error | valid Python construct is not implemented by this pycc version |
 | `C0002` | error | recognized stdlib module, but the specific imported symbol is not registered (D-136), e.g. `from math import isnan` |
-| `L0001` | error | syntax error (span + expected set) *(also reused, without an "expected set", for a post-parse context violation caught during HIR lowering -- `break`/`continue` outside a loop, `async for` outside an async function (D-148), `yield`/`yield from` outside a function (D-149), `return`/`break`/`continue` inside a `finally` block that would exit it (PEP 765, D-193, Part 1 of #543), and `return`/`break`/`continue` inside an `except*` clause body (PEP 654, #795) -- since CPython classifies all of these as `SyntaxError` (a `SyntaxWarning` as of CPython 3.14 for the `finally` case specifically) too; `T0024` ("`return` outside a function") is the closest existing precedent for this same "keyword valid only in a specific context" family but lives under `T0xxx` instead, an accepted, deliberately unfixed inconsistency -- see D-148)* |
+| `L0001` | error | syntax error (span + expected set) *(also reused, without an "expected set", for a post-parse context violation caught during HIR lowering -- `break`/`continue` outside a loop, `async for` outside an async function (D-148), `yield`/`yield from` outside a function (D-149), `return`/`break`/`continue` inside a `finally` block that would exit it (PEP 765, D-193, Part 1 of #543), `return`/`break`/`continue` inside an `except*` clause body (PEP 654, #795), and a `from __future__ import ...` CPython rejects -- an unknown feature name including `*` (`future feature <name> is not defined`), `braces` (`not a chance`), or a future import after the docstring-and-future-imports prologue (`from __future__ imports must occur at the beginning of the file`) (#919, D-229) -- since CPython classifies all of these as `SyntaxError` (a `SyntaxWarning` as of CPython 3.14 for the `finally` case specifically) too; `T0024` ("`return` outside a function") is the closest existing precedent for this same "keyword valid only in a specific context" family but lives under `T0xxx` instead, an accepted, deliberately unfixed inconsistency -- see D-148)* |
 | `L0002` | error | Python version mismatch (feature needs 3.14 level) |
 | `T0001` | error | public function missing annotation |
 | `T0002` | error | `Any` outside interop boundary |
@@ -100,7 +100,13 @@ segment is fine), and a top-level name two linked modules both define
 namespace per module is not supported yet``, lifted by Part 3 of #881). A
 program that seeds the builtin exception classes in one module while another
 shadows one of their names is rejected the same way. An import failure
-CPython itself would raise on is `T0021`, not `C0001`.
+CPython itself would raise on is `T0021`, not `C0001`. A `from __future__
+import ...` is a compiler directive, not a module (#919, D-229): its nine no-op
+features lower to nothing, a name CPython rejects is `L0001`, and the one
+CPython-valid feature that changes the grammar, `barry_as_FLUFL`, is `C0001`
+(``the `barry_as_FLUFL` future feature (`<>` in place of `!=`) is not
+supported yet``), as is `from __future__ import x as y` under the generic
+aliasing gap.
 
 `pycc_types` also uses it for calls to known Python 3.14
 callable builtins that this compiler version does not implement (e.g.
