@@ -21,6 +21,12 @@ was already delivering" for the process lesson.
   the consequence bullet said the row "stays `☐` under rule 5 until #937
   flips it"; a dated inline update records that #937 flipped it in #939 after
   `main` run 33972731538. The decision's substance is unchanged.
+- `tests/fixtures/conformance-breadth-manifest.json`: a fourth `not_proven`
+  item on the PEP 563 row, `out-of-scope`, for feature-name binding (CPython
+  binds `annotations` to a `__future__._Feature`; pycc binds nothing, a
+  deliberate divergence D-229 records). Raised by the Codex review of this
+  pull request's superseded head; the fixture never reads the name, so the
+  manifest must not present the directive as a binding-equivalent import.
 - `.harden/findings/issue-937.jsonl`: the D-068 review findings from this
   session's full (now superseded) implementation, kept because both findings
   were real and one of them (the stale comment in `tests/conformance/classes.rs`)
