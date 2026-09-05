@@ -1044,3 +1044,45 @@ fn c0001_protocol_container_attribute() {
 fn t0044_user_class_named_list_subscript() {
     assert_diagnostic_matches_fixture("t0044_user_class_named_list_subscript");
 }
+
+// #931: a subscript on a base that is not a class -- a PEP 695 type
+// parameter, a builtin scalar, `Self`, or a non-class `type` alias -- is
+// rejected with the same `T0044` instead of silently discarding the type
+// argument, in parameter, return, class-attribute and every other annotation
+// position.
+#[test]
+fn t0044_type_param_subscript_annotation() {
+    assert_diagnostic_matches_fixture("t0044_type_param_subscript_annotation");
+}
+
+#[test]
+fn t0044_type_param_subscript_annotation_json_carries_no_help() {
+    // D-152: no determinate safe replacement, so the structured `help` list
+    // is empty rather than absent.
+    assert_json_diagnostic_matches_fixture("t0044_type_param_subscript_annotation");
+}
+
+#[test]
+fn t0044_builtin_scalar_subscript_annotation() {
+    assert_diagnostic_matches_fixture("t0044_builtin_scalar_subscript_annotation");
+}
+
+#[test]
+fn t0044_self_subscript_annotation() {
+    assert_diagnostic_matches_fixture("t0044_self_subscript_annotation");
+}
+
+#[test]
+fn t0044_type_alias_subscript_annotation() {
+    assert_diagnostic_matches_fixture("t0044_type_alias_subscript_annotation");
+}
+
+#[test]
+fn t0044_subscript_annotation_class_attribute() {
+    assert_diagnostic_matches_fixture("t0044_subscript_annotation_class_attribute");
+}
+
+#[test]
+fn t0044_subscript_annotation_return() {
+    assert_diagnostic_matches_fixture("t0044_subscript_annotation_return");
+}
