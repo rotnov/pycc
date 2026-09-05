@@ -62,7 +62,9 @@ fn assert_enum_subclass_rejected(
         combined.contains(message),
         "the output should carry {message:?}, got: {combined}"
     );
-    let location = format!("{}:{line}:1", entry.display());
+    // The renderer prints paths with forward slashes on every platform
+    // (see `tests/slice0.rs`), so normalize the expected location the same way.
+    let location = format!("{}:{line}:1", entry.to_string_lossy().replace('\\', "/"));
     assert!(
         combined.contains(&location),
         "the diagnostic should point at the class header {location}, got: {combined}"
