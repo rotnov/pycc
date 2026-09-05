@@ -265,8 +265,9 @@ Permissions, checkout depth, thresholds, required checks and `ci.yml`
 classification remain unchanged.
 The current Language/Status directive note follows D-229 and the annotation
 semantics owner separately from the immutable D-230 transcript. Positive and
-mutation controls preserve its module-prologue, no-binding, unsupported-annotation
-and pending PEP 563 acceptance boundaries after integrating issue #919. Public
+mutation controls preserve its module-prologue, no-binding, three core annotation
+gaps and partial PEP 563 acceptance boundaries after integrating issues #919 and
+#937. Public
 CLI mutations also reject each new hero's limitations or source transcript
 wrapped in `noscript`: evidence must be visible with JavaScript enabled too.
 

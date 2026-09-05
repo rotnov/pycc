@@ -437,8 +437,9 @@ and D-186. Dedicated Language Support and Diagnostics pages extend that
 contract under [D-230](./decisions/D-230-bind-public-evidence-to-ordered-immutable-executions.md).
 Language and Status also project D-229's current future-import directive
 boundary separately from that historical transcript; their shared scope check
-preserves the module-prologue restriction, annotation gaps and pending PEP 563
-acceptance.
+preserves the module-prologue restriction, three core annotation gaps and partial
+PEP 563 acceptance. The observed-green subset has its own fixture and CI links;
+it does not expand the historical PEP 526 transcript's claim.
 
 ## Versioned evidence-hero contract
 

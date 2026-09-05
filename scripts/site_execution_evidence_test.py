@@ -66,9 +66,11 @@ class ExecutionEvidenceTests(unittest.TestCase):
 
     def test_current_future_import_scope_is_distinct_from_historical_hero(self):
         expected = ("In the module prologue, from __future__ import annotations is accepted as a "
-                    "compile-time no-op and binds no feature name. String annotations and "
-                    "references to classes defined later remain unsupported. PEP 563 "
-                    "acceptance remains pending in #937.")
+                    "compile-time no-op and binds no feature name. The PEP 563 subset proves "
+                    "that this directive leaves supported own-class method annotations and "
+                    "already-defined-class function annotations working. Later-defined forward "
+                    "references, string annotations, and runtime __annotations__ introspection "
+                    "remain unsupported. This is partial evidence, not whole-PEP acceptance.")
         for relative in ("language-support/index.html", "status/index.html"):
             with self.subTest(page=relative):
                 source = (ROOT / "site" / relative).read_text()
@@ -79,8 +81,10 @@ class ExecutionEvidenceTests(unittest.TestCase):
         for relative in ("language-support/index.html", "status/index.html"):
             for old, new in (("In the module prologue", "At module level"),
                              ("compile-time no-op and binds no feature name", "fully compatible annotation implementation"),
-                             ("references to classes defined later remain unsupported", "references to classes defined later are supported"),
-                             ("PEP 563 acceptance remains pending in #937.", "PEP 563 is fully accepted.")):
+                             ("Later-defined forward references, ", ""),
+                             ("string annotations, and ", ""),
+                             ("runtime <code>__annotations__</code> introspection remain unsupported", "runtime annotation introspection is supported"),
+                             ("partial evidence, not whole-PEP acceptance", "whole-PEP acceptance")):
                 with self.subTest(page=relative, claim=old):
                     self.run_case(lambda doc, site, root: self.edit(site, relative, old, new), "current future-import scope")
 

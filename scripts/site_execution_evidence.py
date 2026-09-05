@@ -20,9 +20,11 @@ RUN = 33969157527
 REPO = "https://github.com/rotnov/pycc"
 CURRENT_FUTURE_SCOPE = (
     "In the module prologue, from __future__ import annotations is accepted as a "
-    "compile-time no-op and binds no feature name. String annotations and "
-    "references to classes defined later remain unsupported. PEP 563 "
-    "acceptance remains pending in #937."
+    "compile-time no-op and binds no feature name. The PEP 563 subset proves "
+    "that this directive leaves supported own-class method annotations and "
+    "already-defined-class function annotations working. Later-defined forward "
+    "references, string annotations, and runtime __annotations__ introspection "
+    "remain unsupported. This is partial evidence, not whole-PEP acceptance."
 )
 RUN_URL = f"{REPO}/actions/runs/{RUN}"
 PLATFORMS = [

@@ -229,7 +229,7 @@
                   compiles as a no-op, and an unknown module-level future feature
                   reports <code>L0001</code> with CPython's wording.
                 </p>
-                <p>In the module prologue, <code>from __future__ import annotations</code> is accepted as a compile-time no-op and binds no feature name. String annotations and references to classes defined later remain unsupported. PEP 563 acceptance remains pending in #937. The <a href="../language-support/">language support map</a> links the directive's contract and production tests separately from its historical PEP 526 hero.</p>
+                <p>In the module prologue, <code>from __future__ import annotations</code> is accepted as a compile-time no-op and binds no feature name. The PEP 563 subset proves that this directive leaves supported own-class method annotations and already-defined-class function annotations working. Later-defined forward references, string annotations, and runtime <code>__annotations__</code> introspection remain unsupported. This is partial evidence, not whole-PEP acceptance. The <a href="../language-support/">language support map</a> links the directive's contract, production tests, and observed-green subset evidence separately from its historical PEP 526 hero.</p>
               </div>
               <div class="evidence-card">
                 <span>Portability</span>
@@ -399,15 +399,11 @@
               v0.1, v0.2, and v0.3's acceptance criteria are all met, and
               v0.3 is released as the <code>v0.3.0</code> tag — see
               <a href="#implemented">Implemented now</a> above for what that
-              covers today. The conformance matrix clears 38 of the 37
-              <code>PYTHON_STANDARDS.md</code> rows v0.3 required (exceeding
-              the floor by one), encompassing all 39 required distinct PEP
-              numbers, with a 0-row and 0-PEP gap on both axes. The
-              previously-outstanding exception rows — PEP 3151
-              (<code>OSError</code> hierarchy), PEP 654
-              (<code>except*</code>), and PEP 758 (parenthesis-free
-              multi-type <code>except</code>) — flipped once their fixtures
-              were observed green on Tier-1 CI; see
+              covers today. The conformance matrix has 39 evidence-backed
+              <code>PYTHON_STANDARDS.md</code> rows: 2 whole-PEP acceptances
+              and 37 tested subsets, encompassing 40 distinct PEP numbers.
+              The v0.3 floors of 37 rows and 39 PEPs remain met; these counts
+              do not establish full Python compatibility. See
               <a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">the roadmap's v0.3 section</a>
               for the itemized evidence.
             </p>
