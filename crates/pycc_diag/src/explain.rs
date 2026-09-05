@@ -73,7 +73,13 @@ target type, issue #767), and a `cast` whose target type would change the \
 value's runtime representation (`cast(str, 5)`, `cast(int, some_bool)`; \
 D-198, issue #767) are the current instances -- for the same reason: the \
 construct is valid Python that a later slice can implement, not a by-design \
-rejection. The construct remains reserved and stops \
+rejection. Two `from __future__ import ...` shapes are C0001 for the same \
+reason (issue #919, D-229): `barry_as_FLUFL`, a valid feature that changes \
+the grammar (`<>` in place of `!=`) and that the vendored parser does not \
+implement, and `from __future__ import x as y`, the generic aliasing gap \
+(CPython binds a `_Feature` object pycc never models); the nine no-op \
+features lower to nothing, and a feature name CPython itself rejects is \
+`L0001`, not C0001. The construct remains reserved and stops \
 producing C0001 the moment the corresponding roadmap slice is implemented; \
 until then the diagnostic's span points at the unsupported node and the \
 message names the construct in Python terms, so it stays actionable rather \
