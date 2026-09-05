@@ -258,8 +258,11 @@ historical-blob controls through `scripts/test-check-site.sh` in a full-history
 checkout, as the Pages workflow does. They are deliberately outside shallow
 governance's `test_*.py` discovery; `scripts/test_site_execution_wiring.py`
 checks the shell invocation, Pages validation invocation and full-history
-checkout without reading Git objects. No workflow or permission change is
-needed for this publication.
+checkout without reading Git objects. The Pages push and pull-request path
+filters enumerate the ten direct execution-evidence dependencies exactly once
+per event; wiring controls reject independent removals and duplicates.
+Permissions, checkout depth, thresholds, required checks and `ci.yml`
+classification remain unchanged.
 The current Language/Status directive note follows D-229 and the annotation
 semantics owner separately from the immutable D-230 transcript. Positive and
 mutation controls preserve its module-prologue, no-binding, unsupported-annotation

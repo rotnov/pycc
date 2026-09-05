@@ -8,9 +8,45 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = "site_execution_evidence_test.py"
 COMMAND = 'python3 -B "$repo_root/scripts/' + SUITE + '"'
+EXECUTION_INPUTS = (
+    "scripts/check_site_evidence.py",
+    "scripts/site_execution_evidence.py",
+    "scripts/site_execution_evidence_test.py",
+    "tests/site_evidence.rs",
+    "tests/fixtures/pep_0526_var_annotations.py",
+    "tests/fixtures/pep_0526_var_annotations.expected.txt",
+    "tests/diagnostics/d0021_range_argument_type.py",
+    "tests/diagnostics/d0021_range_argument_type.expected.txt",
+    "tests/diagnostics/d0021_range_argument_type.expected.json",
+    "tests/fixtures/conformance-breadth-manifest.json",
+)
 
 
 class ExecutionEvidenceWiringTests(unittest.TestCase):
+    def event_block(self, workflow, event):
+        block = re.search(rf"(?ms)^  {event}:\n(.*?)(?=^  \S|\Z)", workflow)
+        self.assertIsNotNone(block, f"Pages {event} event is missing")
+        return block
+
+    def event_paths(self, workflow, event):
+        block = self.event_block(workflow, event)
+        paths = re.search(r"(?ms)^    paths:\n(.*?)(?=^    \S|\Z)", block.group(1))
+        self.assertIsNotNone(paths, f"Pages {event} paths are missing")
+        entries = []
+        for line in paths.group(1).splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            # Model the workflow's literal quoted-list form, failing closed on
+            # unmodeled YAML syntax instead of overlooking duplicate aliases.
+            entry = re.fullmatch(r'      - "([^"\\]+)"\s*(?:#.*)?', line)
+            self.assertIsNotNone(entry, f"Pages {event} paths require literal quoted entries")
+            entries.append(entry.group(1))
+        return entries
+
+    def assert_dependency_trigger(self, workflow, event, path):
+        self.assertEqual(self.event_paths(workflow, event).count(path), 1,
+                         f"Pages {event} paths must list {path} exactly once")
+
     def assert_binding(self, shell, workflow):
         self.assertIn("set -eu", shell)
         self.assertRegex(shell, re.compile("^" + re.escape(COMMAND) + "$", re.M))
@@ -30,6 +66,9 @@ class ExecutionEvidenceWiringTests(unittest.TestCase):
         )
         self.assertIsNotNone(validation, "Pages validation is missing")
         self.assertRegex(validation.group(1), r"(?m)^          ./scripts/test-check-site\.sh$")
+        for event in ("push", "pull_request"):
+            for path in EXECUTION_INPUTS:
+                self.assert_dependency_trigger(workflow, event, path)
 
     def setUp(self):
         self.shell = (ROOT / "scripts/test-check-site.sh").read_text()
@@ -52,6 +91,26 @@ class ExecutionEvidenceWiringTests(unittest.TestCase):
     def test_shallow_pages_checkout_is_rejected(self):
         with self.assertRaises(AssertionError):
             self.assert_binding(self.shell, self.workflow.replace("fetch-depth: 0", "fetch-depth: 1"))
+
+    def test_each_execution_dependency_triggers_each_pages_event(self):
+        for event in ("push", "pull_request"):
+            for path in EXECUTION_INPUTS:
+                with self.subTest(event=event, path=path):
+                    self.assert_dependency_trigger(self.workflow, event, path)
+
+    def test_each_dependency_trigger_rejects_absence_and_duplication(self):
+        for event in ("push", "pull_request"):
+            block = self.event_block(self.workflow, event)
+            for path in EXECUTION_INPUTS:
+                line = f'      - "{path}"\n'
+                self.assertIn(line, block.group(1))
+                for replacement in ("", line + line):
+                    with self.subTest(event=event, path=path, replacement=replacement):
+                        changed = block.group(1).replace(line, replacement, 1)
+                        workflow = self.workflow[:block.start(1)] + changed + self.workflow[block.end(1):]
+                        with self.assertRaisesRegex(AssertionError, re.escape(
+                                f"Pages {event} paths must list {path} exactly once")):
+                            self.assert_binding(self.shell, workflow)
 
 
 if __name__ == "__main__":
