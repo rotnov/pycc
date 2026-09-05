@@ -1011,11 +1011,6 @@ fn c0001_bare_dict_annotation() {
 }
 
 #[test]
-fn c0001_container_return_annotation() {
-    assert_diagnostic_matches_fixture("c0001_container_return_annotation");
-}
-
-#[test]
 fn c0001_protocol_container_attribute() {
     assert_diagnostic_matches_fixture("c0001_protocol_container_attribute");
 }

@@ -18,6 +18,7 @@ use exception::{
     expression_can_set_exception, guard_statement_effects,
 };
 mod bigint_rc;
+mod call_result;
 use bigint_rc::{
     BigIntRefcount, emit_bigint_refcount_call, int_temporary_word, pop_pending_int_release,
     push_pending_int_release_if_scalar_temporary, push_pending_int_release_if_temporary,
@@ -2708,97 +2709,7 @@ fn emit_expr_unchecked<'ctx>(
                 callee,
                 args,
             );
-            match ty {
-                Ty::Int => Scalar::Int(
-                    call_site
-                        .try_as_basic_value()
-                        .expect_basic("this function is declared to return int")
-                        .into_int_value(),
-                ),
-                Ty::Bool => Scalar::Bool(
-                    call_site
-                        .try_as_basic_value()
-                        .expect_basic("this function is declared to return bool")
-                        .into_int_value(),
-                ),
-                Ty::Float => Scalar::Float(
-                    call_site
-                        .try_as_basic_value()
-                        .expect_basic("this function is declared to return float")
-                        .into_float_value(),
-                ),
-                Ty::Str => Scalar::Str(
-                    call_site
-                        .try_as_basic_value()
-                        .expect_basic("this function is declared to return str")
-                        .into_pointer_value(),
-                ),
-                Ty::None => {
-                    // A `None`-returning call's LLVM function returns
-                    // `void`, so there is no value to extract. Preserve the
-                    // call's side effects and materialize the canonical zero
-                    // carrier used when that unit value crosses a parameter
-                    // or storage boundary. The surrounding MIR type keeps it
-                    // distinct from a real `False` value.
-                    Scalar::Bool(context.i8_type().const_int(0, false))
-                }
-                // A class instance is not reachable as a real function
-                // return type from this PR's own frontend (`pycc_types`
-                // never resolves a return annotation to `Ty::Instance` --
-                // class-typed annotations are out of scope, see the plan's
-                // own "Explicitly out of scope" list), but the codegen
-                // itself needs no defensive deferral the way `List`/`Dict`/
-                // `Set`/`Tuple` below still do: `ty_to_basic_type` already
-                // gives an `Instance`-returning function's LLVM signature
-                // the same pointer return type a `str`-returning one gets,
-                // so extracting the call result is identical to `Str`
-                // above -- a future PR that does support `-> Self`/
-                // `-> ClassName` needs no further codegen work here.
-                Ty::Instance(_) => Scalar::Instance(
-                    call_site
-                        .try_as_basic_value()
-                        .expect_basic("this function is declared to return an instance")
-                        .into_pointer_value(),
-                ),
-                // `Optional[int]` (D-197, #763, Part 1 of #747): unlike
-                // `List`/`Dict`/`Set`/`Tuple` below, an `Optional`-returning
-                // function IS reachable from real, type-checked source --
-                // `pycc_hir::func::annotation_to_ty`'s own `T | None` arm
-                // accepts `-> int | None` as a return annotation, so a call
-                // to such a function (`y = g(x)`, or `g(x)` used directly
-                // as a narrowing condition's operand) must extract its
-                // struct-by-value result rather than falling through to the
-                // generic panic below. `ty_to_basic_type`'s own
-                // `Ty::Optional` arm already gave this function's LLVM
-                // signature the matching `{ inner, i8 }` struct return
-                // type, mirroring `Tuple`'s own by-value extraction one
-                // arm up in kind (D-115).
-                Ty::Optional(_) => Scalar::Optional(
-                    call_site
-                        .try_as_basic_value()
-                        .expect_basic("this function is declared to return Optional[int]")
-                        .into_struct_value(),
-                ),
-                // No dedicated arm for `List`/`Dict`/`Set`/`Tuple`: a
-                // container-typed call result gets the same treatment as
-                // every other still-unhandled `Ty` here, naming the specific
-                // type via `.name()` instead of a bare `{:?}`.
-                //
-                // This panic is reachable today, which is why it is tracked
-                // as issue #926: D-146's private-helper return-type solver
-                // can infer a container return type for an *un-annotated*
-                // helper and reach here. D-228 (issue #918) deliberately does
-                // not widen that -- it rejects a container *return*
-                // annotation in `pycc_hir::lower_return_annotation` with
-                // `C0001` rather than opening a second route to this line.
-                // Supporting container returns properly is issue #925.
-                other => {
-                    panic!(
-                        "pycc_codegen: a `{}`-typed call result is not supported yet",
-                        other.name()
-                    )
-                }
-            }
+            crate::call_result::call_result_scalar(context, call_site, ty)
         }
         MirExpr::FString(parts) => {
             // Two deviations from the task brief, both here:

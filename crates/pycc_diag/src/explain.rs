@@ -47,18 +47,18 @@ rule: it fires whenever HIR lowering reaches a syntactically valid Python \
 statement, expression, or annotation shape that this pycc version's frontend \
 does not yet lower -- a `with` statement, a tuple-unpacking assignment, an \
 unrecognized import shape, or a type annotation this version's lowering \
-does not recognize, for example. Since D-228 (issue #918) the \
-parameterized container annotations `list[T]`, `set[T]`, `dict[K, V]` \
-and `tuple[A, B, ...]` *are* lowered in parameter, local- and module-variable \
-and type-alias positions, so C0001 no longer covers every \
-annotation more complex than a bare name; what it still covers there is \
-the bare, unparameterized `list`/`set`/`dict`/`tuple` spelling (whose \
-message names the parameterized form to write instead in exactly those \
-positions, and stays generic where that form is rejected too), a container \
-annotation in return position, which stays reserved for a later slice \
-(issue #925), and a protocol *attribute* whose type is a container, which no \
+does not recognize, for example. Since D-228 (issue #918), widened by \
+issue #925, the parameterized container annotations `list[T]`, `set[T]`, \
+`dict[K, V]` and `tuple[A, B, ...]` *are* lowered in parameter, return, \
+local- and module-variable and type-alias positions, so C0001 no longer \
+covers every annotation more complex than a bare name; what it still covers \
+there is the bare, unparameterized `list`/`set`/`dict`/`tuple` spelling \
+(whose message names the parameterized form to write instead in exactly \
+those positions, and stays generic where that form is rejected too) and a \
+protocol *attribute* whose type is a container, which no \
 class could ever satisfy because every class attribute slot is restricted to a \
-scalar type (a container type in a protocol *method*'s parameter does lower). It also fires for calls to known Python 3.14 \
+scalar type (a container type in a protocol *method*'s parameter or return \
+type does lower). It also fires for calls to known Python 3.14 \
 callable builtins that this compiler version does not implement (e.g. \
 `ValueError(\"x\")`, `Exception(\"msg\")`, `int(\"5\")`, `range(10)` as a \
 standalone call) -- these are valid Python, not name-resolution failures \

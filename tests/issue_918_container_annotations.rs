@@ -3,10 +3,10 @@
 // the real `pycc build` CLI -- parser -> hir -> types -> mir -> codegen ->
 // link -> run.
 //
-// Deliberately contains no container *return* type: return position is
-// rejected by design in Part 1 and tracked as issue #925 (see
-// `tests/diagnostics/c0001_container_return_annotation.py` for that rejection's
-// own fixture). It does contain a container-typed protocol *method*
+// Deliberately contains no container *return* type: return position was
+// rejected by design in Part 1 and delivered separately by issue #925, whose
+// own end-to-end coverage lives in `tests/issue_925_container_returns.rs`.
+// It does contain a container-typed protocol *method*
 // parameter: D-228 decision 10's gate covers protocol *attributes* only, and
 // a protocol method's parameter is an ordinary parameter position. Every
 // expected stdout below was verified against CPython 3.14 on the same

@@ -206,10 +206,11 @@ pub(super) fn lower_protocol_class(
                 // in a protocol body lowers through `crate::lower_arg_list`
                 // like any other parameter and runs end to end (measured
                 // against CPython 3.14, pinned by the
-                // `issue_918_container_annotations` integration test). A
-                // container *return* type in a protocol method is rejected
-                // by the separate return-position gate (issue #925), not
-                // here.
+                // `issue_918_container_annotations` integration test). Nor
+                // does it extend to a protocol method's *return* type, which
+                // lowers and runs end to end since #925 removed the
+                // return-position gate that once rejected it -- this gate
+                // covers attributes only.
                 //
                 // Non-container attribute types keep their existing
                 // behaviour exactly: `Ty::Instance`, `Ty::Optional`,

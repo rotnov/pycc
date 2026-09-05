@@ -1731,9 +1731,12 @@ fn the_bare_container_advice_appears_only_where_the_parameterized_form_lowers() 
          e.g. `list[int]`";
     const GENERIC: &str = "type annotation `list` is not supported yet";
 
-    // `list[int]` lowers here, so the advice is actionable.
+    // `list[int]` lowers here, so the advice is actionable. Return position
+    // joined this set in #925 (Part 2 of #918), which removed the
+    // return-position gate that once rejected the parameterized form.
     for source in [
         "def f(x: list) -> None:\n    return\n",
+        "def f() -> list:\n    return []\n",
         "def f() -> None:\n    xs: list = []\n",
         "xs: list = []\n",
         "type X = list\n",
@@ -1742,12 +1745,11 @@ fn the_bare_container_advice_appears_only_where_the_parameterized_form_lowers() 
         assert_capability_error_message(source, ADVICE);
     }
 
-    // `list[int]` is rejected here by a `C0001` of its own -- the #925 return
-    // gate, the scalar-slot rule for class attributes and dataclass fields,
-    // and D-228's own protocol-attribute gate -- so the advice would name a
-    // form that fails too.
+    // `list[int]` is rejected here by a `C0001` of its own -- the scalar-slot
+    // rule for class attributes and dataclass fields, and D-228's own
+    // protocol-attribute gate -- so the advice would name a form that fails
+    // too.
     for source in [
-        "def f() -> list:\n    return []\n",
         "class C:\n    xs: list\n",
         "from dataclasses import dataclass\n\n\n@dataclass\nclass C:\n    xs: list\n",
         "from typing import Protocol\n\n\nclass P(Protocol):\n    xs: list\n",
@@ -6722,42 +6724,56 @@ fn a_type_parameter_inside_a_container_annotation_is_rejected_with_a_real_span()
 }
 
 #[test]
-fn a_container_return_annotation_is_rejected_naming_the_positions_that_do_work() {
-    // Deliberate, not an oversight: a container-typed call result already
-    // reaches an unhandled codegen case (issue #926), so accepting the
-    // annotation would widen a known panic rather than add a feature.
-    // Return position is issue #925.
-    for family in ["list[int]", "dict[str, int]", "set[int]", "tuple[int, int]"] {
-        let diagnostic =
-            container_annotation_err(&format!("def f() -> {family}:\n    return None\n"));
-        assert_eq!(diagnostic.code, "C0001", "{family}");
-        assert_eq!(
-            diagnostic.message,
-            format!(
-                "a container return type annotation (`{family}`) is not supported yet -- container annotations are currently supported in parameter, local- and module-variable and type-alias positions only"
-            ),
-            "{family}"
-        );
+fn a_container_return_annotation_lowers_in_every_family() {
+    // #925 (Part 2 of #918) removed D-228's return-position `C0001`: a
+    // container-typed call result no longer reaches an unhandled codegen
+    // case (`crates/pycc_codegen/src/call_result.rs` carries an arm per
+    // family), so the annotation lowers to the container `Ty` itself.
+    for (family, expected) in [
+        ("list[int]", Ty::List(Box::new(Ty::Int))),
+        ("dict[str, int]", Ty::Dict(Box::new((Ty::Str, Ty::Int)))),
+        ("set[int]", Ty::Set(Box::new(Ty::Int))),
+        (
+            "tuple[int, int]",
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
+        ),
+    ] {
+        let module =
+            pycc_parser_test_helper::parse(&format!("def f() -> {family}:\n    return f()\n"));
+        let hir = lower_checked(&module).unwrap_or_else(|error| {
+            panic!("`-> {family}` must lower: {error:?}");
+        });
+        let HirItem::Function { return_ty, .. } = &hir.items[0] else {
+            panic!("expected a function item for {family}");
+        };
+        assert_eq!(*return_ty, expected, "{family}");
     }
     // Reached through a type alias too, not only a literal annotation.
-    let diagnostic =
-        container_annotation_err("type Ints = list[int]\ndef f() -> Ints:\n    return None\n");
-    assert_eq!(diagnostic.code, "C0001");
-    assert!(
-        diagnostic
-            .message
-            .contains("a container return type annotation (`list[int]`)")
-    );
+    let module =
+        pycc_parser_test_helper::parse("type Ints = list[int]\ndef f() -> Ints:\n    return f()\n");
+    let hir = lower_checked(&module).expect("an aliased container return type must lower");
+    let HirItem::Function { return_ty, .. } = hir
+        .items
+        .iter()
+        .find(|item| matches!(item, HirItem::Function { .. }))
+        .expect("the function item must be lowered")
+    else {
+        unreachable!("filtered to `HirItem::Function` above")
+    };
+    assert_eq!(*return_ty, Ty::List(Box::new(Ty::Int)));
 }
 
 #[test]
-fn every_position_the_container_return_advice_names_really_lowers_a_container() {
-    // The C0001 return-position message enumerates the positions that *do*
-    // work, so each one is pinned here: a message that names a position the
-    // compiler rejects, or omits one it accepts, is misleading guidance.
+fn every_position_the_bare_container_advice_names_really_lowers_a_container() {
+    // The bare-container `C0001` advice enumerates the positions that *do*
+    // accept the parameterized form, so each one is pinned here: a message
+    // that names a position the compiler rejects, or omits one it accepts,
+    // is misleading guidance. Return position joined the list in #925.
     for source in [
         // Parameter.
         "def f(x: list[int]) -> None:\n    return\n",
+        // Return.
+        "def f() -> list[int]:\n    return [1]\n",
         // Local variable.
         "def f() -> None:\n    x: list[int] = []\n    return\n",
         // Module variable.
@@ -6770,8 +6786,44 @@ fn every_position_the_container_return_advice_names_really_lowers_a_container() 
         let module = pycc_parser_test_helper::parse(source);
         assert!(
             lower_checked(&module).is_ok(),
-            "the return-position advice names this position as supported: {source:?}"
+            "the bare-container advice names this position as supported: {source:?}"
         );
+    }
+}
+
+#[test]
+fn a_container_return_annotation_still_meets_every_element_and_arity_gate() {
+    // Removing the position gate did not remove the annotation's own checks:
+    // `lower_return_annotation` lowers through `annotation_to_ty`, so
+    // decisions 1 and 2 still fire, now as the *only* rejection a return
+    // annotation can produce. Measured, not inferred: this is the diagnostic
+    // a user sees, reported against the return annotation's own span.
+    //
+    // Nested containers are enumerated concretely rather than as a category,
+    // because the two shapes do not share a gate: `list[list[int]]` is the
+    // list element gate (`T0034`, D-105), while `tuple[list[int], int]` is
+    // the *tuple* element gate (`T0039`, D-116) -- D-116 rejects a tuple
+    // element that is not int/bool/float before D-105 ever sees the inner
+    // `list[int]`.
+    for (source, code) in [
+        ("def f() -> list[str]:\n    return f()\n", "T0034"),
+        ("def f() -> list[list[int]]:\n    return f()\n", "T0034"),
+        ("def f() -> set[str]:\n    return f()\n", "T0038"),
+        ("def f() -> dict[int, int]:\n    return f()\n", "T0036"),
+        ("def f() -> tuple[int, str]:\n    return f()\n", "T0039"),
+        (
+            "def f() -> tuple[list[int], int]:\n    return f()\n",
+            "T0039",
+        ),
+        ("def f() -> tuple[int, ...]:\n    return f()\n", "T0053"),
+        ("def f() -> tuple[()]:\n    return f()\n", "T0053"),
+        ("def f() -> dict[str]:\n    return f()\n", "T0053"),
+        ("def f[T](x: T) -> list[T]:\n    return f(x)\n", "T0042"),
+        ("def f() -> list[int] | None:\n    return f()\n", "T0049"),
+    ] {
+        let diagnostic = container_annotation_err(source);
+        assert_eq!(diagnostic.code, code, "{source}");
+        assert_ne!(diagnostic.span, Some(Span::new(0, 0)), "{source}");
     }
 }
 
@@ -6815,30 +6867,6 @@ fn a_type_alias_named_list_still_wins_over_the_builtin_container() {
         "the alias must win over the builtin container: {:?}",
         lowered.items[0]
     );
-}
-
-#[test]
-fn a_malformed_container_return_annotation_reports_its_own_defect_first() {
-    // D-228 decision 9's position gate is not the first check a container
-    // return annotation meets. `lower_return_annotation` lowers the
-    // annotation through `annotation_to_ty` *before* applying its own
-    // position check, so decisions 1 and 2 fire first: a bad element type
-    // reports its element gate and an `...` argument reports `T0053`. Only a
-    // container that would otherwise have lowered cleanly ever reaches the
-    // `C0001` that names the working positions -- pinned by
-    // `a_container_return_annotation_is_rejected_naming_the_positions_that_do_work`
-    // above. Measured, not inferred: this is the diagnostic a user sees.
-    for (source, code) in [
-        ("def f() -> list[str]:\n    return None\n", "T0034"),
-        ("def f() -> set[str]:\n    return None\n", "T0038"),
-        ("def f() -> dict[int, int]:\n    return None\n", "T0036"),
-        ("def f() -> tuple[int, str]:\n    return None\n", "T0039"),
-        ("def f() -> tuple[int, ...]:\n    return None\n", "T0053"),
-        ("def f() -> dict[str]:\n    return None\n", "T0053"),
-    ] {
-        let diagnostic = container_annotation_err(source);
-        assert_eq!(diagnostic.code, code, "{source}");
-    }
 }
 
 #[test]

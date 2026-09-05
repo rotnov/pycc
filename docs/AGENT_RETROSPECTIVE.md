@@ -33,6 +33,37 @@ never a merge gate.
 
 ---
 
+## 2026-09-05 — Invented a schema for a machine-checked data file instead of reading one existing line
+
+**What happened:** while recording a review finding for #925, I appended a
+line to `.harden/findings/issue-925.jsonl` using keys I made up on the spot
+(`finding`, `severity`, `resolution`). The pile is validated by
+`scripts/check_harden_findings.py`, whose `REQUIRED_KEYS` are `round`, `file`,
+`category`, `summary`, `disposition`, `note`. The pull request's `governance`
+job failed 46 seconds in, on a change that had otherwise passed every gate
+including the D-014 coverage gate.
+
+**Root cause:** I treated an append-only journal as free-form prose because
+its extension is `.jsonl` and its directory is gitignored. Both signals are
+misleading — the directory is gitignored but its contents are force-staged and
+tracked, and the file has a validator with a test that asserts *the real
+repository's* piles conform, so a malformed line fails CI rather than sitting
+inert. The checker's own source even names this exact failure mode: a comment
+above `REQUIRED_KEYS` records that agents write `status`/`finding`/`description`
+instead of `disposition`/`summary`/`note`. I wrote two of those three.
+
+**What fixed it:** reading `REQUIRED_KEYS` and the first line of the adjacent
+`issue-918.jsonl`, then rewriting both rows in the real schema. Under a minute
+once the failing test named the missing keys — but it cost a full CI round on a
+pull request that was otherwise ready.
+
+**Lesson:** before appending to any tracked data file, read one existing record
+from it first. A single `head -1` of a sibling file is cheaper than a CI round,
+and it is the only step that distinguishes a free-form journal from a validated
+one. This generalizes past JSONL: the same applies to any file whose format a
+checker enforces, and the cue to check is that the file is tracked, not that it
+looks structured.
+
 ## 2026-09-05 — Read a decision's "left at None by design" as covering code that decision never saw
 
 **What happened.** Round 9 of PR #930's review reported that all three arms
