@@ -2,8 +2,10 @@
 
 ## Overall status
 
-Delivered as PR #930 (`feat/issue-918-container-annotations`, head `69e000f6`
-plus this snapshot's own commit), based on `origin/main` at `c639e682`,
+Delivered as PR #930 (`feat/issue-918-container-annotations`, whose last
+commit touching the Rust tree is `69e000f6`; every later commit on the branch,
+including this snapshot's own, is documentation), based on `origin/main` at
+`c639e682`,
 re-fetched and unmoved. State re-resolved immediately before this snapshot was
 committed: open, not a draft, `MERGEABLE`, all nine review threads answered and
 resolved, CI green on every check that had reported. It deliberately does not
@@ -138,7 +140,11 @@ a user-facing artefact asserting a support contract nothing checks — and round
 is the first the position inventory could not have caught: the inventory
 enumerates positions, and a wrapper sits *inside* a position it already listed.
 `references/rule-audit.md` disqualifies a further textual artefact at three, so
-the guard worth building is mechanical.
+the guard worth building is mechanical, and it must range over annotation
+*shapes* as well as positions. It is filed as a checklist item on the standing
+agent-tooling umbrella issue #806 rather than built here: one source list of the
+forms the lowering accepts, and a CI check that every artefact enumerating them
+agrees with it.
 
 ## Where a fresh session should resume
 

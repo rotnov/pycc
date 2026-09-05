@@ -33,6 +33,61 @@ never a merge gate.
 
 ---
 
+## 2026-09-05 — Inventoried the positions and missed the wrapper sitting inside one
+
+What happened: after a review round found a support enumeration disagreeing with
+the implementation, the repair built an inventory of every *position* the
+enumeration names and checked each one. A later round then found the same class
+of defect one level down: the advice a bare container name produces was silently
+lost when that name sat inside `Final[...]` or `Annotated[...]`. The helper
+matched the annotation expression against a bare name, and a wrapper subscript
+is not a bare name, so the specific advice degraded to the generic capability
+error — inside a position the inventory had already listed and marked correct.
+
+Root cause: the inventory ranged over the wrong axis. Positions are where an
+annotation appears; shapes are what an annotation is. A check that enumerates
+one axis exhaustively proves nothing about the other, and the wrapper case is
+invisible to a position-level sweep precisely because it lives inside a position
+already accounted for.
+
+What fixed it: peeling the transparent wrappers before matching, reporting
+against the inner span, and a test covering both wrappers, their nesting, their
+malformed forms, and a non-wrapper subscript that must not be peeled.
+
+Lesson: when a repair answers "did I cover every X?", ask what axis X is, and
+whether the defect could recur one level inside a single X. An exhaustive sweep
+over one dimension reads like completeness and is not. Where two dimensions
+exist, the durable guard is mechanical and ranges over both — filed here as a
+checklist item on the agent-tooling umbrella (#806) rather than re-swept by hand.
+
+
+## 2026-09-05 — Verified the closing mechanism was armed, never that it should be
+
+What happened: a pull request delivering Part 1 of a decomposed issue carried
+`Fixes #918` in its body. The `closingIssuesReferences` query was run before
+merge exactly as the repository's own rule requires, returned `totalCount: 1`,
+and that was recorded as the check passing. It was the wrong intent: the parent
+issue must stay open until Part 2 closes, so the correct answer was zero. A
+review round caught it.
+
+Root cause: the check answers "which issues will this merge close?" and it was
+read as "is the closing mechanism wired correctly?". The number came back
+non-zero, which looks like confirmation, so nothing prompted the second
+question — whether closing that issue was the intended outcome at all.
+
+What fixed it: rewriting the body to "Part 1 of #918; #918 stays open until #925
+(Part 2) closes" — a phrasing that references the issue without adjoining a
+closing keyword — and re-running the query for the expected `totalCount: 0`. The
+first read after the edit returned the stale previous value; a second read a
+short while later returned the correct one, so treat that field as eventually
+consistent and re-read rather than re-editing.
+
+Lesson: a verification that confirms a mechanism is armed never asks whether the
+intent behind it is correct. Pair every such query with the expected value
+written down *before* running it, so a passing mechanism with the wrong intent
+cannot read as a green check.
+
+
 ## 2026-09-05 — Wrote an enumeration into a diagnostic and let nothing check it
 
 What happened: the same change's return-position diagnostic ends with a list of
