@@ -151,8 +151,12 @@ region coverage. Ordinary workspace tests do not replace either gate.
 
 ## Remaining delivery
 
-The orchestration session must complete its follow-up harden batch and publish
-the preserved chain through PR #935, then inspect that exact head's `audit`,
+The mandatory one-pass-per-task harden batch is complete. An independent
+late-delta review classified rounds 4, 6 and 8 as already covered by the
+existing incident classes, new mutation guards or the resource-budget gate;
+therefore no second batch or incident rewrite is warranted. The orchestration
+session must publish the preserved chain through PR #935, then inspect that
+exact head's `audit`,
 `ci-gate`, Tier-1/oracle/coverage/frontend-performance and Pages checks,
 including actual PR/push routing. Only #565 is intended to close; #563 and
 coordination work remain open. Use a merge commit, never squash or rebase away
