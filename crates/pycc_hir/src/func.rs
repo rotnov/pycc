@@ -318,7 +318,11 @@ fn bare_container_example(name: &str) -> Option<&'static str> {
 /// `Expr::Name` arm resolves a bare name in**, so the noun always agrees with
 /// what the recursion that precedes the reject actually resolved: a type
 /// parameter first, then `Self` inside a class, then the enclosing class's
-/// own name, then the builtin scalars, and otherwise a `type` alias.
+/// own name, then the builtin scalars, and otherwise a `type` alias. Only the
+/// *precedence* is mirrored, not the resolved `Ty`: since #948 a self-reference
+/// inside a protocol body resolves to `Ty::Protocol` rather than
+/// `Ty::Instance`, but the recursion's `Ok` value is discarded here and the
+/// noun is keyed on the spelling alone, so the wording is unaffected.
 ///
 /// The `class_name` arm is defensive: every current caller that passes
 /// `class_name` also has that class in `class_defs` (`lower_class` pushes the
@@ -561,6 +565,25 @@ fn container_annotation_to_ty(
     Ok(ty)
 }
 
+/// The type an annotation naming the enclosing class resolves to.
+///
+/// Both self-reference spellings -- PEP 673 `Self` and PEP 649/749's bare use
+/// of the class's own name ([#387](https://github.com/rotnov/pycc/issues/387))
+/// -- denote the enclosing class, so both go through this helper. A protocol
+/// enclosing class yields `Ty::Protocol`, exactly as the cross-class
+/// `class_defs` lookup in `annotation_to_ty`'s general `Expr::Name` arm does
+/// for any other protocol name ([#948](https://github.com/rotnov/pycc/issues/948));
+/// every other class yields `Ty::Instance`, the type `self` has.
+fn enclosing_class_ty(class_name: &str, class_defs: &[ClassAnnotationInfo]) -> Ty {
+    if class_defs
+        .iter()
+        .any(|info| info.name == class_name && info.is_protocol)
+    {
+        return Ty::Protocol(Box::new(class_name.to_string()));
+    }
+    Ty::Instance(Box::new(class_name.to_string()))
+}
+
 /// Resolves an annotation expression to a `Ty`. `aliases` is the D-135 type
 /// alias table (`(name, Ty)` pairs recorded by `module::lower_all` for every
 /// `type X = ...`/legacy `X: TypeAlias = ...` statement reached so far, in
@@ -571,8 +594,10 @@ fn container_annotation_to_ty(
 /// `class_name` is the enclosing class's name when lowering a method's
 /// annotations (PEP 673 `Self` and PEP 649/749 self-referential deferred
 /// annotations, #387): `Some(name)` makes both `"Self"` and the class's own
-/// name resolve to `Ty::Instance(Box::new(name))` — the same type `self`
-/// has. `None` for top-level functions and all other annotation contexts
+/// name resolve through `enclosing_class_ty` — `Ty::Instance(Box::new(name))`
+/// for an ordinary class, the type `self` has, and `Ty::Protocol` when the
+/// enclosing class is itself a protocol (#948). `None` for top-level functions
+/// and all other annotation contexts
 /// (module-level `AnnAssign`, type aliases), where `"Self"` and a bare class
 /// name remain unrecognized (C0001), matching CPython's own scope rule that
 /// `Self` is only valid inside a class body.
@@ -599,9 +624,14 @@ pub(crate) fn annotation_to_ty(
             Ok(Ty::Param(Box::new(name.id.to_string())))
         }
         // PEP 673 (#387): `Self` inside a class method's annotation resolves
-        // to the enclosing class's instance type — the same type `self` has.
-        // Outside a class (`class_name` is `None`), `"Self"` falls through to
-        // the alias/C0001 path below, matching CPython's own scoping rule.
+        // to the enclosing class's own type — `Ty::Instance`, the type `self`
+        // has, for an ordinary class. Inside a *protocol* body it resolves to
+        // `Ty::Protocol` instead (#948): `self` itself stays `Ty::Instance`
+        // there, but the annotation denotes the protocol, so the two diverge
+        // and a `-> Self` member return reaches #934's `C0001` gate exactly as
+        // the bare `-> P` spelling does. Outside a class (`class_name` is
+        // `None`), `"Self"` falls through to the alias/C0001 path below,
+        // matching CPython's own scoping rule.
         // #911 (Part 1 of #885): `ClassVar` is a *class-body-only* annotation
         // wrapper -- PEP 526 defines it as "this name is a class variable,
         // not an instance one", which is meaningless on a parameter, a
@@ -618,16 +648,19 @@ pub(crate) fn annotation_to_ty(
             pycc_ast::expr_range(annotation),
         )),
         Expr::Name(name) if name.id.as_str() == "Self" && class_name.is_some() => {
-            Ok(Ty::Instance(Box::new(class_name.unwrap().to_string())))
+            Ok(enclosing_class_ty(class_name.unwrap(), class_defs))
         }
         // PEP 649/749 (#387): a method's return-type annotation may reference
         // the enclosing class's own name (self-referential deferred
         // annotation, e.g. `class Node: def next(self) -> Node: ...`). Inside
         // a class body (`class_name` is `Some`), the class's own name resolves
-        // to `Ty::Instance(class_name)`. This is specifically for the
-        // self-referential case — cross-class references are not in scope.
+        // to `Ty::Instance(class_name)` — or to `Ty::Protocol(class_name)`
+        // when the enclosing class is a protocol (#948), matching what the
+        // general `Expr::Name` arm below resolves any *other* protocol name
+        // to. This is specifically for the self-referential case —
+        // cross-class references are not in scope.
         Expr::Name(name) if Some(name.id.as_str()) == class_name => {
-            Ok(Ty::Instance(Box::new(name.id.to_string())))
+            Ok(enclosing_class_ty(name.id.as_str(), class_defs))
         }
         Expr::Name(name) => match name.id.as_str() {
             "int" => Ok(Ty::Int),
