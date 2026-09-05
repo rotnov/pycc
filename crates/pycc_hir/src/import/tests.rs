@@ -359,6 +359,23 @@ fn project_import_requests_skips_everything_the_stdlib_registry_answers() {
 }
 
 #[test]
+fn project_import_requests_skips_a_future_import() {
+    // `__future__` is not a registry answer, so without D-229's early
+    // return the directive would be forwarded to the driver, which would
+    // load a sibling `__future__.py` and bind its names. A bare
+    // `import __future__` is not the directive and is still requested.
+    let module = parse("from __future__ import annotations\nimport __future__\n");
+    let requests = project_import_requests(&module);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].level, 0);
+    assert_eq!(requests[0].module.as_deref(), Some("__future__"));
+    assert!(requests[0].names.is_empty());
+    // A relative `from .__future__ import x` is an ordinary project import.
+    let module = parse("from .__future__ import annotations\n");
+    assert_eq!(project_import_requests(&module).len(), 1);
+}
+
+#[test]
 fn a_wildcard_import_of_a_resolved_dependency_is_rejected() {
     let fixture = Fixture::new(DEFINITIONS);
     let diagnostic = fixture.first_error("from dep import *\n", &[]);

@@ -71,6 +71,32 @@ fn pep_0649_deferred_ann_matches_cpython_3_14_7_byte_for_byte() {
     );
 }
 
+// PEP 563 (#919, D-229): `from __future__ import annotations` is a
+// compile-time no-op -- pycc already evaluates annotations statically, so the
+// directive contributes nothing and the file runs as if it were absent. The
+// fixture exercises only what pycc supports today (a method annotated with
+// its own class, a function annotated with an already-defined class); a
+// forward reference to a later-defined name and a string annotation are
+// recorded `core` gaps, so the matrix row stays `☐` until the follow-up flip.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn pep_0563_lazy_annotations_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0563_lazy_annotations.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0563_lazy_annotations_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/pep_0563_lazy_annotations.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0563_lazy_annotations_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0563_lazy_annotations.py"
+    );
+}
+
 // PEP 695 (#387 Part 3): scoped generic classes with one type parameter.
 // `class C[T]:` defines a generic class; `C[int](args)` instantiates it
 // with a concrete scalar type. pycc monomorphizes the class's methods at

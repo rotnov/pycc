@@ -59,7 +59,7 @@
             "name": "pycc status — what the Python AOT compiler can do today",
             "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete through v0.3 (released as v0.3.0) and what's planned next, and the CI evidence behind each claim.",
             "inLanguage": "en",
-            "dateModified": "2026-09-04",
+            "dateModified": "2026-09-05",
             "additionalProperty": [
               {
                 "@type": "PropertyValue",
@@ -218,7 +218,10 @@
                   Parser failures use <code>L0001</code>; byte-exact CLI
                   snapshots cover <code>T0001</code>, <code>T0002</code>,
                   <code>T0021</code>, <code>T0022</code>,
-                  <code>T0023</code>, and <code>T0024</code>.
+                  <code>T0023</code>, and <code>T0024</code>. A
+                  <code>from __future__ import annotations</code> line now
+                  compiles as a no-op, and a future feature CPython rejects
+                  reports the same <code>L0001</code> with CPython's wording.
                 </p>
               </div>
               <div class="evidence-card">
