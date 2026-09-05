@@ -93,7 +93,13 @@ fn has_single_enum_marker_base(def: &StmtClassDef) -> bool {
 /// `def` that precedes a failing `class E(Enum): pass` is scanned before
 /// `E` is poisoned. In both cases the report is still a true diagnostic --
 /// the first falls through to `pycc_types`' span-less guard, the second is
-/// reported here.
+/// reported here. The poison filter also inherits D-219's rule that *any*
+/// failing `class` statement poisons its name: an enum class redefined
+/// under the same name (`class Color(Enum): ...` then `class Color: pass`)
+/// is reported once, for the duplicate definition, and a later `Color()`
+/// is suppressed with it even though the first `Color` is a real enum. The
+/// module still fails on the duplicate, so nothing is accepted; the
+/// enum-call diagnostic surfaces once the duplicate is removed.
 pub(crate) fn reject_enum_class_calls(stmt: &Stmt, enum_class_names: &[String]) -> Vec<Diagnostic> {
     struct CallScan<'n> {
         enum_class_names: &'n [String],
@@ -220,6 +226,20 @@ mod tests {
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert_eq!(diagnostics[0].code, "C0001");
         assert_ne!(diagnostics[0].message, enum_class_call_message("E"));
+    }
+
+    #[test]
+    fn a_call_to_a_redefined_enum_class_is_suppressed_with_the_duplicate() {
+        // D-219 poisons the name of *any* failing `class` statement, so the
+        // duplicate `class Color:` poisons `Color` and the later `Color()`
+        // is filtered as a cascade even though the first definition is a
+        // real enum. Pinned as a documented limit (see the function doc),
+        // not as the preferred outcome: the module still fails to compile.
+        let source = format!("{COLOR}class Color:\n    pass\nc = Color()\n");
+        let diagnostics = lower_err(&source);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let message = &diagnostics[0].message;
+        assert!(message.contains("defined more than once"), "{message}");
     }
 
     #[test]

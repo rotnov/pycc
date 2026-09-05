@@ -118,11 +118,14 @@ Gates run locally on the rebased tree: `cargo fmt --all -- --check`,
 - Enum value lookup itself (`Color(1)` compiling, with CPython's `TypeError`
   and `ValueError` outcomes becoming `T0021`), `Color(value=1)` (#884), and
   member equality (#908) stay out of scope.
-- Two order-dependent limits of the scan are documented on
-  `reject_enum_class_calls`: an enum imported *after* a `def` that calls it
-  falls through to the span-less `pycc_types` guard (renders at `1:1`), and
-  a call inside a `def` that precedes a failing `class E(Enum): pass` is
-  reported rather than suppressed as a cascade.
+- Three limits of the scan are documented on `reject_enum_class_calls` and
+  pinned by unit tests: an enum imported *after* a `def` that calls it falls
+  through to the span-less `pycc_types` guard (renders at `1:1`); a call
+  inside a `def` that precedes a failing `class E(Enum): pass` is reported
+  rather than suppressed as a cascade; and an enum class redefined under the
+  same name poisons that name (D-219), so a later call is suppressed together
+  with the duplicate-definition `C0001` (the deep-reviewer's one P2 finding,
+  kept as a documented limit rather than changing D-219's poison rule here).
 
 ## Paused autopilot
 
