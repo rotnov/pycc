@@ -227,10 +227,8 @@
                   <code>T0023</code>, and <code>T0024</code>. A
                   <code>from __future__ import annotations</code> line now
                   compiles as a no-op, and an unknown module-level future feature
-                  reports <code>L0001</code> with CPython's wording. A stdlib
-                  module imported behind an alias (<code>import math as m</code>)
-                  now compiles, and an unregistered symbol reached through the
-                  alias reports both spellings in its <code>C0001</code>.
+                  reports <code>L0001</code> with CPython's wording.
+                  <code>import math as m</code> now compiles.
                 </p>
                 <p>In the module prologue, <code>from __future__ import annotations</code> is accepted as a compile-time no-op and binds no feature name. The PEP 563 subset proves that this directive leaves supported own-class method annotations and already-defined-class function annotations working. Later-defined forward references, string annotations, and runtime <code>__annotations__</code> introspection remain unsupported. This is partial evidence, not whole-PEP acceptance. The <a href="../language-support/">language support map</a> links the directive's contract, production tests, and observed-green subset evidence separately from its historical PEP 526 hero.</p>
               </div>
