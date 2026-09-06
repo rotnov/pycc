@@ -220,14 +220,27 @@ pub(crate) fn module_rebound_names(body: &[Stmt]) -> Vec<String> {
         match stmt {
             Stmt::FunctionDef(def) => bound.push(def.name.as_str()),
             Stmt::ClassDef(def) => bound.push(def.name.as_str()),
-            Stmt::TypeAlias(alias) => {
-                if let Some(name) = alias.name.as_name_expr() {
-                    bound.push(name.id.as_str());
-                }
-            }
+            // Same `.expect` as `lower_type_alias_stmt` and
+            // `poisonable_names`: ruff unconditionally parses a `type`
+            // statement's name as `Expr::Name`.
+            Stmt::TypeAlias(alias) => bound.push(
+                alias
+                    .name
+                    .as_name_expr()
+                    .expect("ruff always parses a `type` statement's name as Expr::Name")
+                    .id
+                    .as_str(),
+            ),
+            // `str::split` always yields at least one segment.
             Stmt::Import(import) => bound.extend(import.names.iter().map(|alias| {
                 alias.asname.as_ref().map_or_else(
-                    || alias.name.split('.').next().unwrap_or_default(),
+                    || {
+                        alias
+                            .name
+                            .split('.')
+                            .next()
+                            .expect("`str::split` yields at least one segment")
+                    },
                     |asname| asname.as_str(),
                 )
             })),
