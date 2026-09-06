@@ -122,6 +122,19 @@ fn a_call_to_a_poisoned_enum_class_is_a_suppressed_cascade() {
 }
 
 #[test]
+fn a_cascade_silenced_item_still_reports_a_call_to_another_enum_class() {
+    // `class E(Enum): pass` fails and poisons `E`; `def f(e: E)` then fails
+    // only because its annotation names the poisoned class, so its own
+    // diagnostic is silenced as a D-219 cascade. The scan still runs over
+    // that item (D-233 decision 6), so the `Color()` inside it is reported.
+    let source = format!("{COLOR}class E(Enum):\n    pass\ndef f(e: E) -> None:\n    Color()\n");
+    let diagnostics = lower_err(&source);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+    assert_ne!(diagnostics[0].message, enum_class_call_message("E"));
+    assert_enum_call(&diagnostics[1], "Color", "Color()", &source);
+}
+
+#[test]
 fn a_call_to_a_redefined_enum_class_is_suppressed_with_the_duplicate() {
     // D-219 poisons the name of *any* failing `class` statement, so the
     // duplicate `class Color:` poisons `Color` and the later `Color()`

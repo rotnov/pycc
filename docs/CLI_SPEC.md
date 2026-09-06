@@ -77,8 +77,11 @@ The current v0.1 slice requires at least one explicit file for `pycc check` and
 accepts multiple files in one invocation, matching the argument shape used by
 pre-commit. It checks every supplied file before exiting. Within a file, every
 diagnostic the first failing pass collected is reported, in that pass's own
-order; the first diagnostic for any input is stable across releases (byte-
-identical code, message, and span -- D-217). HIR lowering collects, per
+order; the first diagnostic for any input was kept byte-identical (code,
+message, and span) across the three #864 parts as a transition invariant
+(D-217 rule 2), not as a release-to-release promise: D-233 lets an enum-call
+`C0001` scanned from an earlier item precede a later item's own diagnostic.
+HIR lowering collects, per
 top-level item, the item's own diagnostic when it fails (skipping that item)
 plus one enum-call `C0001` per call of an enum class inside it (D-233), so
 one item can contribute several diagnostics; an item whose only
@@ -414,8 +417,9 @@ JSON format versioned (`"format_version": 1`), one object per diagnostic, one ob
 Report order is pass order (parser, then HIR, then types -- only one pass
 fails per file, since each pass stops the pipeline), then that pass's own
 collection order; the parser's is ruff's discovery order, which is not always
-source order, HIR lowering's is the source order of the failing top-level
-items (D-219), and the type checker's is the solver's item-order walk of
+source order, HIR lowering's is the source order of the top-level items
+(D-219), each item's own diagnostic first and then that item's enum-call
+`C0001`s (D-233), and the type checker's is the solver's item-order walk of
 function bodies followed by the annotation checker's item-order entries for
 functions the solver did not flag, so a checker-only function may follow a
 later solver-flagged one (D-220). No span-monotone order is promised across a
