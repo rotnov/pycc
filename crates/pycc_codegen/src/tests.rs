@@ -12824,6 +12824,7 @@ fn enum_member_singleton_init_emits_and_runs() {
         class_methods: vec![],
         type_param: None,
         is_enum: false,
+        implicit_object_init: false,
         enum_members: vec![
             ("RED".to_string(), pycc_mir::EnumMemberValue::Int(1)),
             ("GREEN".to_string(), pycc_mir::EnumMemberValue::Int(2)),
@@ -12885,6 +12886,7 @@ fn str_valued_enum_member_singleton_init_emits_and_runs() {
         class_methods: vec![],
         type_param: None,
         is_enum: false,
+        implicit_object_init: false,
         enum_members: vec![
             (
                 "AXIAL".to_string(),
@@ -13005,6 +13007,7 @@ fn abstract_method_body_with_non_none_return_emits_default_value() {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),

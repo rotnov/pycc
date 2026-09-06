@@ -763,16 +763,36 @@ pub(crate) fn resolve_super_method_call(
         .position(|c| c == current_class)
         .unwrap();
     let super_mro = &class_def.mro[current_pos + 1..];
-    for mro_class in super_mro {
-        let mro_def = expect_class(env, mro_class);
-        if let Some((_, mangled)) = mro_def.methods.iter().find(|(name, _)| name == method) {
-            let (param_tys, return_ty) = env.lookup_function(mangled).unwrap();
-            let method_param_tys = &param_tys[1..]; // exclude `self`
-            check_call_args(method, arg_tys, method_param_tys, None)?;
-            return Ok(return_ty.clone());
-        }
-    }
-    Err(t0044_unknown_member("method", current_class, method))
+    // #966: `super().__init__()` ranks constructors the same way
+    // instantiation does, so a D-225 implicit constructor on an earlier
+    // base must not out-rank a real one further along -- skip flagged
+    // classes on the first pass. The skip is gated on the method name so
+    // every other `super().m()` resolution stays name-agnostic, and the
+    // second pass is mandatory: `class A: pass` / `class C(A)` calling
+    // `super().__init__()` has only the implicit constructor to reach and
+    // would otherwise get a spurious `T0044`. Mirrors `pycc_mir`'s
+    // `super()` lowering exactly.
+    let skip_implicit_init = method == "__init__";
+    let resolve = |skip_implicit: bool| {
+        super_mro.iter().find_map(|mro_class| {
+            let mro_def = expect_class(env, mro_class);
+            if skip_implicit && mro_def.implicit_object_init {
+                return None;
+            }
+            mro_def
+                .methods
+                .iter()
+                .find(|(name, _)| name == method)
+                .map(|(_, mangled)| mangled.clone())
+        })
+    };
+    let Some(mangled) = resolve(skip_implicit_init).or_else(|| resolve(false)) else {
+        return Err(t0044_unknown_member("method", current_class, method));
+    };
+    let (param_tys, return_ty) = env.lookup_function(&mangled).unwrap();
+    let method_param_tys = &param_tys[1..]; // exclude `self`
+    check_call_args(method, arg_tys, method_param_tys, None)?;
+    Ok(return_ty.clone())
 }
 
 /// Checks `base.attr = value` (`HirStmt::AttrSet`), shared between module
@@ -1476,6 +1496,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -1896,6 +1917,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -1975,6 +1997,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -2261,6 +2284,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
@@ -2386,6 +2410,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
@@ -2431,6 +2456,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
@@ -2505,6 +2531,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
@@ -2602,6 +2629,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -2627,6 +2655,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -2672,6 +2701,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -2697,6 +2727,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -2740,6 +2771,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -2765,6 +2797,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -2805,6 +2838,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -2830,6 +2864,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -2863,6 +2898,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -2888,6 +2924,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -2976,6 +3013,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -3041,6 +3079,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -3399,6 +3438,7 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         is_enum: false,
+                        implicit_object_init: false,
                         enum_members: Vec::new(),
                         is_dataclass: false,
                         dataclass_fields: Vec::new(),
@@ -3427,6 +3467,7 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         is_enum: false,
+                        implicit_object_init: false,
                         enum_members: Vec::new(),
                         is_dataclass: false,
                         dataclass_fields: Vec::new(),
@@ -3554,6 +3595,7 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         is_enum: false,
+                        implicit_object_init: false,
                         enum_members: Vec::new(),
                         is_dataclass: false,
                         dataclass_fields: Vec::new(),
@@ -3579,6 +3621,7 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         is_enum: false,
+                        implicit_object_init: false,
                         enum_members: Vec::new(),
                         is_dataclass: false,
                         dataclass_fields: Vec::new(),
@@ -3710,6 +3753,7 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         is_enum: false,
+                        implicit_object_init: false,
                         enum_members: Vec::new(),
                         is_dataclass: false,
                         dataclass_fields: Vec::new(),
@@ -3735,6 +3779,7 @@ mod tests {
                         static_methods: Vec::new(),
                         class_methods: Vec::new(),
                         is_enum: false,
+                        implicit_object_init: false,
                         enum_members: Vec::new(),
                         is_dataclass: false,
                         dataclass_fields: Vec::new(),
@@ -3888,6 +3933,7 @@ mod tests {
                     static_methods: vec![("create".to_string(), "C.create.static".to_string())],
                     class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -4086,6 +4132,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
@@ -4133,6 +4180,7 @@ mod tests {
                 static_methods: vec![("create".to_string(), "C.create.static".to_string())],
                 class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
@@ -4167,6 +4215,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
@@ -4209,6 +4258,7 @@ mod tests {
                 static_methods: vec![("create".to_string(), "C.create.static".to_string())],
                 class_methods: Vec::new(),
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
@@ -4246,6 +4296,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
@@ -4623,6 +4674,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: true,
                     dataclass_fields: vec![("x".to_string(), Ty::Int)],
@@ -4718,6 +4770,7 @@ mod tests {
                     static_methods: Vec::new(),
                     class_methods: Vec::new(),
                     is_enum: false,
+                    implicit_object_init: false,
                     enum_members: Vec::new(),
                     is_dataclass: false,
                     dataclass_fields: Vec::new(),
@@ -5081,6 +5134,7 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             is_enum: false,
+            implicit_object_init: false,
             enum_members: Vec::new(),
             is_dataclass: false,
             dataclass_fields: Vec::new(),
@@ -5137,6 +5191,7 @@ mod tests {
             static_methods: Vec::new(),
             class_methods: Vec::new(),
             is_enum: false,
+            implicit_object_init: false,
             enum_members: Vec::new(),
             is_dataclass: false,
             dataclass_fields: Vec::new(),
@@ -5204,6 +5259,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),

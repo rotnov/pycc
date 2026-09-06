@@ -201,6 +201,30 @@ pub struct HirClassDef {
     /// reaches it because `mro::validate_bases` rejects the enum base with
     /// its own `C0001` (#941), so no subclass of an enum is ever lowered.
     pub is_enum: bool,
+    /// #966: this class's own `__init__` entry is the D-225 implicit
+    /// zero-argument constructor synthesized by
+    /// [`init::ensure_init`](self::init::ensure_init) because nothing in the
+    /// class's MRO declared one -- pycc's stand-in for CPython's inherited
+    /// `object.__init__`.
+    ///
+    /// It is *provenance*, never shape: an explicitly written
+    /// `def __init__(self) -> None: pass` lowers to the same empty body and
+    /// must keep ranking first, so no consumer may infer this flag from the
+    /// constructor's parameter list or body. Only `ensure_init`'s call site
+    /// in [`lower_class`] sets it; the dataclass path shares
+    /// [`init::synthesize_dataclass_init`] but produces a *real* constructor
+    /// and leaves this `false`.
+    ///
+    /// Constructor resolution ranks a flagged class **last**, matching
+    /// CPython: for `class C(A, B)` with `A` init-less and `B` declaring
+    /// `__init__`, `C()` must run `B.__init__`, not `A`'s implicit stub.
+    /// The consumers that honour it are `pycc_mir`'s `Instantiate` and
+    /// `super()` lowering, `pycc_types`'
+    /// `class::binding::resolve_instantiation` and
+    /// `class::resolve_super_method_call`, and
+    /// `pycc_types::exception::reject_own_constructor`. Ordinary
+    /// (non-constructor) method resolution is deliberately unaffected.
+    pub implicit_object_init: bool,
     /// PEP 435 (#379, PR-19): the enum members of an enum class
     /// (`class Color(Enum): RED = 1; GREEN = 2`), in source order. Each
     /// entry is `(member_name, value)` where `value` is the `int` or `str`
@@ -1302,11 +1326,16 @@ pub(crate) fn lower_class(
             }
         }
     }
+    // #966: set only here, from `ensure_init`'s own report -- never from
+    // the shape of the constructor it synthesized, and never on the
+    // dataclass path, whose `__init__` is a real constructor.
+    let mut implicit_object_init = false;
     if !is_dataclass && !methods.iter().any(|(name, _)| name == "__init__") {
         // #432 / #912: the class declares no `__init__` of its own, so it
         // either inherits one from its MRO or gets a synthesized implicit
         // zero-argument constructor.
-        ensure_init(&class_name, &mro, defined_classes, &mut methods, &mut items);
+        implicit_object_init =
+            ensure_init(&class_name, &mro, defined_classes, &mut methods, &mut items);
     }
     // #435 (Part B, __init_subclass__) / #585 / #854: PEP 487's
     // `__init_subclass__` hook is recognized as a valid method name. In
@@ -1385,6 +1414,7 @@ pub(crate) fn lower_class(
             class_methods,
             type_param,
             is_enum: false,
+            implicit_object_init,
             enum_members,
             is_dataclass,
             dataclass_fields,
@@ -2541,6 +2571,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),

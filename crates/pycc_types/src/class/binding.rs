@@ -177,11 +177,21 @@ pub(crate) fn resolve_instantiation(
     // `"Exception.__init__"` string as the synthetic placeholder without
     // being it (`is_synthetic_class` is provenance-based, D-188; shape and
     // name never decide it).
-    let (mangled, init_owner_is_synthetic) = class_def
-        .mro
-        .iter()
-        .find_map(|mro_class| {
+    //
+    // #966: the first `__init__` is not always the right one. D-225 gives
+    // every class that declares none an implicit zero-argument constructor
+    // in its *own* method table, which would out-rank a real `__init__` on
+    // a later base -- CPython ranks the equivalent (`object.__init__`)
+    // last, so skip flagged classes on the first pass and fall back only
+    // for an all-implicit MRO. This must stay in lockstep with
+    // `pycc_mir`'s `Instantiate` lowering, or the checker and the lowering
+    // would resolve different constructors.
+    let ctor_in = |skip_implicit: bool| {
+        class_def.mro.iter().find_map(|mro_class| {
             let mro_def = env.lookup_class(mro_class)?;
+            if skip_implicit && mro_def.implicit_object_init {
+                return None;
+            }
             if mro_def.methods.iter().any(|(mn, _)| mn == "__init__") {
                 Some((
                     format!("{mro_class}.__init__"),
@@ -191,7 +201,9 @@ pub(crate) fn resolve_instantiation(
                 None
             }
         })
-        .unwrap_or_else(|| {
+    };
+    let (mangled, init_owner_is_synthetic) =
+        ctor_in(true).or_else(|| ctor_in(false)).unwrap_or_else(|| {
             panic!(
                 "pycc_types: internal error: no `__init__` found in class `{class_name}`'s MRO -- \
              pycc_hir guarantees an `__init__` for every non-enum class it lowers (D-225: by \
@@ -273,6 +285,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),
@@ -328,6 +341,7 @@ mod tests {
                 static_methods: Vec::new(),
                 class_methods: Vec::new(),
                 is_enum: false,
+                implicit_object_init: false,
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),

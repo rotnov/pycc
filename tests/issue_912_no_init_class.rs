@@ -193,25 +193,70 @@ fn an_abstract_class_with_no_init_still_cannot_be_instantiated() {
     );
 }
 
-/// #541 Part 2 is unchanged: a raisable class whose MRO reaches a
-/// *user-declared* ancestor carrying a synthesized `__init__` is still
-/// `C0001`, because "non-synthetic ancestor" is D-188 provenance rather than
-/// a statement about who wrote the constructor body. The rejection comes
-/// from the `raise` operand -- the identical class declarations without the
-/// `raise` compile.
+/// #966 flipped this case, and the flip is the point of the test.
+///
+/// A raisable class whose MRO reaches a *user-declared* ancestor carrying
+/// only the D-225 implicit constructor is now **raisable**, matching
+/// CPython, which raises this exact program without complaint. Before #966
+/// it was rejected `C0001` purely because `Base` carried that implicit
+/// stub: `reject_own_constructor` took the first `__init__` along the MRO
+/// and found `Base`'s rather than `Exception`'s. Constructor resolution now
+/// ranks an implicit `object`-style constructor last everywhere it ranks
+/// constructors, so `Exception.__init__` is the one found, and D-189 rule 4
+/// is satisfied.
+///
+/// Asserted on runtime evidence rather than a bare exit code: the built
+/// program must actually raise, rendering `MyError: boom`.
 #[test]
-fn a_raisable_class_over_a_synthesized_ancestor_constructor_is_rejected() {
+fn a_raisable_class_over_a_synthesized_ancestor_constructor_now_raises() {
     const CLASSES: &str =
         "class Base:\n    pass\n\n\nclass MyError(Base, Exception):\n    pass\n\n\n";
-    build_fails_with(
-        "912_raisable",
+
+    let dir = ScratchDir::new("912_raisable").expect("failed to create scratch dir");
+    let src = write_fixture(
+        &dir,
+        "prog.py",
         &format!("{CLASSES}raise MyError(\"boom\")\n"),
-        "declares or inherits an `__init__` other than `Exception`'s",
     );
+    let out = dir.join("prog");
+    let build = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "#966: the raise now compiles, got: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(&out).output().unwrap();
+    assert!(
+        !run.status.success(),
+        "an uncaught raise must not exit successfully"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("MyError: boom"),
+        "the program must actually raise `MyError`, got stderr: {stderr}"
+    );
+
+    // The identical declarations without the `raise` still compile, and
+    // `Base` -- the class carrying the implicit constructor -- is still
+    // ordinarily instantiable.
     build_and_run(
         "912_raisable_ok",
         &format!("{CLASSES}b = Base()\nprint(5)\n"),
         "5\n",
+    );
+
+    // #966's second, consequential flip: with `Exception.__init__` now the
+    // resolved constructor, binding the class as a *value* reaches the
+    // D-188 synthetic-owner guard in `resolve_instantiation` and is
+    // rejected -- the same `C0001` every other raisable class already gets,
+    // where before #966 this one shape slipped through and compiled.
+    build_fails_with(
+        "912_raisable_value",
+        &format!("{CLASSES}m = MyError()\nprint(5)\n"),
+        "cannot instantiate exception class `MyError` as a value",
     );
 }
 
