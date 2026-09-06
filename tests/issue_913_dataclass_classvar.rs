@@ -260,17 +260,26 @@ fn a_derived_class_var_shadowing_an_inherited_dataclass_field_is_rejected() {
     );
 }
 
-/// A `ClassVar` named after a method the dataclass synthesizes. CPython's
-/// `dataclasses` uses `_set_new_attribute`, which leaves an existing class
-/// `__dict__` entry alone -- so `A.__repr__` really is `8` and an
-/// `__init__` class attribute leaves the class with no constructor at all.
-/// pycc synthesizes all three unconditionally.
+/// A `ClassVar` named after a dunder the dataclass relies on implicitly.
+/// CPython's `dataclasses` uses `_set_new_attribute`, which leaves an
+/// existing class `__dict__` entry alone -- so `A.__repr__` really is `8`
+/// and an `__init__` class attribute leaves the class with no constructor
+/// at all. pycc synthesizes `__init__`/`__eq__`/`__repr__` unconditionally,
+/// and additionally rewrites `!=` through the synthesized `__eq__`
+/// (bypassing `__ne__`) and both `print(instance)` and an f-string
+/// interpolation through the synthesized `__repr__` (bypassing `__str__`
+/// and `__format__`). Verified against CPython 3.13.9: each of the six
+/// raises `TypeError: 'int' object is not callable` at the use site, where
+/// pycc would have silently succeeded (D-235).
 #[test]
-fn a_class_var_named_after_a_synthesized_dataclass_method_is_rejected() {
+fn a_class_var_named_after_an_implicit_dataclass_dunder_is_rejected() {
     for (tag, name) in [
         ("913_class_var_named_init", "__init__"),
         ("913_class_var_named_eq", "__eq__"),
         ("913_class_var_named_repr", "__repr__"),
+        ("913_class_var_named_ne", "__ne__"),
+        ("913_class_var_named_str", "__str__"),
+        ("913_class_var_named_format", "__format__"),
     ] {
         assert_rejected(
             tag,
