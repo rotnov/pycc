@@ -10,6 +10,13 @@
 //! one for a callable `def __new__`
 //! ([#981](https://github.com/rotnov/pycc/issues/981)).
 //!
+//! [#984](https://github.com/rotnov/pycc/issues/984) widened that `__slots__`
+//! half from the `@property` getter to every other `def` spelling and to a
+//! `Protocol` body, so the file now also pins the three carrier types CPython
+//! names, the two precedence boundaries the widening had to respect (a
+//! `@__slots__.setter` with no getter, and an implementation-bodied protocol
+//! method), and the negative halves on both method routes.
+//!
 //! Its own child module for the same reason as `dataclass_class_vars`
 //! (AGENTS.md "Keep source files decomposable"): `tests.rs` is already ~7k
 //! lines. `use super::*` reaches the parent's private helpers.
@@ -427,4 +434,172 @@ fn a_plain_new_method_is_left_to_issue_981() {
         "class C:\n    def __new__(self) -> int:\n        return 7\n",
     );
     lower_checked(&module).expect("`def __new__` is out of D-236's scope until #981 is fixed");
+}
+
+/// #984: the carrier CPython names for each non-`@property` `def __slots__`
+/// spelling, as `(source prefix, carrier)`.
+///
+/// Measured at `e77b4b13` against CPython 3.13.9: a bare `def` and an
+/// `@abstractmethod` both bind a plain `function`, while `@staticmethod` and
+/// `@classmethod` bind their own wrapper objects. Those three strings are the
+/// whole reachable range of `method_slots_carrier`, which is why it has two
+/// named arms and one wildcard and no more -- a fourth arm would be a dead
+/// region under D-014's 100% region gate.
+///
+/// `@override def __slots__` is deliberately absent, and no test for it can be
+/// written that would not pass for the wrong reason: `@override` requires a
+/// base class declaring the same name, and that base's own `def __slots__` is
+/// rejected by this guard first, at the *base's* line. It folds into the same
+/// wildcard arm as the bare `def` in any case.
+const SLOTS_METHOD_SPELLINGS: [(&str, &str); 3] = [
+    (
+        "    def __slots__(self) -> int:\n        return 1\n",
+        "function",
+    ),
+    (
+        "    @staticmethod\n    def __slots__() -> int:\n        return 1\n",
+        "staticmethod",
+    ),
+    (
+        "    @classmethod\n    def __slots__(cls) -> int:\n        return 1\n",
+        "classmethod",
+    ),
+];
+
+/// The account the #984 message must *not* borrow: D-154's plain attribute
+/// route explanation, which describes a redundant declaration on a class that
+/// is created rather than a class creation that fails.
+const D154_FRAGMENT: &str = "fixed at compile time from its `__init__`";
+
+/// Asserts the #984 message from both sides: the carrier-specific needle is
+/// present and D-154's instance-layout account is absent. A `contains`-only
+/// assertion would still pass if a future change wired this route through
+/// `slots_message(Plain)`, which is exactly the false account #984 exists to
+/// avoid.
+fn assert_method_slots_message(source: &str, carrier: &str) {
+    assert_capability_error_message(source, &format!("a `{carrier}` object is not iterable"));
+    let module = pycc_parser_test_helper::parse(source);
+    let diagnostic = lower_checked(&module).unwrap_err();
+    assert!(
+        diagnostic
+            .message
+            .starts_with("a `def __slots__` in a class body is not supported yet"),
+        "the method route must use its own #984 message, got: {}",
+        diagnostic.message
+    );
+    assert!(
+        !diagnostic.message.contains(D154_FRAGMENT),
+        "the method route must not borrow D-154's plain-class explanation, got: {}",
+        diagnostic.message
+    );
+}
+
+/// #984: every non-`@property` `def __slots__` spelling in a plain class body
+/// is rejected, each naming the carrier type CPython itself names.
+///
+/// Measured at `e77b4b13`: all three compiled and ran under pycc (`check`
+/// exit 0, `run` prints `1`) while CPython 3.13.9 raised
+/// `TypeError: '<carrier>' object is not iterable` at class creation and never
+/// created the class -- the D-198 false acceptance D-224 forbids. The
+/// divergence is value-independent: none of the three carriers is ever
+/// iterable, whatever the method returns.
+#[test]
+fn a_method_named_slots_is_rejected_in_a_plain_class() {
+    for (spelling, carrier) in SLOTS_METHOD_SPELLINGS {
+        assert_method_slots_message(&format!("class C:\n{spelling}"), carrier);
+    }
+}
+
+/// #984: an `@abstractmethod` spelling on an `ABC` reaches the same wildcard
+/// carrier arm as the bare `def` and reports `function` too (measured: CPython
+/// 3.13.9 raises `TypeError: 'function' object is not iterable`, from
+/// `<frozen abc>`'s `__new__`). Pinned separately from the bare `def` because
+/// it is a different `MethodKind` reaching the same arm.
+#[test]
+fn an_abstract_method_named_slots_is_rejected() {
+    assert_method_slots_message(
+        "from abc import ABC, abstractmethod\n\n\nclass C(ABC):\n    @abstractmethod\n    def __slots__(self) -> int:\n        ...\n",
+        "function",
+    );
+}
+
+/// #984, companion pin: the same bare `def` in a `@dataclass` body reaches the
+/// same arm and reports the same message. `super::super::body`'s dataclass
+/// pre-check matches only `__init__`, `__eq__` and `__repr__`, so `__slots__`
+/// falls through to the reserved-name guard rather than to D-235's set.
+#[test]
+fn a_dataclass_method_named_slots_is_rejected() {
+    assert_method_slots_message(
+        "from dataclasses import dataclass\n\n\n@dataclass\nclass C:\n    x: int\n\n    def __slots__(self) -> int:\n        return 1\n",
+        "function",
+    );
+}
+
+/// #984: a `Protocol` body is a *separate* call site, not the same one. A
+/// protocol class returns through `super::super::protocol::lower_protocol_class`
+/// before the method loop runs at all, so a guard placed only in
+/// `super::super::body` would leave this shape falsely accepted (measured at
+/// `e77b4b13`: `pycc check` exit 0, CPython 3.13.9 `TypeError: 'function'
+/// object is not iterable`).
+#[test]
+fn a_protocol_method_named_slots_is_rejected() {
+    assert_method_slots_message(
+        "from typing import Protocol\n\n\nclass P(Protocol):\n    def __slots__(self) -> int:\n        ...\n",
+        "function",
+    );
+}
+
+/// #984, precedence pin for the `Protocol` call site: the new check is placed
+/// *after* every rejection that arm already had, so an implementation-bodied
+/// protocol method named `__slots__` still reports the declaration-style-body
+/// diagnostic rather than the new one. Only the shape that is falsely accepted
+/// today changes its answer.
+#[test]
+fn a_protocol_slots_method_with_a_body_still_reports_the_declaration_rule() {
+    assert_capability_error_message(
+        "from typing import Protocol\n\n\nclass P(Protocol):\n    def __slots__(self) -> int:\n        return 1\n",
+        "must have a declaration-style body",
+    );
+}
+
+/// #984, precedence pin for the `PropertySetter` short-circuit. A
+/// `@__slots__.setter` with no getter *does* reach the guard --
+/// `classify_decorator` only requires the setter's own `def` name to match the
+/// decorated property name, and the "requires a preceding getter" rejection
+/// lives after the guard's call site -- so without the short-circuit the new
+/// message would preempt it. That would be false in every clause: measured at
+/// `e77b4b13` pycc already rejected this program, and CPython 3.13.9 raises
+/// `NameError: name '__slots__' is not defined` while evaluating the decorator
+/// expression, not a `TypeError` about a non-iterable object.
+#[test]
+fn a_slots_setter_without_a_getter_keeps_the_missing_getter_message() {
+    assert_capability_error_message(
+        "class C:\n    @__slots__.setter\n    def __slots__(self, v: int) -> None:\n        pass\n",
+        "requires a preceding `@property` getter",
+    );
+}
+
+/// #984, negative half: a benign dunder *method* stays accepted. `def
+/// __doc__(self) -> int` runs and prints `1` under both engines (measured on
+/// CPython 3.13.9), so the guard must not grow into "reject every dunder
+/// method". This is also the `Ok(())` arm of `reject_reserved_method_name` and
+/// of `reject_reserved_protocol_method_name`.
+#[test]
+fn a_benign_dunder_method_stays_accepted() {
+    let module = pycc_parser_test_helper::parse(
+        "class C:\n    def __doc__(self) -> int:\n        return 1\n",
+    );
+    lower_checked(&module).expect("`def __doc__` must still lower");
+}
+
+/// #984, negative half for the protocol route specifically: the same benign
+/// dunder in a `Protocol` body stays accepted too, covering
+/// `reject_reserved_protocol_method_name`'s `Ok(())` arm from its own call
+/// site rather than only through the plain-class one.
+#[test]
+fn a_benign_dunder_protocol_method_stays_accepted() {
+    let module = pycc_parser_test_helper::parse(
+        "from typing import Protocol\n\n\nclass P(Protocol):\n    def __doc__(self) -> int:\n        ...\n",
+    );
+    lower_checked(&module).expect("`def __doc__` in a protocol body must still lower");
 }
