@@ -19,7 +19,14 @@ agent validators, and `check_ci_permissions.rb` all exited 0.
 
 The branch is pushed as `feat/issue-977`; the pull request opened from it carries `Fixes #977` and is
 the delivery vehicle for this file: [PR #985](https://github.com/rotnov/pycc/pull/985), opened from
-head `8f678416` with `closingIssuesReferences` = {#977}.
+head `8f678416` with `closingIssuesReferences` = {#977}. CI went green on `9150ba0f` (a status-page
+sync for the new roadmap paragraph) and Codex's first review round raised two findings, both fixed in
+`a78c1662` and recorded as harden round 2: a generic `@dataclass` specialization lost `is_dataclass`
+in `instantiate_generic_class_methods`, so `check` accepted `print(Box[int](1))` while `build`
+rejected `0gen_Box__T_int` with `C0001` (at `e77b4b13` the same program panicked in codegen); and the
+help recommended `@dataclass` for a class under a builtin exception name, which the predicate rejects
+by name regardless, so that case now gets a rename remedy. The full gate set was re-run from a
+single-writer baseline after the fix (100.00% lines and regions).
 
 ### Post-merge workflow runs on `e77b4b13`
 
@@ -114,7 +121,6 @@ the orchestrating session and `issue-select`):
 
 1. `git fetch --prune origin`; this snapshot is anchored at `origin/main` = `e77b4b13`, branch base
    `f8e9d2e3`.
-2. Integrate `feat/issue-977` onto the refreshed default branch (the only expected overlap is
-   `docs/ROADMAP.md`/`docs/TYPE_SYSTEM.md` at unrelated lines and the decisions index), push, open the
-   pull request, watch CI, merge.
+2. PR #985 is open from `feat/issue-977`; watch CI on its current head, confirm no unresolved review
+   thread remains, re-check `closingIssuesReferences` = {#977}, and squash-merge.
 3. Then decide whether the two runtime/solver follow-ups above earn a milestone issue under D-192.
