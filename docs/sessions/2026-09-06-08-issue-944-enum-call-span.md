@@ -393,3 +393,10 @@ One P2 on `83455282`, fixed in `ba2a68c5`: the `pycc` skill and
 `docs/CLI_SPEC.md` now scope cascade silence to the item's own lowering
 diagnostic, matching `lower_module`'s contract. Round 18 of the findings
 pile records it.
+
+## PR #971 seventeenth Codex round (lazy rebound-name set)
+
+One P2 on `df76c760`, fixed in `b0ef29ed`: the limit (vii) rebound-name set
+is now collected lazily on the first scanned item, like the module frame,
+so a no-enum module pays for no part of the diagnostic (D-233 decision 1).
+Round 19 of the findings pile records it.
