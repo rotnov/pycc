@@ -271,3 +271,70 @@ fn the_reserved_name_guard_precedes_the_method_collision_check() {
         "resolves a class's constructor from its methods alone",
     );
 }
+
+/// #978 review round: the `@property` getter arm is the *fourth* class-body
+/// route to a class-level binding of one of these names, and the only one
+/// that does not pass through `reject_reserved_class_attr_name`.
+/// `classify_decorator` routes `@property def __new__` to
+/// `MethodKind::PropertyGetter`, so before this guard existed none of the
+/// three attribute routes saw it: `ensure_init` synthesized a constructor
+/// from the method table alone and pycc accepted `C()` while CPython 3.13.9
+/// raised `TypeError: 'property' object is not callable` there.
+///
+/// The three names are not equally affected today, which is why each is
+/// pinned by *message* rather than merely by rejection. Only `__new__` was a
+/// D-198 false acceptance; `__init__` was already rejected as `T0021`
+/// ("cannot redefine function `C.__init__` with a different signature") and
+/// `__init_subclass__` as an unrelated `C0001` about the MRO hook needing to
+/// be statically evaluable. Both of those described the wrong defect, so this
+/// test fails if either reverts to its old diagnostic.
+#[test]
+fn a_property_getter_named_after_the_instantiation_protocol_is_rejected() {
+    for (name, fragment) in RESERVED {
+        assert_capability_error_message(
+            &format!("class C:\n    @property\n    def {name}(self) -> int:\n        return 1\n"),
+            fragment,
+        );
+    }
+}
+
+/// #978 review round, negative half: only the *property spelling* is
+/// rejected on this route. A plain `def __init__` is a
+/// `MethodKind::Regular` and must keep lowering -- a guard that keyed on the
+/// method name instead of the method kind would reject every constructor in
+/// the language.
+#[test]
+fn a_plain_init_method_is_not_rejected_by_the_property_route() {
+    let module =
+        pycc_parser_test_helper::parse("class C:\n    def __init__(self) -> None:\n        pass\n");
+    lower_checked(&module).expect("a plain `def __init__` must still lower");
+}
+
+/// #978 review round, negative half: an ordinary `@property` is untouched.
+/// This is the `None` arm of `reject_reserved_property_name` -- the guard
+/// must not grow past the three protocol names.
+#[test]
+fn an_ordinary_property_getter_is_not_rejected() {
+    let module = pycc_parser_test_helper::parse(
+        "class C:\n    @property\n    def value(self) -> int:\n        return 7\n",
+    );
+    lower_checked(&module).expect("`@property def value` must still lower");
+}
+
+/// #978 review round: `@property def __slots__` is **not** routed through
+/// this guard. Its divergence is real but different in mechanism -- CPython
+/// 3.13.9 raises `TypeError: 'property' object is not iterable` while the
+/// `class` statement itself executes, because `type.__new__` iterates
+/// `__slots__` -- and the plain-route `__slots__` message explains D-154's
+/// instance layout instead, which would be a false account of it. Tracked as
+/// [#980](https://github.com/rotnov/pycc/issues/980). Pin the current
+/// acceptance so that issue's fix has to come here and invert this test
+/// deliberately, rather than the scope boundary being lost silently.
+#[test]
+fn a_property_getter_named_slots_is_left_to_issue_980() {
+    let module = pycc_parser_test_helper::parse(
+        "class C:\n    @property\n    def __slots__(self) -> int:\n        return 1\n",
+    );
+    lower_checked(&module)
+        .expect("`@property def __slots__` is out of D-236's scope until #980 is fixed");
+}

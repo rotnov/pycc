@@ -14,6 +14,7 @@
 //! returns through `lower_enum_class`/`lower_protocol_class` before it.
 
 use super::attrs::{lower_class_attr, lower_unannotated_class_attr, strip_class_var};
+use super::reserved_names::reject_reserved_property_name;
 use super::{
     CONTAINER_METHOD_NAMES, ClassAnnotationInfo, ClassAttrValue, HirClassDef, MethodKind,
     PropertyDef, classify_decorator, collect_init_attrs, is_declaration_body, is_scalar_slot_type,
@@ -411,6 +412,24 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             &method_name,
             method_def.range.into(),
         )?;
+        // #975 (D-236), added in the #978 review round: a `@property`
+        // getter is the fourth class-body route to a class-level binding of
+        // an instantiation/class-creation protocol name, and the only one
+        // that does not pass through `reject_reserved_class_attr_name`.
+        // `@property def __new__(self) -> int` lands here, not in
+        // `lower_class_attr`, so without this call `ensure_init` synthesizes
+        // a constructor from the method table alone and pycc accepts `C()`
+        // while CPython 3.13.9 raises `TypeError: 'property' object is not
+        // callable`. A plain `def __init__` is a `MethodKind::Regular` and is
+        // untouched -- only the property spelling is rejected. The setter arm
+        // needs no matching call: `classify_decorator` requires a setter's own
+        // `def` name to equal the decorated property name, so
+        // `@value.setter def __new__` is rejected there as a mismatch, and the
+        // matching `@__new__.setter def __new__` requires a preceding getter
+        // of that name, which is rejected here first.
+        if let MethodKind::PropertyGetter { prop_name } = &kind {
+            reject_reserved_property_name(prop_name, method_def.range.into())?;
+        }
         // #436: `@staticmethod` and `@classmethod` on `__init__` are
         // rejected -- a constructor must be a regular instance method.
         // #380 (PR-20): `@abstractmethod` on `__init__` is also rejected

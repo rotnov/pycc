@@ -31,8 +31,25 @@ status: accepted
   | `class C: __init__ = 8` + `C()` | runs | `TypeError` |
   | `class C: __new__: ClassVar[int] = 8` + `C()` | runs | `TypeError` |
   | `class A: __init_subclass__: ClassVar[int] = 8` + `class B(A)` | runs | `TypeError` at `class B` |
-  | `@dataclass class P: x: int; __new__: ClassVar[int] = 8` | runs | `TypeError` |
+  | `@dataclass class P: x: int; __new__: ClassVar[int] = 8` + `P(1)` | runs | `TypeError` |
   | `class C(Enum): __init__ = 1; B = 2` | runs | `TypeError` at class creation |
+
+  The review round on [#978](https://github.com/rotnov/pycc/pull/978) found a
+  fourth class-body route the first three rows do not reach: a `@property`
+  getter. `walk_class_body` routes `@property def __new__(self) -> int` to
+  `MethodKind::PropertyGetter`, not to `lower_class_attr`, so the guard was
+  never called for it. Measured at `f3eb908c` against CPython 3.13.9:
+
+  | program | pycc at `f3eb908c` | CPython 3.13.9 |
+  |---|---|---|
+  | `class C: @property def __new__(self) -> int` + `C()` | runs | `TypeError: 'property' object is not callable` at `C()` |
+  | `class C: @property def __init__(self) -> int` + `C()` | rejected, but as `T0021` "cannot redefine function `C.__init__` with a different signature" | `TypeError: 'int' object is not callable` at `C()` |
+  | `class C: @property def __init_subclass__(self) -> int` + `class B(C)` | rejected, but as an unrelated `C0001` requiring the MRO's `__init_subclass__` hook to be statically evaluable | `TypeError: 'property' object is not callable` at `class B` |
+
+  Only the `__new__` row is a false acceptance; the other two were already
+  non-zero, for defects that are not the one present. The `__init__` row names
+  `'int'` rather than `'property'` because `type.__call__` looks `__init__` up
+  on the instance, which invokes the getter and then calls its `int` result.
 
   That is a D-198 false acceptance: pycc silently compiles a program CPython
   rejects. The cause is that pycc resolves each protocol without ever consulting
@@ -56,7 +73,9 @@ status: accepted
   __init_subclass__}`, enforced by `reject_reserved_class_attr_name`
   (`crates/pycc_hir/src/class/reserved_names.rs`) in **every** class body —
   plain, `@dataclass` and `Enum` — in every spelling (`X: ClassVar[T] = v`,
-  `X: T = v`, and a bare `X = v`), as a `C0001` capability rejection under
+  `X: T = v`, and a bare `X = v`), plus `reject_reserved_property_name` in the
+  same module for the `@property def X` spelling, as a `C0001` capability
+  rejection under
   [D-224](D-224-restrict-class-level-attributes-to-scalar.md)'s "reject what you can't
   model". The two sets stay **disjoint**: `body.rs`'s dataclass check runs
   before the class-attribute path, so `__init__` in a `@dataclass` body keeps
@@ -159,10 +178,18 @@ status: accepted
     mis-compiled, so the change converts a silent wrong answer into a
     diagnostic.
   - The reserved-name guard becomes the single place where "a name the
-    interpreter owns" is decided, reached from three call sites: the annotated
-    and bare class-attribute paths and the `Enum` member loop. Adding a fourth
-    class-body route in future means adding a fourth call to it; the module doc
-    says so.
+    interpreter owns" is decided, reached from four call sites: the annotated
+    and bare class-attribute paths, the `Enum` member loop, and (from the #978
+    review round) `walk_class_body`'s `@property` getter arm. Adding a fifth
+    class-body route in future means adding a fifth call to it; the module doc
+    says so. The property route calls `reject_reserved_property_name`, not the
+    full guard, so only the protocol names are checked there: `@property def
+    __slots__` is a different divergence — CPython raises `TypeError:
+    'property' object is not iterable` while the `class` statement itself
+    executes, because `type.__new__` iterates `__slots__` — and this guard's
+    `__slots__` message explains D-154's instance layout instead, which would
+    be a false account of it. That shape is
+    [#980](https://github.com/rotnov/pycc/issues/980).
   - The diagnostic precedence D-235 pinned is unchanged and now explicitly
     tested. The guard is a class-body-walk error, which is already the head of
     that four-deep order, so a program with both a reserved-name binding and a
@@ -176,7 +203,7 @@ status: accepted
     CPython's text is `'<type>' object is not callable`, and `<type>` is
     whatever the initializer evaluates to (`'int'`, `'str'`, `'bool'`,
     `'float'`, ...), while this guard keys on the attribute name alone and
-    runs before any value extraction so that all three class-body routes can
+    runs before any value extraction so that every class-body route can
     call it at the same cheap, value-independent point. Naming one concrete
     type would be wrong for every other binding, so the type is omitted rather
     than derived. Both name the error *conditionally*, on two axes. They say

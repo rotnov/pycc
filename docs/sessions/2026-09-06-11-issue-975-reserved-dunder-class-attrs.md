@@ -56,9 +56,26 @@ required, no force pushes or deletions). No `[ci-bypass]` incident is open.
   dunder in an enum body diverges the other way too (CPython keeps it out of the member list, pycc lowers
   it as a member), filed as [#979](https://github.com/rotnov/pycc/issues/979) and corrected in
   `docs/TYPE_SYSTEM.md`, D-236's Alternatives, and the two tests that pinned the old claim.
+  Fix round 3 answered the last two codex P2 threads. The first was a documentation claim: D-236's
+  evidence table showed `@dataclass class P: x: int; __new__: ClassVar[int] = 8` as raising on its own,
+  when CPython accepts the declaration and raises only at `P(1)`; the row now states its use site like
+  every other row. The second was a real hole in the guard — `walk_class_body` routes a `@property`
+  getter to `MethodKind::PropertyGetter`, so none of the three call sites saw `@property def __new__`,
+  and pycc compiled and ran `C()` where CPython 3.13.9 raises `TypeError: 'property' object is not
+  callable`. A fourth call site (`reject_reserved_property_name`, protocol names only) now covers that
+  route. Re-measuring the three names as properties found that only `__new__` was a false acceptance:
+  `@property def __init__` was already `T0021` ("cannot redefine function `C.__init__` with a different
+  signature") and `@property def __init_subclass__` an unrelated `C0001` about the MRO hook, both
+  describing the wrong defect, so the new tests pin messages rather than exit status. The same
+  measurement pass found `@property def __slots__` diverging by a *different* mechanism (CPython raises
+  `TypeError: 'property' object is not iterable` while the `class` statement executes, because
+  `type.__new__` iterates `__slots__`), which the existing D-154 `__slots__` message would misdescribe;
+  it is filed as [#980](https://github.com/rotnov/pycc/issues/980) and left out of D-236's scope
+  deliberately, pinned by a test that inverts when #980 is fixed.
 - **PR [#971](https://github.com/rotnov/pycc/pull/971)** (#944, `feat/issue-944`,
   "fix(hir): report the enum-call C0001 at the call expression"): **OPEN**, not a draft, `MERGEABLE`,
-  head **`0e88a674`** — note this moved from `5f450ae5` during this session, so any earlier snapshot of its
+  head **`94bcf61c`** — note this moved from `5f450ae5` to `0e88a674` and then to `94bcf61c` during this
+  session (the last re-resolved immediately before the fix-round-3 commit), so any earlier snapshot of its
   head is stale. It claims decision number **D-233** and session file `2026-09-06-08-*`, neither of which is
   in the tree; that is why this file is `-11-` (01–07, 09, 10 are on main, 08 is reserved by #971) and why
   #975's ADR is **D-236** rather than D-233.

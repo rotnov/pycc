@@ -26,6 +26,11 @@
 //!
 //! Scope notes that are easy to get wrong, all measured at `28a1b194`:
 //!
+//! * The guard is reached from **four** class-body routes, not three: the
+//!   annotated and bare class-attribute paths, the `Enum` member loop, and
+//!   (since the #978 review round) `super::body`'s `@property` getter arm,
+//!   which reaches only the protocol-name half through
+//!   [`reject_reserved_property_name`].
 //! * The set is **not** `ClassVar`-gated. `super::body`'s non-dataclass branch
 //!   routes every `AnnAssign` to `lower_class_attr` regardless of the
 //!   `ClassVar` wrapper, and #910's `Stmt::Assign` arm routes to
@@ -67,11 +72,14 @@ use pycc_diag::Diagnostic;
 /// Rejects a class-body binding of a name the interpreter gives its own
 /// meaning, in every spelling and every class body.
 ///
-/// Called first thing after name extraction from all three routes into a
-/// class body: [`super::attrs::lower_class_attr`] (annotated),
+/// Called first thing after name extraction from three of the four routes
+/// into a class body: [`super::attrs::lower_class_attr`] (annotated),
 /// [`super::attrs::lower_unannotated_class_attr`] (#910's bare assignment),
 /// and [`super::enum_class`]'s member loop. `route` distinguishes the last of
-/// those, because only the `__slots__` explanation differs between them.
+/// those, because only the `__slots__` explanation differs between them. The
+/// fourth route -- a `@property` getter in [`super::body`]'s method loop --
+/// calls [`reject_reserved_property_name`] instead, because only the
+/// protocol-name half of this guard applies there.
 ///
 /// Because it runs during the class-body walk, it sits at the *head* of
 /// D-235's pinned four-deep diagnostic precedence rather than reordering it.
@@ -87,6 +95,52 @@ pub(super) fn reject_reserved_class_attr_name(
         return Err(unsupported(message, range));
     }
     Ok(())
+}
+
+/// Rejects a `@property` getter named after the instantiation or
+/// class-creation protocol (#975, D-236; added in the #978 review round).
+///
+/// The fourth route into a class-level binding of one of these names, and the
+/// only one that does not go through [`reject_reserved_class_attr_name`].
+/// `super::body`'s method loop routes `@property def __new__(self) -> int` to
+/// `MethodKind::PropertyGetter`, so none of the three attribute routes sees
+/// it; without this call `ensure_init` synthesizes a constructor from the
+/// method table alone and pycc accepts `C()`, while CPython 3.13.9 raises
+/// `TypeError: 'property' object is not callable` at that call.
+///
+/// Only the protocol names are checked here -- [`slots_message`] is
+/// deliberately not reachable from this route. `@property def __slots__` is a
+/// different divergence with a different mechanism (CPython raises
+/// `TypeError: 'property' object is not iterable` while the `class` statement
+/// itself executes, not at any instantiation), and D-154's "the instance
+/// layout is fixed from `__init__`" explanation would be a false account of
+/// it. That shape is tracked separately as
+/// [#980](https://github.com/rotnov/pycc/issues/980) rather than folded in
+/// here under a message that does not describe it.
+///
+/// The three messages are shared verbatim with the attribute routes and need
+/// no property-specific clause: each already says "binding that name to a
+/// non-callable object", and a `property` object is exactly that.
+///
+/// Only the *getter* arm calls this, and a `@<name>.setter` is unreachable
+/// for these names for two independent reasons. `super::classify_decorator`
+/// requires a setter's own `def` name to equal the decorator's property name,
+/// so `@value.setter def __new__` is already rejected there as a mismatch;
+/// and the matching spelling `@__new__.setter def __new__` requires a
+/// preceding `@property def __new__` getter, which is rejected here first.
+///
+/// `@staticmethod def __new__` and `@classmethod def __init_subclass__` are
+/// deliberately *not* routed here: those bind a callable, which is what
+/// CPython itself expects of the protocol, so they are not the divergence
+/// this guard describes.
+pub(super) fn reject_reserved_property_name(
+    prop_name: &str,
+    range: std::ops::Range<u32>,
+) -> Result<(), Diagnostic> {
+    match instantiation_protocol_message(prop_name) {
+        Some(message) => Err(unsupported(message, range)),
+        None => Ok(()),
+    }
 }
 
 /// Which class-body route reached the guard.

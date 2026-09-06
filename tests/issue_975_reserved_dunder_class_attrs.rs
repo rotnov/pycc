@@ -22,8 +22,9 @@
 //!    defect, [#979](https://github.com/rotnov/pycc/issues/979).)
 //! 2. **Three spellings, not one.** `ClassVar[int] = 8`, `int = 8` and a bare
 //!    `= 8` all reach the same hazard, so the guard is not `ClassVar`-gated.
-//! 3. **Three class-body routes, not one.** A plain class, a `@dataclass`
-//!    body, and an `Enum` member list each reach it by a different path.
+//! 3. **Four class-body routes, not one.** A plain class, a `@dataclass`
+//!    body, an `Enum` member list, and (from the #978 review round) a
+//!    `@property` getter each reach it by a different path.
 //!
 //! The already-rejected shapes (`__slots__`, a method collision) are pinned
 //! unchanged: this change adds a guard, it does not re-implement them.
@@ -518,5 +519,86 @@ fn the_reserved_name_guard_precedes_the_method_collision_check() {
          \x20   return 0\n",
         "C0001",
         "resolves a class's constructor from its methods alone",
+    );
+}
+
+// -- the fourth class-body route: a `@property` getter --------------------
+
+/// #978 review round: `@property def <name>` reaches a class-level binding of
+/// a reserved name through `walk_class_body`'s `MethodKind::PropertyGetter`
+/// arm, which none of the three attribute routes covers.
+///
+/// Measured on CPython 3.13.9 for each name:
+///
+/// * `@property def __new__` + `C()` -> `TypeError: 'property' object is not
+///   callable` at `C()`. pycc at `f3eb908c` **accepted and ran** this
+///   program -- the D-198 false acceptance this fix closes.
+/// * `@property def __init__` + `C()` -> `TypeError: 'int' object is not
+///   callable` at `C()`. The type differs from the previous row because
+///   `type.__call__` looks `__init__` up on the *instance*, which invokes the
+///   getter and then calls its `int` result. pycc already rejected this, but
+///   as `T0021` ("cannot redefine function `C.__init__` with a different
+///   signature"), which describes the wrong defect.
+/// * `@property def __init_subclass__` + `class B(C)` -> `TypeError:
+///   'property' object is not callable` at `class B`. pycc already rejected
+///   this too, as an unrelated `C0001` about the MRO hook having to be
+///   statically evaluable.
+///
+/// So this is pinned by message, not merely by exit status: two of the three
+/// were already non-zero for the wrong reason.
+#[test]
+fn a_property_getter_named_after_the_instantiation_protocol_is_rejected() {
+    for (name, needle) in RESERVED {
+        assert_rejected(
+            &format!("975_property_{name}"),
+            &format!(
+                "class C:\n\
+                 \x20   @property\n\
+                 \x20   def {name}(self) -> int:\n\
+                 \x20       return 1\n\
+                 \n\
+                 \n\
+                 def main() -> int:\n\
+                 \x20   c = C()\n\
+                 \x20   return 0\n"
+            ),
+            "C0001",
+            needle,
+        );
+    }
+}
+
+/// #978 review round, negative half: the guard keys on the property
+/// *spelling*, not on the name alone. A plain `def __init__` must still
+/// compile, and an ordinary `@property` must still compile -- the two shapes
+/// that a name-only guard on this route would have broken.
+#[test]
+fn a_plain_constructor_and_an_ordinary_property_stay_accepted() {
+    assert_accepted(
+        "975_property_plain_init",
+        "class C:\n\
+         \x20   def __init__(self) -> None:\n\
+         \x20       self.x = 1\n\
+         \n\
+         \n\
+         def main() -> int:\n\
+         \x20   c = C()\n\
+         \x20   return c.x - 1\n",
+    );
+    assert_accepted(
+        "975_property_ordinary",
+        "class C:\n\
+         \x20   def __init__(self) -> None:\n\
+         \x20       self.x = 7\n\
+         \n\
+         \x20   @property\n\
+         \x20   def value(self) -> int:\n\
+         \x20       return self.x\n\
+         \n\
+         \n\
+         def main() -> int:\n\
+         \x20   c = C()\n\
+         \x20   print(c.value)\n\
+         \x20   return 0\n",
     );
 }
