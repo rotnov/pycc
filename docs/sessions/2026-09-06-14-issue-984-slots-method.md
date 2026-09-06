@@ -65,8 +65,12 @@ compiled and ran the program.
 - D-236 gained a dated 2026-09-06 amendment note generalizing its type-naming
   rule from "the decorator fixes the bound type structurally" to "the
   **binding form** fixes it", which is what licenses the new message to name
-  `function` for a decorator-free `def`. No new decision entry: no new
-  generating rule and no new reserved name.
+  `function` for a decorator-free `def`. That generalization *is* a new
+  normative rule -- D-236's amendment says so in those words -- but it
+  widens an existing accepted decision rather than deciding something new,
+  so it lands as a dated amendment note, not a new entry. No new decision
+  entry was created: no new reserved name, no new diagnostic code, and
+  nothing accepted was rewritten.
 - Docs updated in the same change: `docs/TYPE_SYSTEM.md` (the `__slots__`
   bullet's account count, and the note that the protocol-name half stays
   `@property`-only pending #981), `docs/ROADMAP.md` (prose inside the existing
