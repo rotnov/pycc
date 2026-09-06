@@ -674,13 +674,47 @@ pub(super) fn lower_expr(
                     };
                 }
             }
-            // #911 (Part 1 of #885): `w.MIN_WIDTH` / `self.MIN_WIDTH` -- a
-            // class-level attribute read through an instance. Folded to its
-            // constant *before* the `mro_attrs` lookup below, whose miss
-            // panics: a class attribute deliberately never enters
+            // #960: the instance-slot lookup runs *before* the
+            // class-attribute fold below, matching
+            // `pycc_types::class::resolve_attr_get`'s own properties ->
+            // instance `attrs` -> `class_attrs` order and, through it,
+            // CPython's precedence: an instance `__dict__` entry shadows a
+            // non-data-descriptor class attribute. Two independent sibling
+            // bases can contribute an instance slot and a same-named class
+            // attribute to one derived class without
+            // `pycc_hir::class::attrs::reject_class_attr_collisions` ever
+            // comparing them (it only walks a class's own `class_attrs`
+            // against its own MRO), so the two really can meet here, and
+            // folding first made `pycc_mir` disagree with the type checker
+            // -- silently printing the class attribute's value, and aborting
+            // codegen outright when the two declared types differ.
+            //
+            // A class attribute still deliberately never enters
             // `mro_attrs`/`mro_attr_count`, so it occupies no instance slot
-            // and does not change any other attribute's slot index or the
-            // allocation size of the class's instances.
+            // and changes no other attribute's slot index or the allocation
+            // size of the class's instances. The one cost of the order is
+            // that `mro_attrs` now runs for a class-attribute read too,
+            // where it previously never ran; MRO chains are shallow and this
+            // is compile-time only. It adds no new panic path either: the
+            // property walk above already resolves every entry of
+            // `class_def.mro` through `mro_class_def`.
+            let flat_attrs = mro_attrs(class_def, classes);
+            if let Some((slot, (_, ty))) = flat_attrs
+                .iter()
+                .enumerate()
+                .find(|(_, (name, _))| name == attr)
+            {
+                return MirExpr::AttrGet {
+                    base: Box::new(base),
+                    slot,
+                    ty: ty.clone(),
+                };
+            }
+            // #911 (Part 1 of #885): `w.MIN_WIDTH` / `self.MIN_WIDTH` -- a
+            // class-level attribute read through an instance, reached only
+            // when the slot lookup above missed. Folded to its constant
+            // *before* the panic below, which is the tail for a name that is
+            // neither a slot nor a class attribute anywhere in the MRO.
             //
             // Discarding the already-lowered `base` here is sound because
             // `pycc_types` restricts a class-attribute read's base to a bare
@@ -691,24 +725,12 @@ pub(super) fn lower_expr(
                     return folded;
                 }
             }
-            let flat_attrs = mro_attrs(class_def, classes);
-            let (slot, (_, ty)) = flat_attrs
-                .iter()
-                .enumerate()
-                .find(|(_, (name, _))| name == attr)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "pycc_mir: internal error: attribute `{attr}` not declared on class `{}` \
-                         or any base in its MRO -- pycc_types::check should have rejected this \
-                         HIR before it reached pycc_mir",
-                        class_def.name
-                    )
-                });
-            MirExpr::AttrGet {
-                base: Box::new(base),
-                slot,
-                ty: ty.clone(),
-            }
+            panic!(
+                "pycc_mir: internal error: attribute `{attr}` not declared on class `{}` \
+                 or any base in its MRO -- pycc_types::check should have rejected this \
+                 HIR before it reached pycc_mir",
+                class_def.name
+            )
         }
         // D-154 (Part 1 of #375): `base.method(args)` resolves to the
         // method's mangled, compile-time-known function symbol (D-006's

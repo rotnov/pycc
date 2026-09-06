@@ -1049,6 +1049,16 @@ pub(crate) fn infer_expr_in(
             // effect, so the base is restricted to a bare name (`w.LIMIT`,
             // `self.LIMIT`). `make_window().LIMIT` would otherwise drop the
             // call, so it is rejected here rather than silently mis-compiled.
+            //
+            // #960 left this gate deliberately coarse, exactly like
+            // `check_attr_set`'s own class-attribute rejection: it fires when
+            // a class attribute of that name exists anywhere in the MRO,
+            // without asking whether a sibling base's instance slot shadows
+            // it. For that one shape the read would no longer fold, so the
+            // message's stated reason does not apply -- but the result is a
+            // conservative rejection of a program CPython accepts, never a
+            // mis-compile, and relaxing it belongs with the write-side
+            // follow-up rather than with #960's read fix.
             if !matches!(base.as_ref(), HirExpr::Name(_))
                 && let Ty::Instance(class_name) = &base_ty
                 && class::lookup_class_attr_through_mro(env, class_name, attr).is_some()
