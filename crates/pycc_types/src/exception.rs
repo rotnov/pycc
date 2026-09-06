@@ -690,8 +690,24 @@ fn derived_group_ancestor(def: &HirClassDef) -> Option<&str> {
 /// would silently drop the user's fields. Part 3 of #541 (#703) materializes a
 /// real instance; until then this is a capability gap, reported as `C0001`.
 fn reject_own_constructor(env: &Environment, def: &HirClassDef) -> Result<(), Diagnostic> {
+    // #966: rank the MRO the way constructor resolution does -- a D-225
+    // implicit zero-argument constructor ranks last, so skip it rather
+    // than letting it decide raisability. Before this, `class Base: pass` /
+    // `class MyError(Base, Exception): pass` was rejected purely because
+    // `Base` carried an implicit stub; CPython raises that program fine.
+    //
+    // There is deliberately no all-implicit fallback pass here, unlike the
+    // instantiation and `super()` sites. This function only ever runs on a
+    // tagged class, whose MRO therefore reaches a seeded builtin, and
+    // `pycc_hir::exception` gives the root `Exception` -- and only it -- a
+    // real `__init__` entry that is never flagged. So the walk always
+    // terminates on an unflagged candidate, and a fallback arm would be
+    // unreachable code (D-014 scores every region).
     let init = def.mro.iter().find_map(|ancestor| {
         env.classes.get(ancestor.as_str()).and_then(|ancestor_def| {
+            if ancestor_def.implicit_object_init {
+                return None;
+            }
             ancestor_def
                 .methods
                 .iter()

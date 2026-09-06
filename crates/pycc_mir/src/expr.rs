@@ -134,27 +134,41 @@ pub(super) fn lower_expr(
             if let Some(class_def) = classes.get(callee.as_str()) {
                 // #432: resolve `__init__` via the MRO -- a derived class
                 // without its own `__init__` inherits the base class's
-                // constructor. The MRO is ordered most-derived-first, so
-                // the first `__init__` found is the one to call.
-                let ctor = class_def
-                    .mro
-                    .iter()
-                    .find_map(|mro_class| {
+                // constructor. The MRO is ordered most-derived-first.
+                //
+                // #966: but the *first* `__init__` is not always the right
+                // one. D-225 puts an implicit zero-argument constructor in
+                // the own method table of every class that declares none,
+                // so for `class C(A, B)` with `A` init-less and `B`
+                // declaring `__init__`, `A`'s stub would win and `B`'s
+                // constructor would never run -- leaving `B`'s slots
+                // uninitialized. CPython ranks the equivalent
+                // (`object.__init__`) last, so skip flagged classes on a
+                // first pass. The `or_else` pass covers the all-implicit
+                // MRO (`class A: pass` / `class B: pass` / `class C(A, B)`),
+                // where the implicit constructor really is the one to call;
+                // only a genuinely `__init__`-less MRO reaches the panic.
+                let ctor_in = |skip_implicit: bool| {
+                    class_def.mro.iter().find_map(|mro_class| {
                         let mro_def = classes.get(mro_class.as_str())?;
+                        if skip_implicit && mro_def.implicit_object_init {
+                            return None;
+                        }
                         if mro_def.methods.iter().any(|(mn, _)| mn == "__init__") {
                             Some(format!("{mro_class}.__init__"))
                         } else {
                             None
                         }
                     })
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "pycc_mir: internal error: no `__init__` found in class `{callee}`'s \
+                };
+                let ctor = ctor_in(true).or_else(|| ctor_in(false)).unwrap_or_else(|| {
+                    panic!(
+                        "pycc_mir: internal error: no `__init__` found in class `{callee}`'s \
                          MRO -- pycc_hir guarantees an `__init__` for every non-enum class it \
                          lowers (D-225: by inheritance or by synthesis), and pycc_types rejects \
                          a call to an enum class with C0001 before MIR lowering (#921)"
-                        )
-                    });
+                    )
+                });
                 return MirExpr::Instantiate(Box::new(InstantiateExpr {
                     ctor,
                     // #432: allocate slots for all unique attributes across the
@@ -768,16 +782,32 @@ pub(super) fn lower_expr(
                     .position(|c| c == current)
                     .expect("pycc_mir: internal error: class not found in its own MRO");
                 let super_mro = &class_def.mro[current_pos + 1..];
-                let mangled = super_mro
-                    .iter()
-                    .find_map(|mro_class| {
+                // #966: `super().__init__()` ranks constructors exactly as
+                // `Instantiate` does, so it takes the same skip -- for
+                // `class C(A, B)` with `A` init-less, `super().__init__()`
+                // must reach `B.__init__` rather than `A`'s D-225 stub.
+                // The skip is gated on the method name because every other
+                // `super().m()` resolution is name-agnostic and must stay
+                // that way; the `or_else` pass is mandatory, since
+                // `class A: pass` / `class C(A)` calling `super().__init__()`
+                // has nothing but the implicit constructor to reach and
+                // would otherwise panic here.
+                let skip_implicit_init = method == "__init__";
+                let super_method = |skip_implicit: bool| {
+                    super_mro.iter().find_map(|mro_class| {
                         let mro_def = &classes[mro_class.as_str()];
+                        if skip_implicit && mro_def.implicit_object_init {
+                            return None;
+                        }
                         mro_def
                             .methods
                             .iter()
                             .find(|(name, _)| name == method)
                             .map(|(_, mangled)| mangled.clone())
                     })
+                };
+                let mangled = super_method(skip_implicit_init)
+                    .or_else(|| super_method(false))
                     .expect(
                         "pycc_mir: internal error: method not declared on class or any base in its \
                      MRO after the current class -- pycc_types::check should have rejected this \

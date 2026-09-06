@@ -238,6 +238,7 @@ pub(super) fn lower_enum_class(
             class_methods: Vec::new(),
             type_param,
             is_enum: true,
+            implicit_object_init: false,
             enum_members,
             is_dataclass: false,
             dataclass_fields: Vec::new(),

@@ -9,6 +9,7 @@ mod builtin;
 mod class_attr;
 mod class_dunder;
 mod class_getitem;
+mod class_init_rank;
 mod class_mro;
 mod class_predicate;
 mod class_static;
