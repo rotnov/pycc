@@ -299,3 +299,15 @@ Recorded as one more D-233 residual shape the backstop reports (limit
 (vii), decision 5, `docs/DIAGNOSTICS.md`); tracking re-export provenance is
 a separate feature outside #944. Replied and resolved; round 8 of
 `.harden/findings/issue-944.jsonl` records the refutation.
+
+## PR #971 seventh Codex round (diagnostic-count contracts)
+
+Codex P2 on `fb4caa18`: `docs/DIAGNOSTICS.md`'s quality-bar bullet,
+`docs/CLI_SPEC.md`'s `check` contract, and `.claude/skills/pycc/SKILL.md`
+still stated that HIR lowering reports one diagnostic per failing
+top-level item, although the D-233 scan appends one `C0001` per enum-class
+call after the item's own diagnostic (an unsupported `with` item holding two
+`Color()` calls yields three). Fixed in `8dfe739c`: all three describe the
+two per-item sources; the `.agents/skills/pycc` Codex entrypoint is a pointer
+to the Claude skill and needed no change. Round 9 of
+`.harden/findings/issue-944.jsonl` records it.
