@@ -63,7 +63,14 @@ type does lower). A protocol class in return-annotation position \
 a protocol member declaration alike: a protocol is a compile-time-only \
 interface, so a call to such a function has no concrete type to bind, and \
 a protocol type is currently supported in parameter and variable positions \
-only. It also fires for calls to known Python 3.14 \
+only. String conversion of a value whose type only the checker can see is \
+also C0001, reported by `pycc_types` at `1:1` rather than at the expression \
+(issue #977, D-237): a `print()` argument or f-string interpolation typed as \
+a class instance that is neither a `@dataclass` instance nor a caught \
+builtin exception (a plain class, an `Enum` member, a non-dataclass subclass \
+of a dataclass, a user exception class, or any user class declared under a \
+builtin exception name), or typed as a protocol, whose concrete class is not \
+known at the conversion site. It also fires for calls to known Python 3.14 \
 callable builtins that this compiler version does not implement (e.g. \
 `ValueError(\"x\")`, `Exception(\"msg\")`, `int(\"5\")`, `range(10)` as a \
 standalone call) -- these are valid Python, not name-resolution failures \

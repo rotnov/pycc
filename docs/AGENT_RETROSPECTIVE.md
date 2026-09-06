@@ -33,6 +33,32 @@ never a merge gate.
 
 ---
 
+## 2026-09-06 — Eighteen Codex review rounds on one pull request, most of them documentation drift found one file at a time
+
+**What happened:** PR [#971](https://github.com/rotnov/pycc/pull/971) (#944,
+"fix(hir): report the enum-call C0001 at the call expression") went through
+eighteen Codex review rounds before it merged. Every push spawned a fresh
+round, and most rounds surfaced documentation drift in exactly one more file
+that still stated the old contract — a spec sentence, a skill file, the CLI
+spec, a roadmap row, an ADR line — which was fixed, pushed, and answered by
+the next round finding the next file.
+
+**Root cause:** the documentation sweep was reactive. Each fix addressed the
+file the reviewer named rather than every file that states the changed
+contract, so the review loop did the enumeration one round at a time, and
+each push was a single-file fix rather than a batch.
+
+**What fixed it:** the pull request eventually converged once the remaining
+copies were found; nothing structural changed.
+
+**Lesson:** before the *first* push of a contract change, grep every document
+that states the changed contract — the owning spec under `docs/`, every skill
+file under `.claude/skills/` and its Codex mirror, `docs/CLI_SPEC.md`,
+`docs/ROADMAP.md`, and the ADRs that cite the old wording — and sweep them in
+one commit. During review, batch every documentation-only fix into a single
+push instead of pushing each one as it is found: a fresh round per push is
+the expensive part, not the edit.
+
 ## 2026-09-06 — Requested an invalid placeholder in a pre-commit findings record
 
 **What happened:** During #569, the controller told the implementer to leave

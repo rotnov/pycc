@@ -243,3 +243,4 @@ current.
 | [D-234](./D-234-reject-multiple-inheritance-whose-base-layouts-are.md) | Reject multiple inheritance whose base layouts are not prefixes of the derived layout | accepted |
 | [D-235](./D-235-reject-a-dataclass-field-that-shares-its-name-with-a.md) | Reject a dataclass field that shares its name with a `ClassVar` anywhere in the MRO | accepted |
 | [D-236](./D-236-reject-a-class-attribute-named-after-the-instantiation.md) | Reject a class attribute named after the instantiation or class-creation protocol | accepted |
+| [D-237](./D-237-reject-string-conversion-of-a-non-dataclass-non-exception.md) | Reject string conversion of a non-dataclass, non-exception instance and of a protocol-typed value with C0001 | accepted |
