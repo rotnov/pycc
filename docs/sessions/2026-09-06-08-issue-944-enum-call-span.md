@@ -311,3 +311,16 @@ call after the item's own diagnostic (an unsupported `with` item holding two
 two per-item sources; the `.agents/skills/pycc` Codex entrypoint is a pointer
 to the Claude skill and needed no change. Round 9 of
 `.harden/findings/issue-944.jsonl` records it.
+
+## PR #971 eighth Codex round (ordering contracts)
+
+Three P2 doc-drift findings on `80b23ca9`, fixed in `78d8a626`:
+`docs/CLI_SPEC.md` no longer promises a release-stable first diagnostic
+(it is the completed #864 transition invariant, D-217 rule 2, as
+`docs/DIAGNOSTICS.md` already said); its report-order section and
+`src/frontend.rs`'s `Frontend` error doc now name the per-item pair (the
+item's own diagnostic, then its enum-call `C0001`s); and the D-219 cascade
+sentence in `docs/DIAGNOSTICS.md` scopes the silence to the lowering
+diagnostic, since the scan still runs over a cascade-silenced item (D-233
+decision 6) -- a new unit test pins that report. Round 10 of
+`.harden/findings/issue-944.jsonl` records the three.
