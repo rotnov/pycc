@@ -82,7 +82,9 @@ fn assert_accepted(tag: &str, source: &str) {
 
 /// The distinctive fragment of each name's message. Only `__init__` and
 /// `__new__` name CPython's `TypeError`; `__init_subclass__` shares its string
-/// with the `Enum` route, where CPython does not raise.
+/// with the `Enum` route, where CPython does not raise. Neither of the two
+/// names a concrete bound *type* in that `TypeError` --
+/// `a_non_integer_binding_...` below is the end-to-end pin for that.
 const RESERVED: [(&str, &str); 3] = [
     (
         "__init__",
@@ -165,6 +167,58 @@ fn a_bare_assignment_named_after_the_instantiation_protocol_is_rejected() {
             "C0001",
             needle,
         );
+    }
+}
+
+/// Review round on #978: the guard keys on the attribute *name* alone and
+/// runs before any value extraction, so the same message is rendered whatever
+/// the initializer binds. CPython's own text names the bound type -- it is
+/// `'str' object is not callable` for `__init__ = "x"`, `'bool'` for `True`,
+/// `'float'` for `1.5` -- so the diagnostic must not name one. Pin both
+/// halves end to end: the rejection still fires for a non-integer binding,
+/// and the rendered diagnostic never claims a concrete type.
+#[test]
+fn a_non_integer_binding_is_rejected_without_naming_a_concrete_type() {
+    for (name, needle) in [
+        (
+            "__init__",
+            "resolves a class's constructor from its methods alone",
+        ),
+        ("__new__", "does not model `__new__` at all"),
+    ] {
+        for (shape, decl) in [
+            ("str", format!("{name} = \"x\"")),
+            ("classvar_str", format!("{name}: ClassVar[str] = \"x\"")),
+            ("bool", format!("{name} = True")),
+            ("float", format!("{name} = 1.5")),
+        ] {
+            let tag = format!("975_nonint_{shape}_{name}");
+            let source = format!(
+                "from typing import ClassVar\n\
+                 \n\
+                 \n\
+                 class C:\n\
+                 \x20   {decl}\n\
+                 \n\
+                 \n\
+                 def main() -> int:\n\
+                 \x20   c = C()\n\
+                 \x20   return 0\n"
+            );
+            assert_rejected(&tag, &source, "C0001", needle);
+
+            let dir = ScratchDir::new(&tag).expect("failed to create scratch dir");
+            let src = write_fixture(&dir, &source);
+            let out = Command::new(pycc_bin())
+                .args(["check", src.to_str().unwrap()])
+                .output()
+                .unwrap();
+            let rendered = String::from_utf8_lossy(&out.stdout).to_string();
+            assert!(
+                !rendered.contains("object is not callable"),
+                "diagnostic for {tag} must not name a concrete bound type, got:\n{rendered}"
+            );
+        }
     }
 }
 

@@ -45,6 +45,9 @@ required, no force pushes or deletions). No `[ci-bypass]` incident is open.
 ## In flight
 
 - **This branch, `autopilot/iter-2026-09-06-24`** — #975. See below.
+  Review round on PR [#978](https://github.com/rotnov/pycc/pull/978): the one codex P2 thread asked
+  that the `__init__`/`__new__` messages stop claiming `'int' object is not callable` for every
+  binding; they are now type-neutral, with non-integer-binding coverage added in-crate and end to end.
 - **PR [#971](https://github.com/rotnov/pycc/pull/971)** (#944, `feat/issue-944`,
   "fix(hir): report the enum-call C0001 at the call expression"): **OPEN**, not a draft, `MERGEABLE`,
   head **`0e88a674`** — note this moved from `5f450ae5` during this session, so any earlier snapshot of its

@@ -89,10 +89,19 @@ pub(super) fn reject_reserved_class_attr_name(
 /// string is emitted from the `Enum` member route, where CPython does *not*
 /// raise for `__init_subclass__`.
 ///
-/// Both of those name it *conditionally* in two axes. They say "binding that
-/// name makes CPython raise" rather than "CPython raises here", and they do
-/// not fix *when* it raises: the `C()` call site on the plain and dataclass
-/// routes, but already at class creation on the `Enum` route, where
+/// Neither of them names the *type* of the bound object in that `TypeError`.
+/// CPython's own text is `'<type>' object is not callable`, and `<type>` is
+/// whatever the initializer evaluates to (`'int'`, `'str'`, `'bool'`,
+/// `'float'`, ...). Deriving it here is deliberately not done: this guard
+/// runs on the attribute *name* alone, before any value extraction, and must
+/// stay cheap and value-independent so that all three class-body routes can
+/// call it at the same early point. Naming one concrete type would make the
+/// message wrong for every other binding, so the type is omitted instead.
+///
+/// Both messages name the `TypeError` *conditionally* in two axes. They say
+/// "binding that name ... makes CPython raise" rather than "CPython raises here",
+/// and they do not fix *when* it raises: the `C()` call site on the plain and
+/// dataclass routes, but already at class creation on the `Enum` route, where
 /// `enum.py`'s `__set_name__` invokes the now-non-callable member while the
 /// `class` statement itself executes.
 ///
@@ -108,8 +117,8 @@ fn instantiation_protocol_message(attr_name: &str) -> Option<&'static str> {
         "__init__" => Some(
             "a class attribute named `__init__` is not supported yet -- Python calls it \
              implicitly when the class is instantiated (`C()` runs `type.__call__` -> `__new__` \
-             -> `__init__`), so binding that name makes CPython raise `TypeError: 'int' object \
-             is not callable` when it reaches that call -- at the `C()` call site, or already at \
+             -> `__init__`), so binding that name to a non-callable object makes CPython raise a \
+             `TypeError` when it reaches that call -- at the `C()` call site, or already at \
              class creation in an `Enum` body -- while this compiler resolves a class's \
              constructor from its methods alone and never consults a class attribute of that \
              name, so the binding would be silently ignored rather than honored",
@@ -117,9 +126,9 @@ fn instantiation_protocol_message(attr_name: &str) -> Option<&'static str> {
         "__new__" => Some(
             "a class attribute named `__new__` is not supported yet -- Python calls it \
              implicitly when the class is instantiated (`C()` runs `type.__call__` -> `__new__` \
-             before `__init__`), so binding that name makes CPython raise `TypeError: 'int' \
-             object is not callable` when it reaches that call -- at the `C()` call site, or \
-             already at class creation in an `Enum` body -- while this compiler does not model \
+             before `__init__`), so binding that name to a non-callable object makes CPython \
+             raise a `TypeError` when it reaches that call -- at the `C()` call site, or already \
+             at class creation in an `Enum` body -- while this compiler does not model \
              `__new__` at all (construction is driven entirely by `__init__`), so the binding \
              would be silently ignored rather than honored",
         ),

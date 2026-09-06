@@ -142,8 +142,15 @@ status: accepted
     `__init_subclass__`, and "instantiation" is wrong for `__init_subclass__`.
     Only `__init__` and `__new__` name CPython's `TypeError`, because the same
     string is emitted from the `Enum` route, where CPython does not raise for
-    `__init_subclass__`. Both name it *conditionally*, on two axes. They say
-    "binding that name makes CPython raise" rather than "CPython raises here",
+    `__init_subclass__`. Neither names the bound object's *type* in it:
+    CPython's text is `'<type>' object is not callable`, and `<type>` is
+    whatever the initializer evaluates to (`'int'`, `'str'`, `'bool'`,
+    `'float'`, ...), while this guard keys on the attribute name alone and
+    runs before any value extraction so that all three class-body routes can
+    call it at the same cheap, value-independent point. Naming one concrete
+    type would be wrong for every other binding, so the type is omitted rather
+    than derived. Both name the error *conditionally*, on two axes. They say
+    "binding that name ... makes CPython raise" rather than "CPython raises here",
     because the guard runs before the value-presence check and so also covers a
     value-less declaration (`__init__: int`, no `=`), for which CPython creates
     no class `__dict__` entry at all. And they do not fix *when* it raises: at

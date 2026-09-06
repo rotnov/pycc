@@ -17,7 +17,8 @@ use super::*;
 ///
 /// Only `__init__` and `__new__` may name CPython's `TypeError` --
 /// `__init_subclass__` shares its string with the `Enum` route, where CPython
-/// does not raise.
+/// does not raise. Neither of the two names a concrete bound *type* in that
+/// `TypeError`; `a_non_integer_binding_...` below is the pin for that.
 const RESERVED: [(&str, &str); 3] = [
     (
         "__init__",
@@ -64,13 +65,49 @@ fn a_bare_assignment_named_after_the_instantiation_protocol_is_rejected() {
 /// before the value-presence check, so this input gets the reserved-name
 /// message rather than the generic "there is nothing to fold" one. It was
 /// already rejected before this change, so only the message differs -- but it
-/// is why both message texts say "binding that name makes CPython raise"
+/// is why both message texts say "binding that name ... makes CPython raise"
 /// rather than "CPython raises here": a bare annotation creates no class
 /// `__dict__` entry in CPython, so the unconditional claim would be false.
 #[test]
 fn a_value_less_declaration_named_after_the_instantiation_protocol_is_rejected() {
     for (name, fragment) in RESERVED {
         assert_capability_error_message(&format!("class C:\n    {name}: int\n"), fragment);
+    }
+}
+
+/// #975 review round: the guard fires on the attribute *name* alone, so the
+/// same message is emitted whatever the initializer binds. CPython's own text
+/// names the bound type (`'str' object is not callable` for `__init__ = "x"`),
+/// which the message therefore must not do -- naming one concrete type would
+/// be wrong for every other binding. Pin both directions: the reserved-name
+/// message still fires for a non-integer binding, and it never names a type.
+#[test]
+fn a_non_integer_binding_is_rejected_without_naming_a_concrete_type() {
+    for (name, fragment) in [
+        (
+            "__init__",
+            "resolves a class's constructor from its methods alone",
+        ),
+        ("__new__", "does not model `__new__` at all"),
+    ] {
+        for body in [
+            format!("class C:\n    {name} = \"x\"\n"),
+            format!(
+                "from typing import ClassVar\n\n\nclass C:\n    {name}: ClassVar[str] = \"x\"\n"
+            ),
+            format!("class C:\n    {name} = True\n"),
+            format!("class C:\n    {name} = 1.5\n"),
+        ] {
+            let module = pycc_parser_test_helper::parse(&body);
+            let diagnostic = lower_checked(&module).unwrap_err();
+            assert_eq!(diagnostic.code, "C0001");
+            assert!(diagnostic.message.contains(fragment), "{body}");
+            assert!(!diagnostic.message.contains("'int'"), "{body}");
+            assert!(
+                !diagnostic.message.contains("object is not callable"),
+                "{body}"
+            );
+        }
     }
 }
 
