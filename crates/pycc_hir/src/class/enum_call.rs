@@ -27,7 +27,8 @@
 //! the callee. There is one frame for the module body (computed once by
 //! `lower_module` through [`module_bindings`]), one pushed around each
 //! `def` (its parameter names plus the names its body binds), and one
-//! pushed around each `lambda` (its parameter names). A frame records every
+//! pushed around each `lambda` (its parameter names plus the names its body
+//! binds). A frame records every
 //! `Expr::Name` in `Store` context (assignment, augmented and annotated
 //! assignment, `for`/`with`/walrus targets, tuple and starred targets,
 //! comprehension targets), every `except ... as name`, and every `match`
@@ -340,83 +341,6 @@ pub(crate) fn module_bindings(body: &[Stmt], imports: &[ImportBinding]) -> Vec<S
 /// suppress the scan; inside a function the same statement makes `Color`
 /// a local, which the frame models as before (PR #971 review).
 fn scope_bindings(body: &[Stmt], imports: &[ImportBinding], module_scope: bool) -> Vec<String> {
-    struct Binder<'i> {
-        imports: &'i [ImportBinding],
-        names: Vec<String>,
-        module_scope: bool,
-    }
-    impl<'a> Visitor<'a> for Binder<'_> {
-        fn visit_stmt(&mut self, stmt: &'a Stmt) {
-            match stmt {
-                // A value-less module annotation binds nothing at runtime;
-                // its annotation expression is still walked.
-                Stmt::AnnAssign(ann) if self.module_scope && ann.value.is_none() => {
-                    self.visit_annotation(&ann.annotation);
-                }
-                // A nested `def`/`class` is neither a binding this frame
-                // models (limit (ii)) nor a scope it descends into -- but
-                // its definition-time expressions (decorators, type
-                // parameters, defaults, annotations, bases) are evaluated
-                // in *this* scope, so a walrus there binds here.
-                Stmt::FunctionDef(def) => {
-                    for decorator in &def.decorator_list {
-                        self.visit_decorator(decorator);
-                    }
-                    if let Some(type_params) = &def.type_params {
-                        self.visit_type_params(type_params);
-                    }
-                    self.visit_parameters(&def.parameters);
-                    if let Some(returns) = &def.returns {
-                        self.visit_annotation(returns);
-                    }
-                }
-                Stmt::ClassDef(class) => {
-                    for decorator in &class.decorator_list {
-                        self.visit_decorator(decorator);
-                    }
-                    if let Some(type_params) = &class.type_params {
-                        self.visit_type_params(type_params);
-                    }
-                    if let Some(arguments) = &class.arguments {
-                        self.visit_arguments(arguments);
-                    }
-                }
-                // A `TYPE_CHECKING`-guarded body binds nothing at runtime.
-                Stmt::If(if_stmt) => walk_if_as_lowered(self, if_stmt, self.imports),
-                _ => visitor::walk_stmt(self, stmt),
-            }
-        }
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            match expr {
-                Expr::Name(name) if matches!(name.ctx, ExprContext::Store) => {
-                    self.names.push(name.id.to_string());
-                }
-                // A lambda is its own scope: a walrus inside it binds there.
-                Expr::Lambda(_) => return,
-                _ => {}
-            }
-            visitor::walk_expr(self, expr);
-        }
-        fn visit_except_handler(&mut self, handler: &'a ExceptHandler) {
-            let ExceptHandler::ExceptHandler(except) = handler;
-            if let Some(name) = &except.name {
-                self.names.push(name.to_string());
-            }
-            visitor::walk_except_handler(self, handler);
-        }
-        fn visit_pattern(&mut self, pattern: &'a Pattern) {
-            let captured = match pattern {
-                Pattern::MatchAs(p) => p.name.as_ref(),
-                Pattern::MatchStar(p) => p.name.as_ref(),
-                Pattern::MatchMapping(p) => p.rest.as_ref(),
-                _ => None,
-            };
-            if let Some(name) = captured {
-                self.names.push(name.to_string());
-            }
-            visitor::walk_pattern(self, pattern);
-        }
-    }
     let mut binder = Binder {
         imports,
         names: Vec::new(),
@@ -424,6 +348,99 @@ fn scope_bindings(body: &[Stmt], imports: &[ImportBinding], module_scope: bool) 
     };
     binder.visit_body(body);
     binder.names
+}
+
+/// The names a `lambda` body binds (a walrus at any depth, short of a
+/// nested `lambda`, which is its own scope again); together with the
+/// parameters they make the lambda's frame (D-233 decision 5, PR #971
+/// review).
+fn lambda_body_bindings(body: &Expr, imports: &[ImportBinding]) -> Vec<String> {
+    let mut binder = Binder {
+        imports,
+        names: Vec::new(),
+        module_scope: false,
+    };
+    binder.visit_expr(body);
+    binder.names
+}
+
+/// The [`Visitor`] behind [`scope_bindings`] and [`lambda_body_bindings`].
+struct Binder<'i> {
+    imports: &'i [ImportBinding],
+    names: Vec<String>,
+    module_scope: bool,
+}
+impl<'a> Visitor<'a> for Binder<'_> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            // A value-less module annotation binds nothing at runtime;
+            // its annotation expression is still walked.
+            Stmt::AnnAssign(ann) if self.module_scope && ann.value.is_none() => {
+                self.visit_annotation(&ann.annotation);
+            }
+            // A nested `def`/`class` is neither a binding this frame
+            // models (limit (ii)) nor a scope it descends into -- but
+            // its definition-time expressions (decorators, type
+            // parameters, defaults, annotations, bases) are evaluated
+            // in *this* scope, so a walrus there binds here.
+            Stmt::FunctionDef(def) => {
+                for decorator in &def.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+                if let Some(type_params) = &def.type_params {
+                    self.visit_type_params(type_params);
+                }
+                self.visit_parameters(&def.parameters);
+                if let Some(returns) = &def.returns {
+                    self.visit_annotation(returns);
+                }
+            }
+            Stmt::ClassDef(class) => {
+                for decorator in &class.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+                if let Some(type_params) = &class.type_params {
+                    self.visit_type_params(type_params);
+                }
+                if let Some(arguments) = &class.arguments {
+                    self.visit_arguments(arguments);
+                }
+            }
+            // A `TYPE_CHECKING`-guarded body binds nothing at runtime.
+            Stmt::If(if_stmt) => walk_if_as_lowered(self, if_stmt, self.imports),
+            _ => visitor::walk_stmt(self, stmt),
+        }
+    }
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        match expr {
+            Expr::Name(name) if matches!(name.ctx, ExprContext::Store) => {
+                self.names.push(name.id.to_string());
+            }
+            // A lambda is its own scope: a walrus inside it binds there.
+            Expr::Lambda(_) => return,
+            _ => {}
+        }
+        visitor::walk_expr(self, expr);
+    }
+    fn visit_except_handler(&mut self, handler: &'a ExceptHandler) {
+        let ExceptHandler::ExceptHandler(except) = handler;
+        if let Some(name) = &except.name {
+            self.names.push(name.to_string());
+        }
+        visitor::walk_except_handler(self, handler);
+    }
+    fn visit_pattern(&mut self, pattern: &'a Pattern) {
+        let captured = match pattern {
+            Pattern::MatchAs(p) => p.name.as_ref(),
+            Pattern::MatchStar(p) => p.name.as_ref(),
+            Pattern::MatchMapping(p) => p.rest.as_ref(),
+            _ => None,
+        };
+        if let Some(name) = captured {
+            self.names.push(name.to_string());
+        }
+        visitor::walk_pattern(self, pattern);
+    }
 }
 
 /// Every call in `stmt` (at any depth -- a nested `print(Color(1))`, a call
@@ -509,8 +526,9 @@ pub(crate) fn reject_enum_class_calls(
                 }
                 Expr::Lambda(lambda) => {
                     // `lambda: Color()` has no parameters at all; the frame
-                    // is then empty, and the walk below still sees the body.
-                    let frame: Vec<String> = lambda
+                    // is then the body's own walrus bindings (possibly
+                    // none), and the walk below still sees the body.
+                    let mut frame: Vec<String> = lambda
                         .parameters
                         .as_deref()
                         .map(|parameters| {
@@ -520,6 +538,7 @@ pub(crate) fn reject_enum_class_calls(
                                 .collect()
                         })
                         .unwrap_or_default();
+                    frame.extend(lambda_body_bindings(&lambda.body, self.imports));
                     self.frames.push(frame);
                     visitor::walk_expr(self, expr);
                     self.frames.pop();

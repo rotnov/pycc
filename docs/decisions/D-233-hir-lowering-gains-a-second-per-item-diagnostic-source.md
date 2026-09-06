@@ -55,7 +55,7 @@ status: accepted
   5. The scan models scope-local bindings so a call on a name that shadows
      the enum class keeps its accurate `T0021` from `pycc_types`: a stack of
      frames (the module body, each `def` with its parameters, each `lambda`
-     with its parameters) records the names bound directly in that scope
+     with its parameters and the names its body binds) records the names bound directly in that scope
      (`Store` names, `except ... as`, `match` captures; a value-less
      module-level `Color: int` is metadata, not a binding, and does not
      count, while the same statement inside a function makes the name

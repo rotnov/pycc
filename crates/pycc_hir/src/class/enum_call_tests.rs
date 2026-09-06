@@ -505,6 +505,25 @@ fn a_value_less_annotation_inside_a_function_still_makes_the_name_local() {
 }
 
 #[test]
+fn a_walrus_in_a_lambda_body_binds_the_lambda_frame() {
+    // `Color` is the lambda-local `int` for the sibling call: only the
+    // lambda's own diagnostic remains.
+    let source = format!("{COLOR}g = lambda: ((Color := 1), Color())\n");
+    let diagnostics = lower_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(diagnostics[0].message.contains("a `lambda`"));
+}
+
+#[test]
+fn a_walrus_in_a_nested_lambda_does_not_bind_the_outer_lambda_frame() {
+    let source = format!("{COLOR}g = lambda: (lambda: (Color := 1), Color())\n");
+    let diagnostics = lower_err(&source);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+    assert!(diagnostics[0].message.contains("a `lambda`"));
+    assert_enum_call(&diagnostics[1], "Color", "Color()", &source);
+}
+
+#[test]
 fn a_shadow_in_one_function_does_not_leak_into_a_sibling() {
     let source = format!(
         "{COLOR}def f() -> None:\n    Color = 1\n    Color()\ndef g() -> None:\n    Color()\n"
