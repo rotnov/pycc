@@ -4,9 +4,15 @@
 
 Implemented [#962](https://github.com/rotnov/pycc/issues/962) on
 `feat/issue-962` in the `issue-883` worktree, cut from `origin/main` at
-`f29d245b` (the #961 merge). Five commits, all local at the time of this
-snapshot -- nothing pushed, no pull request opened; the orchestrating
-`issue-implement` session reviews, pushes, and opens the pull request. The
+`f29d245b` (the #961 merge) and rebased cleanly onto `ad5b2534` (the #967
+merge, which touched `pycc_types/src/expr.rs` at a different site and took
+the day's `05` session slot, hence this file's `06`). Seven commits, all
+local at the time of this snapshot -- nothing pushed, no pull request
+opened; the orchestrating `issue-implement` session reviews, pushes, and
+opens the pull request. The rebase re-ran the full gate set from a
+single-writer baseline; the first coverage run had exposed one uncovered
+arm (a nested attribute receiver named `TYPE_CHECKING`), pinned by a
+dedicated test before the rebase. The
 pull request must reference #962 with a closing keyword and #883 without one:
 #883 is the parent and stays open.
 
