@@ -67,6 +67,9 @@ module-level assignment and `for` target) still yields `T0021`.
 - `4017a4c0` test(hir): keep the enum-call test helpers fully covered (#944)
 - `570ab52a` docs(sessions): snapshot the #944 enum-call span delivery
 - `2d4df343` fixup(rebase): mirror #970's implicit_object_init field in the direct-HIR enum guard test
+- `38982a62` docs(sessions): record the #944 rebase onto 50a0dc2a and the post-rebase gate run
+- `d7d18c48` docs/test: address the D-068 review round for #944
+- (this commit) docs(sessions): record the D-068 review round; followed by `chore(harden): record #944 review findings`
 
 ## Gate results (single writer, run sequentially, exit codes captured to files)
 
@@ -97,9 +100,31 @@ branch does not touch.
 
 - #877 (thread spans through `pycc_types`) still owns the abstract-class,
   protocol-class, and builtin-exception `1:1` renderings.
-- The branch must be updated over `origin/main` (`50a0dc2a`, #970) before
-  its pull request; the only expected overlap is the generated
-  `docs/decisions/README.md` table (D-232 row versus D-233 row).
+- The branch is already rebased onto `origin/main` (`50a0dc2a`, #970,
+  re-verified with `git fetch --prune` before this entry was committed);
+  the generated `docs/decisions/README.md` table carries both the D-232 and
+  the D-233 rows.
+
+## D-068 review round
+
+The pinned iEvo `deep-reviewer` (fresh context, full merge-base..HEAD range
+after the rebase) reported no behavioural defect and three documentation
+findings, all fixed in `d7d18c48` and recorded in
+`.harden/findings/issue-944.jsonl`: (1) the `module.rs` doc and D-233
+decision 6 overclaimed that a cascade-silenced item emits no diagnostic at
+all, while the per-item scan runs after every item whatever its outcome --
+both texts now scope the suppression to the lowering source, and the scan
+deliberately stays unfiltered on the cascade outcome; (2) the `pycc_types`
+guard's reachability comment now names only the scan's position-insensitive
+over-suppression cases (limit (i)), since binding-form shadows yield `T0021`
+instead; (3) D-233 decision 5's "every residual is pinned by a test" is now
+literally true -- two unit tests pin the call-before-a-later-module-rebinding
+and the comprehension-target-suppresses-a-sibling-call residuals. After that
+commit, `cargo fmt --check`, `cargo clippy --workspace --all-targets -D
+warnings`, `cargo test --workspace`, the decisions-index `--check`, and
+`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
+(run alone: TOTAL 100.00% lines / functions / regions, 55039 regions, 36259
+lines, 0 missed) all exited 0.
 
 ## Where to resume
 
