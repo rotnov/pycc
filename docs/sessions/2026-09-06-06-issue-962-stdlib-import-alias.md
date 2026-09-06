@@ -107,6 +107,14 @@ The pinned deep reviewer returned one blocker, one warning, one note:
 - **Note, answered by the gate.** Whether the solver-path `defs_rebound`
   branch is exercised: the 100/100 coverage gate passes, so it is.
 
+## CI fix round
+
+The first CI run of PR #968 failed only `pages-performance`: the status-page
+note pushed `site/status/index.html` to 25686 bytes against the 25600-byte
+resource budget. `a504631c` shortens the note to one sentence (25504 bytes)
+and re-pins the manifest sha; the retrospective records the missing local
+step (`check_pages_performance_budget.rb --skip-lighthouse`).
+
 ## Known follow-ups
 
 - [#963](https://github.com/rotnov/pycc/issues/963) and
