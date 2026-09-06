@@ -264,27 +264,34 @@ pub fn lower_module(
         // `is_enum` provenance flag, never on `enum_members` emptiness),
         // minus the poisoned names: a call to an enum class that itself
         // failed to lower is a cascade of that skip (D-219, P2).
-        let enum_class_names: Vec<String> = syntactic_enum_classes
+        // Borrowed names, and no walk at all when the set is empty (the
+        // common module, which defines and imports no enum class): the scan
+        // is a full AST walk of the item plus one of each `def` body, and
+        // paying it unconditionally cost the `pycc check` frontend bench
+        // ~7% (PR #971's `frontend-perf-gate`).
+        let enum_class_names: Vec<&str> = syntactic_enum_classes
             .iter()
-            .cloned()
+            .map(String::as_str)
             .chain(
                 state
                     .class_defs
                     .iter()
                     .filter(|(_, class_def)| class_def.is_enum)
-                    .map(|(name, _)| name.clone()),
+                    .map(|(name, _)| name.as_str()),
             )
             .filter(|name| !poisoned.iter().any(|poisoned_name| poisoned_name == name))
             .collect();
-        // `state.imports` at this point is exactly what `lower_stmt` folded
-        // this item's `TYPE_CHECKING` guards against, so the scan skips the
-        // same dead bodies the lowering did.
-        diagnostics.extend(class::enum_call::reject_enum_class_calls(
-            stmt,
-            &module_frame,
-            &enum_class_names,
-            &state.imports,
-        ));
+        if !enum_class_names.is_empty() {
+            // `state.imports` at this point is exactly what `lower_stmt`
+            // folded this item's `TYPE_CHECKING` guards against, so the scan
+            // skips the same dead bodies the lowering did.
+            diagnostics.extend(class::enum_call::reject_enum_class_calls(
+                stmt,
+                &module_frame,
+                &enum_class_names,
+                &state.imports,
+            ));
+        }
     }
     if !diagnostics.is_empty() {
         return Err(diagnostics);

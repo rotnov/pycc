@@ -287,6 +287,11 @@ fn scope_bindings(body: &[Stmt], imports: &[ImportBinding]) -> Vec<String> {
 /// method gets its frame the same way and a `class` itself gets none --
 /// limit (i)); `visit_expr` pushes one around each `lambda`.
 ///
+/// `lower_module` calls this only with a non-empty `enum_class_names`: the
+/// walk is the whole item plus, again, each `def` body for its frame, and a
+/// module with no enum class in sight must not pay it (`pycc check`'s
+/// frontend bench measured ~7% for the unconditional walk).
+///
 /// `enum_class_names` is assembled by `lower_module` from the syntactic
 /// pre-collection plus every `HirClassDef` with `is_enum` known at scan
 /// time (an enum pulled in by a project import), minus the names currently
@@ -300,11 +305,11 @@ fn scope_bindings(body: &[Stmt], imports: &[ImportBinding]) -> Vec<String> {
 pub(crate) fn reject_enum_class_calls(
     stmt: &Stmt,
     module_frame: &[String],
-    enum_class_names: &[String],
+    enum_class_names: &[&str],
     imports: &[ImportBinding],
 ) -> Vec<Diagnostic> {
     struct CallScan<'n> {
-        enum_class_names: &'n [String],
+        enum_class_names: &'n [&'n str],
         module_frame: &'n [String],
         imports: &'n [ImportBinding],
         frames: Vec<Vec<String>>,
@@ -341,10 +346,7 @@ pub(crate) fn reject_enum_class_calls(
                 Expr::Call(call)
                     if let Expr::Name(callee) = call.func.as_ref()
                         && call.arguments.keywords.is_empty()
-                        && self
-                            .enum_class_names
-                            .iter()
-                            .any(|n| n == callee.id.as_str())
+                        && self.enum_class_names.contains(&callee.id.as_str())
                         && !self.is_bound(callee.id.as_str()) =>
                 {
                     self.diagnostics.push(crate::unsupported(

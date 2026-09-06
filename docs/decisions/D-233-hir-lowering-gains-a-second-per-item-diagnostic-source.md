@@ -30,7 +30,11 @@ status: accepted
      alike. The scan reports one `C0001` per bare-name call to an enum class
      at the call expression's own span, with the #942 message shared through
      `pycc_hir::enum_class_call_message` so the spanned and the span-less
-     rejection render byte-identically.
+     rejection render byte-identically. The scan walks an item only when
+     at least one enum class is in its name set: the unconditional walk
+     cost the `pycc check` frontend bench about 7% (PR #971's
+     `frontend-perf-gate`, threshold 7%), and a module with no enum class
+     -- the common case -- must not pay for a diagnostic it can never emit.
   2. Its diagnostics are appended immediately after the item's own
      diagnostic, so the collection order is still loop order
      ([D-217](D-217-report-every-frontend-diagnostic-per-pass-with.md) rule
