@@ -110,12 +110,28 @@ fn super_reads_the_base_value_when_the_derived_class_overrides_it() {
 /// an instance attribute contributed by one MRO branch must not mask a class
 /// attribute contributed by another. Before #915 pycc rejected this with
 /// `T0047`; CPython prints `1`.
+///
+/// **Deliberately narrowed by #969** ([D-234]): #915's `super()` resolution
+/// is unchanged and still prefers `B.X` here, but the class shape itself no
+/// longer reaches it. `D`'s flat layout is `[X, n]` while `B`'s own is `[n]`,
+/// so `B`'s methods -- lowered once against `B`'s layout under D-154 -- would
+/// address the wrong slot on a `D` instance, and the #969 gate rejects the
+/// class at HIR lowering with `C0001`. This particular program happened to
+/// print the right answer because nothing on the mis-addressed path ran; the
+/// gate is a name-sequence prefix test on the layout, not a reachability
+/// analysis, because `super()` can re-enter a shadowed base member that does
+/// read a mis-addressed slot (see `tests/issue_969_mi_slot_layout.rs`). The
+/// accepted narrowing is recorded in D-234 alongside the redesign that would
+/// lift it.
+///
+/// [D-234]: ../docs/decisions/D-234-reject-multiple-inheritance-whose-base-layouts-are.md
 #[test]
-fn a_sibling_bases_instance_attribute_does_not_mask_a_class_attribute() {
-    assert_runs(
+fn a_sibling_bases_instance_attribute_is_now_rejected_by_the_969_layout_gate() {
+    assert_rejected(
         "915_mixed_diamond",
         "class B:\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass C:\n    def __init__(self) -> None:\n        self.X = 5\n\n\nclass D(B, C):\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().X\n\n\nprint(D().read())\n",
-        "1\n",
+        "C0001",
+        "instance layout is not a prefix of",
     );
 }
 

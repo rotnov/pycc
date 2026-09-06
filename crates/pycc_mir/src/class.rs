@@ -161,72 +161,29 @@ pub(super) fn self_expr(scopes: &[HashMap<String, Ty>]) -> MirExpr {
 }
 
 /// #432: Computes the flat attribute-slot layout for a class by walking its
-/// MRO. Each class in the MRO (from most derived to most base) contributes
-/// its own declared attributes that haven't already been seen by an earlier
-/// (more derived) class. The result is a flat `(name, ty)` list whose indices
-/// are the slot indices used at runtime -- the instance is allocated with
-/// exactly this many slots (`mro_attr_count`), and every `AttrGet`/`AttrSet`
-/// resolves its slot index against this flat layout, not the individual
-/// class's own `attrs` list.
+/// MRO, delegating the walk itself to `pycc_hir::flat_attr_layout`.
 ///
-/// A derived class that re-declates an attribute of the same name as a base
-/// class "wins" (its declaration appears first in the MRO, so its slot type
-/// is the one used), matching CPython's own MRO-based attribute resolution.
+/// The resulting flat `(name, ty)` list's indices are the slot indices used
+/// at runtime -- the instance is allocated with exactly this many slots
+/// (`mro_attr_count`), and every `AttrGet`/`AttrSet` resolves its slot index
+/// against this flat layout, not the individual class's own `attrs` list.
+/// `pycc_hir`'s #969 layout gate computes the same layout to reject a
+/// multiple-inheritance shape whose bases' layouts cannot all be embedded
+/// in the derived one, so the walk is defined once, in `pycc_hir`.
 pub(super) fn mro_attrs(
     class_def: &HirClassDef,
     classes: &HashMap<String, HirClassDef>,
 ) -> Vec<(String, Ty)> {
-    // #432: Walk the MRO most-base-first so that base class attributes
-    // always occupy consistent low slot indices. This is critical for
-    // inherited methods: when `Animal.speak` reads `self.name`, it
-    // resolves the slot index from `Animal`'s `mro_attrs` (where `name`
-    // is slot 0). If we walked most-derived-first, `Dog`'s `breed` would
-    // get slot 0 and `name` would shift to slot 1 — but `Animal.speak`
-    // would still read slot 0, getting `breed` instead of `name`.
-    //
-    // For re-declared attributes (a derived class re-declaring an attr
-    // with the same name as a base), the most-derived declaration's type
-    // wins — so we do a second pass over the MRO (most-derived-first) to
-    // override types for attrs that were already assigned a slot.
-    //
-    // Collect the MRO defs once (verifying all classes exist) so both
-    // passes share the same lookup and the panic path is only exercised
-    // once.
+    // Collect the MRO defs once (verifying all classes exist) so the
+    // defensive panic is exercised here rather than inside the shared
+    // layout walk, then delegate the walk itself to `pycc_hir` so the two
+    // crates cannot drift on what counts as a slot (#969).
     let mro_defs: Vec<&HirClassDef> = class_def
         .mro
         .iter()
         .map(|mro_class| mro_class_def(mro_class, classes))
         .collect();
-    let mut result: Vec<(String, Ty)> = Vec::new();
-    let mut slot_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    // Pass 1: assign slots in most-base-first order (reverse MRO).
-    for mro_def in mro_defs.iter().rev() {
-        for (name, ty) in &mro_def.attrs {
-            if !slot_index.contains_key(name) {
-                slot_index.insert(name.clone(), result.len());
-                result.push((name.clone(), ty.clone()));
-            }
-        }
-    }
-    // Pass 2: override types for re-declared attrs (most-derived wins).
-    // Walk the MRO forward and, for each attr, take the type from the
-    // first (most-derived) class that declares it. We track which attrs
-    // have already been overridden to avoid a less-derived class
-    // overwriting the most-derived type.
-    let mut overridden: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for mro_def in &mro_defs {
-        for (name, ty) in &mro_def.attrs {
-            // `overridden.insert` returns true the first time we see this
-            // attr in pass 2. Since pass 1 already assigned a slot for
-            // every attr in the MRO, `slot_index[name]` always exists
-            // here — direct indexing is safe.
-            if overridden.insert(name.clone()) {
-                let idx = slot_index[name];
-                result[idx].1 = ty.clone();
-            }
-        }
-    }
-    result
+    pycc_hir::flat_attr_layout(&mro_defs)
 }
 
 /// #432: Returns the total number of attribute slots for a class, computed

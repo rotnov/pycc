@@ -239,3 +239,4 @@ current.
 | [D-230](./D-230-bind-public-evidence-to-ordered-immutable-executions.md) | Bind public evidence to ordered immutable executions | accepted |
 | [D-231](./D-231-lower-stdlib-import-x-as-y-to-canonical-names-with-an.md) | Lower stdlib `import X as Y` to canonical names with an alias-aware receiver shadow check | accepted |
 | [D-232](./D-232-rank-an-implicit-object-style-constructor-last-in.md) | Rank an implicit object-style constructor last in constructor resolution | accepted |
+| [D-234](./D-234-reject-multiple-inheritance-whose-base-layouts-are.md) | Reject multiple inheritance whose base layouts are not prefixes of the derived layout | accepted |

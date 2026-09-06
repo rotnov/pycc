@@ -13,7 +13,9 @@ mod program;
 mod stmt;
 mod typecheck;
 
-pub use class::{ClassAttrValue, EnumMemberValue, HirClassDef, PropertyDef, ProtocolMember};
+pub use class::{
+    ClassAttrValue, EnumMemberValue, HirClassDef, PropertyDef, ProtocolMember, flat_attr_layout,
+};
 pub use container::{check_container_ty, check_tuple_element_ty};
 pub use exception::{
     BUILTIN_EXCEPTION_CLASSES, EXCEPTION_GROUP_TYPE_TAG, EXCEPTION_INIT_MANGLED_NAME,
