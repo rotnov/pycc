@@ -571,7 +571,11 @@ fn statement_span(stmt: &Stmt) -> Span {
 /// An import yields names exactly when it *fails*, and then the names are
 /// the ones it would have bound locally: `from geometry import Point, Line`
 /// -> `[Point, Line]`, `import pkg.dep as d` -> `[d]`, and a rejected
-/// `from math import *` -> `math`'s whole export list. Both import arms
+/// `from math import *` -> `math`'s whole export list. Since Part 1 of
+/// #883 (#962, D-231) a `Stmt::Import` lowers -- and so poisons nothing --
+/// exactly when it has one alias and a `pycc_std`-resolvable module, with
+/// or without an `asname`: `import math as m` binds `m` and yields nothing,
+/// while `import numpy as np` yields `[np]`. Both import arms
 /// therefore mirror `import::lower_import_stmt`'s own success conditions
 /// exactly rather than approximating them, one arm per statement kind, so
 /// a shape that lowers poisons nothing and every shape that does not

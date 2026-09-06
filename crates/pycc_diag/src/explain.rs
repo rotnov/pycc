@@ -81,8 +81,10 @@ construct is valid Python that a later slice can implement, not a by-design \
 rejection. Two `from __future__ import ...` shapes are C0001 for the same \
 reason (issue #919, D-229): `barry_as_FLUFL`, a valid feature that changes \
 the grammar (`<>` in place of `!=`) and that the vendored parser does not \
-implement, and `from __future__ import x as y`, the generic aliasing gap \
-(CPython binds a `_Feature` object pycc never models); the nine no-op \
+implement, and `from __future__ import x as y`, the `from ... import x as \
+y` aliasing gap (issue #963; CPython binds a `_Feature` object pycc never \
+models -- a stdlib module behind `import X as Y` lowers since issue #962, \
+D-231); the nine no-op \
 features lower to nothing, and a feature name CPython itself rejects is \
 `L0001`, not C0001. The construct remains reserved and stops \
 producing C0001 the moment the corresponding roadmap slice is implemented; \
