@@ -61,6 +61,7 @@
 
 mod attrs;
 mod body;
+pub(crate) mod enum_call;
 mod enum_class;
 mod init;
 mod mro;
@@ -197,13 +198,15 @@ pub struct HirClassDef {
     /// docstring-only enum body (#744) is an enum with an empty member
     /// table. An enum class has no `__init__` in its MRO by design
     /// (`lower_class` early-returns into `lower_enum_class` ahead of
-    /// D-225's `ensure_init`), so
-    /// `pycc_types::class::binding::resolve_instantiation` rejects any call
-    /// to it (`Color()`, `Color(1)`) with `C0001` before its MRO walk. The
-    /// guard reads the flag off the named class only; an ordinary class
-    /// that lists an enum class as a base (`class Foo(Color): pass`) never
-    /// reaches it because `mro::validate_bases` rejects the enum base with
-    /// its own `C0001` (#941), so no subclass of an enum is ever lowered.
+    /// D-225's `ensure_init`), so a call to it (`Color()`, `Color(1)`) is
+    /// `C0001`: the per-item scan in `class::enum_call` reports every call
+    /// it can attribute at the call expression's own span (#944, D-233),
+    /// and `pycc_types::class::binding::resolve_instantiation` keeps a
+    /// span-less guard on this flag behind it, before its MRO walk. Both
+    /// read the flag off the named class only; an ordinary class that lists
+    /// an enum class as a base (`class Foo(Color): pass`) never reaches
+    /// either because `mro::validate_bases` rejects the enum base with its
+    /// own `C0001` (#941), so no subclass of an enum is ever lowered.
     pub is_enum: bool,
     /// #966: this class's own `__init__` entry is the D-225 implicit
     /// zero-argument constructor synthesized by

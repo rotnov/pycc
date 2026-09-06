@@ -239,5 +239,6 @@ current.
 | [D-230](./D-230-bind-public-evidence-to-ordered-immutable-executions.md) | Bind public evidence to ordered immutable executions | accepted |
 | [D-231](./D-231-lower-stdlib-import-x-as-y-to-canonical-names-with-an.md) | Lower stdlib `import X as Y` to canonical names with an alias-aware receiver shadow check | accepted |
 | [D-232](./D-232-rank-an-implicit-object-style-constructor-last-in.md) | Rank an implicit object-style constructor last in constructor resolution | accepted |
+| [D-233](./D-233-hir-lowering-gains-a-second-per-item-diagnostic-source.md) | HIR lowering gains a second, syntactic per-item diagnostic source: the enum-call scan (issue #944, amending D-219) | accepted |
 | [D-234](./D-234-reject-multiple-inheritance-whose-base-layouts-are.md) | Reject multiple inheritance whose base layouts are not prefixes of the derived layout | accepted |
 | [D-235](./D-235-reject-a-dataclass-field-that-shares-its-name-with-a.md) | Reject a dataclass field that shares its name with a `ClassVar` anywhere in the MRO | accepted |

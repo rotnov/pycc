@@ -1158,3 +1158,18 @@ fn c0001_import_alias_unregistered_symbol() {
 fn c0001_import_alias_project_module() {
     assert_diagnostic_matches_fixture("c0001_import_alias_project_module");
 }
+
+/// #921/#944: calling an enum class with no arguments is `C0001` at the
+/// call expression (reported by `pycc_hir`'s per-item scan), not at `1:1`
+/// and not a `pycc_types` panic.
+#[test]
+fn c0001_enum_class_call_no_args() {
+    assert_diagnostic_matches_fixture("c0001_enum_class_call_no_args");
+}
+
+/// #921/#944: the value-lookup spelling `Color(1)` is the same `C0001` at
+/// its own call expression.
+#[test]
+fn c0001_enum_class_call_value() {
+    assert_diagnostic_matches_fixture("c0001_enum_class_call_value");
+}

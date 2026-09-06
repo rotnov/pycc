@@ -156,7 +156,7 @@ use pycc_diag::Diagnostic;
 /// to another stdlib module by an alias. An alias of any *other* module
 /// (`import math as t`) does not fold, so `t.TYPE_CHECKING` then reaches
 /// the ordinary attribute path and its "has no attribute" diagnostic.
-fn is_type_checking_guard(test: &Expr, imports: &[ImportBinding]) -> bool {
+pub(crate) fn is_type_checking_guard(test: &Expr, imports: &[ImportBinding]) -> bool {
     match test {
         Expr::Name(name) => name.id.as_str() == "TYPE_CHECKING",
         Expr::Attribute(attr) => {
