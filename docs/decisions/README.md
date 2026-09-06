@@ -241,3 +241,4 @@ current.
 | [D-232](./D-232-rank-an-implicit-object-style-constructor-last-in.md) | Rank an implicit object-style constructor last in constructor resolution | accepted |
 | [D-234](./D-234-reject-multiple-inheritance-whose-base-layouts-are.md) | Reject multiple inheritance whose base layouts are not prefixes of the derived layout | accepted |
 | [D-235](./D-235-reject-a-dataclass-field-that-shares-its-name-with-a.md) | Reject a dataclass field that shares its name with a `ClassVar` anywhere in the MRO | accepted |
+| [D-236](./D-236-reject-a-class-attribute-named-after-the-instantiation.md) | Reject a class attribute named after the instantiation or class-creation protocol | accepted |

@@ -30,6 +30,17 @@ use pycc_diag::{Diagnostic, Span};
 /// dataclass, plus every dunder CPython consults for an operation pycc
 /// rewrites through one of those three.*
 ///
+/// D-236 records that this rule is **not** the whole story: it cannot
+/// generate `__new__` or `__init_subclass__`, which Python's instantiation
+/// and class-creation protocols call implicitly without pycc rewriting
+/// anything through them. Those two are owned by
+/// [`super::reserved_names::reject_reserved_class_attr_name`], which applies
+/// in *every* class body rather than only a dataclass one, so this set stays
+/// exactly as D-235 accepted it. Keeping the two sets disjoint is deliberate:
+/// this check runs before [`super::attrs::lower_class_attr`], so every
+/// message below stays byte-for-byte what D-235 pinned, while the two names
+/// it omits fall through to the universal guard.
+///
 /// - `__init__`, `__eq__`, `__repr__` -- synthesized unconditionally by
 ///   [`super::init::synthesize_dataclass_init`] and its siblings.
 /// - `__ne__` -- `pycc_mir`'s `Eq`/`NotEq` rewrite spells `a != b` as
@@ -48,7 +59,7 @@ use pycc_diag::{Diagnostic, Span};
 /// `__hash__` agrees with CPython because `dataclasses` leaves an explicitly
 /// bound `__hash__` alone. `__slots__` is not here either -- it is rejected
 /// earlier and with its own message by
-/// [`super::attrs::reject_reserved_class_attr_name`].
+/// [`super::reserved_names::reject_reserved_class_attr_name`].
 const DATACLASS_IMPLICIT_DUNDERS: [&str; 6] = [
     "__init__",
     "__eq__",

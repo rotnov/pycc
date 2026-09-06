@@ -68,6 +68,7 @@ pub use mro::flat_attr_layout;
 mod protocol;
 #[cfg(test)]
 mod protocol_return_tests;
+mod reserved_names;
 
 use crate::{HirExpr, HirItem, HirStmt, ImportBinding, Ty, lower_arg_list, unsupported};
 use attrs::{

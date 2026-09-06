@@ -8,6 +8,7 @@
 //! compile-time constant from its right-hand side, and rejecting a class
 //! attribute whose name collides with something else the class exposes.
 
+use super::reserved_names::reject_reserved_class_attr_name;
 use super::{ClassAnnotationInfo, ClassAttrValue, HirClassDef, PropertyDef, is_scalar_slot_type};
 use crate::{Ty, unsupported};
 use pycc_ast::{Expr, Number, UnaryOp};
@@ -380,31 +381,6 @@ fn bad_class_attr_shape(attr_name: &str, range: std::ops::Range<u32>) -> Diagnos
         ),
         range,
     )
-}
-
-/// #910: Rejects a class-body assignment to a name the interpreter gives its
-/// own meaning, in either spelling.
-///
-/// `__slots__` is the one such name reachable here. Python reads it as a
-/// declaration of the instance layout; this compiler fixes that layout at
-/// compile time from `__init__` (D-154) and would instead bind an ordinary
-/// constant named `__slots__`, silently discarding the declaration. The
-/// annotated spelling accepted it before #910 for exactly that reason, so
-/// this check closes both spellings at once.
-fn reject_reserved_class_attr_name(
-    attr_name: &str,
-    range: std::ops::Range<u32>,
-) -> Result<(), Diagnostic> {
-    if attr_name == "__slots__" {
-        return Err(unsupported(
-            "`__slots__` in a class body is not supported yet -- a class's instance layout is \
-             fixed at compile time from its `__init__` (the `__slots__` semantics are already \
-             implicit), so a `__slots__` assignment would be silently ignored rather than \
-             honored",
-            range,
-        ));
-    }
-    Ok(())
 }
 
 /// #911: Extracts the compile-time constant value of a class attribute from
