@@ -173,3 +173,21 @@ and the scan's doc record the rule. Round 3 of
 `docs/decisions/D-233-...md` for the design, `crates/pycc_hir/src/class/enum_call.rs`
 for the scan and its residual-limit tests, `tests/issue_921_enum_call.rs` and
 `tests/diagnostics/c0001_enum_class_call_*.py` for the end-to-end span pins.
+
+## Second rebase, onto `5f942512`
+
+While the perf round's gates ran, the concurrent actor merged PR #972
+(`site/issue-569-human-first`: `site/` files plus `docs/ROADMAP.md`) and
+`origin/main` moved from `50a0dc2a` to `5f942512`. The branch was rebased onto
+`5f942512` without conflicts (`git merge-tree` reported a clean merge before
+the rebase). The rebase rewrote every branch commit, so the short SHAs quoted
+above and the `fix_commit` values in `.harden/findings/issue-944.jsonl` name
+the pre-rebase commits; the delivered squash commit supersedes all of them.
+No Rust source changed between `50a0dc2a` and `5f942512`, so the perf-round
+gate run (fmt, clippy, test, `llvm-cov` at 100.00% lines/regions) stands;
+`check_roadmap_evidence.rb`, the decisions-index freshness check, the findings
+checker, and `cargo check --workspace` were re-run after the rebase and
+passed. PR #973 (`autopilot/iter-2026-09-06-22`, #969) is open and overlaps
+this branch on `crates/pycc_hir/src/class.rs`, `crates/pycc_hir/src/lib.rs`,
+`docs/ROADMAP.md`, `docs/TYPE_SYSTEM.md`, and `docs/decisions/README.md`;
+whichever merges second rebases.
