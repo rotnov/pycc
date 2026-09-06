@@ -48,6 +48,14 @@ required, no force pushes or deletions). No `[ci-bypass]` incident is open.
   Review round on PR [#978](https://github.com/rotnov/pycc/pull/978): the one codex P2 thread asked
   that the `__init__`/`__new__` messages stop claiming `'int' object is not callable` for every
   binding; they are now type-neutral, with non-integer-binding coverage added in-crate and end to end.
+  Fix round 2 answered two more codex P2 threads: `__slots__` in an `Enum` body now gets its own
+  route-specific message instead of the plain-class one about a layout fixed from an `__init__` no enum
+  has (`reject_reserved_class_attr_name` takes a `ClassBodyRoute`), and the `docs/ROADMAP.md` #910
+  paragraph now separates the measured `__init__`/`__new__` divergences from the conservative
+  `__init_subclass__` and `__slots__` rejections; re-measuring the supporting claim also found that a
+  dunder in an enum body diverges the other way too (CPython keeps it out of the member list, pycc lowers
+  it as a member), filed as [#979](https://github.com/rotnov/pycc/issues/979) and corrected in
+  `docs/TYPE_SYSTEM.md`, D-236's Alternatives, and the two tests that pinned the old claim.
 - **PR [#971](https://github.com/rotnov/pycc/pull/971)** (#944, `feat/issue-944`,
   "fix(hir): report the enum-call C0001 at the call expression"): **OPEN**, not a draft, `MERGEABLE`,
   head **`0e88a674`** — note this moved from `5f450ae5` during this session, so any earlier snapshot of its

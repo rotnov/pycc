@@ -10,7 +10,7 @@
 //! the function itself: cargo-llvm-cov#276's instantiation-merge gap.
 
 use crate::class::EnumMemberValue;
-use crate::class::reserved_names::reject_reserved_class_attr_name;
+use crate::class::reserved_names::{ClassBodyRoute, reject_reserved_class_attr_name};
 use crate::{HirClassDef, HirItem, Ty, unsupported};
 use pycc_ast::{Expr, Number, Stmt};
 use pycc_diag::Diagnostic;
@@ -86,7 +86,7 @@ pub(super) fn lower_enum_class(
         // needs the same reserved-name guard as the two `class/attrs.rs`
         // routes -- `class C(Enum): __init__ = 1` compiles here today while
         // CPython raises `TypeError` at class creation.
-        reject_reserved_class_attr_name(&member_name, assign.range.into())?;
+        reject_reserved_class_attr_name(&member_name, ClassBodyRoute::Enum, assign.range.into())?;
         // Reject duplicate member names (matching CPython's
         // `TypeError: Attempted to reuse key`).
         if enum_members.iter().any(|(name, _)| name == &member_name) {

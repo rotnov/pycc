@@ -15,8 +15,11 @@
 //!
 //! 1. **Three names, not one.** The issue named `__init__`/`__eq__`/`__repr__`;
 //!    the set that actually diverges is `__init__`/`__new__`/`__init_subclass__`.
-//!    `__eq__` and `__repr__` do *not* diverge outside a dataclass, so they are
-//!    pinned here as still-accepted.
+//!    `__eq__` and `__repr__` do *not* diverge in a plain class body, so they
+//!    are pinned here as still-accepted. (In an `Enum` body they do diverge,
+//!    for a different reason -- CPython's `_EnumDict` keeps every dunder out of
+//!    the member list while pycc lowers it as a member -- which is a separate
+//!    defect, [#979](https://github.com/rotnov/pycc/issues/979).)
 //! 2. **Three spellings, not one.** `ClassVar[int] = 8`, `int = 8` and a bare
 //!    `= 8` all reach the same hazard, so the guard is not `ClassVar`-gated.
 //! 3. **Three class-body routes, not one.** A plain class, a `@dataclass`
@@ -387,12 +390,16 @@ fn dunders_outside_the_instantiation_protocol_stay_accepted_in_a_plain_class() {
     }
 }
 
-/// An `Enum` member named after a dunder outside the set stays an ordinary
-/// member. This is the measurement that settled the scope question: had
-/// `__repr__` diverged here too, the enum route would have been governed by
-/// CPython's `_EnumDict` "no dunder is a member" rule -- a different rule
-/// needing its own name set -- rather than by the instantiation protocol.
-/// Both engines print `2`.
+/// An `Enum` member named after a dunder outside the set is still accepted and
+/// still lowered as an ordinary member. This pins the *current* behavior, not
+/// agreement with CPython: the review round on #978 re-measured it and found
+/// that CPython's `_EnumDict` keeps every dunder out of the member list, so
+/// `for c in C` counts two members here and one there, and `C.__repr__.value`
+/// prints `1` here where CPython raises `AttributeError`. That is a separate
+/// defect with its own name set, tracked as
+/// [#979](https://github.com/rotnov/pycc/issues/979); this test inverts when it
+/// is fixed. D-236's own set and guard are unaffected -- the enum route still
+/// diverges on the instantiation-protocol names for the reasons D-236 records.
 #[test]
 fn an_enum_member_named_after_an_unreserved_dunder_stays_accepted() {
     assert_accepted(
@@ -427,6 +434,42 @@ fn the_slots_rejection_is_unchanged() {
         "C0001",
         "`__slots__` in a class body is not supported yet",
     );
+}
+
+/// Review round on #978: the shared guard made a fourth shape reachable --
+/// `__slots__` in an `Enum` body -- and the plain-class message it first
+/// rendered claimed the layout is fixed from `__init__`, which no enum has.
+/// Pin the enum-specific text end to end.
+///
+/// CPython 3.13.9 accepts both shapes (`_EnumDict` keeps a dunder out of the
+/// member list): `class C(Enum): __slots__ = "x"` with `A = 1` leaves
+/// `C.__slots__ == 'x'` and `list(C) == [C.A]`, and `__slots__ = ()` behaves
+/// the same. The rejection is therefore conservative, and the message says so
+/// instead of claiming a measured divergence.
+#[test]
+fn the_enum_slots_rejection_uses_the_enum_specific_message() {
+    for (tag, value) in [
+        ("975_enum_slots_str", "\"x\""),
+        ("975_enum_slots_tuple", "()"),
+    ] {
+        assert_rejected(
+            tag,
+            &format!(
+                "from enum import Enum\n\
+                 \n\
+                 \n\
+                 class C(Enum):\n\
+                 \x20   __slots__ = {value}\n\
+                 \x20   A = 1\n\
+                 \n\
+                 \n\
+                 def main() -> int:\n\
+                 \x20   return 0\n"
+            ),
+            "C0001",
+            "`__slots__` in an `Enum` body is not supported yet",
+        );
+    }
 }
 
 /// The method-collision rejection still exists for a non-reserved name, so

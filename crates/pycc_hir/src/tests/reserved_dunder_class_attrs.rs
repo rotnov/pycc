@@ -196,8 +196,12 @@ fn dunders_outside_the_instantiation_protocol_stay_accepted_in_a_plain_class() {
 }
 
 /// #975 negative: an `Enum` member named after a dunder outside the set is
-/// still an ordinary member. Measured against CPython 3.13.9: both engines
-/// print `2` for this program.
+/// still lowered as an ordinary member. This pins the current behavior, not
+/// agreement with CPython -- the #978 review round measured that CPython's
+/// `_EnumDict` keeps every dunder out of the member list, so this program has
+/// two members here and one there. That divergence is
+/// [#979](https://github.com/rotnov/pycc/issues/979), a separate name set from
+/// D-236's; this test inverts when it is fixed.
 #[test]
 fn an_enum_member_named_after_an_unreserved_dunder_stays_accepted() {
     let module = pycc_parser_test_helper::parse(
@@ -213,6 +217,45 @@ fn the_slots_message_is_unchanged() {
     assert_capability_error_message(
         "class C:\n    __slots__ = 8\n",
         "`__slots__` in a class body is not supported yet",
+    );
+}
+
+/// Review round on #978: `__slots__` in an `Enum` body is a fourth shape the
+/// shared guard made reachable, and D-154's "the layout is fixed from
+/// `__init__`" explanation is false there -- `lower_enum_class` produces no
+/// `__init__` and no instance layout at all. Pin the route-specific message,
+/// and pin that the plain-class explanation is *not* what gets rendered.
+///
+/// CPython 3.13.9 accepts this program (`_EnumDict` keeps a dunder out of the
+/// member list, so `C.__slots__` is `'x'` and `list(C)` is `[C.A]`), so the
+/// rejection is conservative -- the message says so rather than claiming a
+/// measured divergence.
+#[test]
+fn the_enum_slots_message_describes_the_enum_route() {
+    let source = "from enum import Enum\n\n\nclass C(Enum):\n    __slots__ = \"x\"\n    A = 1\n";
+    assert_capability_error_message(source, "`__slots__` in an `Enum` body is not supported yet");
+
+    let module = pycc_parser_test_helper::parse(source);
+    let diagnostic = lower_checked(&module).unwrap_err();
+    assert!(
+        !diagnostic
+            .message
+            .contains("fixed at compile time from its `__init__`"),
+        "the enum route must not borrow D-154's plain-class explanation, got: {}",
+        diagnostic.message
+    );
+}
+
+/// The empty-tuple shape, which CPython also accepts (`E.__slots__ == ()`,
+/// `list(E) == [E.A]`). Without the guard it would be rejected anyway, but for
+/// the unrelated reason that `()` is not an `int`/`str` literal member value --
+/// so pin that the reserved-name guard wins and the `__slots__` message is what
+/// a reader sees.
+#[test]
+fn an_empty_slots_tuple_in_an_enum_body_reports_the_slots_message() {
+    assert_capability_error_message(
+        "from enum import Enum\n\n\nclass C(Enum):\n    __slots__ = ()\n    A = 1\n",
+        "`__slots__` in an `Enum` body is not supported yet",
     );
 }
 

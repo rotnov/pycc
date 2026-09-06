@@ -8,7 +8,7 @@
 //! compile-time constant from its right-hand side, and rejecting a class
 //! attribute whose name collides with something else the class exposes.
 
-use super::reserved_names::reject_reserved_class_attr_name;
+use super::reserved_names::{ClassBodyRoute, reject_reserved_class_attr_name};
 use super::{ClassAnnotationInfo, ClassAttrValue, HirClassDef, PropertyDef, is_scalar_slot_type};
 use crate::{Ty, unsupported};
 use pycc_ast::{Expr, Number, UnaryOp};
@@ -154,7 +154,7 @@ pub(super) fn lower_class_attr(
         ));
     };
     let attr_name = target_name.id.to_string();
-    reject_reserved_class_attr_name(&attr_name, ann.range.into())?;
+    reject_reserved_class_attr_name(&attr_name, ClassBodyRoute::Plain, ann.range.into())?;
     if already.iter().any(|(name, _, _)| name == &attr_name) {
         return Err(unsupported(
             format!(
@@ -303,7 +303,7 @@ pub(super) fn lower_unannotated_class_attr(
         ));
     };
     let attr_name = target_name.id.to_string();
-    reject_reserved_class_attr_name(&attr_name, assign.range.into())?;
+    reject_reserved_class_attr_name(&attr_name, ClassBodyRoute::Plain, assign.range.into())?;
     if already.iter().any(|(name, _, _)| name == &attr_name) {
         return Err(unsupported(
             format!(

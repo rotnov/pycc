@@ -77,6 +77,24 @@ status: accepted
   Both are rejected for uniformity of the single rule, not because a divergence
   was measured at the declaration site alone.
 
+  The review round on [#978](https://github.com/rotnov/pycc/pull/978) added a
+  third asymmetry, on the `__slots__` name this guard already owned from #910.
+  Routing the `Enum` member loop through the same function made a `__slots__`
+  binding in an enum body reachable for the first time, and the shared message
+  explained it with D-154's "the instance layout is fixed at compile time from
+  `__init__`" — false for a class `lower_enum_class` produces, which has no
+  `__init__` and no instance layout at all. `reject_reserved_class_attr_name`
+  now takes a `ClassBodyRoute` and only the `__slots__` arm branches on it; the
+  instantiation-protocol strings stay route-independent, because their reason
+  ("pycc resolves each protocol without consulting a class attribute of that
+  name") is the same on every route. The enum text is conservative on the same
+  footing as `__init_subclass__`: CPython 3.13.9 *accepts* both `class C(Enum):
+  __slots__ = "x"` and `__slots__ = ()` alongside `A = 1` — the `class`
+  statement succeeds, `C.__slots__` is the bound value, `list(C)` is `[C.A]`,
+  and the member still has a `__dict__` — so no divergence was measured at the
+  declaration site; pycc rejects because it has no model for a non-member
+  dunder in an enum body and would otherwise lower the name as a member.
+
   **Trigger to revisit.** The five names D-235 lists that are *not* in this set
   (`__eq__`, `__repr__`, `__ne__`, `__str__`, `__format__`) are safe in a plain
   class body **only because** every pycc rewrite that consults them is
@@ -118,10 +136,22 @@ status: accepted
   - **Defer the `Enum` body to a separate issue.** Considered seriously, on the
     hypothesis that the enum path is governed by a *different* rule — CPython's
     `_EnumDict` excludes every dunder from membership, which would be a second
-    seam needing its own name set and evidence. Tested and refuted: `class
-    C(Enum): __repr__ = 1; B = 2` prints `2` under both engines, so the enum
-    path diverges on exactly the instantiation-protocol names. One rule, one
-    guard, one more call site.
+    seam needing its own name set and evidence. Accepted as decided — one rule,
+    one guard, one more call site — but the evidence originally recorded here
+    for it was wrong, and is corrected by
+    [#978](https://github.com/rotnov/pycc/pull/978)'s review round. The probe
+    was `class C(Enum): __repr__ = 1; B = 2` printing `2` under both engines,
+    which does not discriminate: `C.B.value` is `2` either way, whether or not
+    `__repr__` also became a member. A discriminating probe shows the second
+    seam is real. Under CPython 3.13.9 `_EnumDict` keeps `__repr__` out of the
+    member list (`list(C.__members__) == ['B']`, `C.__repr__` is the plain
+    `int`), while pycc lowers it as a member: `for c in C` counts two here and
+    one there, and `C.__repr__.value` prints `1` here where CPython raises
+    `AttributeError`. That divergence is a separate defect with its own name
+    set (every dunder, not an enumeration) and is tracked as
+    [#979](https://github.com/rotnov/pycc/issues/979); it does not change this
+    decision's own set or guard, which remain correct for the
+    instantiation-protocol names.
 
 - Consequences:
   - Three names are now unusable as a class attribute anywhere. This is a
