@@ -244,3 +244,25 @@ promised the call-expression span categorically; the sentence now names the
 residual fallback to the span-less guard at `1:1` (module-level rebinding
 anywhere in the module, sibling-comprehension rebinding). Round 5 of
 `.harden/findings/issue-944.jsonl` records both.
+
+## PR #971 fourth Codex round (failed same-named def)
+
+Codex P2 (thread `PRRT_kwDOTiOo7s6fr7RV`): a same-named `def` that fails to
+lower (unannotated `def Color()`), followed by `class Color(Enum)` and
+`Color()`, still counts for `module_rebound_names`, so the call is never
+scanned and the collision never fires (the def bound nothing); Codex
+proposed suppressing only names whose declarations actually bind or
+collide. Reproduced both orders with `pycc check`: def-first reports
+`T0001` at the def, class-first reports the collision at the def. Judgment
+fork resolved by an independent advisor round (D-127), verdict refute: the
+program carries two independent errors and the root-cause `T0001` is always
+reported, after which the collision surfaces on the next run -- the same
+under-reporting downstream of a failed same-named item that D-219's
+`class A:` / `def A()` / `def g(a: A)` example documents as intended.
+Outcome-based suppression would emit a false-kind `C0001` at a `Color()`
+that lexically resolves to the def, which is the wrong-kind report limit
+(vii) was pinned to prevent in the two earlier rounds; the limit stays
+syntactic so collision ownership never depends on lowering outcomes.
+Replied and resolved; round 6 of `.harden/findings/issue-944.jsonl` records
+the refutation. The one-region coverage gap in `module_rebound_names`
+(two unreachable `Option` branches) closed with `.expect` in `f7d2de0e`.
