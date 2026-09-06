@@ -117,6 +117,17 @@
 //!   spellings need no import binding and fold in the module frame too;
 //!   inside a `def` the scan runs with the item's own import view, so the
 //!   aliased spelling folds there.
+//! - (vii) **A name a module-level `def` also binds is never scanned.**
+//!   `def Color()` beside `class Color(Enum)` is a name collision that the
+//!   class or function item itself reports (`... collides with a function
+//!   of the same name ...`), whichever comes second. A module-level
+//!   `Color()` between the two resolves to the earlier binding, so scanning
+//!   it against the syntactic pre-collection would report a *false-kind*
+//!   `C0001` ahead of the real one (PR #971 review). `lower_module`
+//!   therefore drops every name in `module_function_names` from the scan's
+//!   name set for the whole module, in either order: the collision
+//!   diagnostic owns such a program, and a `def`-body call to the shadowed
+//!   name falls through to `pycc_types`' span-less guard as before #944.
 //! - A call with a keyword argument (`Color(value=1)`) is skipped:
 //!   `lower_expr` already reports exactly one `C0001 keyword call arguments
 //!   are not supported yet` at that call, and the scan runs on failed items
@@ -188,6 +199,19 @@ pub(crate) fn syntactic_enum_class_names(body: &[Stmt]) -> Vec<String> {
     body.iter()
         .filter_map(|stmt| match stmt {
             Stmt::ClassDef(def) if has_single_enum_marker_base(def) => Some(def.name.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every name a module-level `def` binds, in body order (limit (vii)):
+/// `lower_module` drops these from the enum-call name set, because a
+/// module that binds one name to both a function and an enum class is
+/// reported by the collision diagnostic, never by the scan.
+pub(crate) fn module_function_names(body: &[Stmt]) -> Vec<String> {
+    body.iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::FunctionDef(def) => Some(def.name.to_string()),
             _ => None,
         })
         .collect()
@@ -852,5 +876,58 @@ mod tests {
         let diagnostics = lower_err(&source);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
+    }
+
+    /// Limit (vii): a module that binds one name to both a `def` and an
+    /// enum class is reported by the collision diagnostic alone -- the scan
+    /// never claims a call to that name, in either definition order
+    /// (PR #971 review: `def Color()` / `Color()` / `class Color(Enum)`
+    /// used to report a false-kind enum-call `C0001` first).
+    fn assert_only_the_collision_is_reported(source: &str) {
+        let diagnostics = lower_err(source);
+        let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| m.contains("collides with"))
+                .count(),
+            1,
+            "exactly one collision diagnostic expected, got {messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .all(|m| !m.contains("cannot call enum class")),
+            "the scan must not claim a def-bound name, got {messages:?}"
+        );
+    }
+
+    #[test]
+    fn a_def_bound_name_is_never_scanned_when_the_def_comes_first() {
+        assert_only_the_collision_is_reported(
+            "from enum import Enum\n\ndef Color() -> int:\n    return 1\n\nColor()\n\nclass Color(Enum):\n    RED = 1\n",
+        );
+    }
+
+    #[test]
+    fn a_def_bound_name_is_never_scanned_when_the_class_comes_first() {
+        assert_only_the_collision_is_reported(
+            "from enum import Enum\n\nclass Color(Enum):\n    RED = 1\n\ndef Color() -> int:\n    return 1\n\nColor()\n",
+        );
+    }
+
+    #[test]
+    fn a_def_body_call_to_a_def_bound_enum_name_is_not_scanned_either() {
+        assert_only_the_collision_is_reported(
+            "from enum import Enum\n\ndef use() -> None:\n    Color()\n\ndef Color() -> int:\n    return 1\n\nclass Color(Enum):\n    RED = 1\n",
+        );
+    }
+
+    #[test]
+    fn module_function_names_lists_module_level_defs_only() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "def a() -> None:\n    def inner() -> None:\n        pass\n\nclass K:\n    def method(self) -> None:\n        pass\n\nasync def b() -> None:\n    pass\n",
+        );
+        assert_eq!(super::module_function_names(&module.body), vec!["a", "b"]);
     }
 }

@@ -191,3 +191,19 @@ passed. PR #973 (`autopilot/iter-2026-09-06-22`, #969) is open and overlaps
 this branch on `crates/pycc_hir/src/class.rs`, `crates/pycc_hir/src/lib.rs`,
 `docs/ROADMAP.md`, `docs/TYPE_SYSTEM.md`, and `docs/decisions/README.md`;
 whichever merges second rebases.
+
+## PR #971 second Codex round (def-bound names)
+
+A Codex P2 thread on `crates/pycc_hir/src/module.rs` (posted against head
+`2bc3164c`, found after the perf push) showed a real false-kind report:
+`def Color() -> int` / `Color()` / `class Color(Enum)` reported the enum-call
+`C0001` at the call first and the class/function collision second, because
+the syntactic pre-collection knew `Color` before its class item was reached
+and the frame binder records no `def` name. Reproduced with `pycc check`
+on all three orderings (def-call-class, class-def-call, and a `def`-body
+call). Fix: `class::enum_call::module_function_names` lists the module-level
+`def` names and `lower_module` drops them from the scan's name set for the
+whole module (limit (vii) in the module doc; D-233 decision 5 and
+`docs/DIAGNOSTICS.md` gained the sentence), so such a program carries the
+collision diagnostic alone. Four unit tests and one end-to-end test pin it.
+Round 4 of `.harden/findings/issue-944.jsonl` records the finding.

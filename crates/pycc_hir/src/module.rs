@@ -220,6 +220,11 @@ pub fn lower_module(
     // not, and its body's bindings stay in the frame (limit (vi) in
     // `class::enum_call`, over-suppression only).
     let syntactic_enum_classes = class::enum_call::syntactic_enum_class_names(&module.body);
+    // A name a module-level `def` also binds is a collision the class or
+    // function item reports itself; the scan never claims it (limit (vii)
+    // in `class::enum_call`), so `def Color()` / `Color()` /
+    // `class Color(Enum)` yields the collision diagnostic alone.
+    let def_bound_names = class::enum_call::module_function_names(&module.body);
     let module_frame = class::enum_call::module_bindings(&module.body, &state.imports);
     for (index, stmt) in module.body.iter().enumerate() {
         let position = if index < prologue_len {
@@ -263,7 +268,8 @@ pub fn lower_module(
         // at this point (an enum a project import pulled in, keyed on the
         // `is_enum` provenance flag, never on `enum_members` emptiness),
         // minus the poisoned names: a call to an enum class that itself
-        // failed to lower is a cascade of that skip (D-219, P2).
+        // failed to lower is a cascade of that skip (D-219, P2); minus the
+        // names a module-level `def` binds (collision, limit (vii)).
         // Borrowed names, and no walk at all when the set is empty (the
         // common module, which defines and imports no enum class): the scan
         // is a full AST walk of the item plus one of each `def` body, and
@@ -280,6 +286,7 @@ pub fn lower_module(
                     .map(|(name, _)| name.as_str()),
             )
             .filter(|name| !poisoned.iter().any(|poisoned_name| poisoned_name == name))
+            .filter(|name| !def_bound_names.iter().any(|def_name| def_name == name))
             .collect();
         if !enum_class_names.is_empty() {
             // `state.imports` at this point is exactly what `lower_stmt`

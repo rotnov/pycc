@@ -204,3 +204,36 @@ fn calling_an_imported_docstring_only_enum_is_c0001_at_the_call() {
     let entry = write_fixture(&dir, "prog.py", entry_source);
     assert_enum_call_rejected_in(&dir, "check", &entry, entry_source, "Color", "Color()");
 }
+
+/// PR #971 review: a module-level `def Color()` beside `class Color(Enum)`
+/// is a name collision the class item reports; a `Color()` between the two
+/// resolves to the function, so the binary must report the collision alone
+/// and never a false-kind "cannot call enum class" ahead of it.
+#[test]
+fn a_call_to_a_def_bound_name_before_the_enum_class_reports_the_collision_only() {
+    let dir = ScratchDir::new("921_def_shadow").expect("failed to create scratch dir");
+    let entry = write_fixture(
+        &dir,
+        "prog.py",
+        "from enum import Enum\n\n\ndef Color() -> int:\n    return 1\n\n\nColor()\n\n\nclass Color(Enum):\n    RED = 1\n",
+    );
+    let result = Command::new(pycc_bin())
+        .arg("check")
+        .arg(entry.to_str().unwrap())
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(result.status.code(), Some(1), "got: {combined}");
+    assert!(
+        combined.contains("class `Color` collides with a function of the same name"),
+        "the collision diagnostic should be reported, got: {combined}"
+    );
+    assert!(
+        !combined.contains("cannot call enum class"),
+        "no enum-call C0001 may precede the collision, got: {combined}"
+    );
+}
