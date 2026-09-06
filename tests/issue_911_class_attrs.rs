@@ -544,15 +544,18 @@ fn a_class_attribute_in_a_class_pattern_keyword_is_rejected() {
     );
 }
 
-/// PEP 544: a class attribute does **not** satisfy a protocol attribute
-/// member in Part 1 -- `check_protocol_conformance` is deliberately
-/// untouched. Recorded as a limitation in `docs/TYPE_SYSTEM.md`.
+/// PEP 544: a class attribute **does** satisfy a protocol attribute member.
+/// Part 1 (#911) deliberately left `check_protocol_conformance` untouched and
+/// this test pinned the resulting rejection; [#914] lifted the limitation, so
+/// the same program now compiles and prints the folded constant. The full
+/// surface (inheritance, mixed members, `isinstance` agreement, and the
+/// type-mismatch rejection) lives in `tests/issue_914_protocol_class_attr.rs`.
 #[test]
-fn a_class_attribute_does_not_satisfy_a_protocol_attribute_member() {
-    assert_rejected(
+fn a_class_attribute_satisfies_a_protocol_attribute_member() {
+    assert_runs(
         "911_protocol",
-        "class HasLimit(Protocol):\n    limit: int\n\n\nclass C:\n    limit: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\ndef read(p: HasLimit) -> int:\n    return p.limit\n\n\nprint(read(C()))\n",
-        "limit",
+        "from typing import Protocol\n\n\nclass HasLimit(Protocol):\n    limit: int\n\n\nclass C:\n    limit: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\ndef read(p: HasLimit) -> int:\n    return p.limit\n\n\nprint(read(C()))\n",
+        "1\n",
     );
 }
 

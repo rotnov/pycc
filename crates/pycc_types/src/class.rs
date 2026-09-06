@@ -143,7 +143,19 @@ pub(crate) fn check_protocol_conformance(
                 ty: proto_attr_ty,
             } => {
                 // Look up the attribute through the MRO.
-                let found = lookup_attr_through_mro(env, &class_def.mro, attr_name);
+                // #914 (follow-up to #911, Part 1 of #885): a class-level
+                // attribute satisfies an attribute member exactly as an
+                // instance slot or a `@property` does, matching mypy and
+                // pyright. The two walks stay separate for the reason
+                // `lookup_class_attr_through_mro`'s own doc comment gives
+                // (a class attribute occupies no slot and folds to a
+                // constant), and the *order* is deliberate: two independent
+                // sibling bases can contribute an instance slot and a
+                // same-named class attribute to one derived class without
+                // `reject_class_attr_collisions` ever comparing them, and
+                // CPython lets the instance `__dict__` entry win there.
+                let found = lookup_attr_through_mro(env, &class_def.mro, attr_name)
+                    .or_else(|| lookup_class_attr_through_mro(env, class_name, attr_name));
                 let Some(concrete_attr_ty) = found else {
                     return Err(Diagnostic::error(
                         "T0046",
@@ -4775,6 +4787,68 @@ mod tests {
             "unexpected message: {}",
             err.message
         );
+    }
+
+    // -- #914: a class attribute satisfies a protocol attribute member ----
+
+    /// A `#911` class-level attribute satisfies a protocol's attribute
+    /// member, exactly as an instance slot or a `@property` does: the
+    /// `ProtocolMember::Attribute` arm falls back to
+    /// `lookup_class_attr_through_mro` when the instance/property walk
+    /// misses.
+    #[test]
+    fn protocol_conformance_with_class_attribute_succeeds() {
+        check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    x: int\nclass C:\n    x: int = 1\n    def __init__(self) -> None:\n        self.y = 0\nc: P = C()\n",
+        )
+        .expect("a class attribute satisfies the protocol's attribute member");
+    }
+
+    /// The fallback walks the full MRO, so a class attribute declared on a
+    /// *base* satisfies the member for a derived class that declares none
+    /// of its own.
+    #[test]
+    fn protocol_conformance_with_inherited_class_attribute_succeeds() {
+        check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    x: int\nclass B:\n    x: int = 1\nclass C(B):\n    def __init__(self) -> None:\n        self.y = 0\nc: P = C()\n",
+        )
+        .expect("an inherited class attribute satisfies the protocol's attribute member");
+    }
+
+    /// A class attribute of the wrong type still fails, with the same
+    /// "has type" wording an instance attribute produces -- the fallback
+    /// feeds the existing `is_assignable` branch rather than short-circuiting
+    /// past it.
+    #[test]
+    fn protocol_conformance_with_wrong_typed_class_attribute_is_t0046() {
+        let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    x: int\nclass C:\n    x: str = \"hi\"\n    def __init__(self) -> None:\n        self.y = 0\nc: P = C()\n",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0046");
+        assert!(
+            err.message.contains("attribute `x` has type `str`"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    /// Pins the `.or_else` *ordering*. `reject_class_attr_collisions` only
+    /// compares a class's own `class_attrs` against its own MRO, so two
+    /// independent sibling bases can contribute an instance slot and a
+    /// same-named class attribute to one derived class without ever being
+    /// compared. The instance walk runs first, so the member resolves to
+    /// `A.x`'s `int` -- CPython's own answer, since an instance `__dict__`
+    /// entry shadows a non-data-descriptor class attribute. Swapping the
+    /// two walks would resolve it to `B.x`'s `str` and reject this program.
+    /// (The separate MIR-side value divergence the same shape exposes for
+    /// ordinary attribute reads is #960, not fixed here.)
+    #[test]
+    fn protocol_conformance_prefers_a_sibling_base_instance_attribute() {
+        check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    x: int\nclass A:\n    def __init__(self) -> None:\n        self.x = 1\nclass B:\n    x: str = \"hi\"\nclass C(A, B):\n    pass\nc: P = C()\n",
+        )
+        .expect("the sibling base's instance attribute wins over the class attribute");
     }
 
     #[test]
