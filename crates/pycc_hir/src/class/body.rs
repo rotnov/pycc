@@ -150,18 +150,58 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
                 )?);
                 continue;
             }
-            // #911: correct `ClassVar` semantics inside a `@dataclass` body
-            // (the field is excluded from the generated `__init__`) is out of
-            // scope for Part 1. Merely stripping the wrapper here would turn
-            // `x: ClassVar[int]` into a *required* `__init__` parameter --
-            // silently wrong -- so the spelling is rejected instead.
-            if is_class_var {
+            // #913: PEP 557 says a `ClassVar`-annotated name in a
+            // `@dataclass` body is *not* a dataclass field, so it takes the
+            // very same #911 class-attribute route the non-dataclass branch
+            // above takes. Because it never enters `dataclass_fields`, it is
+            // absent from the merged field list `super::lower_class` builds
+            // -- and therefore from the synthesized `__init__`, `__eq__` and
+            // `__repr__`, and from the D-154 instance-slot layout, which is
+            // that same merged list. #911 rejected the spelling outright
+            // because merely stripping the wrapper would have turned it into
+            // a *required* `__init__` parameter; routing instead of stripping
+            // is what makes that objection moot.
+            //
+            // Two guards keep the routed form honest. The first is here: a
+            // `ClassVar` named after a method the dataclass *synthesizes*
+            // cannot be modelled. CPython's `dataclasses` uses
+            // `_set_new_attribute`, which does not overwrite a name already
+            // in the class `__dict__`, so `__repr__: ClassVar[int] = 8`
+            // really does leave `A.__repr__ == 8` and
+            // `__init__: ClassVar[int] = 8` leaves the class with no
+            // synthesized constructor at all. pycc synthesizes all three
+            // unconditionally, and `reject_class_attr_collisions` runs before
+            // synthesis pushes them into `methods`, so it cannot see the
+            // clash either. This mirrors the same three names the explicit
+            // `def __init__`/`__eq__`/`__repr__` rejection below covers. The
+            // second guard is the field/class-attribute name check in
+            // `super::lower_class`, which runs after the field merge.
+            if is_class_var
+                && let Expr::Name(target_name) = ann.target.as_ref()
+                && matches!(target_name.id.as_str(), "__init__" | "__eq__" | "__repr__")
+            {
                 return Err(unsupported(
-                    "`ClassVar` in a `@dataclass` body is not supported yet -- a `ClassVar` \
-                     field must be excluded from the generated `__init__`, which this version \
-                     does not model",
+                    format!(
+                        "a `@dataclass` class auto-generates `{name}`; a `ClassVar` named \
+                         `{name}` is not allowed in a `@dataclass` body -- CPython would keep \
+                         the class attribute and skip synthesizing the method, which this \
+                         version does not model",
+                        name = target_name.id.as_str()
+                    ),
                     ann.range,
                 ));
+            }
+            if is_class_var {
+                class_attrs.push(lower_class_attr(
+                    ann,
+                    stripped,
+                    class_name,
+                    type_param,
+                    aliases,
+                    class_name_defs,
+                    &class_attrs,
+                )?);
+                continue;
             }
             // The target must be a single bare name.
             let Expr::Name(target_name) = ann.target.as_ref() else {

@@ -251,17 +251,6 @@ fn a_bare_class_var_in_a_parameter_annotation_is_rejected() {
     );
 }
 
-/// #911 work item 3: merely stripping `ClassVar` in a `@dataclass` body would
-/// turn the field into a *required* `__init__` parameter. Reject instead.
-#[test]
-fn class_var_in_a_dataclass_body_is_rejected() {
-    assert_rejected(
-        "911_classvar_dataclass",
-        "@dataclass\nclass C:\n    x: int\n    LIMIT: ClassVar[int] = 8\n",
-        "`ClassVar` in a `@dataclass` body is not supported yet",
-    );
-}
-
 // -- annotation-form rejections -------------------------------------------
 
 #[test]
