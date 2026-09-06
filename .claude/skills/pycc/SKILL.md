@@ -24,9 +24,10 @@ At this alpha revision, `build`, `run`, `check`, and `version --verbose` have
 implementations. `check` accepts one or more native file paths, runs the
 parser, checked HIR lowering, and strict type-checker subset for every
 supplied file, reports every diagnostic the failing pass found for each input
-(parser: all syntax errors; HIR lowering: one per failing top-level item, with
-an item that only references a class or alias that itself failed to lower
-skipped silently, D-219; the type checker: one per failing function --
+(parser: all syntax errors; HIR lowering: per top-level item, the item's own
+diagnostic when it fails plus one enum-call `C0001` per call of an enum class
+inside it (D-233), with an item that only references a class or alias that
+itself failed to lower skipped silently, D-219; the type checker: one per failing function --
 a pre-check failure is reported alone; otherwise a module-level solver
 list (its top-level walk or a post-body phase such as
 `propagate_binop_constraints`) is reported alone and the checker's list

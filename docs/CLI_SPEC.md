@@ -78,8 +78,10 @@ accepts multiple files in one invocation, matching the argument shape used by
 pre-commit. It checks every supplied file before exiting. Within a file, every
 diagnostic the first failing pass collected is reported, in that pass's own
 order; the first diagnostic for any input is stable across releases (byte-
-identical code, message, and span -- D-217). HIR lowering collects one
-diagnostic per failing top-level item and skips that item; an item whose only
+identical code, message, and span -- D-217). HIR lowering collects, per
+top-level item, the item's own diagnostic when it fails (skipping that item)
+plus one enum-call `C0001` per call of an enum class inside it (D-233), so
+one item can contribute several diagnostics; an item whose only
 failure is a reference to a class or type alias that itself failed to lower is
 skipped silently rather than reported as a second gap (D-219). The type
 checker reports one diagnostic per failing function (D-220). A pre-check
