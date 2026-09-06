@@ -370,3 +370,10 @@ scopes cascade silence to the item's own lowering diagnostic (the enum-call
 scan still runs, D-233 decision 3), and the roadmap's #944 entry plus
 `docs/TYPE_SYSTEM.md` qualify the call-span claim to attributable calls
 with the `1:1` fallback named. Round 15 of the findings pile records both.
+
+## PR #971 fourteenth Codex round (`lower_checked` contract)
+
+One P2 on `4a3d59b1`: `lower_checked`'s rustdoc still promised a
+byte-identical pre-D-219 `Err`; it now states the first-lowering-diagnostic
+guarantee with the D-233 decision 4 ordering. Round 16 of the findings pile
+records it.
