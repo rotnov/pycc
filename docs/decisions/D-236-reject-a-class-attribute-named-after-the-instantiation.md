@@ -190,6 +190,31 @@ status: accepted
     `__slots__` message explains D-154's instance layout instead, which would
     be a false account of it. That shape is
     [#980](https://github.com/rotnov/pycc/issues/980).
+
+    **Amendment, 2026-09-06 — closed by
+    [#980](https://github.com/rotnov/pycc/issues/980).** The deferral above is
+    fulfilled rather than reversed: `reject_reserved_property_name` now rejects
+    `__slots__` on the property route too, under a *third, distinct*
+    `__slots__` string (`PROPERTY_SLOTS_MESSAGE`) that accounts for the failure
+    correctly — `type.__new__` iterates `__slots__` while the `class` statement
+    itself executes, and a `property` object is not iterable, so CPython 3.13.9
+    never creates the class. `slots_message` and its `ClassBodyRoute` are
+    untouched, and the new check takes no route parameter: a plain and a
+    `@dataclass` body share the one `MethodKind::PropertyGetter` arm and
+    diverge identically, while an `Enum` body rejects method definitions
+    outright before reaching it, so a route arm there would be a dead match arm
+    under D-014's region gate. Unlike this entry's three strings, that one
+    *names* the bound type (`property`), because the decorator fixes it
+    structurally rather than leaving it to an initializer the guard has not
+    read. Nothing else here changes: this decision's rule, name set and guard,
+    and D-235, all stand as accepted, which is why the closure is recorded as a
+    dated note rather than as a superseding entry. `@property def __qualname__`
+    stays deferred — it is value-typed on the attribute route
+    (`__qualname__: int = 1` diverges, `__qualname__: str = "D"` agrees on both
+    engines), so it needs a generating rule this value-independent guard cannot
+    host — and is tracked as
+    [#982](https://github.com/rotnov/pycc/issues/982), pinned by
+    `a_property_getter_named_qualname_is_left_to_issue_982`.
   - **The rule is about binding one of the names to a *non-callable* object**,
     which is the literal text of all three messages. A `def __new__` binds a
     callable — exactly what CPython's protocol expects — so it is outside this

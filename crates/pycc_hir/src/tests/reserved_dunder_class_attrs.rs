@@ -3,6 +3,13 @@
 //!
 //! [D-236]: ../../../../docs/decisions/D-236-reject-a-class-attribute-named-after-the-instantiation.md
 //!
+//! Since #980 the file also carries the `@property` getter route's `__slots__`
+//! rejection -- a different name set and a different mechanism, sharing only
+//! the call site -- together with the deferral pin for `@property def
+//! __qualname__` ([#982](https://github.com/rotnov/pycc/issues/982)) and the
+//! one for a callable `def __new__`
+//! ([#981](https://github.com/rotnov/pycc/issues/981)).
+//!
 //! Its own child module for the same reason as `dataclass_class_vars`
 //! (AGENTS.md "Keep source files decomposable"): `tests.rs` is already ~7k
 //! lines. `use super::*` reaches the parent's private helpers.
@@ -311,8 +318,12 @@ fn a_plain_init_method_is_not_rejected_by_the_property_route() {
 }
 
 /// #978 review round, negative half: an ordinary `@property` is untouched.
-/// This is the `None` arm of `reject_reserved_property_name` -- the guard
-/// must not grow past the three protocol names.
+/// This is the `None` arm of `instantiation_protocol_message` inside
+/// `reject_reserved_property_name` -- the *protocol* half of that guard must
+/// not grow past its three names. `__slots__` is rejected on the same route
+/// since #980, but by a separate check ahead of that match, under its own
+/// message; `a_benign_dunder_property_getter_stays_accepted` below is the
+/// corresponding negative for it.
 #[test]
 fn an_ordinary_property_getter_is_not_rejected() {
     let module = pycc_parser_test_helper::parse(
@@ -321,22 +332,80 @@ fn an_ordinary_property_getter_is_not_rejected() {
     lower_checked(&module).expect("`@property def value` must still lower");
 }
 
-/// #978 review round: `@property def __slots__` is **not** routed through
-/// this guard. Its divergence is real but different in mechanism -- CPython
-/// 3.13.9 raises `TypeError: 'property' object is not iterable` while the
-/// `class` statement itself executes, because `type.__new__` iterates
-/// `__slots__` -- and the plain-route `__slots__` message explains D-154's
-/// instance layout instead, which would be a false account of it. Tracked as
-/// [#980](https://github.com/rotnov/pycc/issues/980). Pin the current
-/// acceptance so that issue's fix has to come here and invert this test
-/// deliberately, rather than the scope boundary being lost silently.
+/// #980: `@property def __slots__` is rejected on this route, under its own
+/// message. Its divergence is real but different in mechanism from the
+/// protocol names' -- CPython 3.13.9 raises `TypeError: 'property' object is
+/// not iterable` while the `class` statement itself executes, because
+/// `type.__new__` iterates `__slots__`, so the class is never created --
+/// while pycc lowered the getter as an ordinary property and ran the program
+/// (a D-198 false acceptance, measured at `f8e9d2e3`).
+///
+/// Pinned from both sides, like `the_enum_slots_message_describes_the_enum_route`:
+/// the property-route needle must be present, and the plain attribute route's
+/// D-154 explanation must be absent. Substring assertions alone would pass if
+/// a future change wired this route through `slots_message(Plain)`, which is
+/// exactly the false account #980 was opened to avoid.
 #[test]
-fn a_property_getter_named_slots_is_left_to_issue_980() {
+fn a_property_getter_named_slots_is_rejected() {
+    let source = "class C:\n    @property\n    def __slots__(self) -> int:\n        return 1\n";
+    assert_capability_error_message(
+        source,
+        "a `@property` getter named `__slots__` is not supported yet",
+    );
+
+    let module = pycc_parser_test_helper::parse(source);
+    let diagnostic = lower_checked(&module).unwrap_err();
+    assert!(
+        !diagnostic
+            .message
+            .contains("fixed at compile time from its `__init__`"),
+        "the property route must not borrow D-154's plain-class explanation, got: {}",
+        diagnostic.message
+    );
+}
+
+/// #980, companion pin: the same getter in a `@dataclass` body reaches the
+/// same arm and reports the same message. `super::super::body`'s dataclass
+/// pre-check matches only `__init__`, `__eq__` and `__repr__`, so `__slots__`
+/// falls through to the property guard rather than to D-235's set.
+#[test]
+fn a_dataclass_property_getter_named_slots_is_rejected() {
+    assert_capability_error_message(
+        "from dataclasses import dataclass\n\n\n@dataclass\nclass C:\n    x: int\n\n    @property\n    def __slots__(self) -> int:\n        return 1\n",
+        "a `@property` getter named `__slots__` is not supported yet",
+    );
+}
+
+/// #980, negative half: a benign dunder property stays accepted. `__doc__` is
+/// measured to agree on both engines (CPython 3.13.9 and pycc both run
+/// `@property def __doc__(self) -> int: return 1` and print `1`), so the new
+/// branch must not grow into "reject every dunder property".
+#[test]
+fn a_benign_dunder_property_getter_stays_accepted() {
     let module = pycc_parser_test_helper::parse(
-        "class C:\n    @property\n    def __slots__(self) -> int:\n        return 1\n",
+        "class C:\n    @property\n    def __doc__(self) -> int:\n        return 1\n",
+    );
+    lower_checked(&module).expect("`@property def __doc__` must still lower");
+}
+
+/// #982: `@property def __qualname__` is **not** routed through this guard.
+/// It diverges too -- CPython 3.13.9 raises `TypeError: type __qualname__
+/// must be a str, not property` at class creation while pycc runs the program
+/// -- but on the *attribute* route the same name is **value-typed**:
+/// `__qualname__: int = 1` diverges while `__qualname__: str = "D"` agrees on
+/// both engines. D-236 pins this guard as value-independent, so closing only
+/// the property half would leave the name half-closed under a rule that does
+/// not generate it; the full fix needs a third generating rule and its own
+/// decision entry. Tracked as
+/// [#982](https://github.com/rotnov/pycc/issues/982). Pin the current
+/// acceptance so that issue's fix has to invert this test deliberately.
+#[test]
+fn a_property_getter_named_qualname_is_left_to_issue_982() {
+    let module = pycc_parser_test_helper::parse(
+        "class C:\n    @property\n    def __qualname__(self) -> int:\n        return 1\n",
     );
     lower_checked(&module)
-        .expect("`@property def __slots__` is out of D-236's scope until #980 is fixed");
+        .expect("`@property def __qualname__` is out of D-236's scope until #982 is fixed");
 }
 
 /// #978 review round: a *callable* `__new__` -- `def __new__(self) -> int` --
