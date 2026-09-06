@@ -427,6 +427,17 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
         // `@value.setter def __new__` is rejected there as a mismatch, and the
         // matching `@__new__.setter def __new__` requires a preceding getter
         // of that name, which is rejected here first.
+        //
+        // #980: the same call also rejects `@property def __slots__`, under
+        // its own message rather than the attribute route's. `type.__new__`
+        // iterates `__slots__` while the `class` statement executes, so
+        // CPython 3.13.9 raises `TypeError: 'property' object is not
+        // iterable` and never creates the class -- on a plain and on a
+        // `@dataclass` body alike, since both reach this one arm. The
+        // dataclass pre-check above matches only `__init__`/`__eq__`/
+        // `__repr__`, so `__slots__` falls through to here; an `Enum` body
+        // never does, because `lower_enum_class` rejects a method definition
+        // outright before this point.
         if let MethodKind::PropertyGetter { prop_name } = &kind {
             reject_reserved_property_name(prop_name, method_def.range.into())?;
         }
