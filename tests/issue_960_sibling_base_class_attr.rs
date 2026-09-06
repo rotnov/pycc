@@ -13,11 +13,14 @@
 //! `pycc_codegen` abort, because the checker and the lowering disagreed about
 //! the read's type.
 //!
-//! Every accepting test asserts the program's *stdout*, never a bare exit 0:
-//! the whole defect was a wrong value from a program that compiled fine.
-//! Rejections are matched on the diagnostic code plus a message substring
-//! rather than on a rendered path, which prints with forward slashes on
-//! Windows CI.
+//! The first three tests below fail under the old fold-first order and so
+//! pin the fix itself; the remaining three are guards, for the #911 fold path
+//! that must survive the reorder and for the two `pycc_types` gates this
+//! change deliberately leaves rejecting. Every accepting test asserts the
+//! program's *stdout*, never a bare exit 0: the whole defect was a wrong
+//! value from a program that compiled fine. Rejections are matched on the
+//! diagnostic code plus a message substring rather than on a rendered path,
+//! which prints with forward slashes on Windows CI.
 
 use pycc_scratch::ScratchDir;
 use std::io::Write;
