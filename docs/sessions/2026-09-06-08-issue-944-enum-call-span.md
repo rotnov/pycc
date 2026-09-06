@@ -266,3 +266,20 @@ syntactic so collision ownership never depends on lowering outcomes.
 Replied and resolved; round 6 of `.harden/findings/issue-944.jsonl` records
 the refutation. The one-region coverage gap in `module_rebound_names`
 (two unreachable `Option` branches) closed with `.expect` in `f7d2de0e`.
+
+## PR #971 fifth Codex round (repeated import, file size)
+
+Two more findings on `4d7216c7`, both fixed in `c7c77dde`. (1) P2: an
+identical repeated import (`from colors import Color` twice, then
+`Color()`) counted as a rebinding for limit (vii), so the call was never
+scanned and fell to the span-less backstop at `1:1` -- reproduced with
+`pycc check` -- although `lower_module` accepts the repeat as binding the
+same class twice. `module_rebound_names` now keys each import binding on
+its imported definition and treats a repeat of the same (local, source)
+pair as no rebinding; `from other import Color` or `import pkg.tone as
+Shade` over an earlier import still counts. Limit (vii), D-233 decision 5,
+and `docs/DIAGNOSTICS.md` say so; one unit test and one end-to-end test
+added. (2) P1: `enum_call.rs` had reached 1,013 lines; its inline test
+module is now the sibling `enum_call_tests.rs` (a `#[path]` child module,
+so `super::` access is unchanged), leaving the scanner at 488 lines. Round
+7 of `.harden/findings/issue-944.jsonl` records both.
