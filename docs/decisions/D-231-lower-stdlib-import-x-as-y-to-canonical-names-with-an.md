@@ -67,7 +67,7 @@ status: accepted
      behaviour changes: a module-level conditionally bound `math` and a
      `def math()` above the use are now `C0001`, as CPython's `AttributeError`
      demands, while a `def math()` *below* a module-level use stays accepted.
-  5. **Recorded residuals** (both fail closed, a false reject, never a
+  5. **Recorded residuals** (all fail closed, a false reject, never a
      miscompile): (a) the HIR string cannot say which spelling the user wrote,
      so a local named `math` while the module only ever writes `m.sqrt` is
      rejected -- closed by [#768](https://github.com/rotnov/pycc/issues/768)'s
@@ -76,7 +76,13 @@ status: accepted
      and `import math as m` in `a.py` makes a parameter `m` around a canonical
      `math.sqrt` call in `b.py` a false reject -- closed by
      [#901](https://github.com/rotnov/pycc/issues/901)'s per-module
-     namespaces. Both are pinned by tests so their closure is observable.
+     namespaces; (c) the HIR rejects an *unregistered* symbol on a
+     stdlib-resolved receiver before `pycc_types` runs, so a local named like
+     the alias (`import math as m` plus a parameter `m`) calling a method that
+     is not a registered `math` symbol is rejected in HIR rather than checked
+     as an ordinary method call -- the same false-reject class as (a), closed
+     by the same #768 binding-aware resolution. All three are pinned by tests
+     so their closure is observable.
   6. **Unchanged.** Attribute-form class bases, decorators, and annotations
      (`class C(enum.Enum)`, `@dataclasses.dataclass`, `x: typing.Final[int]`)
      were already `C0001` in the canonical spelling and stay so through an

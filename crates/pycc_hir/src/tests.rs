@@ -4321,6 +4321,40 @@ fn a_type_checking_attribute_on_an_alias_of_another_module_is_not_folded() {
 }
 
 #[test]
+fn a_type_checking_attribute_on_a_rebound_typing_alias_is_not_folded() {
+    // D-068 review of #962: the fold must honour last-binding-wins exactly
+    // like every other stdlib receiver. After `import typing as t` is
+    // rebound by `import enum as t`, the live `t` is `enum`, CPython raises
+    // `AttributeError` on `t.TYPE_CHECKING`, and folding the guard would
+    // silently discard that -- so the test must reach the ordinary
+    // attribute path and its diagnostic instead.
+    let module = pycc_parser_test_helper::parse(
+        "import typing as t\nimport enum as t\nif t.TYPE_CHECKING:\n    print(1)\n",
+    );
+    let diagnostic = lower_checked(&module).unwrap_err();
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "module `enum` (imported as `t`) has no attribute `TYPE_CHECKING`"
+    );
+}
+
+#[test]
+fn a_type_checking_attribute_on_typing_rebound_to_another_module_is_not_folded() {
+    // The textual `typing.` spelling folds through `std_receiver`'s
+    // fallback only while no alias rebinds `typing` itself.
+    let module = pycc_parser_test_helper::parse(
+        "import math as typing\nif typing.TYPE_CHECKING:\n    print(1)\n",
+    );
+    let diagnostic = lower_checked(&module).unwrap_err();
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "module `math` (imported as `typing`) has no attribute `TYPE_CHECKING`"
+    );
+}
+
+#[test]
 fn a_class_named_like_an_import_alias_collides_with_it() {
     let module = pycc_parser_test_helper::parse(
         "import math as m\nclass m:\n    def __init__(self) -> None:\n        self.v = 1\n",

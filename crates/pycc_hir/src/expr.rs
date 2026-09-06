@@ -44,7 +44,8 @@ use crate::{
 };
 use pycc_ast::{CmpOp, Expr, Int, Number, Operator, UnaryOp};
 use pycc_diag::Diagnostic;
-use std_receiver::{describe_module, std_receiver};
+use std_receiver::describe_module;
+pub(crate) use std_receiver::std_receiver;
 
 /// Resolves a PEP 695 generic-class type argument (the `int` in `C[int]`)
 /// to a `Ty`. PEP 695 generic class instantiation is scoped to scalar-only
@@ -397,8 +398,13 @@ pub(crate) fn lower_expr(
                 // design (#768 tracks closing it). A receiver that is a
                 // *local* binding of the same name is caught downstream by
                 // `pycc_types`' alias-aware shadow check, the first stage
-                // with binding-scope information. The emitted callee is
-                // always the module's canonical spelling, never the alias.
+                // with binding-scope information -- but only when the
+                // accessed symbol itself resolves: an unregistered symbol
+                // is rejected right here, before `pycc_types` runs, so a
+                // local `m` whose method is not a registered `math` symbol
+                // is a false reject (D-231 residual (c)). The emitted
+                // callee is always the module's canonical spelling, never
+                // the alias.
                 if let Expr::Name(receiver) = attr.value.as_ref()
                     && let Some(module) = std_receiver(receiver.id.as_str(), imports)
                 {

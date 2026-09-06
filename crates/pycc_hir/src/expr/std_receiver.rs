@@ -34,7 +34,7 @@ use pycc_std::StdModule;
 /// The alias is consulted before the textual spelling, so `import enum as
 /// math` makes `math.Enum` resolve to `enum.Enum` -- the binding the user
 /// wrote, not the name's stdlib homonym.
-pub(super) fn std_receiver(receiver: &str, imports: &[ImportBinding]) -> Option<StdModule> {
+pub(crate) fn std_receiver(receiver: &str, imports: &[ImportBinding]) -> Option<StdModule> {
     imports
         .iter()
         .rev()

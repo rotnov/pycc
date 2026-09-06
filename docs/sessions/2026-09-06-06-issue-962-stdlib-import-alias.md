@@ -90,6 +90,23 @@ module-level use stays accepted.
   diffed by hand against the local 3.14.6 in both profiles (identical output:
   `4.0`, `3.141592653589793`, `5.0`); CI's pinned oracle is the authority.
 
+## D-068 review round
+
+The pinned deep reviewer returned one blocker, one warning, one note:
+
+- **Blocker, fixed.** `is_type_checking_guard` scanned the alias table with
+  `.any()`, so `import typing as t; import enum as t; if t.TYPE_CHECKING:`
+  still folded although the live `t` is `enum` (CPython: `AttributeError`).
+  The guard now resolves the receiver through `expr::std_receiver`, the same
+  last-binding-wins lookup every other stdlib receiver uses; two tests pin
+  the rebound-alias and the rebound-`typing` spellings.
+- **Warning, fixed.** The `expr.rs` comment claimed every local that shares
+  an alias name is caught by `pycc_types`' shadow check; that holds only when
+  the accessed symbol resolves. The comment now says so and D-231 records
+  the case as residual (c).
+- **Note, answered by the gate.** Whether the solver-path `defs_rebound`
+  branch is exercised: the 100/100 coverage gate passes, so it is.
+
 ## Known follow-ups
 
 - [#963](https://github.com/rotnov/pycc/issues/963) and

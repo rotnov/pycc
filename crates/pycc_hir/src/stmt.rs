@@ -142,15 +142,20 @@ use pycc_diag::Diagnostic;
 /// actual `typing` import.
 ///
 /// Part 1 of #883 (#962): the attribute form also folds through a module
-/// alias -- `import typing as t` then `if t.TYPE_CHECKING:` -- when
-/// `imports` binds the receiver to `StdModule::Typing`. Without this, the
-/// test would lower through `expr::std_receiver` into
-/// `Name("typing.TYPE_CHECKING")` and fail in `pycc_types` as a marker
-/// used as a value, a worse diagnostic than the bare spelling gets. The
-/// bare-name and `typing.` spellings stay syntactic and non-gated (#798);
-/// an alias of any *other* module (`import math as t`) does not fold, so
-/// `t.TYPE_CHECKING` then reaches the ordinary attribute path and its
-/// "has no attribute" diagnostic.
+/// alias -- `import typing as t` then `if t.TYPE_CHECKING:` -- when the
+/// receiver resolves to `StdModule::Typing` through the very same
+/// last-binding-wins lookup every other stdlib receiver uses
+/// (`expr::std_receiver`), so `import typing as t; import enum as t` does
+/// *not* fold: the live `t` is `enum`, and CPython raises `AttributeError`
+/// there. Without the alias branch, the test would lower through
+/// `expr::std_receiver` into `Name("typing.TYPE_CHECKING")` and fail in
+/// `pycc_types` as a marker used as a value, a worse diagnostic than the
+/// bare spelling gets. The bare-name spelling stays syntactic and
+/// non-gated (#798), and so does the `typing.` spelling through
+/// `std_receiver`'s textual fallback -- unless `typing` itself is rebound
+/// to another stdlib module by an alias. An alias of any *other* module
+/// (`import math as t`) does not fold, so `t.TYPE_CHECKING` then reaches
+/// the ordinary attribute path and its "has no attribute" diagnostic.
 fn is_type_checking_guard(test: &Expr, imports: &[ImportBinding]) -> bool {
     match test {
         Expr::Name(name) => name.id.as_str() == "TYPE_CHECKING",
@@ -158,14 +163,8 @@ fn is_type_checking_guard(test: &Expr, imports: &[ImportBinding]) -> bool {
             attr.attr.as_str() == "TYPE_CHECKING"
                 && match attr.value.as_ref() {
                     Expr::Name(receiver) => {
-                        receiver.id.as_str() == "typing"
-                            || imports.iter().rev().any(|binding| {
-                                matches!(
-                                    binding,
-                                    ImportBinding::Module { local_name, module: pycc_std::StdModule::Typing }
-                                        if local_name == receiver.id.as_str()
-                                )
-                            })
+                        crate::expr::std_receiver(receiver.id.as_str(), imports)
+                            == Some(pycc_std::StdModule::Typing)
                     }
                     _ => false,
                 }
