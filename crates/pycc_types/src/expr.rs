@@ -15,14 +15,14 @@
 
 use crate::binop::numeric_result_type;
 use crate::class;
+use crate::std_receiver::{shadowed_std_receiver, std_qualified_symbol, std_receiver_shadowed};
 use crate::unop::unary_result_type;
 use crate::{
     BindingState, Environment, annotation_marker_is_not_a_value, cast_marker_is_not_a_value,
     enum_marker_is_not_a_value, enum_member_attr_type, instantiate_generic_call, is_assignable,
     is_known_callable_builtin, is_local, is_marker_kind, lookup_bound_name, marker_is_not_a_value,
     non_callable_binding, numeric_or_bool_compatible, possibly_unbound,
-    std_constant_is_not_callable, std_function_used_as_a_value, std_qualified_symbol,
-    std_receiver_name, std_receiver_shadowed, std_scalar_to_ty,
+    std_constant_is_not_callable, std_function_used_as_a_value, std_scalar_to_ty,
     type_checking_marker_is_not_a_value, unbound_local, unsupported_callable_builtin,
 };
 
@@ -32,6 +32,31 @@ use pycc_hir::{CmpOpKind as CmpOp, FStringPart, HirExpr};
 
 pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
     infer_expr_in(env, &[], expr)
+}
+
+/// Whether `receiver` is bound at this use site, for the validation pass's
+/// stdlib-receiver shadow check (`shadowed_std_receiver`). Three sources,
+/// each closing a distinct hole:
+///
+/// - `binding_state` rather than `lookup`: `lookup` deliberately returns
+///   `None` for a `BindingState::Maybe` binding, so a conditionally bound
+///   `m` (`if c: m = 1.0`) would otherwise slip past the check and reach
+///   the libm path.
+/// - `def_rebound` (the precedent is the `non_callable_binding` gate in
+///   `infer_expr_in`'s call arm), never `lookup_function`, which is
+///   position-blind: `import math` / `print(math.sqrt(4.0))` / `def
+///   math(): ...` *below* the use is valid CPython and must stay accepted,
+///   which only the source-order rebinding set encodes. Inside a function
+///   body the set is the module's final one (`child_for_function` clones
+///   it after pass 2), so there a `def m()` anywhere in the module
+///   rejects `m.sqrt` -- a fail-closed divergence recorded in the #962
+///   ADR.
+/// - `is_local`: a parameter or body-assigned local of the enclosing
+///   function.
+fn is_std_receiver_bound(env: &Environment, local_names: &[&str], receiver: &str) -> bool {
+    env.binding_state(receiver).is_some()
+        || env.def_rebound.contains(receiver)
+        || is_local(local_names, receiver)
 }
 
 pub(crate) fn infer_expr_in(
@@ -55,12 +80,13 @@ pub(crate) fn infer_expr_in(
         }
         HirExpr::Name(name) => {
             if let Some(symbol) = std_qualified_symbol(name) {
-                // Post-review finding: see `std_receiver_shadowed`'s own
-                // doc comment -- a real local/parameter named `math`
+                // See `shadowed_std_receiver`'s own doc comment -- a real
+                // local/parameter named `math` (or an alias of it, #962)
                 // shadows the stdlib module.
-                let receiver = std_receiver_name(name);
-                if env.lookup(receiver).is_some() || is_local(local_names, receiver) {
-                    return Err(std_receiver_shadowed(name));
+                if let Some(shadowed) = shadowed_std_receiver(symbol.module, &env.std_module_aliases, |receiver| {
+                    is_std_receiver_bound(env, local_names, receiver)
+                }) {
+                    return Err(std_receiver_shadowed(shadowed, symbol.module));
                 }
                 return match symbol.kind {
                     pycc_std::StdSymbolKind::Constant { ty } => Ok(std_scalar_to_ty(ty)),
@@ -311,12 +337,13 @@ pub(crate) fn infer_expr_in(
                 return Ok(Ty::Int);
             }
             if let Some(symbol) = std_qualified_symbol(callee) {
-                // Post-review finding: see `std_receiver_shadowed`'s own
-                // doc comment -- a real local/parameter named `math`
+                // See `shadowed_std_receiver`'s own doc comment -- a real
+                // local/parameter named `math` (or an alias of it, #962)
                 // shadows the stdlib module.
-                let receiver = std_receiver_name(callee);
-                if env.lookup(receiver).is_some() || is_local(local_names, receiver) {
-                    return Err(std_receiver_shadowed(callee));
+                if let Some(shadowed) = shadowed_std_receiver(symbol.module, &env.std_module_aliases, |receiver| {
+                    is_std_receiver_bound(env, local_names, receiver)
+                }) {
+                    return Err(std_receiver_shadowed(shadowed, symbol.module));
                 }
                 let pycc_std::StdSymbolKind::Function {
                     arg_tys: expected_arg_tys,
