@@ -195,6 +195,16 @@ fn an_except_handler_name_suppresses_a_call_after_it() {
 }
 
 #[test]
+fn a_module_level_except_handler_without_a_name_binds_nothing() {
+    // The module frame is built lazily (only for a module with an enum
+    // class), so this shape is what walks a name-less handler there.
+    let source = format!("{COLOR}try:\n    pass\nexcept ValueError:\n    Color()\n");
+    let diagnostics = lower_err(&source);
+    assert_eq!(diagnostics.len(), 1);
+    assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
+}
+
+#[test]
 fn an_except_handler_name_suppresses_a_call_before_it() {
     // The frame is the whole scope, not position-aware (limit (i)).
     lower_ok(&format!(
@@ -575,4 +585,27 @@ fn module_rebound_names_keeps_an_identical_repeated_import() {
         super::module_rebound_names(&module.body),
         vec!["Color", "Shade", "a"]
     );
+}
+
+#[test]
+fn module_rebound_names_ignores_a_future_import() {
+    // PR #971 review: `lower_future_import` binds nothing, so a feature
+    // name an enum class shares is no rebinding; a relative
+    // `from .__future__ import x` is an ordinary import and still counts.
+    let module = crate::pycc_parser_test_helper::parse(concat!(
+        "from __future__ import annotations\n",
+        "from enum import Enum\n",
+        "class annotations(Enum):\n    A = 1\n",
+        "from .__future__ import Shade\n",
+        "class Shade(Enum):\n    A = 1\n",
+    ));
+    assert_eq!(super::module_rebound_names(&module.body), vec!["Shade"]);
+}
+
+#[test]
+fn an_enum_named_after_a_future_feature_is_still_reported_at_the_call() {
+    let source = "from __future__ import annotations\nfrom enum import Enum\n\nclass annotations(Enum):\n    A = 1\n\ndef f() -> None:\n    annotations()\n";
+    let diagnostics = lower_err(source);
+    assert_eq!(diagnostics.len(), 1);
+    assert_enum_call(&diagnostics[0], "annotations", "annotations()", source);
 }

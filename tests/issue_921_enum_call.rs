@@ -300,3 +300,56 @@ fn a_call_after_an_identical_repeated_import_is_reported_at_the_call() {
         "the repeated import binds the same class twice and the call keeps its span, got: {combined}"
     );
 }
+
+/// D-233 decision 5's documented residual: one enum imported under one
+/// local name through two module paths (`colors.Color` directly and via
+/// a `palette` re-export) is indistinguishable from a rebinding, so the
+/// scan stays silent and the span-less guard reports the call at `1:1`.
+#[test]
+fn a_call_after_a_two_path_import_of_one_enum_falls_back_to_the_span_less_guard() {
+    let dir = ScratchDir::new("921_two_path_import").expect("failed to create scratch dir");
+    write_fixture(
+        &dir,
+        "colors.py",
+        "from enum import Enum\n\n\nclass Color(Enum):\n    RED = 1\n",
+    );
+    write_fixture(&dir, "palette.py", "from colors import Color\n");
+    let entry = write_fixture(
+        &dir,
+        "prog.py",
+        "from colors import Color\nfrom palette import Color\n\n\nColor()\n",
+    );
+    let result = Command::new(pycc_bin())
+        .arg("check")
+        .arg(entry.to_str().unwrap())
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(result.status.code(), Some(1), "got: {combined}");
+    assert!(
+        combined.contains("cannot call enum class `Color`") && combined.contains("prog.py:1:1"),
+        "the two-path import is the documented span-less residual, got: {combined}"
+    );
+    assert!(
+        !combined.contains("prog.py:5:1"),
+        "the scan must not claim the call, got: {combined}"
+    );
+}
+
+/// PR #971 review: a `from __future__` import binds nothing, so an enum
+/// that shares a feature name is scanned and reported at the call.
+#[test]
+fn an_enum_sharing_a_future_feature_name_is_reported_at_the_call() {
+    let source = "from __future__ import annotations\nfrom enum import Enum\n\n\nclass annotations(Enum):\n    A = 1\n\n\ndef f() -> None:\n    annotations()\n";
+    assert_enum_call_rejected(
+        "921_future_name",
+        "check",
+        source,
+        "annotations",
+        "annotations()",
+    );
+}

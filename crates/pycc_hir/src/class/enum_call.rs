@@ -125,7 +125,9 @@
 //!   beside `from palette import Color` where `palette` re-exports it, is
 //!   indistinguishable here -- HIR records no defining-module provenance
 //!   for a re-exported class -- so that name stays suppressed and the
-//!   call is reported by the span-less guard at `1:1`). `def Color()`,
+//!   call is reported by the span-less guard at `1:1`; a `from __future__`
+//!   import binds nothing and never counts, so an enum that shares a
+//!   feature name, `class annotations(Enum)`, stays scannable). `def Color()`,
 //!   an ordinary `class Color`, `from m import Color`, or
 //!   `type Color = int` beside `class Color(Enum)` is a collision that the
 //!   class item reports itself (`... collides with a function / an import /
@@ -258,7 +260,10 @@ pub(crate) fn module_rebound_names(body: &[Stmt]) -> Vec<String> {
                 );
                 (local, Some(alias.name.to_string()))
             })),
-            Stmt::ImportFrom(import) => bound.extend(
+            // `lower_future_import` binds nothing, so a feature name that an
+            // enum class shares (`from __future__ import annotations` beside
+            // `class annotations(Enum)`) is no rebinding (PR #971 review).
+            Stmt::ImportFrom(import) if !crate::import::is_future_import(import) => bound.extend(
                 import
                     .names
                     .iter()

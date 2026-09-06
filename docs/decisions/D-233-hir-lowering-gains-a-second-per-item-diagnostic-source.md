@@ -34,7 +34,9 @@ status: accepted
      at least one enum class is in its name set: the unconditional walk
      cost the `pycc check` frontend bench about 7% (PR #971's
      `frontend-perf-gate`, threshold 7%), and a module with no enum class
-     -- the common case -- must not pay for a diagnostic it can never emit.
+     -- the common case -- must not pay for a diagnostic it can never emit:
+     the module frame (every name the module body binds) is built on the
+     first item scanned, never for such a module.
   2. Its diagnostics are appended immediately after the item's own
      diagnostic, so the collection order is still loop order
      ([D-217](D-217-report-every-frontend-diagnostic-per-pass-with.md) rule
@@ -68,7 +70,8 @@ status: accepted
      set; one enum imported under one name through two module paths is
      indistinguishable from a rebinding, because HIR records no
      defining-module provenance for a re-exported class, and is one more
-     residual shape the span-less guard reports at `1:1`). Every residual
+     residual shape the span-less guard reports at `1:1`; a
+     `from __future__` import binds nothing and never counts). Every residual
      is enumerated in the module doc of `class::enum_call` and pinned by a
      test: over-suppression is the only failure mode on an item that lowers
      (the call still fails in `pycc_types`), and the one false-kind report

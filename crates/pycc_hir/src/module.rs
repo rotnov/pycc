@@ -226,7 +226,14 @@ pub fn lower_module(
     // `def Color()` / `Color()` / `class Color(Enum)` yields the collision
     // diagnostic alone.
     let rebound_names = class::enum_call::module_rebound_names(&module.body);
-    let module_frame = class::enum_call::module_bindings(&module.body, &state.imports);
+    // Built on the first item whose name set is non-empty, never for a
+    // module that defines and imports no enum class (D-233 decision 1: the
+    // common module pays for no part of this diagnostic, and the frame is
+    // a walk of every live module-level statement). `state.imports` only
+    // grows (`append` in `lower_top_level_item`), so the pre-loop slice is
+    // exactly the driver's answers whichever item first needs the frame.
+    let pre_loop_imports = state.imports.len();
+    let mut module_frame: Option<Vec<String>> = None;
     for (index, stmt) in module.body.iter().enumerate() {
         let position = if index < prologue_len {
             FuturePosition::Prologue
@@ -294,9 +301,12 @@ pub fn lower_module(
             // `state.imports` at this point is exactly what `lower_stmt`
             // folded this item's `TYPE_CHECKING` guards against, so the scan
             // skips the same dead bodies the lowering did.
+            let module_frame = module_frame.get_or_insert_with(|| {
+                class::enum_call::module_bindings(&module.body, &state.imports[..pre_loop_imports])
+            });
             diagnostics.extend(class::enum_call::reject_enum_class_calls(
                 stmt,
-                &module_frame,
+                module_frame,
                 &enum_class_names,
                 &state.imports,
             ));
