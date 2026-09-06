@@ -44,6 +44,29 @@ class TestCheckMarkdownLanding < Minitest::Test
     assert_equal 0, $?.exitstatus, "live Markdown landing failed:\n#{output}"
   end
 
+  def test_rejects_missing_source_evaluation_section
+    md = live_markdown.sub("## Try the checked example", "## Removed")
+    status, output = run_checker(live_html, md)
+    refute_equal 0, status, "accepted Markdown without source evaluation:\n#{output}"
+    assert_includes output, "source evaluation"
+  end
+
+  def test_rejects_missing_source_prerequisites_and_maturity
+    ["Not ready for production.", "LLVM_SYS_221_PREFIX",
+     "docs/DISTRIBUTION.md#current-installation-boundary",
+     "cargo build --workspace", "Will my code work?", "What errors will I see?",
+     "How does it differ?"].each do |marker|
+      status, output = run_checker(live_html, live_markdown.gsub(marker, "Removed"))
+      refute_equal 0, status, "accepted Markdown without #{marker}:\n#{output}"
+    end
+  end
+
+  def test_rejects_missing_html_source_evaluation
+    status, output = run_checker(live_html.sub('id="try"', 'id="removed"'), live_markdown)
+    refute_equal 0, status, "accepted HTML without source evaluation:\n#{output}"
+    assert_includes output, "source evaluation"
+  end
+
   # --- Negative: missing HTML anchor (contract drift on the HTML side) ---
 
   def test_rejects_missing_html_anchor
