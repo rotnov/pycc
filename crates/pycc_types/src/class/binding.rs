@@ -131,21 +131,21 @@ pub(crate) fn resolve_instantiation(
     // `TypeError`, and neither shape is implemented -- `lower_enum_class`
     // deliberately gives an enum no `__init__`, so this guard is also what
     // keeps the MRO walk below from reaching its internal-error panic for
-    // an enum. Keyed on `is_enum` (provenance, D-188), not on a non-empty
-    // `enum_members`: a docstring-only enum (#744) has an empty member
-    // table and is an enum all the same. The "not supported yet" clause
-    // attaches only to the by-value lookup, which a later slice can
-    // implement; `Color()` is a CPython error too and no slice will accept
-    // it (`docs/DIAGNOSTICS.md`'s `C0001` is a versioned capability code).
+    // an enum. Since #944 the reporting site is `pycc_hir`'s per-item scan
+    // (`class::enum_call`), which reports every enum call it can attribute
+    // at the call's own span before this crate runs; this guard is defense
+    // in depth with the same shared message, and it stays end-to-end
+    // reachable through import ordering (a `def` that calls `Color()`
+    // placed *before* the `from colors import Color` that makes `Color`
+    // known -- the scan's name set is order-dependent for imports) and
+    // through the scan's documented over-suppression cases. Keyed on
+    // `is_enum` (provenance, D-188), not on a non-empty `enum_members`: a
+    // docstring-only enum (#744) has an empty member table and is an enum
+    // all the same. `HirExpr` carries no span, hence `Span::new(0, 0)`.
     if class_def.is_enum {
         return Err(Diagnostic::error(
             "C0001",
-            format!(
-                "cannot call enum class `{class_name}` -- enum members are accessed \
-                 by name (`{class_name}.MEMBER`); looking a member up by value \
-                 (`{class_name}(1)`) is not supported yet, and a zero-argument call \
-                 (`{class_name}()`) is a `TypeError` in CPython as well"
-            ),
+            pycc_hir::enum_class_call_message(class_name),
             Span::new(0, 0),
         ));
     }
@@ -357,87 +357,71 @@ mod tests {
 
     // -- #921 (PEP 435): calling an enum class is `C0001`, never a panic --
 
-    /// Parses and lowers source code, then type-checks it with
-    /// `check_and_resolve`, returning the first diagnostic. Every program
-    /// below panicked in `resolve_instantiation`'s MRO walk before #921;
-    /// these stay unit tests because `resolve_instantiation`'s error paths
-    /// are covered in-crate (cargo-llvm-cov#276, see `class.rs`).
-    fn check_source_err(source: &str) -> pycc_diag::Diagnostic {
-        let module = pycc_parser::parse(source).expect("test fixture must parse");
-        let hir = pycc_hir::lower_checked(&module).expect("test fixture must lower");
-        crate::check_and_resolve(&hir).expect_err("calling an enum class must be rejected")
+    /// A direct-HIR probe of the `is_enum` guard. Since #944 the CLI path
+    /// never reaches it for a program the HIR scan can attribute (the scan
+    /// rejects the module before `check_and_resolve` runs), so the guard is
+    /// covered here, in-crate, like `resolve_instantiation`'s other error
+    /// paths (cargo-llvm-cov#276, see `class.rs`). The message is the one
+    /// `pycc_hir::enum_class_call_message` renders at the call.
+    fn enum_class_def(
+        name: &str,
+        enum_members: Vec<(String, pycc_hir::EnumMemberValue)>,
+    ) -> HirClassDef {
+        HirClassDef {
+            class_attrs: Vec::new(),
+            exception_type_tag: None,
+            name: name.to_string(),
+            bases: Vec::new(),
+            mro: vec![name.to_string()],
+            attrs: vec![],
+            methods: vec![],
+            type_param: None,
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            is_enum: true,
+            enum_members,
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: Vec::new(),
+            abstract_methods: Vec::new(),
+            is_abstract: false,
+        }
     }
 
-    fn assert_enum_call_rejected(err: &pycc_diag::Diagnostic, class_name: &str) {
-        assert_eq!(err.code, "C0001", "unexpected diagnostic: {err:?}");
+    #[test]
+    fn resolve_instantiation_rejects_an_enum_class_with_c0001() {
+        let mut env = crate::Environment::new();
+        env.bind_class(
+            "Color".to_string(),
+            enum_class_def(
+                "Color",
+                vec![("RED".to_string(), pycc_hir::EnumMemberValue::Int(1))],
+            ),
+        );
+        // A docstring-only enum (#744) has an empty member table, so
+        // `is_enum` -- not the table -- must be what the guard keys on.
+        env.bind_class("E".to_string(), enum_class_def("E", Vec::new()));
+        for (class_name, arg_tys) in [("Color", vec![crate::Ty::Int]), ("E", Vec::new())] {
+            let err = super::resolve_instantiation(&env, class_name, &arg_tys)
+                .expect_err("calling an enum class must be rejected, never reach the MRO walk");
+            assert_eq!(err.code, "C0001", "unexpected diagnostic: {err:?}");
+            assert_eq!(err.message, pycc_hir::enum_class_call_message(class_name));
+            assert_eq!(err.span, Some(pycc_diag::Span::new(0, 0)));
+        }
+        // The wording stays pinned in the crate that used to own it: the
+        // zero-argument form is a CPython error, the by-value form is the
+        // versioned-capability clause.
+        let message = pycc_hir::enum_class_call_message("Color");
         assert!(
-            err.message
-                .contains(&format!("cannot call enum class `{class_name}`")),
-            "unexpected message: {}",
-            err.message
+            message.contains("(`Color()`) is a `TypeError` in CPython as well"),
+            "the zero-argument form must not be described as merely unsupported: {message}"
         );
-    }
-
-    #[test]
-    fn calling_an_enum_class_with_no_arguments_is_c0001() {
-        // The issue's own program: a zero-argument call inside a function.
-        let err = check_source_err(
-            "from enum import Enum\n\nclass Color(Enum):\n    RED = 1\n    GREEN = 2\n\ndef main() -> None:\n    c = Color()\n    print(c.value)\n\nmain()\n",
-        );
-        assert_enum_call_rejected(&err, "Color");
         assert!(
-            err.message
-                .contains("(`Color()`) is a `TypeError` in CPython as well"),
-            "the zero-argument form must not be described as merely unsupported: {}",
-            err.message
+            message.contains("(`Color(1)`) is not supported yet"),
+            "the by-value form carries the versioned-capability clause: {message}"
         );
-    }
-
-    #[test]
-    fn calling_an_enum_class_with_a_value_is_c0001() {
-        // CPython's by-value member lookup (`Color(1)` -> `Color.RED`) is
-        // not implemented; the guard fires regardless of arity, so the MRO
-        // walk is never reached for an enum.
-        let err = check_source_err(
-            "from enum import Enum\n\nclass Color(Enum):\n    RED = 1\n    GREEN = 2\n\nc = Color(1)\nprint(c.value)\n",
-        );
-        assert_enum_call_rejected(&err, "Color");
-        assert!(
-            err.message.contains("(`Color(1)`) is not supported yet"),
-            "the by-value form carries the versioned-capability clause: {}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn calling_a_member_less_enum_class_is_c0001() {
-        // A docstring-only enum (#744) has an empty `enum_members` table,
-        // so `is_enum` -- not the table -- must be what the guard keys on.
-        let err = check_source_err(
-            "from enum import Enum\n\nclass E(Enum):\n    \"doc\"\n\ne = E()\nprint(1)\n",
-        );
-        assert_enum_call_rejected(&err, "E");
-    }
-
-    #[test]
-    fn calling_a_str_enum_class_is_c0001() {
-        // `lower_enum_class` serves both marker bases, so a `StrEnum`
-        // subclass carries `is_enum` and is rejected the same way.
-        let err = check_source_err(
-            "from enum import StrEnum\n\nclass S(StrEnum):\n    A = \"a\"\n\ns = S(\"a\")\nprint(s.value)\n",
-        );
-        assert_enum_call_rejected(&err, "S");
-    }
-
-    #[test]
-    fn raising_an_enum_class_call_is_c0001() {
-        // `raise Color()` never enters `check_raise_operand`'s
-        // exception-class branch (an enum carries no `exception_type_tag`),
-        // so the operand is inferred as an ordinary call and lands on the
-        // same guard rather than the MRO-walk panic.
-        let err = check_source_err(
-            "from enum import Enum\n\nclass Color(Enum):\n    RED = 1\n\nraise Color()\n",
-        );
-        assert_enum_call_rejected(&err, "Color");
     }
 }
