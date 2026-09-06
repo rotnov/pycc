@@ -247,8 +247,12 @@ fn lookup_attr_through_mro(env: &Environment, mro: &[String], attr_name: &str) -
             return Some(ty.clone());
         }
         // A @property satisfies an attribute requirement just as a direct
-        // attribute does — `eval_isinstance_protocol` already checks both,
-        // and the conformance check must be consistent with it (#380 W2).
+        // attribute does — `eval_isinstance_protocol` checks both, and the
+        // conformance check must be consistent with it (#380 W2). Since #914
+        // a class-level attribute is a third such source; it is matched by
+        // `check_protocol_conformance`'s own fallback to
+        // `lookup_class_attr_through_mro` rather than here, because this
+        // walk is also the instance-attribute path.
         if let Some(prop) = mro_def.properties.iter().find(|p| p.name == attr_name) {
             let (_, return_ty) = env.lookup_function(&prop.getter).unwrap_or_else(|| {
                 panic!(
