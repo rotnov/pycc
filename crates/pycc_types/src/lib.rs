@@ -11,6 +11,7 @@ mod narrow;
 mod redeclaration;
 mod solver;
 mod std_receiver;
+mod string_conversion;
 #[cfg(test)]
 mod tests;
 mod unop;

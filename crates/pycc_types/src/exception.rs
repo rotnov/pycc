@@ -241,6 +241,12 @@ pub(super) fn check_try_star_stmt(
             }
         }
         if let Some(name) = &handler.name {
+            // Bound to `ExceptionGroup` unconditionally, whatever the module
+            // contains (the same literal in `monomorphize.rs` and
+            // `constraints.rs`); when the module shadows that name, or
+            // shadows any builtin exception name so the seeded table was
+            // withheld, `pycc_types::string_conversion` (#977, D-237) is what
+            // keeps `print(eg)`/`f"{eg}"` from reaching the backend.
             handler_env.bind(
                 name.clone(),
                 Ty::Instance(Box::new("ExceptionGroup".to_string())),

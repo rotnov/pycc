@@ -5312,13 +5312,14 @@ fn instantiating_a_class_at_module_scope_with_a_truthiness_check_codegens_and_ru
 )]
 fn string_conversion_of_a_class_instance_panics_honestly() {
     // Mirrors `string_conversion_of_a_list_value_panics_honestly`
-    // above exactly: `pycc_types` type-checks `print(p)` for a class
-    // instance unconditionally. #378 (PR-18) added `__repr__` support
-    // for dataclass instances (the MIR rewrites `print(instance)` to
-    // a `__repr__` call before codegen), but a bare `to_str` call with
-    // an Instance scalar (e.g. a class without `__repr__`) still panics
-    // honestly instead of handing a `PyInstanceObj` pointer to a
-    // `pycc_rt_*_to_str` function expecting a `PyStrObj`.
+    // above exactly. #378 (PR-18) added `__repr__` support for dataclass
+    // instances (the MIR rewrites `print(instance)` to a `__repr__` call
+    // before codegen), and since #977 (D-237) `pycc_types` rejects every
+    // other instance with `C0001` before lowering, so this arm is
+    // reachable only from a hand-built `Scalar::Instance` like the one
+    // below -- where it still panics honestly instead of handing a
+    // `PyInstanceObj` pointer to a `pycc_rt_*_to_str` function expecting
+    // a `PyStrObj`.
     let context = Context::create();
     let (_module, rt) = list_scalar_panic_fixture(&context);
     let builder = context.create_builder();

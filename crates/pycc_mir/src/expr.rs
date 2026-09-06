@@ -112,10 +112,13 @@ pub(super) fn lower_expr(
                         // rewrite before the dataclass `__repr__` one, so a
                         // caught exception binding is rendered as its
                         // message rather than falling through to
-                        // `rewrite_instance_to_repr` (a no-op for it anyway,
-                        // since an exception class is never a dataclass, but
-                        // ordering this rewrite first keeps the exception
-                        // path independent of that fact).
+                        // `rewrite_instance_to_repr`. The ordering matters:
+                        // a user `@dataclass` declared under a builtin
+                        // exception name *would* satisfy both rewrites, and
+                        // this name-first order is why `pycc_types`'s
+                        // string-conversion gate (#977, D-237) rejects that
+                        // shape before lowering instead of letting the
+                        // dataclass `__repr__` run on an exception object.
                         let lowered = rewrite_exception_to_message(&lowered, classes);
                         rewrite_instance_to_repr(&lowered, classes)
                     } else {
