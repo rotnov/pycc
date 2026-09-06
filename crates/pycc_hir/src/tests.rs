@@ -1073,6 +1073,41 @@ fn an_attribute_named_type_checking_on_another_receiver_is_not_folded() {
 }
 
 #[test]
+fn an_attribute_named_type_checking_on_a_nested_receiver_is_not_folded() {
+    // #962: the qualified-form arm only consults the alias table when the
+    // receiver is a bare name. A nested attribute receiver
+    // (`outer.inner.TYPE_CHECKING`) can never be a module alias, so it must
+    // fall through to ordinary lowering exactly like any other attribute
+    // read named `TYPE_CHECKING`.
+    let module = pycc_parser_test_helper::parse("if outer.inner.TYPE_CHECKING:\n    print(1)\n");
+    let hir = lower_checked(&module).unwrap();
+    let HirItem::TopLevelStmt(HirStmt::If { test, body, orelse }) = &hir.items[0] else {
+        panic!(
+            "expected the `if` statement to lower to `HirStmt::If`, got {:?}",
+            hir.items[0]
+        );
+    };
+    assert_eq!(
+        *test,
+        HirExpr::AttrGet {
+            base: Box::new(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("outer".to_string())),
+                attr: "inner".to_string(),
+            }),
+            attr: "TYPE_CHECKING".to_string(),
+        }
+    );
+    assert_eq!(
+        *body,
+        vec![HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::IntLiteral(1)],
+        })]
+    );
+    assert_eq!(*orelse, Vec::<HirStmt>::new());
+}
+
+#[test]
 fn lowers_the_else_branch_of_a_type_checking_guard_normally() {
     // #790: only the `TYPE_CHECKING` branch itself is dead code -- an
     // `else` clause is live at runtime whenever the guard is skipped, so it
