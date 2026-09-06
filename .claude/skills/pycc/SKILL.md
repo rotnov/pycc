@@ -26,7 +26,8 @@ parser, checked HIR lowering, and strict type-checker subset for every
 supplied file, reports every diagnostic the failing pass found for each input
 (parser: all syntax errors; HIR lowering: per top-level item, the item's own
 diagnostic when it fails plus one enum-call `C0001` per call of an enum class
-inside it (D-233), with an item that only references a class or alias that
+inside it that the scan can attribute (D-233; a shadowed or rebound name
+falls through to the type checker's span-less guard at `1:1`), with an item that only references a class or alias that
 itself failed to lower skipped silently, D-219; the type checker: one per failing function --
 a pre-check failure is reported alone; otherwise a module-level solver
 list (its top-level walk or a post-body phase such as

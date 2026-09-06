@@ -83,8 +83,11 @@ message, and span) across the three #864 parts as a transition invariant
 `C0001` scanned from an earlier item precede a later item's own diagnostic.
 HIR lowering collects, per
 top-level item, the item's own diagnostic when it fails (skipping that item)
-plus one enum-call `C0001` per call of an enum class inside it (D-233), so
-one item can contribute several diagnostics; an item whose only
+plus one enum-call `C0001` per call of an enum class inside it that the
+scan can attribute (D-233; a call whose name is shadowed, rebound, or
+otherwise outside the scan's enumerated limits falls through to the type
+checker's span-less guard at `1:1` instead), so one item can contribute
+several diagnostics; an item whose only
 failure is a reference to a class or type alias that itself failed to lower is
 skipped silently rather than reported as a second gap (D-219). The type
 checker reports one diagnostic per failing function (D-220). A pre-check
