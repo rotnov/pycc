@@ -51,8 +51,11 @@ use pycc_diag::{Diagnostic, Span};
 /// First-diagnostic view of [`lower_all`] for the crate's many test, bench,
 /// and downstream callers that consume a single `Diagnostic` (D-217's
 /// `parse`/`parse_all` precedent): the `Err` is exactly `lower_all`'s first
-/// collected diagnostic, which is byte-identical to what this function
-/// reported before per-item collection landed (D-219). The `.expect` follows
+/// collected diagnostic. That is the first *lowering* diagnostic,
+/// byte-identical to what this function reported before per-item
+/// collection landed (D-219), unless an enum-call `C0001` scanned from an
+/// earlier, successfully lowered item precedes it in loop order (#944,
+/// D-233 decision 4). The `.expect` follows
 /// the crate's documented coverage convention (`import.rs`): `lower_all`'s
 /// `Err` is never empty by construction, and the panic path lives in
 /// libcore, adding no in-crate region.
