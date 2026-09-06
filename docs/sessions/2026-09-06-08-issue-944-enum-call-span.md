@@ -333,3 +333,13 @@ by the span-less guard at `1:1` instead. `5b12e7b8` qualifies the count to
 calls the scan can attribute in `docs/CLI_SPEC.md`, `docs/DIAGNOSTICS.md`,
 `src/frontend.rs` and the `pycc` skill; round 11 of the findings pile
 records it.
+
+## PR #971 tenth Codex round (future imports, lazy frame, two-path test)
+
+Three P2s on `13e7725b`, fixed in `f674edce`: a `from __future__` import no
+longer counts as a rebinding in `module_rebound_names` (it binds nothing),
+so `class annotations(Enum)` keeps its call span; the module frame is
+built lazily on the first scanned item, against the pre-loop import slice,
+so a module without an enum class pays no walk (D-233 decision 1); and the
+two-path re-export import residual now has a CLI test at `1:1`. Round 12
+of the findings pile records the three.
