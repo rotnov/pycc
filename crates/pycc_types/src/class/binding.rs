@@ -388,6 +388,7 @@ mod tests {
             protocol_members: Vec::new(),
             abstract_methods: Vec::new(),
             is_abstract: false,
+            implicit_object_init: false,
         }
     }
 
