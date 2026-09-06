@@ -386,3 +386,10 @@ context), so the following `Color()` fell back to `1:1`. The scope binder
 now knows whether it walks the module body and skips such an annotation's
 target there while keeping the function-local semantics. Round 17 of the
 findings pile records it.
+
+## PR #971 sixteenth Codex round (cascade silence in the skill and CLI spec)
+
+One P2 on `83455282`, fixed in `ba2a68c5`: the `pycc` skill and
+`docs/CLI_SPEC.md` now scope cascade silence to the item's own lowering
+diagnostic, matching `lower_module`'s contract. Round 18 of the findings
+pile records it.
