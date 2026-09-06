@@ -10,13 +10,16 @@ was written, `origin/main` is now **`e77b4b13`** ("fix(hir): reject a `@property
 `__slots__` (#980) (#983)"), one commit ahead of the base. That commit touches `docs/ROADMAP.md` (the #910
 paragraph near line 213) and `docs/TYPE_SYSTEM.md` (near line 209), neither of which overlaps the
 sentences this branch amends (ROADMAP lines 160, 212 and the new v0.4 row before `## v0.5`; TYPE_SYSTEM
-line 262), and it claims session slot `-12-`, which is why this file is `-13-`. The branch was **not**
-rebased onto `e77b4b13`: the dispatch brief authorizes no integration, so fast-forwarding or rebasing
-belongs to the orchestrating session.
+line 262), and it claims session slot `-12-`, which is why this file is `-13-`. The orchestrating
+`issue-implement` session rebased the branch onto `e77b4b13` (a clean rebase, no conflicts) and re-ran
+the full local gate set from that single-writer baseline before pushing: fmt, clippy with warnings
+denied, the workspace tests, `cargo llvm-cov` at 100.00% lines and regions, `cargo doc`, the
+decisions-index freshness check, the roadmap-evidence checker, the `scripts/` unittest suite, both
+agent validators, and `check_ci_permissions.rb` all exited 0.
 
-This branch is **not pushed and has no pull request**. The brief reserves push, PR creation, CI watching
-and merge for the orchestrating `issue-implement` session. If you are reading this and no pull request
-exists from `feat/issue-977`, the push is the missing step.
+The branch is pushed as `feat/issue-977`; the pull request opened from it carries `Fixes #977` and is
+the delivery vehicle for this file (the PR number is recorded in the follow-up paragraph below once
+it exists).
 
 ### Post-merge workflow runs on `e77b4b13`
 
