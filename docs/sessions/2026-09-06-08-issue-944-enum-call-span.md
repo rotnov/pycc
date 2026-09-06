@@ -71,7 +71,8 @@ module-level assignment and `for` target) still yields `T0021`.
 - `d7d18c48` docs/test: address the D-068 review round for #944
 - `9b1615d2` docs(sessions): record the D-068 review round for #944 (also lands `.harden/findings/issue-944.jsonl`)
 - `3416241c` fix(hir): fold TYPE_CHECKING bodies out of the enum-call scan (#944)
-- (this commit) docs(sessions): record the PR #971 review round
+- `2bc3164c` docs(sessions): record the PR #971 review round for #944
+- `a5a6fb5b` perf(hir): skip the enum-call scan when no enum class is known (#944)
 
 ## Gate results (single writer, run sequentially, exit codes captured to files)
 
@@ -151,6 +152,21 @@ decisions-index `--check`, and `cargo llvm-cov --workspace
 lines / functions / regions, 55173 regions, 36331 lines, 0 missed) all
 exited 0. `origin/main` was still `50a0dc2a` and #971 the only open pull
 request when this entry was committed.
+
+## PR #971 perf round
+
+Head `2bc3164c` failed `frontend-perf-gate`: the paired `pycc check`
+frontend median regressed 9.9% against the exact predecessor (threshold
+7%); the first run at `9b1615d2` had passed at 6.9%. Reproduced locally
+with `cargo bench --locked --bench check_bench`: `origin/main`
+(`50a0dc2a`) 8.11 us median versus 8.73 us on the branch, +7.6% -- a real
+cost, not runner noise. The cause was the unconditional per-item walk
+(the whole item plus each `def` body again for its frame) on a bench
+fixture with no enum class. `lower_module` now builds the name set as
+borrowed `&str`s and calls the scan only when it is non-empty; the same
+local bench then reads 8.28 us, +1.8% against `main`. D-233 decision 1
+and the scan's doc record the rule. Round 3 of
+`.harden/findings/issue-944.jsonl` records the finding.
 
 ## Where to resume
 
