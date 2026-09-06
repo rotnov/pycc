@@ -343,3 +343,14 @@ built lazily on the first scanned item, against the pre-loop import slice,
 so a module without an enum class pays no walk (D-233 decision 1); and the
 two-path re-export import residual now has a CLI test at `1:1`. Round 12
 of the findings pile records the three.
+
+## PR #971 eleventh Codex round (definition-time bindings)
+
+One P2 on `0e88a674`, fixed in `a093c901`: the scope binder skipped a
+nested `def`/`class` whole, so a walrus in a decorator, type parameter,
+default value, annotation, return annotation, or class base did not bind
+the enclosing frame, and a later module-level `Color()` was a false-kind
+enum-call `C0001` outside a class body. The binder now walks those
+definition-time expressions into the enclosing frame and still skips the
+body; limit (iii) and D-233 record the harmless over-suppression under the
+`def`'s own frame. Round 13 of the findings pile records it.
