@@ -292,24 +292,6 @@ fn a_type_parameter_class_attribute_annotation_is_rejected() {
 }
 
 #[test]
-fn a_subscripted_final_class_attribute_is_rejected() {
-    assert_rejected(
-        "911_final_sub",
-        "class C:\n    X: Final[int] = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n",
-        "is not supported yet",
-    );
-}
-
-#[test]
-fn a_bare_final_class_attribute_is_rejected() {
-    assert_rejected(
-        "911_final_bare",
-        "class C:\n    X: Final = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n",
-        "is not supported yet",
-    );
-}
-
-#[test]
 fn an_unresolvable_class_attribute_annotation_propagates_its_error() {
     assert_rejected(
         "911_unknown_annotation",

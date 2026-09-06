@@ -23,7 +23,19 @@ use pycc_diag::Diagnostic;
 ///
 /// A bare `ClassVar` (no subscript) and a multi-argument `ClassVar[T, U]` are
 /// both `C0001`, mirroring `Final`'s own "takes exactly one type argument".
-pub(super) fn strip_class_var(annotation: &Expr) -> Result<(&Expr, bool), Diagnostic> {
+pub(super) struct StrippedAnnotation<'a> {
+    /// The annotation with any `ClassVar[...]` wrapper removed.
+    pub(super) expr: &'a Expr,
+    /// Whether a `ClassVar[...]` wrapper was actually present.
+    ///
+    /// This survives the stripping because it is not recoverable from
+    /// `expr` afterwards, and [`lower_class_attr`] needs it: PEP 591 forbids
+    /// `ClassVar[Final[T]]`, which is byte-identical to a valid `Final[T]`
+    /// once the wrapper is gone.
+    pub(super) is_class_var: bool,
+}
+
+pub(super) fn strip_class_var(annotation: &Expr) -> Result<StrippedAnnotation<'_>, Diagnostic> {
     match annotation {
         Expr::Name(name) if name.id.as_str() == "ClassVar" => Err(unsupported(
             "a bare `ClassVar` is not a valid annotation -- write `ClassVar[<type>]` with \
@@ -38,9 +50,74 @@ pub(super) fn strip_class_var(annotation: &Expr) -> Result<(&Expr, bool), Diagno
                     pycc_ast::expr_range(&sub.slice),
                 ));
             }
-            Ok((sub.slice.as_ref(), true))
+            Ok(StrippedAnnotation {
+                expr: sub.slice.as_ref(),
+                is_class_var: true,
+            })
         }
-        other => Ok((other, false)),
+        other => Ok(StrippedAnnotation {
+            expr: other,
+            is_class_var: false,
+        }),
+    }
+}
+
+/// #916: Strips a `Final[...]` wrapper from a class-body attribute
+/// annotation, mirroring [`strip_class_var`]'s shape.
+///
+/// Returns the *inner* annotation and whether a wrapper was present. A bare
+/// `Final` (no subscript) is valid here -- PEP 591 allows `X: Final = 1` and
+/// the type is then inferred from the literal right-hand side, exactly as
+/// #910's un-annotated spelling does -- so it yields `None` rather than an
+/// inner expression. `Final[T, U]` reuses `annotation_to_ty`'s own
+/// "takes exactly one type argument" wording, and `Final[T,]` (a one-element
+/// tuple slice) unwraps to `T`, so both spellings behave identically to the
+/// variable-level position.
+///
+/// Unlike [`strip_class_var`], stripping here is a convenience rather than a
+/// necessity: the shared `annotation_to_ty` unwraps `Final[X]` on its own.
+/// The wrapper is intercepted anyway because the two PEP 591-invalid nestings
+/// (`ClassVar[Final[T]]`, `Final[ClassVar[T]]`) are only distinguishable at
+/// this seam -- see [`lower_class_attr`].
+///
+/// The attribute spelling `typing.Final[...]` is deliberately not handled,
+/// exactly as [`strip_class_var`] does not handle `typing.ClassVar[...]`: it
+/// falls through to `annotation_to_ty` and keeps its existing `C0001`.
+fn strip_final(annotation: &Expr) -> Result<(Option<&Expr>, bool), Diagnostic> {
+    match annotation {
+        Expr::Name(name) if name.id.as_str() == "Final" => Ok((None, true)),
+        Expr::Subscript(sub) if matches!(sub.value.as_ref(), Expr::Name(n) if n.id.as_str() == "Final") =>
+        {
+            let inner = match sub.slice.as_ref() {
+                Expr::Tuple(tuple) if tuple.elts.len() != 1 => {
+                    return Err(unsupported(
+                        "Final takes exactly one type argument",
+                        pycc_ast::expr_range(&sub.slice),
+                    ));
+                }
+                Expr::Tuple(tuple) => &tuple.elts[0],
+                other => other,
+            };
+            Ok((Some(inner), true))
+        }
+        other => Ok((Some(other), false)),
+    }
+}
+
+/// Whether `annotation` names `ClassVar`, in either the bare (`ClassVar`) or
+/// the subscripted (`ClassVar[T]`) spelling.
+///
+/// [`strip_class_var`] cannot answer this question: it returns `Err` for the
+/// bare spelling, so a caller that only needs "is this a `ClassVar` at all"
+/// would either propagate a message about the wrong defect or lose the bare
+/// case entirely.
+fn is_class_var_annotation(annotation: &Expr) -> bool {
+    match annotation {
+        Expr::Name(name) => name.id.as_str() == "ClassVar",
+        Expr::Subscript(sub) => {
+            matches!(sub.value.as_ref(), Expr::Name(n) if n.id.as_str() == "ClassVar")
+        }
+        _ => false,
     }
 }
 
@@ -48,8 +125,9 @@ pub(super) fn strip_class_var(annotation: &Expr) -> Result<(&Expr, bool), Diagno
 /// (`MIN_WIDTH: int = -1024`, `LIMIT: ClassVar[int] = 8`) into a
 /// `(name, type, constant value)` entry for [`HirClassDef::class_attrs`].
 ///
-/// `annotation` is the `ClassVar`-stripped annotation; `already` is the
-/// entries accumulated so far in this body, for duplicate detection.
+/// `stripped` is the `ClassVar`-stripped annotation plus whether that
+/// wrapper was present; `already` is the entries accumulated so far in this
+/// body, for duplicate detection.
 ///
 /// **Named invariant -- class attributes are restricted to scalar slot
 /// types.** Beyond D-154's single-word storage constraint, this is what
@@ -60,7 +138,7 @@ pub(super) fn strip_class_var(annotation: &Expr) -> Result<(&Expr, bool), Diagno
 /// restriction requires revisiting #585 in the same change.
 pub(super) fn lower_class_attr(
     ann: &pycc_ast::StmtAnnAssign,
-    annotation: &Expr,
+    stripped: StrippedAnnotation<'_>,
     class_name: &str,
     type_param: Option<&str>,
     aliases: &[(String, Ty)],
@@ -85,67 +163,101 @@ pub(super) fn lower_class_attr(
             ann.range,
         ));
     }
-    // PEP 591 (#383): `Final[X]` unwraps to `X` inside `annotation_to_ty`,
-    // carrying no finality with it -- a `Final` class attribute would
-    // therefore be silently accepted as an ordinary rebindable one. Class
-    // attributes are already write-rejected outright in Part 1, but
-    // accepting the spelling would imply a finality guarantee this pass does
-    // not model, so `Final[...]` on a class-body attribute stays out of
-    // scope (see `docs/TYPE_SYSTEM.md`'s own `Final` scope statement).
-    if matches!(annotation, Expr::Name(n) if n.id.as_str() == "Final")
-        || matches!(annotation, Expr::Subscript(sub)
-            if matches!(sub.value.as_ref(), Expr::Name(n) if n.id.as_str() == "Final"))
-    {
+    // PEP 591 (#916): `Final[X]` on a class-body attribute is accepted and
+    // stripped to `X`. #911 rejected the spelling outright because
+    // `Final`'s non-reassignability is tracked by the type checker's
+    // `Environment.finals` set, populated from `HirStmt::AnnAssign` -- and a
+    // class attribute produces no `HirStmt` at all, so a stripped `Final`
+    // would have carried none of `Final`'s meaning. That objection does not
+    // survive #911's own model: every write path to a class attribute is
+    // already `T0044`, so the binding is immutable without `Environment`
+    // knowing anything about it, and `Final[T]` here is a documentation-only
+    // wrapper over an already-final binding rather than an unmodelled
+    // guarantee.
+    //
+    // These two checks run *after* the reserved-name and duplicate-name
+    // checks above, so a program that both duplicates a name and misnests the
+    // wrappers keeps reporting the duplicate, exactly as it did before #916.
+    let StrippedAnnotation {
+        expr: annotation,
+        is_class_var,
+    } = stripped;
+    let (annotation, is_final) = strip_final(annotation)?;
+    if is_final && is_class_var {
         return Err(unsupported(
             format!(
-                "`Final` on the class-level attribute `{attr_name}` is not supported yet -- \
-                 write a plain scalar annotation (`{attr_name}: int = 1`) instead"
+                "`ClassVar[Final[...]]` on the class-level attribute `{attr_name}` is not a \
+                 valid annotation -- PEP 591 forbids nesting `Final` inside `ClassVar`; a class \
+                 attribute is a class variable already, so write `{attr_name}: Final[int] = 1`"
             ),
             ann.range,
         ));
     }
-    let attr_ty = crate::annotation_to_ty(
-        annotation,
-        type_param,
-        Some(class_name),
-        aliases,
-        class_name_defs,
-    )?;
-    // A type parameter has no compile-time constant value to fold, so a
-    // generic class's own `T` is rejected here even though it *is* one of
-    // `is_scalar_slot_type`'s accepted types.
-    if matches!(attr_ty, Ty::Param(_)) {
+    if is_final && annotation.is_some_and(is_class_var_annotation) {
         return Err(unsupported(
             format!(
-                "class attribute `{attr_name}` is annotated with the type parameter `{}` -- a \
-                 class attribute is a compile-time constant, and a type parameter has no \
-                 constant value to fold",
-                attr_ty.name()
+                "`Final[ClassVar[...]]` on the class-level attribute `{attr_name}` is not a \
+                 valid annotation -- PEP 591 forbids nesting `ClassVar` inside `Final`; a class \
+                 attribute is a class variable already, so write `{attr_name}: Final[int] = 1`"
             ),
             ann.range,
         ));
     }
-    if !is_scalar_slot_type(&attr_ty) {
-        return Err(unsupported(
-            format!(
-                "class attribute `{attr_name}` has type `{}`, which is not a scalar slot type \
-                 -- only `int`, `float`, `bool`, and `str` are supported (a class attribute is \
-                 a compile-time constant folded at every read; restricting it to scalars is \
-                 also what keeps `__set_name__` untriggerable, see #585)",
-                attr_ty.name()
-            ),
-            ann.range,
-        ));
-    }
+    let attr_ty = match annotation {
+        Some(annotation) => {
+            let attr_ty = crate::annotation_to_ty(
+                annotation,
+                type_param,
+                Some(class_name),
+                aliases,
+                class_name_defs,
+            )?;
+            // A type parameter has no compile-time constant value to fold, so
+            // a generic class's own `T` is rejected here even though it *is*
+            // one of `is_scalar_slot_type`'s accepted types.
+            if matches!(attr_ty, Ty::Param(_)) {
+                return Err(unsupported(
+                    format!(
+                        "class attribute `{attr_name}` is annotated with the type parameter \
+                         `{}` -- a class attribute is a compile-time constant, and a type \
+                         parameter has no constant value to fold",
+                        attr_ty.name()
+                    ),
+                    ann.range,
+                ));
+            }
+            if !is_scalar_slot_type(&attr_ty) {
+                return Err(unsupported(
+                    format!(
+                        "class attribute `{attr_name}` has type `{}`, which is not a scalar \
+                         slot type -- only `int`, `float`, `bool`, and `str` are supported (a \
+                         class attribute is a compile-time constant folded at every read; \
+                         restricting it to scalars is also what keeps `__set_name__` \
+                         untriggerable, see #585)",
+                        attr_ty.name()
+                    ),
+                    ann.range,
+                ));
+            }
+            attr_ty
+        }
+        // #916: a bare `X: Final = 1` has no inner annotation to resolve, so
+        // the type comes from the literal right-hand side through #910's
+        // existing `infer_class_attr_ty`. That function only ever yields a
+        // scalar, so the `Ty::Param` and scalar-slot checks above are
+        // correctly skipped here rather than left unreachable.
+        None => {
+            let Some(value) = &ann.value else {
+                return Err(no_class_attr_value(&attr_name, ann.range.into()));
+            };
+            let Some(attr_ty) = infer_class_attr_ty(value) else {
+                return Err(bad_class_attr_shape(&attr_name, ann.range.into()));
+            };
+            attr_ty
+        }
+    };
     let Some(value) = &ann.value else {
-        return Err(unsupported(
-            format!(
-                "class attribute `{attr_name}` has no value -- a class attribute is a \
-                 compile-time constant and must be initialized with a literal \
-                 (`{attr_name}: int = 1`)"
-            ),
-            ann.range,
-        ));
+        return Err(no_class_attr_value(&attr_name, ann.range.into()));
     };
     let attr_value = class_attr_value(value, &attr_ty, &attr_name, ann.range.into())?;
     Ok((attr_name, attr_ty, attr_value))
@@ -240,6 +352,21 @@ fn infer_class_attr_ty(value: &Expr) -> Option<Ty> {
         Expr::StringLiteral(_) => Some(Ty::Str),
         _ => None,
     }
+}
+
+/// The `C0001` for a class-attribute declaration with no initializer.
+///
+/// Shared by the annotated path's own check and #916's bare-`Final` arm,
+/// which must reach the same conclusion before it has a type to infer.
+fn no_class_attr_value(attr_name: &str, range: std::ops::Range<u32>) -> Diagnostic {
+    unsupported(
+        format!(
+            "class attribute `{attr_name}` has no value -- a class attribute is a \
+             compile-time constant and must be initialized with a literal \
+             (`{attr_name}: int = 1`)"
+        ),
+        range,
+    )
 }
 
 /// The `C0001` for a class-attribute initializer whose shape this pass does
@@ -700,6 +827,28 @@ mod tests {
         );
     }
 
+    /// The annotated path has its own bare-name check, and D-014 measures each
+    /// crate's regions from its own in-crate tests -- the unannotated pin above
+    /// exercises a different function, so the annotated arm needs its own.
+    #[test]
+    fn an_annotated_attribute_target_is_rejected() {
+        assert_collision(
+            "class C:\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass D:\n    C.x: int = 1\n",
+            "must target a bare name",
+        );
+    }
+
+    /// The annotated path resolves its type first and then checks the literal
+    /// against it, so a well-shaped literal of the wrong type is rejected by
+    /// the shared value lowering rather than by annotation resolution.
+    #[test]
+    fn an_annotated_class_attribute_with_a_mismatched_literal_is_rejected() {
+        assert_collision(
+            "class C:\n    X: int = \"a\"\n",
+            "is annotated `int` but is initialized with a `str` literal",
+        );
+    }
+
     #[test]
     fn a_duplicate_unannotated_class_attribute_is_rejected() {
         assert_collision(
@@ -816,6 +965,176 @@ mod tests {
         assert_collision(
             "class C:\n    __slots__: str = \"a\"\n",
             "`__slots__` in a class body",
+        );
+    }
+
+    // -- #916: `Final[...]` on a class-body attribute ----------------------
+
+    /// Lowers `source` and returns class `C`'s class attributes.
+    fn class_c_attrs(source: &str) -> Vec<(String, Ty, ClassAttrValue)> {
+        let module = crate::pycc_parser_test_helper::parse(source);
+        let hir = lower_checked(&module).expect("the class body must lower");
+        let (_, class_def) = hir
+            .class_defs
+            .iter()
+            .find(|(name, _)| name == "C")
+            .expect("class `C` must be lowered");
+        class_def.class_attrs.clone()
+    }
+
+    /// PEP 591 (#916): every `Final` spelling of the same declaration lowers
+    /// to the byte-identical entry the plain annotation produces. `Final` is
+    /// a binding-level property and the binding is already immutable here
+    /// (every write path is `T0044`), so the wrapper contributes nothing to
+    /// the lowered form -- which is exactly why accepting it is safe.
+    #[test]
+    fn every_final_spelling_lowers_identically_to_the_plain_annotation() {
+        let plain = class_c_attrs("class C:\n    X: int = 1\n");
+        assert_eq!(
+            plain,
+            vec![("X".to_string(), Ty::Int, ClassAttrValue::Int(1))]
+        );
+        for source in [
+            // `Final[T]`, the subscripted spelling.
+            "class C:\n    X: Final[int] = 1\n",
+            // `Final[T,]`, a one-element tuple slice -- the same shape
+            // `annotation_to_ty` already unwraps in variable position.
+            "class C:\n    X: Final[int,] = 1\n",
+            // A bare `Final`, whose type is inferred from the literal.
+            "class C:\n    X: Final = 1\n",
+            // A redundant `Final[Final[T]]`: `strip_final` unwraps one layer
+            // and the shared `annotation_to_ty` unwraps the rest, so the class
+            // body accepts exactly what the variable-level position already
+            // accepts rather than becoming a stricter special case.
+            "class C:\n    X: Final[Final[int]] = 1\n",
+        ] {
+            assert_eq!(class_c_attrs(source), plain, "source: {source:?}");
+        }
+    }
+
+    /// A bare `Final` infers its type from the literal exactly as #910's
+    /// un-annotated spelling does, across every literal shape.
+    #[test]
+    fn a_bare_final_class_attribute_infers_every_literal_shape() {
+        assert_eq!(
+            class_c_attrs(
+                "class C:\n    I: Final = 1\n    F: Final = 1.5\n    B: Final = True\n    S: Final = \"cfg\"\n    NI: Final = -1024\n",
+            ),
+            vec![
+                ("I".to_string(), Ty::Int, ClassAttrValue::Int(1)),
+                ("F".to_string(), Ty::Float, ClassAttrValue::Float(1.5)),
+                ("B".to_string(), Ty::Bool, ClassAttrValue::Bool(true)),
+                (
+                    "S".to_string(),
+                    Ty::Str,
+                    ClassAttrValue::Str("cfg".to_string())
+                ),
+                ("NI".to_string(), Ty::Int, ClassAttrValue::Int(-1024)),
+            ]
+        );
+    }
+
+    /// `Final` takes exactly one type argument, reusing `annotation_to_ty`'s
+    /// own wording so the class-body position and the variable position
+    /// report identically.
+    #[test]
+    fn a_multi_argument_final_class_attribute_is_rejected() {
+        assert_collision(
+            "class C:\n    X: Final[int, str] = 1\n",
+            "Final takes exactly one type argument",
+        );
+    }
+
+    /// PEP 591 forbids nesting `Final` inside `ClassVar`. `class/body.rs`
+    /// strips the `ClassVar` wrapper *before* calling `lower_class_attr`, so
+    /// without the threaded `is_class_var` flag this annotation would arrive
+    /// indistinguishable from a plain `Final[int]` and be accepted.
+    #[test]
+    fn a_class_var_wrapping_final_class_attribute_is_rejected() {
+        assert_collision(
+            "class C:\n    X: ClassVar[Final[int]] = 1\n",
+            "forbids nesting `Final` inside `ClassVar`",
+        );
+    }
+
+    /// PEP 591 forbids the opposite nesting too. Both the subscripted and
+    /// the bare inner `ClassVar` report the nesting, not `annotation_to_ty`'s
+    /// generic "`ClassVar` is only valid on a class-body attribute
+    /// declaration" message -- which would be actively misleading here,
+    /// since this *is* a class-body attribute declaration.
+    #[test]
+    fn a_final_wrapping_class_var_class_attribute_is_rejected() {
+        for source in [
+            "class C:\n    X: Final[ClassVar[int]] = 1\n",
+            "class C:\n    X: Final[ClassVar] = 1\n",
+        ] {
+            assert_collision(source, "forbids nesting `ClassVar` inside `Final`");
+        }
+    }
+
+    /// The nesting checks run after the duplicate-name check, so today's
+    /// diagnostic precedence is unchanged by #916.
+    #[test]
+    fn a_duplicate_name_outranks_an_invalid_final_nesting() {
+        assert_collision(
+            "class C:\n    X: int = 1\n    X: ClassVar[Final[int]] = 2\n",
+            "is already defined in class `C`",
+        );
+    }
+
+    /// An inner annotation that is neither a bare name nor a subscript is
+    /// not a `ClassVar` nesting -- it falls through to `annotation_to_ty`
+    /// and keeps that position's own diagnostic.
+    #[test]
+    fn a_final_wrapping_an_unsupported_annotation_shape_propagates() {
+        assert_collision(
+            "class C:\n    X: Final[\"int\"] = 1\n",
+            "got a string literal",
+        );
+    }
+
+    /// A `Final`-wrapped annotation that does not resolve propagates the
+    /// inner failure rather than reporting the wrapper.
+    #[test]
+    fn a_final_wrapping_an_unknown_name_propagates_the_inner_error() {
+        assert_collision("class C:\n    X: Final[Nope] = 1\n", "Nope");
+    }
+
+    /// The scalar-slot restriction (#585/D-224) applies through the wrapper.
+    #[test]
+    fn a_final_wrapping_a_non_scalar_annotation_is_rejected() {
+        assert_collision(
+            "class C:\n    X: Final[None] = 1\n",
+            "which is not a scalar slot type",
+        );
+    }
+
+    /// So does the type-parameter restriction.
+    #[test]
+    fn a_final_wrapping_a_type_parameter_is_rejected() {
+        assert_collision(
+            "class Box[T]:\n    X: Final[T] = 1\n\n    def __init__(self, item: T) -> None:\n        self.item = item\n",
+            "has no constant value to fold",
+        );
+    }
+
+    /// A value-less declaration has nothing to fold in either arm: the
+    /// annotated one reaches the shared check after resolving its type, the
+    /// bare-`Final` one must reach it *before* inferring one.
+    #[test]
+    fn a_value_less_final_class_attribute_is_rejected_in_both_arms() {
+        for source in ["class C:\n    X: Final[int]\n", "class C:\n    X: Final\n"] {
+            assert_collision(source, "has no value");
+        }
+    }
+
+    /// A bare `Final` whose right-hand side is not a foldable literal
+    /// reuses #910's shared initializer-shape diagnostic.
+    #[test]
+    fn a_bare_final_class_attribute_with_an_unfoldable_value_is_rejected() {
+        assert_collision(
+            "class C:\n    X: Final = 1j\n",
+            "must be initialized with a literal",
         );
     }
 }

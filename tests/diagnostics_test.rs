@@ -549,9 +549,12 @@ fn t0041_maybe_bound_for_range() {
 }
 
 // PEP 591 (#383): reassigning a `Final`-annotated name after its initial
-// binding is T0045. Variable-level annotations only (module-level and
-// function-local); `Final` on parameters or class-body attributes is out
-// of scope for this PR.
+// binding is T0045. `T0045` covers the variable-level position only
+// (module-level and function-local annotated assignments); `Final` on a
+// function parameter is still out of scope. A class-body `Final` attribute
+// (#916) is accepted but never reaches `T0045`: it produces no
+// `HirStmt::AnnAssign`, so `Environment.finals` never learns about it, and
+// every write to it is already rejected with `T0044`.
 #[test]
 fn t0045_final_reassignment() {
     assert_diagnostic_matches_fixture("t0045_final_reassignment");
