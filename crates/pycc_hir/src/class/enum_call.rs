@@ -86,12 +86,16 @@
 //!   already fails -- the same residual class as the class body. An
 //!   imported enum (the `state.class_defs` half of `lower_module`'s name
 //!   set) stays scannable.
-//! - (iii) Decorators, default values, annotations, and the return
-//!   annotation are scoped to the function they belong to rather than to
-//!   the enclosing scope (the frame is pushed around ruff's whole
-//!   `FunctionDef` walk). The only observable consequence is a missed
-//!   *second* diagnostic on an item that already fails: a decorator or a
-//!   default expression is `C0001 ... not supported yet` on its own.
+//! - (iii) A walrus in a decorator, type parameter, default value,
+//!   annotation, return annotation, or class base binds in the enclosing
+//!   frame (Python's rule: those expressions are evaluated at definition
+//!   time in the enclosing scope), so a later `Color()` in that scope is
+//!   left to the type checker. Those expressions are additionally walked
+//!   under the `def`'s own frame (the frame is pushed around ruff's whole
+//!   `FunctionDef` walk), a harmless over-suppression whose only
+//!   observable consequence is a missed *second* diagnostic on an item
+//!   that already fails: a decorator or a default expression is
+//!   `C0001 ... not supported yet` on its own.
 //! - (iv) **Poison is order-dependent.** A `def` that calls `Color(1)` and
 //!   *precedes* a failing `class Color(Enum): pass` is scanned before the
 //!   class item fails and poisons `Color` (`poisoned` is filled only in the
@@ -320,8 +324,11 @@ pub(crate) fn module_bindings(body: &[Stmt], imports: &[ImportBinding]) -> Vec<S
 }
 
 /// The names bound directly by the statements of one scope, without
-/// descending into a nested `def`, `class`, or `lambda` (each of those is
-/// its own scope and gets its own frame, or none).
+/// descending into a nested `def`, `class`, or `lambda` body (each of
+/// those is its own scope and gets its own frame, or none). A nested
+/// definition's decorators, type parameters, parameters, return
+/// annotation, and class bases are walked, though: they are evaluated in
+/// this scope (limit (iii)).
 fn scope_bindings(body: &[Stmt], imports: &[ImportBinding]) -> Vec<String> {
     struct Binder<'i> {
         imports: &'i [ImportBinding],
@@ -331,8 +338,33 @@ fn scope_bindings(body: &[Stmt], imports: &[ImportBinding]) -> Vec<String> {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
             match stmt {
                 // A nested `def`/`class` is neither a binding this frame
-                // models (limit (ii)) nor a scope it descends into.
-                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+                // models (limit (ii)) nor a scope it descends into -- but
+                // its definition-time expressions (decorators, type
+                // parameters, defaults, annotations, bases) are evaluated
+                // in *this* scope, so a walrus there binds here.
+                Stmt::FunctionDef(def) => {
+                    for decorator in &def.decorator_list {
+                        self.visit_decorator(decorator);
+                    }
+                    if let Some(type_params) = &def.type_params {
+                        self.visit_type_params(type_params);
+                    }
+                    self.visit_parameters(&def.parameters);
+                    if let Some(returns) = &def.returns {
+                        self.visit_annotation(returns);
+                    }
+                }
+                Stmt::ClassDef(class) => {
+                    for decorator in &class.decorator_list {
+                        self.visit_decorator(decorator);
+                    }
+                    if let Some(type_params) = &class.type_params {
+                        self.visit_type_params(type_params);
+                    }
+                    if let Some(arguments) = &class.arguments {
+                        self.visit_arguments(arguments);
+                    }
+                }
                 // A `TYPE_CHECKING`-guarded body binds nothing at runtime.
                 Stmt::If(if_stmt) => walk_if_as_lowered(self, if_stmt, self.imports),
                 _ => visitor::walk_stmt(self, stmt),

@@ -383,6 +383,106 @@ fn a_walrus_inside_a_lambda_does_not_bind_the_module_frame() {
 }
 
 #[test]
+fn a_walrus_in_a_parameter_default_binds_the_module_frame() {
+    // Default values are evaluated at definition time in the enclosing
+    // scope: `Color` is rebound to an `int` at module level, so the later
+    // `Color()` is left to the type checker. The `def` itself is the one
+    // diagnostic (a default value is not supported yet).
+    let source = format!("{COLOR}def f(x: int = (Color := 1)) -> None:\n    pass\nColor()\n");
+    let diagnostics = lower_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(
+        !diagnostics[0].message.contains("enum class"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn a_walrus_in_a_default_of_an_unannotated_def_binds_the_module_frame() {
+    // Same as above without a return annotation: the binder walks the
+    // parameters alone and still rebinds `Color` in the module frame.
+    let source = format!("{COLOR}def f(x: int = (Color := 1)):\n    pass\nColor()\n");
+    let diagnostics = lower_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(
+        !diagnostics[0].message.contains("enum class"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn a_walrus_in_a_decorator_binds_the_module_frame() {
+    let source = format!("{COLOR}@(Color := 1)\ndef f() -> None:\n    pass\nColor()\n");
+    let diagnostics = lower_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(
+        !diagnostics[0].message.contains("enum class"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn a_walrus_in_a_return_annotation_binds_the_module_frame() {
+    let source = format!("{COLOR}def f() -> (Color := 1):\n    pass\nColor()\n");
+    let diagnostics = lower_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(
+        !diagnostics[0].message.contains("enum class"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn a_walrus_in_a_class_base_binds_the_module_frame() {
+    let source = format!("{COLOR}class P((Color := 1)):\n    pass\nColor()\n");
+    let diagnostics = lower_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(
+        !diagnostics[0].message.contains("enum class"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn a_walrus_in_a_type_parameter_bound_binds_the_module_frame() {
+    // A type-parameter bound is not lowered, so the definition itself
+    // passes; the rebound `Color()` is left to the type checker.
+    lower_ok(&format!(
+        "{COLOR}def f[T: (Color := 1)]() -> None:\n    pass\nColor()\n"
+    ));
+}
+
+#[test]
+fn a_walrus_in_a_class_decorator_binds_the_module_frame() {
+    let source = format!("{COLOR}@(Color := 1)\nclass P:\n    pass\nColor()\n");
+    let diagnostics = lower_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(
+        !diagnostics[0].message.contains("enum class"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn a_walrus_in_a_class_type_parameter_binds_the_module_frame() {
+    // A type-parameter bound is not lowered, so the definition itself
+    // passes; the rebound `Color()` is left to the type checker.
+    lower_ok(&format!(
+        "{COLOR}class P[T: (Color := 1)]:\n    pass\nColor()\n"
+    ));
+}
+
+#[test]
+fn a_walrus_in_a_function_body_does_not_bind_the_module_frame() {
+    // The body is the `def`'s own scope: the module-level `Color()` is
+    // still an attributable enum call.
+    let source = format!("{COLOR}def f() -> None:\n    (Color := 1)\nColor()\n");
+    let diagnostics = lower_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
+}
+
+#[test]
 fn a_shadow_in_one_function_does_not_leak_into_a_sibling() {
     let source = format!(
         "{COLOR}def f() -> None:\n    Color = 1\n    Color()\ndef g() -> None:\n    Color()\n"

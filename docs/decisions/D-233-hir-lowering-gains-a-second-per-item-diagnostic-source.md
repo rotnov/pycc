@@ -105,11 +105,16 @@ status: accepted
     assignment, module-level `for` target) into a misleading enum-call
     `C0001` against programs CPython also rejects as "`int` is not
     callable"; the frame stack is ~50 lines inside the visitor.
-  - *Scope decorators, defaults, and annotations to the enclosing frame*
-    (Python's actual rule). Considered, no change: the only observable
-    consequence of the simplification is a missed *second* diagnostic on an
-    item that already fails (a decorator or default expression is `C0001`
-    on its own).
+  - *Scope decorators, defaults, and annotations only to the `def`'s own
+    frame* (the first-cut simplification). Rejected during review: a walrus
+    in a default value binds the enum's name in the enclosing scope, so a
+    later module-level `Color()` was reported as a false-kind enum call
+    outside a class body. The binder now walks a nested definition's
+    decorators, type parameters, parameters, return annotation, and class
+    bases into the enclosing frame (Python's actual rule); the `def`'s own
+    frame still sees them too, a harmless over-suppression whose only
+    observable consequence is a missed *second* diagnostic on an item that
+    already fails (a decorator or default expression is `C0001` on its own).
   - *Key the scan on `enum_members` non-emptiness.* Rejected for the reason
     #942 keyed the guard on `is_enum`: a docstring-only enum (#744) has no
     members.
