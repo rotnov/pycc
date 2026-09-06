@@ -26,7 +26,10 @@ in `instantiate_generic_class_methods`, so `check` accepted `print(Box[int](1))`
 rejected `0gen_Box__T_int` with `C0001` (at `e77b4b13` the same program panicked in codegen); and the
 help recommended `@dataclass` for a class under a builtin exception name, which the predicate rejects
 by name regardless, so that case now gets a rename remedy. The full gate set was re-run from a
-single-writer baseline after the fix (100.00% lines and regions).
+single-writer baseline after the fix (100.00% lines and regions). Codex's second round raised one
+more P1, fixed in `a4f88f5b` (harden round 3): `print(cast(Base, d))` with a plain `Derived(Base)`
+and a `@dataclass` `Base` passed the type-only gate as `Base` while MIR erased the cast and codegen
+panicked on the `Derived`; the gate now re-judges the value under every erased `cast`.
 
 ### Post-merge workflow runs on `e77b4b13`
 
@@ -111,6 +114,11 @@ the orchestrating session and `issue-select`):
   table, so `class ValueError: ...` followed by `ValueError()` in any solver-path module reports
   ``call to builtin `ValueError` `` rather than a message about the user class. Pre-existing; a fix
   needs the class table threaded into every `ConstraintEnvironment` construction.
+- **Bound-cast codegen drift.** `b: Base = cast(Base, d)` followed by `print(b)` (same `Derived(Base)`
+  shape as the Codex round-2 finding) fails under `pycc run` with codegen's `local type drifted`
+  assertion (`crates/pycc_codegen/src/lib.rs`, around line 1874) rather than with a diagnostic: the
+  annotated local is `Base` while the erased value is a `Derived`. Pre-existing at `e77b4b13` and
+  independent of the string-conversion gate, which cannot see through a name binding.
 - **Deferred positive paths.** A user `__repr__` on a plain class and `Enum` member rendering
   (`Color.RED`) are `C0001` under D-237 until their own slices; both need MIR's
   `rewrite_instance_to_repr` widened (and, for `__repr__`, D-236's reserved-name machinery and a
