@@ -16,7 +16,7 @@
 use crate::binop::numeric_result_type;
 use crate::class;
 use crate::std_receiver::{shadowed_std_receiver, std_qualified_symbol, std_receiver_shadowed};
-use crate::string_conversion::{StringConversionSite, reject_unrenderable};
+use crate::string_conversion::{StringConversionSite, reject_unrenderable_expr};
 use crate::unop::unary_result_type;
 use crate::{
     BindingState, Environment, annotation_marker_is_not_a_value, cast_marker_is_not_a_value,
@@ -79,8 +79,12 @@ pub(crate) fn infer_expr_in(
                     // instance and every protocol-typed value is rejected
                     // here with `C0001` before it can reach the codegen
                     // `to_str` panic. See `string_conversion.rs`.
-                    let ty = infer_expr_in(env, local_names, expr)?;
-                    reject_unrenderable(env, &ty, StringConversionSite::FStringInterpolation)?;
+                    reject_unrenderable_expr(
+                        env,
+                        local_names,
+                        expr,
+                        StringConversionSite::FStringInterpolation,
+                    )?;
                 }
             }
             Ok(Ty::Str)
@@ -313,9 +317,16 @@ pub(crate) fn infer_expr_in(
                 // #977 (D-237): both arg-inference branches above funnel
                 // into `arg_tys`, so this is the single place the
                 // string-conversion gate sees every argument -- see the
-                // `FString` arm and `string_conversion.rs`.
-                for arg_ty in arg_tys {
-                    reject_unrenderable(env, arg_ty, StringConversionSite::PrintArgument)?;
+                // `FString` arm and `string_conversion.rs`. The expression
+                // form re-infers each argument (already inferred into
+                // `arg_tys` above) so it can look under an erased `cast`.
+                for arg in args {
+                    reject_unrenderable_expr(
+                        env,
+                        local_names,
+                        arg,
+                        StringConversionSite::PrintArgument,
+                    )?;
                 }
                 return Ok(Ty::None);
             }

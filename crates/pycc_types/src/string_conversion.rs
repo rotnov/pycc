@@ -21,8 +21,9 @@
 //! `redeclaration.rs`.
 
 use crate::env::Environment;
+use crate::expr::infer_expr_in;
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::Ty;
+use pycc_hir::{HirExpr, Ty};
 
 /// The two surfaces that hand a value to `pycc_codegen`'s `to_str`
 /// (`crates/pycc_codegen/src/lib.rs`, the f-string and `print` lowering);
@@ -107,6 +108,41 @@ pub(crate) fn reject_unrenderable(
         Ty::Protocol(name) => Err(unrenderable_protocol(name, site)),
         _ => Ok(()),
     }
+}
+
+/// Gates a string-conversion *expression*: [`reject_unrenderable`] on its
+/// inferred type, then again on the value under every erased `cast`.
+///
+/// `pycc_mir` erases `cast(T, v)` to `v` and its `__repr__` rewrite keys on
+/// the erased value's own class, so a representation-preserving upcast from
+/// a non-dataclass subclass to a `@dataclass` base (`print(cast(Base, d))`
+/// with `class Derived(Base): pass`) would pass a type-only gate as `Base`
+/// and still reach codegen's `to_str` panic as a `Derived`. Only a call that
+/// `infer_expr_in` itself routes to `check_cast` is looked through -- a user
+/// `def cast` shadows the builtin there too -- and the descent repeats for a
+/// nested `cast(A, cast(B, v))`. The value's own type is inferred exactly as
+/// `check_cast` infers it, so no new diagnostic can surface from the descent.
+pub(crate) fn reject_unrenderable_expr(
+    env: &Environment,
+    local_names: &[&str],
+    expr: &HirExpr,
+    site: StringConversionSite,
+) -> Result<(), Diagnostic> {
+    let ty = infer_expr_in(env, local_names, expr)?;
+    reject_unrenderable(env, &ty, site)?;
+    let mut current = expr;
+    while let HirExpr::Call { callee, args } = current
+        && callee == "cast"
+        && env.lookup_function(callee).is_none()
+    {
+        // `infer_expr_in` above already ran `check_cast`, which rejects any
+        // arity other than two before this point.
+        let value = &args[1];
+        let value_ty = infer_expr_in(env, local_names, value)?;
+        reject_unrenderable(env, &value_ty, site)?;
+        current = value;
+    }
+    Ok(())
 }
 
 /// The `C0001` for a class instance neither MIR rewrite renders.
@@ -410,6 +446,49 @@ mod tests {
             specialization.dataclass_fields,
             vec![("value".to_string(), Ty::Str)]
         );
+    }
+
+    const UPCAST: &str = "from typing import cast\n\n@dataclass\nclass Base:\n    x: int\n\n\
+class Derived(Base):\n    pass\n\nd = Derived(1)\n";
+
+    /// Codex round 2 on PR #985: MIR erases `cast(Base, d)` to `d`, whose
+    /// class is not a dataclass, so the gate must judge the erased value.
+    #[test]
+    fn a_cast_from_a_plain_subclass_to_a_dataclass_base_is_c0001_under_print() {
+        assert_rejected(
+            &format!("{UPCAST}print(cast(Base, d))\n"),
+            "`Derived` instance",
+        );
+    }
+
+    #[test]
+    fn a_cast_from_a_plain_subclass_to_a_dataclass_base_is_c0001_in_an_fstring() {
+        assert_rejected(
+            &format!("{UPCAST}s: str = f\"{{cast(Base, d)}}\"\n"),
+            "`Derived` instance as an f-string interpolation",
+        );
+    }
+
+    #[test]
+    fn a_nested_cast_is_looked_through_to_the_erased_value() {
+        assert_rejected(
+            &format!("{UPCAST}print(cast(Base, cast(Derived, d)))\n"),
+            "`Derived` instance",
+        );
+    }
+
+    #[test]
+    fn a_cast_to_the_dataclass_own_type_stays_renderable() {
+        assert_accepted(&format!(
+            "{DATACLASS}from typing import cast\n\np = P(1, 2)\nprint(cast(P, p))\ns: str = f\"{{cast(P, p)}}\"\n"
+        ));
+    }
+
+    /// A user `def cast` is an ordinary function call: nothing is erased,
+    /// so only its declared return type is judged.
+    #[test]
+    fn a_user_defined_cast_is_not_looked_through() {
+        assert_accepted("def cast(a: int, b: int) -> int:\n    return b\n\nprint(cast(1, 2))\n");
     }
 
     #[test]

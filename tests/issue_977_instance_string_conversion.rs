@@ -373,6 +373,20 @@ fn a_class_under_a_builtin_exception_name_gets_the_rename_help() {
     );
 }
 
+/// Codex round 2 on PR #985: `cast(Base, d)` upcasts a plain subclass to a
+/// `@dataclass` base; MIR erases the cast, so the gate judges the erased
+/// value. At `e77b4b13` this program passed `check` and panicked in
+/// `pycc_codegen`'s `to_str` under `run`.
+#[test]
+fn a_cast_from_a_plain_subclass_to_a_dataclass_base_is_rejected_by_check() {
+    assert_c0001(
+        "cast_upcast",
+        "from typing import cast\n\n@dataclass\nclass Base:\n    x: int\n\n\
+         class Derived(Base):\n    pass\n\nd = Derived(1)\nprint(cast(Base, d))\n",
+        "`Derived`",
+    );
+}
+
 /// The first public-CLI guard for rendering a caught flat-seven exception.
 #[test]
 fn a_caught_flat_seven_exception_still_renders() {

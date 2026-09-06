@@ -106,6 +106,19 @@ status: accepted
   adding `@dataclass` does not make a class under a builtin exception name
   renderable``.
 
+  The gate judges the *expression*, not only its type: `pycc_mir` erases
+  `cast(T, v)` to `v` and its `__repr__` rewrite keys on the erased value's
+  own class, so a representation-preserving upcast from a non-dataclass
+  subclass to a `@dataclass` base (`print(cast(Base, d))` with `class
+  Derived(Base): pass`) passes `check_cast`, reads as `Base` to a type-only
+  gate, and still reaches codegen's `to_str` panic as a `Derived`.
+  `reject_unrenderable_expr` therefore re-judges the value under every
+  erased `cast` (nested casts included; a user `def cast` is an ordinary
+  call and is not looked through), naming the erased class in the message.
+  Binding the cast first (`b: Base = cast(Base, d); print(b)`) is a
+  different, pre-existing codegen failure (`local type drifted`) outside
+  this decision.
+
   A generic `@dataclass` (`@dataclass class Box[T]: n: int`) must render in
   every monomorphized specialization. `check` infers `print(Box[int](1))`
   against the origin class and accepts it; `build` re-infers the rewritten
