@@ -126,7 +126,8 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             // The shared `annotation_to_ty` rejects it outright, so it is
             // stripped here -- the one position where it is legal -- before
             // the annotation is resolved.
-            let (annotation, is_class_var) = strip_class_var(&ann.annotation)?;
+            let stripped = strip_class_var(&ann.annotation)?;
+            let is_class_var = stripped.is_class_var;
             if !is_dataclass {
                 // PEP 526 (#911, Part 1 of #885): an *annotated* class-level
                 // attribute with a literal initializer is a compile-time
@@ -135,7 +136,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
                 // below.
                 class_attrs.push(lower_class_attr(
                     ann,
-                    annotation,
+                    stripped,
                     class_name,
                     type_param,
                     aliases,
