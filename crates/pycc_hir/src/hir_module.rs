@@ -330,13 +330,14 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
 /// a stdlib registry entry.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportBinding {
-    /// `import math` -- binds `math` (or, for a dotted-but-single-segment
-    /// name, whatever `local_name` ends up being; D-137 rejects every
-    /// import shape other than a single bare recognized module name, so in
-    /// practice `local_name` always equals the resolved module's source
-    /// spelling) as a module namespace marker. `math` itself never carries
-    /// a `Ty` -- only `math.<attr>` attribute access on this bound name
-    /// resolves further, via `pycc_std::resolve_symbol`.
+    /// `import math` -- binds `math` as a module namespace marker; `import
+    /// math as m` (Part 1 of #883, #962) binds `m` instead, so `local_name`
+    /// is the alias when one is written and the module's canonical
+    /// spelling (`pycc_std::module_name`) otherwise. `math` itself never
+    /// carries a `Ty` -- only `<local_name>.<attr>` attribute access on
+    /// this bound name resolves further, via `pycc_std::resolve_symbol`,
+    /// and the lowered HIR always spells the result with the canonical
+    /// module name (`"math.sqrt"`), never the alias.
     Module {
         local_name: String,
         module: pycc_std::StdModule,

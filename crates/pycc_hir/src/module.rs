@@ -410,6 +410,7 @@ fn lower_top_level_item<'a>(
             &state.class_defs,
             &state.items,
             &state.class_asts,
+            &state.imports,
         )?;
         // D-154 Part 1's own post-merge review finding: two module-level
         // classes sharing a name would each lower their own `__init__`
@@ -525,7 +526,9 @@ fn lower_top_level_item<'a>(
         ));
     }
     let item = match stmt {
-        Stmt::FunctionDef(def) => lower_function(def, &state.aliases, &class_name_defs)?,
+        Stmt::FunctionDef(def) => {
+            lower_function(def, &state.aliases, &class_name_defs, &state.imports)?
+        }
         other => HirItem::TopLevelStmt(stmt::lower_stmt(
             other,
             &state.aliases,
@@ -537,6 +540,7 @@ fn lower_top_level_item<'a>(
             None,
             None,
             &class_name_defs,
+            &state.imports,
         )?),
     };
     let span = statement_span(stmt);
@@ -626,13 +630,13 @@ pub(crate) fn poisonable_names(stmt: &Stmt) -> Vec<&str> {
         }
         Stmt::Import(import) => {
             // `import::lower_import_stmt` accepts exactly one shape: a single
-            // alias, no `asname`, and a module name `pycc_std` resolves. The
-            // condition is exact rather than an approximation of that arm --
-            // its earlier `ResolvedImport::Found` branch cannot fire for a
+            // alias (with or without an `asname` -- Part 1 of #883, #962) and
+            // a module name `pycc_std` resolves. The condition is exact
+            // rather than an approximation of that arm -- its earlier
+            // `ResolvedImport::Found` branch cannot fire for a
             // stdlib-resolving name, because `project_import_request` returns
             // `None` for one, so no answer is ever recorded for its span.
             if let [alias] = import.names.as_slice()
-                && alias.asname.is_none()
                 && pycc_std::resolve_module(alias.name.as_str()).is_some()
             {
                 return Vec::new();

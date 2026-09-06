@@ -19,7 +19,7 @@ use super::{
     PropertyDef, classify_decorator, collect_init_attrs, is_declaration_body, is_scalar_slot_type,
     lower_method,
 };
-use crate::{HirItem, Ty, unsupported};
+use crate::{HirItem, ImportBinding, Ty, unsupported};
 use pycc_ast::{Expr, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
@@ -46,6 +46,10 @@ pub(super) struct ClassBodyInput<'a> {
     pub(super) mro: &'a [String],
     /// Every class lowered before this one.
     pub(super) defined_classes: &'a [(String, HirClassDef)],
+    /// The module's import table as it stands at this class (Part 1 of
+    /// #883, #962), forwarded to every method body so an aliased stdlib
+    /// receiver (`m.sqrt(x)` after `import math as m`) lowers there too.
+    pub(super) imports: &'a [ImportBinding],
 }
 
 /// The tables the class-body walk accumulates, handed back to
@@ -88,6 +92,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
         class_name_defs,
         mro,
         defined_classes,
+        imports,
     } = input;
     let mut methods: Vec<(String, String)> = Vec::new();
     let mut items: Vec<HirItem> = Vec::new();
@@ -345,6 +350,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             aliases,
             &kind,
             class_name_defs,
+            imports,
         )?;
         if method_name == "__init__" {
             init_seen = true;

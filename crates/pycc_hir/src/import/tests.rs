@@ -356,6 +356,18 @@ fn project_import_requests_skips_everything_the_stdlib_registry_answers() {
             (0, Some("pkg.sub"), 1),
         ]
     );
+    // Part 1 of #883 (#962) keeps the driver contract unchanged: an
+    // aliased `import geometry as g` is still never requested (project
+    // module aliasing is Part 3, #964), so the driver never sees one --
+    // the single `geometry` request above is the bare `import geometry`.
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.module.as_deref() == Some("geometry"))
+            .count(),
+        1,
+        "an aliased project import must not be requested: {requests:#?}"
+    );
 }
 
 #[test]

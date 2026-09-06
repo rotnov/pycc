@@ -49,7 +49,7 @@
 
 use super::lower_body;
 use crate::class::ClassAnnotationInfo;
-use crate::{HirExceptHandler, Ty, unsupported};
+use crate::{HirExceptHandler, ImportBinding, Ty, unsupported};
 use pycc_ast::{ExceptHandler, Expr};
 use pycc_diag::Diagnostic;
 
@@ -107,6 +107,7 @@ pub(super) fn lower_except_handler(
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
+    imports: &[ImportBinding],
 ) -> Result<HirExceptHandler, Diagnostic> {
     let pycc_ast::ExceptHandler::ExceptHandler(handler) = handler;
     let exc_type = handler
@@ -159,6 +160,7 @@ pub(super) fn lower_except_handler(
         class_name,
         type_param,
         class_defs,
+        imports,
     )?;
     Ok(HirExceptHandler {
         exc_type,
