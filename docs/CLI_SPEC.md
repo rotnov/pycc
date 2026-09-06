@@ -88,8 +88,10 @@ scan can attribute (D-233; a call whose name is shadowed, rebound, or
 otherwise outside the scan's enumerated limits falls through to the type
 checker's span-less guard at `1:1` instead), so one item can contribute
 several diagnostics; an item whose only
-failure is a reference to a class or type alias that itself failed to lower is
-skipped silently rather than reported as a second gap (D-219). The type
+failure is a reference to a class or type alias that itself failed to lower
+contributes no lowering diagnostic of its own rather than a second gap (D-219);
+the enum-call scan still runs on such an item, so a call to another, valid
+enum class inside it is still reported. The type
 checker reports one diagnostic per failing function (D-220). A pre-check
 failure (an incompatible redefinition or attribute redeclaration) is
 reported alone. Otherwise, if the private-helper solver's list is
