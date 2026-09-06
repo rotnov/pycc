@@ -845,3 +845,126 @@ fn an_instance_class_attribute_read_folds_to_its_constant() {
     });
     assert_eq!(attr_count, Some(1));
 }
+
+/// #960: when a sibling MRO base contributes an instance slot of the same
+/// name, the instance read resolves to that slot instead of folding the class
+/// attribute. `reject_class_attr_collisions` never compares two independent
+/// sibling bases with each other, so this shape is legal, and
+/// `pycc_types::class::resolve_attr_get` already answers it CPython's way --
+/// this pins `pycc_mir` to the same order.
+#[test]
+fn a_sibling_bases_instance_slot_wins_over_a_class_attribute() {
+    use pycc_hir::ClassAttrValue;
+
+    let slot_ty = Ty::Instance(Box::new("Slotted".to_string()));
+    let init = HirItem::Function {
+        name: "Slotted.__init__".to_string(),
+        params: vec![("self".to_string(), slot_ty)],
+        return_ty: Ty::None,
+        body: vec![
+            HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+            HirStmt::Return(None),
+        ],
+    };
+    let base_def = |name: &str,
+                    attrs: Vec<(String, Ty)>,
+                    class_attrs: Vec<(String, Ty, ClassAttrValue)>,
+                    methods: Vec<(String, String)>,
+                    mro: Vec<String>| {
+        (
+            name.to_string(),
+            HirClassDef {
+                class_attrs,
+                exception_type_tag: None,
+                name: name.to_string(),
+                bases: Vec::new(),
+                mro,
+                attrs,
+                methods,
+                type_param: None,
+                properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
+                is_enum: false,
+                enum_members: Vec::new(),
+                is_dataclass: false,
+                dataclass_fields: Vec::new(),
+                is_protocol: false,
+                runtime_checkable: false,
+                protocol_members: Vec::new(),
+                abstract_methods: Vec::new(),
+                is_abstract: false,
+            },
+        )
+    };
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            init,
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "d".to_string(),
+                value: HirExpr::Call {
+                    callee: "Derived".to_string(),
+                    args: vec![],
+                },
+            }),
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "v".to_string(),
+                value: HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("d".to_string())),
+                    attr: "x".to_string(),
+                },
+            }),
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: vec![
+            base_def(
+                "Slotted",
+                vec![("x".to_string(), Ty::Int)],
+                Vec::new(),
+                vec![("__init__".to_string(), "Slotted.__init__".to_string())],
+                vec!["Slotted".to_string()],
+            ),
+            base_def(
+                "Constant",
+                Vec::new(),
+                vec![("x".to_string(), Ty::Int, ClassAttrValue::Int(2))],
+                Vec::new(),
+                vec!["Constant".to_string()],
+            ),
+            base_def(
+                "Derived",
+                Vec::new(),
+                Vec::new(),
+                vec![("__init__".to_string(), "Slotted.__init__".to_string())],
+                vec![
+                    "Derived".to_string(),
+                    "Slotted".to_string(),
+                    "Constant".to_string(),
+                ],
+            ),
+        ],
+    };
+    let mir = build(&hir);
+    let read = mir.items.iter().find_map(|item| match item {
+        MirItem::TopLevelStmt(MirStmt::Assign { target, value }) if target == "v" => {
+            Some(value.clone())
+        }
+        _ => None,
+    });
+    match read {
+        Some(MirExpr::AttrGet { slot, ty, .. }) => {
+            assert_eq!(slot, 0, "`Slotted.x` is the derived class's only slot");
+            assert_eq!(ty, Ty::Int);
+        }
+        other => panic!(
+            "the sibling base's instance slot must win over `Constant.x`'s folded \
+             constant, but the read lowered to {other:?}"
+        ),
+    }
+}
