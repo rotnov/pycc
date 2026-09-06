@@ -109,8 +109,11 @@ pub struct LoweredModule {
 
 /// Lowers every top-level item of a parsed module, collecting one
 /// diagnostic per failing item (in source order) plus, per item, one
-/// `C0001` for every call to an enum class it contains (#921, #944,
-/// `class::enum_call`, D-233), and skipping a failing item; the `Err` is
+/// `C0001` for every call to an enum class that the scan can attribute
+/// (#921, #944, `class::enum_call`, D-233 -- a call the scan's documented
+/// limits suppress, such as one whose name another module-level statement
+/// also binds, lowers `Ok` here and is caught by the type checker's
+/// span-less guard instead), and skipping a failing item; the `Err` is
 /// never empty (D-219, Part 2 of #864). The single-file
 /// entry: exactly `lower_module` with no project imports answered,
 /// followed by `program::finalize` -- the same phases in the same order as
@@ -152,8 +155,11 @@ pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
 /// after a skipped `A` silences a following `class C(B)`. A later item
 /// that binds a poisoned name and lowers successfully un-poisons it.
 /// Nothing before the first failing item is ever skipped, and that item's
-/// diagnostic is pushed unconditionally (the set is still empty), so the
-/// first collected diagnostic is byte-identical to the pre-#867 single
+/// diagnostic is pushed unconditionally (the set is still empty). Since
+/// #944 (D-233 decision 4) the first collected diagnostic is not always
+/// that item's own: an enum-call `C0001` scanned from an earlier,
+/// successfully lowered item precedes it in loop order. The first
+/// *lowering* diagnostic is still byte-identical to the pre-#867 single
 /// diagnostic (D-217 rule 2).
 pub fn lower_module(
     module: &ModModule,
