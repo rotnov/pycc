@@ -237,3 +237,4 @@ current.
 | [D-228](./D-228-lower-parameterized-container-type-annotations.md) | Lower parameterized container type annotations in parameter, local- and module-variable and type-alias positions | accepted |
 | [D-229](./D-229-reserve-from-future-import-as-a-compile-time-directive.md) | Reserve `from __future__ import ...` as a compile-time directive at both import sites | accepted |
 | [D-230](./D-230-bind-public-evidence-to-ordered-immutable-executions.md) | Bind public evidence to ordered immutable executions | accepted |
+| [D-231](./D-231-lower-stdlib-import-x-as-y-to-canonical-names-with-an.md) | Lower stdlib `import X as Y` to canonical names with an alias-aware receiver shadow check | accepted |

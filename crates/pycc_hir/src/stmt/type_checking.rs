@@ -55,8 +55,8 @@
 //!   non-body parts do not lower (see the recursion gate above).
 
 use super::ExceptStarCtx;
-use crate::context_invalid;
 use crate::expr::{lower_expr, lower_range_call};
+use crate::{ImportBinding, context_invalid};
 use pycc_ast::{ExceptHandler, Expr, Stmt};
 use pycc_diag::Diagnostic;
 
@@ -127,6 +127,10 @@ struct Ctx<'a> {
     in_finally: bool,
     except_star: ExceptStarCtx,
     class_name: Option<&'a str>,
+    /// The module's import table (Part 1 of #883, #962), forwarded to
+    /// `lower_expr` so an aliased stdlib receiver inside a guarded body
+    /// lowers exactly as it would outside one.
+    imports: &'a [ImportBinding],
 }
 
 /// Re-checks a `TYPE_CHECKING`-guarded body for the context violations the
@@ -140,6 +144,7 @@ pub(super) fn check_guarded_body(
     in_finally: bool,
     except_star: ExceptStarCtx,
     class_name: Option<&str>,
+    imports: &[ImportBinding],
 ) -> Result<(), Diagnostic> {
     check_body(
         body,
@@ -149,6 +154,7 @@ pub(super) fn check_guarded_body(
             in_finally,
             except_star,
             class_name,
+            imports,
         },
     )
 }
@@ -190,8 +196,12 @@ fn check_stmt(stmt: &Stmt, ctx: Ctx<'_>) -> Result<(), Diagnostic> {
             // by construction. Only an `L0001` is forwarded -- a `C0001`
             // from an unsupported expression is precisely what the guard
             // exists to permit.
-            if let Err(diagnostic) = lower_expr(&expr_stmt.value, ctx.in_function, ctx.class_name)
-                && diagnostic.code == "L0001"
+            if let Err(diagnostic) = lower_expr(
+                &expr_stmt.value,
+                ctx.in_function,
+                ctx.class_name,
+                ctx.imports,
+            ) && diagnostic.code == "L0001"
             {
                 return Err(diagnostic);
             }
@@ -201,7 +211,14 @@ fn check_stmt(stmt: &Stmt, ctx: Ctx<'_>) -> Result<(), Diagnostic> {
             if !while_stmt.orelse.is_empty() {
                 return Ok(());
             }
-            if lower_expr(&while_stmt.test, ctx.in_function, ctx.class_name).is_err() {
+            if lower_expr(
+                &while_stmt.test,
+                ctx.in_function,
+                ctx.class_name,
+                ctx.imports,
+            )
+            .is_err()
+            {
                 return Ok(());
             }
             return check_body(&while_stmt.body, loop_ctx(ctx));
@@ -222,7 +239,7 @@ fn check_stmt(stmt: &Stmt, ctx: Ctx<'_>) -> Result<(), Diagnostic> {
             if !matches!(for_stmt.target.as_ref(), Expr::Name(_)) {
                 return Ok(());
             }
-            if !for_iterable_lowers(&for_stmt.iter, ctx.in_function, ctx.class_name) {
+            if !for_iterable_lowers(&for_stmt.iter, ctx.in_function, ctx.class_name, ctx.imports) {
                 return Ok(());
             }
             return check_body(&for_stmt.body, loop_ctx(ctx));
@@ -279,7 +296,7 @@ fn loop_ctx(ctx: Ctx<'_>) -> Ctx<'_> {
 }
 
 fn check_if(if_stmt: &pycc_ast::StmtIf, ctx: Ctx<'_>) -> Result<(), Diagnostic> {
-    if lower_expr(&if_stmt.test, ctx.in_function, ctx.class_name).is_err() {
+    if lower_expr(&if_stmt.test, ctx.in_function, ctx.class_name, ctx.imports).is_err() {
         return Ok(());
     }
     check_body(&if_stmt.body, ctx)?;
@@ -288,7 +305,7 @@ fn check_if(if_stmt: &pycc_ast::StmtIf, ctx: Ctx<'_>) -> Result<(), Diagnostic> 
         // the rest of the chain in `lower_elif_else_clauses`, so it aborts
         // the walk of the rest of the chain here too.
         if let Some(test) = &clause.test
-            && lower_expr(test, ctx.in_function, ctx.class_name).is_err()
+            && lower_expr(test, ctx.in_function, ctx.class_name, ctx.imports).is_err()
         {
             return Ok(());
         }
@@ -300,13 +317,18 @@ fn check_if(if_stmt: &pycc_ast::StmtIf, ctx: Ctx<'_>) -> Result<(), Diagnostic> 
 /// Whether `lower_for` would accept this iterable and go on to lower the
 /// loop body. Mirrors the iterable arms of `lower_for`, including
 /// `lower_range_call`'s own rejections of the `range(...)` arguments.
-fn for_iterable_lowers(iter: &Expr, in_function: bool, class_name: Option<&str>) -> bool {
+fn for_iterable_lowers(
+    iter: &Expr,
+    in_function: bool,
+    class_name: Option<&str>,
+    imports: &[ImportBinding],
+) -> bool {
     match iter {
         Expr::Name(_) => true,
         Expr::Call(call) => {
             matches!(call.func.as_ref(), Expr::Name(callee) if callee.id.as_str() == "range")
                 && call.arguments.keywords.is_empty()
-                && lower_range_call(call, in_function, class_name).is_ok()
+                && lower_range_call(call, in_function, class_name, imports).is_ok()
         }
         _ => false,
     }

@@ -261,6 +261,12 @@ pub(super) fn check_with_environment_all(
     mut env: Environment,
     function_local_names: &[Vec<&str>],
 ) -> Result<(), KeyedDiagnostics> {
+    // Part 1 of #883 (#962): this is the common sink of both `Environment`
+    // constructors (`check_with_signatures_all` and
+    // `concrete_function_environment`), so the alias table is filled here
+    // exactly once rather than in each constructor -- a fully annotated
+    // module takes the concrete path and would otherwise never see it.
+    env.std_module_aliases = crate::std_receiver::bind_std_module_aliases(&hir.imports);
     // Issue #22: clear `defined_functions` before the top-level source-order
     // pass. `bind_function` (called by `check_with_signatures_all`'s pass 1
     // or `concrete_function_environment`) adds every function to this set,

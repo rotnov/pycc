@@ -70,6 +70,17 @@ pub struct Environment {
     /// `helper = 1; def helper(): ...; helper = "leaked"` reach codegen with
     /// an `int`-allocated slot stored as `str`.
     pub(crate) def_rebound: HashSet<String>,
+    /// Part 1 of #883 (#962): every `(alias, module)` pair the module's
+    /// import table binds (`import math as m` -> `("m", Math)`), from
+    /// `std_receiver::bind_std_module_aliases`. Read only by the stdlib
+    /// receiver shadow check (`std_receiver::shadowed_std_receiver`) so
+    /// that a local named after an alias rejects `m.sqrt(m)` exactly as a
+    /// local named `math` rejects `math.sqrt(math)`. Filled once, at
+    /// `module::check_with_environment_all`'s entry; legitimately empty
+    /// for the test-only entry points `check_function` /
+    /// `check_generic_function` and the post-check `Environment::new()` in
+    /// `monomorphize`, which have no module context at all.
+    pub(crate) std_module_aliases: Vec<(String, pycc_std::StdModule)>,
     /// Issue #22: function names whose `def` has been encountered so far in
     /// top-level source order. In top-level code, a call to a function not
     /// yet in this set is a static error (matching CPython's `NameError` for

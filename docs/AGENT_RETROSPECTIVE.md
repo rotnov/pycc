@@ -33,6 +33,36 @@ never a merge gate.
 
 ---
 
+## 2026-09-06 — Pushed a status-page edit that overran the byte budget a local checker would have caught
+
+**What happened:** PR [#968](https://github.com/rotnov/pycc/pull/968) (#962)
+added one four-line sentence to `site/status/index.html`. Every local gate
+in the brief passed, including `scripts/check-site.sh` and the manifest
+`source_artifact_sha256` pin. CI's `pages-performance` job then failed with
+`resource budget: HTML status/index.html is 25686 bytes, exceeds 25600 byte
+limit`. The page on `main` was already within 158 bytes of the ceiling, so a
+244-byte addition tipped it. One CI round (about eight minutes of Lighthouse
+plus the rerun) was spent on a check that runs locally in seconds.
+
+**Root cause:** the status-page checklist covered the four pins (sitemap
+`lastmod`, `dateModified`, `check-site.sh` date, manifest sha) but not the
+resource budget, and nothing in the local gate set exercised
+`scripts/check_pages_performance_budget.rb`. Its `--skip-lighthouse` flag
+runs exactly the byte-budget and HTTP-identity phases without the
+Lighthouse dependency, so the miss was a missing local step, not a missing
+tool.
+
+**What fixed it:** cut the sentence to `import math as m` now compiles
+(25504 bytes), re-pinned the manifest sha, and ran the budget checker with
+`--skip-lighthouse` before the second push.
+
+**Lesson:** any edit to a page listed in
+`tests/fixtures/pages-performance-manifest.json` runs
+`ruby scripts/check_pages_performance_budget.rb --skip-lighthouse` locally
+before the push, alongside the four pin rotations. Treat the resource budget
+as a fifth pin: a page near its ceiling turns a one-sentence note into a CI
+failure, so prefer the shortest wording that carries the fact.
+
 ## 2026-09-05 — Delivered a full implementation of an issue a concurrent actor planned and merged twenty minutes behind my plan
 
 **What happened:** iteration 10 implemented

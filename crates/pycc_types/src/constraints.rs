@@ -65,14 +65,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::binop::numeric_result_type;
+use crate::std_receiver::{shadowed_std_receiver, std_qualified_symbol, std_receiver_shadowed};
 use crate::unop::unary_result_type;
 use crate::{
     Environment, annotation_marker_is_not_a_value, cast_marker_is_not_a_value,
     enum_marker_is_not_a_value, is_assignable, is_generic_signature, is_known_callable_builtin,
     is_local, is_marker_kind, marker_is_not_a_value, non_callable_binding, solver,
-    std_constant_is_not_callable, std_function_used_as_a_value, std_qualified_symbol,
-    std_receiver_name, std_receiver_shadowed, std_scalar_to_ty, t0042, ty_contains_param,
-    type_checking_marker_is_not_a_value, unbound_local, unsupported_callable_builtin,
+    std_constant_is_not_callable, std_function_used_as_a_value, std_scalar_to_ty, t0042,
+    ty_contains_param, type_checking_marker_is_not_a_value, unbound_local,
+    unsupported_callable_builtin,
 };
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
@@ -163,6 +164,44 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// and after `bindings` itself, so a real term always takes priority
     /// over a stale opaque marker for the same name.
     pub(crate) opaque_bindings: HashSet<String>,
+    /// Part 1 of #883 (#962): mirror of `Environment::std_module_aliases`
+    /// -- every `(alias, module)` pair the module's import table binds,
+    /// from `std_receiver::bind_std_module_aliases`. Populated on the
+    /// globals environment in `constraints::signatures` and copied into
+    /// each per-function environment there; the stdlib receiver shadow
+    /// check in `collect_expr_constraints` reads it.
+    pub(crate) std_module_aliases: Vec<(String, pycc_std::StdModule)>,
+}
+
+impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
+    /// An environment with no bindings of any kind and the given local
+    /// names -- the struct-update base every unit-test literal starts
+    /// from, so adding a field here never means editing a hundred test
+    /// literals.
+    #[cfg(test)]
+    pub(crate) fn empty(local_names: &'scope [&'hir str]) -> Self {
+        Self {
+            bindings: HashMap::new(),
+            local_names,
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
+            opaque_bindings: HashSet::new(),
+            std_module_aliases: Vec::new(),
+        }
+    }
+
+    /// Whether `receiver` is bound at this use site, for the solver's
+    /// stdlib-receiver shadow check (`shadowed_std_receiver`): a term
+    /// binding (a maybe-bound name's term stays in `bindings` -- only
+    /// unification consults `maybe_bindings` -- so `Maybe` is covered), a
+    /// `def` rebinding (the `defs_rebound` mirror of the validation pass's
+    /// `def_rebound`, never a position-blind signature lookup), or a
+    /// syntactic local of the enclosing function.
+    fn is_std_receiver_bound(&self, receiver: &str) -> bool {
+        self.bindings.contains_key(receiver)
+            || self.defs_rebound.contains(receiver)
+            || is_local(self.local_names, receiver)
+    }
 }
 
 fn fresh_variable(parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>>) -> usize {
@@ -425,9 +464,12 @@ pub(crate) fn collect_expr_constraints(
             // in this function handles for that hand-recognized name (see
             // `std_receiver_shadowed`'s own doc comment).
             if let Some(symbol) = std_qualified_symbol(name) {
-                let receiver = std_receiver_name(name);
-                if env.bindings.contains_key(receiver) || is_local(env.local_names, receiver) {
-                    return Err(std_receiver_shadowed(name));
+                if let Some(shadowed) =
+                    shadowed_std_receiver(symbol.module, &env.std_module_aliases, |receiver| {
+                        env.is_std_receiver_bound(receiver)
+                    })
+                {
+                    return Err(std_receiver_shadowed(shadowed, symbol.module));
                 }
                 return match symbol.kind {
                     pycc_std::StdSymbolKind::Constant { ty } => Ok(Some(Ok(std_scalar_to_ty(ty)))),
@@ -693,12 +735,15 @@ pub(crate) fn collect_expr_constraints(
                 return Ok(None);
             }
             if let Some(symbol) = std_qualified_symbol(callee) {
-                // Post-review finding: see `std_receiver_shadowed`'s own
-                // doc comment -- a real local/parameter named `math`
+                // See `shadowed_std_receiver`'s own doc comment -- a real
+                // local/parameter named `math` (or an alias of it, #962)
                 // shadows the stdlib module.
-                let receiver = std_receiver_name(callee);
-                if env.bindings.contains_key(receiver) || is_local(env.local_names, receiver) {
-                    return Err(std_receiver_shadowed(callee));
+                if let Some(shadowed) =
+                    shadowed_std_receiver(symbol.module, &env.std_module_aliases, |receiver| {
+                        env.is_std_receiver_bound(receiver)
+                    })
+                {
+                    return Err(std_receiver_shadowed(shadowed, symbol.module));
                 }
                 let pycc_std::StdSymbolKind::Function {
                     arg_tys: expected_arg_tys,

@@ -1073,6 +1073,41 @@ fn an_attribute_named_type_checking_on_another_receiver_is_not_folded() {
 }
 
 #[test]
+fn an_attribute_named_type_checking_on_a_nested_receiver_is_not_folded() {
+    // #962: the qualified-form arm only consults the alias table when the
+    // receiver is a bare name. A nested attribute receiver
+    // (`outer.inner.TYPE_CHECKING`) can never be a module alias, so it must
+    // fall through to ordinary lowering exactly like any other attribute
+    // read named `TYPE_CHECKING`.
+    let module = pycc_parser_test_helper::parse("if outer.inner.TYPE_CHECKING:\n    print(1)\n");
+    let hir = lower_checked(&module).unwrap();
+    let HirItem::TopLevelStmt(HirStmt::If { test, body, orelse }) = &hir.items[0] else {
+        panic!(
+            "expected the `if` statement to lower to `HirStmt::If`, got {:?}",
+            hir.items[0]
+        );
+    };
+    assert_eq!(
+        *test,
+        HirExpr::AttrGet {
+            base: Box::new(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("outer".to_string())),
+                attr: "inner".to_string(),
+            }),
+            attr: "TYPE_CHECKING".to_string(),
+        }
+    );
+    assert_eq!(
+        *body,
+        vec![HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::IntLiteral(1)],
+        })]
+    );
+    assert_eq!(*orelse, Vec::<HirStmt>::new());
+}
+
+#[test]
 fn lowers_the_else_branch_of_a_type_checking_guard_normally() {
     // #790: only the `TYPE_CHECKING` branch itself is dead code -- an
     // `else` clause is live at runtime whenever the guard is skipped, so it
@@ -3250,7 +3285,7 @@ fn lower_comprehension_header_rejects_an_empty_generators_slice() {
     // span-fallback expression at all (D-014's region coverage gate
     // would otherwise flag that fallback as an uncoverable dead
     // branch).
-    let err = lower_comprehension_header(&[], None).unwrap_err();
+    let err = lower_comprehension_header(&[], None, &[]).unwrap_err();
     assert_eq!(err.code, "C0001");
     assert!(
         err.message
@@ -4021,12 +4056,318 @@ fn from_enum_import_enum_binds_enum_marker() {
     );
 }
 
+// Part 1 of #883 (#962): `import <stdlib module> as <alias>` lowers and
+// binds the alias; every `<alias>.<attr>` receiver resolves through that
+// binding to the module's canonical spelling.
+
+fn print_call(arg: HirExpr) -> Vec<HirItem> {
+    vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+        callee: "print".to_string(),
+        args: vec![arg],
+    }))]
+}
+
 #[test]
-fn import_math_as_m_is_c0001() {
+fn import_math_as_m_binds_the_alias_to_the_module() {
     let module = pycc_parser_test_helper::parse("import math as m\n");
+    let hir = lower_checked(&module).expect("`import math as m` must lower");
+
+    assert_eq!(
+        hir.imports,
+        vec![ImportBinding::Module {
+            local_name: "m".to_string(),
+            module: pycc_std::StdModule::Math,
+        }]
+    );
+}
+
+#[test]
+fn aliased_math_sqrt_call_lowers_to_the_canonical_callee() {
+    let module = pycc_parser_test_helper::parse("import math as m\nprint(m.sqrt(2.0))\n");
+    let hir = lower_checked(&module).expect("m.sqrt(...) must lower");
+
+    // The alias never reaches the HIR string: `pycc_mir`/`pycc_codegen`
+    // match the literal `"math.sqrt"`.
+    assert_eq!(
+        hir.items,
+        print_call(HirExpr::Call {
+            callee: "math.sqrt".to_string(),
+            args: vec![HirExpr::FloatLiteral(2.0)],
+        })
+    );
+}
+
+#[test]
+fn aliased_math_pi_reference_lowers_to_the_canonical_name() {
+    let module = pycc_parser_test_helper::parse("import math as m\nprint(m.pi)\n");
+    let hir = lower_checked(&module).expect("m.pi must lower");
+
+    assert_eq!(hir.items, print_call(HirExpr::Name("math.pi".to_string())));
+}
+
+#[test]
+fn aliased_unregistered_call_names_the_alias_in_its_diagnostic() {
+    let module = pycc_parser_test_helper::parse("import math as m\nm.tan(1.0)\n");
     let diagnostic = lower_checked(&module).unwrap_err();
 
     assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "module `math` (imported as `m`) has no importable symbol named `tan`"
+    );
+}
+
+#[test]
+fn aliased_unregistered_attribute_names_the_alias_in_its_diagnostic() {
+    let module = pycc_parser_test_helper::parse("import math as m\nprint(m.tau)\n");
+    let diagnostic = lower_checked(&module).unwrap_err();
+
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "module `math` (imported as `m`) has no attribute `tau`"
+    );
+}
+
+#[test]
+fn canonical_receiver_diagnostics_are_byte_stable() {
+    // The "(imported as ...)" suffix is appended only when the spelling the
+    // user wrote differs from the canonical one, so the pre-#962 wording
+    // (and every `.expected.txt` fixture pinning it) is unchanged.
+    let module = pycc_parser_test_helper::parse("import math\nmath.tan(1.0)\n");
+    let diagnostic = lower_checked(&module).unwrap_err();
+    assert_eq!(
+        diagnostic.message,
+        "module `math` has no importable symbol named `tan`"
+    );
+
+    let module = pycc_parser_test_helper::parse("import math\nprint(math.tau)\n");
+    let diagnostic = lower_checked(&module).unwrap_err();
+    assert_eq!(diagnostic.message, "module `math` has no attribute `tau`");
+}
+
+#[test]
+fn the_last_binding_of_an_alias_wins() {
+    // Python rebinding semantics: `m` is `enum` and then `math`.
+    let module =
+        pycc_parser_test_helper::parse("import enum as m\nimport math as m\nprint(m.sqrt(1.0))\n");
+    let hir = lower_checked(&module).expect("the later `import math as m` wins");
+
+    assert_eq!(
+        hir.items,
+        print_call(HirExpr::Call {
+            callee: "math.sqrt".to_string(),
+            args: vec![HirExpr::FloatLiteral(1.0)],
+        })
+    );
+}
+
+#[test]
+fn an_alias_bound_in_the_import_table_beats_the_textual_spelling() {
+    // `import enum as math`: the binding the user wrote wins over the
+    // name's stdlib homonym, pinning `std_receiver`'s alias-first order.
+    let module = pycc_parser_test_helper::parse("import enum as math\nprint(math.Enum)\n");
+    let hir = lower_checked(&module).expect("math.Enum must resolve through the alias");
+
+    assert_eq!(
+        hir.items,
+        print_call(HirExpr::Name("enum.Enum".to_string()))
+    );
+}
+
+#[test]
+fn an_aliased_non_math_module_resolves_through_the_alias() {
+    let module = pycc_parser_test_helper::parse("import enum as e\nprint(e.Enum)\n");
+    let hir = lower_checked(&module).expect("e.Enum must resolve");
+
+    assert_eq!(
+        hir.items,
+        print_call(HirExpr::Name("enum.Enum".to_string()))
+    );
+}
+
+#[test]
+fn an_alias_is_visible_inside_a_function_body_lowered_after_the_import() {
+    let module = pycc_parser_test_helper::parse(
+        "import math as m\ndef f(x: float) -> float:\n    return m.sqrt(x)\n",
+    );
+    let hir = lower_checked(&module).expect("the alias is in scope for `f`");
+
+    let HirItem::Function { body, .. } = &hir.items[0] else {
+        panic!("expected a function item, got {:?}", hir.items[0]);
+    };
+    assert_eq!(
+        *body,
+        vec![HirStmt::Return(Some(HirExpr::Call {
+            callee: "math.sqrt".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        }))]
+    );
+}
+
+#[test]
+fn an_alias_bound_after_the_using_function_is_not_visible_to_it() {
+    // Source-order visibility, exactly like a class or a type alias: the
+    // HIR lowers `m.sqrt(1.0)` as a generic `MethodCall` on an unbound
+    // receiver (a recorded divergence from CPython's late binding), and it
+    // is `pycc_types` that then reports the unbound name.
+    let module = pycc_parser_test_helper::parse(
+        "def f() -> float:\n    return m.sqrt(1.0)\nimport math as m\n",
+    );
+    let hir = lower_checked(&module).expect("the HIR itself lowers");
+
+    let HirItem::Function { body, .. } = &hir.items[0] else {
+        panic!("expected a function item, got {:?}", hir.items[0]);
+    };
+    assert_eq!(
+        *body,
+        vec![HirStmt::Return(Some(HirExpr::MethodCall {
+            base: Box::new(HirExpr::Name("m".to_string())),
+            method: "sqrt".to_string(),
+            args: vec![HirExpr::FloatLiteral(1.0)],
+        }))]
+    );
+}
+
+#[test]
+fn an_aliased_unregistered_module_is_still_c0001() {
+    for source in ["import numpy as np\n", "import geometry as g\n"] {
+        let module = pycc_parser_test_helper::parse(source);
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001", "{source}");
+        assert!(
+            diagnostic.message.ends_with("is not supported yet"),
+            "{source}: {}",
+            diagnostic.message
+        );
+    }
+    let module = pycc_parser_test_helper::parse("import numpy as np\n");
+    assert_eq!(
+        lower_checked(&module).unwrap_err().message,
+        "import of module `numpy` is not supported yet"
+    );
+}
+
+#[test]
+fn an_aliased_unregistered_module_reports_exactly_one_diagnostic_for_its_uses() {
+    // D-219 cascade suppression: the failed `import numpy as np` poisons
+    // `np`, and `np.array(1)` lowers as a generic `MethodCall` on the
+    // poisoned name, so the only diagnostic is the import's own `C0001`.
+    let module = pycc_parser_test_helper::parse("import numpy as np\nprint(np.array(1))\n");
+    let diagnostics = lower_all(&module).unwrap_err();
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        diagnostics[0].message,
+        "import of module `numpy` is not supported yet"
+    );
+}
+
+#[test]
+fn folds_a_type_checking_guard_through_a_typing_alias() {
+    // Part 1 of #883 (#962): `import typing as t` + `if t.TYPE_CHECKING:`
+    // folds exactly like the bare `typing.TYPE_CHECKING` spelling.
+    let module = pycc_parser_test_helper::parse(
+        "import typing as t\nif t.TYPE_CHECKING:\n    import some_module_that_does_not_exist_at_runtime_or_compile_time\n",
+    );
+    let hir = lower_checked(&module).unwrap();
+    assert_eq!(
+        hir.items,
+        vec![HirItem::TopLevelStmt(HirStmt::If {
+            test: HirExpr::BoolLiteral(false),
+            body: vec![],
+            orelse: vec![],
+        })]
+    );
+}
+
+#[test]
+fn folds_an_elif_type_checking_guard_through_a_typing_alias() {
+    let module = pycc_parser_test_helper::parse(
+        "import typing as t\nif False:\n    print(1)\nelif t.TYPE_CHECKING:\n    import some_module_that_does_not_exist_at_runtime_or_compile_time\nelse:\n    print(2)\n",
+    );
+    let hir = lower_checked(&module).unwrap();
+    assert_eq!(
+        hir.items,
+        vec![HirItem::TopLevelStmt(HirStmt::If {
+            test: HirExpr::BoolLiteral(false),
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            })],
+            orelse: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(false),
+                body: vec![],
+                orelse: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::IntLiteral(2)],
+                })],
+            }],
+        })]
+    );
+}
+
+#[test]
+fn a_type_checking_attribute_on_an_alias_of_another_module_is_not_folded() {
+    // The guard folds only through an alias of `typing`; an alias of
+    // `math` reaches the ordinary attribute path and its diagnostic.
+    let module =
+        pycc_parser_test_helper::parse("import math as t\nif t.TYPE_CHECKING:\n    print(1)\n");
+    let diagnostic = lower_checked(&module).unwrap_err();
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "module `math` (imported as `t`) has no attribute `TYPE_CHECKING`"
+    );
+}
+
+#[test]
+fn a_type_checking_attribute_on_a_rebound_typing_alias_is_not_folded() {
+    // D-068 review of #962: the fold must honour last-binding-wins exactly
+    // like every other stdlib receiver. After `import typing as t` is
+    // rebound by `import enum as t`, the live `t` is `enum`, CPython raises
+    // `AttributeError` on `t.TYPE_CHECKING`, and folding the guard would
+    // silently discard that -- so the test must reach the ordinary
+    // attribute path and its diagnostic instead.
+    let module = pycc_parser_test_helper::parse(
+        "import typing as t\nimport enum as t\nif t.TYPE_CHECKING:\n    print(1)\n",
+    );
+    let diagnostic = lower_checked(&module).unwrap_err();
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "module `enum` (imported as `t`) has no attribute `TYPE_CHECKING`"
+    );
+}
+
+#[test]
+fn a_type_checking_attribute_on_typing_rebound_to_another_module_is_not_folded() {
+    // The textual `typing.` spelling folds through `std_receiver`'s
+    // fallback only while no alias rebinds `typing` itself.
+    let module = pycc_parser_test_helper::parse(
+        "import math as typing\nif typing.TYPE_CHECKING:\n    print(1)\n",
+    );
+    let diagnostic = lower_checked(&module).unwrap_err();
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "module `math` (imported as `typing`) has no attribute `TYPE_CHECKING`"
+    );
+}
+
+#[test]
+fn a_class_named_like_an_import_alias_collides_with_it() {
+    let module = pycc_parser_test_helper::parse(
+        "import math as m\nclass m:\n    def __init__(self) -> None:\n        self.v = 1\n",
+    );
+    let diagnostic = lower_checked(&module).unwrap_err();
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic
+            .message
+            .contains("class `m` collides with an import of the same name"),
+        "{}",
+        diagnostic.message
+    );
 }
 
 #[test]

@@ -5,7 +5,7 @@
 
 use super::{ExceptStarCtx, lower_body, lower_range_call};
 use crate::class::ClassAnnotationInfo;
-use crate::{HirStmt, Ty, context_invalid, unsupported};
+use crate::{HirStmt, ImportBinding, Ty, context_invalid, unsupported};
 use pycc_ast::{Expr, StmtFor};
 use pycc_diag::Diagnostic;
 
@@ -13,6 +13,7 @@ use pycc_diag::Diagnostic;
 /// in range(...)` to `HirStmt::ForRange`; every other iterable shape is a
 /// `C0001`. `async for` is context-invalid (D-148) because no `async def`
 /// body is ever lowered today.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn lower_for(
     for_stmt: &StmtFor,
     aliases: &[(String, Ty)],
@@ -21,6 +22,7 @@ pub(super) fn lower_for(
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
+    imports: &[ImportBinding],
 ) -> Result<HirStmt, Diagnostic> {
     if for_stmt.is_async {
         // `async for` is only valid Python syntax inside an `async
@@ -75,6 +77,7 @@ pub(super) fn lower_for(
                 class_name,
                 type_param,
                 class_defs,
+                imports,
             )?,
         });
     }
@@ -111,7 +114,7 @@ pub(super) fn lower_for(
             call.range,
         ));
     }
-    let (start, stop, step) = lower_range_call(call, in_function, class_name)?;
+    let (start, stop, step) = lower_range_call(call, in_function, class_name, imports)?;
     Ok(HirStmt::ForRange {
         var: var.id.to_string(),
         start,
@@ -130,6 +133,7 @@ pub(super) fn lower_for(
             class_name,
             type_param,
             class_defs,
+            imports,
         )?,
     })
 }

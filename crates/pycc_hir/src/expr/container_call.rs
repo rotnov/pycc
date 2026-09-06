@@ -14,7 +14,7 @@
 
 use super::lower_expr;
 use crate::int_boundary::check_boundary_literal;
-use crate::{HirExpr, unsupported};
+use crate::{HirExpr, ImportBinding, unsupported};
 use pycc_ast::Expr;
 use pycc_diag::Diagnostic;
 
@@ -27,12 +27,19 @@ pub(super) fn lower_container_method_call(
     attr: &pycc_ast::ExprAttribute,
     in_function: bool,
     class_name: Option<&str>,
+    imports: &[ImportBinding],
 ) -> Option<Result<HirExpr, Diagnostic>> {
     match attr.attr.as_str() {
-        "append" => Some(lower_list_append(call, attr, in_function, class_name)),
+        "append" => Some(lower_list_append(
+            call,
+            attr,
+            in_function,
+            class_name,
+            imports,
+        )),
         "pop" => Some(lower_list_pop(call, attr)),
-        "get" => Some(lower_dict_get(call, attr, in_function, class_name)),
-        "add" => Some(lower_set_add(call, attr, in_function, class_name)),
+        "get" => Some(lower_dict_get(call, attr, in_function, class_name, imports)),
+        "add" => Some(lower_set_add(call, attr, in_function, class_name, imports)),
         _ => None,
     }
 }
@@ -42,6 +49,7 @@ fn lower_list_append(
     attr: &pycc_ast::ExprAttribute,
     in_function: bool,
     class_name: Option<&str>,
+    imports: &[ImportBinding],
 ) -> Result<HirExpr, Diagnostic> {
     let Expr::Name(list_name) = attr.value.as_ref() else {
         return Err(unsupported(
@@ -59,7 +67,7 @@ fn lower_list_append(
         ));
     };
     let value_span = pycc_ast::expr_range(value);
-    let value = lower_expr(value, in_function, class_name)?;
+    let value = lower_expr(value, in_function, class_name, imports)?;
     check_boundary_literal(&value, value_span, "`list.append()` value")?;
     Ok(HirExpr::ListAppend {
         list: list_name.id.as_str().to_string(),
@@ -96,6 +104,7 @@ fn lower_dict_get(
     attr: &pycc_ast::ExprAttribute,
     in_function: bool,
     class_name: Option<&str>,
+    imports: &[ImportBinding],
 ) -> Result<HirExpr, Diagnostic> {
     let Expr::Name(dict_name) = attr.value.as_ref() else {
         return Err(unsupported(
@@ -121,8 +130,8 @@ fn lower_dict_get(
         ));
     };
     let default_span = pycc_ast::expr_range(default);
-    let key = lower_expr(key, in_function, class_name)?;
-    let default = lower_expr(default, in_function, class_name)?;
+    let key = lower_expr(key, in_function, class_name, imports)?;
+    let default = lower_expr(default, in_function, class_name, imports)?;
     check_boundary_literal(&default, default_span, "`dict.get()` default")?;
     Ok(HirExpr::DictGetOrDefault {
         dict: dict_name.id.as_str().to_string(),
@@ -136,6 +145,7 @@ fn lower_set_add(
     attr: &pycc_ast::ExprAttribute,
     in_function: bool,
     class_name: Option<&str>,
+    imports: &[ImportBinding],
 ) -> Result<HirExpr, Diagnostic> {
     let Expr::Name(set_name) = attr.value.as_ref() else {
         return Err(unsupported(
@@ -153,7 +163,7 @@ fn lower_set_add(
         ));
     };
     let value_span = pycc_ast::expr_range(value);
-    let value = lower_expr(value, in_function, class_name)?;
+    let value = lower_expr(value, in_function, class_name, imports)?;
     check_boundary_literal(&value, value_span, "`set.add()` value")?;
     Ok(HirExpr::SetAdd {
         set: set_name.id.as_str().to_string(),

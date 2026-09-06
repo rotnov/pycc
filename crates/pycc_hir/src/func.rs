@@ -15,7 +15,7 @@
 //! resolving unchanged.
 
 use crate::class::ClassAnnotationInfo;
-use crate::{HirItem, Ty, stmt, unsupported};
+use crate::{HirItem, ImportBinding, Ty, stmt, unsupported};
 use pycc_ast::{Expr, Operator};
 use pycc_diag::{Diagnostic, Span};
 
@@ -23,6 +23,7 @@ pub(crate) fn lower_function(
     def: &pycc_ast::StmtFunctionDef,
     aliases: &[(String, Ty)],
     class_defs: &[ClassAnnotationInfo],
+    imports: &[ImportBinding],
 ) -> Result<HirItem, Diagnostic> {
     if def.is_async {
         return Err(unsupported(
@@ -81,6 +82,7 @@ pub(crate) fn lower_function(
         None,
         type_param.as_deref(),
         class_defs,
+        imports,
     )?;
     Ok(HirItem::Function {
         name: def.name.to_string(),

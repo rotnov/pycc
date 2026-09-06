@@ -10,6 +10,7 @@ mod monomorphize;
 mod narrow;
 mod redeclaration;
 mod solver;
+mod std_receiver;
 #[cfg(test)]
 mod tests;
 mod unop;
@@ -86,64 +87,10 @@ fn non_callable_binding(name: &str) -> Diagnostic {
     )
 }
 
-/// D-136: resolves a `HirExpr::Call`/`HirExpr::Name` callee/name string
-/// that `pycc_hir`'s lowering already qualified as `<module>.<symbol>`
-/// (e.g. `"math.sqrt"`, `"math.pi"`) back into its `pycc_std` registry
-/// entry. A real Python identifier can never contain `.`, so `split_once`
-/// finding one is itself sufficient evidence this is a stdlib-qualified
-/// name, not an ordinary user identifier -- no additional import-binding
-/// lookup is needed here (pycc_hir already gated construction of this
-/// shape on a successful `pycc_std::resolve_module`/`resolve_symbol`
-/// lookup at lowering time; re-resolving here is cheap and idempotent).
-fn std_qualified_symbol(name: &str) -> Option<pycc_std::StdSymbol> {
-    let (module_name, symbol_name) = name.split_once('.')?;
-    let module = pycc_std::resolve_module(module_name)?;
-    pycc_std::resolve_symbol(module, symbol_name)
-}
-
 fn std_scalar_to_ty(kind: pycc_std::ScalarKind) -> Ty {
     match kind {
         pycc_std::ScalarKind::Float => Ty::Float,
     }
-}
-
-/// The module-prefix portion of a `pycc_hir`-qualified stdlib name
-/// (`"math"` from `"math.sqrt"`), used only for the shadowing check
-/// `std_receiver_is_shadowed` performs -- kept separate from
-/// `std_qualified_symbol` above so a caller can check shadowing before
-/// (not after) treating the name as a confirmed stdlib reference.
-fn std_receiver_name(qualified_name: &str) -> &str {
-    qualified_name
-        .split_once('.')
-        .map_or(qualified_name, |(receiver, _)| receiver)
-}
-
-/// D-136 (post-review finding): `pycc_hir::lower_expr` resolves
-/// `math.sqrt`/`math.pi` textually against the receiver's bare source
-/// name (`"math"`), with no visibility into whether that name is actually
-/// shadowed by a real local binding at the same call site (e.g. `def
-/// f(math: float) -> float: return math.sqrt(math)` -- a legal Python
-/// parameter named `math`). Real CPython would raise `AttributeError`
-/// there (`float` has no `.sqrt` attribute), not silently call libm's
-/// `sqrt`. `pycc_types` is the first stage with real binding-scope
-/// information (`env`/`local_names`), so this check happens here rather
-/// than in `pycc_hir` -- mirroring `float`'s own existing
-/// user-definition-takes-priority guard (`env.lookup_function(callee).is_none()`
-/// in `infer_expr_in`, `!signatures.contains_key(callee)` in
-/// `collect_expr_constraints`), which solves the same class of problem
-/// (a hand-recognized name colliding with a real user binding) for a
-/// different hand-recognized name.
-fn std_receiver_shadowed(qualified_name: &str) -> Diagnostic {
-    Diagnostic::error(
-        "C0001",
-        format!(
-            "`{}` is a local name here, not the stdlib `{}` module -- attribute access on a \
-             non-module value is not supported yet",
-            std_receiver_name(qualified_name),
-            std_receiver_name(qualified_name)
-        ),
-        Span::new(0, 0),
-    )
 }
 
 /// A stdlib function symbol (e.g. `math.sqrt`) referenced without a call

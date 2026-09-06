@@ -12,7 +12,7 @@ fn lower_pattern_rejects_bare_match_star() {
         range: Default::default(),
         name: None,
     });
-    let err = lower_pattern(&star, false, None).unwrap_err();
+    let err = lower_pattern(&star, false, None, &[]).unwrap_err();
     assert_eq!(err.code, "C0001");
     assert!(
         err.message
@@ -37,7 +37,7 @@ fn lower_pattern_as_with_no_name_produces_empty_name() {
         pattern: Some(Box::new(inner)),
         name: None,
     });
-    let result = lower_pattern(&as_pat, false, None).unwrap();
+    let result = lower_pattern(&as_pat, false, None, &[]).unwrap();
     assert_eq!(
         result,
         HirPattern::As(

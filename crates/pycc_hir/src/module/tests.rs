@@ -360,10 +360,12 @@ fn poisonable_name_per_statement_kind() {
         // Annotation is not a `Name`.
         ("X: list[int] = []\n", None),
         // A plain `import` binds a name only when it lowers: exactly one
-        // alias, no `asname`, and a module `pycc_std` resolves.
+        // alias (with or without an `asname`, Part 1 of #883) and a module
+        // `pycc_std` resolves.
         ("import math\n", None),
         ("import os\n", Some("os")),
-        ("import math as m\n", Some("m")),
+        ("import math as m\n", None),
+        ("import numpy as np\n", Some("np")),
         ("import pkg.dep\n", Some("pkg")),
         ("import pkg.dep as d\n", Some("d")),
         ("import math, os\n", Some("math")),
@@ -567,15 +569,16 @@ const CLASS_BODY: &str = "    def __init__(self) -> None:\n        self.v = 1\n"
 
 #[test]
 fn a_rejected_plain_import_poisons_its_alias() {
-    // `import x as y` is rejected outright, and the name it would have
-    // bound is `y`, so a later `y` is a cascade while an unrelated name is
-    // still reported.
+    // `import pkg.dep as d` names a dotted module `pycc_std` cannot resolve
+    // (aliasing itself lowers for a stdlib module since Part 1 of #883),
+    // and the name it would have bound is `d`, so a later `d` is a cascade
+    // while an unrelated name is still reported.
     let source = format!("import pkg.dep as d\nclass Foo(d):\n{CLASS_BODY}");
     let diagnostics = lower_all_err(&source);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
     assert_eq!(
         diagnostics[0].message,
-        "`import ... as ...` aliasing is not supported yet"
+        "import of module `pkg.dep` is not supported yet"
     );
 
     let source = format!("import pkg.dep as d\nclass Foo(pkg):\n{CLASS_BODY}");
@@ -773,11 +776,11 @@ fn a_successful_stdlib_from_import_poisons_nothing() {
 const IMPORT_SHAPES: &[&str] = &[
     // `Stmt::Import`: accepted, then one row per rejection branch.
     "import math\n",
+    "import math as m\n", // `asname` on a stdlib module lowers (Part 1 of #883)
     "import enum\n",
     "import os\n",             // module `pycc_std` does not resolve
     "import pkg.dep\n",        // dotted, unresolvable
-    "import math as m\n",      // `asname`
-    "import pkg.dep as d\n",   // `asname`, dotted
+    "import pkg.dep as d\n",   // `asname`, dotted, unresolvable
     "import math, enum\n",     // more than one alias
     "import pkg.dep, other\n", // more than one alias, unresolvable
     // `Stmt::ImportFrom`, stdlib arm: accepted, then its rejection branches.

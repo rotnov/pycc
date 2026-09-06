@@ -281,6 +281,23 @@ pub fn resolve_module(name: &str) -> Option<StdModule> {
     }
 }
 
+/// The canonical source spelling of a [`StdModule`] (`"math"` for
+/// [`StdModule::Math`]) -- the exact inverse of [`resolve_module`], so
+/// `resolve_module(module_name(m)) == Some(m)` for every variant. `pycc_hir`
+/// emits every `<module>.<symbol>` string through this accessor rather than
+/// from the receiver the user wrote, so an aliased receiver (`import math as
+/// m` then `m.sqrt(x)`) still produces the canonical `"math.sqrt"` that
+/// `pycc_types`, `pycc_mir`, and `pycc_codegen` key on.
+pub fn module_name(module: StdModule) -> &'static str {
+    match module {
+        StdModule::Math => "math",
+        StdModule::Enum => "enum",
+        StdModule::Typing => "typing",
+        StdModule::Abc => "abc",
+        StdModule::Dataclasses => "dataclasses",
+    }
+}
+
 /// Every name `module` exports, in registry order -- exactly the names a
 /// `from <module> import *` would have bound. [`resolve_symbol`] answers
 /// "is this one name exported"; a caller reasoning about the whole
@@ -337,6 +354,24 @@ mod tests {
     #[test]
     fn resolve_module_recognizes_dataclasses() {
         assert_eq!(resolve_module("dataclasses"), Some(StdModule::Dataclasses));
+    }
+
+    #[test]
+    fn module_name_round_trips_through_resolve_module_for_every_module() {
+        for module in [
+            StdModule::Math,
+            StdModule::Enum,
+            StdModule::Typing,
+            StdModule::Abc,
+            StdModule::Dataclasses,
+        ] {
+            assert_eq!(resolve_module(module_name(module)), Some(module));
+        }
+        assert_eq!(module_name(StdModule::Math), "math");
+        assert_eq!(module_name(StdModule::Enum), "enum");
+        assert_eq!(module_name(StdModule::Typing), "typing");
+        assert_eq!(module_name(StdModule::Abc), "abc");
+        assert_eq!(module_name(StdModule::Dataclasses), "dataclasses");
     }
 
     #[test]
