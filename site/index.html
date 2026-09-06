@@ -30,7 +30,7 @@
     <meta property="og:site_name" content="pycc">
     <meta property="og:locale" content="en_US">
     <meta property="og:url" content="https://rotnov.github.io/pycc/">
-    <meta property="og:title" content="pycc — Typed Python in. Autonomous artifacts out.">
+    <meta property="og:title" content="pycc — Typed Python in. Native binaries out.">
     <meta
       property="og:description"
       content="A pre-alpha AOT compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM, created by AI and managed by a human."
@@ -42,7 +42,7 @@
     <meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
 
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="pycc — Typed Python in. Autonomous artifacts out.">
+    <meta name="twitter:title" content="pycc — Typed Python in. Native binaries out.">
     <meta
       name="twitter:description"
       content="A pre-alpha AOT compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM, created by AI and managed by a human."
@@ -64,7 +64,7 @@
             "name": "pycc — AOT compiler for typed Python to native binaries",
             "description": "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM; AI-created and human-managed.",
             "inLanguage": "en",
-            "dateModified": "2026-09-05",
+            "dateModified": "2026-09-06",
             "additionalProperty": [
               {
                 "@type": "PropertyValue",
@@ -126,12 +126,13 @@
         <span>pycc</span>
       </a>
       <nav class="site-nav" aria-label="Primary navigation">
-        <a href="language-support/">Language</a>
+        <a href="./" aria-current="page">Home</a>
+        <a href="language-support/">Language support</a>
         <a href="diagnostics/">Diagnostics</a>
-        <a href="status/">Status</a>
-        <a href="architecture/">Architecture</a>
-        <a href="python-aot-compilers/">Compare</a>
-        <a href="ai-native/">AI experiment</a>
+        <a href="architecture/">How it works</a>
+        <a href="status/">Current status</a>
+        <a href="python-aot-compilers/">Compare compilers</a>
+        <a href="ai-native/">AI provenance</a>
         <a class="nav-cta" href="https://github.com/rotnov/pycc">GitHub ↗</a>
       </nav>
     </header>
@@ -148,28 +149,25 @@
         <div class="hero-copy">
           <p class="eyebrow">
             <span class="signal" aria-hidden="true"></span>
-            100% AI-created · Human-managed · Rust + LLVM
+            Pre-alpha · typed Python subset
           </p>
           <h1 id="hero-title">
             Typed Python in.<br>
-            <span>Autonomous artifacts out.</span>
+            <span>Native binaries out.</span>
           </h1>
           <p class="hero-lede">
-            pycc is an open-source ahead-of-time compiler project for standard
-            Python 3.14. Its design contract is to check annotations at compile
-            time, then emit a fast, autonomous deployment artifact—without
-            inventing a new language. Native and pure builds emit standalone
-            executables; planned permitted CPython interop emits a self-contained
-            bundle with its pinned runtime. AI agents create the entire project;
-            a human only manages direction, priorities, and constraints.
+            pycc compiles type-annotated Python before your program runs,
+            producing a standalone native executable for the implemented subset.
+          </p>
+          <p class="hero-boundary">
+            Python 3.14 is the target, not full compatibility. Not ready for production.
           </p>
           <div class="hero-actions">
-            <a class="button button-primary" href="https://github.com/rotnov/pycc">
-              Explore on GitHub
-              <span aria-hidden="true">↗</span>
+            <a class="button button-primary" href="#try">
+              Try the checked example
             </a>
-            <a class="button button-secondary" href="https://github.com/rotnov/pycc/blob/main/docs/SPEC.md">
-              Read the specification
+            <a class="button button-secondary" href="language-support/">
+              Check language support
             </a>
           </div>
           <div class="command">
@@ -288,10 +286,39 @@ i = <span class="code-number">0</span>
         </div>
       </section>
 
+      <section class="section source-evaluation" id="try" aria-labelledby="try-title">
+        <p class="eyebrow">01 · Evaluate pycc</p>
+        <h2 id="try-title">Try the checked example</h2>
+        <p>This example requires a local source build, not a package-manager install.
+          Start with the <a href="https://github.com/rotnov/pycc">source repository</a>,
+          the <a href="https://github.com/rotnov/pycc/blob/main/docs/DISTRIBUTION.md#current-installation-boundary">distribution prerequisites</a>,
+          and the <a href="https://github.com/rotnov/pycc/blob/main/.github/workflows/ci.yml">current CI platform setup</a>.
+          Use the pinned Rust toolchain and LLVM 22.1.1, with <code>LLVM_SYS_221_PREFIX</code> pointing at that LLVM installation.</p>
+        <p>After those prerequisites, run this Unix-shell source-checkout sequence.
+          Windows has separate LLVM/MSVC prerequisites in the distribution guide;
+          this transcript is not an all-platform installation attestation.</p>
+        <pre tabindex="0" aria-label="Unix-shell source evaluation commands"><code>git clone https://github.com/rotnov/pycc.git
+cd pycc
+cargo build --workspace
+./target/debug/pycc run tests/fixtures/quick_start.py</code></pre>
+        <p>The checked fixture prints the Fibonacci sequence from 0 through 55 shown above.
+          This current source flow is separate from the immutable historical build transcript.</p>
+        <h3>Will my code work?</h3>
+        <p>Start with <a href="language-support/">language support and its explicit limits</a>.
+          Python 3.14 is the target, not full compatibility.</p>
+        <h3>What errors will I see?</h3>
+        <p>Inspect <a href="diagnostics/">real human and JSON diagnostics</a>, including current span limitations.</p>
+        <h3>How does it differ?</h3>
+        <p><a href="python-aot-compilers/">How is this different from Cython, mypyc, or Nuitka?</a>
+          Compare language contracts, output artifacts, and runtime models.</p>
+        <p>Benchmark evidence and a Performance page are not yet published;
+          <a href="https://github.com/rotnov/pycc/issues/567">#567 owns that evidence</a>.</p>
+      </section>
+
       <section class="ai-built-section" id="ai-built" aria-labelledby="ai-built-title">
         <div class="ai-built-head">
           <div>
-            <p class="eyebrow">01 · Development model</p>
+            <p class="eyebrow">02 · Development model</p>
             <h2 id="ai-built-title">
               Built entirely by AI.<br>
               <span>Managed by a human.</span>
@@ -331,7 +358,7 @@ i = <span class="code-number">0</span>
 
       <section class="section section-split" id="why" aria-labelledby="why-title">
         <div class="section-heading">
-          <p class="eyebrow">02 · Why pycc</p>
+          <p class="eyebrow">03 · Why pycc</p>
           <h2 id="why-title">One tool should finish the whole job.</h2>
         </div>
         <div class="section-copy">
@@ -346,6 +373,8 @@ i = <span class="code-number">0</span>
             bundles in one compiler pipeline. Annotations are the contract—not
             optional hints.
           </p>
+          <p>Native and pure builds emit standalone executables;
+            planned permitted CPython interop emits a self-contained bundle with its pinned runtime.</p>
         </div>
       </section>
 

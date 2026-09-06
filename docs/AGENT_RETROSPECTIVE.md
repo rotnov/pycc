@@ -33,6 +33,27 @@ never a merge gate.
 
 ---
 
+## 2026-09-06 — Requested an invalid placeholder in a pre-commit findings record
+
+**What happened:** During #569, the controller told the implementer to leave
+`fix_commit` empty until commit. The unchanged findings read-back rejected that
+initial record. Repair required a separate independent judgment because the
+pile is append-only while every fixed finding needs a non-empty fix reference.
+
+**Root cause:** a compliance gap: the controller assumed a placeholder was
+valid without checking the existing read-back contract before delegating it.
+
+**What fixed it:** preserve the exact rejected record locally, then perform the
+independently reviewed one-time repair of the sole never-committed record with
+a labeled, verified staged CSS blob reference (not a fabricated commit).
+The record retains correction provenance; the unchanged validator passes.
+This was an explicit repair, not literal append-only compliance.
+
+**Lesson:** validate a proposed record against its existing read-back contract
+before delegating its creation. The existing checker caught this defect, so no
+new guard or duplicated governance text was added. The source-review finding
+remains separate from this bookkeeping mistake.
+
 ## 2026-09-06 — Pushed a status-page edit that overran the byte budget a local checker would have caught
 
 **What happened:** PR [#968](https://github.com/rotnov/pycc/pull/968) (#962)

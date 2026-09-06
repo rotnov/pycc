@@ -12,6 +12,8 @@
  *   nonessential transition is suppressed to ≤ 0.02ms.
  * - Under `no-preference`: normal motion remains available (root
  *   scroll-behavior may be smooth, transitions are non-zero).
+ * - In both modes, source-evaluation and related-evidence links retain
+ *   a persistent underline, independent of hover, focus, or color.
  *
  * Uses the system Chrome via `PUPPETEER_EXECUTABLE_PATH` or
  * `--executable-path`, consistent with `run_pages_lighthouse.py`'s
@@ -104,7 +106,11 @@ async function checkPage(browser, url, pageId) {
     const skipTransition = skipLink ? getComputedStyle(skipLink).transitionDuration : null;
     const navLink = document.querySelector('.site-nav a, nav a');
     const navTransition = navLink ? getComputedStyle(navLink).transitionDuration : null;
-    return { rootScroll, skipTransition, navTransition };
+    const evaluatorLinks = ['.source-evaluation a', '.related-evidence a'].map(selector => ({
+      selector,
+      decorations: [...document.querySelectorAll(selector)].map(link => getComputedStyle(link).textDecorationLine),
+    }));
+    return { rootScroll, skipTransition, navTransition, evaluatorLinks };
   });
 
   // Under no-preference, normal motion should be available.
@@ -131,7 +137,11 @@ async function checkPage(browser, url, pageId) {
     const skipTransition = skipLink ? getComputedStyle(skipLink).transitionDuration : null;
     const navLink = document.querySelector('.site-nav a, nav a');
     const navTransition = navLink ? getComputedStyle(navLink).transitionDuration : null;
-    return { rootScroll, skipTransition, navTransition };
+    const evaluatorLinks = ['.source-evaluation a', '.related-evidence a'].map(selector => ({
+      selector,
+      decorations: [...document.querySelectorAll(selector)].map(link => getComputedStyle(link).textDecorationLine),
+    }));
+    return { rootScroll, skipTransition, navTransition, evaluatorLinks };
   });
 
   // Under reduce, scroll-behavior must not be smooth.
@@ -156,6 +166,20 @@ async function checkPage(browser, url, pageId) {
   const navMs = durationMs(reduce.navTransition);
   if (navMs >= 0 && navMs > 0.02) {
     failures.push(`${pageId}: reduce nav-link transition is ${reduce.navTransition} (${navMs}ms) — must be ≤ 0.02ms under prefers-reduced-motion: reduce`);
+  }
+
+  // Home owns source evaluation; the six current children own related evidence.
+  // A scope absent from another page is allowed, but expected scopes cannot
+  // silently disappear and make the all-links check vacuously pass.
+  const relatedPages = ['status', 'architecture', 'python-aot-compilers', 'ai-native', 'language-support', 'diagnostics'];
+  for (const [mode, styles] of [['no-preference', noPref], ['reduce', reduce]]) {
+    for (const { selector, decorations } of styles.evaluatorLinks) {
+      const expected = (selector === '.source-evaluation a' && pageId === 'home') ||
+        (selector === '.related-evidence a' && relatedPages.includes(pageId));
+      if ((expected && decorations.length === 0) || decorations.some(value => !value.split(/\s+/).includes('underline'))) {
+        failures.push(`${pageId}: ${mode} ${selector} must retain a persistent underline on every evaluator link`);
+      }
+    }
   }
 
   await page.close();

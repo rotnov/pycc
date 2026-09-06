@@ -4,15 +4,11 @@
 > with an implemented native-binary path through Rust and LLVM. AI agents
 > create it, and a human manages it.
 
-Typed Python in. Autonomous artifacts out.
+Typed Python in. Native binaries out.
 
-pycc is an open-source ahead-of-time compiler project for standard Python
-3.14. Its design contract is to check annotations at compile time, then emit
-a fast, autonomous deployment artifact—without inventing a new language.
-Native and pure builds emit standalone executables; planned permitted CPython
-interop emits a self-contained bundle with its pinned runtime. AI agents
-create the entire project; a human only manages direction, priorities, and
-constraints.
+Pre-alpha · typed Python subset. pycc compiles type-annotated Python before
+your program runs, producing a standalone native executable for the implemented
+subset. Python 3.14 is the target, not full compatibility. Not ready for production.
 
     $ pycc build hello.py -o hello
 
@@ -77,6 +73,28 @@ diagnostics-v1 — all-Tier-1: `pycc check tests/diagnostics/d0021_range_argumen
 - **Native** — Standalone output
 - **No dialect** — Python syntax stays Python
 
+## Try the checked example
+
+Source build: pinned Rust, LLVM 22.1.1, `LLVM_SYS_221_PREFIX`.
+Follow [distribution prerequisites](https://github.com/rotnov/pycc/blob/main/docs/DISTRIBUTION.md#current-installation-boundary)
+and [CI setup](https://github.com/rotnov/pycc/blob/main/.github/workflows/ci.yml).
+Unix only; Windows needs the guide's LLVM/MSVC setup.
+
+```sh
+git clone https://github.com/rotnov/pycc.git
+cd pycc
+cargo build --workspace
+./target/debug/pycc run tests/fixtures/quick_start.py
+```
+
+Expect 0–55 as above; this is separate from the historical hero.
+
+- **Will my code work?** [Language support](https://rotnov.github.io/pycc/language-support/).
+- **What errors will I see?** [Diagnostics](https://rotnov.github.io/pycc/diagnostics/).
+- **How does it differ?** [Compare Cython, mypyc, and Nuitka](https://rotnov.github.io/pycc/python-aot-compilers/).
+
+Performance evidence/page: unpublished, owned by [#567](https://github.com/rotnov/pycc/issues/567).
+
 ## Development model
 
 Built entirely by AI. Managed by a human.
@@ -106,6 +124,8 @@ Python-like compilers ask you to adopt a dialect.
 pycc's design target combines hard type errors, standard Python syntax,
 native execution, and autonomous permitted-interoperability bundles in one
 compiler pipeline. Annotations are the contract—not optional hints.
+Native and pure builds emit standalone executables; planned permitted CPython
+interop emits a self-contained bundle with its pinned runtime.
 
 ## The intended position
 
@@ -172,17 +192,13 @@ explicitly identified as implemented behavior.
 - [Diagnostics](https://rotnov.github.io/pycc/diagnostics/): Exact human and JSON output, help and span boundaries.
 
 - [Current implementation status](https://rotnov.github.io/pycc/status/):
-  working language and CLI surface, enforced CI and coverage, missing v0.1
-  behavior, and the next planned delivery slice.
+  implemented scope, CI, coverage, gaps, and next steps.
 - [Compiler architecture](https://rotnov.github.io/pycc/architecture/):
-  implemented Rust and LLVM stages, current crate boundaries, planned
-  typed-Python pipeline, and platform model.
+  Rust/LLVM stages, crates, planned pipeline, and platforms.
 - [Python AOT compiler comparison](https://rotnov.github.io/pycc/python-aot-compilers/):
-  source-backed differences among pycc, LPython, Codon, Nuitka, mypyc, and
-  Cython, including output artifacts, runtime models, and current positioning.
+  source-backed artifact, runtime, and language differences.
 - [AI-native experiment](https://rotnov.github.io/pycc/ai-native/):
-  who creates each project artifact, what the human manages, how the agent
-  development loop works, and where its public audit evidence lives.
+  AI authorship, human management, agent workflow, and audit evidence.
 
 ## Follow the project
 

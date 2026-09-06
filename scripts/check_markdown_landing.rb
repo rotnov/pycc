@@ -52,8 +52,22 @@ SECTION_CONTRACT = {
     html_anchor: "Typed Python in.",
     md_heading: nil,
     md_markers: [
-      "Typed Python in. Autonomous artifacts out.",
+      "Typed Python in. Native binaries out.",
+      "Not ready for production.",
       "pycc build hello.py -o hello",
+    ],
+  },
+  "source evaluation" => {
+    html_anchor: 'id="try"',
+    md_heading: "## Try the checked example",
+    md_markers: [
+      "LLVM_SYS_221_PREFIX",
+      "docs/DISTRIBUTION.md#current-installation-boundary",
+      "cargo build --workspace",
+      "./target/debug/pycc run tests/fixtures/quick_start.py",
+      "Will my code work?",
+      "What errors will I see?",
+      "How does it differ?",
     ],
   },
   "design contract" => {

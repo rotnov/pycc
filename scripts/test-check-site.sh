@@ -50,6 +50,67 @@ restore_fixtures
 
 SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null
 
+# Human-first evaluation: exercise the public checker, with a fresh complete
+# fixture for every mutation. Footer/source links cannot rescue primary nav.
+python3 - "$repo_root" "$fixture_root" <<'PY'
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+repo, fixture = map(Path, sys.argv[1:])
+site = fixture / "site"
+
+def rejected(relative, change, reason):
+    shutil.rmtree(site)
+    shutil.copytree(repo / "site", site)
+    path = site / relative
+    path.write_text(change(path.read_text()))
+    result = subprocess.run([str(repo / "scripts" / "check-site.sh")],
+                            env={**os.environ, "SITE_DIR": str(site)},
+                            capture_output=True, text=True)
+    assert result.returncode != 0, f"accepted {relative}: {reason}"
+    assert reason in result.stdout + result.stderr, result.stdout + result.stderr
+
+routes = ["", "language-support/", "diagnostics/", "architecture/", "status/",
+          "python-aot-compilers/", "ai-native/"]
+for route in routes:
+    relative = route + "index.html"
+    prefix = "" if not route else "../"
+    for destination in [prefix or "./"] + [prefix + item for item in routes[1:]] + ["https://github.com/rotnov/pycc"]:
+        rejected(relative, lambda source, destination=destination: re.sub(
+            r'(<nav class="site-nav".*?</nav>)',
+            lambda nav: nav[0].replace(f'href="{destination}"', 'href="#omitted"'),
+            source, count=1, flags=re.S), "primary navigation")
+    for replacement in ["", 'aria-current="false"']:
+        rejected(relative, lambda source, replacement=replacement: source.replace(
+            'aria-current="page"', replacement), "active primary page")
+    rejected(relative, lambda source: source.replace('class="nav-cta"',
+        'class="nav-cta" aria-current="page"'), "active primary page")
+
+for pattern, replacement, reason in [
+    (r'<p class="eyebrow">\s*<span class="signal".*?</p>', '', "visible introduction"),
+    (r'<p class="hero-boundary">.*?</p>', '', "visible introduction"),
+    (r'class="hero-copy"', 'class="hero-copy" hidden', "visible introduction"),
+    (r'(class="button button-primary" href=")#try', r'\1#status', "primary evaluation action"),
+    (r'id="try"', 'id="removed"', "source evaluation"),
+    (r'id="try"', 'id="try" hidden', "source evaluation"),
+]:
+    rejected("index.html", lambda source, pattern=pattern, replacement=replacement:
+             re.sub(pattern, replacement, source, count=1, flags=re.S), reason)
+for href in ["https://github.com/rotnov/pycc",
+             "https://github.com/rotnov/pycc/blob/main/docs/DISTRIBUTION.md#current-installation-boundary",
+             "https://github.com/rotnov/pycc/blob/main/.github/workflows/ci.yml"]:
+    rejected("index.html", lambda source, href=href: re.sub(
+        r'<section[^>]+id="try".*?</section>',
+        lambda section: section[0].replace(f'href="{href}"', 'href="#omitted"'),
+        source, count=1, flags=re.S), "source evaluation prerequisites")
+shutil.rmtree(site)
+shutil.copytree(repo / "site", site)
+PY
+
 # The restoration invariant above is only worth as much as its uniformity: a
 # guarded block that forgets to restore hands its mutation to every block after
 # it, which is exactly the masking #644 reported. Enforce it structurally rather
@@ -2038,7 +2099,7 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-09-05</lastmod>"""
+    <lastmod>2026-09-06</lastmod>"""
 assert entry in content
 path.write_text(content.replace(entry, entry + "\n    <lastmod>2026-07-30</lastmod>", 1))
 PY
@@ -2060,9 +2121,9 @@ content = path.read_text()
 # a lastmod, so replacing a bare date literal would silently mutate whichever
 # entry comes first in document order instead of the one named here.
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-09-05</lastmod>"""
+    <lastmod>2026-09-06</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-09-05", "not-a-date"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-09-06", "not-a-date"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -2079,9 +2140,9 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-09-05</lastmod>"""
+    <lastmod>2026-09-06</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-09-05", "9999-12-31"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-09-06", "9999-12-31"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
@@ -2098,9 +2159,9 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/python-aot-compilers/</loc>
-    <lastmod>2026-09-05</lastmod>"""
+    <lastmod>2026-09-06</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-09-05", "2026-07-27"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-09-06", "2026-07-27"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
