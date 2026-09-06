@@ -42,13 +42,17 @@
 //!   the two names `DATACLASS_IMPLICIT_DUNDERS` omits (`__new__`,
 //!   `__init_subclass__`) on the dataclass path, without disturbing the six
 //!   messages that set already owns: `super::body` runs its own check first.
-//! * The `Enum`-body `__slots__` rejection is conservative in the same sense:
-//!   CPython 3.13.9 *accepts* `class C(Enum): __slots__ = "x"` with `A = 1`
-//!   (the `class` statement succeeds, `C.__slots__` is `'x'`, `list(C)` is
-//!   `[C.A]`, and the member still has a `__dict__`), so no divergence was
-//!   measured at the declaration site. pycc rejects it because it has no model
-//!   for a non-member dunder in an enum body and would otherwise lower the
-//!   name as a member.
+//! * The `Enum`-body `__slots__` rejection is conservative too, but only in
+//!   the narrow sense. CPython 3.13.9 *accepts* `class C(Enum): __slots__ =
+//!   "x"` with `A = 1` (the `class` statement succeeds, `C.__slots__` is
+//!   `'x'`, `list(C)` is `[C.A]`, and the member still has a `__dict__`), so
+//!   the rejection does refuse a program CPython runs. It is
+//!   not conservative in the weaker sense of "nothing would have gone wrong":
+//!   without the guard pycc lowers the name as a member, so an all-`str` enum
+//!   (`__slots__ = "x"` alongside `A = "y"`, which CPython leaves at one
+//!   member) would have compiled to a two-member enum. `__slots__ = ()` is the
+//!   shape where no divergence is reachable, because a non-literal member
+//!   value is rejected anyway.
 //! * `__init_subclass__`'s rejection is conservative on two different
 //!   grounds. In an `Enum` body it can never diverge, because an `Enum` with
 //!   members cannot be subclassed at all. In a plain class body it diverges
