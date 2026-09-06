@@ -377,3 +377,12 @@ One P2 on `4a3d59b1`: `lower_checked`'s rustdoc still promised a
 byte-identical pre-D-219 `Err`; it now states the first-lowering-diagnostic
 guarantee with the D-233 decision 4 ordering. Round 16 of the findings pile
 records it.
+
+## PR #971 fifteenth Codex round (value-less module annotation)
+
+One P2 on `b76b4350`, fixed in `88adc5ae`: a value-less module-level
+`Color: int` was taken as a frame binding (ruff gives its target `Store`
+context), so the following `Color()` fell back to `1:1`. The scope binder
+now knows whether it walks the module body and skips such an annotation's
+target there while keeping the function-local semantics. Round 17 of the
+findings pile records it.
