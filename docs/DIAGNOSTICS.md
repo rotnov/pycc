@@ -188,7 +188,10 @@ binds (`def Color()` or `class Color:` beside `class Color(Enum)`) is never
 scanned in either order: that program is reported by the name-collision
 diagnostic alone; an identical repeated import (`from colors import Color`
 twice) binds the same class twice, is not a rebinding, and keeps the
-call-expression span. A
+call-expression span, whereas one enum imported under one name through two
+module paths (`from colors import Color` beside `from palette import
+Color`, `palette` re-exporting it) is indistinguishable from a rebinding
+and falls back to the span-less guard at `1:1`. A
 scope-local rebinding of the class name (`def f(Color: int) -> None:
 Color()`) is not an enum call and keeps its `T0021`. Naming
 an enum class as a base (`class Foo(Color): pass`) is rejected from

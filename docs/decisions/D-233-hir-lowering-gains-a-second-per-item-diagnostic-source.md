@@ -65,7 +65,10 @@ status: accepted
      collision the class item reports, and the scan must not put a
      false-kind enum-call report ahead of it (an identical repeated import
      binds the same definition twice, is no collision, and stays in the
-     set). Every residual
+     set; one enum imported under one name through two module paths is
+     indistinguishable from a rebinding, because HIR records no
+     defining-module provenance for a re-exported class, and is one more
+     residual shape the span-less guard reports at `1:1`). Every residual
      is enumerated in the module doc of `class::enum_call` and pinned by a
      test: over-suppression is the only failure mode on an item that lowers
      (the call still fails in `pycc_types`), and the one false-kind report

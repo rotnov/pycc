@@ -283,3 +283,19 @@ added. (2) P1: `enum_call.rs` had reached 1,013 lines; its inline test
 module is now the sibling `enum_call_tests.rs` (a `#[path]` child module,
 so `super::` access is unchanged), leaving the scanner at 488 lines. Round
 7 of `.harden/findings/issue-944.jsonl` records both.
+
+## PR #971 sixth Codex round (re-exported enum under two paths)
+
+Codex P2 on `15efde6e`: `from colors import Color` beside `from palette
+import Color` (with `palette` re-exporting it) puts `Color` in
+`module_rebound_names`, so `Color()` falls to the span-less guard at `1:1`
+-- reproduced with `pycc check` (a single re-exported import keeps the
+call span). The proposed fix, comparing the resolved
+`ImportBinding::Project` origin, has no mechanism behind it:
+`bind_project_name` records the module the name was imported *from*
+(`palette`), and `copy_class_with_ancestors` clones a re-exported class
+with no defining-module tag, so HIR carries no provenance to compare.
+Recorded as one more D-233 residual shape the backstop reports (limit
+(vii), decision 5, `docs/DIAGNOSTICS.md`); tracking re-export provenance is
+a separate feature outside #944. Replied and resolved; round 8 of
+`.harden/findings/issue-944.jsonl` records the refutation.

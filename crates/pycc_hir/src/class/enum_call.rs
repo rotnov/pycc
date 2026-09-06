@@ -120,7 +120,12 @@
 //! - (vii) **A name bound by more than one module-level `def`, `class`,
 //!   `import`, or `type` statement is never scanned** (an identical
 //!   repeated import, `from colors import Color` twice, binds the same
-//!   definition twice and is not a rebinding). `def Color()`,
+//!   definition twice and is not a rebinding; one enum imported under one
+//!   local name through two module paths, `from colors import Color`
+//!   beside `from palette import Color` where `palette` re-exports it, is
+//!   indistinguishable here -- HIR records no defining-module provenance
+//!   for a re-exported class -- so that name stays suppressed and the
+//!   call is reported by the span-less guard at `1:1`). `def Color()`,
 //!   an ordinary `class Color`, `from m import Color`, or
 //!   `type Color = int` beside `class Color(Enum)` is a collision that the
 //!   class item reports itself (`... collides with a function / an import /
