@@ -69,7 +69,9 @@ module-level assignment and `for` target) still yields `T0021`.
 - `2d4df343` fixup(rebase): mirror #970's implicit_object_init field in the direct-HIR enum guard test
 - `38982a62` docs(sessions): record the #944 rebase onto 50a0dc2a and the post-rebase gate run
 - `d7d18c48` docs/test: address the D-068 review round for #944
-- (this commit) docs(sessions): record the D-068 review round; followed by `chore(harden): record #944 review findings`
+- `9b1615d2` docs(sessions): record the D-068 review round for #944 (also lands `.harden/findings/issue-944.jsonl`)
+- `3416241c` fix(hir): fold TYPE_CHECKING bodies out of the enum-call scan (#944)
+- (this commit) docs(sessions): record the PR #971 review round
 
 ## Gate results (single writer, run sequentially, exit codes captured to files)
 
@@ -125,6 +127,30 @@ warnings`, `cargo test --workspace`, the decisions-index `--check`, and
 `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
 (run alone: TOTAL 100.00% lines / functions / regions, 55039 regions, 36259
 lines, 0 missed) all exited 0.
+
+## PR #971 review round
+
+PR #971 (`Fixes #944`, head `9b1615d2` at open) came back CI-green but
+`BLOCKED` on one Codex review thread (P1, `crates/pycc_hir/src/module.rs`):
+the scan walked the original AST, so a call inside an `if`/`elif
+TYPE_CHECKING:` body that `lower_stmt` constant-folds away (#790, D-223)
+was reported as an enum-call `C0001` and rejected a module the lowering
+accepts. Confirmed against `stmt.rs`'s fold and fixed in `3416241c`: both
+the call scan and the frame binder route every `if` through
+`walk_if_as_lowered`, which skips a guarded body (calls and bindings) with
+the same `is_type_checking_guard` predicate and the same import view the
+fold used for that item; the module frame is computed before the loop and
+so keeps an aliased `t.TYPE_CHECKING` module-level residual (limit (vi),
+over-suppression only). Nine unit tests pin the folded, live, and residual
+shapes; D-233 decision 5, `docs/DIAGNOSTICS.md`, and the scan's module doc
+record the fold. Round 2 of `.harden/findings/issue-944.jsonl` records
+the finding. After that commit `cargo fmt --check`, `cargo clippy
+--workspace --all-targets -D warnings`, `cargo test --workspace`, the
+decisions-index `--check`, and `cargo llvm-cov --workspace
+--fail-under-lines 100 --fail-under-regions 100` (run alone: TOTAL 100.00%
+lines / functions / regions, 55173 regions, 36331 lines, 0 missed) all
+exited 0. `origin/main` was still `50a0dc2a` and #971 the only open pull
+request when this entry was committed.
 
 ## Where to resume
 
