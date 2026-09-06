@@ -344,7 +344,7 @@ mod tests {
             .match_indices(needle)
             .nth(occurrence)
             .map(|(start, _)| start as u32)
-            .unwrap_or_else(|| panic!("{needle:?} occurrence {occurrence} not in {source:?}"))
+            .expect("the call text must occur in the source that many times")
     }
 
     fn assert_enum_call_at(diagnostic: &Diagnostic, class_name: &str, call_text: &str, start: u32) {
@@ -613,11 +613,8 @@ mod tests {
         let diagnostics = lower_err(&source);
         assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
         assert_eq!(diagnostics[0].code, "C0001");
-        assert!(
-            diagnostics[0].message.contains("with"),
-            "{}",
-            diagnostics[0].message
-        );
+        let message = &diagnostics[0].message;
+        assert!(message.contains("with"), "{message}");
         assert_enum_call(&diagnostics[1], "Color", "Color()", &source);
     }
 
