@@ -21,6 +21,13 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   assignments, returns, `range` operands, and arithmetic expressions. The
   resulting helper signature is monomorphic within the module. Conflicting
   call-site constraints are `T0021`; conflicting inferred returns are `T0022`.
+  `T0022` also covers the unrelated-to-inference case in the same solver walk:
+  a function with a *written* return annotation whose body returns an
+  incompatible value. The two are worded differently -- an annotation is a
+  declared/actual mismatch, an unannotated helper's return genuinely is an
+  inference conflict -- and the return annotation, not the function's
+  visibility, is what tells them apart (#949); the solver walks every
+  module-level function, not only `_`-prefixed helpers.
 - An initialized scalar-annotated local with no earlier representation binding
   binds its target to the declaration type, while the initializer keeps its
   independently inferred type and is checked directionally afterward. A

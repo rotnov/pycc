@@ -26,7 +26,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0002` | error | `Any` outside interop boundary |
 | `T0003` | error | untyped empty container needs annotation |
 | `T0021` | error | name resolution (including an unbound local), operand, call, or inference type mismatch; also the project-import failures CPython itself rejects (D-222): a name the imported module does not define, a relative import with no parent package or climbing above the top-level package, and a relative target that resolves to no module |
-| `T0022` | error | return type mismatch |
+| `T0022` | error | return type mismatch — a written return annotation the body contradicts reads *return type mismatch: expected `int`, found `P`* and carries a `help` suggestion (D-152), while an *unannotated* private helper whose inferred return type gets pinned two incompatible ways reads *private helper return type: conflicting inferred types `int` and `str`* with no `help` (neither side is canonical). The discriminator is the return annotation, not the function's visibility — the solver walks every module-level function, not only `_`-prefixed helpers (#949) |
 | `T0023` | error | incompatible assignment |
 | `T0024` | error | `return` outside a function |
 | `T0025` | error | annotated-assignment initializer incompatible with its declared annotation |
