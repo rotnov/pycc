@@ -2,9 +2,11 @@
 //! scalar class attributes, end to end through the public `pycc` CLI.
 //!
 //! A class attribute is a **compile-time constant**: it occupies no instance
-//! slot, has no runtime storage, and every read of it -- through the class
-//! name (`W.MIN_WIDTH`) or through an instance (`w.MIN_WIDTH`) -- is folded
-//! to its literal at MIR-lowering time. These tests pin both the accepted
+//! slot, has no runtime storage, and a read of it -- through the class name
+//! (`W.MIN_WIDTH`) or through an instance (`w.MIN_WIDTH`) -- is folded to its
+//! literal at MIR-lowering time. Since #960 an instance read folds only when
+//! no instance slot of that name exists anywhere in the MRO; these fixtures
+//! declare no such collision, so every read here folds. These tests pin both the accepted
 //! surface and every rejection that keeps that model honest, including the
 //! #585 scalar-only invariant.
 

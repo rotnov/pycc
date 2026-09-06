@@ -154,6 +154,9 @@ pub(crate) fn check_protocol_conformance(
                 // same-named class attribute to one derived class without
                 // `reject_class_attr_collisions` ever comparing them, and
                 // CPython lets the instance `__dict__` entry win there.
+                // Since #960 `pycc_mir`'s instance `AttrGet` arm mirrors that
+                // order too, so the checker and the lowering agree on which
+                // of the two a read resolves to.
                 let found = lookup_attr_through_mro(env, &class_def.mro, attr_name)
                     .or_else(|| lookup_class_attr_through_mro(env, class_name, attr_name));
                 let Some(concrete_attr_ty) = found else {
@@ -501,10 +504,17 @@ pub(crate) fn resolve_attr_get(
     }
     // #911 (Part 1 of #885): a class-level attribute (`MIN_WIDTH: int =
     // -1024`) read through an instance. Checked *after* the instance slots
-    // so a real slot always wins -- the two can never actually collide,
-    // because `pycc_hir` rejects a class attribute that shares a name with
-    // an instance slot or a `@property` in either declaration order, but the
-    // ordering keeps that invariant from being load-bearing here.
+    // so a real slot always wins, which is CPython's own precedence -- an
+    // instance `__dict__` entry shadows a non-data-descriptor class
+    // attribute.
+    //
+    // #960: that ordering is load-bearing, not merely defensive. `pycc_hir`'s
+    // `reject_class_attr_collisions` walks only a class's *own* `class_attrs`
+    // against its own MRO, so two independent sibling bases -- one
+    // contributing an instance slot, the other a same-named class attribute
+    // -- reach this function without ever having been compared. `pycc_mir`'s
+    // instance `AttrGet` arm mirrors this exact order; folding first is what
+    // #960 was.
     if let Some(ty) = lookup_class_attr_through_mro(env, class_name, attr) {
         return Ok(ty);
     }
@@ -514,10 +524,12 @@ pub(crate) fn resolve_attr_get(
 /// #911 (Part 1 of #885): looks a class-level attribute up through
 /// `class_name`'s MRO, most-derived first, returning its declared type.
 ///
-/// A class attribute occupies no instance slot -- `pycc_mir` folds every
-/// read of it to the constant recorded in `HirClassDef::class_attrs` -- so
-/// this walk is deliberately separate from the `attrs` walk above rather
-/// than merged into it.
+/// A class attribute occupies no instance slot -- `pycc_mir` folds a read of
+/// it to the constant recorded in `HirClassDef::class_attrs` -- so this walk
+/// is deliberately separate from the `attrs` walk above rather than merged
+/// into it. Since #960 that fold is reached only when the instance-slot walk
+/// missed, on both sides: a same-named slot contributed by a sibling MRO base
+/// wins here and in `pycc_mir` alike.
 pub(crate) fn lookup_class_attr_through_mro(
     env: &Environment,
     class_name: &str,
@@ -807,10 +819,19 @@ pub(crate) fn check_attr_set(
     // not look in that direction at all, and this check is the only thing
     // that rejects it -- which is why `lookup_class_attr_through_mro` must
     // stay a full-MRO walk and must not be narrowed to the class's own
-    // `class_attrs`. `pycc_mir`'s instance-read fold (`fold_class_attr` in
-    // the MRO loop of `pycc_mir::expr`) walks the same MRO and would
-    // otherwise fold the read of a genuinely written slot to the ancestor's
-    // constant.
+    // `class_attrs`.
+    //
+    // #960 left this check deliberately coarse: it fires whenever a class
+    // attribute of that name exists anywhere in the MRO, without asking
+    // whether it actually *wins* the read-side precedence. For the
+    // cross-sibling shape #960 fixed -- one base contributing the slot, an
+    // independent sibling base the class attribute -- `resolve_attr_get` now
+    // resolves the read to the slot, so this message's "no storage to write
+    // to" is inaccurate for that one shape and the write is rejected where
+    // CPython accepts it. That is a conservative rejection, never a wrong
+    // answer, and lifting it would relax `docs/TYPE_SYSTEM.md`'s "every write
+    // path to a class attribute is `T0044`" contract -- a separate,
+    // decision-bearing change rather than part of #960's read fix.
     if let Ty::Instance(class_name) = &base_ty
         && let Some(class_attr_ty) = lookup_class_attr_through_mro(env, class_name, attr)
     {
@@ -4845,8 +4866,11 @@ mod tests {
     /// `A.x`'s `int` -- CPython's own answer, since an instance `__dict__`
     /// entry shadows a non-data-descriptor class attribute. Swapping the
     /// two walks would resolve it to `B.x`'s `str` and reject this program.
-    /// (The separate MIR-side value divergence the same shape exposes for
-    /// ordinary attribute reads is #960, not fixed here.)
+    /// The same shape used to expose a MIR-side value divergence for ordinary
+    /// attribute reads (#960): `pycc_mir` folded the class attribute before
+    /// looking for the slot, so `c.x` printed `B`'s value and, for the `str`
+    /// spelling above, aborted codegen outright. `pycc_mir`'s instance
+    /// `AttrGet` arm now mirrors this order, so the two layers agree.
     #[test]
     fn protocol_conformance_prefers_a_sibling_base_instance_attribute() {
         check_source(

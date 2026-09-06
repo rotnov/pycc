@@ -228,10 +228,12 @@ pub struct HirClassDef {
     ///
     /// **Storage model.** A class attribute is a *compile-time constant*: it
     /// occupies no instance slot and has no runtime representation at all.
-    /// `pycc_mir` folds every read (`W.MIN_WIDTH` and `w.MIN_WIDTH` alike)
+    /// `pycc_mir` folds a read (`W.MIN_WIDTH` and `w.MIN_WIDTH` alike)
     /// straight to the literal, so neither `mro_attrs`/`mro_attr_count` nor
     /// the allocation size a class's instances need is affected by adding
-    /// one. This deliberately differs from the enum-member model, which
+    /// one. Since #960 an instance read folds only when no instance slot of
+    /// that name exists anywhere in the MRO: a slot contributed by a sibling
+    /// MRO base wins, matching CPython. This deliberately differs from the enum-member model, which
     /// allocates a per-member singleton with a module global.
     ///
     /// **Named invariant -- class attributes are restricted to scalar slot
