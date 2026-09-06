@@ -14811,6 +14811,86 @@ fn type_solver_covers_concrete_and_union_merge_paths() {
     );
 }
 
+/// #949: with a known declared type, `unify_terms_with_declared` reports a
+/// declared-vs-actual mismatch instead of the ambiguous "conflicting inferred
+/// types" wording, and picks the actual operand by comparing against the
+/// declared type rather than by position -- the `(Ok, Ok)` arm passes the
+/// declared type first, while the `(Err(var), Ok(ty)) | (Ok(ty), Err(var))`
+/// arm passes the already-inferred actual first and the declared type second.
+#[test]
+fn unify_terms_with_declared_names_the_declared_type_in_either_operand_order() {
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+
+    // `(Ok, Ok)`: declared is the left operand.
+    let declared_first = unify_terms_with_declared(
+        Ok(Ty::Int),
+        Ok(Ty::Str),
+        &mut parents,
+        &mut concrete,
+        "T0022",
+        "declared return type",
+        Some(&Ty::Int),
+    )
+    .unwrap_err();
+    assert_eq!(declared_first.code, "T0022");
+    assert_eq!(
+        declared_first.message,
+        "return type mismatch: expected `int`, found `str`"
+    );
+    assert_eq!(declared_first.help.as_deref(), Some("return a `int` value"));
+
+    // `(Ok(ty), Err(var))` with the variable already resolved to `str`: the
+    // conflict is raised with the *actual* type first, so a positional
+    // assumption would invert the message.
+    let inferred = fresh_term(&mut parents, &mut concrete);
+    unify_terms(
+        inferred.clone(),
+        Ok(Ty::Str),
+        &mut parents,
+        &mut concrete,
+        "T0022",
+        "private helper return type",
+    )
+    .unwrap();
+    let declared_second = unify_terms_with_declared(
+        Ok(Ty::Int),
+        inferred.clone(),
+        &mut parents,
+        &mut concrete,
+        "T0022",
+        "declared return type",
+        Some(&Ty::Int),
+    )
+    .unwrap_err();
+    assert_eq!(
+        declared_second.message,
+        "return type mismatch: expected `int`, found `str`"
+    );
+    assert_eq!(
+        declared_second.help.as_deref(),
+        Some("return a `int` value")
+    );
+
+    // Without a declared type the original ambiguous wording is unchanged,
+    // including its operand order, and carries no `help` (D-152 leaves
+    // genuinely ambiguous conflicts unpopulated).
+    let ambiguous = unify_terms(
+        Ok(Ty::Int),
+        inferred,
+        &mut parents,
+        &mut concrete,
+        "T0022",
+        "private helper return type",
+    )
+    .unwrap_err();
+    assert_eq!(
+        ambiguous.message,
+        "private helper return type: conflicting inferred types `str` and `int`"
+    );
+    assert_eq!(ambiguous.help, None);
+}
+
 fn generic_identity_fn(param_ty: Ty, return_ty: Ty) -> HirItem {
     HirItem::Function {
         name: "identity".to_string(),

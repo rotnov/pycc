@@ -33,7 +33,7 @@ fn item_name(hir: &HirModule, index: usize) -> &str {
     }
 }
 
-const T0022_RETURN: &str = "private helper return type: conflicting inferred types `int` and `str`";
+const T0022_RETURN: &str = "return type mismatch: expected `int`, found `str`";
 const T0043_INT_ATTR: &str = "cannot read an attribute on `int`: it is not a class instance";
 const T0025_TOP_LEVEL: &str =
     "cannot assign `str` to `x: int`, initializer does not match the declared annotation";
@@ -381,6 +381,50 @@ fn solver_collects_an_implicit_return_failure_in_a_later_body() {
         collected[1].1.message,
         "private helper implicit return: conflicting inferred types `int` and `None`"
     );
+}
+
+// -- #949: the return conflict's wording follows the return *term* ---------
+
+#[test]
+fn an_unannotated_helper_keeps_the_inferred_return_conflict_wording() {
+    // `_h` has no return annotation, so its return type really is inferred
+    // and the original wording still applies verbatim -- the #949 reword is
+    // scoped to declared returns only.
+    let hir = lower(
+        "def _h(a: int, b: bool):\n    if b:\n        return a\n    return \"s\"\n\n\ndef main() -> int:\n    return _h(1, True)\n",
+    );
+    let local_names = module_function_local_names(&hir);
+    let collected = infer_function_signatures_with_solver_all(&hir, &local_names).unwrap_err();
+    assert_eq!(
+        keyed_codes(&collected),
+        vec![(DiagnosticKey::Function(0), "T0022")]
+    );
+    assert_eq!(
+        collected[0].1.message,
+        "private helper return type: conflicting inferred types `int` and `str`"
+    );
+    assert_eq!(collected[0].1.help, None);
+}
+
+#[test]
+fn a_declared_return_names_the_annotation_even_when_the_conflict_is_raised_reversed() {
+    // `f`'s declared `int` unifies against `_h`'s *inference variable*, which
+    // `f`'s own call already resolved to `str`. That path raises the conflict
+    // with the actual type first and the declared type second (the reverse of
+    // the plain `(Ok, Ok)` order), so before #949 this rendered as
+    // "conflicting inferred types `str` and `int`" -- both misdescribed and
+    // backwards.
+    let hir = lower(
+        "def _h(a):\n    return a\n\n\ndef f() -> int:\n    return _h(\"s\")\n\n\ndef main() -> int:\n    return f()\n",
+    );
+    let local_names = module_function_local_names(&hir);
+    let collected = infer_function_signatures_with_solver_all(&hir, &local_names).unwrap_err();
+    assert_eq!(
+        keyed_codes(&collected),
+        vec![(DiagnosticKey::Function(1), "T0022")]
+    );
+    assert_eq!(collected[0].1.message, T0022_RETURN);
+    assert_eq!(collected[0].1.help.as_deref(), Some("return a `int` value"));
 }
 
 #[test]
