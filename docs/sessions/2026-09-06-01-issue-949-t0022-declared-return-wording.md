@@ -150,9 +150,14 @@ visibility; `docs/TYPE_SYSTEM.md`'s v0.1-local-inference bullet said only
 "conflicting inferred returns are `T0022`", which is now half the story, and
 gained the declared case. No new ADR: this changes the text of an existing
 diagnostic, not a project-wide or irreversible design choice, and D-038/D-045
-are untouched. `docs/ROADMAP.md` was not edited at all — no new
-`**[#949](...) —` paragraph, so the status-page four-pin rotation is not
-triggered (`check_status_page_freshness.rb origin/main` reports no signal).
+are untouched. `docs/ROADMAP.md` received a prose-only
+edit in place, surfaced by the committed-range review: its Diagnostics row
+asserted that "ambiguous-conflict diagnostics still emit `help: []`", which
+this change makes half-false, so the row now records the declared-return
+carve-out. No new `**[#949](...) —` feature-landing paragraph, no new
+evidence bullet and no checklist change, so the status-page four-pin rotation
+is not triggered (`check_status_page_freshness.rb origin/main` reports no
+signal).
 `docs/sessions/2026-09-05-09-issue-934-protocol-return-dispatch.md` quotes
 the old wording and was deliberately left alone: D-066/D-130 session files
 are immutable historical snapshots, not text to sweep.
@@ -183,7 +188,7 @@ binaries); the CI coverage sequence
 / 1251 lines, all 100.00%);
 `python3 -m unittest discover -s scripts -p 'test_*.py'`;
 `check_roadmap_evidence.rb`; `check_status_page_freshness.rb origin/main`
-(no signal); `check-site.sh`; `check_conformance_breadth.py`;
+(no signal, re-run after the ROADMAP prose edit); `check-site.sh`; `check_conformance_breadth.py`;
 `check_readme_milestone_projection.rb`;
 `generate_decisions_index.py --check`; `check_ci_permissions.rb`; and
 `cargo doc --workspace --no-deps`. Nothing touched appears in
@@ -208,6 +213,12 @@ diagnostic that reproduces the gate's number was not needed.
 - The plan listed the `.expected.json` `help`-array update as a separate
   work item because it is easy to miss; it was applied, and the fixture is
   green.
+- The plan said `docs/ROADMAP.md` would be edited "prose only, if at all" and
+  expected "at all" to be unnecessary. It was necessary: the committed-range
+  review found that the Diagnostics row's blanket claim about
+  ambiguous-conflict diagnostics emitting `help: []` is exactly what the
+  declared branch's new `help` breaks. The edit is prose-in-place, and the
+  freshness checker was re-run after it.
 
 ## Known follow-ups
 
