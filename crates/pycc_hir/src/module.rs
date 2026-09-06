@@ -24,9 +24,13 @@
 //! item. Two `C0001` shapes are *cascades* of an earlier skipped item rather
 //! than independent gaps: a bare-name annotation that names a class or
 //! type alias which failed to lower, and a base-class reference to one.
-//! Those are suppressed silently through the "poisoned bindings" set kept by
-//! `lower_module` (see `poisonable_names` and `cascade_name`); everything else
-//! is reported. HIR failures still stop the pipeline before the type
+//! The lowering source suppresses those silently through the "poisoned
+//! bindings" set kept by `lower_module` (see `poisonable_names` and
+//! `cascade_name`); everything else it produces is reported. The suppression
+//! covers the lowering source only: the #944 per-item enum-call scan (D-233,
+//! `class::enum_call`) runs after every item whatever its outcome, so a
+//! cascade-silenced item can still report a true enum-call `C0001` of its
+//! own. HIR failures still stop the pipeline before the type
 //! checker (`src/frontend.rs`), so no partial module is ever type-checked.
 
 use crate::import::{

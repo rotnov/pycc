@@ -543,6 +543,24 @@ mod tests {
         lower_ok(&format!("{COLOR}for Color in range(3):\n    Color()\n"));
     }
 
+    #[test]
+    fn a_module_level_call_before_a_later_shadowing_assignment_is_suppressed() {
+        // Limit (i): the module frame is not position-aware, so the later
+        // `Color = 1` hides the earlier `Color()`; `pycc_types`' span-less
+        // guard still rejects it.
+        lower_ok(&format!("{COLOR}Color()\nColor = 1\n"));
+    }
+
+    #[test]
+    fn a_comprehension_target_suppresses_a_sibling_call_in_the_same_def() {
+        // Limit (i): the comprehension target is recorded in the enclosing
+        // `def`'s frame, so a sibling `Color(1)` outside the comprehension
+        // is suppressed too; `pycc_types` still rejects it.
+        lower_ok(&format!(
+            "{COLOR}def f() -> None:\n    xs = [Color for Color in range(3)]\n    Color(1)\n"
+        ));
+    }
+
     // -- frame boundaries and item ordering (#944): exact counts --
 
     #[test]

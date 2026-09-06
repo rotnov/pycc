@@ -138,7 +138,10 @@ pub(crate) fn resolve_instantiation(
     // reachable through import ordering (a `def` that calls `Color()`
     // placed *before* the `from colors import Color` that makes `Color`
     // known -- the scan's name set is order-dependent for imports) and
-    // through the scan's documented over-suppression cases. Keyed on
+    // through the scan's position-insensitive over-suppression cases
+    // (`class::enum_call` limit (i): a `Color()` that precedes a later
+    // module-level `Color = 1`, a comprehension target suppressing a
+    // sibling call); a binding-form shadow yields `T0021` instead. Keyed on
     // `is_enum` (provenance, D-188), not on a non-empty `enum_members`: a
     // docstring-only enum (#744) has an empty member table and is an enum
     // all the same. `HirExpr` carries no span, hence `Span::new(0, 0)`.

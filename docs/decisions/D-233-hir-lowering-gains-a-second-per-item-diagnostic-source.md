@@ -60,7 +60,11 @@ status: accepted
   6. D-219 decisions 2-5 (no partial HIR is type-checked, poison
      classification, rebinding un-poisons, the first failing item is never
      skipped) are untouched: the scan filters the currently poisoned names
-     out of its class set and never poisons anything. Poison stays
+     out of its class set and never poisons anything. The cascade
+     suppression itself stays a property of the lowering source only
+     (decision 3): the scan runs after every item whatever its outcome, so
+     an item whose own diagnostic was silenced as a cascade can still
+     report a true enum-call `C0001`. Poison stays
      order-dependent for it, as for D-219 itself: a `def` that calls
      `Color(1)` *before* a failing `class Color(Enum): pass` is scanned
      before the class item poisons `Color`, so that program reports the
