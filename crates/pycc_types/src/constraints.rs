@@ -215,16 +215,57 @@ fn resolved_private_signature_term(
     }
 }
 
-fn inference_conflict(code: &'static str, context: &str, left: Ty, right: Ty) -> Diagnostic {
+/// Builds the conflict diagnostic for a failed `unify_terms` merge.
+///
+/// `declared` is `Some` only when the caller knows one of the two terms is a
+/// *written return annotation* rather than an inferred type -- today that is
+/// exactly `collect_block_constraints`' `HirStmt::Return` arm for an annotated
+/// function (#949). In that case the conflict is not an ambiguous
+/// inference clash between two equally-derived types: the annotation is the
+/// canonical "correct" side and the other operand is what the body actually
+/// produced, so the message says so and, per D-152's standing contract on the
+/// return-type family (`docs/DIAGNOSTICS.md`'s quality bar), carries a `help`
+/// suggestion. The wording deliberately follows this crate's existing
+/// `<noun> mismatch: expected `X`, found `Y`` shape (see `dict key type
+/// mismatch` in `expr.rs`) and stays textually distinct from the annotation
+/// checker's own `expected return type `X`, got `Y`` for the same program --
+/// `module::tests`' merge tests assert the two phases word it differently so
+/// they can prove the solver's text is the one that survives de-duplication.
+///
+/// The `actual` operand is selected by comparing against `declared` rather
+/// than by position: `unify_terms`' second arm calls this with the
+/// already-inferred type *first* and the known type second, the reverse of the
+/// `(Ok, Ok)` arm's order, so a positional assumption would silently invert
+/// the message. See the ordering note in `unify_terms` itself.
+fn inference_conflict(
+    code: &'static str,
+    context: &str,
+    left: Ty,
+    right: Ty,
+    declared: Option<&Ty>,
+) -> Diagnostic {
+    let Some(declared) = declared else {
+        return Diagnostic::error(
+            code,
+            format!(
+                "{context}: conflicting inferred types `{}` and `{}`",
+                left.name(),
+                right.name()
+            ),
+            Span::new(0, 0),
+        );
+    };
+    let actual = if left == *declared { right } else { left };
     Diagnostic::error(
         code,
         format!(
-            "{context}: conflicting inferred types `{}` and `{}`",
-            left.name(),
-            right.name()
+            "return type mismatch: expected `{}`, found `{}`",
+            declared.name(),
+            actual.name()
         ),
         Span::new(0, 0),
     )
+    .with_help(format!("return a `{}` value", declared.name()))
 }
 
 pub(crate) fn unify_terms(
@@ -235,10 +276,36 @@ pub(crate) fn unify_terms(
     code: &'static str,
     context: &str,
 ) -> Result<bool, Diagnostic> {
+    unify_terms_with_declared(left, right, parents, concrete, code, context, None)
+}
+
+/// `unify_terms`, plus the caller's knowledge of which side (if either) is a
+/// written annotation rather than an inferred type -- see `inference_conflict`.
+///
+/// Ordering invariant this relies on (#949): `declared` is `Some` only at the
+/// `HirStmt::Return` call site, which passes the return term *first*. So with
+/// `declared.is_some()`, `left` is `Ok(declared)` in the `(Ok, Ok)` arm below,
+/// the `Ok` side is always the declared type in the merged
+/// `(Err(var), Ok(ty)) | (Ok(ty), Err(var))` arm, and the `(Err, Err)` arm is
+/// unreachable -- an annotated return never lowers to an inference variable
+/// (`signatures::term_for_type` returns `Ok(ty)` for every `ty != Ty::Infer`).
+/// A future edit that swaps that call's argument order would not break the
+/// message (`inference_conflict` compares rather than indexes), but it would
+/// invalidate this note; no `debug_assert!` guards it because that would be an
+/// unreachable region under D-014's 100% region gate.
+pub(crate) fn unify_terms_with_declared(
+    left: TypeTerm,
+    right: TypeTerm,
+    parents: &mut [usize],
+    concrete: &mut [Option<Ty>],
+    code: &'static str,
+    context: &str,
+    declared: Option<&Ty>,
+) -> Result<bool, Diagnostic> {
     match (left, right) {
         (Ok(left), Ok(right)) => merge_inferred_types(left.clone(), right.clone())
             .map(|_| false)
-            .ok_or_else(|| inference_conflict(code, context, left, right)),
+            .ok_or_else(|| inference_conflict(code, context, left, right, declared)),
         (Err(var), Ok(ty)) | (Ok(ty), Err(var)) => {
             // D-133/D-134: this constraint solver exists only to infer a
             // `Ty::Infer` parameter/return of an unannotated private
@@ -283,7 +350,7 @@ pub(crate) fn unify_terms(
             let root = root(parents, var);
             let merged = match concrete[root].clone() {
                 Some(current) => merge_inferred_types(current.clone(), ty.clone())
-                    .ok_or_else(|| inference_conflict(code, context, current, ty))?,
+                    .ok_or_else(|| inference_conflict(code, context, current, ty, declared))?,
                 None => ty,
             };
             let changed = concrete[root] != Some(merged.clone());
@@ -297,9 +364,13 @@ pub(crate) fn unify_terms(
                 return Ok(false);
             }
             let merged = match (concrete[left_root].clone(), concrete[right_root].clone()) {
+                // `declared` is threaded through for consistency even though
+                // this arm is unreachable while it is `Some` (see the ordering
+                // note above): a future caller that made it reachable would get
+                // the right message rather than a silently stale one.
                 (Some(left), Some(right)) => Some(
                     merge_inferred_types(left.clone(), right.clone())
-                        .ok_or_else(|| inference_conflict(code, context, left, right))?,
+                        .ok_or_else(|| inference_conflict(code, context, left, right, declared))?,
                 ),
                 (Some(ty), None) | (None, Some(ty)) => Some(ty),
                 (None, None) => None,
@@ -1610,13 +1681,38 @@ pub(crate) fn collect_block_constraints(
                     None => Some(Ok(Ty::None)),
                 };
                 if let Some(actual) = actual {
-                    unify_terms(
+                    // #949: this solver runs over *every* module-level
+                    // function, not only D-038 private helpers, so the context
+                    // string cannot be "private helper ..." unconditionally --
+                    // that misdescribed every annotated (and every public)
+                    // function whose body returned the wrong type. The real
+                    // discriminator is the return term itself: `Ok(ty)` is a
+                    // written annotation, `Err(var)` an inference variable
+                    // standing in for an unannotated helper's return type.
+                    // Only the latter is genuinely an "inferred" return.
+                    //
+                    // The declared case therefore gets both a different
+                    // `context` -- which `unify_terms` interpolates into its
+                    // `T0042` "cannot be inferred through a PEP 695 generic
+                    // function's own type parameter" message, the same misnomer
+                    // one message over -- and, via `declared`, a
+                    // declared-vs-actual `T0022` message with a `help`
+                    // suggestion. The inferred case keeps the original wording
+                    // verbatim so `_helper` diagnostics are unchanged.
+                    let declared = return_term.as_ref().ok().cloned();
+                    let context = if declared.is_some() {
+                        "declared return type"
+                    } else {
+                        "private helper return type"
+                    };
+                    unify_terms_with_declared(
                         return_term,
                         actual,
                         parents,
                         concrete,
                         "T0022",
-                        "private helper return type",
+                        context,
+                        declared.as_ref(),
                     )?;
                 }
             }

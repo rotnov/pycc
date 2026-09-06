@@ -571,6 +571,19 @@ fn t0022_types_per_function() {
     assert_json_diagnostic_matches_fixture("t0022_types_per_function");
 }
 
+// Issue #949: the private-helper solver runs over every module-level
+// function, so its `T0022` return conflict used to be worded "private helper
+// return type" even for an annotated public function. The discriminator is
+// the return term, not the function's visibility: a written annotation is a
+// declared/actual mismatch, an unannotated helper's return is a genuinely
+// inferred one. This fixture pins the declared wording for the issue's own
+// program; `t0022_types_per_function` above pins it for the plain-`str` case,
+// and `constraints`' in-crate tests pin the unchanged inferred wording.
+#[test]
+fn t0022_declared_return_protocol_param() {
+    assert_diagnostic_matches_fixture("t0022_declared_return_protocol_param");
+}
+
 // Issue #618: an out-of-range `int` literal in a runtime `int`-boundary
 // position (D-141) is rejected at compile time with a spanned T0051
 // diagnostic instead of reaching `pycc_rt_int_untag_checked` and aborting at

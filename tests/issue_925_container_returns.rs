@@ -253,9 +253,7 @@ fn a_returned_value_that_disagrees_with_the_container_annotation_is_rejected() {
         "def f() -> list[int]:\n    return 5\n\n\nprint(len(f()))\n",
     );
     assert!(
-        scalar.contains(
-            "error[T0022]: private helper return type: conflicting inferred types `list[int]` and `int`"
-        ),
+        scalar.contains("error[T0022]: return type mismatch: expected `list[int]`, found `int`"),
         "{scalar}"
     );
 
@@ -265,7 +263,7 @@ fn a_returned_value_that_disagrees_with_the_container_annotation_is_rejected() {
     );
     assert!(
         wrong_family.contains(
-            "error[T0022]: private helper return type: conflicting inferred types `dict[str, int]` and `list[int]`"
+            "error[T0022]: return type mismatch: expected `dict[str, int]`, found `list[int]`"
         ),
         "{wrong_family}"
     );
