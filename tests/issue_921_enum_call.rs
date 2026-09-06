@@ -270,3 +270,33 @@ fn a_call_to_an_import_bound_name_before_the_enum_class_reports_the_collision_on
         "no enum-call C0001 may precede the collision, got: {combined}"
     );
 }
+
+#[test]
+fn a_call_after_an_identical_repeated_import_is_reported_at_the_call() {
+    let dir = ScratchDir::new("921_repeated_import").expect("failed to create scratch dir");
+    write_fixture(
+        &dir,
+        "colors.py",
+        "from enum import Enum\n\n\nclass Color(Enum):\n    RED = 1\n",
+    );
+    let entry = write_fixture(
+        &dir,
+        "prog.py",
+        "from colors import Color\nfrom colors import Color\n\n\nColor()\n",
+    );
+    let result = Command::new(pycc_bin())
+        .arg("check")
+        .arg(entry.to_str().unwrap())
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(result.status.code(), Some(1), "got: {combined}");
+    assert!(
+        combined.contains("cannot call enum class `Color`") && combined.contains("prog.py:5:1"),
+        "the repeated import binds the same class twice and the call keeps its span, got: {combined}"
+    );
+}

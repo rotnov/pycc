@@ -186,7 +186,9 @@ folds `if`/`elif TYPE_CHECKING:` bodies exactly as HIR lowering does
 another module-level `def`, `class`, `import`, or `type` statement also
 binds (`def Color()` or `class Color:` beside `class Color(Enum)`) is never
 scanned in either order: that program is reported by the name-collision
-diagnostic alone. A
+diagnostic alone; an identical repeated import (`from colors import Color`
+twice) binds the same class twice, is not a rebinding, and keeps the
+call-expression span. A
 scope-local rebinding of the class name (`def f(Color: int) -> None:
 Color()`) is not an enum call and keeps its `T0021`. Naming
 an enum class as a base (`class Foo(Color): pass`) is rejected from

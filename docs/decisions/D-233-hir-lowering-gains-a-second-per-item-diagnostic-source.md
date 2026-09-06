@@ -63,7 +63,9 @@ status: accepted
      module-level `def`, `class`, `import`, or `type` statement also binds
      is dropped from the name set for the whole module: that program is a
      collision the class item reports, and the scan must not put a
-     false-kind enum-call report ahead of it. Every residual
+     false-kind enum-call report ahead of it (an identical repeated import
+     binds the same definition twice, is no collision, and stays in the
+     set). Every residual
      is enumerated in the module doc of `class::enum_call` and pinned by a
      test: over-suppression is the only failure mode on an item that lowers
      (the call still fails in `pycc_types`), and the one false-kind report

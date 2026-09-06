@@ -118,7 +118,9 @@
 //!   inside a `def` the scan runs with the item's own import view, so the
 //!   aliased spelling folds there.
 //! - (vii) **A name bound by more than one module-level `def`, `class`,
-//!   `import`, or `type` statement is never scanned.** `def Color()`,
+//!   `import`, or `type` statement is never scanned** (an identical
+//!   repeated import, `from colors import Color` twice, binds the same
+//!   definition twice and is not a rebinding). `def Color()`,
 //!   an ordinary `class Color`, `from m import Color`, or
 //!   `type Color = int` beside `class Color(Enum)` is a collision that the
 //!   class item reports itself (`... collides with a function / an import /
@@ -213,27 +215,33 @@ pub(crate) fn syntactic_enum_class_names(body: &[Stmt]) -> Vec<String> {
 /// the enum-call name set, because a module that binds one name twice
 /// that way is reported by the collision diagnostic, never by the scan.
 /// An `import a.b` binds `a`; a `from m import *` binds nothing nameable
-/// here and is skipped.
+/// here and is skipped. An import that repeats an earlier import of the
+/// same definition under the same local name (`from colors import Color`
+/// twice) is not a rebinding: `lower_module` accepts it as binding the
+/// same class twice, so the scan keeps the name.
 pub(crate) fn module_rebound_names(body: &[Stmt]) -> Vec<String> {
-    let mut bound: Vec<&str> = Vec::new();
+    // (local name, imported definition) -- `None` for a `def`, `class`, or
+    // `type` binding, which always conflicts with any earlier binding.
+    let mut bound: Vec<(&str, Option<String>)> = Vec::new();
     for stmt in body {
         match stmt {
-            Stmt::FunctionDef(def) => bound.push(def.name.as_str()),
-            Stmt::ClassDef(def) => bound.push(def.name.as_str()),
+            Stmt::FunctionDef(def) => bound.push((def.name.as_str(), None)),
+            Stmt::ClassDef(def) => bound.push((def.name.as_str(), None)),
             // Same `.expect` as `lower_type_alias_stmt` and
             // `poisonable_names`: ruff unconditionally parses a `type`
             // statement's name as `Expr::Name`.
-            Stmt::TypeAlias(alias) => bound.push(
+            Stmt::TypeAlias(alias) => bound.push((
                 alias
                     .name
                     .as_name_expr()
                     .expect("ruff always parses a `type` statement's name as Expr::Name")
                     .id
                     .as_str(),
-            ),
+                None,
+            )),
             // `str::split` always yields at least one segment.
             Stmt::Import(import) => bound.extend(import.names.iter().map(|alias| {
-                alias.asname.as_ref().map_or_else(
+                let local = alias.asname.as_ref().map_or_else(
                     || {
                         alias
                             .name
@@ -242,7 +250,8 @@ pub(crate) fn module_rebound_names(body: &[Stmt]) -> Vec<String> {
                             .expect("`str::split` yields at least one segment")
                     },
                     |asname| asname.as_str(),
-                )
+                );
+                (local, Some(alias.name.to_string()))
             })),
             Stmt::ImportFrom(import) => bound.extend(
                 import
@@ -250,18 +259,28 @@ pub(crate) fn module_rebound_names(body: &[Stmt]) -> Vec<String> {
                     .iter()
                     .filter(|alias| alias.name.as_str() != "*")
                     .map(|alias| {
-                        alias
+                        let local = alias
                             .asname
                             .as_ref()
-                            .map_or(alias.name.as_str(), |a| a.as_str())
+                            .map_or(alias.name.as_str(), |a| a.as_str());
+                        let module = import.module.as_ref().map_or("", |m| m.as_str());
+                        let source = format!(
+                            "{}{module}.{}",
+                            ".".repeat(import.level as usize),
+                            alias.name
+                        );
+                        (local, Some(source))
                     }),
             ),
             _ => {}
         }
     }
     let mut rebound: Vec<String> = Vec::new();
-    for (index, name) in bound.iter().enumerate() {
-        if bound[..index].contains(name) && !rebound.iter().any(|seen| seen == name) {
+    for (index, (name, source)) in bound.iter().enumerate() {
+        let conflicts = bound[..index].iter().any(|(earlier, earlier_source)| {
+            earlier == name && (source.is_none() || earlier_source != source)
+        });
+        if conflicts && !rebound.iter().any(|seen| seen == name) {
             rebound.push((*name).to_string());
         }
     }
@@ -465,549 +484,5 @@ pub(crate) fn reject_enum_class_calls(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::enum_class_call_message;
-    use crate::lower_all;
-    use pycc_diag::{Diagnostic, Span};
-
-    fn lower_err(source: &str) -> Vec<Diagnostic> {
-        let module = crate::pycc_parser_test_helper::parse(source);
-        lower_all(&module).expect_err("test fixture should be rejected")
-    }
-
-    /// The shapes whose call is suppressed by a frame lower `Ok` here; the
-    /// CLI then reaches `pycc_types`, which reports the accurate `T0021`
-    /// (or, for the module-frame cases, the span-less guard).
-    fn lower_ok(source: &str) {
-        let module = crate::pycc_parser_test_helper::parse(source);
-        lower_all(&module).expect("the frame must suppress the enum-call scan");
-    }
-
-    /// Byte offset of the `occurrence`-th (0-based) `needle` in `source`.
-    fn nth_offset(source: &str, needle: &str, occurrence: usize) -> u32 {
-        source
-            .match_indices(needle)
-            .nth(occurrence)
-            .map(|(start, _)| start as u32)
-            .expect("the call text must occur in the source that many times")
-    }
-
-    fn assert_enum_call_at(diagnostic: &Diagnostic, class_name: &str, call_text: &str, start: u32) {
-        assert_eq!(diagnostic.code, "C0001");
-        assert_eq!(diagnostic.message, enum_class_call_message(class_name));
-        assert_eq!(
-            diagnostic.span,
-            Some(Span::new(start, start + call_text.len() as u32))
-        );
-    }
-
-    fn assert_enum_call(diagnostic: &Diagnostic, class_name: &str, call_text: &str, source: &str) {
-        assert_enum_call_at(
-            diagnostic,
-            class_name,
-            call_text,
-            nth_offset(source, call_text, 0),
-        );
-    }
-
-    const COLOR: &str = "class Color(Enum):\n    RED = 1\n    GREEN = 2\n";
-
-    // -- the reference shapes (#921) --
-
-    #[test]
-    fn a_module_level_zero_argument_call_is_rejected_at_the_call() {
-        let source = format!("{COLOR}c = Color()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1);
-        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
-    }
-
-    #[test]
-    fn a_value_lookup_call_inside_a_function_body_is_rejected() {
-        let source = format!("{COLOR}def f() -> None:\n    c = Color(1)\n    print(c.value)\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1);
-        assert_enum_call(&diagnostics[0], "Color", "Color(1)", &source);
-    }
-
-    #[test]
-    fn calls_before_and_after_the_class_are_both_found_in_loop_order() {
-        // The `def` precedes the class in source, so only the syntactic
-        // pre-collection can know `Color` when the `def` is scanned.
-        let source = format!("def f() -> None:\n    Color(1)\n{COLOR}Color(2)\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 2);
-        assert_enum_call(&diagnostics[0], "Color", "Color(1)", &source);
-        assert_enum_call(&diagnostics[1], "Color", "Color(2)", &source);
-    }
-
-    #[test]
-    fn a_nested_call_is_found() {
-        let source = format!("{COLOR}print(Color(1))\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1);
-        assert_enum_call(&diagnostics[0], "Color", "Color(1)", &source);
-    }
-
-    #[test]
-    fn a_non_enum_class_call_and_a_member_access_are_untouched() {
-        let source = format!(
-            "class P:\n    def __init__(self, x: int) -> None:\n        self.x = x\n{COLOR}p = P(1)\nc = Color.RED\nprint(c.value)\n"
-        );
-        lower_ok(&source);
-    }
-
-    #[test]
-    fn a_str_enum_class_call_is_rejected_the_same_way() {
-        let source = "class S(StrEnum):\n    A = \"a\"\ns = S(\"a\")\n";
-        let diagnostics = lower_err(source);
-        assert_eq!(diagnostics.len(), 1);
-        assert_enum_call(&diagnostics[0], "S", "S(\"a\")", source);
-    }
-
-    #[test]
-    fn a_docstring_only_enum_class_call_is_rejected() {
-        // #744 accepts a member-less enum; `enum_members` is empty, so only
-        // the provenance marker (`is_enum`/the syntactic set) can catch it.
-        let source = "class E(Enum):\n    \"doc\"\ne = E()\n";
-        let diagnostics = lower_err(source);
-        assert_eq!(diagnostics.len(), 1);
-        assert_enum_call(&diagnostics[0], "E", "E()", source);
-    }
-
-    #[test]
-    fn a_call_to_a_poisoned_enum_class_is_a_suppressed_cascade() {
-        // `class E(Enum): pass` fails to lower and poisons `E` (D-219); the
-        // later `E()` is a consequence of that skip, not a second gap.
-        let source = "class E(Enum):\n    pass\ne = E()\n";
-        let diagnostics = lower_err(source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].code, "C0001");
-        assert_ne!(diagnostics[0].message, enum_class_call_message("E"));
-    }
-
-    #[test]
-    fn a_call_to_a_redefined_enum_class_is_suppressed_with_the_duplicate() {
-        // D-219 poisons the name of *any* failing `class` statement, so the
-        // duplicate `class Color:` poisons `Color` and the later `Color()`
-        // is filtered as a cascade even though the first definition is a
-        // real enum. Pinned as a documented limit (see the function doc),
-        // not as the preferred outcome: the module still fails to compile.
-        let source = format!("{COLOR}class Color:\n    pass\nc = Color()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        let message = &diagnostics[0].message;
-        assert!(message.contains("defined more than once"), "{message}");
-    }
-
-    #[test]
-    fn a_keyword_call_keeps_exactly_the_keyword_diagnostic() {
-        let source = format!("{COLOR}c = Color(value=1)\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].code, "C0001");
-        let message = &diagnostics[0].message;
-        assert!(message.contains("keyword call arguments"), "{message}");
-    }
-
-    #[test]
-    fn a_class_whose_base_is_not_a_bare_name_is_not_an_enum_class() {
-        // `class Color(enum.Enum):` takes the pre-collection's non-`Name`
-        // arm and is rejected by `lower_class`'s own base-shape `C0001`;
-        // the later `Color()` is then a poisoned-name cascade.
-        let source = "class Color(enum.Enum):\n    RED = 1\nc = Color()\n";
-        let diagnostics = lower_err(source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        let message = &diagnostics[0].message;
-        assert!(
-            message.contains("a base class must be a bare name"),
-            "{message}"
-        );
-    }
-
-    // -- scope-local bindings keep their `T0021` (#944): the item lowers --
-
-    #[test]
-    fn a_parameter_that_shadows_the_enum_suppresses_the_scan() {
-        lower_ok(&format!("{COLOR}def f(Color: int) -> None:\n    Color()\n"));
-    }
-
-    #[test]
-    fn a_local_assignment_that_shadows_the_enum_suppresses_the_scan() {
-        lower_ok(&format!(
-            "{COLOR}def f() -> None:\n    Color = 1\n    Color()\n"
-        ));
-    }
-
-    #[test]
-    fn an_except_handler_name_suppresses_a_call_after_it() {
-        lower_ok(&format!(
-            "{COLOR}def f() -> None:\n    try:\n        pass\n    except ValueError as Color:\n        Color()\n"
-        ));
-    }
-
-    #[test]
-    fn an_except_handler_name_suppresses_a_call_before_it() {
-        // The frame is the whole scope, not position-aware (limit (i)).
-        lower_ok(&format!(
-            "{COLOR}def f() -> None:\n    Color()\n    try:\n        pass\n    except ValueError as Color:\n        pass\n"
-        ));
-    }
-
-    #[test]
-    fn a_match_capture_suppresses_the_scan() {
-        lower_ok(&format!(
-            "{COLOR}def f(x: int) -> None:\n    match x:\n        case Color:\n            Color()\n"
-        ));
-    }
-
-    #[test]
-    fn a_match_star_capture_suppresses_the_scan() {
-        lower_ok(&format!(
-            "{COLOR}def f(xs: list[int]) -> None:\n    match xs:\n        case [*Color]:\n            Color()\n"
-        ));
-    }
-
-    #[test]
-    fn a_match_mapping_rest_capture_suppresses_the_scan() {
-        lower_ok(&format!(
-            "{COLOR}def f(d: dict[str, int]) -> None:\n    match d:\n        case {{**Color}}:\n            Color()\n"
-        ));
-    }
-
-    #[test]
-    fn a_module_level_assignment_that_shadows_the_enum_suppresses_the_scan() {
-        // Side by side with `a_module_level_zero_argument_call_is_rejected_at_the_call`:
-        // `class Color(Enum)` itself is not a module-frame binding, a plain
-        // `Color = 1` is.
-        lower_ok(&format!("{COLOR}Color = 1\nColor()\n"));
-    }
-
-    #[test]
-    fn a_module_level_for_target_that_shadows_the_enum_suppresses_the_scan() {
-        lower_ok(&format!("{COLOR}for Color in range(3):\n    Color()\n"));
-    }
-
-    #[test]
-    fn a_module_level_call_before_a_later_shadowing_assignment_is_suppressed() {
-        // Limit (i): the module frame is not position-aware, so the later
-        // `Color = 1` hides the earlier `Color()`; `pycc_types`' span-less
-        // guard still rejects it.
-        lower_ok(&format!("{COLOR}Color()\nColor = 1\n"));
-    }
-
-    #[test]
-    fn a_comprehension_target_suppresses_a_sibling_call_in_the_same_def() {
-        // Limit (i): the comprehension target is recorded in the enclosing
-        // `def`'s frame, so a sibling `Color(1)` outside the comprehension
-        // is suppressed too; `pycc_types` still rejects it.
-        lower_ok(&format!(
-            "{COLOR}def f() -> None:\n    xs = [Color for Color in range(3)]\n    Color(1)\n"
-        ));
-    }
-
-    // -- `TYPE_CHECKING` guards (#790 fold, PR #971 review): dead bodies --
-
-    const TC: &str = "from typing import TYPE_CHECKING\n";
-
-    #[test]
-    fn a_call_under_a_type_checking_guard_is_dead_code_and_not_scanned() {
-        lower_ok(&format!("{TC}{COLOR}if TYPE_CHECKING:\n    Color(1)\n"));
-    }
-
-    #[test]
-    fn a_call_under_an_elif_type_checking_guard_is_dead_code_and_not_scanned() {
-        lower_ok(&format!(
-            "{TC}{COLOR}x = 1\nif x == 2:\n    pass\nelif TYPE_CHECKING:\n    Color(1)\n"
-        ));
-    }
-
-    #[test]
-    fn a_qualified_type_checking_guard_inside_a_def_is_folded_the_same_way() {
-        lower_ok(&format!(
-            "import typing\n{COLOR}def f() -> None:\n    if typing.TYPE_CHECKING:\n        Color(1)\n"
-        ));
-    }
-
-    #[test]
-    fn the_live_clauses_around_a_type_checking_guard_are_still_scanned() {
-        // The leading `if` is live (not a guard), the `elif` is folded, the
-        // `else` is live: exactly the two live calls, in source order.
-        let source = format!(
-            "{TC}{COLOR}x = 1\nif x == 2:\n    Color()\nelif TYPE_CHECKING:\n    Color(1)\nelse:\n    Color(2)\n"
-        );
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
-        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
-        assert_enum_call(&diagnostics[1], "Color", "Color(2)", &source);
-    }
-
-    #[test]
-    fn the_else_of_a_leading_type_checking_guard_is_live() {
-        let source = format!("{TC}{COLOR}if TYPE_CHECKING:\n    pass\nelse:\n    Color()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
-    }
-
-    #[test]
-    fn a_module_level_binding_under_a_type_checking_guard_does_not_shadow() {
-        // The guarded `Color = 1` never runs, so the runtime `Color` is the
-        // enum and the call is reported -- the frame skips the dead body.
-        let source = format!("{TC}{COLOR}if TYPE_CHECKING:\n    Color = 1\nColor()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
-    }
-
-    #[test]
-    fn a_def_level_binding_under_a_type_checking_guard_does_not_shadow() {
-        let source = format!(
-            "{TC}{COLOR}def f() -> None:\n    if TYPE_CHECKING:\n        Color = 1\n    Color()\n"
-        );
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
-    }
-
-    #[test]
-    fn an_aliased_module_level_guard_binding_is_the_documented_frame_residual() {
-        // Limit (iv): the module frame is computed before the loop lowers
-        // `import typing as t`, so `t.TYPE_CHECKING` is not recognized there
-        // and the dead `Color = 1` still suppresses the call (over-suppression;
-        // `pycc_types`' guard rejects it). Inside a `def` the scan runs with
-        // the import known, so the same alias folds -- see the next test.
-        lower_ok(&format!(
-            "import typing as t\n{COLOR}if t.TYPE_CHECKING:\n    Color = 1\nColor()\n"
-        ));
-    }
-
-    #[test]
-    fn an_aliased_guard_inside_a_def_is_folded_once_the_import_is_lowered() {
-        let source = format!(
-            "import typing as t\n{COLOR}def f() -> None:\n    if t.TYPE_CHECKING:\n        Color = 1\n    Color()\n"
-        );
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
-    }
-
-    // -- frame boundaries and item ordering (#944): exact counts --
-
-    #[test]
-    fn a_lambda_parameter_shadow_keeps_exactly_the_lambda_diagnostic() {
-        let source = format!("{COLOR}g = lambda Color: Color()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        let message = &diagnostics[0].message;
-        assert!(message.contains("a `lambda`"), "{message}");
-    }
-
-    #[test]
-    fn a_parameter_less_lambda_body_call_is_reported_after_the_lambda_diagnostic() {
-        let source = format!("{COLOR}g = lambda: Color()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
-        assert!(diagnostics[0].message.contains("a `lambda`"));
-        assert_enum_call(&diagnostics[1], "Color", "Color()", &source);
-    }
-
-    #[test]
-    fn a_walrus_inside_a_lambda_does_not_bind_the_module_frame() {
-        // The binder does not descend into a lambda: the walrus binds in the
-        // lambda's own scope, so the module-level `Color()` is still found
-        // (after the lambda's own `C0001`, the item's first diagnostic).
-        let source = format!("{COLOR}g = lambda: (Color := 1)\nColor()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
-        assert!(diagnostics[0].message.contains("a `lambda`"));
-        assert_enum_call(&diagnostics[1], "Color", "Color()", &source);
-    }
-
-    #[test]
-    fn a_shadow_in_one_function_does_not_leak_into_a_sibling() {
-        let source = format!(
-            "{COLOR}def f() -> None:\n    Color = 1\n    Color()\ndef g() -> None:\n    Color()\n"
-        );
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_enum_call_at(
-            &diagnostics[0],
-            "Color",
-            "Color()",
-            nth_offset(&source, "Color()", 1),
-        );
-    }
-
-    #[test]
-    fn a_shadow_inside_a_function_does_not_bind_the_module_frame() {
-        let source = format!("{COLOR}def g() -> None:\n    Color = 1\nColor()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
-    }
-
-    #[test]
-    fn a_raised_enum_call_is_rejected_at_the_call() {
-        let source = format!("{COLOR}raise Color()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
-    }
-
-    #[test]
-    fn a_failed_item_carries_its_own_diagnostic_before_the_scan_s() {
-        let source =
-            format!("{COLOR}def f() -> None:\n    with open(\"x\") as y:\n        Color()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].code, "C0001");
-        let message = &diagnostics[0].message;
-        assert!(message.contains("with"), "{message}");
-        assert_enum_call(&diagnostics[1], "Color", "Color()", &source);
-    }
-
-    #[test]
-    fn a_call_scanned_before_its_class_fails_is_reported_first() {
-        // Limit (iv): the `def` is scanned before the class item poisons
-        // `Color`, so the true enum-call report precedes the class's own.
-        let source = "def f() -> None:\n    Color(1)\nclass Color(Enum):\n    pass\n";
-        let diagnostics = lower_err(source);
-        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
-        assert_enum_call(&diagnostics[0], "Color", "Color(1)", source);
-        assert_eq!(diagnostics[1].code, "C0001");
-        assert_ne!(diagnostics[1].message, enum_class_call_message("Color"));
-    }
-
-    #[test]
-    fn a_starred_argument_call_reports_the_starred_diagnostic_then_the_call() {
-        let source = format!("{COLOR}def f(xs: list[int]) -> None:\n    Color(*xs)\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
-        let starred = nth_offset(&source, "*xs", 0);
-        assert_eq!(diagnostics[0].code, "C0001");
-        assert_eq!(diagnostics[0].span, Some(Span::new(starred, starred + 3)));
-        assert_enum_call(&diagnostics[1], "Color", "Color(*xs)", &source);
-    }
-
-    #[test]
-    fn a_class_body_call_reports_the_attribute_diagnostic_then_the_call() {
-        let source = format!("{COLOR}class K:\n    X = Color()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
-        let message = &diagnostics[0].message;
-        assert!(message.contains("class attribute `X`"), "{message}");
-        assert_enum_call(&diagnostics[1], "Color", "Color()", &source);
-    }
-
-    #[test]
-    fn a_class_body_shadow_is_the_documented_false_kind_residual() {
-        // Limit (i): a class body gets no frame, so `Color = 1` there does
-        // not suppress the scan. Pinned so the residual cannot drift.
-        let source = format!("{COLOR}class K:\n    Color = 1\n    X = Color()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
-        let message = &diagnostics[0].message;
-        assert!(message.contains("class attribute `X`"), "{message}");
-        assert_enum_call(&diagnostics[1], "Color", "Color()", &source);
-    }
-
-    #[test]
-    fn a_method_body_call_is_rejected_at_the_call() {
-        let source = format!("{COLOR}class K:\n    def m(self) -> None:\n        Color()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
-    }
-
-    #[test]
-    fn a_class_body_binding_does_not_reach_a_method_body() {
-        let source =
-            format!("{COLOR}class K:\n    Color = 1\n    def m(self) -> None:\n        Color()\n");
-        let diagnostics = lower_err(&source);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
-    }
-
-    /// Limit (vii): a module that binds one name through two module-level
-    /// `def`/`class`/`import`/`type` statements (one of them the enum
-    /// class) is reported by the collision diagnostic alone -- the scan
-    /// never claims a call to that name, in either definition order
-    /// (PR #971 review: `def Color()` / `Color()` / `class Color(Enum)`,
-    /// and then an ordinary `class Color` in the same position, used to
-    /// report a false-kind enum-call `C0001` first).
-    fn assert_only_the_collision_is_reported(source: &str) {
-        let diagnostics = lower_err(source);
-        let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
-        assert_eq!(
-            messages
-                .iter()
-                .filter(|m| m.contains("collides with") || m.contains("defined more than once"))
-                .count(),
-            1,
-            "exactly one collision diagnostic expected, got {messages:?}"
-        );
-        assert!(
-            messages
-                .iter()
-                .all(|m| !m.contains("cannot call enum class")),
-            "the scan must not claim a rebound name, got {messages:?}"
-        );
-    }
-
-    #[test]
-    fn a_def_bound_name_is_never_scanned_when_the_def_comes_first() {
-        assert_only_the_collision_is_reported(
-            "from enum import Enum\n\ndef Color() -> int:\n    return 1\n\nColor()\n\nclass Color(Enum):\n    RED = 1\n",
-        );
-    }
-
-    #[test]
-    fn a_def_bound_name_is_never_scanned_when_the_class_comes_first() {
-        assert_only_the_collision_is_reported(
-            "from enum import Enum\n\nclass Color(Enum):\n    RED = 1\n\ndef Color() -> int:\n    return 1\n\nColor()\n",
-        );
-    }
-
-    #[test]
-    fn a_def_body_call_to_a_def_bound_enum_name_is_not_scanned_either() {
-        assert_only_the_collision_is_reported(
-            "from enum import Enum\n\ndef use() -> None:\n    Color()\n\ndef Color() -> int:\n    return 1\n\nclass Color(Enum):\n    RED = 1\n",
-        );
-    }
-
-    #[test]
-    fn an_ordinary_class_bound_name_is_never_scanned_when_the_class_comes_first() {
-        assert_only_the_collision_is_reported(
-            "from enum import Enum\n\nclass Color:\n    pass\n\nColor()\n\nclass Color(Enum):\n    RED = 1\n",
-        );
-    }
-
-    #[test]
-    fn a_type_alias_bound_name_is_never_scanned_when_the_alias_comes_first() {
-        assert_only_the_collision_is_reported(
-            "from enum import Enum\n\ntype Color = int\n\nColor()\n\nclass Color(Enum):\n    RED = 1\n",
-        );
-    }
-
-    #[test]
-    fn module_rebound_names_lists_names_bound_by_two_or_more_statements() {
-        let module = crate::pycc_parser_test_helper::parse(concat!(
-            "import a.b\n",
-            "import c as a\n",
-            "from m import x, y as z\n",
-            "from n import *\n",
-            "def z() -> None:\n    def inner() -> None:\n        pass\n",
-            "class K:\n    def method(self) -> None:\n        pass\n",
-            "type K = int\n",
-            "async def once() -> None:\n    pass\n",
-            "class Once(Enum):\n    pass\n",
-            "def x() -> None:\n    pass\n",
-            "def x() -> None:\n    pass\n",
-        ));
-        assert_eq!(
-            super::module_rebound_names(&module.body),
-            vec!["a", "z", "K", "x"]
-        );
-    }
-}
+#[path = "enum_call_tests.rs"]
+mod tests;
