@@ -303,6 +303,10 @@
         {
           "category": "`super().<property>` calling the base class's getter rather than a subclass override",
           "evidence": "pep_3135_super.py"
+        },
+        {
+          "category": "`super().<class attribute>` reading the base class's value, including an earlier MRO entry's class attribute outranking a later entry's same-named `@property`",
+          "evidence": "pep_3135_super.py"
         }
       ],
       "not_proven": [

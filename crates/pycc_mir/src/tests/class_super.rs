@@ -234,7 +234,7 @@ fn super_method_lowers_to_direct_call_to_base_method() {
 }
 
 #[test]
-#[should_panic(expected = "is not a property on any class after `B` in its MRO")]
+#[should_panic(expected = "is not a property or class attribute on any class after `B` in its MRO")]
 fn super_attr_get_naming_an_instance_attr_panics_with_an_internal_error() {
     // #587: `super().x` where `x` is an instance attribute is rejected
     // by `pycc_types::class::resolve_super_attr_get` with `T0047`, so
@@ -439,5 +439,200 @@ fn super_property_lowers_to_call_to_base_getter() {
             }],
             ty: Ty::Int,
         })))
+    );
+}
+
+// -- #915: `super().CLASS_CONST` folds a base class's class attribute ------
+
+/// Builds a class def with no members other than the given name, MRO,
+/// bases and class attributes -- enough for the `super()` `AttrGet` arm.
+fn class_attr_class(
+    name: &str,
+    bases: Vec<String>,
+    mro: Vec<String>,
+    class_attrs: Vec<(String, Ty, pycc_hir::ClassAttrValue)>,
+    methods: Vec<(String, String)>,
+) -> HirClassDef {
+    HirClassDef {
+        class_attrs,
+        exception_type_tag: None,
+        name: name.to_string(),
+        bases,
+        mro,
+        attrs: Vec::new(),
+        methods,
+        type_param: None,
+        properties: Vec::new(),
+        static_methods: Vec::new(),
+        class_methods: Vec::new(),
+        is_enum: false,
+        enum_members: Vec::new(),
+        is_dataclass: false,
+        dataclass_fields: Vec::new(),
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: Vec::new(),
+        abstract_methods: Vec::new(),
+        is_abstract: false,
+    }
+}
+
+/// `class B(A)` (or a diamond, when `extra` adds classes) whose `B.read`
+/// returns `super().X`.
+fn super_class_attr_module(
+    class_defs: Vec<(String, HirClassDef)>,
+    reader_class: &str,
+    attr: &str,
+) -> HirModule {
+    HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: format!("{reader_class}.read"),
+            params: vec![(
+                "self".to_string(),
+                Ty::Instance(Box::new(reader_class.to_string())),
+            )],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Super),
+                attr: attr.to_string(),
+            }))],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs,
+    }
+}
+
+fn read_body(mir: &MirModule, name: &str) -> Option<MirStmt> {
+    mir.items.iter().find_map(|item| match item {
+        MirItem::Function { name: n, body, .. } if n == name => body.first().cloned(),
+        _ => None,
+    })
+}
+
+#[test]
+fn super_class_attr_folds_to_the_base_literal() {
+    // #915: `super().X` where `X` is a base class's class attribute folds
+    // to the literal, exactly as `A.X` does -- no receiver is emitted.
+    use pycc_hir::ClassAttrValue;
+    let mir = build(&super_class_attr_module(
+        vec![
+            (
+                "A".to_string(),
+                class_attr_class(
+                    "A",
+                    vec![],
+                    vec!["A".to_string()],
+                    vec![("X".to_string(), Ty::Int, ClassAttrValue::Int(1))],
+                    Vec::new(),
+                ),
+            ),
+            (
+                "B".to_string(),
+                class_attr_class(
+                    "B",
+                    vec!["A".to_string()],
+                    vec!["B".to_string(), "A".to_string()],
+                    Vec::new(),
+                    vec![("read".to_string(), "B.read".to_string())],
+                ),
+            ),
+        ],
+        "B",
+        "X",
+    ));
+    assert_eq!(
+        read_body(&mir, "B.read"),
+        Some(MirStmt::Return(Some(MirExpr::IntLiteral(1))))
+    );
+}
+
+#[test]
+fn super_class_attr_reaches_the_second_base_of_a_diamond() {
+    // #915: the fold walks the *current class's* post-current MRO slice.
+    // `C` is reachable only through `D`'s linearization `[D, B, C, object]`;
+    // walking `B`'s own MRO instead would miss it.
+    use pycc_hir::ClassAttrValue;
+    let mir = build(&super_class_attr_module(
+        vec![
+            (
+                "B".to_string(),
+                class_attr_class("B", vec![], vec!["B".to_string()], Vec::new(), Vec::new()),
+            ),
+            (
+                "C".to_string(),
+                class_attr_class(
+                    "C",
+                    vec![],
+                    vec!["C".to_string()],
+                    vec![("Y".to_string(), Ty::Int, ClassAttrValue::Int(42))],
+                    Vec::new(),
+                ),
+            ),
+            (
+                "D".to_string(),
+                class_attr_class(
+                    "D",
+                    vec!["B".to_string(), "C".to_string()],
+                    vec!["D".to_string(), "B".to_string(), "C".to_string()],
+                    Vec::new(),
+                    vec![("read".to_string(), "D.read".to_string())],
+                ),
+            ),
+        ],
+        "D",
+        "Y",
+    ));
+    assert_eq!(
+        read_body(&mir, "D.read"),
+        Some(MirStmt::Return(Some(MirExpr::IntLiteral(42))))
+    );
+}
+
+#[test]
+fn super_class_attr_on_an_earlier_mro_entry_outranks_a_later_property() {
+    // #915: the fold walks the slice one class at a time, checking every
+    // class-level member kind per class. `B` (earlier in `D`'s MRO) carries
+    // the class attribute and `C` (later) a `@property` of the same name, so
+    // the literal wins -- scanning all properties first would emit a call to
+    // `C.X` instead.
+    use pycc_hir::{ClassAttrValue, PropertyDef};
+    let mut c = class_attr_class("C", vec![], vec!["C".to_string()], Vec::new(), Vec::new());
+    c.properties = vec![PropertyDef {
+        name: "X".to_string(),
+        getter: "C.X".to_string(),
+        setter: None,
+    }];
+    let mir = build(&super_class_attr_module(
+        vec![
+            (
+                "B".to_string(),
+                class_attr_class(
+                    "B",
+                    vec![],
+                    vec!["B".to_string()],
+                    vec![("X".to_string(), Ty::Int, ClassAttrValue::Int(1))],
+                    Vec::new(),
+                ),
+            ),
+            ("C".to_string(), c),
+            (
+                "D".to_string(),
+                class_attr_class(
+                    "D",
+                    vec!["B".to_string(), "C".to_string()],
+                    vec!["D".to_string(), "B".to_string(), "C".to_string()],
+                    Vec::new(),
+                    vec![("read".to_string(), "D.read".to_string())],
+                ),
+            ),
+        ],
+        "D",
+        "X",
+    ));
+    assert_eq!(
+        read_body(&mir, "D.read"),
+        Some(MirStmt::Return(Some(MirExpr::IntLiteral(1))))
     );
 }

@@ -688,10 +688,16 @@ resolve this form against `self`'s own slot and return a value, which meant \
 a program compiled and printed a different answer than CPython gave for the \
 same expression; it is now rejected instead. Nothing is lost by the \
 rejection: `super().<attr>` and `self.<attr>` read the identical slot, so \
-the fix is always to spell the read `self.<attr>`. A base class \
-`@property` read through `super()` is unaffected -- a property is a \
-class-level descriptor, which a `super` object genuinely does proxy. A name \
-declared nowhere in the MRO at all is `T0044`, not this code.",
+the fix is always to spell the read `self.<attr>`. The class-level members \
+a `super` object genuinely does proxy are unaffected: a base class \
+`@property` (a class-level descriptor) and a base class class attribute \
+(#911), which is a real entry in that class's `__dict__` and folds to its \
+literal. Because a `super` object never consults the instance `__dict__`, \
+such a class attribute is found even when an unrelated base class \
+establishes an instance attribute of the same name -- this code is reported \
+only when no class-level member of that name exists anywhere after the \
+current class in the MRO. A name declared nowhere in the MRO at all is \
+`T0044`, not this code.",
         example: "\
 class Vehicle:
     def __init__(self, wheels: int) -> None:

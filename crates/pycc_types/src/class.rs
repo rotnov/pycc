@@ -613,10 +613,33 @@ pub(crate) fn has_static_or_class_method(
 /// '<attr>'`. pycc used to resolve that form against `self`'s own slot and
 /// return a value, which disagreed with the pinned oracle on the value of
 /// an expression rather than merely on what compiles (#587); it is now
-/// rejected with `T0047`. Of the class-level members pycc models, only
-/// properties are reachable this way today, so this function resolves a
-/// property or rejects.
+/// rejected with `T0047`. Of the class-level members pycc models, a base
+/// class `@property` and a base class *class attribute* (#911) are the
+/// two reachable this way (#915), so this function resolves one of those
+/// or rejects.
 pub(crate) fn resolve_super_attr_get(env: &Environment, attr: &str) -> Result<Ty, Diagnostic> {
+    // #915: both `super()` forms below assume a `self` receiver -- the
+    // `pycc_mir` lowering of `super().attr` and `super().m()` passes the
+    // enclosing method's `self` binding as the receiver and panics when it
+    // is absent. Inside a `@classmethod` the first parameter is bound as
+    // `cls` and inside a `@staticmethod` there is no receiver at all
+    // (`pycc_hir::class`), so a `self` binding here can only be a regular
+    // method's receiver: `pycc_hir` requires a regular method's first
+    // parameter and requires it to be named literally `self`. Reject the
+    // receiver-less forms as a capability gap (`C0001`) rather than
+    // letting them reach `pycc_mir` and abort the compiler. The single
+    // approximation is a `@classmethod` or `@staticmethod` that itself
+    // declares a non-receiver parameter named `self`, which keeps the
+    // previous behavior.
+    if env.binding_state("self").is_none() {
+        return Err(Diagnostic::error(
+            "C0001",
+            "`super()` inside a `@classmethod` or `@staticmethod` is not supported -- it has \
+             no `self` receiver to bind"
+                .to_string(),
+            Span::new(0, 0),
+        ));
+    }
     let current_class = env.current_class().unwrap();
     let class_def = expect_class(env, current_class);
     // Find the current class's position in its own MRO, then search
@@ -627,12 +650,31 @@ pub(crate) fn resolve_super_attr_get(env: &Environment, attr: &str) -> Result<Ty
         .position(|c| c == current_class)
         .unwrap();
     let super_mro = &class_def.mro[current_pos + 1..];
-    // Properties first (matching `resolve_attr_get`'s precedence).
+    // #915: walk the slice once, checking every class-level member kind on
+    // each class before moving to the next -- a CPython `super` object
+    // resolves against one class `__dict__` at a time, so the *MRO
+    // position* decides, not the member kind. Scanning all properties
+    // first and only then all class attributes would let a `@property` on
+    // a later MRO entry outrank a class attribute on an earlier one; for
+    // `class D(B, C)` with `B.X = 1` and a `C.X` property, CPython yields
+    // `1`, the class attribute `B` contributes.
+    //
+    // Both member kinds are searched before the `T0047` instance-attribute
+    // rejection below, and that ordering is *not* positional: an instance
+    // attribute is never in any class `__dict__`, so a `super` object never
+    // sees one at all. An instance attribute contributed by one MRO branch
+    // must therefore not mask a class-level member contributed by another,
+    // whatever their relative MRO positions.
     for mro_class in super_mro {
         let mro_def = expect_class(env, mro_class);
         if let Some(prop) = mro_def.properties.iter().find(|p| p.name == attr) {
             let (_, return_ty) = env.lookup_function(&prop.getter).unwrap();
             return Ok(return_ty.clone());
+        }
+        // A base class's class attribute (#911) is a genuine entry in that
+        // class's `__dict__`, so a `super` object does proxy it.
+        if let Some((_, ty, _)) = mro_def.class_attrs.iter().find(|(name, _, _)| name == attr) {
+            return Ok(ty.clone());
         }
     }
     // #587: an instance attribute — established by `self.<attr> = ...`
@@ -663,6 +705,28 @@ pub(crate) fn resolve_super_method_call(
     method: &str,
     arg_tys: &[Ty],
 ) -> Result<Ty, Diagnostic> {
+    // #915: both `super()` forms below assume a `self` receiver -- the
+    // `pycc_mir` lowering of `super().attr` and `super().m()` passes the
+    // enclosing method's `self` binding as the receiver and panics when it
+    // is absent. Inside a `@classmethod` the first parameter is bound as
+    // `cls` and inside a `@staticmethod` there is no receiver at all
+    // (`pycc_hir::class`), so a `self` binding here can only be a regular
+    // method's receiver: `pycc_hir` requires a regular method's first
+    // parameter and requires it to be named literally `self`. Reject the
+    // receiver-less forms as a capability gap (`C0001`) rather than
+    // letting them reach `pycc_mir` and abort the compiler. The single
+    // approximation is a `@classmethod` or `@staticmethod` that itself
+    // declares a non-receiver parameter named `self`, which keeps the
+    // previous behavior.
+    if env.binding_state("self").is_none() {
+        return Err(Diagnostic::error(
+            "C0001",
+            "`super()` inside a `@classmethod` or `@staticmethod` is not supported -- it has \
+             no `self` receiver to bind"
+                .to_string(),
+            Span::new(0, 0),
+        ));
+    }
     let current_class = env.current_class().unwrap();
     let class_def = expect_class(env, current_class);
     let current_pos = class_def
@@ -2429,10 +2493,53 @@ mod tests {
     /// class `"A"` in the MRO, and `extra_setup` to customize the class
     /// definitions and function registrations per test.
     fn super_env(extra_setup: impl FnOnce(&mut crate::Environment)) -> crate::Environment {
+        let mut env = super_env_without_self(extra_setup);
+        // #915: `resolve_super_attr_get` and `resolve_super_method_call`
+        // reject a receiver-less `super()` with `C0001`, so every fixture
+        // exercising the resolving path needs the enclosing method's `self`
+        // binding, exactly as a real method body's environment has it.
+        env.bind("self".to_string(), Ty::Instance(Box::new("B".to_string())));
+        env
+    }
+
+    /// #915: the same fixture without the `self` binding -- the environment
+    /// a `@classmethod` or `@staticmethod` body actually has, used by the
+    /// `C0001` guard's own tests.
+    fn super_env_without_self(
+        extra_setup: impl FnOnce(&mut crate::Environment),
+    ) -> crate::Environment {
         let mut env = crate::Environment::new();
         env.current_class = Some("B".to_string());
         extra_setup(&mut env);
         env
+    }
+
+    #[test]
+    fn resolve_super_attr_get_rejects_a_receiver_less_super() {
+        // #915: `super().X` inside a `@classmethod`/`@staticmethod` has no
+        // `self` to bind, and `pycc_mir`'s `Super` arm would abort the
+        // compiler computing one. Reject it as a capability gap instead.
+        let env = super_env_without_self(|_| {});
+        let err = super::resolve_super_attr_get(&env, "X").unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message.contains("no `self` receiver to bind"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn resolve_super_method_call_rejects_a_receiver_less_super() {
+        // #915: the method-call form of the same gap.
+        let env = super_env_without_self(|_| {});
+        let err = super::resolve_super_method_call(&env, "m", &[]).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message.contains("no `self` receiver to bind"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]

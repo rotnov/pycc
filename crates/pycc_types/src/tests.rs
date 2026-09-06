@@ -11378,6 +11378,9 @@ fn infer_expr_in_resolves_super_attr_get() {
     use pycc_hir::PropertyDef;
     let mut env = Environment::new();
     env.current_class = Some("B".to_string());
+    // #915: a receiver-less `super()` is now `C0001`, so this fixture binds
+    // the `self` a real method body's environment carries.
+    env.bind("self".to_string(), Ty::Instance(Box::new("B".to_string())));
     env.bind_class(
         "A".to_string(),
         HirClassDef {
@@ -11451,6 +11454,9 @@ fn infer_expr_in_resolves_super_method_call() {
     // inference closure (`.map(|arg| infer_expr_in(...))`).
     let mut env = Environment::new();
     env.current_class = Some("B".to_string());
+    // #915: a receiver-less `super()` is now `C0001`, so this fixture binds
+    // the `self` a real method body's environment carries.
+    env.bind("self".to_string(), Ty::Instance(Box::new("B".to_string())));
     env.bind_class(
         "A".to_string(),
         HirClassDef {
@@ -30266,4 +30272,86 @@ fn a_class_attribute_class_pattern_keyword_is_rejected() {
         "unexpected diagnostic: {}",
         err.message
     );
+}
+
+// -- #915: `super().CLASS_CONST` reaches a base class's class attribute ----
+//
+// `tests/issue_915_super_class_attr.rs` drives these programs through the
+// compiled `pycc` binary and asserts their runtime output; the tests below
+// pin the same contract at this crate's own seam, `class::resolve_super_attr_get`.
+
+#[test]
+fn a_class_attribute_read_through_super_type_checks() {
+    // The new class-attribute loop, reached after the property walk misses.
+    check_source(
+        "class Base:\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass Derived(Base):\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().X\n\n\nprint(Derived().read())\n",
+    )
+    .expect("`super().X` must reach a base class's class attribute");
+}
+
+#[test]
+fn a_class_attribute_on_the_second_base_of_a_diamond_is_reached_through_super() {
+    // The loop must walk the *current class's* post-current MRO slice, not
+    // the first base's own MRO -- `C` is reachable only through `D`'s
+    // linearization `[D, B, C, A, object]`.
+    check_source(
+        "class A:\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass B(A):\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass C(A):\n    Y: int = 42\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass D(B, C):\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().Y\n\n\nprint(D().read())\n",
+    )
+    .expect("`super().Y` must reach a class attribute on the second base of a diamond");
+}
+
+#[test]
+fn an_instance_attribute_on_a_sibling_base_does_not_mask_a_class_attribute() {
+    // The class-attribute loop runs before the `T0047` instance-attribute
+    // rejection: a CPython `super` object never sees the instance
+    // `__dict__`, so `C`'s `self.X` must not mask `B`'s class attribute.
+    // CPython prints `1` for this program; pycc rejected it with `T0047`
+    // before #915.
+    check_source(
+        "class B:\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass C:\n    def __init__(self) -> None:\n        self.X = 5\n\n\nclass D(B, C):\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().X\n\n\nprint(D().read())\n",
+    )
+    .expect("a sibling base's instance attribute must not mask a class attribute");
+}
+
+#[test]
+fn a_class_attribute_declared_only_on_the_current_class_is_not_reachable_through_super() {
+    // `mro[current_pos + 1..]`, not the full MRO: CPython raises
+    // `AttributeError: 'super' object has no attribute 'X'` here.
+    let err = check_source(
+        "class Base:\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass Derived(Base):\n    X: int = 7\n\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().X\n\n\nprint(Derived().read())\n",
+    )
+    .expect_err("a class attribute declared only on the current class is not reachable");
+    assert_eq!(err.code, "T0044");
+}
+
+#[test]
+fn super_inside_a_classmethod_is_rejected_as_a_capability_gap() {
+    // #915: a `@classmethod` has no `self` receiver for `pycc_mir`'s
+    // `Super` arm to bind, so the form is a `C0001` capability gap rather
+    // than a compiler abort.
+    let err = check_source(
+        "class Base:\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass Derived(Base):\n    def __init__(self) -> None:\n        self.n = 0\n\n    @classmethod\n    def read(cls) -> int:\n        return super().X\n\n\nprint(Derived.read())\n",
+    )
+    .expect_err("`super()` inside a `@classmethod` must be rejected");
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
+fn super_method_call_inside_a_staticmethod_is_rejected_as_a_capability_gap() {
+    let err = check_source(
+        "class Base:\n    def __init__(self) -> None:\n        self.n = 0\n\n    def m(self) -> int:\n        return 1\n\n\nclass Derived(Base):\n    def __init__(self) -> None:\n        self.n = 0\n\n    @staticmethod\n    def read() -> int:\n        return super().m()\n\n\nprint(Derived.read())\n",
+    )
+    .expect_err("`super().m()` inside a `@staticmethod` must be rejected");
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
+fn a_class_attribute_earlier_in_the_slice_outranks_a_later_property() {
+    // One pass over the slice, all member kinds per class: `B` contributes
+    // the class attribute and the later `C` a `@property` of the same name.
+    // CPython yields the class attribute (`int`), not the property.
+    check_source(
+        "class A:\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass B(A):\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass C(A):\n    def __init__(self) -> None:\n        self.n = 0\n\n    @property\n    def X(self) -> int:\n        return 99\n\n\nclass D(B, C):\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().X\n\n\nprint(D().read())\n",
+    )
+    .expect("an earlier class attribute must outrank a later property");
 }

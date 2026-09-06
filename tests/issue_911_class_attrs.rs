@@ -537,15 +537,17 @@ fn reading_a_class_attribute_off_a_call_result_is_rejected() {
     );
 }
 
-/// #587/#433: `super().X` is out of scope for Part 1 -- a class attribute is
-/// not reachable through `super()`, and this pins the diagnostic that shape
-/// produces today so a later change to it is a deliberate one.
+/// #587/#433/#915: `super().X` *does* reach a base class's class attribute --
+/// a class attribute is a genuine entry in the base's `__dict__`, which a
+/// CPython `super` object proxies. This was out of scope for Part 1 and
+/// rejected with `T0044`; #915 resolves it, and `tests/issue_915_super_class_attr.rs`
+/// carries the full surface.
 #[test]
-fn reading_a_class_attribute_through_super_is_rejected() {
-    assert_rejected(
+fn reading_a_class_attribute_through_super_folds_to_the_base_literal() {
+    assert_runs(
         "911_super",
-        "class Base:\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass Derived(Base):\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().X\n",
-        "class `Derived` has no attribute named `X`",
+        "class Base:\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass Derived(Base):\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().X\n\n\nprint(Derived().read())\n",
+        "1\n",
     );
 }
 
