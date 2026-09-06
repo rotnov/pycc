@@ -193,3 +193,29 @@ fn super_property_read_inside_a_staticmethod_is_c0001() {
         "no `self` receiver to bind",
     );
 }
+
+/// The slice is walked one class at a time, checking every class-level member
+/// kind on that class before moving to the next -- a `super` object resolves
+/// against one class `__dict__` at a time, so MRO *position* decides, not
+/// member kind. Here `B` (earlier in `D`'s MRO) contributes the class
+/// attribute and `C` (later) a `@property` of the same name; CPython prints
+/// `1`, the class attribute. Scanning all properties first would print `99`.
+#[test]
+fn an_earlier_class_attribute_outranks_a_later_property_of_the_same_name() {
+    assert_runs(
+        "915_attr_beats_later_property",
+        "class A:\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass B(A):\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass C(A):\n    def __init__(self) -> None:\n        self.n = 0\n\n    @property\n    def X(self) -> int:\n        return 99\n\n\nclass D(B, C):\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().X\n\n\nprint(D().read())\n",
+        "1\n",
+    );
+}
+
+/// The converse ordering: the `@property` is on the earlier MRO entry, so it
+/// wins and its getter is called. CPython prints `99`.
+#[test]
+fn an_earlier_property_outranks_a_later_class_attribute_of_the_same_name() {
+    assert_runs(
+        "915_property_beats_later_attr",
+        "class A:\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass B(A):\n    def __init__(self) -> None:\n        self.n = 0\n\n    @property\n    def X(self) -> int:\n        return 99\n\n\nclass C(A):\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass D(B, C):\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().X\n\n\nprint(D().read())\n",
+        "99\n",
+    );
+}

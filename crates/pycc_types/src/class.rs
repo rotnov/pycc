@@ -628,8 +628,9 @@ pub(crate) fn resolve_super_attr_get(env: &Environment, attr: &str) -> Result<Ty
     // parameter and requires it to be named literally `self`. Reject the
     // receiver-less forms as a capability gap (`C0001`) rather than
     // letting them reach `pycc_mir` and abort the compiler. The single
-    // approximation is a `@staticmethod` that itself declares a parameter
-    // named `self`, which keeps the previous behavior.
+    // approximation is a `@classmethod` or `@staticmethod` that itself
+    // declares a non-receiver parameter named `self`, which keeps the
+    // previous behavior.
     if env.binding_state("self").is_none() {
         return Err(Diagnostic::error(
             "C0001",
@@ -649,24 +650,29 @@ pub(crate) fn resolve_super_attr_get(env: &Environment, attr: &str) -> Result<Ty
         .position(|c| c == current_class)
         .unwrap();
     let super_mro = &class_def.mro[current_pos + 1..];
-    // Properties first (matching `resolve_attr_get`'s precedence).
+    // #915: walk the slice once, checking every class-level member kind on
+    // each class before moving to the next -- a CPython `super` object
+    // resolves against one class `__dict__` at a time, so the *MRO
+    // position* decides, not the member kind. Scanning all properties
+    // first and only then all class attributes would let a `@property` on
+    // a later MRO entry outrank a class attribute on an earlier one; for
+    // `class D(B, C)` with `B.X = 1` and a `C.X` property, CPython yields
+    // `1`, the class attribute `B` contributes.
+    //
+    // Both member kinds are searched before the `T0047` instance-attribute
+    // rejection below, and that ordering is *not* positional: an instance
+    // attribute is never in any class `__dict__`, so a `super` object never
+    // sees one at all. An instance attribute contributed by one MRO branch
+    // must therefore not mask a class-level member contributed by another,
+    // whatever their relative MRO positions.
     for mro_class in super_mro {
         let mro_def = expect_class(env, mro_class);
         if let Some(prop) = mro_def.properties.iter().find(|p| p.name == attr) {
             let (_, return_ty) = env.lookup_function(&prop.getter).unwrap();
             return Ok(return_ty.clone());
         }
-    }
-    // #915: a base class's class attribute (#911) is a genuine entry in
-    // that class's `__dict__`, so a CPython `super` object does proxy it.
-    // This loop runs *before* the `T0047` instance-attribute rejection
-    // below because a `super` object never sees the instance `__dict__` at
-    // all: an instance attribute contributed by one MRO branch must not
-    // mask a class attribute contributed by another. (This ordering says
-    // nothing about the properties loop above, which already runs to
-    // completion over the whole slice first.)
-    for mro_class in super_mro {
-        let mro_def = expect_class(env, mro_class);
+        // A base class's class attribute (#911) is a genuine entry in that
+        // class's `__dict__`, so a `super` object does proxy it.
         if let Some((_, ty, _)) = mro_def.class_attrs.iter().find(|(name, _, _)| name == attr) {
             return Ok(ty.clone());
         }
@@ -709,8 +715,9 @@ pub(crate) fn resolve_super_method_call(
     // parameter and requires it to be named literally `self`. Reject the
     // receiver-less forms as a capability gap (`C0001`) rather than
     // letting them reach `pycc_mir` and abort the compiler. The single
-    // approximation is a `@staticmethod` that itself declares a parameter
-    // named `self`, which keeps the previous behavior.
+    // approximation is a `@classmethod` or `@staticmethod` that itself
+    // declares a non-receiver parameter named `self`, which keeps the
+    // previous behavior.
     if env.binding_state("self").is_none() {
         return Err(Diagnostic::error(
             "C0001",

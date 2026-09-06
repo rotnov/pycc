@@ -589,3 +589,50 @@ fn super_class_attr_reaches_the_second_base_of_a_diamond() {
         Some(MirStmt::Return(Some(MirExpr::IntLiteral(42))))
     );
 }
+
+#[test]
+fn super_class_attr_on_an_earlier_mro_entry_outranks_a_later_property() {
+    // #915: the fold walks the slice one class at a time, checking every
+    // class-level member kind per class. `B` (earlier in `D`'s MRO) carries
+    // the class attribute and `C` (later) a `@property` of the same name, so
+    // the literal wins -- scanning all properties first would emit a call to
+    // `C.X` instead.
+    use pycc_hir::{ClassAttrValue, PropertyDef};
+    let mut c = class_attr_class("C", vec![], vec!["C".to_string()], Vec::new(), Vec::new());
+    c.properties = vec![PropertyDef {
+        name: "X".to_string(),
+        getter: "C.X".to_string(),
+        setter: None,
+    }];
+    let mir = build(&super_class_attr_module(
+        vec![
+            (
+                "B".to_string(),
+                class_attr_class(
+                    "B",
+                    vec![],
+                    vec!["B".to_string()],
+                    vec![("X".to_string(), Ty::Int, ClassAttrValue::Int(1))],
+                    Vec::new(),
+                ),
+            ),
+            ("C".to_string(), c),
+            (
+                "D".to_string(),
+                class_attr_class(
+                    "D",
+                    vec!["B".to_string(), "C".to_string()],
+                    vec!["D".to_string(), "B".to_string(), "C".to_string()],
+                    Vec::new(),
+                    vec![("read".to_string(), "D.read".to_string())],
+                ),
+            ),
+        ],
+        "D",
+        "X",
+    ));
+    assert_eq!(
+        read_body(&mir, "D.read"),
+        Some(MirStmt::Return(Some(MirExpr::IntLiteral(1))))
+    );
+}

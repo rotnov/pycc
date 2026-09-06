@@ -68,3 +68,61 @@ class TurboEngine(Engine):
 t = TurboEngine(50)
 print(t.power)
 print(t.base_power())
+
+
+# #915: a base class *class attribute* is also a class-level member a
+# CPython `super` object proxies -- it is a real entry in that class's
+# `__dict__` -- so `super().<class attribute>` reads the base class's value
+# even when the current class declares its own. Resolution walks one class
+# at a time along the MRO after the current class, so an earlier entry's
+# class attribute outranks a later entry's `@property` of the same name.
+class Limits:
+    MAX: int = 10
+
+    def __init__(self) -> None:
+        self.used = 0
+
+
+class TightLimits(Limits):
+    MAX: int = 3
+
+    def __init__(self) -> None:
+        self.used = 0
+
+    def base_max(self) -> int:
+        return super().MAX
+
+    def own_max(self) -> int:
+        return self.MAX
+
+
+tl = TightLimits()
+print(tl.base_max())
+print(tl.own_max())
+
+
+class Slow:
+    RATE: int = 1
+
+    def __init__(self) -> None:
+        self.used = 0
+
+
+class Fast:
+    def __init__(self) -> None:
+        self.used = 0
+
+    @property
+    def RATE(self) -> int:
+        return 100
+
+
+class Mixed(Slow, Fast):
+    def __init__(self) -> None:
+        self.used = 0
+
+    def rate(self) -> int:
+        return super().RATE
+
+
+print(Mixed().rate())

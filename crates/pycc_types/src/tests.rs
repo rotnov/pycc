@@ -30344,3 +30344,14 @@ fn super_method_call_inside_a_staticmethod_is_rejected_as_a_capability_gap() {
     .expect_err("`super().m()` inside a `@staticmethod` must be rejected");
     assert_eq!(err.code, "C0001");
 }
+
+#[test]
+fn a_class_attribute_earlier_in_the_slice_outranks_a_later_property() {
+    // One pass over the slice, all member kinds per class: `B` contributes
+    // the class attribute and the later `C` a `@property` of the same name.
+    // CPython yields the class attribute (`int`), not the property.
+    check_source(
+        "class A:\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass B(A):\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass C(A):\n    def __init__(self) -> None:\n        self.n = 0\n\n    @property\n    def X(self) -> int:\n        return 99\n\n\nclass D(B, C):\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().X\n\n\nprint(D().read())\n",
+    )
+    .expect("an earlier class attribute must outrank a later property");
+}

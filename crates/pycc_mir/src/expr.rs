@@ -585,7 +585,21 @@ pub(super) fn lower_expr(
                     .position(|c| c == current)
                     .expect("pycc_mir: internal error: class not found in its own MRO");
                 let super_mro = &class_def.mro[current_pos + 1..];
-                // Properties first (matching the non-super AttrGet arm).
+                // #915: one pass over the slice, checking every class-level
+                // member kind on each class before moving to the next --
+                // mirroring `pycc_types::class::resolve_super_attr_get`,
+                // where the reasoning lives: a `super` object resolves
+                // against one class `__dict__` at a time, so MRO position
+                // decides, not member kind.
+                //
+                // A class attribute (#911) folds to its literal through the
+                // same `fold_class_attr` helper the `Base.X`, `self.X` and
+                // `d.X` sites use, so `super().X` produces MIR identical to
+                // `Base.X` and `pycc_codegen` needs no change. The
+                // `self_expr` receiver computed above is deliberately
+                // discarded on that path: a class attribute has no runtime
+                // storage, so the read needs no instance, and `super()` is
+                // side-effect-free, so dropping it loses nothing.
                 for mro_class in super_mro {
                     let mro_def = &classes[mro_class.as_str()];
                     if let Some(prop) = mro_def.properties.iter().find(|p| p.name == *attr) {
@@ -596,18 +610,6 @@ pub(super) fn lower_expr(
                             ty,
                         };
                     }
-                }
-                // #915: a base class's class attribute (#911) is folded to
-                // its literal here, over the same post-current MRO slice.
-                // The `self_expr` receiver computed above is deliberately
-                // discarded on this path: a class attribute has no runtime
-                // storage, so the read needs no instance, and `super()` is
-                // side-effect-free, so dropping it loses nothing. Using the
-                // same `fold_class_attr` helper as the `Base.X`, `self.X`
-                // and `d.X` sites makes `super().X` produce MIR identical to
-                // `Base.X`, which is why `pycc_codegen` needs no change.
-                for mro_class in super_mro {
-                    let mro_def = &classes[mro_class.as_str()];
                     if let Some(folded) = fold_class_attr(mro_def, attr) {
                         return folded;
                     }
