@@ -103,8 +103,8 @@ use crate::stmt::type_checking::{
     return_context_violation,
 };
 use crate::{
-    CompIter, HirExpr, HirMatchCase, HirPattern, HirStmt, Ty, annotation_to_ty, context_invalid,
-    unsupported,
+    CompIter, HirExpr, HirMatchCase, HirPattern, HirStmt, ImportBinding, Ty, annotation_to_ty,
+    context_invalid, unsupported,
 };
 pub(crate) use exception::ExceptStarCtx;
 use exception::lower_except_handler;
@@ -140,15 +140,34 @@ use pycc_diag::Diagnostic;
 /// this compiler still folds it away as dead code, silently diverging from
 /// CPython for that (contrived) program. #798 tracks gating the fold on an
 /// actual `typing` import.
-fn is_type_checking_guard(test: &Expr) -> bool {
+///
+/// Part 1 of #883 (#962): the attribute form also folds through a module
+/// alias -- `import typing as t` then `if t.TYPE_CHECKING:` -- when the
+/// receiver resolves to `StdModule::Typing` through the very same
+/// last-binding-wins lookup every other stdlib receiver uses
+/// (`expr::std_receiver`), so `import typing as t; import enum as t` does
+/// *not* fold: the live `t` is `enum`, and CPython raises `AttributeError`
+/// there. Without the alias branch, the test would lower through
+/// `expr::std_receiver` into `Name("typing.TYPE_CHECKING")` and fail in
+/// `pycc_types` as a marker used as a value, a worse diagnostic than the
+/// bare spelling gets. The bare-name spelling stays syntactic and
+/// non-gated (#798), and so does the `typing.` spelling through
+/// `std_receiver`'s textual fallback -- unless `typing` itself is rebound
+/// to another stdlib module by an alias. An alias of any *other* module
+/// (`import math as t`) does not fold, so `t.TYPE_CHECKING` then reaches
+/// the ordinary attribute path and its "has no attribute" diagnostic.
+fn is_type_checking_guard(test: &Expr, imports: &[ImportBinding]) -> bool {
     match test {
         Expr::Name(name) => name.id.as_str() == "TYPE_CHECKING",
         Expr::Attribute(attr) => {
             attr.attr.as_str() == "TYPE_CHECKING"
-                && matches!(
-                    attr.value.as_ref(),
-                    Expr::Name(receiver) if receiver.id.as_str() == "typing"
-                )
+                && match attr.value.as_ref() {
+                    Expr::Name(receiver) => {
+                        crate::expr::std_receiver(receiver.id.as_str(), imports)
+                            == Some(pycc_std::StdModule::Typing)
+                    }
+                    _ => false,
+                }
         }
         _ => false,
     }
@@ -165,11 +184,15 @@ pub(crate) fn lower_stmt(
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
+    imports: &[ImportBinding],
 ) -> Result<HirStmt, Diagnostic> {
     let lowered = match stmt {
-        Stmt::Expr(expr_stmt) => {
-            HirStmt::ExprStmt(lower_expr(&expr_stmt.value, in_function, class_name)?)
-        }
+        Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(
+            &expr_stmt.value,
+            in_function,
+            class_name,
+            imports,
+        )?),
         Stmt::Assign(assign) => {
             let [target] = assign.targets.as_slice() else {
                 return Err(unsupported(
@@ -193,17 +216,17 @@ pub(crate) fn lower_stmt(
                     // generic "expression kind not supported yet"
                     // catch-all.
                     Expr::ListComp(comp) => {
-                        lower_list_comp_assign(name.id.as_str(), comp, class_name)?
+                        lower_list_comp_assign(name.id.as_str(), comp, class_name, imports)?
                     }
                     Expr::SetComp(comp) => {
-                        lower_set_comp_assign(name.id.as_str(), comp, class_name)?
+                        lower_set_comp_assign(name.id.as_str(), comp, class_name, imports)?
                     }
                     Expr::DictComp(comp) => {
-                        lower_dict_comp_assign(name.id.as_str(), comp, class_name)?
+                        lower_dict_comp_assign(name.id.as_str(), comp, class_name, imports)?
                     }
                     _ => HirStmt::Assign {
                         target: name.id.as_str().to_string(),
-                        value: lower_expr(&assign.value, in_function, class_name)?,
+                        value: lower_expr(&assign.value, in_function, class_name, imports)?,
                     },
                 },
                 // `<bare name>[key] = value`, PR-11 Task 3 (D-123): unlike
@@ -232,8 +255,8 @@ pub(crate) fn lower_stmt(
                     // -- this compiler never gives a dict key an `int`-typed,
                     // boundary-sensitive representation, so a key literal has
                     // no runtime `int`-untagging boundary to protect.
-                    let key = lower_expr(&sub.slice, in_function, class_name)?;
-                    let value = lower_expr(&assign.value, in_function, class_name)?;
+                    let key = lower_expr(&sub.slice, in_function, class_name, imports)?;
+                    let value = lower_expr(&assign.value, in_function, class_name, imports)?;
                     // This lowering step is type-blind (see the comment
                     // above): `base_name` may turn out to be a `list[int]` at
                     // `pycc_types` time, not a `dict`, in which case T0033
@@ -286,9 +309,9 @@ pub(crate) fn lower_stmt(
                         ));
                     }
                     HirStmt::AttrSet {
-                        base: lower_expr(&attr.value, in_function, class_name)?,
+                        base: lower_expr(&attr.value, in_function, class_name, imports)?,
                         attr: attr.attr.to_string(),
-                        value: lower_expr(&assign.value, in_function, class_name)?,
+                        value: lower_expr(&assign.value, in_function, class_name, imports)?,
                     }
                 }
                 other => {
@@ -334,7 +357,7 @@ pub(crate) fn lower_stmt(
             let value = ann
                 .value
                 .as_deref()
-                .map(|e| lower_expr(e, in_function, class_name))
+                .map(|e| lower_expr(e, in_function, class_name, imports))
                 .transpose()?;
             // PEP 591 (#383): detect `Final[X]` at the AST level (before
             // `annotation_to_ty` unwrapped it to `X`) so the type checker
@@ -356,7 +379,7 @@ pub(crate) fn lower_stmt(
                 is_final,
             }
         }
-        Stmt::If(if_stmt) if is_type_checking_guard(&if_stmt.test) => {
+        Stmt::If(if_stmt) if is_type_checking_guard(&if_stmt.test, imports) => {
             // #790: `if TYPE_CHECKING:` is CPython's standard idiom for
             // guarding imports/statements meant only for static type
             // checkers -- `typing.TYPE_CHECKING` is always `False` at
@@ -387,6 +410,7 @@ pub(crate) fn lower_stmt(
                 in_finally,
                 except_star,
                 class_name,
+                imports,
             )?;
             HirStmt::If {
                 test: HirExpr::BoolLiteral(false),
@@ -401,11 +425,12 @@ pub(crate) fn lower_stmt(
                     class_name,
                     type_param,
                     class_defs,
+                    imports,
                 )?,
             }
         }
         Stmt::If(if_stmt) => HirStmt::If {
-            test: lower_expr(&if_stmt.test, in_function, class_name)?,
+            test: lower_expr(&if_stmt.test, in_function, class_name, imports)?,
             body: lower_body(
                 &if_stmt.body,
                 aliases,
@@ -416,6 +441,7 @@ pub(crate) fn lower_stmt(
                 class_name,
                 type_param,
                 class_defs,
+                imports,
             )?,
             orelse: lower_elif_else_clauses(
                 &if_stmt.elif_else_clauses,
@@ -427,6 +453,7 @@ pub(crate) fn lower_stmt(
                 class_name,
                 type_param,
                 class_defs,
+                imports,
             )?,
         },
         Stmt::While(while_stmt) => {
@@ -437,7 +464,7 @@ pub(crate) fn lower_stmt(
                 ));
             }
             HirStmt::While {
-                test: lower_expr(&while_stmt.test, in_function, class_name)?,
+                test: lower_expr(&while_stmt.test, in_function, class_name, imports)?,
                 body: lower_body(
                     &while_stmt.body,
                     aliases,
@@ -456,6 +483,7 @@ pub(crate) fn lower_stmt(
                     class_name,
                     type_param,
                     class_defs,
+                    imports,
                 )?,
             }
         }
@@ -467,6 +495,7 @@ pub(crate) fn lower_stmt(
             class_name,
             type_param,
             class_defs,
+            imports,
         )?,
         Stmt::Return(ret) => {
             // #795 (PEP 654) and PEP 765 (#738, Part 1 of #543): both
@@ -488,7 +517,7 @@ pub(crate) fn lower_stmt(
             HirStmt::Return(
                 ret.value
                     .as_deref()
-                    .map(|e| lower_expr(e, in_function, class_name))
+                    .map(|e| lower_expr(e, in_function, class_name, imports))
                     .transpose()?,
             )
         }
@@ -542,6 +571,7 @@ pub(crate) fn lower_stmt(
             class_name,
             type_param,
             class_defs,
+            imports,
         )?,
         Stmt::Try(try_stmt) => {
             let body = lower_body(
@@ -554,6 +584,7 @@ pub(crate) fn lower_stmt(
                 class_name,
                 type_param,
                 class_defs,
+                imports,
             )?;
             // #795 (PEP 654): an `except*` clause body is the only thing
             // that *sets* the context; a plain `except` clause propagates
@@ -591,6 +622,7 @@ pub(crate) fn lower_stmt(
                         class_name,
                         type_param,
                         class_defs,
+                        imports,
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -604,6 +636,7 @@ pub(crate) fn lower_stmt(
                 class_name,
                 type_param,
                 class_defs,
+                imports,
             )?;
             // Entering a `finally` clause always sets `in_finally` to `true`
             // for its own body -- unconditionally, regardless of the
@@ -626,6 +659,7 @@ pub(crate) fn lower_stmt(
                 class_name,
                 type_param,
                 class_defs,
+                imports,
             )?;
             if try_stmt.is_star {
                 HirStmt::TryStar {
@@ -647,7 +681,7 @@ pub(crate) fn lower_stmt(
             let exc = raise_stmt
                 .exc
                 .as_deref()
-                .map(|e| lower_expr(e, in_function, class_name))
+                .map(|e| lower_expr(e, in_function, class_name, imports))
                 .transpose()?;
             // PEP 409: `raise X from None` suppresses the implicit
             // `__context__` chain. Its only observable effect in CPython is
@@ -662,7 +696,7 @@ pub(crate) fn lower_stmt(
             // reintroduced here when implicit `__context__` chaining lands.
             let cause = match raise_stmt.cause.as_deref() {
                 None | Some(Expr::NoneLiteral(_)) => None,
-                Some(cause) => Some(lower_expr(cause, in_function, class_name)?),
+                Some(cause) => Some(lower_expr(cause, in_function, class_name, imports)?),
             };
             HirStmt::Raise { exc, cause }
         }
@@ -825,6 +859,7 @@ pub(crate) fn lower_body(
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
+    imports: &[ImportBinding],
 ) -> Result<Vec<HirStmt>, Diagnostic> {
     // #435: `Stmt::Pass` is a no-op — filter it out rather than lowering it
     // to a statement. This allows method bodies like `def __init_subclass__:
@@ -844,6 +879,7 @@ pub(crate) fn lower_body(
                 class_name,
                 type_param,
                 class_defs,
+                imports,
             )
         })
         .collect()
@@ -860,6 +896,7 @@ pub(crate) fn lower_elif_else_clauses(
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
+    imports: &[ImportBinding],
 ) -> Result<Vec<HirStmt>, Diagnostic> {
     let Some((first, rest)) = clauses.split_first() else {
         return Ok(vec![]);
@@ -870,7 +907,7 @@ pub(crate) fn lower_elif_else_clauses(
         // own doc comment) -- the guarded body is dead at runtime either
         // way, and CPython's `elif` is just sugar for a nested `if` inside
         // the enclosing `else`.
-        Some(test) if is_type_checking_guard(test) => {
+        Some(test) if is_type_checking_guard(test, imports) => {
             // #905: and the same context re-check as the leading
             // `if TYPE_CHECKING:` fold in `lower_stmt`.
             check_guarded_body(
@@ -880,6 +917,7 @@ pub(crate) fn lower_elif_else_clauses(
                 in_finally,
                 except_star,
                 class_name,
+                imports,
             )?;
             Ok(vec![HirStmt::If {
                 test: HirExpr::BoolLiteral(false),
@@ -894,11 +932,12 @@ pub(crate) fn lower_elif_else_clauses(
                     class_name,
                     type_param,
                     class_defs,
+                    imports,
                 )?,
             }])
         }
         Some(test) => Ok(vec![HirStmt::If {
-            test: lower_expr(test, in_function, class_name)?,
+            test: lower_expr(test, in_function, class_name, imports)?,
             body: lower_body(
                 &first.body,
                 aliases,
@@ -909,6 +948,7 @@ pub(crate) fn lower_elif_else_clauses(
                 class_name,
                 type_param,
                 class_defs,
+                imports,
             )?,
             orelse: lower_elif_else_clauses(
                 rest,
@@ -920,6 +960,7 @@ pub(crate) fn lower_elif_else_clauses(
                 class_name,
                 type_param,
                 class_defs,
+                imports,
             )?,
         }]),
         None => {
@@ -937,6 +978,7 @@ pub(crate) fn lower_elif_else_clauses(
                 class_name,
                 type_param,
                 class_defs,
+                imports,
             )
         }
     }
@@ -957,15 +999,16 @@ fn lower_match(
     class_name: Option<&str>,
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
+    imports: &[ImportBinding],
 ) -> Result<HirStmt, Diagnostic> {
-    let subject = lower_expr(&match_stmt.subject, in_function, class_name)?;
+    let subject = lower_expr(&match_stmt.subject, in_function, class_name, imports)?;
     let mut cases = Vec::with_capacity(match_stmt.cases.len());
     for case in &match_stmt.cases {
-        let pattern = lower_pattern(&case.pattern, in_function, class_name)?;
+        let pattern = lower_pattern(&case.pattern, in_function, class_name, imports)?;
         let guard = case
             .guard
             .as_deref()
-            .map(|g| lower_expr(g, in_function, class_name))
+            .map(|g| lower_expr(g, in_function, class_name, imports))
             .transpose()?;
         let body = lower_body(
             &case.body,
@@ -977,6 +1020,7 @@ fn lower_match(
             class_name,
             type_param,
             class_defs,
+            imports,
         )?;
         cases.push(HirMatchCase {
             pattern,
@@ -995,10 +1039,11 @@ fn lower_pattern(
     pattern: &Pattern,
     in_function: bool,
     class_name: Option<&str>,
+    imports: &[ImportBinding],
 ) -> Result<HirPattern, Diagnostic> {
     match pattern {
         Pattern::MatchValue(value) => {
-            let expr = lower_expr(&value.value, in_function, class_name)?;
+            let expr = lower_expr(&value.value, in_function, class_name, imports)?;
             match &expr {
                 HirExpr::IntLiteral(_)
                 | HirExpr::FloatLiteral(_)
@@ -1027,7 +1072,7 @@ fn lower_pattern(
                     if let Pattern::MatchStar(star) = p {
                         rest = star.name.as_ref().map(|n| n.id.to_string());
                     } else {
-                        fixed.push(lower_pattern(p, in_function, class_name)?);
+                        fixed.push(lower_pattern(p, in_function, class_name, imports)?);
                     }
                 }
                 Ok(HirPattern::SequenceStar(fixed, rest))
@@ -1035,7 +1080,7 @@ fn lower_pattern(
                 let sub_patterns = seq
                     .patterns
                     .iter()
-                    .map(|p| lower_pattern(p, in_function, class_name))
+                    .map(|p| lower_pattern(p, in_function, class_name, imports))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(HirPattern::Sequence(sub_patterns))
             }
@@ -1043,8 +1088,8 @@ fn lower_pattern(
         Pattern::MatchMapping(mapping) => {
             let mut pairs = Vec::with_capacity(mapping.keys.len());
             for (key, pat) in mapping.keys.iter().zip(mapping.patterns.iter()) {
-                let key_expr = lower_expr(key, in_function, class_name)?;
-                let val_pat = lower_pattern(pat, in_function, class_name)?;
+                let key_expr = lower_expr(key, in_function, class_name, imports)?;
+                let val_pat = lower_pattern(pat, in_function, class_name, imports)?;
                 pairs.push((key_expr, val_pat));
             }
             let rest = mapping.rest.as_ref().map(|n| n.id.to_string());
@@ -1062,14 +1107,15 @@ fn lower_pattern(
                 .arguments
                 .patterns
                 .iter()
-                .map(|p| lower_pattern(p, in_function, None))
+                .map(|p| lower_pattern(p, in_function, None, imports))
                 .collect::<Result<Vec<_>, _>>()?;
             let keyword = class
                 .arguments
                 .keywords
                 .iter()
                 .map(|kw| {
-                    lower_pattern(&kw.pattern, in_function, None).map(|p| (kw.attr.to_string(), p))
+                    lower_pattern(&kw.pattern, in_function, None, imports)
+                        .map(|p| (kw.attr.to_string(), p))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(HirPattern::Class {
@@ -1086,7 +1132,7 @@ fn lower_pattern(
             (None, None) => Ok(HirPattern::Wildcard),
             (None, Some(name)) => Ok(HirPattern::Capture(name.id.to_string())),
             (Some(inner), name) => {
-                let inner_pat = lower_pattern(inner, in_function, class_name)?;
+                let inner_pat = lower_pattern(inner, in_function, class_name, imports)?;
                 let name = name.as_ref().map(|n| n.id.to_string()).unwrap_or_default();
                 Ok(HirPattern::As(Box::new(inner_pat), name))
             }
@@ -1095,7 +1141,7 @@ fn lower_pattern(
             let sub = or_pat
                 .patterns
                 .iter()
-                .map(|p| lower_pattern(p, in_function, class_name))
+                .map(|p| lower_pattern(p, in_function, class_name, imports))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(HirPattern::Or(sub))
         }

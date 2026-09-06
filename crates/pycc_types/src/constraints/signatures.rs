@@ -88,6 +88,9 @@ pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environme
         finals: HashSet::new(),
         in_except_handler: false,
         narrowed: HashMap::new(),
+        // Overwritten at `check_with_environment_all`'s entry, the common
+        // sink of both `Environment` constructors (#962).
+        std_module_aliases: Vec::new(),
     };
     // Part 1 of #541: register the class table through `bind_class` (via
     // `bind_classes`) rather than by populating `classes` directly, so this
@@ -172,6 +175,10 @@ pub(crate) fn infer_function_signatures_with_solver_all(
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
         opaque_bindings: HashSet::new(),
+        // #962: the module's alias table, read by the stdlib receiver
+        // shadow check; copied field-by-field into every per-function
+        // environment below.
+        std_module_aliases: crate::std_receiver::bind_std_module_aliases(&hir.imports),
     };
     for (index, item) in hir.items.iter().enumerate() {
         match item {
@@ -212,6 +219,10 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             defs_rebound: globals.defs_rebound.clone(),
             maybe_bindings: globals.maybe_bindings.clone(),
             opaque_bindings: globals.opaque_bindings.clone(),
+            // #962: this literal copies field by field on purpose (it is
+            // not a `.clone()`), so the alias table must be named here or
+            // every function body would silently get an empty one.
+            std_module_aliases: globals.std_module_aliases.clone(),
         };
         for local_name in local_names.iter().copied() {
             env.bindings.remove(local_name);

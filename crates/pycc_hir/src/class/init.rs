@@ -214,10 +214,7 @@ mod tests {
     /// makes the field count irrelevant, and this test proves it.
     #[test]
     fn a_dataclass_s_generated_constructor_is_not_flagged_implicit() {
-        for (label, body) in [
-            ("one field", "    x: int\n"),
-            ("zero fields", "    pass\n"),
-        ] {
+        for (label, body) in [("one field", "    x: int\n"), ("zero fields", "    pass\n")] {
             let module = crate::pycc_parser_test_helper::parse(&format!(
                 "from dataclasses import dataclass\n@dataclass\nclass Point:\n{body}"
             ));

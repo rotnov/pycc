@@ -14,6 +14,7 @@ use crate::binop::numeric_result_type;
 
 // #934: the protocol-return re-cover tests live in their own file so this
 // already-oversized module does not grow (AGENTS.md decomposability rule).
+mod import_alias;
 mod init_rank;
 mod protocol_argument;
 mod protocol_return;
@@ -590,14 +591,7 @@ fn collect_block_constraints_binds_the_annotation_and_records_the_initializer_de
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &[],
-    };
+    let mut env = ConstraintEnvironment::empty(&[]);
     let body = vec![HirStmt::AnnAssign {
         is_final: false,
         target: "y".to_string(),
@@ -633,12 +627,8 @@ fn collect_block_constraints_preserves_an_existing_annotated_target_binding() {
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
         bindings: HashMap::from([("y".to_string(), Ok(Ty::Str))]),
-        local_names: &["y"],
+        ..ConstraintEnvironment::empty(&["y"])
     };
     let body = vec![HirStmt::AnnAssign {
         is_final: false,
@@ -673,14 +663,7 @@ fn collect_block_constraints_binds_the_annotation_when_the_initializer_has_no_te
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &[],
-    };
+    let mut env = ConstraintEnvironment::empty(&[]);
     let body = vec![HirStmt::AnnAssign {
         is_final: false,
         target: "y".to_string(),
@@ -709,14 +692,7 @@ fn collect_block_constraints_ignores_a_value_less_annotated_assignment() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["y"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["y"]);
     let body = vec![HirStmt::AnnAssign {
         is_final: false,
         target: "y".to_string(),
@@ -749,14 +725,7 @@ fn collect_block_constraints_propagates_an_error_from_the_initializer_expression
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["z"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["z"]);
     let body = vec![HirStmt::AnnAssign {
         is_final: false,
         target: "y".to_string(),
@@ -789,14 +758,7 @@ fn constraint_collection_carries_none_literal_as_ty_none() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::NoneLiteral;
 
     let term = collect_expr_constraints(
@@ -824,14 +786,7 @@ fn constraint_collection_carries_a_homogeneous_scalar_list_literal_as_an_element
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]);
 
     let term = collect_expr_constraints(
@@ -853,14 +808,7 @@ fn constraint_collection_propagates_an_error_from_a_list_literal_element() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::Name("missing".to_string())]);
 
     let err = collect_expr_constraints(
@@ -882,14 +830,7 @@ fn constraint_collection_treats_a_subscript_as_unconstrained_but_recurses_into_b
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::IntLiteral(1)),
         index: Box::new(HirExpr::IntLiteral(0)),
@@ -914,14 +855,7 @@ fn constraint_collection_propagates_an_error_from_a_subscript_base() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::Name("missing".to_string())),
         index: Box::new(HirExpr::IntLiteral(0)),
@@ -946,14 +880,7 @@ fn constraint_collection_propagates_an_error_from_a_subscript_index() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::IntLiteral(1)),
         index: Box::new(HirExpr::Name("missing".to_string())),
@@ -981,14 +908,7 @@ fn constraint_collection_carries_a_homogeneous_float_list_literal_as_an_element_
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::FloatLiteral(1.0), HirExpr::FloatLiteral(2.0)]);
 
     let term = collect_expr_constraints(
@@ -1012,14 +932,7 @@ fn constraint_collection_carries_a_single_element_scalar_list_literal() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]);
 
     let term = collect_expr_constraints(
@@ -1046,14 +959,7 @@ fn constraint_collection_does_not_carry_a_heterogeneous_list_literal() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::FloatLiteral(2.0)]);
 
     let term = collect_expr_constraints(
@@ -1081,14 +987,7 @@ fn constraint_collection_does_not_carry_a_bool_int_heterogeneous_list_literal() 
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::BoolLiteral(true)]);
 
     let term = collect_expr_constraints(
@@ -1112,14 +1011,7 @@ fn constraint_collection_does_not_carry_an_empty_list_literal() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![]);
 
     let term = collect_expr_constraints(
@@ -1145,14 +1037,7 @@ fn constraint_collection_does_not_carry_a_list_literal_with_a_non_scalar_element
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])]);
 
     let term = collect_expr_constraints(
@@ -1178,14 +1063,7 @@ fn constraint_collection_does_not_carry_a_list_literal_when_an_element_has_no_te
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![
         HirExpr::IntLiteral(1),
         HirExpr::Name("unbound_global".to_string()),
@@ -1216,11 +1094,7 @@ fn constraint_collection_subscript_on_a_list_literal_base_extracts_the_element_t
     let mut binops = Vec::new();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("xs".to_string(), Ok(Ty::List(Box::new(Ty::Int))))]),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::Name("xs".to_string())),
@@ -1251,11 +1125,7 @@ fn constraint_collection_subscript_on_a_non_list_bound_base_keeps_ok_none() {
     let mut binops = Vec::new();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::Name("x".to_string())),
@@ -1288,11 +1158,7 @@ fn constraint_collection_subscript_on_an_unresolved_list_base_keeps_ok_none() {
     let unresolved = fresh_term(&mut parents, &mut concrete);
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("xs".to_string(), unresolved)]),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::Name("xs".to_string())),
@@ -1323,11 +1189,7 @@ fn constraint_collection_list_pop_on_a_list_typed_bound_name_extracts_the_elemen
     let mut binops = Vec::new();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("xs".to_string(), Ok(Ty::List(Box::new(Ty::Str))))]),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::ListPop {
         list: "xs".to_string(),
@@ -1355,14 +1217,7 @@ fn constraint_collection_list_pop_on_an_unbound_name_keeps_ok_none() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListPop {
         list: "xs".to_string(),
     };
@@ -1391,11 +1246,7 @@ fn constraint_collection_list_pop_on_a_non_list_bound_name_keeps_ok_none() {
     let mut binops = Vec::new();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("xs".to_string(), Ok(Ty::Int))]),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::ListPop {
         list: "xs".to_string(),
@@ -1426,11 +1277,7 @@ fn constraint_collection_list_append_after_a_list_binding_still_keeps_ok_none() 
     let mut binops = Vec::new();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("xs".to_string(), Ok(Ty::List(Box::new(Ty::Int))))]),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::ListAppend {
         list: "xs".to_string(),
@@ -1459,14 +1306,7 @@ fn constraint_collection_inline_subscript_on_a_list_literal_extracts_the_element
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
         index: Box::new(HirExpr::IntLiteral(0)),
@@ -1559,14 +1399,7 @@ fn constraint_collection_treats_a_slice_as_unconstrained_but_recurses_into_base_
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Slice {
         base: Box::new(HirExpr::IntLiteral(1)),
         start: Some(Box::new(HirExpr::IntLiteral(0))),
@@ -1595,14 +1428,7 @@ fn constraint_collection_treats_a_slice_with_every_bound_omitted_as_unconstraine
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Slice {
         base: Box::new(HirExpr::IntLiteral(1)),
         start: None,
@@ -1629,14 +1455,7 @@ fn constraint_collection_propagates_an_error_from_a_slice_base() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::Slice {
         base: Box::new(HirExpr::Name("missing".to_string())),
         start: None,
@@ -1663,14 +1482,7 @@ fn constraint_collection_propagates_an_error_from_a_slice_bound() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::Slice {
         base: Box::new(HirExpr::IntLiteral(1)),
         start: Some(Box::new(HirExpr::Name("missing".to_string()))),
@@ -1697,14 +1509,7 @@ fn constraint_collection_treats_a_list_append_as_unconstrained_but_recurses_into
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListAppend {
         list: "lst".to_string(),
         value: Box::new(HirExpr::IntLiteral(1)),
@@ -1729,14 +1534,7 @@ fn constraint_collection_propagates_an_error_from_a_list_append_value() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::ListAppend {
         list: "lst".to_string(),
         value: Box::new(HirExpr::Name("missing".to_string())),
@@ -1767,14 +1565,7 @@ fn constraint_collection_treats_a_list_pop_as_unconstrained() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListPop {
         list: "lst".to_string(),
     };
@@ -1799,14 +1590,7 @@ fn constraint_collection_treats_a_dict_get_or_default_as_unconstrained_but_recur
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::DictGetOrDefault {
         dict: "d".to_string(),
         key: Box::new(HirExpr::StringLiteral("a".to_string())),
@@ -1832,14 +1616,7 @@ fn constraint_collection_propagates_an_error_from_a_dict_get_or_default_key() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::DictGetOrDefault {
         dict: "d".to_string(),
         key: Box::new(HirExpr::Name("missing".to_string())),
@@ -1865,14 +1642,7 @@ fn constraint_collection_propagates_an_error_from_a_dict_get_or_default_default(
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::DictGetOrDefault {
         dict: "d".to_string(),
         key: Box::new(HirExpr::StringLiteral("a".to_string())),
@@ -1898,14 +1668,7 @@ fn constraint_collection_treats_a_set_add_as_unconstrained_but_recurses_into_val
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::SetAdd {
         set: "s".to_string(),
         value: Box::new(HirExpr::IntLiteral(1)),
@@ -1930,14 +1693,7 @@ fn constraint_collection_propagates_an_error_from_a_set_add_value() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::SetAdd {
         set: "s".to_string(),
         value: Box::new(HirExpr::Name("missing".to_string())),
@@ -1969,11 +1725,7 @@ fn constraint_collection_len_call_returns_int_for_a_concretely_bound_list() {
     let mut binops = Vec::new();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("lst".to_string(), Ok(Ty::List(Box::new(Ty::Int))))]),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::Call {
         callee: "len".to_string(),
@@ -2007,11 +1759,7 @@ fn constraint_collection_len_call_defers_an_unresolved_argument_to_the_real_chec
     let unresolved = fresh_term(&mut parents, &mut concrete);
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("lst".to_string(), unresolved)]),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::Call {
         callee: "len".to_string(),
@@ -2037,14 +1785,7 @@ fn constraint_collection_len_call_rejects_the_wrong_arity() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "len".to_string(),
         args: vec![],
@@ -2070,14 +1811,7 @@ fn constraint_collection_len_call_rejects_a_concretely_known_non_list_argument()
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "len".to_string(),
         args: vec![HirExpr::IntLiteral(5)],
@@ -2111,11 +1845,7 @@ fn constraint_collection_float_call_returns_float_regardless_of_argument_resolut
     let mut binops = Vec::new();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::Call {
         callee: "float".to_string(),
@@ -2148,11 +1878,7 @@ fn constraint_collection_float_call_defers_an_unresolved_argument_to_the_real_ch
     let unresolved = fresh_term(&mut parents, &mut concrete);
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("x".to_string(), unresolved)]),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::Call {
         callee: "float".to_string(),
@@ -2178,14 +1904,7 @@ fn constraint_collection_float_call_rejects_the_wrong_arity() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "float".to_string(),
         args: vec![],
@@ -2211,14 +1930,7 @@ fn constraint_collection_float_call_rejects_a_concretely_known_non_numeric_argum
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "float".to_string(),
         args: vec![HirExpr::StringLiteral("hello".to_string())],
@@ -2255,14 +1967,7 @@ fn constraint_collection_honors_a_user_defined_float_signature_over_the_builtin(
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "float".to_string(),
         args: vec![HirExpr::StringLiteral("hello".to_string())],
@@ -2287,14 +1992,7 @@ fn collect_block_constraints_gives_a_for_list_loop_variable_a_fresh_term_when_un
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["i"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let mut env = ConstraintEnvironment::empty(&["i"]);
     let body = vec![HirStmt::ForList {
         var: "i".to_string(),
         list: "lst".to_string(),
@@ -2323,11 +2021,7 @@ fn collect_block_constraints_keeps_a_for_list_loop_variable_s_existing_term() {
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([("i".to_string(), Ok(Ty::Int))]),
-        local_names: &["i"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&["i"])
     };
     let body = vec![HirStmt::ForList {
         var: "i".to_string(),
@@ -2355,14 +2049,7 @@ fn collect_block_constraints_propagates_an_error_from_a_for_list_loop_body() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["i", "z"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let mut env = ConstraintEnvironment::empty(&["i", "z"]);
     let body = vec![HirStmt::ForList {
         var: "i".to_string(),
         list: "lst".to_string(),
@@ -7625,14 +7312,7 @@ fn constraint_collection_classifies_value_error_as_c0001() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "ValueError".to_string(),
         args: vec![HirExpr::StringLiteral("x".to_string())],
@@ -7656,14 +7336,7 @@ fn constraint_collection_classifies_exception_as_c0001() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "Exception".to_string(),
         args: vec![HirExpr::StringLiteral("msg".to_string())],
@@ -7690,14 +7363,7 @@ fn constraint_collection_defers_unknown_callees_to_final_validation() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "totally_undefined".to_string(),
         args: vec![HirExpr::IntLiteral(1)],
@@ -7726,14 +7392,7 @@ fn constraint_collection_honors_user_defined_value_error_over_c0001() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "ValueError".to_string(),
         args: vec![HirExpr::StringLiteral("x".to_string())],
@@ -7970,11 +7629,7 @@ fn constraint_collection_len_call_returns_int_for_a_concretely_bound_dict() {
     let mut binops = Vec::new();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("d".to_string(), Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int)))))]),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::Call {
         callee: "len".to_string(),
@@ -8000,14 +7655,7 @@ fn constraint_collection_treats_a_dict_literal_as_unconstrained_but_recurses_int
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::DictLiteral(vec![(
         HirExpr::StringLiteral("a".to_string()),
         HirExpr::IntLiteral(1),
@@ -8032,14 +7680,7 @@ fn constraint_collection_propagates_an_error_from_a_dict_literal_key() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::DictLiteral(vec![(
         HirExpr::Name("missing".to_string()),
         HirExpr::IntLiteral(1),
@@ -8064,14 +7705,7 @@ fn constraint_collection_propagates_an_error_from_a_dict_literal_value() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::DictLiteral(vec![(
         HirExpr::StringLiteral("a".to_string()),
         HirExpr::Name("missing".to_string()),
@@ -8096,14 +7730,7 @@ fn collect_block_constraints_recurses_into_a_dict_set_s_key_and_value() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let mut env = ConstraintEnvironment::empty(&[]);
     let body = vec![HirStmt::DictSet {
         dict: "x".to_string(),
         key: HirExpr::StringLiteral("a".to_string()),
@@ -8128,14 +7755,7 @@ fn collect_block_constraints_propagates_an_error_from_a_dict_set_key() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let mut env = ConstraintEnvironment::empty(&["missing"]);
     let body = vec![HirStmt::DictSet {
         dict: "x".to_string(),
         key: HirExpr::Name("missing".to_string()),
@@ -8162,14 +7782,7 @@ fn collect_block_constraints_propagates_an_error_from_a_dict_set_value() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let mut env = ConstraintEnvironment::empty(&["missing"]);
     let body = vec![HirStmt::DictSet {
         dict: "x".to_string(),
         key: HirExpr::StringLiteral("a".to_string()),
@@ -8204,13 +7817,7 @@ fn collect_block_constraints_recurses_into_every_try_star_block_and_binds_a_name
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-    };
+    let mut env = ConstraintEnvironment::empty(&[]);
     let body = vec![HirStmt::TryStar {
         body: vec![HirStmt::ExprStmt(HirExpr::IntLiteral(1))],
         handlers: vec![pycc_hir::HirExceptHandler {
@@ -8277,13 +7884,7 @@ fn collect_block_constraints_propagates_an_error_from_a_try_star_body_block() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-    };
+    let mut env = ConstraintEnvironment::empty(&["missing"]);
     let body = vec![HirStmt::TryStar {
         body: vec![HirStmt::DictSet {
             dict: "x".to_string(),
@@ -8318,13 +7919,7 @@ fn collect_block_constraints_propagates_an_error_from_a_try_star_handler_block()
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-    };
+    let mut env = ConstraintEnvironment::empty(&["missing"]);
     let body = vec![HirStmt::TryStar {
         body: vec![],
         handlers: vec![pycc_hir::HirExceptHandler {
@@ -8362,13 +7957,7 @@ fn collect_block_constraints_propagates_an_error_from_a_try_star_else_block() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-    };
+    let mut env = ConstraintEnvironment::empty(&["missing"]);
     let body = vec![HirStmt::TryStar {
         body: vec![],
         handlers: vec![],
@@ -8415,11 +8004,8 @@ fn collect_block_constraints_try_star_body_reassigns_pre_existing_opaque_binding
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["y"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
         opaque_bindings: HashSet::from(["y".to_string()]),
+        ..ConstraintEnvironment::empty(&["y"])
     };
     let body = vec![HirStmt::TryStar {
         body: vec![HirStmt::Assign {
@@ -8456,13 +8042,7 @@ fn collect_block_constraints_propagates_an_error_from_a_try_star_finally_block()
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-    };
+    let mut env = ConstraintEnvironment::empty(&["missing"]);
     let body = vec![HirStmt::TryStar {
         body: vec![],
         handlers: vec![],
@@ -9764,11 +9344,7 @@ fn constraint_collection_len_call_returns_int_for_a_concretely_bound_set() {
     let mut binops = Vec::new();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("s".to_string(), Ok(Ty::Set(Box::new(Ty::Int))))]),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::Call {
         callee: "len".to_string(),
@@ -9794,14 +9370,7 @@ fn constraint_collection_treats_a_set_literal_as_unconstrained_but_recurses_into
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1)]);
 
     let term = collect_expr_constraints(
@@ -9823,14 +9392,7 @@ fn constraint_collection_propagates_an_error_from_a_set_literal_element() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::SetLiteral(vec![HirExpr::Name("missing".to_string())]);
 
     let err = collect_expr_constraints(
@@ -10043,14 +9605,7 @@ fn constraint_collection_treats_a_tuple_literal_as_unconstrained_but_recurses_in
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &[],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::TupleLiteral(vec![HirExpr::IntLiteral(1)]);
 
     let term = collect_expr_constraints(
@@ -10072,14 +9627,7 @@ fn constraint_collection_propagates_an_error_from_a_tuple_literal_element() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut binops = Vec::new();
-    let env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["missing"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::TupleLiteral(vec![HirExpr::Name("missing".to_string())]);
 
     let err = collect_expr_constraints(
@@ -18624,11 +18172,7 @@ fn solver_if_no_else_marks_body_only_binding_as_maybe() {
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
-        local_names: &["cond", "x"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&["cond", "x"])
     };
     let body = vec![HirStmt::If {
         test: HirExpr::Name("cond".to_string()),
@@ -18664,11 +18208,7 @@ fn solver_if_with_else_marks_both_branch_binding_as_definite() {
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
-        local_names: &["cond", "x"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&["cond", "x"])
     };
     let body = vec![HirStmt::If {
         test: HirExpr::Name("cond".to_string()),
@@ -18708,11 +18248,7 @@ fn solver_if_no_else_does_not_leak_binding_into_orelse() {
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
-        local_names: &["cond", "x", "y"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&["cond", "x", "y"])
     };
     // Body assigns x; orelse assigns y. After the if, both x and y
     // should be maybe-bound (each was introduced by only one branch).
@@ -18766,11 +18302,7 @@ fn solver_if_no_else_marks_opaque_body_only_binding_as_maybe() {
             ("cond".to_string(), Ok(Ty::Bool)),
             ("d".to_string(), Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int))))),
         ]),
-        local_names: &["cond", "d", "y"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&["cond", "d", "y"])
     };
     let body = vec![HirStmt::If {
         test: HirExpr::Name("cond".to_string()),
@@ -18821,11 +18353,7 @@ fn solver_if_with_else_marks_both_branch_opaque_binding_as_definite() {
             ("cond".to_string(), Ok(Ty::Bool)),
             ("d".to_string(), Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int))))),
         ]),
-        local_names: &["cond", "d", "y"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&["cond", "d", "y"])
     };
     let opaque_get = || HirStmt::Assign {
         target: "y".to_string(),
@@ -18889,10 +18417,8 @@ fn solver_if_reassigns_pre_existing_opaque_binding_in_one_branch_only() {
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
-        local_names: &["cond", "y"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
         opaque_bindings: HashSet::from(["y".to_string()]),
+        ..ConstraintEnvironment::empty(&["cond", "y"])
     };
     let body = vec![HirStmt::If {
         test: HirExpr::Name("cond".to_string()),
@@ -18940,10 +18466,8 @@ fn solver_if_reassigns_pre_existing_opaque_binding_in_orelse_branch_only() {
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
-        local_names: &["cond", "y"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
         opaque_bindings: HashSet::from(["y".to_string()]),
+        ..ConstraintEnvironment::empty(&["cond", "y"])
     };
     let body = vec![HirStmt::If {
         test: HirExpr::Name("cond".to_string()),
@@ -18997,10 +18521,8 @@ fn solver_if_reassigns_pre_existing_opaque_binding_in_both_branches_to_real_term
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
-        local_names: &["cond", "y"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
         opaque_bindings: HashSet::from(["y".to_string()]),
+        ..ConstraintEnvironment::empty(&["cond", "y"])
     };
     let body = vec![HirStmt::If {
         test: HirExpr::Name("cond".to_string()),
@@ -19061,11 +18583,7 @@ fn solver_while_loop_marks_opaque_body_only_binding_as_maybe() {
             ("cond".to_string(), Ok(Ty::Bool)),
             ("d".to_string(), Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int))))),
         ]),
-        local_names: &["cond", "d", "y"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&["cond", "d", "y"])
     };
     let body = vec![HirStmt::While {
         test: HirExpr::Name("cond".to_string()),
@@ -19105,11 +18623,7 @@ fn solver_while_loop_marks_body_only_binding_as_maybe() {
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
-        local_names: &["cond", "x"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&["cond", "x"])
     };
     let body = vec![HirStmt::While {
         test: HirExpr::Name("cond".to_string()),
@@ -19142,14 +18656,7 @@ fn solver_for_range_marks_loop_variable_as_maybe() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["i"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let mut env = ConstraintEnvironment::empty(&["i"]);
     let body = vec![HirStmt::ForRange {
         var: "i".to_string(),
         start: HirExpr::IntLiteral(0),
@@ -19181,14 +18688,7 @@ fn solver_for_range_body_only_binding_is_maybe() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        bindings: HashMap::new(),
-        local_names: &["i", "x"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-    };
+    let mut env = ConstraintEnvironment::empty(&["i", "x"]);
     let body = vec![HirStmt::ForRange {
         var: "i".to_string(),
         start: HirExpr::IntLiteral(0),
@@ -19225,11 +18725,7 @@ fn solver_for_range_pre_existing_binding_stays_definite() {
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
-        local_names: &["i", "x"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&["i", "x"])
     };
     let body = vec![HirStmt::ForRange {
         var: "i".to_string(),
@@ -19269,11 +18765,8 @@ fn solver_maybe_bound_name_skips_unification_in_name_arm() {
     let mut binops = Vec::new();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
-        local_names: &["x"],
-        defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::from(["x".to_string()]),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&["x"])
     };
 
     let term = collect_expr_constraints(
@@ -19302,11 +18795,7 @@ fn solver_unconditional_assignment_upgrades_maybe_to_definite() {
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment {
         bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
-        local_names: &["cond", "x"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&["cond", "x"])
     };
     let body = vec![
         HirStmt::If {
@@ -19350,11 +18839,7 @@ fn solver_definitely_bound_name_returns_its_term() {
     let mut binops = Vec::new();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
-        local_names: &["x"],
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
+        ..ConstraintEnvironment::empty(&["x"])
     };
 
     let term = collect_expr_constraints(
@@ -26161,14 +25646,7 @@ fn collect_block_constraints_propagates_error_from_match_subject() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["z"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["z"]);
     let body = vec![HirStmt::Match {
         subject: HirExpr::Name("z".to_string()),
         cases: vec![HirMatchCase {
@@ -26196,14 +25674,7 @@ fn collect_block_constraints_propagates_error_from_match_case_body() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["z"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["z"]);
     let body = vec![HirStmt::Match {
         subject: HirExpr::IntLiteral(0),
         cases: vec![HirMatchCase {
@@ -27304,14 +26775,7 @@ fn collect_block_constraints_propagates_an_error_from_a_logical_not_operand() {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["z"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["z"]);
     let body = vec![HirStmt::AnnAssign {
         is_final: false,
         target: "y".to_string(),
@@ -27367,13 +26831,7 @@ fn walrus_nested_inside_another_walrus_value_on_the_solver_path_propagates_a_for
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["n", "m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["n", "m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::NamedExpr {
         name: "n".to_string(),
         value: Box::new(HirExpr::NamedExpr {
@@ -27404,13 +26862,7 @@ fn walrus_nested_inside_a_call_arg_on_the_solver_path_propagates_a_forward_refer
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::Call {
         callee: "f".to_string(),
         args: vec![HirExpr::NamedExpr {
@@ -27442,13 +26894,7 @@ fn walrus_nested_inside_an_fstring_interpolation_on_the_solver_path_propagates_a
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::FString(vec![
         FStringPart::Interpolation(Box::new(HirExpr::NamedExpr {
             name: "m".to_string(),
@@ -27480,13 +26926,7 @@ fn walrus_nested_inside_a_list_literal_element_on_the_solver_path_propagates_a_f
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::ListLiteral(vec![
         HirExpr::NamedExpr {
             name: "m".to_string(),
@@ -27517,13 +26957,7 @@ fn walrus_nested_inside_a_subscript_base_on_the_solver_path_propagates_a_forward
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::Subscript {
         base: Box::new(HirExpr::NamedExpr {
             name: "m".to_string(),
@@ -27554,13 +26988,7 @@ fn walrus_nested_inside_a_slice_base_on_the_solver_path_propagates_a_forward_ref
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::Slice {
         base: Box::new(HirExpr::NamedExpr {
             name: "m".to_string(),
@@ -27597,13 +27025,7 @@ fn walrus_nested_inside_a_slice_bound_on_the_solver_path_propagates_a_forward_re
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::Slice {
         base: Box::new(HirExpr::Name("xs".to_string())),
         start: Some(Box::new(HirExpr::NamedExpr {
@@ -27637,13 +27059,7 @@ fn walrus_nested_inside_a_dict_literal_key_on_the_solver_path_propagates_a_forwa
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::DictLiteral(vec![(
         HirExpr::NamedExpr {
             name: "m".to_string(),
@@ -27676,13 +27092,7 @@ fn walrus_nested_inside_a_dict_literal_value_on_the_solver_path_propagates_a_for
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::DictLiteral(vec![(
         HirExpr::Name("k".to_string()),
         HirExpr::NamedExpr {
@@ -27714,13 +27124,7 @@ fn walrus_nested_inside_a_dict_get_or_default_key_on_the_solver_path_propagates_
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::DictGetOrDefault {
         dict: "d".to_string(),
         key: Box::new(HirExpr::NamedExpr {
@@ -27753,13 +27157,7 @@ fn walrus_nested_inside_a_method_call_base_on_the_solver_path_propagates_a_forwa
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::MethodCall {
         base: Box::new(HirExpr::NamedExpr {
             name: "m".to_string(),
@@ -27794,13 +27192,7 @@ fn walrus_nested_inside_a_method_call_arg_on_the_solver_path_propagates_a_forwar
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::MethodCall {
         base: Box::new(HirExpr::Name("xs".to_string())),
         method: "foo".to_string(),
@@ -27833,13 +27225,7 @@ fn walrus_nested_inside_a_generic_class_instantiate_arg_on_the_solver_path_propa
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
     let mut constraints = SolverConstraints::default();
-    let mut env = ConstraintEnvironment {
-        defs_rebound: HashSet::new(),
-        maybe_bindings: HashSet::new(),
-        opaque_bindings: HashSet::new(),
-        bindings: HashMap::new(),
-        local_names: &["m"],
-    };
+    let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
         class: "C".to_string(),
         type_arg: Ty::Int,

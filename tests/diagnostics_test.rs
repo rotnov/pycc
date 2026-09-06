@@ -1144,3 +1144,17 @@ fn l0001_break_outside_loop_type_checking() {
 fn l0001_yield_outside_function_type_checking() {
     assert_diagnostic_matches_fixture("l0001_yield_outside_function_type_checking");
 }
+
+// Part 1 of #883 (#962): `import <stdlib module> as <alias>`. The
+// unregistered-symbol diagnostic names the canonical module and, because
+// the receiver was spelled through an alias, the alias too; a project
+// module behind `import X as Y` keeps the plain-`import` C0001 verbatim.
+#[test]
+fn c0001_import_alias_unregistered_symbol() {
+    assert_diagnostic_matches_fixture("c0001_import_alias_unregistered_symbol");
+}
+
+#[test]
+fn c0001_import_alias_project_module() {
+    assert_diagnostic_matches_fixture("c0001_import_alias_project_module");
+}

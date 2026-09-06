@@ -68,7 +68,7 @@ mod protocol;
 #[cfg(test)]
 mod protocol_return_tests;
 
-use crate::{HirExpr, HirItem, HirStmt, Ty, lower_arg_list, unsupported};
+use crate::{HirExpr, HirItem, HirStmt, ImportBinding, Ty, lower_arg_list, unsupported};
 use attrs::{ClassAttrCollisionInput, reject_class_attr_collisions};
 use body::{ClassBodyInput, ClassBodyOutput, walk_class_body};
 use enum_class::lower_enum_class;
@@ -875,6 +875,7 @@ pub(crate) fn lower_class(
     defined_classes: &[(String, HirClassDef)],
     module_items: &[HirItem],
     base_class_asts: &[(String, &pycc_ast::StmtClassDef)],
+    imports: &[ImportBinding],
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
     // #380 (PR-20): build the projected class slice `annotation_to_ty` uses
     // to resolve cross-class annotations (including protocol-typed ones);
@@ -1180,6 +1181,7 @@ pub(crate) fn lower_class(
         class_name_defs: &class_name_defs,
         mro: &mro,
         defined_classes,
+        imports,
     })?;
     // #911: the class-attribute/instance-slot collision check runs here,
     // after the walk, not at the `AnnAssign` site: `attrs` is populated only
@@ -1456,6 +1458,7 @@ fn lower_method(
     aliases: &[(String, Ty)],
     kind: &MethodKind,
     class_defs: &[ClassAnnotationInfo],
+    imports: &[ImportBinding],
 ) -> Result<(HirItem, Vec<(String, Ty)>), Diagnostic> {
     if def.is_async {
         return Err(unsupported(
@@ -1701,6 +1704,7 @@ fn lower_method(
             Some(class_name),
             type_param,
             class_defs,
+            imports,
         )?
     };
     // #377/#436: compute the mangled name based on the method kind. A

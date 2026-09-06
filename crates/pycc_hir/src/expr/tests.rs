@@ -282,7 +282,7 @@ fn a_walrus_target_that_is_not_a_bare_name_is_rejected() {
             value: pycc_ast::Number::Int(pycc_ast::Int::from(1u8)),
         })),
     });
-    let err = super::lower_expr(&named, false, None).unwrap_err();
+    let err = super::lower_expr(&named, false, None, &[]).unwrap_err();
     assert_eq!(err.code, "C0001");
     assert!(
         err.message

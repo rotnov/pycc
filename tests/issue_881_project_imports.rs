@@ -380,3 +380,58 @@ fn an_unparseable_manifest_is_an_input_error() {
     assert_eq!(result.code, 2, "{}", result.both());
     assert!(result.stderr.contains("pycc.toml"), "{}", result.stderr);
 }
+
+// -- Part 1 of #883 (#962): stdlib module aliases across a linked program --
+
+#[test]
+fn a_stdlib_alias_in_a_dependency_is_visible_to_the_whole_linked_program() {
+    // `pycc_hir::program::link` concatenates every module's import table
+    // into one flat `HirModule`, so the alias table `pycc_types` builds is
+    // program-wide: `a.py`'s `import math as m` makes a parameter named
+    // `m` around a *canonical* `math.sqrt` call in `main.py` a false
+    // reject. This pins that fail-closed residual (recorded in the #962
+    // ADR) until #901's per-module namespaces close it.
+    let scratch = ScratchDir::new("issue_881").unwrap();
+    write(
+        &scratch,
+        "a.py",
+        "import math as m\n\n\ndef root(x: float) -> float:\n    return m.sqrt(x)\n",
+    );
+    let entry = write(
+        &scratch,
+        "main.py",
+        "import math\nfrom a import root\n\n\ndef f(m: float) -> float:\n    return math.sqrt(m) + root(m)\n",
+    );
+    let result = check(&entry);
+    assert_eq!(result.code, 1, "{}", result.both());
+    assert!(result.both().contains("C0001"), "{}", result.both());
+    assert!(
+        result.both().contains(
+            "`m` is a local name here, not the stdlib `math` module -- attribute access on a \
+             non-module value is not supported yet"
+        ),
+        "{}",
+        result.both()
+    );
+    assert!(result.both().contains("main.py"), "{}", result.both());
+}
+
+#[test]
+fn a_stdlib_alias_in_a_dependency_does_not_disturb_an_unshadowed_entry() {
+    // The same two-module shape without a colliding local: the alias in
+    // `a.py` and the canonical spelling in `main.py` both resolve, and the
+    // program checks clean.
+    let scratch = ScratchDir::new("issue_881").unwrap();
+    write(
+        &scratch,
+        "a.py",
+        "import math as m\n\n\ndef root(x: float) -> float:\n    return m.sqrt(x)\n",
+    );
+    let entry = write(
+        &scratch,
+        "main.py",
+        "import math\nfrom a import root\n\n\ndef f(x: float) -> float:\n    return math.sqrt(x) + root(x)\n\n\nprint(f(16.0))\n",
+    );
+    let result = check(&entry);
+    assert_eq!(result.code, 0, "{}", result.both());
+}

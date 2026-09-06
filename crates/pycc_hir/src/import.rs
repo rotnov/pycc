@@ -333,8 +333,9 @@ pub(crate) struct LoweredImport {
 /// exactly.
 ///
 /// D-137 is fail-closed: every recognized-but-out-of-scope shape (multiple
-/// names in one `import` statement, an `as` alias, a relative import the
-/// driver did not resolve, an unresolvable module) is `C0001`, the same
+/// names in one `import` statement, an `as` alias on the `from` form, a
+/// relative import the driver did not resolve, an unresolvable module) is
+/// `C0001`, the same
 /// generic "statement kind not supported yet" diagnostic the crate already
 /// uses for every other unimplemented statement kind -- matching the plan's
 /// explicit instruction to reuse `C0001` rather than add a new code for "we
@@ -344,6 +345,10 @@ pub(crate) struct LoweredImport {
 /// text), distinguishing "we don't support this import shape at all" from
 /// "we support `math`, just not `math.<this-symbol>`" -- and it fails the
 /// whole statement, not a partial bind of the names that did resolve.
+///
+/// `import <stdlib module> as <alias>` is the one aliasing shape that
+/// lowers (Part 1 of #883, #962): it binds the alias as the module's
+/// `local_name`. `from ... import ... as ...` stays `C0001` (Part 2, #963).
 ///
 /// A project import follows the same fail-closed split (D-222): a name the
 /// origin module does not define is `T0021` (CPython's own `ImportError`
@@ -371,13 +376,14 @@ pub(crate) fn lower_import_stmt(
                     import.range,
                 ));
             };
-            if alias.asname.is_some() {
-                return Err(unsupported(
-                    "`import ... as ...` aliasing is not supported yet",
-                    import.range,
-                ));
-            }
             let module_name = alias.name.as_str();
+            // `Found` is the driver's answer to a bare `import m` of a
+            // project file. It is unreachable for a name `pycc_std`
+            // resolves (`project_import_request` never asks the driver
+            // about one) and unreachable for an aliased `import m as n`
+            // (it never asks about those either -- project-module
+            // aliasing is Part 3 of #883, #964), so an aliased project
+            // import falls through to the "not supported yet" arm below.
             if matches!(
                 resolved.get(statement_span(import.range)),
                 Some(ResolvedImport::Found)
@@ -395,9 +401,15 @@ pub(crate) fn lower_import_stmt(
                     import.range,
                 ));
             };
+            // Part 1 of #883 (#962): `import math as m` binds the alias the
+            // user wrote; every later `m.<attr>` receiver resolves through
+            // this binding (see `expr::std_receiver`), so the alias is
+            // visible to items lowered after this statement, in source
+            // order, exactly like a class or a type alias.
+            let local_name = alias.asname.as_ref().map_or(module_name, |n| n.as_str());
             Ok(Some(LoweredImport {
                 bindings: vec![ImportBinding::Module {
-                    local_name: module_name.to_string(),
+                    local_name: local_name.to_string(),
                     module,
                 }],
                 ..LoweredImport::default()

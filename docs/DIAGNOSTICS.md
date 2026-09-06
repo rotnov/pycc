@@ -118,8 +118,23 @@ import ...` is a compiler directive, not a module (#919, D-229): its nine no-op
 features lower to nothing, a name CPython rejects is `L0001`, and the one
 CPython-valid feature that changes the grammar, `barry_as_FLUFL`, is `C0001`
 (``the `barry_as_FLUFL` future feature (`<>` in place of `!=`) is not
-supported yet``), as is `from __future__ import x as y` under the generic
-aliasing gap.
+supported yet``), as is `from __future__ import x as y` under the
+`from ... import x as y` aliasing gap ([#963](https://github.com/rotnov/pycc/issues/963)).
+A stdlib module behind `import X as Y` is *not* a gap since
+[#962](https://github.com/rotnov/pycc/issues/962) ([D-231](./decisions/D-231-lower-stdlib-import-x-as-y-to-canonical-names-with-an.md)):
+`import math as m` binds `m`, `m.sqrt(x)` lowers to the same canonical
+`math.sqrt` the unaliased program produces, and a symbol the registry lacks
+reports both spellings (``module `math` (imported as `m`) has no importable
+symbol named `tan` ``). The alias makes the receiver shadow check alias-aware
+too: a local or parameter named `m` around `m.sqrt(m)` is rejected with the
+same ``is a local name here, not the stdlib `math` module`` C0001 a local
+named `math` gets -- and, because the HIR keeps only the canonical spelling,
+a local named `math` while the module only ever writes `m.sqrt` is rejected
+as well (a recorded fail-closed residual, closed by
+[#768](https://github.com/rotnov/pycc/issues/768)). An alias on a project or
+unregistered module (`import numpy as np`) keeps the plain-`import` C0001
+(``import of module `numpy` is not supported yet``,
+[#964](https://github.com/rotnov/pycc/issues/964) for project modules).
 
 `pycc_types` also uses it for calls to known Python 3.14
 callable builtins that this compiler version does not implement (e.g.
