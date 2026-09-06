@@ -242,3 +242,4 @@ current.
 | [D-233](./D-233-hir-lowering-gains-a-second-per-item-diagnostic-source.md) | HIR lowering gains a second, syntactic per-item diagnostic source: the enum-call scan (issue #944, amending D-219) | accepted |
 | [D-234](./D-234-reject-multiple-inheritance-whose-base-layouts-are.md) | Reject multiple inheritance whose base layouts are not prefixes of the derived layout | accepted |
 | [D-235](./D-235-reject-a-dataclass-field-that-shares-its-name-with-a.md) | Reject a dataclass field that shares its name with a `ClassVar` anywhere in the MRO | accepted |
+| [D-236](./D-236-reject-a-class-attribute-named-after-the-instantiation.md) | Reject a class attribute named after the instantiation or class-creation protocol | accepted |

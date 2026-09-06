@@ -14,6 +14,7 @@
 //! returns through `lower_enum_class`/`lower_protocol_class` before it.
 
 use super::attrs::{lower_class_attr, lower_unannotated_class_attr, strip_class_var};
+use super::reserved_names::reject_reserved_property_name;
 use super::{
     CONTAINER_METHOD_NAMES, ClassAnnotationInfo, ClassAttrValue, HirClassDef, MethodKind,
     PropertyDef, classify_decorator, collect_init_attrs, is_declaration_body, is_scalar_slot_type,
@@ -29,6 +30,17 @@ use pycc_diag::{Diagnostic, Span};
 /// future change must re-apply: *the three methods pycc synthesizes for a
 /// dataclass, plus every dunder CPython consults for an operation pycc
 /// rewrites through one of those three.*
+///
+/// D-236 records that this rule is **not** the whole story: it cannot
+/// generate `__new__` or `__init_subclass__`, which Python's instantiation
+/// and class-creation protocols call implicitly without pycc rewriting
+/// anything through them. Those two are owned by
+/// [`super::reserved_names::reject_reserved_class_attr_name`], which applies
+/// in *every* class body rather than only a dataclass one, so this set stays
+/// exactly as D-235 accepted it. Keeping the two sets disjoint is deliberate:
+/// this check runs before [`super::attrs::lower_class_attr`], so every
+/// message below stays byte-for-byte what D-235 pinned, while the two names
+/// it omits fall through to the universal guard.
 ///
 /// - `__init__`, `__eq__`, `__repr__` -- synthesized unconditionally by
 ///   [`super::init::synthesize_dataclass_init`] and its siblings.
@@ -48,7 +60,7 @@ use pycc_diag::{Diagnostic, Span};
 /// `__hash__` agrees with CPython because `dataclasses` leaves an explicitly
 /// bound `__hash__` alone. `__slots__` is not here either -- it is rejected
 /// earlier and with its own message by
-/// [`super::attrs::reject_reserved_class_attr_name`].
+/// [`super::reserved_names::reject_reserved_class_attr_name`].
 const DATACLASS_IMPLICIT_DUNDERS: [&str; 6] = [
     "__init__",
     "__eq__",
@@ -400,6 +412,24 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             &method_name,
             method_def.range.into(),
         )?;
+        // #975 (D-236), added in the #978 review round: a `@property`
+        // getter is the fourth class-body route to a class-level binding of
+        // an instantiation/class-creation protocol name, and the only one
+        // that does not pass through `reject_reserved_class_attr_name`.
+        // `@property def __new__(self) -> int` lands here, not in
+        // `lower_class_attr`, so without this call `ensure_init` synthesizes
+        // a constructor from the method table alone and pycc accepts `C()`
+        // while CPython 3.13.9 raises `TypeError: 'property' object is not
+        // callable`. A plain `def __init__` is a `MethodKind::Regular` and is
+        // untouched -- only the property spelling is rejected. The setter arm
+        // needs no matching call: `classify_decorator` requires a setter's own
+        // `def` name to equal the decorated property name, so
+        // `@value.setter def __new__` is rejected there as a mismatch, and the
+        // matching `@__new__.setter def __new__` requires a preceding getter
+        // of that name, which is rejected here first.
+        if let MethodKind::PropertyGetter { prop_name } = &kind {
+            reject_reserved_property_name(prop_name, method_def.range.into())?;
+        }
         // #436: `@staticmethod` and `@classmethod` on `__init__` are
         // rejected -- a constructor must be a regular instance method.
         // #380 (PR-20): `@abstractmethod` on `__init__` is also rejected

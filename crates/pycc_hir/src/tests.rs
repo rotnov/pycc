@@ -25,6 +25,10 @@ mod subscript_annotations;
 // child module for the same reason.
 mod dataclass_class_vars;
 
+// Class attributes named after the instantiation/class-creation protocol
+// (#975, D-236), same reason again.
+mod reserved_dunder_class_attrs;
+
 fn assert_capability_error(source: &str, expected_message: &str, expected_span: Span) {
     let module = pycc_parser_test_helper::parse(source);
     let diagnostic = lower_checked(&module).unwrap_err();
