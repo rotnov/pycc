@@ -170,11 +170,15 @@ whose MRO reaches a builtin exception without overriding its inherited
 constructor) reports `cannot instantiate exception class \`...\` as a
 value` -- `raise MyError("boom")` stays the one supported construction
 (Part 3 of issue #541). Calling an enum class (`Color()`, `Color(1)`)
-reports `cannot call enum class \`...\`` from the same
-`resolve_instantiation` ladder (issue #921): members are compile-time
-singletons reached by name (`Color.RED`), and by-value lookup is the
-not-yet-implemented construct; the zero-argument form is a CPython
-`TypeError` too and is named as such rather than as unsupported. Naming
+reports `cannot call enum class \`...\`` at the call expression, from HIR
+lowering's per-item AST scan (`pycc_hir::class::enum_call`, issue #944,
+D-233), with a span-less guard of the same text in `pycc_types`'s
+`resolve_instantiation` ladder behind it (issue #921): members are
+compile-time singletons reached by name (`Color.RED`), and by-value lookup
+is the not-yet-implemented construct; the zero-argument form is a CPython
+`TypeError` too and is named as such rather than as unsupported. A
+scope-local rebinding of the class name (`def f(Color: int) -> None:
+Color()`) is not an enum call and keeps its `T0021`. Naming
 an enum class as a base (`class Foo(Color): pass`) is rejected from
 `validate_bases` on the class header (issue #941): when the enum has
 members the message names CPython's own `TypeError: <enum 'Foo'> cannot
