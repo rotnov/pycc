@@ -224,3 +224,23 @@ single-writer baseline after the rebase: fmt, clippy, `cargo test
 `check_roadmap_evidence.rb`, the decisions-index freshness check, and the
 findings checker all passed. The commit SHAs quoted in earlier sections
 are pre-rebase identifiers.
+
+## PR #971 third Codex round (rebound names, span wording)
+
+Head `93db52e1` went fully green (the `frontend-perf-gate` included) but
+Codex opened two more P2 threads. (1) `crates/pycc_hir/src/module.rs`: the
+def-only filter left an ordinary `class Color`, a `from m import Color`,
+or a `type Color = int` preceding `Color()` and `class Color(Enum)` with
+the same false-kind report. Reproduced with `pycc check` for the ordinary
+class and the project import (the `type` alias was already frame-suppressed
+and the aliased `from ... import ... as` import fails and poisons the name).
+Fix: `module_function_names` became `module_rebound_names` -- every name
+two or more module-level `def`/`class`/`import`/`type` statements bind --
+and `lower_module` drops those from the scan set; limit (vii), D-233
+decision 5, and `docs/DIAGNOSTICS.md` restated accordingly; two more unit
+tests (ordinary class, `type` alias), one more end-to-end test (project
+import), and a helper test over the import shapes. (2) `docs/DIAGNOSTICS.md`
+promised the call-expression span categorically; the sentence now names the
+residual fallback to the span-less guard at `1:1` (module-level rebinding
+anywhere in the module, sibling-comprehension rebinding). Round 5 of
+`.harden/findings/issue-944.jsonl` records both.

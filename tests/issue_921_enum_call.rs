@@ -237,3 +237,36 @@ fn a_call_to_a_def_bound_name_before_the_enum_class_reports_the_collision_only()
         "no enum-call C0001 may precede the collision, got: {combined}"
     );
 }
+
+/// PR #971 review, second round: the same rule for a project import --
+/// `from colors import Color` beside `class Color(Enum)` collides at the
+/// class item, and a `Color()` between the two resolves to the import.
+#[test]
+fn a_call_to_an_import_bound_name_before_the_enum_class_reports_the_collision_only() {
+    let dir = ScratchDir::new("921_import_shadow").expect("failed to create scratch dir");
+    write_fixture(&dir, "colors.py", "def Color() -> int:\n    return 1\n");
+    let entry = write_fixture(
+        &dir,
+        "prog.py",
+        "from enum import Enum\nfrom colors import Color\n\n\nColor()\n\n\nclass Color(Enum):\n    RED = 1\n",
+    );
+    let result = Command::new(pycc_bin())
+        .arg("check")
+        .arg(entry.to_str().unwrap())
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(result.status.code(), Some(1), "got: {combined}");
+    assert!(
+        combined.contains("class `Color` collides with an import of the same name"),
+        "the collision diagnostic should be reported, got: {combined}"
+    );
+    assert!(
+        !combined.contains("cannot call enum class"),
+        "no enum-call C0001 may precede the collision, got: {combined}"
+    );
+}

@@ -117,17 +117,21 @@
 //!   spellings need no import binding and fold in the module frame too;
 //!   inside a `def` the scan runs with the item's own import view, so the
 //!   aliased spelling folds there.
-//! - (vii) **A name a module-level `def` also binds is never scanned.**
-//!   `def Color()` beside `class Color(Enum)` is a name collision that the
-//!   class or function item itself reports (`... collides with a function
-//!   of the same name ...`), whichever comes second. A module-level
-//!   `Color()` between the two resolves to the earlier binding, so scanning
-//!   it against the syntactic pre-collection would report a *false-kind*
-//!   `C0001` ahead of the real one (PR #971 review). `lower_module`
-//!   therefore drops every name in `module_function_names` from the scan's
-//!   name set for the whole module, in either order: the collision
-//!   diagnostic owns such a program, and a `def`-body call to the shadowed
-//!   name falls through to `pycc_types`' span-less guard as before #944.
+//! - (vii) **A name bound by more than one module-level `def`, `class`,
+//!   `import`, or `type` statement is never scanned.** `def Color()`,
+//!   an ordinary `class Color`, `from m import Color`, or
+//!   `type Color = int` beside `class Color(Enum)` is a collision that the
+//!   class item reports itself (`... collides with a function / an import /
+//!   a type alias of the same name ...`, `... defined more than once ...`),
+//!   whichever comes second. A module-level `Color()` between the two
+//!   resolves to the earlier binding, so scanning it against the syntactic
+//!   pre-collection would report a *false-kind* `C0001` ahead of the real
+//!   one (PR #971 review, two rounds). `lower_module` therefore drops every
+//!   name in `module_rebound_names` from the scan's name set for the whole
+//!   module, in either order: the collision diagnostic owns such a
+//!   program, and a `def`-body call to the rebound name falls through to
+//!   `pycc_types`' span-less guard as before #944. A plain assignment
+//!   rebinding the name is the module frame's case already.
 //! - A call with a keyword argument (`Color(value=1)`) is skipped:
 //!   `lower_expr` already reports exactly one `C0001 keyword call arguments
 //!   are not supported yet` at that call, and the scan runs on failed items
@@ -204,17 +208,51 @@ pub(crate) fn syntactic_enum_class_names(body: &[Stmt]) -> Vec<String> {
         .collect()
 }
 
-/// Every name a module-level `def` binds, in body order (limit (vii)):
-/// `lower_module` drops these from the enum-call name set, because a
-/// module that binds one name to both a function and an enum class is
-/// reported by the collision diagnostic, never by the scan.
-pub(crate) fn module_function_names(body: &[Stmt]) -> Vec<String> {
-    body.iter()
-        .filter_map(|stmt| match stmt {
-            Stmt::FunctionDef(def) => Some(def.name.to_string()),
-            _ => None,
-        })
-        .collect()
+/// Every name that two or more module-level `def`, `class`, `import`, or
+/// `type` statements bind (limit (vii)): `lower_module` drops these from
+/// the enum-call name set, because a module that binds one name twice
+/// that way is reported by the collision diagnostic, never by the scan.
+/// An `import a.b` binds `a`; a `from m import *` binds nothing nameable
+/// here and is skipped.
+pub(crate) fn module_rebound_names(body: &[Stmt]) -> Vec<String> {
+    let mut bound: Vec<&str> = Vec::new();
+    for stmt in body {
+        match stmt {
+            Stmt::FunctionDef(def) => bound.push(def.name.as_str()),
+            Stmt::ClassDef(def) => bound.push(def.name.as_str()),
+            Stmt::TypeAlias(alias) => {
+                if let Some(name) = alias.name.as_name_expr() {
+                    bound.push(name.id.as_str());
+                }
+            }
+            Stmt::Import(import) => bound.extend(import.names.iter().map(|alias| {
+                alias.asname.as_ref().map_or_else(
+                    || alias.name.split('.').next().unwrap_or_default(),
+                    |asname| asname.as_str(),
+                )
+            })),
+            Stmt::ImportFrom(import) => bound.extend(
+                import
+                    .names
+                    .iter()
+                    .filter(|alias| alias.name.as_str() != "*")
+                    .map(|alias| {
+                        alias
+                            .asname
+                            .as_ref()
+                            .map_or(alias.name.as_str(), |a| a.as_str())
+                    }),
+            ),
+            _ => {}
+        }
+    }
+    let mut rebound: Vec<String> = Vec::new();
+    for (index, name) in bound.iter().enumerate() {
+        if bound[..index].contains(name) && !rebound.iter().any(|seen| seen == name) {
+            rebound.push((*name).to_string());
+        }
+    }
+    rebound
 }
 
 fn has_single_enum_marker_base(def: &StmtClassDef) -> bool {
@@ -878,18 +916,20 @@ mod tests {
         assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
     }
 
-    /// Limit (vii): a module that binds one name to both a `def` and an
-    /// enum class is reported by the collision diagnostic alone -- the scan
+    /// Limit (vii): a module that binds one name through two module-level
+    /// `def`/`class`/`import`/`type` statements (one of them the enum
+    /// class) is reported by the collision diagnostic alone -- the scan
     /// never claims a call to that name, in either definition order
-    /// (PR #971 review: `def Color()` / `Color()` / `class Color(Enum)`
-    /// used to report a false-kind enum-call `C0001` first).
+    /// (PR #971 review: `def Color()` / `Color()` / `class Color(Enum)`,
+    /// and then an ordinary `class Color` in the same position, used to
+    /// report a false-kind enum-call `C0001` first).
     fn assert_only_the_collision_is_reported(source: &str) {
         let diagnostics = lower_err(source);
         let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
         assert_eq!(
             messages
                 .iter()
-                .filter(|m| m.contains("collides with"))
+                .filter(|m| m.contains("collides with") || m.contains("defined more than once"))
                 .count(),
             1,
             "exactly one collision diagnostic expected, got {messages:?}"
@@ -898,7 +938,7 @@ mod tests {
             messages
                 .iter()
                 .all(|m| !m.contains("cannot call enum class")),
-            "the scan must not claim a def-bound name, got {messages:?}"
+            "the scan must not claim a rebound name, got {messages:?}"
         );
     }
 
@@ -924,10 +964,37 @@ mod tests {
     }
 
     #[test]
-    fn module_function_names_lists_module_level_defs_only() {
-        let module = crate::pycc_parser_test_helper::parse(
-            "def a() -> None:\n    def inner() -> None:\n        pass\n\nclass K:\n    def method(self) -> None:\n        pass\n\nasync def b() -> None:\n    pass\n",
+    fn an_ordinary_class_bound_name_is_never_scanned_when_the_class_comes_first() {
+        assert_only_the_collision_is_reported(
+            "from enum import Enum\n\nclass Color:\n    pass\n\nColor()\n\nclass Color(Enum):\n    RED = 1\n",
         );
-        assert_eq!(super::module_function_names(&module.body), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn a_type_alias_bound_name_is_never_scanned_when_the_alias_comes_first() {
+        assert_only_the_collision_is_reported(
+            "from enum import Enum\n\ntype Color = int\n\nColor()\n\nclass Color(Enum):\n    RED = 1\n",
+        );
+    }
+
+    #[test]
+    fn module_rebound_names_lists_names_bound_by_two_or_more_statements() {
+        let module = crate::pycc_parser_test_helper::parse(concat!(
+            "import a.b\n",
+            "import c as a\n",
+            "from m import x, y as z\n",
+            "from n import *\n",
+            "def z() -> None:\n    def inner() -> None:\n        pass\n",
+            "class K:\n    def method(self) -> None:\n        pass\n",
+            "type K = int\n",
+            "async def once() -> None:\n    pass\n",
+            "class Once(Enum):\n    pass\n",
+            "def x() -> None:\n    pass\n",
+            "def x() -> None:\n    pass\n",
+        ));
+        assert_eq!(
+            super::module_rebound_names(&module.body),
+            vec!["a", "z", "K", "x"]
+        );
     }
 }

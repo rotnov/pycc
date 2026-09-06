@@ -173,15 +173,20 @@ value` -- `raise MyError("boom")` stays the one supported construction
 reports `cannot call enum class \`...\`` at the call expression, from HIR
 lowering's per-item AST scan (`pycc_hir::class::enum_call`, issue #944,
 D-233), with a span-less guard of the same text in `pycc_types`'s
-`resolve_instantiation` ladder behind it (issue #921): members are
+`resolve_instantiation` ladder behind it (issue #921) -- the guard still
+reports at `1:1` for the residual shapes D-233 enumerates, such as a
+module-level rebinding of the class name anywhere in the module
+(`Color(); Color = 1`) or a sibling-comprehension rebinding, where the scan
+stays suppressed: members are
 compile-time singletons reached by name (`Color.RED`), and by-value lookup
 is the not-yet-implemented construct; the zero-argument form is a CPython
 `TypeError` too and is named as such rather than as unsupported. The scan
 folds `if`/`elif TYPE_CHECKING:` bodies exactly as HIR lowering does
-(#790), so a call inside such a dead body is not reported. A name a
-module-level `def` also binds (`def Color()` beside `class Color(Enum)`)
-is never scanned in either order: that program is reported by the
-class/function collision diagnostic alone. A
+(#790), so a call inside such a dead body is not reported. A name that
+another module-level `def`, `class`, `import`, or `type` statement also
+binds (`def Color()` or `class Color:` beside `class Color(Enum)`) is never
+scanned in either order: that program is reported by the name-collision
+diagnostic alone. A
 scope-local rebinding of the class name (`def f(Color: int) -> None:
 Color()`) is not an enum call and keeps its `T0021`. Naming
 an enum class as a base (`class Foo(Color): pass`) is rejected from

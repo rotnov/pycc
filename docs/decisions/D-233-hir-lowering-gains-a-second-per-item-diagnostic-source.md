@@ -59,10 +59,11 @@ status: accepted
      `def`/`class`/`import` name; a class body gets no frame. The scan and
      the frames fold `if`/`elif TYPE_CHECKING:` bodies exactly as
      `lower_stmt` does (#790, D-223), so a call or a binding inside such a
-     dead body is neither reported nor a shadow. A name a module-level
-     `def` also binds is dropped from the name set for the whole module:
-     that program is a collision the class or function item reports, and
-     the scan must not put a false-kind enum-call report ahead of it. Every residual
+     dead body is neither reported nor a shadow. A name that a second
+     module-level `def`, `class`, `import`, or `type` statement also binds
+     is dropped from the name set for the whole module: that program is a
+     collision the class item reports, and the scan must not put a
+     false-kind enum-call report ahead of it. Every residual
      is enumerated in the module doc of `class::enum_call` and pinned by a
      test: over-suppression is the only failure mode on an item that lowers
      (the call still fails in `pycc_types`), and the one false-kind report
