@@ -324,3 +324,12 @@ sentence in `docs/DIAGNOSTICS.md` scopes the silence to the lowering
 diagnostic, since the scan still runs over a cascade-silenced item (D-233
 decision 6) -- a new unit test pins that report. Round 10 of
 `.harden/findings/issue-944.jsonl` records the three.
+
+## PR #971 ninth Codex round (attributable calls)
+
+One P2 on `6c52790c`: the per-item count contract said one enum-call
+`C0001` per call unconditionally, while a scan-suppressed name is reported
+by the span-less guard at `1:1` instead. `5b12e7b8` qualifies the count to
+calls the scan can attribute in `docs/CLI_SPEC.md`, `docs/DIAGNOSTICS.md`,
+`src/frontend.rs` and the `pycc` skill; round 11 of the findings pile
+records it.
