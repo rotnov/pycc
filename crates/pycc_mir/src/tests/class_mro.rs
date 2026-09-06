@@ -251,11 +251,12 @@ fn instantiate_with_no_init_in_the_mro_panics_with_an_internal_error() {
 fn mro_attrs_deduplicates_a_redeclared_attribute_across_the_mro() {
     // #432: a derived class that re-declares an attribute of the same
     // name as a base class "wins" (its declaration appears first in the
-    // MRO). `mro_attrs`'s `seen` set skips the base class's duplicate
-    // entry, so the flat layout has exactly one slot for `x`, not two.
-    // This exercises the `if seen.insert(..)` false branch (the
-    // already-seen skip), which is otherwise uncovered when no test
-    // re-declares an attribute across the MRO.
+    // MRO). Pass 1 of `pycc_hir::flat_attr_layout` (which `mro_attrs`
+    // delegates to) skips a name that already has a slot, so the flat
+    // layout has exactly one slot for `x`, not two. This exercises the
+    // `if !slot_index.contains_key(name)` false branch (the already-seen
+    // skip), which is otherwise uncovered when no test re-declares an
+    // attribute across the MRO.
     use pycc_hir::HirClassDef;
     let self_ty = Ty::Instance(Box::new("Derived".to_string()));
     let init = HirItem::Function {
@@ -385,8 +386,9 @@ fn mro_attrs_deduplicates_a_redeclared_attribute_across_the_mro() {
 fn mro_attrs_overrides_type_for_a_redeclared_attribute_with_a_different_type() {
     // #432: when a derived class re-declares an attribute with a
     // different type than the base, the most-derived declaration's
-    // type wins (pass 2 of `mro_attrs`). This exercises the
-    // `result[idx].1 = ty.clone()` line in the second pass.
+    // type wins (pass 2 of `pycc_hir::flat_attr_layout`, which
+    // `mro_attrs` delegates to). This exercises the
+    // `result[idx].1 = ty.clone()` line in that second pass.
     use pycc_hir::HirClassDef;
     let self_ty = Ty::Instance(Box::new("Derived".to_string()));
     let init = HirItem::Function {

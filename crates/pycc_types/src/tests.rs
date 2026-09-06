@@ -29740,8 +29740,16 @@ fn an_instance_attribute_on_a_sibling_base_does_not_mask_a_class_attribute() {
     // `__dict__`, so `C`'s `self.X` must not mask `B`'s class attribute.
     // CPython prints `1` for this program; pycc rejected it with `T0047`
     // before #915.
+    //
+    // #969 narrowed the original program used here: it also gave `B` its own
+    // `self.n`, which makes `B`'s flat instance layout `[n]` while `D`'s is
+    // `[X, n]` -- not a prefix -- so `pycc_hir`'s layout gate now rejects that
+    // class shape with `C0001` before the checker ever runs (D-234). Dropping
+    // `B`'s instance attribute leaves `B`'s layout empty, which is a prefix of
+    // everything, and exercises exactly the same `super()` resolution path.
+    // The rejected shape is pinned in `tests/issue_969_mi_slot_layout.rs`.
     check_source(
-        "class B:\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass C:\n    def __init__(self) -> None:\n        self.X = 5\n\n\nclass D(B, C):\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().X\n\n\nprint(D().read())\n",
+        "class B:\n    X: int = 1\n\n\nclass C:\n    def __init__(self) -> None:\n        self.X = 5\n\n\nclass D(B, C):\n    def read(self) -> int:\n        return super().X\n\n\nprint(D().read())\n",
     )
     .expect("a sibling base's instance attribute must not mask a class attribute");
 }

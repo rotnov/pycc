@@ -35,6 +35,27 @@ fn write_fixture(dir: &std::path::Path, source: &str) -> std::path::PathBuf {
     path
 }
 
+/// Asserts that `pycc check` rejects `source` with a diagnostic containing
+/// both `code` and `needle`. Matched on code plus message substring rather
+/// than a rendered path, which prints with forward slashes on Windows CI.
+fn assert_rejected(tag: &str, source: &str, code: &str, needle: &str) {
+    let dir = ScratchDir::new(&format!("issue966_{tag}")).expect("failed to create scratch dir");
+    let src = write_fixture(&dir, source);
+    let out = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let rendered = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        !out.status.success(),
+        "{tag}: pycc check should reject the program, but it succeeded"
+    );
+    assert!(
+        rendered.contains(code) && rendered.contains(needle),
+        "{tag}: diagnostic should contain {code:?} and {needle:?}, got:\n{rendered}"
+    );
+}
+
 /// Compile and run `source`, asserting it prints `expected_stdout`.
 fn assert_runs(tag: &str, source: &str, expected_stdout: &str) {
     let dir = ScratchDir::new(&format!("issue966_{tag}")).expect("failed to create scratch dir");
@@ -207,36 +228,39 @@ fn a_dataclass_base_s_generated_constructor_still_ranks_first() {
     );
 }
 
-/// Known limitation, pinned so a future change to it is deliberate.
+/// The multi-base slot-aliasing limitation this file used to pin as *live*
+/// behaviour is now rejected outright by #969's layout gate.
 ///
-/// A class with two or more bases that each declare attribute slots hits a
-/// pre-existing MRO **slot-aliasing** defect in `pycc_mir`'s `mro_attrs`:
-/// the derived class's flat layout is assigned most-base-first, while each
-/// base's own `__init__` addresses slots against that base's *own* layout.
-/// This predates #966 and is out of its scope; it is reachable without any
-/// implicit constructor involved.
+/// A class with two or more bases that each declare attribute slots hit a
+/// pre-existing MRO **slot-aliasing** defect in `mro_attrs`: the derived
+/// class's flat layout is assigned most-base-first, while each base's own
+/// `__init__` addresses slots against that base's *own* layout. The failure
+/// was not uniformly loud -- the slot the running constructor never wrote
+/// aborted in `pycc_rt`, while the slot it aliased over returned a silently
+/// wrong value where CPython raises `AttributeError`.
 ///
-/// Both reads are pinned, because the failure is not uniformly loud: the
-/// slot the running constructor never wrote aborts, while the slot it
-/// aliased over returns a **wrong value** silently, where CPython raises
-/// `AttributeError`.
+/// #969 rejects the shape at HIR lowering with `C0001` instead
+/// ([D-234]), so both reads below are now compile errors. The behaviour is
+/// pinned end to end in `tests/issue_969_mi_slot_layout.rs`; it is kept here
+/// because #966's own constructor-ranking rules are stated against this
+/// shape, and a future relaxation of the gate must revisit both files.
+///
+/// [D-234]: ../docs/decisions/D-234-reject-multiple-inheritance-whose-base-layouts-are.md
 #[test]
-fn the_multiple_slot_bearing_base_layout_is_a_known_aliasing_limitation() {
+fn the_multiple_slot_bearing_base_layout_is_now_rejected_by_the_969_gate() {
     const CLASSES: &str = "class B:\n    def __init__(self) -> None:\n        self.z = 1\n\n\nclass D:\n    def __init__(self) -> None:\n        self.w = 2\n\n\nclass C(B, D):\n    pass\n\n\nc = C()\n";
 
-    // The slot `B.__init__` never wrote: a loud abort.
-    assert_runtime_abort(
+    assert_rejected(
         "alias_unwritten",
         &format!("{CLASSES}print(c.z)\n"),
-        "pycc_rt: invalid encoded int word 0x0",
+        "C0001",
+        "instance layout is not a prefix of",
     );
 
-    // The slot it aliased over: silently wrong. CPython raises
-    // `AttributeError: 'C' object has no attribute 'w'` here; pycc prints
-    // `B.z`'s value under `D.w`'s name.
-    assert_runs(
+    assert_rejected(
         "alias_wrong_value",
         &format!("{CLASSES}print(c.w)\n"),
-        "1\n",
+        "C0001",
+        "instance layout is not a prefix of",
     );
 }

@@ -21,7 +21,7 @@
 //! base resolution, so it deliberately stays with the other `type_param`
 //! checks.
 
-use crate::{HirClassDef, unsupported};
+use crate::{HirClassDef, Ty, unsupported};
 use pycc_diag::Diagnostic;
 
 /// Validates every direct base of the class being lowered against the
@@ -104,6 +104,151 @@ pub(super) fn validate_bases(
                      inheritance is not supported"
                 ),
                 range.clone(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// #432/#969: Computes the flat attribute-slot layout shared by `pycc_hir`'s
+/// layout gate and `pycc_mir`'s `AttrGet`/`AttrSet` slot resolution.
+///
+/// `mro_defs` is the class's MRO, most derived first, already resolved to
+/// the corresponding [`HirClassDef`]s. Each class contributes its own
+/// declared attributes that no more-derived class already contributed; the
+/// walk runs most-base-first so a base class's attributes always occupy the
+/// same low slot indices in every class that inherits them (an inherited
+/// method is lowered once, against its *own* class's layout). A second,
+/// most-derived-first pass overrides the slot type for a re-declared
+/// attribute, matching CPython's MRO-based attribute resolution.
+///
+/// The two crates must agree on what counts as a slot -- merged `@dataclass`
+/// fields, an exception class's (empty) attribute list -- so the single
+/// definition lives here, beside the MRO that indexes it, and `pycc_mir`
+/// delegates to it (`pycc_mir::class::mro_attrs`).
+pub fn flat_attr_layout(mro_defs: &[&HirClassDef]) -> Vec<(String, Ty)> {
+    let mut result: Vec<(String, Ty)> = Vec::new();
+    let mut slot_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    // Pass 1: assign slots in most-base-first order (reverse MRO).
+    for mro_def in mro_defs.iter().rev() {
+        for (name, ty) in &mro_def.attrs {
+            if !slot_index.contains_key(name) {
+                slot_index.insert(name.clone(), result.len());
+                result.push((name.clone(), ty.clone()));
+            }
+        }
+    }
+    // Pass 2: override types for re-declared attrs (most-derived wins).
+    // `overridden.insert` returns true the first time pass 2 sees an attr,
+    // and pass 1 already assigned every attr a slot, so the index is always
+    // present.
+    let mut overridden: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for mro_def in mro_defs {
+        for (name, ty) in &mro_def.attrs {
+            if overridden.insert(name.clone()) {
+                let idx = slot_index[name];
+                result[idx].1 = ty.clone();
+            }
+        }
+    }
+    result
+}
+
+/// Resolves `class_def`'s MRO to the `HirClassDef`s that carry the slots,
+/// most derived first. The class being lowered is not yet in
+/// `defined_classes`, so its own MRO head resolves to `class_def` itself.
+fn resolve_mro_defs<'a>(
+    class_def: &'a HirClassDef,
+    defined_classes: &'a [(String, HirClassDef)],
+) -> Vec<&'a HirClassDef> {
+    class_def
+        .mro
+        .iter()
+        .filter_map(|mro_class| {
+            if *mro_class == class_def.name {
+                Some(class_def)
+            } else {
+                defined_classes
+                    .iter()
+                    .find(|(name, _)| name == mro_class)
+                    .map(|(_, def)| def)
+            }
+        })
+        .collect()
+}
+
+/// #969: Rejects a multiple-inheritance shape whose base instance layouts
+/// cannot all be embedded in the derived class's flat slot layout.
+///
+/// D-154 lowers each method once, against the slot indices of its *own*
+/// class's layout, and those indices have to keep meaning the same
+/// attribute in every class that inherits the method. That holds exactly
+/// when every ancestor's layout is a name-wise prefix of the derived
+/// layout. With a single base it always holds (the derived layout is the
+/// base's layout plus the derived class's own new attributes), but two
+/// bases that each declare instance attributes have disjoint layouts and no
+/// flat ordering can make both a prefix -- one of them is re-based and its
+/// methods then read and write the wrong slots (silently wrong values, or
+/// an abort on a slot that was never written).
+///
+/// Rejecting is a deliberate narrowing of accepted surface rather than a
+/// layout redesign; see the decision entry cited from `docs/TYPE_SYSTEM.md`.
+/// Bases that declare *no* instance attributes (a methods-only mixin, a
+/// class-attribute-only base, a builtin exception class) contribute no
+/// slots and stay accepted, as do bases whose attributes all share names
+/// (they share the one slot).
+///
+/// The comparison is name-wise only, which is sufficient because D-210's
+/// `T0052` (`pycc_types`) independently rejects two classes in one MRO that
+/// declare the same attribute name with differing types: equal names there
+/// imply equal slot types, so a name-wise prefix is a full layout prefix.
+/// Relaxing `T0052` would require revisiting that reasoning here. Because
+/// this gate runs during HIR lowering, ahead of type checking, a program
+/// that violates both is reported as `C0001` rather than `T0052`.
+pub(super) fn validate_mro_slot_layout(
+    class_def: &HirClassDef,
+    defined_classes: &[(String, HirClassDef)],
+    range: std::ops::Range<u32>,
+) -> Result<(), Diagnostic> {
+    // A single base can never violate the prefix property, and a base-less
+    // class has no inherited method to mis-address.
+    if class_def.bases.len() < 2 {
+        return Ok(());
+    }
+    let derived = flat_attr_layout(&resolve_mro_defs(class_def, defined_classes));
+    let class_name = &class_def.name;
+    for ancestor in class_def
+        .mro
+        .iter()
+        .skip(1)
+        .filter_map(|name| defined_classes.iter().find(|(n, _)| n == name))
+        .map(|(_, def)| def)
+    {
+        // C3 guarantees the ancestor's own MRO is a sub-sequence of this
+        // class's, so its layout can never be *longer* than the derived
+        // one -- comparing the names pairwise is exactly the prefix test.
+        // Checking each ancestor against the derived layout alone, rather
+        // than every pair of ancestors, is sufficient: two sequences that
+        // are each a prefix of one common sequence are themselves
+        // prefix-comparable, so the linear check is equivalent to the
+        // quadratic one.
+        let ancestor_layout = flat_attr_layout(&resolve_mro_defs(ancestor, defined_classes));
+        if !ancestor_layout
+            .iter()
+            .zip(derived.iter())
+            .all(|((ancestor_attr, _), (derived_attr, _))| ancestor_attr == derived_attr)
+        {
+            let ancestor_name = &ancestor.name;
+            return Err(unsupported(
+                format!(
+                    "class `{class_name}` inherits instance attributes from more than one \
+                     class in its method resolution order -- multiple inheritance where two \
+                     classes in the method resolution order each declare their own instance \
+                     attributes is not supported yet: \
+                     `{ancestor_name}`'s instance layout is not a prefix of `{class_name}`'s, \
+                     so `{ancestor_name}`'s own methods would address the wrong attribute slots"
+                ),
+                range,
             ));
         }
     }
@@ -207,9 +352,142 @@ fn compute_c3_mro(
 
 #[cfg(test)]
 mod tests {
+    use super::flat_attr_layout;
     use crate::HirClassDef;
     use crate::class::tests::lower_ok;
     use crate::lower_checked;
+
+    // -- #969: flat attribute-slot layout and the layout-prefix gate --------
+
+    /// Collects the `HirClassDef`s of `names`, in order, out of a lowered
+    /// module, so a test can call `flat_attr_layout` on a real MRO slice.
+    fn defs_of<'a>(hir: &'a crate::HirModule, names: &[&str]) -> Vec<&'a HirClassDef> {
+        names
+            .iter()
+            .map(|name| {
+                &hir.class_defs
+                    .iter()
+                    .find(|(class_name, _)| class_name == name)
+                    .expect("test fixture should define the class")
+                    .1
+            })
+            .collect()
+    }
+
+    fn layout_names(layout: &[(String, crate::Ty)]) -> Vec<String> {
+        layout.iter().map(|(name, _)| name.clone()).collect()
+    }
+
+    #[test]
+    fn flat_attr_layout_assigns_slots_most_base_first() {
+        let hir = lower_ok(
+            "class A:\n    def __init__(self) -> None:\n        self.a = 1\nclass B(A):\n    def __init__(self) -> None:\n        self.a = 1\n        self.b = 2\n",
+        );
+        // `B`'s MRO is `[B, A]`; the walk is most-base-first, so `A`'s `a`
+        // takes slot 0 and `B`'s own `b` follows it.
+        assert_eq!(
+            layout_names(&flat_attr_layout(&defs_of(&hir, &["B", "A"]))),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        // The base's own layout is exactly the derived layout's prefix.
+        assert_eq!(
+            layout_names(&flat_attr_layout(&defs_of(&hir, &["A"]))),
+            vec!["a".to_string()]
+        );
+    }
+
+    #[test]
+    fn flat_attr_layout_deduplicates_a_redeclared_attribute() {
+        // Pass 1's `slot_index` skip: a name declared by two classes in one
+        // MRO gets one slot, not two. This is why two bases declaring the
+        // *same* attribute name never violate the #969 prefix predicate.
+        let hir = lower_ok(
+            "class A:\n    def __init__(self) -> None:\n        self.x = 1\nclass B(A):\n    def __init__(self) -> None:\n        self.x = 2\n",
+        );
+        assert_eq!(
+            layout_names(&flat_attr_layout(&defs_of(&hir, &["B", "A"]))),
+            vec!["x".to_string()]
+        );
+    }
+
+    #[test]
+    fn flat_attr_layout_lets_the_most_derived_declaration_win_on_type() {
+        // Pass 2: the slot keeps its most-base-first *index* but takes the
+        // most-derived declaration's *type*.
+        let hir = lower_ok(
+            "class A:\n    def __init__(self) -> None:\n        self.x = 1\nclass B(A):\n    def __init__(self) -> None:\n        self.x = 1.5\n",
+        );
+        let layout = flat_attr_layout(&defs_of(&hir, &["B", "A"]));
+        assert_eq!(layout.len(), 1);
+        assert_eq!(layout[0].0, "x");
+        assert_eq!(layout[0].1, crate::Ty::Float);
+        // The base alone still sees its own declaration.
+        let base = flat_attr_layout(&defs_of(&hir, &["A"]));
+        assert_eq!(base[0].1, crate::Ty::Int);
+    }
+
+    #[test]
+    fn a_single_base_never_trips_the_layout_gate() {
+        // `bases.len() < 2` short-circuit: an ancestor's layout is a prefix
+        // of its descendant's by construction in a single-inheritance chain,
+        // however many levels declare attributes.
+        let hir = lower_ok(
+            "class A:\n    def __init__(self) -> None:\n        self.a = 1\nclass B(A):\n    def __init__(self) -> None:\n        self.a = 1\n        self.b = 2\nclass C(B):\n    def __init__(self) -> None:\n        self.a = 1\n        self.b = 2\n        self.c = 3\n",
+        );
+        assert_eq!(
+            layout_names(&flat_attr_layout(&defs_of(&hir, &["C", "B", "A"]))),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+    }
+
+    #[test]
+    fn two_bases_declaring_the_same_attribute_name_pass_the_layout_gate() {
+        // Every layout in the MRO is `[used]`, so every prefix test is an
+        // equality. This is `tests/fixtures/pep_3135_super.py`'s shape.
+        let hir = lower_ok(
+            "class Slow:\n    def __init__(self) -> None:\n        self.used = 1\nclass Fast:\n    def __init__(self) -> None:\n        self.used = 2\nclass Mixed(Slow, Fast):\n    def __init__(self) -> None:\n        self.used = 3\n",
+        );
+        assert_eq!(
+            layout_names(&flat_attr_layout(&defs_of(
+                &hir,
+                &["Mixed", "Slow", "Fast"]
+            ))),
+            vec!["used".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_methods_only_second_base_passes_the_layout_gate() {
+        // An empty layout is a prefix of everything, so a mixin that
+        // declares no instance attribute is always accepted.
+        let hir = lower_ok(
+            "class A:\n    def __init__(self) -> None:\n        self.a = 1\nclass Mixin:\n    def f(self) -> int:\n        return 1\nclass C(A, Mixin):\n    def __init__(self) -> None:\n        self.a = 1\n",
+        );
+        assert!(flat_attr_layout(&defs_of(&hir, &["Mixin"])).is_empty());
+        assert_eq!(
+            layout_names(&flat_attr_layout(&defs_of(&hir, &["C", "A", "Mixin"]))),
+            vec!["a".to_string()]
+        );
+    }
+
+    #[test]
+    fn two_bases_with_diverging_layouts_are_rejected() {
+        // The gate itself: `C`'s layout is `[b, a]` (most-base-first over
+        // `[C, A, B]`) while `A`'s own is `[a]`, so `A`'s already-lowered
+        // methods would address slot 0 -- which now belongs to `b`.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class A:\n    def __init__(self) -> None:\n        self.a = 1\nclass B:\n    def __init__(self) -> None:\n        self.b = 2\nclass C(A, B):\n    def __init__(self) -> None:\n        self.a = 1\n        self.b = 2\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("`A`'s instance layout is not a prefix of `C`'s"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
 
     // -- #432: inheritance, C3 MRO, @override, inherited __init__ -----------
 

@@ -64,6 +64,7 @@ mod body;
 mod enum_class;
 mod init;
 mod mro;
+pub use mro::flat_attr_layout;
 mod protocol;
 #[cfg(test)]
 mod protocol_return_tests;
@@ -73,7 +74,7 @@ use attrs::{ClassAttrCollisionInput, reject_class_attr_collisions};
 use body::{ClassBodyInput, ClassBodyOutput, walk_class_body};
 use enum_class::lower_enum_class;
 use init::{ensure_init, synthesize_dataclass_init};
-use mro::{resolve_mro, validate_bases};
+use mro::{resolve_mro, validate_bases, validate_mro_slot_layout};
 use protocol::lower_protocol_class;
 use pycc_ast::{Decorator, Expr, Number, Stmt};
 use pycc_diag::{Diagnostic, Span};
@@ -1400,32 +1401,35 @@ pub(crate) fn lower_class(
             }
         }
     }
-    Ok((
-        HirClassDef {
-            class_attrs,
-            exception_type_tag: None,
-            name: class_name,
-            bases,
-            mro,
-            attrs,
-            methods,
-            properties,
-            static_methods,
-            class_methods,
-            type_param,
-            is_enum: false,
-            implicit_object_init,
-            enum_members,
-            is_dataclass,
-            dataclass_fields,
-            is_protocol: false,
-            runtime_checkable: false,
-            protocol_members: Vec::new(),
-            abstract_methods: all_abstract_methods,
-            is_abstract,
-        },
-        items,
-    ))
+    let class_def = HirClassDef {
+        class_attrs,
+        exception_type_tag: None,
+        name: class_name,
+        bases,
+        mro,
+        attrs,
+        methods,
+        properties,
+        static_methods,
+        class_methods,
+        type_param,
+        is_enum: false,
+        implicit_object_init,
+        enum_members,
+        is_dataclass,
+        dataclass_fields,
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: Vec::new(),
+        abstract_methods: all_abstract_methods,
+        is_abstract,
+    };
+    // #969: the layout gate runs last, on the finished `HirClassDef` -- it
+    // needs `attrs` complete (a `@dataclass` fills it from the merged field
+    // list well below `walk_class_body`) and every base's own `attrs` final
+    // (a base is always defined earlier in the module, so it is).
+    validate_mro_slot_layout(&class_def, defined_classes, def.range.into())?;
+    Ok((class_def, items))
 }
 
 /// Lowers a single method definition into an ordinary `HirItem::Function`
