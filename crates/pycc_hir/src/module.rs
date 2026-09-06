@@ -150,8 +150,10 @@ pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
 /// class, type-alias, or project-import names it would have bound
 /// (`poisonable_names`) are recorded as poisoned; when a later item fails
 /// with one of the two cascade-shaped `C0001`s (`cascade_name`) naming a
-/// poisoned name, that item is skipped *silently* -- no diagnostic of any
-/// kind -- and its own poisonable names are recorded too, so `class B(A)`
+/// poisoned name, that item's own lowering diagnostic is dropped *silently*
+/// (the post-item enum-call scan still runs on it, D-233 decision 3, so a
+/// call to another, valid enum class inside it is still reported) and its
+/// own poisonable names are recorded too, so `class B(A)`
 /// after a skipped `A` silences a following `class C(B)`. A later item
 /// that binds a poisoned name and lowers successfully un-poisons it.
 /// Nothing before the first failing item is ever skipped, and that item's
