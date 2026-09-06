@@ -523,6 +523,29 @@ def normalized_text(value):
     return " ".join(value.replace("`", "").split())
 
 
+class EvaluationParser(site_execution_evidence.VisibleExecutionParser):
+    """Read evaluator actions with the same visibility boundary as evidence."""
+    def __init__(self):
+        super().__init__()
+        self.current_pages = []
+        self.visible_links = []
+
+    def handle_starttag(self, tag, attrs):
+        super().handle_starttag(tag, attrs)
+        attributes = dict(attrs)
+        if tag == "a" and self.stack and not self.stack[-1][1]:
+            self.visible_links.append(attributes.get("href"))
+            if self.stack[-1][4] and attributes.get("aria-current") == "page":
+                self.current_pages.append(attributes.get("href"))
+
+
+def visible_fragment(source, pattern):
+    match = re.search(pattern, source, re.S)
+    parsed = EvaluationParser()
+    parsed.feed(match[0] if match else "")
+    return parsed, " ".join("".join(parsed.visible_text).split())
+
+
 hero_by_page = {hero["page_id"]: hero for hero in heroes}
 for page_id, hero in hero_by_page.items():
     if page_id in site_execution_evidence.SPECS:
@@ -532,14 +555,14 @@ for page_id, hero in hero_by_page.items():
     if html_projection is not None:
         html_path = projection_file(html_projection, f"hero {page_id!r} HTML projection")
         html_text = html_path.read_text()
-        navigation = site_execution_evidence.VisibleExecutionParser()
+        navigation = EvaluationParser()
         navigation.feed(html_text)
         if page_id in {"language", "status"}:
             visible = " ".join("".join(navigation.visible_text).split())
             if site_execution_evidence.CURRENT_FUTURE_SCOPE not in visible:
                 fail(f"hero {page_id!r} current future-import scope or limitations drifted")
         prefix = "" if page_id == "landing" else "../"
-        expected_navigation = [
+        expected_navigation = [prefix or "./"] + [
             prefix + item["route"].lstrip("/")
             for identity, item in PAGE_ALLOWLIST.items()
             if identity != "landing" and item["page_path"] is not None
@@ -547,6 +570,31 @@ for page_id, hero in hero_by_page.items():
         if (navigation.primary_navs != 1 or len(navigation.navigation) != len(expected_navigation)
                 or set(navigation.navigation) != set(expected_navigation)):
             fail(f"hero {page_id!r} primary navigation must visibly link every evidence route exactly once")
+        current_page = prefix + hero["route"].lstrip("/") if page_id != "landing" else "./"
+        if navigation.current_pages != [current_page]:
+            fail(f"hero {page_id!r} must identify exactly one correct active primary page")
+        if page_id == "landing":
+            intro, intro_text = visible_fragment(html_text, r'<div class="hero-copy"[^>]*>.*?<div class="hero-actions">')
+            for phrase in ("Pre-alpha · typed Python subset", "Typed Python in.",
+                           "Native binaries out.", "before your program runs",
+                           "standalone native executable for the implemented subset",
+                           "Python 3.14 is the target, not full compatibility.",
+                           "Not ready for production."):
+                if phrase not in intro_text:
+                    fail("landing visible introduction must explain product, subset and maturity")
+            actions, _ = visible_fragment(html_text, r'<div class="hero-actions">.*?</div>')
+            if actions.visible_links != ["#try", "language-support/"]:
+                fail("landing primary evaluation action must lead to #try, then language support")
+            setup, setup_text = visible_fragment(html_text, r'<section[^>]+id="try"[^>]*>.*?</section>')
+            if "local source build" not in setup_text:
+                fail("landing source evaluation must be present and visible")
+            prerequisites = {
+                "https://github.com/rotnov/pycc",
+                "https://github.com/rotnov/pycc/blob/main/docs/DISTRIBUTION.md#current-installation-boundary",
+                "https://github.com/rotnov/pycc/blob/main/.github/workflows/ci.yml",
+            }
+            if not prerequisites.issubset(set(setup.visible_links)):
+                fail("landing source evaluation prerequisites must link source, distribution and CI setup")
         parser = EvidenceProjectionParser()
         parser.feed(html_text)
         if parser.hero_roots != [expected_tuple]:

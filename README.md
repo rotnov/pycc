@@ -237,7 +237,9 @@ including `pycc build --target` cross-compilation. Full spec:
 ## Building from source
 
 Requires Rust 1.97+ (`rustup update stable`) and LLVM 22.1.1.
-`cargo build --release`. The compiler itself has no Python dependency.
+`cargo build --release` after the [distribution prerequisites](docs/DISTRIBUTION.md#current-installation-boundary),
+including `LLVM_SYS_221_PREFIX` and platform linker setup. The compiler itself has no Python dependency.
+For a source-first evaluation, [try the checked example](https://rotnov.github.io/pycc/#try).
 
 ## License
 

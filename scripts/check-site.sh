@@ -520,7 +520,7 @@ if web_page.get("name") != title:
     raise SystemExit("WebPage JSON-LD name must match the page title")
 if web_page.get("description") != metadata["description"][0]["content"]:
     raise SystemExit("WebPage JSON-LD description must match the meta description")
-if web_page.get("dateModified") != "2026-09-05":
+if web_page.get("dateModified") != "2026-09-06":
     raise SystemExit("Landing WebPage dateModified is stale")
 if web_page.get("mainEntity") != {"@id": project_id}:
     raise SystemExit("WebPage JSON-LD must identify the pycc project as its main entity")
@@ -603,10 +603,10 @@ for disclosure in required_disclosures:
     if disclosure not in visible_body_text:
         raise SystemExit(f"Missing visible AI authorship disclosure: {disclosure}")
 product_phrase = (
-    "pycc is an open-source ahead-of-time compiler project for standard "
-    "Python 3.14."
+    "pycc compiles type-annotated Python before your program runs, "
+    "producing a standalone native executable for the implemented subset."
 )
-provenance_phrase = "AI agents create the entire project"
+provenance_phrase = "Built entirely by AI."
 if product_phrase not in visible_body_text or provenance_phrase not in visible_body_text:
     raise SystemExit("Landing body must state both product and provenance roles")
 if visible_body_text.index(product_phrase) > visible_body_text.index(provenance_phrase):
@@ -634,7 +634,7 @@ ROBOTS = (
 PAGE_SPECS = {
     "language-support": {
         "canonical": "https://rotnov.github.io/pycc/language-support/",
-        "date_modified": "2026-09-05",
+        "date_modified": "2026-09-06",
         "title": "pycc language support — pre-alpha Python AOT evidence",
         "description": "pycc is a pre-alpha AOT compiler for typed Python. Inspect one PEP 526 fixture, its CPython 3.14.7 comparison, and the limits of current language support.",
         "social_description": "pycc is a pre-alpha AOT compiler for typed Python. Inspect one PEP 526 fixture, its CPython 3.14.7 comparison, and the limits of current language support.",
@@ -642,7 +642,7 @@ PAGE_SPECS = {
     },
     "diagnostics": {
         "canonical": "https://rotnov.github.io/pycc/diagnostics/",
-        "date_modified": "2026-09-05",
+        "date_modified": "2026-09-06",
         "title": "pycc diagnostics — pre-alpha compiler output evidence",
         "description": "pycc is a pre-alpha AOT compiler for typed Python. Inspect real T0021 human and JSON output, emitted help, placeholder spans, and diagnostic limitations.",
         "social_description": "pycc is a pre-alpha AOT compiler for typed Python. Inspect real T0021 human and JSON output, emitted help, placeholder spans, and diagnostic limitations.",
@@ -681,7 +681,7 @@ PAGE_SPECS = {
     },
     "architecture": {
         "canonical": f"{ROOT}architecture/",
-        "date_modified": "2026-09-05",
+        "date_modified": "2026-09-06",
         "title": "pycc architecture — typed Python to LLVM native binaries",
         "description": (
             "Explore pycc's implemented Rust and LLVM compiler pipeline, "
@@ -703,7 +703,7 @@ PAGE_SPECS = {
     },
     "python-aot-compilers": {
         "canonical": f"{ROOT}python-aot-compilers/",
-        "date_modified": "2026-09-05",
+        "date_modified": "2026-09-06",
         "title": "Python AOT compilers compared — where pycc fits",
         "description": (
             "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from "
@@ -748,7 +748,7 @@ PAGE_SPECS = {
     },
     "ai-native": {
         "canonical": f"{ROOT}ai-native/",
-        "date_modified": "2026-09-05",
+        "date_modified": "2026-09-06",
         "title": (
             "pycc AI-native experiment — software built entirely by AI"
         ),

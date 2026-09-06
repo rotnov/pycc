@@ -92,7 +92,10 @@ footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 88px;
+  min-height: 88px;
+  gap: 16px 24px;
+  padding-block: 16px;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--line);
 }
 
@@ -125,7 +128,9 @@ footer {
 
 .site-nav {
   display: flex;
-  gap: 28px;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 12px 20px;
   align-items: center;
   color: var(--ink-soft);
   font-size: 0.88rem;
@@ -134,6 +139,13 @@ footer {
 
 .site-nav a {
   transition: color 160ms ease;
+}
+
+.site-nav a[aria-current="page"] {
+  color: var(--acid);
+  text-decoration: underline;
+  text-underline-offset: 6px;
+  text-decoration-thickness: 2px;
 }
 
 .site-nav a:hover {
@@ -150,9 +162,42 @@ footer {
   display: grid;
   grid-template-columns: minmax(0, 1.08fr) minmax(380px, 0.92fr);
   gap: clamp(48px, 7vw, 100px);
-  align-items: center;
-  min-height: calc(100svh - 88px);
-  padding: 90px 0 110px;
+  align-items: start;
+  padding: 48px 0 72px;
+}
+
+.hero h1 {
+  font-size: clamp(2.5rem, 4.8vw, 4.8rem);
+  line-height: 1.02;
+}
+
+.hero-boundary {
+  color: var(--ink-soft);
+  margin: 18px 0 0;
+}
+
+.source-evaluation a,
+.related-evidence a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.source-evaluation pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 20px;
+  background: var(--ground);
+  border: 1px solid var(--line);
+}
+
+.source-evaluation pre code {
+  white-space: pre;
+}
+
+.related-evidence {
+  margin-block: 32px;
+  padding: 20px;
+  border: 1px solid var(--line);
 }
 
 .hero > * {
@@ -202,7 +247,7 @@ h1 span {
 
 .hero-lede {
   max-width: 670px;
-  margin: 34px 0 0;
+  margin: 24px 0 0;
   color: #c8cbc4;
   font-size: clamp(1.05rem, 1.5vw, 1.3rem);
   line-height: 1.65;
@@ -212,7 +257,7 @@ h1 span {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  margin-top: 36px;
+  margin-top: 24px;
 }
 
 .button {
@@ -1346,7 +1391,7 @@ footer > div a:hover {
   .hero {
     grid-template-columns: 1fr;
     gap: 70px;
-    padding: 80px 0 120px;
+    padding: 36px 0 72px;
   }
 
   .hero-code {
@@ -1433,7 +1478,7 @@ footer > div a:hover {
 
   .hero {
     min-height: auto;
-    padding: 66px 0 88px;
+    padding: 28px 0 64px;
   }
 
   h1 {

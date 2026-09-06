@@ -969,7 +969,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
   def test_extract_h1_from_real_home_page
     html = File.read(File.join(REPO_ROOT, "site/index.html"))
     h1 = extract_h1_from_html(html)
-    assert_equal "Typed Python in. Autonomous artifacts out.", h1
+    assert_equal "Typed Python in. Native binaries out.", h1
   end
 
   def test_extract_title_from_real_pages

@@ -371,10 +371,42 @@ viewports up to 680 CSS pixels, the footer must stack into one grid column and
 its navigation group must wrap within the available width; the validator and
 an independent negative mutation preserve that footer contract as the
 evidence-page link set grows.
-Each canonical page has one visible primary navigation containing all six
-evidence-route links and the repository link exactly once. The parsed
+Each canonical page has one visible primary navigation containing Home, all six
+evidence-route links, and the repository link exactly once. Its labels are
+Home, Language support, Diagnostics, How it works, Current status, Compare
+compilers, AI provenance, and GitHub. Exactly one canonical link has
+`aria-current="page"`, with an underline as well as color. The parsed
 primary-navigation inventory is checked separately from footer/source links;
 per-page mutations prevent footer links from masking a missing primary link.
+
+### Human-first evaluation flow
+
+Home introduces the product, implemented subset, Python 3.14 target (not full
+compatibility), and pre-alpha maturity before the AI-authorship narrative.
+At scroll zero and default text size, the complete short explanation, maturity
+boundary, and primary “Try the checked example” action must fit at 320×740,
+390×844, and 1280×800 CSS pixels. Navigation wraps at every width and remains
+visible without JavaScript; it is neither sticky nor a collapsed menu.
+
+The primary action reaches Home's `#try` source-evaluation section; the second
+action reaches Language support. The source sequence follows
+[`DISTRIBUTION.md`'s current installation boundary](./DISTRIBUTION.md#current-installation-boundary)
+and links the repository plus current CI setup. It is a Unix-shell source flow,
+not a package installation or all-platform attestation. Its freshly built
+workspace executable runs the checked quick-start fixture; the immutable
+historical hero remains a separate evidence claim.
+
+Short evaluator questions connect Language, Diagnostics, and Comparison near
+`#try`; each child offers two related next actions. Benchmark evidence and the
+Performance route remain unpublished under #567. This is seven-route partial
+delivery under #569, not completion of its eight-intent acceptance.
+
+Manual browser acceptance covers all seven routes at the three sizes above and
+a breakpoint-adjacent tablet size, JavaScript on/off, both reduced-motion
+settings, and 200% reflow. Check document width, local code scrolling, visible
+keyboard focus, skip-link/anchor/details/copy access, active-page identity, and
+404 recovery. Save screenshots and geometry with source/browser identity.
+First-time human comprehension remains distinct from automated or agent review.
 
 ## Tested quick-start example binding
 
@@ -937,9 +969,9 @@ and the page-to-URL mapping in
 
 ### CI binding
 
-The `pages-performance` job runs on every pull request and push. It is
-listed in `ci-gate.needs`, so `ci-gate` fails unless `pages-performance`
-succeeds. The job has `contents: read` permission only, no
+The `pages-performance` job runs on pull requests selected by the fail-closed
+Pages classifier and on every push. It is listed in `ci-gate.needs`; selected
+runs must succeed. The job has `contents: read` permission only, no
 `continue-on-error`, and is not push-only -- the
 `scripts/check_roadmap_evidence.rb` lifecycle validator enforces these
 structural invariants on every pull request.
@@ -997,14 +1029,15 @@ reduced-motion suppresses nonessential motion to ≤ 0.02ms while normal
 motion remains available under no-preference. Puppeteer is a CI tool
 (like `npx lighthouse`), not a site dependency; it uses the system
 Chrome via `PUPPETEER_EXECUTABLE_PATH`.
+In both modes, `.source-evaluation a` and `.related-evidence a` retain a persistent underline; the evaluator checks every matching link and rejects missing links in each expected scope.
 
 ### CI binding
 
-The `pages-accessibility` job runs on every pull request and push. It
+The `pages-accessibility` job runs on pull requests selected by the fail-closed
+Pages classifier and on every push. It
 has `contents: read` permission only, no `continue-on-error`, and is
 listed in `ci-gate.needs` alongside `pages-performance`. The
-`ci-gate` fail-closed aggregate condition requires
-`needs.pages-accessibility.result == 'success'`.
+`ci-gate` fail-closed aggregate condition requires success for selected runs.
 
 ### Scope and limitations
 
