@@ -483,6 +483,28 @@ fn a_walrus_in_a_function_body_does_not_bind_the_module_frame() {
 }
 
 #[test]
+fn a_value_less_module_annotation_does_not_bind_the_module_frame() {
+    // `Color: int` at module level declares metadata and leaves the class
+    // bound, so the call is still an attributable enum call.
+    let source = format!("{COLOR}Color: int\nColor()\n");
+    let diagnostics = lower_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
+}
+
+#[test]
+fn a_module_annotation_with_a_value_binds_the_module_frame() {
+    lower_ok(&format!("{COLOR}Color: int = 3\nColor()\n"));
+}
+
+#[test]
+fn a_value_less_annotation_inside_a_function_still_makes_the_name_local() {
+    lower_ok(&format!(
+        "{COLOR}def f() -> None:\n    Color: int\n    Color()\n"
+    ));
+}
+
+#[test]
 fn a_shadow_in_one_function_does_not_leak_into_a_sibling() {
     let source = format!(
         "{COLOR}def f() -> None:\n    Color = 1\n    Color()\ndef g() -> None:\n    Color()\n"

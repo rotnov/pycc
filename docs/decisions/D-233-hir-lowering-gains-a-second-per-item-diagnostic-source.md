@@ -55,7 +55,10 @@ status: accepted
      the enum class keeps its accurate `T0021` from `pycc_types`: a stack of
      frames (the module body, each `def` with its parameters, each `lambda`
      with its parameters) records the names bound directly in that scope
-     (`Store` names, `except ... as`, `match` captures) and suppresses the
+     (`Store` names, `except ... as`, `match` captures; a value-less
+     module-level `Color: int` is metadata, not a binding, and does not
+     count, while the same statement inside a function makes the name
+     local and does) and suppresses the
      report when any frame binds the callee. The frames are not
      position-aware, do not descend into a nested scope, and record no
      `def`/`class`/`import` name; a class body gets no frame. The scan and

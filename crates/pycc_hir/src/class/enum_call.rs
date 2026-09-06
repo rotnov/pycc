@@ -63,7 +63,11 @@
 //!   function; for the module frame it also hides a `Color()` that precedes
 //!   a later module-level `Color = 1`, and a comprehension target
 //!   `[Color for Color in range(3)]` suppresses a sibling `Color(1)` in the
-//!   same `def`. Every suppressed call still fails in `pycc_types` (the
+//!   same `def`. A value-less module-level annotation (`Color: int`) is
+//!   not a binding: it declares metadata and leaves the class bound, so
+//!   the call after it is still attributed (inside a function the same
+//!   statement makes the name local and does suppress). Every suppressed
+//!   call still fails in `pycc_types` (the
 //!   span-less guard at `1:1`, or `T0021`). The one false-kind report is
 //!   confined to a **class body**, which gets no frame: `class K:` with
 //!   `Color = 1` and `X = Color()` reports the class-attribute `C0001` for
@@ -320,7 +324,7 @@ fn has_single_enum_marker_base(def: &StmtClassDef) -> bool {
 /// only a plain module-level `Color = 1`, a `for`/`with`/walrus target, an
 /// except-handler name, or a `match` capture does.
 pub(crate) fn module_bindings(body: &[Stmt], imports: &[ImportBinding]) -> Vec<String> {
-    scope_bindings(body, imports)
+    scope_bindings(body, imports, true)
 }
 
 /// The names bound directly by the statements of one scope, without
@@ -329,14 +333,26 @@ pub(crate) fn module_bindings(body: &[Stmt], imports: &[ImportBinding]) -> Vec<S
 /// definition's decorators, type parameters, parameters, return
 /// annotation, and class bases are walked, though: they are evaluated in
 /// this scope (limit (iii)).
-fn scope_bindings(body: &[Stmt], imports: &[ImportBinding]) -> Vec<String> {
+///
+/// `module_scope` distinguishes a value-less annotation: at module level
+/// `Color: int` declares metadata and leaves the existing class binding in
+/// place (ruff still gives the target `Store` context), so it must not
+/// suppress the scan; inside a function the same statement makes `Color`
+/// a local, which the frame models as before (PR #971 review).
+fn scope_bindings(body: &[Stmt], imports: &[ImportBinding], module_scope: bool) -> Vec<String> {
     struct Binder<'i> {
         imports: &'i [ImportBinding],
         names: Vec<String>,
+        module_scope: bool,
     }
     impl<'a> Visitor<'a> for Binder<'_> {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
             match stmt {
+                // A value-less module annotation binds nothing at runtime;
+                // its annotation expression is still walked.
+                Stmt::AnnAssign(ann) if self.module_scope && ann.value.is_none() => {
+                    self.visit_annotation(&ann.annotation);
+                }
                 // A nested `def`/`class` is neither a binding this frame
                 // models (limit (ii)) nor a scope it descends into -- but
                 // its definition-time expressions (decorators, type
@@ -404,6 +420,7 @@ fn scope_bindings(body: &[Stmt], imports: &[ImportBinding]) -> Vec<String> {
     let mut binder = Binder {
         imports,
         names: Vec::new(),
+        module_scope,
     };
     binder.visit_body(body);
     binder.names
@@ -466,7 +483,7 @@ pub(crate) fn reject_enum_class_calls(
                         .iter()
                         .map(|parameter| parameter.name().to_string())
                         .collect();
-                    frame.extend(scope_bindings(&def.body, self.imports));
+                    frame.extend(scope_bindings(&def.body, self.imports, false));
                     self.frames.push(frame);
                     visitor::walk_stmt(self, stmt);
                     self.frames.pop();

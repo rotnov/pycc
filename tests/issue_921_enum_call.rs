@@ -343,6 +343,20 @@ fn a_call_after_a_two_path_import_of_one_enum_falls_back_to_the_span_less_guard(
 /// PR #971 review: a `from __future__` import binds nothing, so an enum
 /// that shares a feature name is scanned and reported at the call.
 #[test]
+fn a_call_after_a_value_less_module_annotation_is_reported_at_the_call() {
+    // `Color: int` at module level binds nothing at runtime, so the scan
+    // still attributes the call (PR #971 review).
+    let source = "from enum import Enum\nclass Color(Enum):\n    RED = 1\nColor: int\nColor()\n";
+    assert_enum_call_rejected(
+        "921_value_less_annotation",
+        "check",
+        source,
+        "Color",
+        "Color()",
+    );
+}
+
+#[test]
 fn an_enum_sharing_a_future_feature_name_is_reported_at_the_call() {
     let source = "from __future__ import annotations\nfrom enum import Enum\n\n\nclass annotations(Enum):\n    A = 1\n\n\ndef f() -> None:\n    annotations()\n";
     assert_enum_call_rejected(
