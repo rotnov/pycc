@@ -362,3 +362,11 @@ counts only the enum calls the scan can attribute, and `lower_module`'s
 contract states the pre-#867 byte-identity for the first *lowering*
 diagnostic, since D-233 decision 4 lets an earlier item's scan diagnostic
 come first. Round 14 of the findings pile records both.
+
+## PR #971 thirteenth Codex round (cascade silence, roadmap call-span claim)
+
+Two P2s on `6a433fbb`, fixed in `ae2b064c`: `lower_module`'s rustdoc now
+scopes cascade silence to the item's own lowering diagnostic (the enum-call
+scan still runs, D-233 decision 3), and the roadmap's #944 entry plus
+`docs/TYPE_SYSTEM.md` qualify the call-span claim to attributable calls
+with the `1:1` fallback named. Round 15 of the findings pile records both.
