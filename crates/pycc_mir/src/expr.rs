@@ -597,6 +597,21 @@ pub(super) fn lower_expr(
                         };
                     }
                 }
+                // #915: a base class's class attribute (#911) is folded to
+                // its literal here, over the same post-current MRO slice.
+                // The `self_expr` receiver computed above is deliberately
+                // discarded on this path: a class attribute has no runtime
+                // storage, so the read needs no instance, and `super()` is
+                // side-effect-free, so dropping it loses nothing. Using the
+                // same `fold_class_attr` helper as the `Base.X`, `self.X`
+                // and `d.X` sites makes `super().X` produce MIR identical to
+                // `Base.X`, which is why `pycc_codegen` needs no change.
+                for mro_class in super_mro {
+                    let mro_def = &classes[mro_class.as_str()];
+                    if let Some(folded) = fold_class_attr(mro_def, attr) {
+                        return folded;
+                    }
+                }
                 // #587: nothing else resolves through `super()`. A `super`
                 // object proxies class-level attributes and descriptors
                 // along the MRO, not the instance's own attributes, so an
@@ -604,12 +619,13 @@ pub(super) fn lower_expr(
                 // nowhere in the MRO at all) is rejected by
                 // `pycc_types::class::resolve_super_attr_get` with `T0047`
                 // or `T0044` before any HIR reaches this crate. Properties
-                // are the only class-level member pycc models today, so the
-                // loop above is exhaustive for well-typed input.
+                // and class attributes are the only class-level members pycc
+                // models today, so the two loops above are exhaustive for
+                // well-typed input.
                 panic!(
-                    "pycc_mir: internal error: `super().{attr}` is not a property on any class \
-                     after `{current}` in its MRO -- pycc_types::check should have rejected this \
-                     HIR with T0047 or T0044 before it reached pycc_mir"
+                    "pycc_mir: internal error: `super().{attr}` is not a property or class \
+                     attribute on any class after `{current}` in its MRO -- pycc_types::check \
+                     should have rejected this HIR with T0047 or T0044 before it reached pycc_mir"
                 );
             }
             // #379 (PR-19): `Color.RED` — accessing an enum member by name
