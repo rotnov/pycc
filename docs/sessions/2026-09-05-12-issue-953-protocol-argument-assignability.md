@@ -119,9 +119,11 @@ false, and the module doc comment of
 `tests/issue_948_protocol_self_reference.rs`, which carried the same claim
 as a deliberate limitation of that issue's fix. `docs/DIAGNOSTICS.md` needed
 no edit: its `T0021` entry is a category description, not an enumeration of
-accepted and rejected cases. `docs/ROADMAP.md` was not touched at all, so
-the status-page four-pin rotation is not triggered
-(`check_status_page_freshness.rb origin/main` reports no signal).
+accepted and rejected cases. `docs/ROADMAP.md` carried the same stale
+limitation inside the existing #380 protocol paragraph and received a
+prose-only edit in place: no new feature-landing paragraph, no new evidence
+bullet and no checklist change, so the status-page four-pin rotation is not
+triggered (`check_status_page_freshness.rb origin/main` reports no signal).
 
 ## Gates
 
