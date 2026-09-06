@@ -1,8 +1,13 @@
 //! Protocol class lowering (#380, PR-20), extracted from `class.rs` per
 //! AGENTS.md's file-decomposition rule (issue #890; tracking issue #548),
-//! following `class/mro.rs`'s precedent. The body is the original
-//! `lower_protocol_class`'s, unchanged.
+//! following `class/mro.rs`'s precedent. The body was the original
+//! `lower_protocol_class`'s, unchanged, until
+//! [#984](https://github.com/rotnov/pycc/issues/984) added the one
+//! reserved-name call below: a `Protocol` body never reaches
+//! `super::body`'s method loop, because `super::lower_class` returns through
+//! this function first, so `def __slots__` needed its own guard here.
 
+use super::reserved_names::reject_reserved_protocol_method_name;
 use super::{ClassAnnotationInfo, HirClassDef, ProtocolMember, is_declaration_body};
 use crate::{HirItem, Ty, unsupported};
 use pycc_ast::{Expr, Stmt};
@@ -99,6 +104,22 @@ pub(super) fn lower_protocol_class(
                         method_def.range,
                     ));
                 }
+                // #984: `def __slots__` diverges in a `Protocol` body too --
+                // `type.__new__` iterates `__slots__` while the `class`
+                // statement executes, so CPython 3.13.9 raises `TypeError:
+                // 'function' object is not iterable` and never creates the
+                // class, while pycc recorded a protocol member and ran the
+                // program. A `Protocol` body never reaches
+                // `super::body`'s method loop -- `lower_class` returns
+                // through this function first -- so the guard needs its own
+                // call site here rather than sharing that one.
+                //
+                // Deliberately placed *after* every rejection above: the only
+                // input it newly rejects is the decorator-free, non-generic,
+                // declaration-body `def __slots__` that is falsely accepted
+                // today, and each other spelling keeps the more specific
+                // diagnostic it already reported.
+                reject_reserved_protocol_method_name(&method_name, method_def.range.into())?;
                 // Lower the method's parameter and return types.
                 // `self` is handled specially (assigned
                 // `Ty::Instance(class_name)` directly, bypassing

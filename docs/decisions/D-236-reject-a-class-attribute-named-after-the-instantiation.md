@@ -215,6 +215,67 @@ status: accepted
     host — and is tracked as
     [#982](https://github.com/rotnov/pycc/issues/982), pinned by
     `a_property_getter_named_qualname_is_left_to_issue_982`.
+
+    **Amendment, 2026-09-06 — widened by
+    [#984](https://github.com/rotnov/pycc/issues/984).** The note above closed
+    `__slots__` on the `@property` getter route only; every other class-body
+    `def` spelling of the same name was still falsely accepted. Measured at
+    `e77b4b13` against CPython 3.13.9, seven of them diverged — a plain `def`,
+    `@staticmethod`, `@classmethod`, `@abstractmethod`, `@override`, and a
+    plain `def` inside a `@dataclass` and inside a `Protocol` body — each
+    raising `TypeError: '<carrier>' object is not iterable` at class creation
+    while pycc compiled and ran the program. They are now rejected by
+    `reject_reserved_method_name` (which subsumes the #980 getter dispatch
+    unchanged) and, for a `Protocol` body,
+    `reject_reserved_protocol_method_name`. Two facts about this decision's
+    scaffolding change with it, and both are recorded rather than rewritten
+    above:
+
+    - **The guard is reached from five class-body call sites, not four.** The
+      three attribute routes are unchanged; `walk_class_body`'s method loop is
+      now one call serving the getter spelling and every non-getter spelling
+      alike; and `lower_protocol_class`'s own method walk is a genuinely
+      separate fifth, because `lower_class` returns through it *before* the
+      method loop, so a `Protocol` body never reaches `walk_class_body` at all.
+      A guard placed only in the method loop would have left that route open.
+    - **`__slots__` now carries four message accounts**, not three: the
+      plain/`@dataclass` attribute route (D-154), the `Enum` member list
+      (`_EnumDict`), the `@property` getter (`PROPERTY_SLOTS_MESSAGE`), and
+      every other `def` spelling (`method_slots_message`). The note above says
+      "third, distinct"; that text stands as accepted and this amendment
+      records the fourth rather than editing it.
+
+    **The one genuinely new normative rule.** The note above permits a message
+    to name the bound type when "the decorator fixes it structurally rather
+    than leaving it to an initializer the guard has not read". A plain
+    `def __slots__` has no decorator at all, so that rule does not generate the
+    `function` carrier the new message names. The rule is therefore generalized
+    to: *a message may name the bound type when the **binding form** fixes it
+    structurally — `def`, `@staticmethod`, `@classmethod`, `@property` — and
+    never when it would have to be derived from a value.* Every carrier the new
+    message can name (`function`, `staticmethod`, `classmethod`) is fixed by
+    the binding form alone, and `instantiation_protocol_message`'s strings
+    still omit the type for exactly the unchanged reason: there it would come
+    from an initializer this value-independent guard has not read. Without this
+    generalization the new message would name a type under a rule that does not
+    generate it, which is the objection class #980 existed to prevent.
+
+    **What #984 deliberately does not touch.** The instantiation-protocol half
+    stays gated to `MethodKind::PropertyGetter`, so a plain `def __new__` is
+    still accepted and `a_plain_new_method_is_left_to_issue_981` stays green:
+    closing that shape still needs the widening from "a non-callable binding"
+    to "any binding pycc does not model" described below, which `__slots__`
+    never required because it is not in this decision's name set at all. The
+    two issues share only a physical location in `walk_class_body`'s method
+    loop, so #984 was not sequenced behind
+    [#981](https://github.com/rotnov/pycc/issues/981). A `@__slots__.setter`
+    with no preceding getter is likewise left alone: it reaches the method loop
+    before the "requires a preceding `@property` getter" rejection, pycc
+    already rejected it, and CPython raises `NameError: name '__slots__' is not
+    defined` while evaluating the decorator expression — so the new message's
+    account would be false in every clause for it. It is short-circuited inside
+    the guard and pinned by
+    `a_slots_setter_without_a_getter_keeps_the_missing_getter_message`.
   - **The rule is about binding one of the names to a *non-callable* object**,
     which is the literal text of all three messages. A `def __new__` binds a
     callable — exactly what CPython's protocol expects — so it is outside this

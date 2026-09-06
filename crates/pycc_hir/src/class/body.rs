@@ -14,7 +14,7 @@
 //! returns through `lower_enum_class`/`lower_protocol_class` before it.
 
 use super::attrs::{lower_class_attr, lower_unannotated_class_attr, strip_class_var};
-use super::reserved_names::reject_reserved_property_name;
+use super::reserved_names::reject_reserved_method_name;
 use super::{
     CONTAINER_METHOD_NAMES, ClassAnnotationInfo, ClassAttrValue, HirClassDef, MethodKind,
     PropertyDef, classify_decorator, collect_init_attrs, is_declaration_body, is_scalar_slot_type,
@@ -438,9 +438,30 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
         // `__repr__`, so `__slots__` falls through to here; an `Enum` body
         // never does, because `lower_enum_class` rejects a method definition
         // outright before this point.
-        if let MethodKind::PropertyGetter { prop_name } = &kind {
-            reject_reserved_property_name(prop_name, method_def.range.into())?;
-        }
+        //
+        // #984: the same one call now covers every *non*-`@property` spelling
+        // of `def __slots__` too -- a bare `def`, `@override`,
+        // `@abstractmethod`, `@staticmethod` and `@classmethod` -- which all
+        // diverged identically and were all accepted here before. The
+        // dispatch moved into `reject_reserved_method_name`; the getter arm's
+        // behavior is unchanged. Three things about the position matter:
+        // `classify_decorator` still runs first, so an unrecognized decorator
+        // keeps reporting "method decorators are not supported yet"; the
+        // instantiation-protocol half stays gated to the getter, so a plain
+        // `def __new__` is still accepted (#981); and a `@__slots__.setter`
+        // is short-circuited inside the guard, because its own "requires a
+        // preceding `@property` getter" rejection below is already the
+        // truthful account for that shape.
+        //
+        // Running before `lower_method` also preempts that function's own
+        // early rejections for an `async def`, a generic `def __slots__[T]`,
+        // `*args`, keyword-only parameters and `**kwargs`. That is
+        // deliberate and stays truthful: CPython binds `__slots__` to a
+        // plain `function` object for every one of those spellings too, so
+        // `method_slots_message("function")` is the accurate account in each
+        // case and the more specific "not supported yet" message it replaces
+        // would have described a program CPython never gets to run.
+        reject_reserved_method_name(&method_name, &kind, method_def.range.into())?;
         // #436: `@staticmethod` and `@classmethod` on `__init__` are
         // rejected -- a constructor must be a regular instance method.
         // #380 (PR-20): `@abstractmethod` on `__init__` is also rejected
