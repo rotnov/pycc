@@ -18,8 +18,8 @@ decisions-index freshness check, the roadmap-evidence checker, the `scripts/` un
 agent validators, and `check_ci_permissions.rb` all exited 0.
 
 The branch is pushed as `feat/issue-977`; the pull request opened from it carries `Fixes #977` and is
-the delivery vehicle for this file (the PR number is recorded in the follow-up paragraph below once
-it exists).
+the delivery vehicle for this file: [PR #985](https://github.com/rotnov/pycc/pull/985), opened from
+head `8f678416` with `closingIssuesReferences` = {#977}.
 
 ### Post-merge workflow runs on `e77b4b13`
 
