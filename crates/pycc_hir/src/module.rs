@@ -24,9 +24,13 @@
 //! item. Two `C0001` shapes are *cascades* of an earlier skipped item rather
 //! than independent gaps: a bare-name annotation that names a class or
 //! type alias which failed to lower, and a base-class reference to one.
-//! Those are suppressed silently through the "poisoned bindings" set kept by
-//! `lower_module` (see `poisonable_names` and `cascade_name`); everything else
-//! is reported. HIR failures still stop the pipeline before the type
+//! The lowering source suppresses those silently through the "poisoned
+//! bindings" set kept by `lower_module` (see `poisonable_names` and
+//! `cascade_name`); everything else it produces is reported. The suppression
+//! covers the lowering source only: the #944 per-item enum-call scan (D-233,
+//! `class::enum_call`) runs after every item whatever its outcome, so a
+//! cascade-silenced item can still report a true enum-call `C0001` of its
+//! own. HIR failures still stop the pipeline before the type
 //! checker (`src/frontend.rs`), so no partial module is ever type-checked.
 
 use crate::import::{
@@ -47,8 +51,11 @@ use pycc_diag::{Diagnostic, Span};
 /// First-diagnostic view of [`lower_all`] for the crate's many test, bench,
 /// and downstream callers that consume a single `Diagnostic` (D-217's
 /// `parse`/`parse_all` precedent): the `Err` is exactly `lower_all`'s first
-/// collected diagnostic, which is byte-identical to what this function
-/// reported before per-item collection landed (D-219). The `.expect` follows
+/// collected diagnostic. That is the first *lowering* diagnostic,
+/// byte-identical to what this function reported before per-item
+/// collection landed (D-219), unless an enum-call `C0001` scanned from an
+/// earlier, successfully lowered item precedes it in loop order (#944,
+/// D-233 decision 4). The `.expect` follows
 /// the crate's documented coverage convention (`import.rs`): `lower_all`'s
 /// `Err` is never empty by construction, and the panic path lives in
 /// libcore, adding no in-crate region.
@@ -104,8 +111,13 @@ pub struct LoweredModule {
 }
 
 /// Lowers every top-level item of a parsed module, collecting one
-/// diagnostic per failing item (in source order) and skipping that item;
-/// the `Err` is never empty (D-219, Part 2 of #864). The single-file
+/// diagnostic per failing item (in source order) plus, per item, one
+/// `C0001` for every call to an enum class that the scan can attribute
+/// (#921, #944, `class::enum_call`, D-233 -- a call the scan's documented
+/// limits suppress, such as one whose name another module-level statement
+/// also binds, lowers `Ok` here and is caught by the type checker's
+/// span-less guard instead), and skipping a failing item; the `Err` is
+/// never empty (D-219, Part 2 of #864). The single-file
 /// entry: exactly `lower_module` with no project imports answered,
 /// followed by `program::finalize` -- the same phases in the same order as
 /// before #898, so the result is byte-identical.
@@ -116,8 +128,13 @@ pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
 
 /// The per-module walk (#898): lowers every top-level item against the
 /// driver's answers for the module's project imports, collecting one
-/// diagnostic per failing item (in source order) and skipping that item;
-/// the `Err` is never empty (D-219). The result still needs
+/// diagnostic per failing item (in source order) and skipping that item,
+/// then -- for every item, lowered or skipped -- one `C0001` per call to an
+/// enum class inside it that no scope-local binding shadows (#921, #944,
+/// `class::enum_call`; the second per-item collection source, appended
+/// right after the item's own diagnostic so the list stays in loop order,
+/// D-233 amending D-219); the `Err` is never empty (D-219). The result
+/// still needs
 /// `program::link` (even for a single module) and `program::finalize`
 /// before it is a complete program: the exception type tags and the
 /// synthetic `Exception.__init__` are program-wide and assigned there.
@@ -136,13 +153,18 @@ pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
 /// class, type-alias, or project-import names it would have bound
 /// (`poisonable_names`) are recorded as poisoned; when a later item fails
 /// with one of the two cascade-shaped `C0001`s (`cascade_name`) naming a
-/// poisoned name, that item is skipped *silently* -- no diagnostic of any
-/// kind -- and its own poisonable names are recorded too, so `class B(A)`
+/// poisoned name, that item's own lowering diagnostic is dropped *silently*
+/// (the post-item enum-call scan still runs on it, D-233 decision 3, so a
+/// call to another, valid enum class inside it is still reported) and its
+/// own poisonable names are recorded too, so `class B(A)`
 /// after a skipped `A` silences a following `class C(B)`. A later item
 /// that binds a poisoned name and lowers successfully un-poisons it.
 /// Nothing before the first failing item is ever skipped, and that item's
-/// diagnostic is pushed unconditionally (the set is still empty), so the
-/// first collected diagnostic is byte-identical to the pre-#867 single
+/// diagnostic is pushed unconditionally (the set is still empty). Since
+/// #944 (D-233 decision 4) the first collected diagnostic is not always
+/// that item's own: an enum-call `C0001` scanned from an earlier,
+/// successfully lowered item precedes it in loop order. The first
+/// *lowering* diagnostic is still byte-identical to the pre-#867 single
 /// diagnostic (D-217 rule 2).
 pub fn lower_module(
     module: &ModModule,
@@ -195,6 +217,36 @@ pub fn lower_module(
     // module's prologue (docstring, then future imports); every later
     // statement is `Body`, and a future import there is an `L0001`.
     let prologue_len = future_prologue_len(&module.body);
+    // #944: the module's own enum classes, known before the loop so a call
+    // inside a `def` that precedes `class Color(Enum):` is still scanned
+    // against it, and the module frame -- every name the module body binds
+    // directly, which is never a `class`/`def`/`import` name -- so a plain
+    // module-level `Color = 1` keeps its `T0021` (see `class::enum_call`).
+    // A `TYPE_CHECKING`-guarded module-level body (#790) binds nothing at
+    // runtime, so the frame skips it -- recognized against the imports known
+    // *before* the loop (the driver's answers, never this module's own
+    // `import` statements, which the loop has not lowered yet): the bare
+    // `TYPE_CHECKING` and `typing.TYPE_CHECKING` spellings resolve without
+    // any import binding, while an aliased `t.TYPE_CHECKING` guard does
+    // not, and its body's bindings stay in the frame (limit (vi) in
+    // `class::enum_call`, over-suppression only).
+    let syntactic_enum_classes = class::enum_call::syntactic_enum_class_names(&module.body);
+    // A name that another module-level `def`/`class`/`import`/`type`
+    // statement also binds is a collision the class item reports itself;
+    // the scan never claims it (limit (vii) in `class::enum_call`), so
+    // `def Color()` / `Color()` / `class Color(Enum)` yields the collision
+    // diagnostic alone. Like the frame below, it is computed on the first
+    // item whose enum-name set is non-empty (it is a pass over every
+    // module-level binding, quadratic in their count).
+    let mut rebound_names: Option<Vec<String>> = None;
+    // Built on the first item whose name set is non-empty, never for a
+    // module that defines and imports no enum class (D-233 decision 1: the
+    // common module pays for no part of this diagnostic, and the frame is
+    // a walk of every live module-level statement). `state.imports` only
+    // grows (`append` in `lower_top_level_item`), so the pre-loop slice is
+    // exactly the driver's answers whichever item first needs the frame.
+    let pre_loop_imports = state.imports.len();
+    let mut module_frame: Option<Vec<String>> = None;
     for (index, stmt) in module.body.iter().enumerate() {
         let position = if index < prologue_len {
             FuturePosition::Prologue
@@ -228,6 +280,54 @@ pub fn lower_module(
                     }
                 }
             }
+        }
+        // #944 (D-233): the second per-item collection source. Scanned after
+        // the item's own outcome (Ok or Err alike) so the item's diagnostic
+        // precedes its enum-call diagnostics and the whole list stays in
+        // loop order (D-217 rule 3, never re-sorted). The name set is the
+        // syntactic pre-collection plus every enum class known to `state`
+        // at this point (an enum a project import pulled in, keyed on the
+        // `is_enum` provenance flag, never on `enum_members` emptiness),
+        // minus the poisoned names: a call to an enum class that itself
+        // failed to lower is a cascade of that skip (D-219, P2); minus the
+        // names another module-level statement binds too (collision,
+        // limit (vii)).
+        // Borrowed names, and no walk at all when the set is empty (the
+        // common module, which defines and imports no enum class): the scan
+        // is a full AST walk of the item plus one of each `def` body, and
+        // paying it unconditionally cost the `pycc check` frontend bench
+        // ~7% (PR #971's `frontend-perf-gate`).
+        let mut enum_class_names: Vec<&str> = syntactic_enum_classes
+            .iter()
+            .map(String::as_str)
+            .chain(
+                state
+                    .class_defs
+                    .iter()
+                    .filter(|(_, class_def)| class_def.is_enum)
+                    .map(|(name, _)| name.as_str()),
+            )
+            .filter(|name| !poisoned.iter().any(|poisoned_name| poisoned_name == name))
+            .collect();
+        if enum_class_names.is_empty() {
+            continue;
+        }
+        let rebound_names = rebound_names
+            .get_or_insert_with(|| class::enum_call::module_rebound_names(&module.body));
+        enum_class_names.retain(|name| !rebound_names.iter().any(|rebound| rebound == name));
+        if !enum_class_names.is_empty() {
+            // `state.imports` at this point is exactly what `lower_stmt`
+            // folded this item's `TYPE_CHECKING` guards against, so the scan
+            // skips the same dead bodies the lowering did.
+            let module_frame = module_frame.get_or_insert_with(|| {
+                class::enum_call::module_bindings(&module.body, &state.imports[..pre_loop_imports])
+            });
+            diagnostics.extend(class::enum_call::reject_enum_class_calls(
+                stmt,
+                module_frame,
+                &enum_class_names,
+                &state.imports,
+            ));
         }
     }
     if !diagnostics.is_empty() {

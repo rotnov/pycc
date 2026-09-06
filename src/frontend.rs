@@ -43,9 +43,12 @@ pub(crate) enum FrontendFailure {
     /// A frontend pass rejected the program. Each entry holds every
     /// diagnostic the *first failing pass* collected for that file, in
     /// that pass's own collection order (the parser: ruff's discovery
-    /// order, see `pycc_parser::parse_all`; HIR lowering: one per failing
-    /// top-level item in source order, with cascades of an earlier skipped
-    /// item suppressed, see `pycc_hir::lower_module` and D-219; linking:
+    /// order, see `pycc_parser::parse_all`; HIR lowering: per top-level
+    /// item in source order, the item's own diagnostic when it fails plus
+    /// one enum-call `C0001` per enum-class call inside it that the scan
+    /// can attribute (a shadowed or rebound name falls through to the type
+    /// checker's span-less guard), with cascades of an earlier skipped item
+    /// suppressed, see `pycc_hir::lower_module`, D-219 and D-233; linking:
     /// the first cross-module conflict; the type checker: one per failing
     /// item, solver-first per function; a pre-check or module-level solver
     /// failure is reported alone, otherwise the checker's entries for

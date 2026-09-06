@@ -77,11 +77,21 @@ The current v0.1 slice requires at least one explicit file for `pycc check` and
 accepts multiple files in one invocation, matching the argument shape used by
 pre-commit. It checks every supplied file before exiting. Within a file, every
 diagnostic the first failing pass collected is reported, in that pass's own
-order; the first diagnostic for any input is stable across releases (byte-
-identical code, message, and span -- D-217). HIR lowering collects one
-diagnostic per failing top-level item and skips that item; an item whose only
-failure is a reference to a class or type alias that itself failed to lower is
-skipped silently rather than reported as a second gap (D-219). The type
+order; the first diagnostic for any input was kept byte-identical (code,
+message, and span) across the three #864 parts as a transition invariant
+(D-217 rule 2), not as a release-to-release promise: D-233 lets an enum-call
+`C0001` scanned from an earlier item precede a later item's own diagnostic.
+HIR lowering collects, per
+top-level item, the item's own diagnostic when it fails (skipping that item)
+plus one enum-call `C0001` per call of an enum class inside it that the
+scan can attribute (D-233; a call whose name is shadowed, rebound, or
+otherwise outside the scan's enumerated limits falls through to the type
+checker's span-less guard at `1:1` instead), so one item can contribute
+several diagnostics; an item whose only
+failure is a reference to a class or type alias that itself failed to lower
+contributes no lowering diagnostic of its own rather than a second gap (D-219);
+the enum-call scan still runs on such an item, so a call to another, valid
+enum class inside it is still reported. The type
 checker reports one diagnostic per failing function (D-220). A pre-check
 failure (an incompatible redefinition or attribute redeclaration) is
 reported alone. Otherwise, if the private-helper solver's list is
@@ -412,8 +422,9 @@ JSON format versioned (`"format_version": 1`), one object per diagnostic, one ob
 Report order is pass order (parser, then HIR, then types -- only one pass
 fails per file, since each pass stops the pipeline), then that pass's own
 collection order; the parser's is ruff's discovery order, which is not always
-source order, HIR lowering's is the source order of the failing top-level
-items (D-219), and the type checker's is the solver's item-order walk of
+source order, HIR lowering's is the source order of the top-level items
+(D-219), each item's own diagnostic first and then that item's enum-call
+`C0001`s (D-233), and the type checker's is the solver's item-order walk of
 function bodies followed by the annotation checker's item-order entries for
 functions the solver did not flag, so a checker-only function may follow a
 later solver-flagged one (D-220). No span-monotone order is promised across a
