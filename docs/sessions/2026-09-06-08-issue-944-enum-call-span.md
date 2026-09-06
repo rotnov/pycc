@@ -400,3 +400,10 @@ One P2 on `df76c760`, fixed in `b0ef29ed`: the limit (vii) rebound-name set
 is now collected lazily on the first scanned item, like the module frame,
 so a no-enum module pays for no part of the diagnostic (D-233 decision 1).
 Round 19 of the findings pile records it.
+
+## PR #971 eighteenth Codex round (lambda-body bindings)
+
+One P2 on `94bcf61c`, fixed in `95935d8e`: a `lambda`'s frame now also
+holds the names its body binds, so `lambda: ((Color := 1), Color())`
+reports only the lambda's own diagnostic. Round 20 of the findings pile
+records it.
