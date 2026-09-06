@@ -190,6 +190,25 @@ status: accepted
     `__slots__` message explains D-154's instance layout instead, which would
     be a false account of it. That shape is
     [#980](https://github.com/rotnov/pycc/issues/980).
+  - **The rule is about binding one of the names to a *non-callable* object**,
+    which is the literal text of all three messages. A `def __new__` binds a
+    callable — exactly what CPython's protocol expects — so it is outside this
+    decision even though it also diverges: measured at `1095b427`,
+    `def __new__(self) -> int: return 7` followed by `c = C(); c.f()` raises
+    `AttributeError: 'int' object has no attribute 'f'` under CPython 3.13.9
+    (`type.__call__` binds `__new__`'s result, which is not a `C`, so
+    `__init__` never runs) while pycc's `ensure_init` synthesizes a constructor
+    from the method table alone and prints `1`. Closing that needs a fourth
+    message, a call site keyed on `MethodKind::Regular` that still leaves the
+    modelled `def __init__` alone, and a decision on the implicitly-static
+    `@staticmethod def __new__` twin and the `@classmethod def
+    __init_subclass__` one — i.e. a widening of this decision's generating rule
+    from "a non-callable binding" to "any binding pycc does not model", not a
+    fifth call to the same guard. It is tracked as
+    [#981](https://github.com/rotnov/pycc/issues/981) and pinned by
+    `a_plain_new_method_is_left_to_issue_981`. For the same reason
+    `@staticmethod def __new__` and `@classmethod def __init_subclass__` are
+    deliberately untouched by the property route's call.
   - The diagnostic precedence D-235 pinned is unchanged and now explicitly
     tested. The guard is a class-body-walk error, which is already the head of
     that four-deep order, so a program with both a reserved-name binding and a

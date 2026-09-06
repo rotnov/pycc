@@ -338,3 +338,24 @@ fn a_property_getter_named_slots_is_left_to_issue_980() {
     lower_checked(&module)
         .expect("`@property def __slots__` is out of D-236's scope until #980 is fixed");
 }
+
+/// #978 review round: a *callable* `__new__` -- `def __new__(self) -> int` --
+/// is likewise **not** routed through this guard. D-236 rejects binding one of
+/// the three names to a **non-callable** object, which is the literal text of
+/// all three messages; a `def` binds exactly what CPython's protocol expects,
+/// so none of them describes this defect. It is still a divergence: measured
+/// at `1095b427`, CPython 3.13.9 binds `__new__`'s return value, so
+/// `c = C(); c.f()` raises `AttributeError: 'int' object has no attribute
+/// 'f'`, while pycc's `ensure_init` synthesizes a constructor from the method
+/// table alone and prints `1`. Closing it needs a fourth message, a call site
+/// keyed on [`MethodKind::Regular`], and a decision on the implicitly-static
+/// `@staticmethod def __new__` twin, so it is tracked as
+/// [#981](https://github.com/rotnov/pycc/issues/981). Pin the current
+/// acceptance so that issue's fix has to invert this test deliberately.
+#[test]
+fn a_plain_new_method_is_left_to_issue_981() {
+    let module = pycc_parser_test_helper::parse(
+        "class C:\n    def __new__(self) -> int:\n        return 7\n",
+    );
+    lower_checked(&module).expect("`def __new__` is out of D-236's scope until #981 is fixed");
+}

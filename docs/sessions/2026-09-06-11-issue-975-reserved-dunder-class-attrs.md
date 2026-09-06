@@ -72,11 +72,29 @@ required, no force pushes or deletions). No `[ci-bypass]` incident is open.
   `type.__new__` iterates `__slots__`), which the existing D-154 `__slots__` message would misdescribe;
   it is filed as [#980](https://github.com/rotnov/pycc/issues/980) and left out of D-236's scope
   deliberately, pinned by a test that inverts when #980 is fixed.
+
+  Fix round 4 (commit on top of `1095b427`) answered the two threads codex raised on the round-3 head.
+  One was self-inflicted documentation drift: `reserved_names.rs`'s module doc still said binding *any*
+  of the three names makes CPython raise, which D-236 and `docs/TYPE_SYSTEM.md` had already qualified —
+  `__init_subclass__` is rejected **conservatively** (an `Enum` with members cannot be subclassed, and a
+  plain class diverges only once it is actually subclassed). The module doc now carries the same
+  qualification; ROADMAP and TYPE_SYSTEM already did, and a sweep found no fourth copy. The other was a
+  genuine, *separate* false acceptance: a **callable** `def __new__(self) -> int: return 7` is not a
+  binding to a non-callable object, so none of D-236's three messages or four call sites reaches it, yet
+  `c = C(); c.f()` prints `1` here while CPython 3.13.9 raises `AttributeError: 'int' object has no
+  attribute 'f'`. Closing it means widening D-236's generating rule (a fourth message, a call site on
+  `MethodKind::Regular` that still spares the modelled `def __init__`, and a decision on the
+  implicitly-static `@staticmethod def __new__` and `@classmethod def __init_subclass__` twins), so it is
+  filed as [#981](https://github.com/rotnov/pycc/issues/981), recorded in D-236's Consequences as an
+  explicit scope boundary, and pinned by `a_plain_new_method_is_left_to_issue_981`. Also measured this
+  round: `@value.setter def __new__` is *not* a hole — `classify_decorator` requires a setter's `def`
+  name to equal the property name, so pycc rejects it (with a divergent message, not a false
+  acceptance).
 - **PR [#971](https://github.com/rotnov/pycc/pull/971)** (#944, `feat/issue-944`,
   "fix(hir): report the enum-call C0001 at the call expression"): **OPEN**, not a draft, `MERGEABLE`,
-  head **`94bcf61c`** — note this moved from `5f450ae5` to `0e88a674` and then to `94bcf61c` during this
-  session (the last re-resolved immediately before the fix-round-3 commit), so any earlier snapshot of its
-  head is stale. It claims decision number **D-233** and session file `2026-09-06-08-*`, neither of which is
+  head **`26583284`** — note this moved four times during this session (`5f450ae5` -> `0e88a674` ->
+  `94bcf61c` -> `26583284`, the last re-resolved immediately before the fix-round-4 commit), so any
+  earlier snapshot of its head is stale and it is actively moving. It claims decision number **D-233** and session file `2026-09-06-08-*`, neither of which is
   in the tree; that is why this file is `-11-` (01–07, 09, 10 are on main, 08 is reserved by #971) and why
   #975's ADR is **D-236** rather than D-233.
   It adds a *new* `crates/pycc_hir/src/class/enum_call.rs` and does **not** touch

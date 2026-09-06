@@ -18,11 +18,20 @@
 //!   `__init__`, `__new__` and `__init_subclass__`. The generating rule is
 //!   "the names Python's object protocol calls implicitly rather than by
 //!   name" -- `C()` runs `type.__call__` -> `__new__` -> `__init__`, and
-//!   `class B(C)` runs `__init_subclass__` at class creation. Binding any of
-//!   them as a class attribute makes CPython raise `TypeError` at the use
-//!   site, while this compiler resolves each protocol without ever consulting
-//!   a class attribute of that name -- so without this guard it silently
-//!   accepts a program CPython rejects (D-198), which D-224 forbids.
+//!   `class B(C)` runs `__init_subclass__` at class creation. This compiler
+//!   resolves each protocol without ever consulting a class attribute of that
+//!   name, so binding one of them silently changes behavior: for `__init__`
+//!   and `__new__` that is a *measured* divergence -- CPython raises
+//!   `TypeError` at the use site (`'int' object is not callable` for an `int`
+//!   binding) while pycc compiled and ran the program, the D-198 false
+//!   acceptance D-224 forbids. `__init_subclass__` is rejected
+//!   **conservatively** instead, and D-236 records why: in an `Enum` body it
+//!   can never diverge (an `Enum` with members cannot be subclassed, and
+//!   `class C(Enum): __init_subclass__ = 1; B = 2` prints `2` under both
+//!   engines), and in a plain body it diverges only once the class is actually
+//!   subclassed -- whole-program information the class-body walk does not have
+//!   when the guard fires. It is rejected on both routes for uniformity of the
+//!   single rule, not because every binding was measured to fail.
 //!
 //! Scope notes that are easy to get wrong, all measured at `28a1b194`:
 //!
