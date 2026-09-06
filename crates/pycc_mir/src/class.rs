@@ -357,6 +357,13 @@ pub(super) fn eval_isinstance_protocol(
                     classes.get(mro_class.as_str()).is_some_and(|mro_def| {
                         mro_def.attrs.iter().any(|(n, _)| n == attr_name)
                             || mro_def.properties.iter().any(|p| &p.name == attr_name)
+                            // #914: a class-level attribute satisfies the
+                            // member too. `check_protocol_conformance` now
+                            // accepts one, and this arm must stay consistent
+                            // with it (#380 W2) -- otherwise `isinstance`
+                            // folds to `False` for a class the checker just
+                            // certified as conforming.
+                            || mro_def.class_attrs.iter().any(|(n, _, _)| n == attr_name)
                     })
                 });
                 if !found {

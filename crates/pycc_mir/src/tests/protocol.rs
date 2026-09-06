@@ -848,3 +848,89 @@ fn a_specialized_method_renders_a_class_free_traceback_frame() {
     assert_eq!(source_frame_name("0gen_proto_fn__P_C"), "proto_fn__P_C");
     assert_eq!(source_frame_name("<module>"), "<module>");
 }
+
+// -- #914: a class attribute satisfies a protocol attribute member ---------
+
+/// Builds an otherwise-empty `HirClassDef` named `name` whose MRO is `mro`,
+/// so the two `#914` tests below can state only the fields they care about.
+fn bare_class(name: &str, mro: &[&str]) -> HirClassDef {
+    HirClassDef {
+        class_attrs: Vec::new(),
+        exception_type_tag: None,
+        name: name.to_string(),
+        bases: Vec::new(),
+        mro: mro.iter().map(|m| (*m).to_string()).collect(),
+        attrs: Vec::new(),
+        methods: Vec::new(),
+        type_param: None,
+        properties: Vec::new(),
+        static_methods: Vec::new(),
+        class_methods: Vec::new(),
+        is_enum: false,
+        enum_members: Vec::new(),
+        is_dataclass: false,
+        dataclass_fields: Vec::new(),
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: Vec::new(),
+        abstract_methods: Vec::new(),
+        is_abstract: false,
+    }
+}
+
+/// The `HasX` protocol used by both `#914` tests: one attribute member
+/// `x: int`, `@runtime_checkable`.
+fn has_x_protocol() -> HirClassDef {
+    HirClassDef {
+        is_protocol: true,
+        runtime_checkable: true,
+        protocol_members: vec![pycc_hir::ProtocolMember::Attribute {
+            name: "x".to_string(),
+            ty: Ty::Int,
+        }],
+        ..bare_class("HasX", &["HasX"])
+    }
+}
+
+/// #914: `isinstance(obj, HasX)` folds to `True` when `x` is a class-level
+/// attribute rather than an instance slot or a `@property`. Without the
+/// `class_attrs` disjunct this returns `false` while
+/// `pycc_types::class::check_protocol_conformance` accepts the same class
+/// -- the #380 W2 inconsistency this exists to prevent.
+#[test]
+fn isinstance_with_runtime_checkable_protocol_attribute_found_via_class_attr() {
+    let class_def = HirClassDef {
+        class_attrs: vec![("x".to_string(), Ty::Int, pycc_hir::ClassAttrValue::Int(1))],
+        ..bare_class("Point", &["Point"])
+    };
+    let classes: HashMap<String, HirClassDef> = [
+        ("HasX".to_string(), has_x_protocol()),
+        ("Point".to_string(), class_def),
+    ]
+    .into_iter()
+    .collect();
+    let obj_ty = Ty::Instance(Box::new("Point".to_string()));
+    let proto = classes.get("HasX").unwrap();
+    assert!(eval_isinstance_protocol(&obj_ty, proto, &classes));
+}
+
+/// #914: the class-attribute disjunct is inside the MRO walk, so a class
+/// attribute declared on a *base* satisfies the member too.
+#[test]
+fn isinstance_with_runtime_checkable_protocol_class_attr_found_in_mro() {
+    let base_def = HirClassDef {
+        class_attrs: vec![("x".to_string(), Ty::Int, pycc_hir::ClassAttrValue::Int(1))],
+        ..bare_class("Base", &["Base"])
+    };
+    let derived_def = bare_class("Point", &["Point", "Base"]);
+    let classes: HashMap<String, HirClassDef> = [
+        ("HasX".to_string(), has_x_protocol()),
+        ("Base".to_string(), base_def),
+        ("Point".to_string(), derived_def),
+    ]
+    .into_iter()
+    .collect();
+    let obj_ty = Ty::Instance(Box::new("Point".to_string()));
+    let proto = classes.get("HasX").unwrap();
+    assert!(eval_isinstance_protocol(&obj_ty, proto, &classes));
+}
