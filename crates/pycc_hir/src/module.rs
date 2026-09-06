@@ -235,8 +235,10 @@ pub fn lower_module(
     // statement also binds is a collision the class item reports itself;
     // the scan never claims it (limit (vii) in `class::enum_call`), so
     // `def Color()` / `Color()` / `class Color(Enum)` yields the collision
-    // diagnostic alone.
-    let rebound_names = class::enum_call::module_rebound_names(&module.body);
+    // diagnostic alone. Like the frame below, it is computed on the first
+    // item whose enum-name set is non-empty (it is a pass over every
+    // module-level binding, quadratic in their count).
+    let mut rebound_names: Option<Vec<String>> = None;
     // Built on the first item whose name set is non-empty, never for a
     // module that defines and imports no enum class (D-233 decision 1: the
     // common module pays for no part of this diagnostic, and the frame is
@@ -295,7 +297,7 @@ pub fn lower_module(
         // is a full AST walk of the item plus one of each `def` body, and
         // paying it unconditionally cost the `pycc check` frontend bench
         // ~7% (PR #971's `frontend-perf-gate`).
-        let enum_class_names: Vec<&str> = syntactic_enum_classes
+        let mut enum_class_names: Vec<&str> = syntactic_enum_classes
             .iter()
             .map(String::as_str)
             .chain(
@@ -306,8 +308,13 @@ pub fn lower_module(
                     .map(|(name, _)| name.as_str()),
             )
             .filter(|name| !poisoned.iter().any(|poisoned_name| poisoned_name == name))
-            .filter(|name| !rebound_names.iter().any(|rebound| rebound == name))
             .collect();
+        if enum_class_names.is_empty() {
+            continue;
+        }
+        let rebound_names = rebound_names
+            .get_or_insert_with(|| class::enum_call::module_rebound_names(&module.body));
+        enum_class_names.retain(|name| !rebound_names.iter().any(|rebound| rebound == name));
         if !enum_class_names.is_empty() {
             // `state.imports` at this point is exactly what `lower_stmt`
             // folded this item's `TYPE_CHECKING` guards against, so the scan

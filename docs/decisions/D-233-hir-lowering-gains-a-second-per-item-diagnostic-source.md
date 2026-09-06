@@ -35,8 +35,9 @@ status: accepted
      cost the `pycc check` frontend bench about 7% (PR #971's
      `frontend-perf-gate`, threshold 7%), and a module with no enum class
      -- the common case -- must not pay for a diagnostic it can never emit:
-     the module frame (every name the module body binds) is built on the
-     first item scanned, never for such a module.
+     the module frame (every name the module body binds) and the
+     rebound-name set (limit (vii)) are both built on the first item
+     scanned, never for such a module.
   2. Its diagnostics are appended immediately after the item's own
      diagnostic, so the collection order is still loop order
      ([D-217](D-217-report-every-frontend-diagnostic-per-pass-with.md) rule
