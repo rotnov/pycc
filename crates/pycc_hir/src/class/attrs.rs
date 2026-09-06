@@ -657,6 +657,104 @@ fn class_attr_collision(
     )
 }
 
+/// #913/D-235: Rejects a merged dataclass field whose name is also a
+/// `ClassVar` anywhere in the class's MRO.
+///
+/// Extracted from `super::lower_class` (AGENTS.md "Keep source files
+/// decomposable"): this module already owns every other class-attribute
+/// collision rule, so the policy and its rationale belong here rather than
+/// in the 4.6k-line parent. `lower_class` keeps the call, positioned on the
+/// *merged* field list, because that is the only place all three reachable
+/// shapes meet:
+///
+/// * same body, either order (`x: int` alongside `x: ClassVar[int] = 1`) --
+///   unchecked before #913, because the dataclass duplicate check scans only
+///   `dataclass_fields`, [`lower_class_attr`]'s scans only `class_attrs`, and
+///   [`reject_class_attr_collisions`] runs against an `attrs` that is still
+///   empty for a dataclass (it is filled from that very merge, immediately
+///   after this call). CPython's two orders disagree with each other:
+///   field-first drops the field, `ClassVar`-first turns it into a field with
+///   a *default*.
+/// * an own field over a base's `ClassVar` -- CPython turns the base's value
+///   into the field's default, so its `__init__` takes an optional parameter
+///   where pycc's synthesized one would take a required one.
+/// * a cross-base split -- `D(A, B)` where `A` contributes the `ClassVar` and
+///   sibling `B` the field. CPython processes fields in reverse-MRO order, so
+///   `A`'s `ClassVar` *removes* `B`'s field; reversing the bases keeps it.
+///   #969's slot-layout gate does not catch this, because a class
+///   contributing only a `ClassVar` declares no instance attributes at all.
+///
+/// Every one of these is a dataclass field default in CPython's model or an
+/// order-dependent field removal, neither of which this version represents,
+/// so all of them are rejected (D-198: never diverge silently). The `D(B, A)`
+/// base order is a program CPython runs and pycc could compile; rejecting it
+/// too is the deliberate conservative narrowing recorded in D-235.
+///
+/// `range` is the class definition's own span, already normalized to the
+/// `Range<u32>` [`crate::unsupported`] ultimately wants, so this module does
+/// not depend on the AST's range type.
+pub(super) fn reject_dataclass_field_class_var_collisions(
+    merged_fields: &[(String, Ty)],
+    own_class_attrs: &[(String, Ty, ClassAttrValue)],
+    class_name: &str,
+    mro: &[String],
+    defined_classes: &[(String, HirClassDef)],
+    range: std::ops::Range<u32>,
+) -> Result<(), Diagnostic> {
+    for (field_name, _) in merged_fields {
+        if let Some(owner) = class_attr_owner(
+            field_name,
+            own_class_attrs,
+            class_name,
+            mro,
+            defined_classes,
+        ) {
+            return Err(unsupported(
+                format!(
+                    "dataclass field `{field_name}` of class `{class_name}` shares its \
+                     name with the class attribute `{owner}.{field_name}` -- a \
+                     `ClassVar` is not a dataclass field, so CPython would either drop \
+                     the field or give it the class attribute's value as a default, and \
+                     dataclass field defaults are not supported in this version"
+                ),
+                range,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// #913: Names the class in `class_name`'s MRO that declares `attr` as a
+/// class attribute (`ClassVar[T] = ...`, or #910's bare `X = 1`), or `None`
+/// if no class in the MRO does.
+///
+/// The class's own `class_attrs` are not in `defined_classes` yet -- the
+/// `HirClassDef` being built is what will be added there -- so they are
+/// passed separately and checked first, matching
+/// `lookup_class_attr_through_mro`'s most-derived-first order.
+fn class_attr_owner<'a>(
+    attr: &str,
+    own_class_attrs: &[(String, Ty, ClassAttrValue)],
+    class_name: &'a str,
+    mro: &'a [String],
+    defined_classes: &'a [(String, HirClassDef)],
+) -> Option<&'a str> {
+    if own_class_attrs.iter().any(|(name, _, _)| name == attr) {
+        return Some(class_name);
+    }
+    mro.iter().skip(1).find_map(|base| {
+        // Every class in the MRO was placed there by `compute_c3_mro` from
+        // `defined_classes`, so `filter_map`'s miss arm is structurally
+        // unreachable; using it rather than `.expect()` keeps D-014's
+        // 100%-region gate satisfied without an uncoverable branch.
+        defined_classes
+            .iter()
+            .find(|(name, _)| name == base)
+            .filter(|(_, base_def)| base_def.class_attrs.iter().any(|(n, _, _)| n == attr))
+            .map(|(name, _)| name.as_str())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ClassAttrValue, Ty};

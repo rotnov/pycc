@@ -23,6 +23,41 @@ use crate::{HirItem, ImportBinding, Ty, unsupported};
 use pycc_ast::{Expr, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
+/// The dunder names a `@dataclass` body may not bind as a `ClassVar` (#913).
+///
+/// The rule that generates this set, rather than the list itself, is what a
+/// future change must re-apply: *the three methods pycc synthesizes for a
+/// dataclass, plus every dunder CPython consults for an operation pycc
+/// rewrites through one of those three.*
+///
+/// - `__init__`, `__eq__`, `__repr__` -- synthesized unconditionally by
+///   [`super::init::synthesize_dataclass_init`] and its siblings.
+/// - `__ne__` -- `pycc_mir`'s `Eq`/`NotEq` rewrite spells `a != b` as
+///   `not a.__eq__(b)` and never consults `__ne__`, which CPython tries
+///   first.
+/// - `__str__`, `__format__` -- `pycc_mir::class::rewrite_instance_to_repr`
+///   rewrites both `print(instance)` and an f-string interpolation of one
+///   straight to `__repr__`, while CPython routes them through `__str__` and
+///   `__format__` respectively.
+///
+/// Verified against CPython 3.13.9: each of the six leaves the class
+/// attribute in place, so the corresponding program raises
+/// `TypeError: 'int' object is not callable` where pycc would silently
+/// succeed. Dunders pycc does *not* rewrite for a dataclass stay off the
+/// list: `__lt__` is already `T0021` ("cannot compare") before MIR, and
+/// `__hash__` agrees with CPython because `dataclasses` leaves an explicitly
+/// bound `__hash__` alone. `__slots__` is not here either -- it is rejected
+/// earlier and with its own message by
+/// [`super::attrs::reject_reserved_class_attr_name`].
+const DATACLASS_IMPLICIT_DUNDERS: [&str; 6] = [
+    "__init__",
+    "__eq__",
+    "__repr__",
+    "__ne__",
+    "__str__",
+    "__format__",
+];
+
 /// The read-only inputs the class-body walk needs from [`super::lower_class`].
 ///
 /// Grouped into a struct rather than passed positionally: the walk takes
@@ -150,18 +185,58 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
                 )?);
                 continue;
             }
-            // #911: correct `ClassVar` semantics inside a `@dataclass` body
-            // (the field is excluded from the generated `__init__`) is out of
-            // scope for Part 1. Merely stripping the wrapper here would turn
-            // `x: ClassVar[int]` into a *required* `__init__` parameter --
-            // silently wrong -- so the spelling is rejected instead.
-            if is_class_var {
+            // #913: PEP 557 says a `ClassVar`-annotated name in a
+            // `@dataclass` body is *not* a dataclass field, so it takes the
+            // very same #911 class-attribute route the non-dataclass branch
+            // above takes. Because it never enters `dataclass_fields`, it is
+            // absent from the merged field list `super::lower_class` builds
+            // -- and therefore from the synthesized `__init__`, `__eq__` and
+            // `__repr__`, and from the D-154 instance-slot layout, which is
+            // that same merged list. #911 rejected the spelling outright
+            // because merely stripping the wrapper would have turned it into
+            // a *required* `__init__` parameter; routing instead of stripping
+            // is what makes that objection moot.
+            //
+            // Two guards keep the routed form honest. The first is here: a
+            // `ClassVar` named after a dunder the dataclass relies on
+            // implicitly cannot be modelled. CPython's `dataclasses` uses
+            // `_set_new_attribute`, which does not overwrite a name already
+            // in the class `__dict__`, so `__repr__: ClassVar[int] = 8`
+            // really does leave `A.__repr__ == 8` and
+            // `__init__: ClassVar[int] = 8` leaves the class with no
+            // synthesized constructor at all. pycc synthesizes those three
+            // unconditionally, and `reject_class_attr_collisions` runs before
+            // synthesis pushes them into `methods`, so it cannot see the
+            // clash either. The set is `DATACLASS_IMPLICIT_DUNDERS`, whose own
+            // doc comment states the rule that generates it. The second guard
+            // is the field/class-attribute name check in `super::lower_class`,
+            // which runs after the field merge.
+            if is_class_var
+                && let Expr::Name(target_name) = ann.target.as_ref()
+                && DATACLASS_IMPLICIT_DUNDERS.contains(&target_name.id.as_str())
+            {
                 return Err(unsupported(
-                    "`ClassVar` in a `@dataclass` body is not supported yet -- a `ClassVar` \
-                     field must be excluded from the generated `__init__`, which this version \
-                     does not model",
+                    format!(
+                        "a `@dataclass` class implicitly relies on `{name}`; a `ClassVar` named \
+                         `{name}` is not allowed in a `@dataclass` body -- CPython would keep \
+                         the class attribute, so the class would either lose the synthesized \
+                         method or fail at the use site, which this version does not model",
+                        name = target_name.id.as_str()
+                    ),
                     ann.range,
                 ));
+            }
+            if is_class_var {
+                class_attrs.push(lower_class_attr(
+                    ann,
+                    stripped,
+                    class_name,
+                    type_param,
+                    aliases,
+                    class_name_defs,
+                    &class_attrs,
+                )?);
+                continue;
             }
             // The target must be a single bare name.
             let Expr::Name(target_name) = ann.target.as_ref() else {

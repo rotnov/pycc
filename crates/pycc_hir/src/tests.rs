@@ -21,6 +21,10 @@ use crate::expr::{lower_comprehension_header, rename_name_in_expr};
 // private helpers through `use super::*`.
 mod subscript_annotations;
 
+// `ClassVar` in a `@dataclass` body (#913, D-235) likewise lives in its own
+// child module for the same reason.
+mod dataclass_class_vars;
+
 fn assert_capability_error(source: &str, expected_message: &str, expected_span: Span) {
     let module = pycc_parser_test_helper::parse(source);
     let diagnostic = lower_checked(&module).unwrap_err();
@@ -6460,14 +6464,6 @@ fn a_bare_class_var_class_body_annotation_propagates_the_strip_error() {
     assert_capability_error_message(
         "class C:\n    X: ClassVar = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n",
         "a bare `ClassVar` is not a valid annotation",
-    );
-}
-
-#[test]
-fn a_class_var_in_a_dataclass_body_is_rejected_at_lowering() {
-    assert_capability_error_message(
-        "@dataclass\nclass C:\n    x: int\n    LIMIT: ClassVar[int] = 8\n",
-        "`ClassVar` in a `@dataclass` body is not supported yet",
     );
 }
 

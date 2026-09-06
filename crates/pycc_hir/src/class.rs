@@ -70,7 +70,10 @@ mod protocol;
 mod protocol_return_tests;
 
 use crate::{HirExpr, HirItem, HirStmt, ImportBinding, Ty, lower_arg_list, unsupported};
-use attrs::{ClassAttrCollisionInput, reject_class_attr_collisions};
+use attrs::{
+    ClassAttrCollisionInput, reject_class_attr_collisions,
+    reject_dataclass_field_class_var_collisions,
+};
 use body::{ClassBodyInput, ClassBodyOutput, walk_class_body};
 use enum_class::lower_enum_class;
 use init::{ensure_init, synthesize_dataclass_init};
@@ -1260,6 +1263,18 @@ pub(crate) fn lower_class(
                 None => merged_fields.push((name.clone(), ty.clone())),
             }
         }
+        // #913/D-235: a merged dataclass field must not share its name with a
+        // `ClassVar` declared anywhere in the MRO. The policy and its three
+        // reachable shapes live with the rest of the class-attribute
+        // collision rules in `attrs`.
+        reject_dataclass_field_class_var_collisions(
+            &merged_fields,
+            &class_attrs,
+            &class_name,
+            &mro,
+            defined_classes,
+            def.range.into(),
+        )?;
         // Populate `attrs` from the merged field list (the dataclass's
         // attribute slots are exactly its fields, in declaration order).
         attrs = merged_fields.clone();

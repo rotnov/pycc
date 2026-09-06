@@ -628,6 +628,10 @@
           "evidence": "pep_0557_dataclasses.py"
         },
         {
+          "category": "`ClassVar` members excluded from the synthesized `__init__`, `__eq__`, and `__repr__`",
+          "evidence": "pep_0557_dataclasses.py"
+        },
+        {
           "category": "dataclass inheritance with field concatenation",
           "evidence": "pep_0557_dataclasses.py"
         }
@@ -645,7 +649,7 @@
           "issue": 248
         },
         {
-          "category": "`__post_init__`, `InitVar`, and `ClassVar`",
+          "category": "`__post_init__` and `InitVar`",
           "kind": "core",
           "reason": "Not exercised by this fixture."
         }
