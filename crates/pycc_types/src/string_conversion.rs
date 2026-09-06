@@ -210,9 +210,7 @@ mod tests {
 
     #[track_caller]
     fn assert_accepted(source: &str) {
-        if let Err(err) = check_source(source) {
-            panic!("source must type-check, got {err:?}");
-        }
+        check_source(source).expect("source must type-check");
     }
 
     const PLAIN: &str = "class C:\n    def __init__(self, x: int) -> None:\n        self.x = x\n\n";

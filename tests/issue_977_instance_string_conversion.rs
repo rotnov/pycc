@@ -162,6 +162,42 @@ fn an_enum_member_printed_is_rejected_by_check() {
     );
 }
 
+/// D-237's repro table: a non-dataclass subclass of a `@dataclass` base.
+/// `is_dataclass` is a class's own decorator, not inherited, so `Q` has no
+/// synthesized `__repr__` and the dataclass rewrite would not fire.
+#[test]
+fn a_non_dataclass_subclass_of_a_dataclass_is_rejected_by_check() {
+    assert_c0001(
+        "subclass",
+        "from dataclasses import dataclass\n\n@dataclass\nclass P:\n    x: int\n\n\
+         class Q(P):\n    pass\n\nprint(Q(1))\n",
+        "`Q`",
+    );
+}
+
+/// D-237's repro table: a plain generic class instance (PEP 695 syntax).
+#[test]
+fn a_plain_generic_instance_printed_is_rejected_by_check() {
+    assert_c0001(
+        "generic",
+        "class Box[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\n\
+         b = Box[int](1)\nprint(b)\n",
+        "`Box`",
+    );
+}
+
+/// D-237's repro table: `print(self)` inside a method, where the instance
+/// reaches the gate as the receiver type rather than a local.
+#[test]
+fn print_self_inside_a_method_is_rejected_by_check() {
+    assert_c0001(
+        "self",
+        "class C:\n    def __init__(self, x: int) -> None:\n        self.x = x\n\n\
+         \n    def show(self) -> None:\n        print(self)\n\nC(1).show()\n",
+        "`C`",
+    );
+}
+
 #[test]
 fn a_protocol_typed_parameter_printed_is_rejected_by_check() {
     let text = check_error(
