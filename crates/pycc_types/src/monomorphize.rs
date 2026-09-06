@@ -32,9 +32,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Environment, bind_local_types_in_body, function_local_names, generic_type_param_name,
-    infer_expr_in, is_assignable, is_generic_signature, is_local, is_unshadowed_builtin_exception,
-    module_function_local_names, t0042,
+    Environment, bind_local_types_in_body, bind_local_types_in_stmt, function_local_names,
+    generic_type_param_name, infer_expr_in, is_assignable, is_generic_signature, is_local,
+    is_unshadowed_builtin_exception, module_function_local_names, t0042,
 };
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
@@ -1923,6 +1923,12 @@ fn monomorphize_protocol_params(
     let mut new_items = Vec::new();
     let mut specializations: Vec<HirItem> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    // #953: a module-level statement's own bindings have to accumulate as
+    // the loop walks them, exactly as `bind_local_types_in_body` does for
+    // a function body. Without this, a module-level `p: P = C()` leaves
+    // `p` untyped for the following `p.same(C())`, no specialization is
+    // created, and `pycc_mir` panics on the dropped `$fn:C.same`.
+    let mut module_env = env.clone();
     for item in items {
         match item {
             HirItem::Function {
@@ -1939,11 +1945,12 @@ fn monomorphize_protocol_params(
                 let _ = (params, return_ty);
             }
             HirItem::TopLevelStmt(ref stmt) => {
+                bind_local_types_in_stmt(&mut module_env, &[], stmt);
                 let mut new_stmt = stmt.clone();
                 rewrite_protocol_calls_in_stmt(
                     &mut new_stmt,
                     &protocol_funcs,
-                    env,
+                    &module_env,
                     &[],
                     &mut specializations,
                     &mut seen,
@@ -2305,6 +2312,97 @@ fn rewrite_protocol_calls_in_stmt(
     }
 }
 
+/// #953: Specializes one `base.method(args)` call whose resolved method
+/// has protocol-typed parameters, returning the `HirExpr::Call` that
+/// replaces it — the same shape `pycc_mir`'s own method-call lowering
+/// produces (`MirExpr::Call { callee: <mangled>, args: [base] ++ args }`),
+/// so the receiver simply becomes the first argument and no class method
+/// table has to be rewritten.
+///
+/// Returns `None` — leaving the `MethodCall` untouched — whenever the
+/// receiver's type is not a concrete class instance (a bare class name or
+/// a `super()` receiver infers as an error; a non-`Instance` type has no
+/// method table to walk), the method resolves to no entry in the
+/// receiver's MRO, the resolved method is not one of the dropped
+/// protocol-parameter functions, or no argument supplies a concrete type
+/// for a protocol-typed parameter.
+///
+/// The specialization keeps `mangle_protocol_instantiation`'s literal
+/// `0gen_` prefix, which `pycc_codegen` keys on
+/// (`is_monomorphized = name.starts_with("0gen_")`) to dispatch a
+/// compiler-generated function directly rather than through an indirect
+/// function-pointer slot populated in item order. `pycc_mir` recovers the
+/// owning class from the resulting `0gen_<Class>.<method>__<P>_<C>` name
+/// by lookup rather than by naive prefix — see `pycc_mir`'s `lower_item`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn specialize_protocol_method_call(
+    base: &HirExpr,
+    method: &str,
+    args: &[HirExpr],
+    protocol_funcs: &HashMap<String, HirItem>,
+    env: &Environment,
+    local_names: &[&str],
+    specializations: &mut Vec<HirItem>,
+    seen: &mut HashSet<String>,
+) -> Option<HirExpr> {
+    let Ok(Ty::Instance(class_name)) = infer_expr_in(env, local_names, base) else {
+        return None;
+    };
+    let class_def = env.lookup_class(class_name.as_ref())?;
+    // Mirrors `pycc_mir`'s own `#432` MRO walk for a method call.
+    let mangled = class_def.mro.iter().find_map(|mro_class| {
+        env.lookup_class(mro_class).and_then(|mro_def| {
+            mro_def
+                .methods
+                .iter()
+                .find(|(name, _)| name == method)
+                .map(|(_, mangled)| mangled.clone())
+        })
+    })?;
+    let Some(HirItem::Function {
+        name,
+        params,
+        return_ty,
+        body,
+    }) = protocol_funcs.get(&mangled)
+    else {
+        return None;
+    };
+    // `params[0]` is `self`, which the call's own argument list does not
+    // carry -- index the arguments against the remaining parameters.
+    let mut substitutions: Vec<(String, Ty)> = Vec::new();
+    for (i, (_, param_ty)) in params.iter().skip(1).enumerate() {
+        if let Ty::Protocol(proto_name) = param_ty
+            && i < args.len()
+            && let Ok(Ty::Instance(concrete_name)) = infer_expr_in(env, local_names, &args[i])
+        {
+            substitutions.push((proto_name.as_ref().clone(), Ty::Instance(concrete_name)));
+        }
+    }
+    if substitutions.is_empty() {
+        return None;
+    }
+    let specialized_name = mangle_protocol_instantiation(name, &substitutions);
+    if seen.insert(specialized_name.clone()) {
+        specializations.push(HirItem::Function {
+            name: specialized_name.clone(),
+            params: params
+                .iter()
+                .map(|(n, ty)| (n.clone(), substitute_ty_protocols(ty, &substitutions)))
+                .collect(),
+            return_ty: substitute_ty_protocols(return_ty, &substitutions),
+            body: substitute_body_protocols(body, &substitutions),
+        });
+    }
+    let mut call_args = Vec::with_capacity(args.len() + 1);
+    call_args.push(base.clone());
+    call_args.extend(args.iter().cloned());
+    Some(HirExpr::Call {
+        callee: specialized_name,
+        args: call_args,
+    })
+}
+
 /// #380 (PR-20): Rewrites calls to protocol-parameter functions in an
 /// expression, creating monomorphized specializations as needed.
 fn rewrite_protocol_calls_in_expr(
@@ -2371,7 +2469,7 @@ fn rewrite_protocol_calls_in_expr(
                 }
             }
         }
-        HirExpr::MethodCall { base, args, .. } => {
+        HirExpr::MethodCall { base, method, args } => {
             rewrite_protocol_calls_in_expr(
                 base,
                 protocol_funcs,
@@ -2389,6 +2487,25 @@ fn rewrite_protocol_calls_in_expr(
                     specializations,
                     seen,
                 );
+            }
+            // #953: a method whose signature has a protocol-typed
+            // parameter is in `protocol_funcs` under its mangled
+            // `<Class>.<method>` name, so the loop above already dropped
+            // its original definition from the module. Without the
+            // specialization this arm creates, `$fn:<Class>.<method>` is
+            // never bound and `pycc_mir::build` panics on the very call
+            // the type checker just accepted.
+            if let Some(rewritten) = specialize_protocol_method_call(
+                base,
+                method,
+                args,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            ) {
+                *expr = rewritten;
             }
         }
         HirExpr::AttrGet { base, .. } => {

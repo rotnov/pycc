@@ -246,7 +246,7 @@ pub(crate) fn resolve_instantiation(
     // `param_tys[0]` is always `self`'s own `Ty::Instance(class_name)` --
     // never part of the argument list a caller actually supplies.
     let ctor_param_tys = &param_tys[1..];
-    check_call_args(class_name, arg_tys, ctor_param_tys)?;
+    check_call_args(class_name, arg_tys, ctor_param_tys, None)?;
     Ok(Ty::Instance(Box::new(class_name.to_string())))
 }
 

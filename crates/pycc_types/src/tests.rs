@@ -14,6 +14,7 @@ use crate::binop::numeric_result_type;
 
 // #934: the protocol-return re-cover tests live in their own file so this
 // already-oversized module does not grow (AGENTS.md decomposability rule).
+mod protocol_argument;
 mod protocol_return;
 
 #[test]

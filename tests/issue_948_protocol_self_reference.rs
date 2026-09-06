@@ -25,12 +25,15 @@
 //! conformance check and the program compiles and runs. Before this fix it
 //! failed with the self-contradictory `T0046: ... parameter 1 has type `P`,
 //! expected `P``, one side `Ty::Protocol("P")` and the other
-//! `Ty::Instance("P")`. What that does *not* buy is calling the member
-//! through a protocol-typed receiver: `p.same(C())` is still `T0021`, because
-//! `pycc_types`' `check_call_args` uses plain assignability rather than the
-//! environment-aware conformance path. That limitation is pre-existing,
-//! untouched here, and recorded in `docs/TYPE_SYSTEM.md`; the test below
-//! therefore dispatches through a *second*, non-self-referential member.
+//! `Ty::Instance("P")`. What that did *not* buy at the time was calling the
+//! member through a protocol-typed receiver: `p.same(C())` was a separate,
+//! pre-existing `T0021`, since `pycc_types`' `check_call_args` used plain
+//! assignability rather than the environment-aware conformance path. That
+//! limitation was lifted afterwards by
+//! [#953](https://github.com/rotnov/pycc/issues/953) and is covered by
+//! `tests/issue_953_protocol_argument.rs`; the tests below stay as written,
+//! dispatching through a *second*, non-self-referential member, so they keep
+//! pinning this issue's own conformance fix independently of that one.
 //!
 //! Unit tests beside the gate (`pycc_hir::class::protocol_return_tests`) pin
 //! the lowered `Ty` for every member position; these prove the binary reports
@@ -178,8 +181,10 @@ fn building_the_self_spelling_is_c0001_and_leaves_no_binary() {
 ///
 /// The executed call is `p.value()`, not `p.same(...)`: what this pins is
 /// that the self-referential member no longer blocks conformance, not that
-/// such a member is callable. Calling it with a concrete argument is a
-/// separate, pre-existing `T0021` (see the module doc comment).
+/// such a member is callable. Calling it with a concrete argument was a
+/// separate, pre-existing `T0021` when this test was written and is now
+/// accepted -- see the module doc comment and
+/// `tests/issue_953_protocol_argument.rs`.
 #[test]
 fn a_self_referential_protocol_parameter_conforms_and_runs() {
     let dir = ScratchDir::new("948_param").expect("failed to create scratch dir");

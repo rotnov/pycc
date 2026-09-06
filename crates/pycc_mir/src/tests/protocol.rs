@@ -768,3 +768,83 @@ fn isinstance_with_protocol_target_goes_through_lower_isinstance() {
         MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::BoolLiteral(true)))
     )));
 }
+
+// -- #953: mangled-name resolution for protocol method specializations ---
+
+/// A minimal class definition registered under `name`, enough for
+/// `resolve_method_owner_class`'s `classes` lookups.
+fn owner_class_table(names: &[&str]) -> HashMap<String, HirClassDef> {
+    names
+        .iter()
+        .map(|name| {
+            (
+                (*name).to_string(),
+                HirClassDef {
+                    class_attrs: Vec::new(),
+                    exception_type_tag: None,
+                    name: (*name).to_string(),
+                    bases: Vec::new(),
+                    mro: vec![(*name).to_string()],
+                    attrs: Vec::new(),
+                    methods: Vec::new(),
+                    type_param: None,
+                    properties: Vec::new(),
+                    static_methods: Vec::new(),
+                    class_methods: Vec::new(),
+                    is_enum: false,
+                    enum_members: Vec::new(),
+                    is_dataclass: false,
+                    dataclass_fields: Vec::new(),
+                    is_protocol: false,
+                    runtime_checkable: false,
+                    protocol_members: Vec::new(),
+                    abstract_methods: Vec::new(),
+                    is_abstract: false,
+                },
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn an_ordinary_method_prefix_resolves_to_its_own_class() {
+    let classes = owner_class_table(&["C"]);
+    assert_eq!(resolve_method_owner_class("C", &classes), "C");
+}
+
+#[test]
+fn a_generic_class_method_prefix_resolves_before_any_stripping() {
+    // PEP 695 mangles the *class*, so `0gen_C__T_int` is itself a
+    // registered class -- stripping unconditionally would break it.
+    let classes = owner_class_table(&["0gen_C__T_int"]);
+    assert_eq!(
+        resolve_method_owner_class("0gen_C__T_int", &classes),
+        "0gen_C__T_int"
+    );
+}
+
+#[test]
+fn a_protocol_method_specialization_prefix_resolves_through_the_stripped_name() {
+    // #953 mangles the *method*, so the first dotted component of
+    // `0gen_C.same__P_C` is `0gen_C`, which is not a class.
+    let classes = owner_class_table(&["C"]);
+    assert_eq!(resolve_method_owner_class("0gen_C", &classes), "C");
+}
+
+#[test]
+fn an_unresolvable_prefix_is_returned_unchanged() {
+    let classes = owner_class_table(&["C"]);
+    assert_eq!(
+        resolve_method_owner_class("0gen_Ghost", &classes),
+        "0gen_Ghost"
+    );
+    assert_eq!(resolve_method_owner_class("Ghost", &classes), "Ghost");
+}
+
+#[test]
+fn a_specialized_method_renders_a_class_free_traceback_frame() {
+    assert_eq!(source_frame_name("0gen_C.same__P_C"), "same__P_C");
+    assert_eq!(source_frame_name("C.same"), "same");
+    assert_eq!(source_frame_name("0gen_proto_fn__P_C"), "proto_fn__P_C");
+    assert_eq!(source_frame_name("<module>"), "<module>");
+}
