@@ -354,3 +354,11 @@ enum-call `C0001` outside a class body. The binder now walks those
 definition-time expressions into the enclosing frame and still skips the
 body; limit (iii) and D-233 record the harmless over-suppression under the
 `def`'s own frame. Round 13 of the findings pile records it.
+
+## PR #971 twelfth Codex round (rustdoc contracts)
+
+Two P2s on `95d7aa2a`, fixed in `7cb92306`: `lower_all`'s rustdoc now
+counts only the enum calls the scan can attribute, and `lower_module`'s
+contract states the pre-#867 byte-identity for the first *lowering*
+diagnostic, since D-233 decision 4 lets an earlier item's scan diagnostic
+come first. Round 14 of the findings pile records both.
