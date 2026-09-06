@@ -322,6 +322,57 @@ fn a_dataclass_instance_still_renders_under_print_and_fstring() {
     );
 }
 
+/// Codex P1 on PR #985: a generic `@dataclass` keeps its dataclass identity
+/// in every monomorphized specialization, so `check` and `run` agree and
+/// the specialization renders through the origin's synthesized `__repr__`.
+/// At `e77b4b13` this program passed `check` and panicked in `pycc_codegen`
+/// under `run`.
+#[test]
+fn a_generic_dataclass_instance_renders_after_monomorphization() {
+    assert_prints(
+        "generic_dataclass_ok",
+        "@dataclass\nclass Box[T]:\n    n: int\n\nb = Box[int](1)\nprint(b)\ns: str = f\"{b}\"\nprint(s)\n",
+        "Box(n=1)\nBox(n=1)\n",
+    );
+}
+
+/// Codex P2 on PR #985: the help for a class under a builtin exception name
+/// must not recommend `@dataclass`, which the gate rejects regardless. The
+/// instance reaches the gate as a method receiver: a call to the shadowing
+/// class is itself reported first by the solver's own `call to builtin`
+/// message under D-220, so a shape with such a call never prints this help.
+#[test]
+fn a_class_under_a_builtin_exception_name_gets_the_rename_help() {
+    let dir = ScratchDir::new("977_rename_help").expect("failed to create scratch dir");
+    let src = write_fixture(
+        &dir,
+        "rename_help.py",
+        "class ValueError:\n    def __init__(self) -> None:\n        return\n\n\
+         \x20   def show(self) -> None:\n        print(self)\n",
+    );
+    let output = Command::new(pycc_bin())
+        .args(["check", "--error-format", "json", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "expected the program to be rejected"
+    );
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        text.contains("\"code\":\"C0001\""),
+        "expected C0001, got: {text}"
+    );
+    assert!(
+        text.contains("rename `ValueError` so it no longer shadows the builtin exception"),
+        "expected the rename help, got: {text}"
+    );
+    assert!(
+        !text.contains("declare `ValueError` with"),
+        "the dataclass help must not be offered for a builtin-named class, got: {text}"
+    );
+}
+
 /// The first public-CLI guard for rendering a caught flat-seven exception.
 #[test]
 fn a_caught_flat_seven_exception_still_renders() {

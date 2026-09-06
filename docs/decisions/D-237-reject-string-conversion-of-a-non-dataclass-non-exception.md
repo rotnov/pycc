@@ -97,8 +97,28 @@ status: accepted
   a synthesized `__repr__` ``), with `an f-string interpolation` at the other
   site; and ``string conversion of a value typed as protocol `Shape` as a
   `print()` argument is not supported yet; the concrete class is not known at
-  the conversion site``. One template keyed on the class or protocol name;
-  no enum-member special case. Reported at this crate's conventional
+  the conversion site``. One message template keyed on the class or protocol
+  name; no enum-member special case. The help alone has a second form for a
+  class under one of the 25 builtin exception names, which the predicate
+  rejects by name before its shape is consulted, so `@dataclass` cannot make
+  it renderable: ``print the instance's attributes individually, or rename
+  `ValueError` so it no longer shadows the builtin exception `ValueError`;
+  adding `@dataclass` does not make a class under a builtin exception name
+  renderable``.
+
+  A generic `@dataclass` (`@dataclass class Box[T]: n: int`) must render in
+  every monomorphized specialization. `check` infers `print(Box[int](1))`
+  against the origin class and accepts it; `build` re-infers the rewritten
+  call against the `0gen_Box__T_int` specialization, whose `HirClassDef`
+  `instantiate_generic_class_methods` used to build with `is_dataclass:
+  false` and an empty `dataclass_fields`, so the gate rejected under `build`
+  a program `check` had accepted (and, before the gate, `pycc_mir`'s
+  `rewrite_instance_to_repr` skipped the specialization for the same reason
+  and codegen panicked). The specialization now carries the origin's
+  `is_dataclass` and its `dataclass_fields` substituted exactly as `attrs`
+  are; its `methods` already carried the mangled synthesized `__repr__`, so
+  the MIR rewrite renders it through the origin's name (`Box(n=1)`), as
+  CPython does. Reported at this crate's conventional
   `(0, 0)` span (rendered `1:1`): `pycc_types` carries no expression spans,
   and D-233's HIR-level syntactic scan cannot apply because the value's
   *type* is unknown at HIR. No mirror in the solver pass: every body is
@@ -145,7 +165,16 @@ status: accepted
     `ConstraintEnvironment` literal, and it already misreports a solver-path
     module that instantiates a user class shadowing a builtin name at
     `f8e9d2e3`), so it is left to its own change; the predicate's own
-    verdict on those shapes is pinned directly in its unit tests.
+    verdict on those shapes is pinned directly in its unit tests. The
+    rename help reaches `pycc check` only for a shape without such a call,
+    for instance `print(self)` inside a method of the shadowing class, which
+    is the shape the public-CLI test pins.
+  - *Resolve a `0gen_`-prefixed specialization through its origin class in
+    the predicate.* Rejected in favour of carrying the dataclass metadata on
+    the specialization itself: `pycc_mir`'s `__repr__` and `__eq__` rewrites
+    and `pycc_types`'s `==`/`!=` acceptance all key on the specialization's
+    own `is_dataclass`, so a predicate-only fix would leave `build` panicking
+    where `check` passes -- the exact split this decision exists to close.
 
 - Consequences:
   - Programs that `check`ed clean and panicked in `build` (or aborted at

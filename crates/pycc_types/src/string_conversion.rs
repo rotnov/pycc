@@ -90,7 +90,8 @@ pub(crate) fn reject_unrenderable(
 ) -> Result<(), Diagnostic> {
     match ty {
         Ty::Instance(name) => {
-            let renderable = if pycc_hir::is_builtin_exception_class(name) {
+            let shadows_builtin_exception = pycc_hir::is_builtin_exception_class(name);
+            let renderable = if shadows_builtin_exception {
                 env.is_synthetic_class(name)
                     || (pycc_hir::is_flat_builtin_exception_class(name)
                         && env.lookup_class(name).is_none())
@@ -100,7 +101,7 @@ pub(crate) fn reject_unrenderable(
             if renderable {
                 Ok(())
             } else {
-                Err(unrenderable_instance(name, site))
+                Err(unrenderable_instance(name, site, shadows_builtin_exception))
             }
         }
         Ty::Protocol(name) => Err(unrenderable_protocol(name, site)),
@@ -113,7 +114,31 @@ pub(crate) fn reject_unrenderable(
 /// Reported at this crate's conventional `(0, 0)` span (rendered `1:1` by the
 /// CLI): `pycc_types` carries no expression spans, and D-233's HIR-level
 /// syntactic scan cannot apply because the value's *type* is unknown at HIR.
-fn unrenderable_instance(class_name: &str, site: StringConversionSite) -> Diagnostic {
+///
+/// The help depends on why the instance is unrenderable. A class under any
+/// other name becomes renderable by adding `@dataclass`. A user class
+/// declared under one of the builtin exception names is rejected by name
+/// before its shape is consulted, so `@dataclass` cannot help it (the
+/// predicate never reaches the dataclass check for such a name); the only
+/// remedy that works is renaming the class so it no longer shadows the
+/// builtin.
+fn unrenderable_instance(
+    class_name: &str,
+    site: StringConversionSite,
+    shadows_builtin_exception: bool,
+) -> Diagnostic {
+    let help = if shadows_builtin_exception {
+        format!(
+            "print the instance's attributes individually, or rename `{class_name}` so it \
+             no longer shadows the builtin exception `{class_name}`; adding `@dataclass` \
+             does not make a class under a builtin exception name renderable"
+        )
+    } else {
+        format!(
+            "print the instance's attributes individually, or declare `{class_name}` with \
+             `@dataclass` to get a synthesized `__repr__`"
+        )
+    };
     Diagnostic::error(
         "C0001",
         format!(
@@ -124,10 +149,7 @@ fn unrenderable_instance(class_name: &str, site: StringConversionSite) -> Diagno
         ),
         Span::new(0, 0),
     )
-    .with_help(format!(
-        "print the instance's attributes individually, or declare `{class_name}` with \
-         `@dataclass` to get a synthesized `__repr__`"
-    ))
+    .with_help(help)
 }
 
 /// The `C0001` for a protocol-typed value; see [`reject_unrenderable`].
@@ -243,6 +265,150 @@ mod tests {
                 "print the instance's attributes individually, or declare `C` with \
                  `@dataclass` to get a synthesized `__repr__`"
             )
+        );
+    }
+
+    /// Codex P2 on PR #985: `@dataclass` cannot rescue a class under a
+    /// builtin exception name (the predicate rejects it by name before
+    /// consulting its shape), so the help must not recommend it.
+    #[test]
+    fn a_class_under_a_builtin_exception_name_carries_the_rename_help() {
+        let env = environment_for(
+            "class ValueError:\n    def __init__(self) -> None:\n        return\n\n",
+        );
+        let ty = Ty::Instance(Box::new("ValueError".to_string()));
+        let err = reject_unrenderable(&env, &ty, StringConversionSite::PrintArgument)
+            .expect_err("predicate must reject");
+        assert_eq!(
+            err.help.as_deref(),
+            Some(
+                "print the instance's attributes individually, or rename `ValueError` so it \
+                 no longer shadows the builtin exception `ValueError`; adding `@dataclass` \
+                 does not make a class under a builtin exception name renderable"
+            )
+        );
+    }
+
+    /// The rename help also reaches a `@dataclass` under a builtin
+    /// exception name -- the shape D-237 records as the deliberate loss --
+    /// and a user class under an `OSError`-family name.
+    #[test]
+    fn a_dataclass_under_a_builtin_exception_name_carries_the_rename_help() {
+        let env = environment_for("@dataclass\nclass FileNotFoundError:\n    x: int\n\n");
+        let ty = Ty::Instance(Box::new("FileNotFoundError".to_string()));
+        let err = reject_unrenderable(&env, &ty, StringConversionSite::FStringInterpolation)
+            .expect_err("predicate must reject");
+        let help = err.help.expect("help must be present");
+        assert!(help.contains("rename `FileNotFoundError`"), "help: {help}");
+        assert!(
+            !help.contains("declare `FileNotFoundError` with"),
+            "help: {help}"
+        );
+    }
+
+    /// Codex P1 on PR #985: the origin generic class is a dataclass, so
+    /// `check` accepts `print(Box[int](1))`; `build` re-infers the rewritten
+    /// call against the `0gen_Box__T_int` specialization, which must keep
+    /// the dataclass identity (and the substituted field list) or the gate
+    /// contradicts `check`'s own verdict.
+    #[test]
+    fn a_generic_dataclass_specialization_stays_renderable_after_monomorphization() {
+        let source = "@dataclass\nclass Box[T]:\n    n: int\n\nb = Box[int](1)\nprint(b)\ns: str = f\"{b}\"\n";
+        assert_accepted(source);
+        let resolved = crate::check_and_resolve(&parse_lower(source))
+            .expect("monomorphized module must type-check");
+        let specialization = resolved
+            .class_defs
+            .iter()
+            .find_map(|(name, def)| (name == "0gen_Box__T_int").then_some(def))
+            .expect("specialization must be registered");
+        assert!(specialization.is_dataclass);
+        assert_eq!(
+            specialization.dataclass_fields,
+            vec![("n".to_string(), Ty::Int)]
+        );
+        assert!(
+            specialization
+                .methods
+                .iter()
+                .any(|(name, _)| name == "__repr__")
+        );
+        let mut env = Environment::new();
+        crate::class::bind_classes(&mut env, &resolved);
+        let ty = Ty::Instance(Box::new("0gen_Box__T_int".to_string()));
+        reject_unrenderable(&env, &ty, StringConversionSite::PrintArgument)
+            .expect("specialization must be renderable");
+    }
+
+    /// A `T`-typed dataclass field is substituted on the specialization
+    /// exactly as `attrs` is.
+    #[test]
+    fn a_generic_dataclass_field_typed_by_the_parameter_is_substituted() {
+        // `value: T` also synthesizes `__eq__` over `T`, which the checker
+        // rejects with `T0021` before monomorphization (a pre-existing
+        // limit outside D-237), so the module is hand-built instead.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let self_ty = Ty::Instance(Box::new("Box".to_string()));
+        let init = HirItem::Function {
+            name: "Box.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty),
+                ("value".to_string(), param.clone()),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "value".to_string(),
+                value: HirExpr::Name("value".to_string()),
+            }],
+        };
+        let class_def = pycc_hir::HirClassDef {
+            class_attrs: Vec::new(),
+            exception_type_tag: None,
+            name: "Box".to_string(),
+            bases: Vec::new(),
+            mro: vec!["Box".to_string()],
+            attrs: vec![("value".to_string(), param.clone())],
+            methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
+            type_param: Some("T".to_string()),
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            is_enum: false,
+            implicit_object_init: false,
+            enum_members: Vec::new(),
+            is_dataclass: true,
+            dataclass_fields: vec![("value".to_string(), param)],
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: Vec::new(),
+            abstract_methods: Vec::new(),
+            is_abstract: false,
+        };
+        let hir = HirModule {
+            seeded_builtin_exception_classes: false,
+            items: vec![
+                init,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "Box".to_string(),
+                    type_arg: Ty::Str,
+                    args: vec![HirExpr::StringLiteral("x".to_string())],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("Box".to_string(), class_def)],
+        };
+        let resolved = crate::check_and_resolve(&hir).expect("module must type-check");
+        let specialization = resolved
+            .class_defs
+            .iter()
+            .find_map(|(name, def)| (name == "0gen_Box__T_str").then_some(def))
+            .expect("specialization must be registered");
+        assert!(specialization.is_dataclass);
+        assert_eq!(
+            specialization.dataclass_fields,
+            vec![("value".to_string(), Ty::Str)]
         );
     }
 
