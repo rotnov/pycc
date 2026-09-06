@@ -211,8 +211,16 @@ pub fn lower_module(
     // against it, and the module frame -- every name the module body binds
     // directly, which is never a `class`/`def`/`import` name -- so a plain
     // module-level `Color = 1` keeps its `T0021` (see `class::enum_call`).
+    // A `TYPE_CHECKING`-guarded module-level body (#790) binds nothing at
+    // runtime, so the frame skips it -- recognized against the imports known
+    // *before* the loop (the driver's answers, never this module's own
+    // `import` statements, which the loop has not lowered yet): the bare
+    // `TYPE_CHECKING` and `typing.TYPE_CHECKING` spellings resolve without
+    // any import binding, while an aliased `t.TYPE_CHECKING` guard does
+    // not, and its body's bindings stay in the frame (limit (vi) in
+    // `class::enum_call`, over-suppression only).
     let syntactic_enum_classes = class::enum_call::syntactic_enum_class_names(&module.body);
-    let module_frame = class::enum_call::module_bindings(&module.body);
+    let module_frame = class::enum_call::module_bindings(&module.body, &state.imports);
     for (index, stmt) in module.body.iter().enumerate() {
         let position = if index < prologue_len {
             FuturePosition::Prologue
@@ -268,10 +276,14 @@ pub fn lower_module(
             )
             .filter(|name| !poisoned.iter().any(|poisoned_name| poisoned_name == name))
             .collect();
+        // `state.imports` at this point is exactly what `lower_stmt` folded
+        // this item's `TYPE_CHECKING` guards against, so the scan skips the
+        // same dead bodies the lowering did.
         diagnostics.extend(class::enum_call::reject_enum_class_calls(
             stmt,
             &module_frame,
             &enum_class_names,
+            &state.imports,
         ));
     }
     if !diagnostics.is_empty() {

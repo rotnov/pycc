@@ -39,6 +39,20 @@
 //! does not descend into a nested `def`, `class`, or `lambda`, so
 //! `def g(): Color = 1` never suppresses a module-level `Color()`.
 //!
+//! # `TYPE_CHECKING` guards
+//!
+//! `lower_stmt` constant-folds an `if TYPE_CHECKING:` / `elif
+//! TYPE_CHECKING:` body away as dead code (#790, D-223: a capability gap
+//! inside such a body is deliberately not an error), and the scan walks the
+//! original AST, so it has to fold the same bodies or it would reject a
+//! module the lowering accepts (`if TYPE_CHECKING: Color(1)`, caught in
+//! review of PR #971). Both walkers route every `if` through
+//! `walk_if_as_lowered`, which skips a guarded body -- calls *and*
+//! bindings, so a dead `Color = 1` does not shadow either -- using the very
+//! `is_type_checking_guard` predicate the fold uses, against the same
+//! import bindings the fold saw for that item. The live clauses around a
+//! guard (a non-guard `if`, an `elif`, an `else`) are scanned normally.
+//!
 //! # Limits
 //!
 //! All of these are stated here rather than discovered later:
@@ -93,6 +107,16 @@
 //!   `class K[Color]`) are not bindings -- they are `Identifier`s, not
 //!   `Store` names. Both shapes lower and already reported the enum-call
 //!   guard at `1:1`, so reporting at the call is the same diagnostic kind.
+//! - (vi) **The module frame sees only the imports known before the
+//!   loop.** `module_bindings` runs once, before `lower_module` lowers the
+//!   module's own `import` statements, so a module-level guard spelled
+//!   through an alias (`import typing as t` then `if t.TYPE_CHECKING:`)
+//!   is not recognized there and a dead `Color = 1` inside it still lands
+//!   in the module frame -- over-suppression only (the call fails in
+//!   `pycc_types`). The bare `TYPE_CHECKING` and `typing.TYPE_CHECKING`
+//!   spellings need no import binding and fold in the module frame too;
+//!   inside a `def` the scan runs with the item's own import view, so the
+//!   aliased spelling folds there.
 //! - A call with a keyword argument (`Color(value=1)`) is skipped:
 //!   `lower_expr` already reports exactly one `C0001 keyword call arguments
 //!   are not supported yet` at that call, and the scan runs on failed items
@@ -101,9 +125,39 @@
 //!   the starred `C0001` sits at `*xs`, a different span, and the call is a
 //!   genuine enum call.
 
+use crate::ImportBinding;
+use crate::stmt::is_type_checking_guard;
 use pycc_ast::visitor::{self, Visitor};
-use pycc_ast::{ExceptHandler, Expr, ExprContext, Pattern, Stmt, StmtClassDef};
+use pycc_ast::{ExceptHandler, Expr, ExprContext, Pattern, Stmt, StmtClassDef, StmtIf};
 use pycc_diag::Diagnostic;
+
+/// Walks an `if` statement the way `lower_stmt` lowers it (#790): a
+/// `TYPE_CHECKING`-guarded body -- the leading `if` or any `elif` clause,
+/// recognized by the very same `is_type_checking_guard` the fold uses,
+/// against the same `imports` -- is dead code that never reaches HIR, so
+/// neither the calls nor the bindings inside it exist for the scan; the
+/// guard's own test expression is folded to `False` and is skipped too.
+/// Every other clause (a live `if`, `elif`, or `else`) is walked normally.
+/// Both walkers below route `Stmt::If` through here, because ruff's
+/// `walk_stmt` visits an `if` body and every clause unconditionally.
+fn walk_if_as_lowered<'a, V: Visitor<'a>>(
+    visitor: &mut V,
+    if_stmt: &'a StmtIf,
+    imports: &[ImportBinding],
+) {
+    if !is_type_checking_guard(&if_stmt.test, imports) {
+        visitor.visit_expr(&if_stmt.test);
+        visitor.visit_body(&if_stmt.body);
+    }
+    for clause in &if_stmt.elif_else_clauses {
+        if let Some(test) = &clause.test
+            && is_type_checking_guard(test, imports)
+        {
+            continue;
+        }
+        visitor::walk_elif_else_clause(visitor, clause);
+    }
+}
 
 /// The one `C0001` message for every positional-argument call shape on an
 /// enum class (`Color()`, `Color(1)`, `Color(1, 2)`). Shared with
@@ -157,23 +211,27 @@ fn has_single_enum_marker_base(def: &StmtClassDef) -> bool {
 /// or `import` name, `class Color(Enum)` itself never puts `Color` here --
 /// only a plain module-level `Color = 1`, a `for`/`with`/walrus target, an
 /// except-handler name, or a `match` capture does.
-pub(crate) fn module_bindings(body: &[Stmt]) -> Vec<String> {
-    scope_bindings(body)
+pub(crate) fn module_bindings(body: &[Stmt], imports: &[ImportBinding]) -> Vec<String> {
+    scope_bindings(body, imports)
 }
 
 /// The names bound directly by the statements of one scope, without
 /// descending into a nested `def`, `class`, or `lambda` (each of those is
 /// its own scope and gets its own frame, or none).
-fn scope_bindings(body: &[Stmt]) -> Vec<String> {
-    struct Binder {
+fn scope_bindings(body: &[Stmt], imports: &[ImportBinding]) -> Vec<String> {
+    struct Binder<'i> {
+        imports: &'i [ImportBinding],
         names: Vec<String>,
     }
-    impl<'a> Visitor<'a> for Binder {
+    impl<'a> Visitor<'a> for Binder<'_> {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
-            // A nested `def`/`class` is neither a binding this frame models
-            // (limit (ii)) nor a scope it descends into.
-            if !matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
-                visitor::walk_stmt(self, stmt);
+            match stmt {
+                // A nested `def`/`class` is neither a binding this frame
+                // models (limit (ii)) nor a scope it descends into.
+                Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+                // A `TYPE_CHECKING`-guarded body binds nothing at runtime.
+                Stmt::If(if_stmt) => walk_if_as_lowered(self, if_stmt, self.imports),
+                _ => visitor::walk_stmt(self, stmt),
             }
         }
         fn visit_expr(&mut self, expr: &'a Expr) {
@@ -207,7 +265,10 @@ fn scope_bindings(body: &[Stmt]) -> Vec<String> {
             visitor::walk_pattern(self, pattern);
         }
     }
-    let mut binder = Binder { names: Vec::new() };
+    let mut binder = Binder {
+        imports,
+        names: Vec::new(),
+    };
     binder.visit_body(body);
     binder.names
 }
@@ -240,10 +301,12 @@ pub(crate) fn reject_enum_class_calls(
     stmt: &Stmt,
     module_frame: &[String],
     enum_class_names: &[String],
+    imports: &[ImportBinding],
 ) -> Vec<Diagnostic> {
     struct CallScan<'n> {
         enum_class_names: &'n [String],
         module_frame: &'n [String],
+        imports: &'n [ImportBinding],
         frames: Vec<Vec<String>>,
         diagnostics: Vec<Diagnostic>,
     }
@@ -255,18 +318,22 @@ pub(crate) fn reject_enum_class_calls(
     }
     impl<'a> Visitor<'a> for CallScan<'_> {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
-            if let Stmt::FunctionDef(def) = stmt {
-                let mut frame: Vec<String> = def
-                    .parameters
-                    .iter()
-                    .map(|parameter| parameter.name().to_string())
-                    .collect();
-                frame.extend(scope_bindings(&def.body));
-                self.frames.push(frame);
-                visitor::walk_stmt(self, stmt);
-                self.frames.pop();
-            } else {
-                visitor::walk_stmt(self, stmt);
+            match stmt {
+                Stmt::FunctionDef(def) => {
+                    let mut frame: Vec<String> = def
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.name().to_string())
+                        .collect();
+                    frame.extend(scope_bindings(&def.body, self.imports));
+                    self.frames.push(frame);
+                    visitor::walk_stmt(self, stmt);
+                    self.frames.pop();
+                }
+                // A `TYPE_CHECKING`-guarded body is dead code (#790): a call
+                // inside it is never lowered, so it is never an enum call.
+                Stmt::If(if_stmt) => walk_if_as_lowered(self, if_stmt, self.imports),
+                _ => visitor::walk_stmt(self, stmt),
             }
         }
         fn visit_expr(&mut self, expr: &'a Expr) {
@@ -312,6 +379,7 @@ pub(crate) fn reject_enum_class_calls(
     let mut scan = CallScan {
         enum_class_names,
         module_frame,
+        imports,
         frames: Vec::new(),
         diagnostics: Vec::new(),
     };
@@ -559,6 +627,92 @@ mod tests {
         lower_ok(&format!(
             "{COLOR}def f() -> None:\n    xs = [Color for Color in range(3)]\n    Color(1)\n"
         ));
+    }
+
+    // -- `TYPE_CHECKING` guards (#790 fold, PR #971 review): dead bodies --
+
+    const TC: &str = "from typing import TYPE_CHECKING\n";
+
+    #[test]
+    fn a_call_under_a_type_checking_guard_is_dead_code_and_not_scanned() {
+        lower_ok(&format!("{TC}{COLOR}if TYPE_CHECKING:\n    Color(1)\n"));
+    }
+
+    #[test]
+    fn a_call_under_an_elif_type_checking_guard_is_dead_code_and_not_scanned() {
+        lower_ok(&format!(
+            "{TC}{COLOR}x = 1\nif x == 2:\n    pass\nelif TYPE_CHECKING:\n    Color(1)\n"
+        ));
+    }
+
+    #[test]
+    fn a_qualified_type_checking_guard_inside_a_def_is_folded_the_same_way() {
+        lower_ok(&format!(
+            "import typing\n{COLOR}def f() -> None:\n    if typing.TYPE_CHECKING:\n        Color(1)\n"
+        ));
+    }
+
+    #[test]
+    fn the_live_clauses_around_a_type_checking_guard_are_still_scanned() {
+        // The leading `if` is live (not a guard), the `elif` is folded, the
+        // `else` is live: exactly the two live calls, in source order.
+        let source = format!(
+            "{TC}{COLOR}x = 1\nif x == 2:\n    Color()\nelif TYPE_CHECKING:\n    Color(1)\nelse:\n    Color(2)\n"
+        );
+        let diagnostics = lower_err(&source);
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
+        assert_enum_call(&diagnostics[1], "Color", "Color(2)", &source);
+    }
+
+    #[test]
+    fn the_else_of_a_leading_type_checking_guard_is_live() {
+        let source = format!("{TC}{COLOR}if TYPE_CHECKING:\n    pass\nelse:\n    Color()\n");
+        let diagnostics = lower_err(&source);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
+    }
+
+    #[test]
+    fn a_module_level_binding_under_a_type_checking_guard_does_not_shadow() {
+        // The guarded `Color = 1` never runs, so the runtime `Color` is the
+        // enum and the call is reported -- the frame skips the dead body.
+        let source = format!("{TC}{COLOR}if TYPE_CHECKING:\n    Color = 1\nColor()\n");
+        let diagnostics = lower_err(&source);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
+    }
+
+    #[test]
+    fn a_def_level_binding_under_a_type_checking_guard_does_not_shadow() {
+        let source = format!(
+            "{TC}{COLOR}def f() -> None:\n    if TYPE_CHECKING:\n        Color = 1\n    Color()\n"
+        );
+        let diagnostics = lower_err(&source);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
+    }
+
+    #[test]
+    fn an_aliased_module_level_guard_binding_is_the_documented_frame_residual() {
+        // Limit (iv): the module frame is computed before the loop lowers
+        // `import typing as t`, so `t.TYPE_CHECKING` is not recognized there
+        // and the dead `Color = 1` still suppresses the call (over-suppression;
+        // `pycc_types`' guard rejects it). Inside a `def` the scan runs with
+        // the import known, so the same alias folds -- see the next test.
+        lower_ok(&format!(
+            "import typing as t\n{COLOR}if t.TYPE_CHECKING:\n    Color = 1\nColor()\n"
+        ));
+    }
+
+    #[test]
+    fn an_aliased_guard_inside_a_def_is_folded_once_the_import_is_lowered() {
+        let source = format!(
+            "import typing as t\n{COLOR}def f() -> None:\n    if t.TYPE_CHECKING:\n        Color = 1\n    Color()\n"
+        );
+        let diagnostics = lower_err(&source);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_enum_call(&diagnostics[0], "Color", "Color()", &source);
     }
 
     // -- frame boundaries and item ordering (#944): exact counts --

@@ -52,7 +52,10 @@ status: accepted
      (`Store` names, `except ... as`, `match` captures) and suppresses the
      report when any frame binds the callee. The frames are not
      position-aware, do not descend into a nested scope, and record no
-     `def`/`class`/`import` name; a class body gets no frame. Every residual
+     `def`/`class`/`import` name; a class body gets no frame. The scan and
+     the frames fold `if`/`elif TYPE_CHECKING:` bodies exactly as
+     `lower_stmt` does (#790, D-223), so a call or a binding inside such a
+     dead body is neither reported nor a shadow. Every residual
      is enumerated in the module doc of `class::enum_call` and pinned by a
      test: over-suppression is the only failure mode on an item that lowers
      (the call still fails in `pycc_types`), and the one false-kind report

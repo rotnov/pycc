@@ -176,7 +176,9 @@ D-233), with a span-less guard of the same text in `pycc_types`'s
 `resolve_instantiation` ladder behind it (issue #921): members are
 compile-time singletons reached by name (`Color.RED`), and by-value lookup
 is the not-yet-implemented construct; the zero-argument form is a CPython
-`TypeError` too and is named as such rather than as unsupported. A
+`TypeError` too and is named as such rather than as unsupported. The scan
+folds `if`/`elif TYPE_CHECKING:` bodies exactly as HIR lowering does
+(#790), so a call inside such a dead body is not reported. A
 scope-local rebinding of the class name (`def f(Color: int) -> None:
 Color()`) is not an enum call and keeps its `T0021`. Naming
 an enum class as a base (`class Foo(Color): pass`) is rejected from
