@@ -207,3 +207,20 @@ whole module (limit (vii) in the module doc; D-233 decision 5 and
 `docs/DIAGNOSTICS.md` gained the sentence), so such a program carries the
 collision diagnostic alone. Four unit tests and one end-to-end test pin it.
 Round 4 of `.harden/findings/issue-944.jsonl` records the finding.
+
+## Third rebase, onto `00b0f5a0`
+
+PR #973 (#969, D-234) merged while the def-bound-name round's CI ran and
+the watcher reported #971 as CONFLICTING. Rebased onto `00b0f5a0`:
+`crates/pycc_hir/src/lib.rs` (both sides extended the `pub use class::{..}`
+re-export; both kept), `docs/ROADMAP.md` and `docs/TYPE_SYSTEM.md` (#969
+rewrote the same paragraphs; resolved by taking `main`'s text and
+re-applying #944's four sentence-level edits, each base sentence verified
+to survive verbatim in `main`), and `docs/decisions/README.md` (regenerated
+with `generate_decisions_index.py`; D-233 and D-234 both listed). #969
+changed `pycc_hir` source, so the full gate set was re-run from a
+single-writer baseline after the rebase: fmt, clippy, `cargo test
+--workspace`, `llvm-cov` at 100.00% lines/regions, `cargo doc`,
+`check_roadmap_evidence.rb`, the decisions-index freshness check, and the
+findings checker all passed. The commit SHAs quoted in earlier sections
+are pre-rebase identifiers.
