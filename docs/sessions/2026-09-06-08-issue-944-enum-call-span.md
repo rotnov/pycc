@@ -11,10 +11,14 @@ entry was committed), taking decision number **D-232** and session file
 ## Overall status
 
 `feat/issue-944` (worktree `/Users/denis/projects/pycc-worktrees/issue-944`)
-implements #944 on top of `89501bbb` (PR #968). At the time of writing it is
-four commits ahead of that base and one merge behind `origin/main` (#970's
-merge); it is **not pushed and has no pull request** — the dispatching
-session owns push, review, and merge. Nothing is merged by this branch yet.
+implements #944. It was authored on `89501bbb` (PR #968) and rebased onto
+`50a0dc2a` (PR #970, #966) before review: three prose paragraphs
+(`docs/ROADMAP.md` line 200, `docs/TYPE_SYSTEM.md` line 234, and the
+generated `docs/decisions/README.md`) were merged by hand, keeping both
+sides, and one fixup mirrors #970's new `HirClassDef.implicit_object_init`
+field into the direct-HIR guard test. The pull request that delivers this
+snapshot carries `Fixes #944`; nothing is merged by this branch until it
+lands.
 
 ## What this change is
 
@@ -55,15 +59,22 @@ Smoke on the issue's program: `pycc check` and `pycc build` both moved the
 (parameter, local, `except ... as`, `match` capture/star/mapping-rest,
 module-level assignment and `for` target) still yields `T0021`.
 
-## Commits on the branch
+## Commits on the branch (after the rebase onto `50a0dc2a`)
 
-- `38673195` feat(hir): report the enum-call C0001 at the call expression (#944)
-- `64f20979` test: pin the enum-call C0001 span end to end (#944)
-- `02dd2b79` docs: D-233 -- HIR lowering gains a second per-item diagnostic source (#944)
-- `c83902f3` test(hir): keep the enum-call test helpers fully covered (#944)
+- `e8e758fc` feat(hir): report the enum-call C0001 at the call expression (#944)
+- `6870f4b0` test: pin the enum-call C0001 span end to end (#944)
+- `d70d4b94` docs: D-233 -- HIR lowering gains a second per-item diagnostic source (#944)
+- `4017a4c0` test(hir): keep the enum-call test helpers fully covered (#944)
+- `570ab52a` docs(sessions): snapshot the #944 enum-call span delivery
+- `2d4df343` fixup(rebase): mirror #970's implicit_object_init field in the direct-HIR enum guard test
 
 ## Gate results (single writer, run sequentially, exit codes captured to files)
 
+Re-run in full after the rebase: the first post-rebase run failed
+`clippy`/`test`/`llvm-cov` on the missing `implicit_object_init` field,
+fixed in `2d4df343`; the re-run reports TOTAL 100.00% lines / functions /
+regions (55031 regions, 36251 lines, 0 missed) and frontend throughput at
+41.93 ms against the 75 ms threshold. The pre-rebase run, for the record:
 `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`,
 `cargo test --workspace`, `cargo llvm-cov --workspace --fail-under-lines 100
 --fail-under-regions 100` (TOTAL 100.00% lines / functions / regions after
