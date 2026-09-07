@@ -15,7 +15,8 @@ mod typecheck;
 
 pub use class::enum_call::enum_class_call_message;
 pub use class::{
-    ClassAttrValue, EnumMemberValue, HirClassDef, PropertyDef, ProtocolMember, flat_attr_layout,
+    ClassAttrValue, EnumMemberValue, HirClassDef, PropertyDef, ProtocolMember,
+    declares_name_outside_class_attrs, flat_attr_layout,
 };
 pub use container::{check_container_ty, check_tuple_element_ty};
 pub use exception::{

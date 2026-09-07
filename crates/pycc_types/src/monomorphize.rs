@@ -497,6 +497,30 @@ pub fn instantiate_generic_call(
 /// generic call nested at any depth (e.g. `print(identity(1))`) is found
 /// and rewritten; a leaf variant has nothing to recurse into and falls
 /// straight through to `infer_expr_in`.
+/// Whether `expr` names a class rather than a value binding.
+///
+/// A bare class name is not something `infer_expr_in` can resolve on its own,
+/// so every arm of [`rewrite_generic_calls_in_expr`] that would otherwise
+/// recurse into such a base has to skip it: `C[x]` (PEP 560
+/// `__class_getitem__`), `C.attr` (a class-attribute read), and `C.m()` (a
+/// `@staticmethod` or `@classmethod` call through the class) all put the class
+/// name in a position where recursing fails with T0021 ("name not defined"),
+/// exactly the failure mode this module's `isinstance` class-argument skip
+/// already avoids. Skipping the base loses nothing: `infer_expr_in` still runs
+/// on the whole expression afterwards, and that is what resolves the class read
+/// and reports any real error.
+///
+/// An active value binding or local of that name shadows the class -- in
+/// `def f(B: D) -> int: return B.X`, `B` is the parameter -- so those two
+/// checks come first, matching the order `pycc_types`' own class-name
+/// `AttrGet` and `MethodCall` arms use.
+fn is_class_name_base(env: &Environment, local_names: &[&str], expr: &HirExpr) -> bool {
+    matches!(expr, HirExpr::Name(name)
+        if env.binding_state(name).is_none()
+            && !is_local(local_names, name)
+            && env.lookup_class(name).is_some())
+}
+
 pub(crate) fn rewrite_generic_calls_in_expr(
     env: &mut Environment,
     local_names: &[&str],
@@ -639,11 +663,7 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             // class-argument skip above exists to avoid. Rewrite only the
             // index in that case; `infer_expr_in` on the whole expression
             // below still resolves the hook and reports any error.
-            let base_is_class_name = matches!(base.as_ref(), HirExpr::Name(name)
-                if env.binding_state(name).is_none()
-                    && !is_local(local_names, name)
-                    && env.lookup_class(name).is_some());
-            if !base_is_class_name {
+            if !is_class_name_base(env, local_names, base.as_ref()) {
                 rewrite_generic_calls_in_expr(env, local_names, base, instantiations, seen)?;
             }
             rewrite_generic_calls_in_expr(env, local_names, index, instantiations, seen)?;
@@ -676,11 +696,21 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             infer_expr_in(env, local_names, expr)
         }
         HirExpr::AttrGet { base, .. } => {
-            rewrite_generic_calls_in_expr(env, local_names, base, instantiations, seen)?;
+            // `C.attr` on a bare class name reads a class attribute, so the
+            // base is not a value expression -- the same skip the `Subscript`
+            // arm above applies, for the same reason.
+            if !is_class_name_base(env, local_names, base.as_ref()) {
+                rewrite_generic_calls_in_expr(env, local_names, base, instantiations, seen)?;
+            }
             infer_expr_in(env, local_names, expr)
         }
         HirExpr::MethodCall { base, args, .. } => {
-            rewrite_generic_calls_in_expr(env, local_names, base, instantiations, seen)?;
+            // `C.m()` on a bare class name calls a `@staticmethod` or
+            // `@classmethod` through the class, so the base is not a value
+            // expression either; the arguments still are.
+            if !is_class_name_base(env, local_names, base.as_ref()) {
+                rewrite_generic_calls_in_expr(env, local_names, base, instantiations, seen)?;
+            }
             for arg in args.iter_mut() {
                 rewrite_generic_calls_in_expr(env, local_names, arg, instantiations, seen)?;
             }

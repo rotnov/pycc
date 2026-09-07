@@ -10,7 +10,10 @@ use super::{
     HirClassDef, InstantiateExpr, MirExpr, MirFStringPart, binop_result_ty, lookup, mro_class_def,
     try_lower_enum_member_attr,
 };
-use pycc_hir::{BinOpKind, ClassAttrValue, FStringPart, HirExpr, Ty, UnaryOpKind};
+use pycc_hir::{
+    BinOpKind, ClassAttrValue, FStringPart, HirExpr, Ty, UnaryOpKind,
+    declares_name_outside_class_attrs,
+};
 use std::collections::HashMap;
 
 pub(super) fn lower_expr(
@@ -660,8 +663,15 @@ pub(super) fn lower_expr(
             // `.value`/`.name` read on this result is a separate
             // `AttrGet` that resolves to a slot via the enum class's
             // `attrs = [("value", Int), ("name", Str)]` table.
-            if let Some(enum_member_expr) =
-                try_lower_enum_member_attr(base.as_ref(), attr.as_str(), classes)
+            // A value binding of the enum class's own name shadows the
+            // class here exactly as it does for the class-attribute fold
+            // below, so this interception is guarded the same way -- without
+            // it `def f(Color: D) -> int: return Color.RED` would read the
+            // enum member's singleton instead of the parameter's slot.
+            if !matches!(base.as_ref(), HirExpr::Name(name)
+                if scopes.iter().any(|scope| scope.contains_key(name)))
+                && let Some(enum_member_expr) =
+                    try_lower_enum_member_attr(base.as_ref(), attr.as_str(), classes)
             {
                 return enum_member_expr;
             }
@@ -670,11 +680,49 @@ pub(super) fn lower_expr(
             // for the same reason the enum-member read above is: the base is
             // a class name, not a value binding, so lowering it as an
             // expression would fail.
+            //
+            // #974: the walk runs over `class_def.mro`, most-derived first,
+            // so an *inherited* class attribute (`Derived.LIMIT`) folds too.
+            // It stops at the first class that declares `attr` in any other
+            // class-level namespace, because CPython binds that declaration
+            // instead -- `declares_name_outside_class_attrs` is the shared
+            // predicate, and `pycc_types::class::lookup_class_attr_by_class_name`
+            // runs the identical walk over it so the type the checker
+            // reported and the constant folded here can never disagree (the
+            // #960 failure mode). This is deliberately *not* the instance
+            // arm's walk further below: that one consults instance slots
+            // first, and a class object has no instance `__dict__`.
+            // An active value binding of that name shadows the class, so
+            // `B.X` reads the parameter's instance slot rather than the class
+            // attribute -- `pycc_types`' own class-name `AttrGet` arm applies
+            // the matching binding/local guard, and this scope check is the
+            // MIR-side spelling of it (the same one the `__class_getitem__`
+            // interception above already uses). Without it the shadowed name
+            // would reach the internal-error panic below.
             if let HirExpr::Name(class_name) = base.as_ref()
+                && !scopes.iter().any(|scope| scope.contains_key(class_name))
                 && let Some(class_def) = classes.get(class_name.as_str())
-                && let Some(folded) = fold_class_attr(class_def, attr)
             {
-                return folded;
+                for mro_class in &class_def.mro {
+                    let mro_def = mro_class_def(mro_class, classes);
+                    if let Some(folded) = fold_class_attr(mro_def, attr) {
+                        return folded;
+                    }
+                    if declares_name_outside_class_attrs(mro_def, attr) {
+                        break;
+                    }
+                }
+                // The base really is a class name -- `classes.get`
+                // succeeded and the scope guard above proved no value binding
+                // shadows it -- so there is nothing to fall back to and
+                // `lower_expr` below would fail on it. A name that is *not* a
+                // class (the ordinary `d.LIMIT` local or parameter), and a
+                // class name shadowed by a binding, both fall through.
+                panic!(
+                    "pycc_mir: internal error: attribute `{attr}` is not a class attribute \
+                     reachable through class `{class_name}`'s MRO -- pycc_types::check should \
+                     have rejected this HIR with T0044 before it reached pycc_mir"
+                );
             }
             let base = lower_expr(base, scopes, classes, current_class);
             let class_def = class_def_of(&base, classes);
@@ -836,7 +884,15 @@ pub(super) fn lower_expr(
             // to a registered class. `lower_expr` on a bare class name
             // would panic (class names are not in the scope), so intercept
             // here before lowering the base.
+            // A value binding of that name shadows the class, so
+            // `B.m()` calls the parameter's instance method rather than the
+            // class's static or class method -- `pycc_types`' own
+            // `MethodCall` class-name arm applies the matching
+            // binding/local guard, and this scope check is the MIR-side
+            // spelling of it, the same one the class-attribute fold and the
+            // enum-member interception already use.
             if let HirExpr::Name(class_name) = base.as_ref()
+                && !scopes.iter().any(|scope| scope.contains_key(class_name))
                 && classes.contains_key(class_name.as_str())
             {
                 let class_def = &classes[class_name.as_str()];

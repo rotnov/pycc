@@ -336,20 +336,21 @@ fn a_dataclass_field_type_conflict_outranks_the_class_var_collision() {
 
 // -- pre-existing #911 behaviour, pinned rather than changed ----------------
 
-/// A class-name-qualified read of an *inherited* class attribute is
-/// `T0044`, while the instance-qualified read of the same attribute
-/// succeeds: `pycc_types`'s class-name arm searches only the literally named
-/// class's own `class_attrs` and never walks the MRO. That asymmetry is
-/// pre-existing #911 behaviour, not introduced by #913 -- a `@dataclass` is
-/// simply the shape that made it visible. Tracked by
-/// [#974](https://github.com/rotnov/pycc/issues/974); this test records the
-/// current answer so the fix has to update it deliberately.
+/// A class-name-qualified read of an *inherited* class attribute succeeds,
+/// matching the instance-qualified read of the same attribute. Until
+/// [#974](https://github.com/rotnov/pycc/issues/974) this was `T0044`:
+/// `pycc_types`'s class-name arm searched only the literally named class's
+/// own `class_attrs` and never walked the MRO, an asymmetry that was
+/// pre-existing #911 behaviour rather than anything #913 introduced -- a
+/// `@dataclass` was simply the shape that made it visible. This test now
+/// pins the fixed answer from the `@dataclass`/`ClassVar` side; the full
+/// case matrix lives in
+/// `tests/issue_974_inherited_class_attr_by_class_name.rs`.
 #[test]
-fn a_class_name_read_of_an_inherited_dataclass_class_var_is_still_rejected() {
-    assert_rejected(
+fn a_class_name_read_of_an_inherited_dataclass_class_var_resolves() {
+    assert_runs(
         "913_inherited_class_name_read",
         "from typing import ClassVar\n\n\n@dataclass\nclass A:\n    x: int\n    LIMIT: ClassVar[int] = 8\n\n\n@dataclass\nclass B(A):\n    y: int\n\n\ndef main() -> None:\n    print(B.LIMIT)\n\n\nmain()\n",
-        "T0044",
-        "class `B` has no attribute named `LIMIT`",
+        "8\n",
     );
 }

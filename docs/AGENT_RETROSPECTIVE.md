@@ -33,6 +33,55 @@ never a merge gate.
 
 ---
 
+## 2026-09-07 — Spent a coverage-debugging round trusting merged coverage views that cannot show the miss
+
+**What happened.** On `feat/issue-974` the D-014 gate
+(`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`)
+exited 1 with one missed region and one missed line in
+`crates/pycc_mir/src/expr.rs`, while the TOTAL row still *displayed*
+`100.00%` through rounding. Five separate extraction routes —
+`--show-missing-lines`, `--json`, `--lcov`, the HTML file view's
+`uncovered-line` class, and a hand-written merge of all 1117 region
+records by source coordinate — every one of them reported nothing
+uncovered. That contradiction consumed a debugging round and nearly
+produced a speculative rewrite of correct, committed code.
+
+**Root cause.** `llvm-cov` compiled `pycc_mir::expr::lower_expr` under two
+crate disambiguators, and its *file summary* does not merge instantiations
+the way every view above does. It takes `max(Covered)` and
+`min(NotCovered)` across a function's instantiation records. A region
+covered in instantiation A and missed in B therefore reads as covered in
+every merged view, yet still counts against the gate unless **some single
+instantiation** has zero misses. Here the workspace integration tests
+covered the new MRO walk's `break` and `panic!`, and the `pycc_mir`
+lib-test instantiation covered everything except the loop's
+*continue* edge — so no instantiation was miss-free.
+
+**What fixed it.** Two steps, in this order. First, an A/B: re-running the
+identical gate at the branch base (`3ba4a027`, detached in the same clean
+worktree) proved the base was locally green, so the miss really did belong
+to the diff rather than to the toolchain — that check is what made it safe
+to keep looking instead of rewriting. Second,
+`cargo llvm-cov report -p pycc_mir --show-instantiations --html` split the
+per-instantiation records apart and named the missed line directly. The
+fix was an ordinary unit test
+(`an_inherited_class_attribute_read_through_the_derived_class_name_folds`)
+that walks past a derived class declaring nothing and folds the base's
+constant — the behaviour the issue is about, not coverage padding.
+
+**Lessons.**
+- A merged coverage view showing nothing uncovered does **not** contradict
+  a red gate. When they disagree, the merged view is answering a different
+  question; reach for `--show-instantiations` rather than doubting the
+  exit status.
+- Before restructuring code to chase a coverage miss, re-run the same gate
+  at the branch base. It costs one run and distinguishes "my diff" from
+  "this toolchain", and that is the fact the whole diagnosis rests on.
+- Regenerating a report from `target/llvm-cov-target` reads whatever
+  profile data was written last. After running the gate at another commit,
+  the stale numbers look like a real result — re-run at `HEAD` before
+  reading anything into them.
+
 ## 2026-09-06 — Eighteen Codex review rounds on one pull request, most of them documentation drift found one file at a time
 
 **What happened:** PR [#971](https://github.com/rotnov/pycc/pull/971) (#944,

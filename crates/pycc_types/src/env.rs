@@ -188,6 +188,22 @@ pub struct Environment {
     /// own target instead, killing the narrowing the moment the name is
     /// reassigned anywhere inside a narrowed region.
     pub(crate) narrowed: HashMap<String, Ty>,
+    /// #974: `true` in an environment produced by [`Self::child_for_function`],
+    /// i.e. while a *function body* is being checked rather than a top-level
+    /// statement.
+    ///
+    /// `bindings` means two different things in those two positions.
+    /// `check_and_resolve_all_keyed`'s pass 2 walks the module's top-level
+    /// statements sequentially, so during that pass a `binding_state` answer
+    /// is the binding active *at that point in the source*. Pass 3 then
+    /// checks every function body against the environment as it stands after
+    /// **all** top-level code (D-041 late binding), so the same answer is
+    /// ordering-blind there: a module-level rebinding of a class's own name
+    /// looks identical whether it executes before or after the read. The
+    /// class-name dispatch guard (`crate::expr::class_name_dispatch`) needs
+    /// to tell those apart, and this flag is what tells it which environment
+    /// it is looking at.
+    pub(crate) in_function_body: bool,
 }
 
 impl Environment {
@@ -376,6 +392,10 @@ impl Environment {
 
     pub(crate) fn child_for_function(&self, local_names: &[&str]) -> Self {
         let mut child = self.clone();
+        // #974: everything below this point is a function body, where a
+        // `binding_state` answer is the *final* module environment rather
+        // than a point-in-time one -- see the field's own doc comment.
+        child.in_function_body = true;
         for name in local_names {
             child.bindings.remove(*name);
             child.declared.remove(*name);
