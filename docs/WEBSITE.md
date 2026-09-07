@@ -173,11 +173,42 @@ exactly one `lastmod`, equal to that page's JSON-LD `WebPage.dateModified`, and
 both values advance when main content, structured data, or important links
 materially change. `scripts/check_sitemap_lastmod.rb` enforces a deterministic
 binding between each canonical page's sitemap `lastmod` and the last non-merge
-git commit (author date) that modified that page's source file, so a visible
-content edit that leaves the `lastmod` stale is caught before merge. The
+git commit (author date) that modified that page's source file. The
 `check-site.sh` validator independently enforces that `lastmod` equals the
 page's JSON-LD `dateModified`, so the two checks together guarantee
-`lastmod` == `dateModified` == last content-change commit date.
+`lastmod` == `dateModified` == last content-change commit date *in whatever
+tree they are run against*.
+
+### Canonical page date pins and the merge date (issue #990, [D-239](decisions/D-239-check-canonical-page-date-pins-against-the-predicted.md))
+
+Each canonical page carries **four** date pins, and they move together:
+
+1. the `<lastmod>` for that page's `<loc>` in `site/sitemap.xml`;
+2. the JSON-LD `WebPage.dateModified` in the page's own HTML source;
+3. `PAGE_SPECS["<page>"]["date_modified"]` in `scripts/check-site.sh`;
+4. `source_artifact_sha256` for that page in
+   `tests/fixtures/pages-performance-manifest.json` — not a date, but a digest
+   of the page HTML, so it must be recomputed (e.g.
+   `shasum -a 256 site/status/index.html`) after pin 2 changes, or
+   `scripts/check_pages_performance_budget.rb` fails.
+
+`scripts/check_sitemap_lastmod.rb` alone does **not** guarantee that a visible
+content edit with a stale `lastmod` is caught before merge. `main` takes
+changes only through squash merges, and a squash commit's author date is the
+merge instant in the merging identity's timezone, not the branch's last commit
+time. A pull request that edits a page on day N and pins day N therefore passes
+its own pull-request leg honestly and then fails the identical check on `main`
+when it is squash-merged on day N+1.
+
+`scripts/check_site_pin_merge_currency.rb` closes that window on the
+pull-request leg: it compares the head tree's pins against the date the
+prospective squash commit is predicted to carry, and it fails closed near a
+date rollover rather than guessing. It runs in `.github/workflows/ci.yml`'s
+`governance` job (the load-bearing placement — `ci-gate` is a required context
+and fails when `governance` fails) and again in `.github/workflows/pages.yml`'s
+`build` job as defense in depth. Both invocations are pull-request-leg only:
+after the merge there is no date left to predict. `AGENTS.md` carries the
+literal pre-merge invocation.
 
 ### Repository social preview contract (issue #200)
 

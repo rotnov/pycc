@@ -245,3 +245,4 @@ current.
 | [D-236](./D-236-reject-a-class-attribute-named-after-the-instantiation.md) | Reject a class attribute named after the instantiation or class-creation protocol | accepted |
 | [D-237](./D-237-reject-string-conversion-of-a-non-dataclass-non-exception.md) | Reject string conversion of a non-dataclass, non-exception instance and of a protocol-typed value with C0001 | accepted |
 | [D-238](./D-238-reject-enum-body-assignments-cpython-keeps-out-of-the.md) | Reject Enum-body assignments CPython keeps out of the member list with C0001 | accepted |
+| [D-239](./D-239-check-canonical-page-date-pins-against-the-predicted.md) | Check canonical page date pins against the predicted merge date | accepted |
