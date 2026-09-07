@@ -21566,7 +21566,7 @@ fn parse_check(src: &str) -> Result<(), Diagnostic> {
 
 /// Test helper: assert a top-level HIR item is a `Try`, panicking
 /// otherwise.  The panic arm is covered by
-/// `expect_top_level_try_panics_on_non_try`.
+/// `exception_handling::expect_top_level_try_panics_on_non_try`.
 fn expect_top_level_try(item: &HirItem) {
     match item {
         HirItem::TopLevelStmt(HirStmt::Try { .. }) => {}
@@ -21576,7 +21576,7 @@ fn expect_top_level_try(item: &HirItem) {
 
 /// Test helper: assert a top-level HIR item is a `Raise`, panicking
 /// otherwise.  The panic arm is covered by
-/// `expect_top_level_raise_panics_on_non_raise`.
+/// `exception_handling::expect_top_level_raise_panics_on_non_raise`.
 fn expect_top_level_raise(item: &HirItem) {
     match item {
         HirItem::TopLevelStmt(HirStmt::Raise { .. }) => {}
