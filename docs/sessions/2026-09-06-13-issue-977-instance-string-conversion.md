@@ -127,8 +127,15 @@ the orchestrating session and `issue-select`):
 
 ## Where to resume
 
-1. `git fetch --prune origin`; this snapshot is anchored at `origin/main` = `e77b4b13`, branch base
-   `f8e9d2e3`.
-2. PR #985 is open from `feat/issue-977`; watch CI on its current head, confirm no unresolved review
-   thread remains, re-check `closingIssuesReferences` = {#977}, and squash-merge.
+1. `git fetch --prune origin`; this snapshot was re-anchored at `origin/main` = `edc454ba`
+   ("fix(hir): reject a non-`@property` `def __slots__` in a class body (#984) (#986)"), which landed
+   while the Codex rounds were being addressed. `origin/main` was merged into `feat/issue-977` (clean,
+   no conflicts) and the ROADMAP #977 and #378 paragraphs were condensed in that merge commit to keep
+   `docs/ROADMAP.md` inside the 168960-byte llms.txt per-resource budget that `scripts/check-site.sh`
+   enforces (issue #207); the full gate set was re-run from that merged single-writer baseline.
+2. PR #985 is open from `feat/issue-977` and carries three Codex review rounds, all fixed and answered
+   on the thread: the monomorphized-generic-dataclass split and the builtin-name help wording
+   (round 1), and the erased-`cast` hole (round 2, fixed by `reject_unrenderable_expr`). Watch CI on
+   its current head, confirm no unresolved review thread remains, re-check `closingIssuesReferences`
+   = {#977}, and squash-merge.
 3. Then decide whether the two runtime/solver follow-ups above earn a milestone issue under D-192.
