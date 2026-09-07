@@ -338,7 +338,16 @@ class SitePinMergeCurrencyTest < Minitest::Test
     HTML
   end
 
-  def check_site_sh(status_date:)
+  def check_site_sh(status_date:, landing_date: "2026-09-06")
+    landing_block =
+      if landing_date.nil?
+        ""
+      else
+        <<~PY.chomp
+          if web_page.get("dateModified") != "#{landing_date}":
+              raise SystemExit("Landing WebPage dateModified is stale")
+        PY
+      end
     <<~SH
       #!/usr/bin/env bash
       python3 - "$@" <<'PYTHON'
@@ -352,6 +361,8 @@ class SitePinMergeCurrencyTest < Minitest::Test
           },
       }
 
+
+      #{landing_block}
 
       class PageParser:
           pass
@@ -455,7 +466,26 @@ class SitePinMergeCurrencyTest < Minitest::Test
 
   # site/index.html has no PAGE_SPECS entry -- scripts/check-site.sh validates
   # the landing page in its own block -- so that pin is a skip, not a failure.
+  # A `site/<slug>/index.html` page with no PAGE_SPECS entry is still a skip:
+  # unlike the landing page, scripts/check-site.sh pins no date for it at all.
   def test_skips_the_page_specs_pin_for_a_page_with_no_entry
+    with_repo do |root, base|
+      head = write_and_commit(
+        root,
+        {
+          "site/architecture/index.html" => page_html(date_modified: "2026-09-07"),
+          SITEMAP_RELATIVE_PATH => sitemap(status_date: "2026-09-06", home_date: "2026-09-06"),
+          SITE_CHECKER_PATH => check_site_sh(status_date: "2026-09-07"),
+          PERFORMANCE_MANIFEST_PATH => manifest(status_digest: "0" * 64),
+        },
+        "edit architecture"
+      )
+      result = check_site_pin_merge_currency(root, base, head, now: midday)
+      assert_match(/PAGE_SPECS date_modified not verified/, result)
+    end
+  end
+
+  def test_checks_the_landing_page_s_own_literal_date_pin_in_place_of_page_specs
     with_repo do |root, base|
       html = page_html(date_modified: "2026-09-07", body: "home")
       head = write_and_commit(
@@ -463,15 +493,62 @@ class SitePinMergeCurrencyTest < Minitest::Test
         {
           HOME_SOURCE => html,
           SITEMAP_RELATIVE_PATH => sitemap(status_date: "2026-09-06", home_date: "2026-09-07"),
-          SITE_CHECKER_PATH => check_site_sh(status_date: "2026-09-07"),
+          SITE_CHECKER_PATH =>
+            check_site_sh(status_date: "2026-09-07", landing_date: "2026-09-06"),
+          PERFORMANCE_MANIFEST_PATH => manifest(status_digest: "0" * 64),
+        },
+        "edit home"
+      )
+      error = assert_raises(SitePinMergeCurrencyError) do
+        check_site_pin_merge_currency(root, base, head, now: midday)
+      end
+      assert_match(/landing WebPage "dateModified" literal/, error.message)
+      assert_match(/pinned 2026-09-06, predicted merge date 2026-09-07/, error.message)
+      refute_match(/PAGE_SPECS date_modified not verified/, error.message)
+    end
+  end
+
+  def test_passes_when_the_landing_page_s_literal_date_pin_is_current
+    with_repo do |root, base|
+      html = page_html(date_modified: "2026-09-07", body: "home")
+      head = write_and_commit(
+        root,
+        {
+          HOME_SOURCE => html,
+          SITEMAP_RELATIVE_PATH => sitemap(status_date: "2026-09-06", home_date: "2026-09-07"),
+          SITE_CHECKER_PATH =>
+            check_site_sh(status_date: "2026-09-07", landing_date: "2026-09-07"),
           PERFORMANCE_MANIFEST_PATH => manifest(status_digest: "0" * 64),
         },
         "edit home"
       )
       result = check_site_pin_merge_currency(root, base, head, now: midday)
-      assert_match(/PAGE_SPECS date_modified not verified/, result)
+      refute_match(/landing WebPage/, result)
+    end
+  end
+
+  def test_skips_the_landing_pin_when_the_checker_carries_no_literal_comparison
+    with_repo do |root, base|
+      html = page_html(date_modified: "2026-09-07", body: "home")
+      head = write_and_commit(
+        root,
+        {
+          HOME_SOURCE => html,
+          SITEMAP_RELATIVE_PATH => sitemap(status_date: "2026-09-06", home_date: "2026-09-07"),
+          SITE_CHECKER_PATH => check_site_sh(status_date: "2026-09-07", landing_date: nil),
+          PERFORMANCE_MANIFEST_PATH => manifest(status_digest: "0" * 64),
+        },
+        "edit home"
+      )
+      result = check_site_pin_merge_currency(root, base, head, now: midday)
+      assert_match(/landing WebPage dateModified not verified/, result)
       assert_match(/source_artifact_sha256 not verified/, result)
     end
+  end
+
+  def test_landing_pin_reader_reads_the_real_check_site_script
+    text = File.read(File.expand_path("check-site.sh", __dir__))
+    assert_match(/\A\d{4}-\d{2}-\d{2}\z/, landing_page_date_modified(text).to_s)
   end
 
   def test_skips_a_page_whose_html_carries_no_json_ld_date_modified

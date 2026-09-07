@@ -58,7 +58,7 @@
   ```
 
   Merge only if it exits 0. It exits 0 unchanged when the pull request touches no canonical page source, so it is safe to run on any branch.
-- When it fails, rotate all four pins for each page it names to the date it reports, then recompute the manifest digest: the `<lastmod>` for that page's `<loc>` in `site/sitemap.xml`, the JSON-LD `dateModified` in the page's own HTML, `PAGE_SPECS["<page>"]["date_modified"]` in `scripts/check-site.sh`, and `source_artifact_sha256` for that page in `tests/fixtures/pages-performance-manifest.json` (recomputed last, since it digests the page HTML). Then re-run `ruby scripts/check_pages_performance_budget.rb --skip-lighthouse` and `bash scripts/check-site.sh`. `docs/WEBSITE.md` owns the full contract.
+- When it fails, rotate all four pins for each page it names to the date it reports, then recompute the manifest digest: the `<lastmod>` for that page's `<loc>` in `site/sitemap.xml`, the JSON-LD `dateModified` in the page's own HTML, `PAGE_SPECS["<page>"]["date_modified"]` in `scripts/check-site.sh` (the landing page has no `PAGE_SPECS` entry — its date is the hard-coded `dateModified` literal in that script's landing-page block), and `source_artifact_sha256` for that page in `tests/fixtures/pages-performance-manifest.json` (recomputed last, since it digests the page HTML). Then re-run `ruby scripts/check_pages_performance_budget.rb --skip-lighthouse` and `bash scripts/check-site.sh`. `docs/WEBSITE.md` owns the full contract.
 
 ## Generated documentation
 

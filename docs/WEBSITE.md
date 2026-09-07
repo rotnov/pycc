@@ -185,7 +185,11 @@ Each canonical page carries **four** date pins, and they move together:
 
 1. the `<lastmod>` for that page's `<loc>` in `site/sitemap.xml`;
 2. the JSON-LD `WebPage.dateModified` in the page's own HTML source;
-3. `PAGE_SPECS["<page>"]["date_modified"]` in `scripts/check-site.sh`;
+3. `PAGE_SPECS["<page>"]["date_modified"]` in `scripts/check-site.sh` — except
+   for the landing page (`site/index.html`), which has no `PAGE_SPECS` entry:
+   `scripts/check-site.sh` pins its `dateModified` through a hard-coded literal
+   in the landing-page block instead (`if web_page.get("dateModified") != "…"`),
+   and that literal is pin 3 for the landing page;
 4. `source_artifact_sha256` for that page in
    `tests/fixtures/pages-performance-manifest.json` — not a date, but a digest
    of the page HTML, so it must be recomputed (e.g.

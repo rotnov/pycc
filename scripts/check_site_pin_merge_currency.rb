@@ -87,6 +87,10 @@ class SitePinMergeCurrencyError < StandardError; end
 SITEMAP_RELATIVE_PATH = "site/sitemap.xml"
 PERFORMANCE_MANIFEST_PATH = "tests/fixtures/pages-performance-manifest.json"
 SITE_CHECKER_PATH = "scripts/check-site.sh"
+# The landing page is the one canonical page scripts/check-site.sh validates
+# outside PAGE_SPECS, so its third pin is read differently -- see
+# landing_page_date_modified.
+LANDING_PAGE_SOURCE = "site/index.html"
 WEBSITE_GUIDANCE_DOC = "docs/WEBSITE.md"
 PIN_CURRENCY_ISSUE_REFERENCE = "https://github.com/rotnov/pycc/issues/990"
 
@@ -199,11 +203,27 @@ end
 # The PAGE_SPECS key for a canonical page source, or nil when the page has no
 # entry. The mapping is mechanical -- `site/<slug>/index.html` keys on
 # `<slug>` -- with one genuine exception: `site/index.html`, the landing page,
-# has no PAGE_SPECS entry at all. scripts/check-site.sh validates the landing
-# page in a separate block with its own assertions, so there is no third date
-# pin for it to be stale against; it is a skip, not a failure.
+# which scripts/check-site.sh validates in a separate block rather than through
+# PAGE_SPECS. That block still pins a date, so the landing page is not exempt
+# from the third pin; see LANDING_PAGE_SOURCE and landing_page_date_modified.
 def page_specs_key(source)
   match = source.match(%r{\Asite/([^/]+)/index\.html\z})
+  match && match[1]
+end
+
+# The landing page's own third pin. scripts/check-site.sh checks it outside
+# PAGE_SPECS, against a hard-coded literal:
+#
+#     if web_page.get("dateModified") != "2026-09-06":
+#         raise SystemExit("Landing WebPage dateModified is stale")
+#
+# That literal is the only `dateModified` comparison in the script written
+# against a string rather than against a PAGE_SPECS value, which is what makes
+# the pattern below unambiguous. Returns the pinned date, or nil when the
+# comparison is not found -- scripts/check-site.sh owns diagnosing its own
+# shape, exactly as with page_specs_dates.
+def landing_page_date_modified(check_site_text)
+  match = check_site_text.match(/web_page\.get\("dateModified"\)\s*!=\s*"(\d{4}-\d{2}-\d{2})"/)
   match && match[1]
 end
 
@@ -367,13 +387,24 @@ def check_site_pin_merge_currency(root, base_revision, head_revision,
     end
 
     slug = page_specs_key(source)
-    spec_date = slug && page_specs && page_specs[slug]
-    if spec_date.nil?
-      skipped << "#{source}: PAGE_SPECS date_modified not verified " \
-                 "(no entry in #{SITE_CHECKER_PATH} at this revision)"
-    elsif spec_date != predicted_date
-      pins << "PAGE_SPECS[#{slug.inspect}][\"date_modified\"] in #{SITE_CHECKER_PATH}: " \
-              "pinned #{spec_date}, predicted merge date #{predicted_date}"
+    if slug.nil? && source == LANDING_PAGE_SOURCE
+      landing_date = check_site_text && landing_page_date_modified(check_site_text)
+      if landing_date.nil?
+        skipped << "#{source}: landing WebPage dateModified not verified " \
+                   "(no literal comparison in #{SITE_CHECKER_PATH} at this revision)"
+      elsif landing_date != predicted_date
+        pins << "landing WebPage \"dateModified\" literal in #{SITE_CHECKER_PATH}: " \
+                "pinned #{landing_date}, predicted merge date #{predicted_date}"
+      end
+    else
+      spec_date = slug && page_specs && page_specs[slug]
+      if spec_date.nil?
+        skipped << "#{source}: PAGE_SPECS date_modified not verified " \
+                   "(no entry in #{SITE_CHECKER_PATH} at this revision)"
+      elsif spec_date != predicted_date
+        pins << "PAGE_SPECS[#{slug.inspect}][\"date_modified\"] in #{SITE_CHECKER_PATH}: " \
+                "pinned #{spec_date}, predicted merge date #{predicted_date}"
+      end
     end
 
     pinned_digest = manifest_digests && manifest_digests[source]

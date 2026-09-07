@@ -10,7 +10,9 @@ status: accepted
 - Context: Every canonical page under `site/` carries four date pins that must
   agree with each other and with git history: the `<lastmod>` for the page's
   `<loc>` in `site/sitemap.xml`, the JSON-LD `dateModified` in the page's own
-  HTML, `PAGE_SPECS["<page>"]["date_modified"]` in `scripts/check-site.sh`, and
+  HTML, the `scripts/check-site.sh` date pin for that page
+  (`PAGE_SPECS["<page>"]["date_modified"]`, or the landing page's own
+  hard-coded `dateModified` literal), and
   — because it digests the page HTML — `source_artifact_sha256` for that page
   in `tests/fixtures/pages-performance-manifest.json`.
   `scripts/check_sitemap_lastmod.rb` binds the first of those to the author
