@@ -650,7 +650,7 @@ PAGE_SPECS = {
     },
     "status": {
         "canonical": f"{ROOT}status/",
-        "date_modified": "2026-09-06",
+        "date_modified": "2026-09-07",
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
