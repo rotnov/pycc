@@ -193,10 +193,10 @@ Each canonical page carries **four** date pins, and they move together:
    `scripts/check_pages_performance_budget.rb` fails.
 
 `scripts/check_sitemap_lastmod.rb` alone does **not** guarantee that a visible
-content edit with a stale `lastmod` is caught before merge. `main` takes
-changes only through squash merges, and a squash commit's author date is the
-merge instant in the merging identity's timezone, not the branch's last commit
-time. A pull request that edits a page on day N and pins day N therefore passes
+content edit with a stale `lastmod` is caught before merge. `main` is built
+almost entirely from squash merges (the occasional true merge commit aside),
+and a squash commit's author date is the merge instant in the merging
+identity's timezone, not the branch's last commit time. A pull request that edits a page on day N and pins day N therefore passes
 its own pull-request leg honestly and then fails the identical check on `main`
 when it is squash-merged on day N+1.
 
