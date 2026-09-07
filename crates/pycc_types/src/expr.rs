@@ -60,6 +60,63 @@ fn is_std_receiver_bound(env: &Environment, local_names: &[&str], receiver: &str
         || is_local(local_names, receiver)
 }
 
+/// Whether a bare `name` standing in a class-dispatch position -- `C[i]`,
+/// `C.attr`, `C.m()` -- refers to the class itself rather than to a value
+/// that happens to carry the same name.
+///
+/// Three answers, not two:
+///
+/// - `Ok(true)`: `name` is a registered class and nothing shadows it, so the
+///   caller dispatches on the class.
+/// - `Ok(false)`: `name` is not a class at all, or a *parameter or
+///   function-local* of that name shadows it. `def f(B: D) -> int: return
+///   B.X` reads the parameter, exactly as CPython does, so the caller falls
+///   through to the ordinary value path.
+/// - `Err(C0001)`: `name` is a class whose own name the **module's top-level
+///   code** also binds to a value, and the read is inside a function body.
+///
+/// That last case is the one #974's round-5 review found, and it is rejected
+/// rather than resolved because no resolution would be correct. A function
+/// body is checked (D-041 late binding) against the environment as it stands
+/// after *all* top-level code has run, so `binding_state` there cannot say
+/// whether the rebinding executes before or after the call: `A = D()` above
+/// the call means the read is the instance, the same statement below it means
+/// the read is the class, and one ordering-blind snapshot has to answer both.
+/// Resolving either way silently mis-compiles the other. Answering the same
+/// question at *module* scope is sound and stays supported -- pass 2 walks
+/// top-level statements sequentially, so `in_function_body` is `false` there
+/// and a rebinding simply shadows the class from that statement on, which is
+/// what CPython does.
+///
+/// Ordering-aware name resolution would resolve the rejected case properly;
+/// this compiler does not have it, and building it is a separate analysis.
+pub(crate) fn class_name_dispatch(
+    env: &Environment,
+    local_names: &[&str],
+    name: &str,
+) -> Result<bool, Diagnostic> {
+    if env.lookup_class(name).is_none() || is_local(local_names, name) {
+        return Ok(false);
+    }
+    if env.binding_state(name).is_none() {
+        return Ok(true);
+    }
+    if !env.in_function_body {
+        return Ok(false);
+    }
+    Err(Diagnostic::error(
+        "C0001",
+        format!(
+            "class `{name}` is also bound to a value at module scope, so `{name}` inside a \
+             function body is ambiguous -- pycc resolves a bare class name against the \
+             module environment as it stands after all top-level code has run, which cannot \
+             tell whether the rebinding happens before or after this call"
+        ),
+        Span::new(0, 0),
+    )
+    .with_help("give the value binding a name of its own"))
+}
+
 pub(crate) fn infer_expr_in(
     env: &Environment,
     local_names: &[&str],
@@ -744,9 +801,7 @@ pub(crate) fn infer_expr_in(
             // missing hook -- CPython raises `TypeError: type 'C' is not
             // subscriptable` for the same program.
             if let HirExpr::Name(class_name) = base.as_ref()
-                && env.binding_state(class_name).is_none()
-                && !is_local(local_names, class_name)
-                && env.lookup_class(class_name).is_some()
+                && class_name_dispatch(env, local_names, class_name)?
             {
                 let index_ty = infer_expr_in(env, local_names, index)?;
                 return class::resolve_static_or_class_method_call(
@@ -1073,8 +1128,7 @@ pub(crate) fn infer_expr_in(
             // already uses, so a shadowed name falls through to the ordinary
             // instance path below.
             if let HirExpr::Name(class_name) = base.as_ref()
-                && env.binding_state(class_name).is_none()
-                && !is_local(local_names, class_name)
+                && class_name_dispatch(env, local_names, class_name)?
                 && let Some(class_def) = env.lookup_class(class_name)
             {
                 // #379 (PR-19): `Color.RED` — accessing an enum member by
@@ -1174,9 +1228,7 @@ pub(crate) fn infer_expr_in(
             // a shadowed name short-circuits straight to the ordinary
             // instance path below.
             if let HirExpr::Name(class_name) = base.as_ref()
-                && env.binding_state(class_name).is_none()
-                && !is_local(local_names, class_name)
-                && env.lookup_class(class_name).is_some()
+                && class_name_dispatch(env, local_names, class_name)?
                 && class::has_static_or_class_method(env, class_name, method)
             {
                 let arg_tys = args

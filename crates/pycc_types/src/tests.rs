@@ -28358,6 +28358,149 @@ value: int = f()
     assert!(parse_check(&src).is_ok());
 }
 
+// -- #974 round 5: a module-scope rebinding of a class's own name ----
+//
+// A function body is checked (D-041 late binding) against the module
+// environment as it stands after *all* top-level code has run, so
+// `binding_state` cannot tell a rebinding that executes before the call
+// from one that executes after it. CPython answers those two differently
+// (`1` versus `2`), so neither resolution is correct for both and the read
+// is rejected with `C0001` instead -- see `expr::class_name_dispatch`.
+//
+// All four shapes below are rejected: rebind-before and rebind-after,
+// crossed with a class attribute the class declares itself and one it
+// inherits. The `Subscript` and `MethodCall` dispatch sites carry the same
+// guard and get one case each. The parameter-shadow case that closes the
+// set is the round-2/3 behavior this rejection must **not** widen to.
+
+/// A class, a same-shaped stand-in to rebind its name to, and a function
+/// reading the class attribute through the bare class name.
+const REBIND_OWN_ATTR: &str = "\
+class A:
+    X: int = 2
+
+class D:
+    def __init__(self) -> None:
+        self.X = 1
+
+def f() -> int:
+    return A.X
+";
+
+/// [`REBIND_OWN_ATTR`] with the read going through a *derived* class, so
+/// the attribute resolves through the MRO walk #974 added.
+const REBIND_INHERITED_ATTR: &str = "\
+class A:
+    X: int = 2
+
+class B(A):
+    pass
+
+class D:
+    def __init__(self) -> None:
+        self.X = 1
+
+def f() -> int:
+    return B.X
+";
+
+#[test]
+fn rebinding_a_class_name_after_the_read_is_rejected() {
+    // CPython prints `2` here: `f()` runs before `A = D()` executes.
+    let src = format!("{REBIND_OWN_ATTR}\nprint(f())\nA = D()\n");
+    let err = parse_check(&src).unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
+fn rebinding_a_class_name_before_the_read_is_rejected() {
+    // CPython prints `1` here: `A` is the `D` instance by the time `f()`
+    // runs. The environment pass 3 checks against is identical to the case
+    // above, which is exactly why neither can be resolved.
+    let src = format!("{REBIND_OWN_ATTR}\nA = D()\nprint(f())\n");
+    let err = parse_check(&src).unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
+fn rebinding_a_derived_class_name_after_the_read_is_rejected() {
+    let src = format!("{REBIND_INHERITED_ATTR}\nprint(f())\nB = D()\n");
+    let err = parse_check(&src).unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
+fn rebinding_a_derived_class_name_before_the_read_is_rejected() {
+    let src = format!("{REBIND_INHERITED_ATTR}\nB = D()\nprint(f())\n");
+    let err = parse_check(&src).unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
+fn rebinding_a_class_name_read_through_class_getitem_is_rejected() {
+    // The `Subscript` dispatch site carries the same guard as the
+    // `AttrGet` one above; inside a function body it rejects too.
+    let src = format!(
+        "{CLASS_GETITEM_STATIC}
+def f() -> int:
+    return C[0]
+
+C = [1, 2, 3]
+print(f())
+"
+    );
+    let err = parse_check(&src).unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
+fn rebinding_a_class_name_called_as_a_static_method_is_rejected() {
+    // The `MethodCall` dispatch site, third of the three guards.
+    let src = "\
+class A:
+    @staticmethod
+    def m() -> int:
+        return 2
+
+class D:
+    def __init__(self) -> None:
+        self.x = 1
+
+def f() -> int:
+    return A.m()
+
+A = D()
+print(f())
+";
+    let err = parse_check(src).unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
+fn a_parameter_shadowing_a_class_name_still_reads_the_parameter() {
+    // The round-2/3 behavior the rejection above must not widen to: a
+    // *parameter* (like a function-local) shadows the class without any
+    // ordering ambiguity, because it is bound at the call, not by module
+    // top-level code.
+    let src = "\
+class B:
+    X: int = 2
+
+class D:
+    def __init__(self) -> None:
+        self.X = 1
+
+def f(B: D) -> int:
+    return B.X
+
+print(f(D()))
+";
+    assert!(
+        parse_check(src).is_ok(),
+        "a parameter shadowing a class name must still read the parameter"
+    );
+}
+
 // -- #603: a unary operand is a general expression -------------------
 //
 // The unary arms these cases drive live in this crate's generic-call,

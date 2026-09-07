@@ -87,6 +87,9 @@ pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environme
         current_class: None,
         finals: HashSet::new(),
         in_except_handler: false,
+        // A module-level environment: `child_for_function` is what flips
+        // this, and this constructor's result is that same module scope.
+        in_function_body: false,
         narrowed: HashMap::new(),
         // Overwritten at `check_with_environment_all`'s entry, the common
         // sink of both `Environment` constructors (#962).

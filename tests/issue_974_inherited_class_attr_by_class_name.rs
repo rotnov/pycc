@@ -853,3 +853,138 @@ main()
         "3\n",
     );
 }
+
+// -- Round 5: a module-scope rebinding of a class's own name ---------
+//
+// The round-2/3 shadowing guard asks `binding_state`, which inside a
+// function body is the module environment as it stands after *all*
+// top-level code has run (D-041 late binding). That snapshot cannot tell a
+// rebinding that executes before the call from one that executes after it,
+// and CPython answers those two differently, so the read is rejected with
+// `C0001` rather than resolved to one of the two answers. The four cases
+// below are exactly the four rows measured against CPython 3.13: the
+// `_after_` pair prints `2` there and the `_before_` pair prints `1`.
+//
+// A parameter or function-local shadow is untouched -- it is bound at the
+// call, not by module top-level code, so it has no ordering ambiguity; the
+// accepting tests above already pin that behavior.
+
+/// `A.X` read through the class's own declaration, with the rebinding
+/// executing *after* the call. CPython prints `2`.
+#[test]
+fn rebinding_a_class_name_after_the_read_is_rejected() {
+    assert_rejected(
+        "issue974_rebind_own_after",
+        "\
+class A:
+    X: int = 2
+
+
+class D:
+    def __init__(self) -> None:
+        self.X = 1
+
+
+def f() -> int:
+    return A.X
+
+
+print(f())
+A = D()
+",
+        "C0001",
+        "also bound to a value at module scope",
+    );
+}
+
+/// The same program with the rebinding executing *before* the call.
+/// CPython prints `1` -- a different answer from the same compile-time
+/// environment, which is why neither is resolved.
+#[test]
+fn rebinding_a_class_name_before_the_read_is_rejected() {
+    assert_rejected(
+        "issue974_rebind_own_before",
+        "\
+class A:
+    X: int = 2
+
+
+class D:
+    def __init__(self) -> None:
+        self.X = 1
+
+
+def f() -> int:
+    return A.X
+
+
+A = D()
+print(f())
+",
+        "C0001",
+        "also bound to a value at module scope",
+    );
+}
+
+/// The rebind-after case reading an *inherited* attribute, the shape #974's
+/// own MRO walk added.
+#[test]
+fn rebinding_a_derived_class_name_after_the_read_is_rejected() {
+    assert_rejected(
+        "issue974_rebind_inherited_after",
+        "\
+class A:
+    X: int = 2
+
+
+class B(A):
+    pass
+
+
+class D:
+    def __init__(self) -> None:
+        self.X = 1
+
+
+def f() -> int:
+    return B.X
+
+
+print(f())
+B = D()
+",
+        "C0001",
+        "also bound to a value at module scope",
+    );
+}
+
+/// The rebind-before case reading an inherited attribute.
+#[test]
+fn rebinding_a_derived_class_name_before_the_read_is_rejected() {
+    assert_rejected(
+        "issue974_rebind_inherited_before",
+        "\
+class A:
+    X: int = 2
+
+
+class B(A):
+    pass
+
+
+class D:
+    def __init__(self) -> None:
+        self.X = 1
+
+
+def f() -> int:
+    return B.X
+
+
+B = D()
+print(f())
+",
+        "C0001",
+        "also bound to a value at module scope",
+    );
+}
