@@ -5,8 +5,9 @@
 Issue #990 is implemented on the task branch `autopilot/iter-2026-09-07-29`,
 branched from `origin/main` at `7bc37e03609f03ad556c5377d1b4994cf8a7040a`
 ("fix(site): rotate the status-page date pins to the merge date (#987) (#991)").
-The work is committed and pushed and a pull request is open; nothing is merged
-by this session.
+The work is committed and pushed as pull request
+[#993](https://github.com/rotnov/pycc/pull/993); nothing is merged by this
+session — the orchestrating session reviews the diff and merges.
 
 ## What the change does
 
