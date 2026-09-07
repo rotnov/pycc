@@ -1,4 +1,4 @@
-# 2026-09-07 (06) — #695: four more test clusters out of `pycc_types` `tests.rs`
+# 2026-09-07 (06) — #695: six more test clusters out of `pycc_types` `tests.rs`
 
 ## Overall status
 
@@ -8,12 +8,12 @@ into their own module (part of #695) (#995)"). Branch:
 
 This session delivered one pull request against
 [#695](https://github.com/rotnov/pycc/issues/695), the D-185 tracking issue for
-the oversized `crates/pycc_types/src/tests.rs`. Four cohesion-driven test
+the oversized `crates/pycc_types/src/tests.rs`. Six cohesion-driven test
 clusters were relocated verbatim into new sibling child modules under
 `crates/pycc_types/src/tests/`, following the sibling-`tests.rs`-plus-`tests/`
 layout (no `mod.rs`) that PR #995 established with `tests/constraints.rs`.
 
-`#695` stays open: at 24,744 lines the file is still far above the ~1,000-line
+`#695` stays open: at 24,783 lines the file is still far above the ~1,000-line
 decomposability threshold, so it is narrowed by comment after each merge rather
 than closed.
 
@@ -21,22 +21,27 @@ than closed.
 
 | new file | lines | `#[test]` |
 |---|---|---|
-| `crates/pycc_types/src/tests/typing_cast.rs` | 674 | 39 |
+| `crates/pycc_types/src/tests/typing_cast.rs` | 526 | 31 |
 | `crates/pycc_types/src/tests/pattern_matching.rs` | 559 | 43 |
-| `crates/pycc_types/src/tests/exception_handling.rs` | 420 | 31 |
+| `crates/pycc_types/src/tests/exception_handling.rs` | 322 | 26 |
 | `crates/pycc_types/src/tests/optional_narrowing.rs` | 559 | 36 |
+| `crates/pycc_types/src/tests/type_checking_marker.rs` | 124 | 6 |
+| `crates/pycc_types/src/tests/enum_unrolling.rs` | 115 | 5 |
 
-`crates/pycc_types/src/tests.rs`: 26,906 → 24,744 lines, a net removal of
-2,162: 2,168 lines were removed, 2,164 of them reproduced verbatim in the new
+`crates/pycc_types/src/tests.rs`: 26,906 → 24,783 lines. The first four
+extractions removed 2,168 lines, 2,164 of them reproduced verbatim in the new
 children (one trailing blank line was dropped at each of the four cut
 boundaries), against six lines added in the parent — four `mod` declarations,
 one net line in the child-module comment, and one net line in the reworded
-`#382` banner. Its own `#[test]` count went 1,192 → 1,043.
+`#382` banner. The review round below then moved two strays back *into* the
+parent (+39 lines: 36 test lines, one blank line, and the two further `mod`
+declarations), leaving 24,783. Its own `#[test]` count went 1,192 → 1,045.
 
-The child-module declaration block in `tests.rs` gained `exception_handling`,
-`optional_narrowing`, `pattern_matching` and `typing_cast`, kept alphabetical,
-and the comment above it was updated so it still honestly describes which
-clusters now live in child files.
+The child-module declaration block in `tests.rs` gained `enum_unrolling`,
+`exception_handling`, `optional_narrowing`, `pattern_matching`,
+`type_checking_marker` and `typing_cast`, kept alphabetical, and the comment
+above it was updated so it still honestly describes which clusters now live in
+child files.
 
 ## Deviation: the exception-handling helpers stay in the parent
 
@@ -68,7 +73,7 @@ banner — `// -- #380 W1: protocol monomorphization ...`,
 
 Test-count invariant: the `#[test]` total across `tests.rs` plus every file in
 `tests/` is 1,337 both before and after (145 in the pre-existing five children,
-294 after the four new ones). `cargo test -p pycc_types` reports 1,625 passing
+292 after the six new ones). `cargo test -p pycc_types` reports 1,625 passing
 tests before and after, unchanged.
 
 Gates, each run so its exit status survived (`cmd > log 2>&1; echo $?`):
@@ -92,15 +97,43 @@ committed range from the merge base through `d4c396a3` and returned a single
 `note`-severity finding: the retained `expect_top_level_try` /
 `expect_top_level_raise` doc comments still named their panic-arm coverage
 tests unqualified, even though those tests had moved into the child module.
-Commit `12304fbb` qualifies both cross-references with the
-`exception_handling::` path; it is the pull request's delivering head. No P0/P1
-and no other actionable finding was raised. `cargo fmt --check` exits 0 on that
-head, and the commit changes only two doc-comment lines in place, so every line
-and test count above is unaffected by it.
+Commit `12304fbb`, the head that finding was raised against, qualifies both
+cross-references with the `exception_handling::` path. No P0/P1 and no other
+actionable finding was raised. `cargo fmt --check` exits 0 on that head, and
+the commit changes only two doc-comment lines in place, so every line and test
+count above is unaffected by it.
+
+The automated pull-request reviewer then raised three P2 cohesion findings on
+the pull request, all resolved in this branch. (1) A stale cross-reference:
+`crates/pycc_types/src/expr.rs` named `tests.rs` as the home of
+`cast_without_its_import_is_currently_accepted`, which had moved — the comment
+now names `tests/typing_cast.rs`, rewrapped in place. (2) Two coverage-driven
+strays, `protocol_argument_mismatch_emits_t0046` and
+`check_skips_abstract_method_body_checking`, had ridden along into
+`tests/typing_cast.rs` despite testing nothing about `typing.cast`; they are
+back in `tests.rs` at the end of the `// -- direct unit tests for
+defense-in-depth paths` run, which holds exactly that kind of test. The same
+finding noted that the six #790 `typing.TYPE_CHECKING` marker tests are a
+separate cluster from the #767 `typing.cast` tests; they are now
+`tests/type_checking_marker.rs`. (3) Five enum-loop unrolling tests in
+`tests/exception_handling.rs` exercise `unroll_enum_loops` recursing through
+ordinary statement nesting, not exception handling; they are now
+`tests/enum_unrolling.rs`. The two `try`-flavored enum tests above them and the
+non-enum `for` test below them stay in `exception_handling.rs`, whose module
+doc remains accurate — every helper it names is still called from it.
+`parse_check_resolve` is now called from two child modules, so the parent's
+`// -- #382 exception handling test helpers` banner was reworded to name both;
+that is the only deliberately altered line of prose in the move. Every relocated
+test moved verbatim: a sorted line-multiset comparison of `tests.rs` plus all
+children, before against after, differs only by the two new module doc headers,
+their two `use super::*;` lines, the two new `mod` declarations, the two new
+banners in the new files, that one reworded banner, and four blank lines. The
+`#[test]` total is 1,337 in both, and all five gates above were re-run green on
+the result.
 
 ## Follow-ups
 
-- `crates/pycc_types/src/tests.rs` is still 24,744 lines. #695 remains open for
+- `crates/pycc_types/src/tests.rs` is still 24,783 lines. #695 remains open for
   further cohesion-driven extractions; the next obvious candidates are the
   remaining large banner runs in the 13k–20k region.
 - The `// -- ` prose false positive at what was line 23745 (`// -- an

@@ -18,6 +18,7 @@ use crate::binop::numeric_result_type;
 // constraint-collection, exception-handling, `Optional[T]`-narrowing,
 // pattern-matching and `typing.cast` clusters.
 mod constraints;
+mod enum_unrolling;
 mod exception_handling;
 mod import_alias;
 mod init_rank;
@@ -25,6 +26,7 @@ mod optional_narrowing;
 mod pattern_matching;
 mod protocol_argument;
 mod protocol_return;
+mod type_checking_marker;
 mod typing_cast;
 
 #[test]
@@ -21549,8 +21551,45 @@ fn reject_generic_calls_in_stmt_rejects_a_generic_call_in_a_match_body() {
     assert_eq!(check(&hir).unwrap_err().code, "T0042");
 }
 
+#[test]
+fn protocol_argument_mismatch_emits_t0046() {
+    // This exercises the assignable_error call (line 2894) when
+    // a non-conforming class is passed to a protocol-typed parameter.
+    let err = check_source(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(self) -> int: ...\nclass C:\n    def __init__(self) -> None:\n        self.x = 0\ndef bar(p: P) -> int:\n    return p.foo()\nbar(C())\n",
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "T0046");
+}
+
+#[test]
+fn check_skips_abstract_method_body_checking() {
+    // Covers the `abstract_methods.iter().any(|m| m == method_name)`
+    // closure at line 4355 inside `check_function`.  When a class
+    // declares `@abstractmethod` methods, the HIR lowering populates
+    // `HirClassDef::abstract_methods`.  `check` (validation-only)
+    // calls `check_function` for each function item, including the
+    // abstract method; the closure must iterate `abstract_methods`
+    // to find the match and skip body checking.  Without a non-empty
+    // `abstract_methods` list, the closure body is never entered.
+    //
+    // The fixture uses a non-`None` return annotation on the abstract
+    // method so that, if body checking were NOT skipped, the type
+    // checker would emit T0022 (the `Return(None)` body of an
+    // abstract method does not satisfy `-> int`).  A successful
+    // `check` therefore proves the closure was entered and returned
+    // `true`.
+    let result = check_source(
+        "from abc import ABC, abstractmethod\nclass A(ABC):\n    @abstractmethod\n    def foo(self) -> int: ...\n    def __init__(self) -> None:\n        return\n",
+    );
+    assert!(
+        result.is_ok(),
+        "abstract method body should be skipped by check"
+    );
+}
+
 // -- #382 exception handling test helpers; the tests themselves live in
-// the `exception_handling` child module (#695) --
+// the `exception_handling` and `enum_unrolling` child modules (#695) --
 
 fn parse_check_resolve(src: &str) -> Result<HirModule, Diagnostic> {
     let module = pycc_parser::parse(src).expect("test fixture must parse");
