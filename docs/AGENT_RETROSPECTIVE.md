@@ -33,6 +33,41 @@ never a merge gate.
 
 ---
 
+## 2026-09-07 — Treated an agent's "completed" notification as its termination and wrote into a shared worktree
+
+**What happened.** While delivering PR #995 (issue #695), the dispatched
+implementation agent emitted a task-notification with status `completed`
+and the result text "Waiting on CI for PR #995". The orchestrating session
+read that as the agent having terminated, took over the pull request, and
+edited, committed, and pushed `5f2b1bba` into the same worktree. The agent
+had not terminated: it resumed, observed the commit, first misattributed it
+to the remote concurrent actor, and then committed `4655b390` on top. For
+that window the worktree had two writers, which voids every gate verdict
+taken in it — including the green `cargo fmt` / `cargo test` / `clippy` run
+the session had just recorded as evidence for merging.
+
+**Root cause.** A task-notification fires whenever a dispatched agent stops
+with no live background children; it does not mean the agent has finished.
+`AGENTS.md`'s "One writer per worktree" rule states exactly this ("a report
+is not a termination") and prescribes enumerating live background tasks and
+terminating any that share the tree *before* writing. The session read the
+notification's `completed` status as the enumeration, and so never ran it.
+The result text itself said the agent was still waiting on CI — the signal
+that it intended to continue was present and went unused.
+
+**What fixed it.** `TaskStop` on the agent (which also killed its in-flight
+`deep-reviewer` child), `ListAgents` to confirm no live writer remained, an
+inspection showing the agent's own commit touched only journals and the
+session snapshot with no conflicting code edit, and a full re-run of the
+local gate set from the resulting single-writer baseline.
+
+**Lesson.** A `completed` task-notification is not a termination signal.
+Before the orchestrating session writes to a worktree it dispatched an
+agent into, call `ListAgents` and `TaskStop` that agent explicitly, and
+treat any gate verdict already collected while both could write as void —
+re-run it, rather than reusing a green result recorded before the tree was
+made single-writer.
+
 ## 2026-09-07 — Spent a coverage-debugging round trusting merged coverage views that cannot show the miss
 
 **What happened.** On `feat/issue-974` the D-014 gate
