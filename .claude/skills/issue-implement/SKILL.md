@@ -548,6 +548,11 @@ it, so a disclaimer or a quotation containing the pattern closes the issue just 
 instruction would (see AGENTS.md's pull-request rule). A mismatch is fixed by editing the
 body and re-running the query before merging, never by merging and reopening after.
 
+Before merging a pull request that touches any canonical page source under `site/`, satisfy
+AGENTS.md's "Rotate canonical page date pins before merging" rule (D-239) — it carries the
+literal invocation and the four-pin remediation set. Do not restate the rule here; run it and
+merge only if it exits 0.
+
 Merge with a merge commit, delete the task branch, and — for a pull request that carries
 `Fixes #N` — confirm the issue closed via that reference. For a stage, narrowing, or
 umbrella-checklist pull request, which closes nothing by design, confirm instead that the issue is
