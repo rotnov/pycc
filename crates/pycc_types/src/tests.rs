@@ -12,8 +12,10 @@ use super::*;
 // carries the import these tests inherited through `use super::*`.
 use crate::binop::numeric_result_type;
 
-// #934: the protocol-return re-cover tests live in their own file so this
-// already-oversized module does not grow (AGENTS.md decomposability rule).
+// Cohesive test clusters live in their own child files so this
+// already-oversized module does not grow (AGENTS.md decomposability rule):
+// #934 for the protocol-return re-cover tests, #695 for the
+// constraint-collection tests.
 mod constraints;
 mod import_alias;
 mod init_rank;
