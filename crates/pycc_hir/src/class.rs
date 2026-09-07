@@ -70,6 +70,8 @@ mod protocol;
 #[cfg(test)]
 mod protocol_return_tests;
 mod reserved_names;
+mod shadow;
+pub use shadow::declares_name_outside_class_attrs;
 
 use crate::{HirExpr, HirItem, HirStmt, ImportBinding, Ty, lower_arg_list, unsupported};
 use attrs::{

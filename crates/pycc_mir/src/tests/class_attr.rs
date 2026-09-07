@@ -7,7 +7,7 @@
 //! member test belongs here because it is an `AttrGet` lowering path.
 
 use crate::*;
-use pycc_hir::{BinOpKind, HirClassDef, HirExpr, HirItem, HirModule, HirStmt, Ty};
+use pycc_hir::{BinOpKind, ClassAttrValue, HirClassDef, HirExpr, HirItem, HirModule, HirStmt, Ty};
 
 // -- D-154 (Part 1 of #375): class instantiation, attribute access,
 // method calls --------------------------------------------------------
@@ -973,4 +973,164 @@ fn a_sibling_bases_instance_slot_wins_over_a_class_attribute() {
              constant, but the read lowered to {other:?}"
         ),
     }
+}
+
+/// #974: the class-name-qualified read's own internal-error panic, and the
+/// shadow `break` that reaches it.
+///
+/// No compiling program can get here -- `pycc_types`' class-name arm runs the
+/// identical MRO walk over the identical shared
+/// `declares_name_outside_class_attrs` predicate and reports `T0044` for this
+/// exact shape (see
+/// `tests/issue_974_inherited_class_attr_by_class_name.rs`'s four shadow
+/// tests), so `pycc_mir` only ever sees the read when the checker accepted
+/// it. The panic is the stated invariant that the two walks agree; this
+/// hand-built module bypasses the checker to prove it fires rather than
+/// silently folding `A`'s `2`, which is precisely the mis-compile the shared
+/// predicate exists to prevent.
+#[test]
+#[should_panic(expected = "attribute `x` is not a class attribute reachable through class `B`")]
+fn a_shadowed_class_name_read_panics_with_an_internal_error() {
+    let base = HirClassDef {
+        class_attrs: vec![("x".to_string(), Ty::Int, ClassAttrValue::Int(2))],
+        exception_type_tag: None,
+        name: "A".to_string(),
+        bases: Vec::new(),
+        mro: vec!["A".to_string()],
+        attrs: Vec::new(),
+        methods: Vec::new(),
+        type_param: None,
+        properties: Vec::new(),
+        static_methods: Vec::new(),
+        class_methods: Vec::new(),
+        is_enum: false,
+        implicit_object_init: false,
+        enum_members: Vec::new(),
+        is_dataclass: false,
+        dataclass_fields: Vec::new(),
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: Vec::new(),
+        abstract_methods: Vec::new(),
+        is_abstract: false,
+    };
+    let derived = HirClassDef {
+        class_attrs: Vec::new(),
+        exception_type_tag: None,
+        name: "B".to_string(),
+        bases: vec!["A".to_string()],
+        mro: vec!["B".to_string(), "A".to_string()],
+        attrs: Vec::new(),
+        methods: vec![("x".to_string(), "B.x".to_string())],
+        type_param: None,
+        properties: Vec::new(),
+        static_methods: Vec::new(),
+        class_methods: Vec::new(),
+        is_enum: false,
+        implicit_object_init: false,
+        enum_members: Vec::new(),
+        is_dataclass: false,
+        dataclass_fields: Vec::new(),
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: Vec::new(),
+        abstract_methods: Vec::new(),
+        is_abstract: false,
+    };
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::AttrGet {
+            base: Box::new(HirExpr::Name("B".to_string())),
+            attr: "x".to_string(),
+        }))],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: vec![("A".to_string(), base), ("B".to_string(), derived)],
+    };
+    let _ = build(&hir);
+}
+
+/// #974: the class-name-qualified read resolves an attribute declared on a
+/// *base* class, folding it to the base's constant.
+///
+/// This is the MIR half of the issue's fix, and the half that the sibling
+/// `#[should_panic]` test above cannot reach: here the MRO walk must *carry
+/// on past* the derived class -- which declares the name in no namespace at
+/// all -- and find `A`'s declaration on the next entry. The class-name arm
+/// deliberately runs its own walk rather than the instance arm's, so this
+/// fixture gives `B` no instance slot and no `__init__` to prove the fold
+/// needs neither.
+#[test]
+fn an_inherited_class_attribute_read_through_the_derived_class_name_folds() {
+    let base = HirClassDef {
+        class_attrs: vec![("x".to_string(), Ty::Int, ClassAttrValue::Int(2))],
+        exception_type_tag: None,
+        name: "A".to_string(),
+        bases: Vec::new(),
+        mro: vec!["A".to_string()],
+        attrs: Vec::new(),
+        methods: Vec::new(),
+        type_param: None,
+        properties: Vec::new(),
+        static_methods: Vec::new(),
+        class_methods: Vec::new(),
+        is_enum: false,
+        implicit_object_init: false,
+        enum_members: Vec::new(),
+        is_dataclass: false,
+        dataclass_fields: Vec::new(),
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: Vec::new(),
+        abstract_methods: Vec::new(),
+        is_abstract: false,
+    };
+    let derived = HirClassDef {
+        class_attrs: Vec::new(),
+        exception_type_tag: None,
+        name: "B".to_string(),
+        bases: vec!["A".to_string()],
+        mro: vec!["B".to_string(), "A".to_string()],
+        attrs: Vec::new(),
+        methods: Vec::new(),
+        type_param: None,
+        properties: Vec::new(),
+        static_methods: Vec::new(),
+        class_methods: Vec::new(),
+        is_enum: false,
+        implicit_object_init: false,
+        enum_members: Vec::new(),
+        is_dataclass: false,
+        dataclass_fields: Vec::new(),
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: Vec::new(),
+        abstract_methods: Vec::new(),
+        is_abstract: false,
+    };
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+            target: "v".to_string(),
+            value: HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("B".to_string())),
+                attr: "x".to_string(),
+            },
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: vec![("A".to_string(), base), ("B".to_string(), derived)],
+    };
+    let mir = build(&hir);
+    let read = mir.items.iter().find_map(|item| match item {
+        MirItem::TopLevelStmt(MirStmt::Assign { target, value }) if target == "v" => {
+            Some(value.clone())
+        }
+        _ => None,
+    });
+    assert_eq!(
+        read,
+        Some(MirExpr::IntLiteral(2)),
+        "`B.x` must fold to `A`'s constant even though `B` declares nothing"
+    );
 }

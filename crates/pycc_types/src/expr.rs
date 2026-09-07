@@ -1077,12 +1077,22 @@ pub(crate) fn infer_expr_in(
                 // class-level attribute through the class name itself. This
                 // is the *only* class-name attribute read pycc supports;
                 // everything else still falls through to the `T0044` below.
-                if let Some((_, ty, _)) = class_def
-                    .class_attrs
-                    .iter()
-                    .find(|(name, _, _)| name == attr)
-                {
-                    return Ok(ty.clone());
+                //
+                // #974: the lookup walks `class_name`'s MRO rather than its
+                // own `class_attrs` alone, so an *inherited* class attribute
+                // (`Derived.LIMIT` where a base declares `LIMIT`) resolves,
+                // as it does in CPython. It deliberately does **not** reuse
+                // `lookup_class_attr_through_mro`: that walk would also
+                // resolve a name a derived class re-declares as a method,
+                // static method, class method or property, which CPython
+                // shadows -- see `lookup_class_attr_by_class_name`. It is
+                // equally deliberately *not* `resolve_attr_get`'s #960
+                // instance precedence: a class object has no instance
+                // `__dict__`, so an instance slot does not shadow here.
+                // `pycc_mir`'s fold runs the same walk over the same shared
+                // predicate; the two must never drift.
+                if let Some(ty) = class::lookup_class_attr_by_class_name(env, class_name, attr) {
+                    return Ok(ty);
                 }
                 return Err(Diagnostic::error(
                     "T0044",

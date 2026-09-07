@@ -59,18 +59,26 @@ pub(crate) fn bind_classes(env: &mut Environment, hir: &HirModule) {
 }
 
 /// Looks up `class_name`'s declared shape, panicking if it isn't
-/// registered. Every caller -- all of them in `class.rs`, this function's
-/// parent module -- only ever calls this with a class name extracted from a
-/// real `Ty::Instance` payload (either produced
-/// by `resolve_instantiation` below, which only ever builds one from a
-/// class `env.lookup_class` just confirmed exists, or from `self`'s own
-/// type, assigned directly by `pycc_hir::class::lower_method` from the
-/// enclosing class's own name) -- so an unregistered name reaching here
-/// would mean `Environment::classes` was built from a different
-/// `HirModule` than the one the `Ty::Instance` value itself came from, an
-/// internal-consistency bug this crate has no way to recover from
-/// meaningfully, matching `pycc_mir`'s own `lookup` panic-on-inconsistency
-/// convention (see that function's own doc comment).
+/// registered. Every caller lives in `class.rs`, this function's parent
+/// module, and reaches it with a name from one of two provenances, both of
+/// which `Environment::classes` must already hold:
+///
+/// - A class name extracted from a real `Ty::Instance` payload -- either
+///   produced by `resolve_instantiation` below, which only ever builds one
+///   from a class `env.lookup_class` just confirmed exists, or from `self`'s
+///   own type, assigned directly by `pycc_hir::class::lower_method` from the
+///   enclosing class's own name.
+/// - A class name `env.lookup_class` itself just resolved: `#974`'s
+///   `lookup_class_attr_by_class_name` is entered from `infer_expr_in`'s
+///   class-name `AttrGet` arm only after that lookup succeeded.
+///
+/// Both entry points then walk `HirClassDef::mro`, whose entries
+/// `pycc_hir`'s `compute_c3_mro` builds from classes it lowered in the same
+/// module. So an unregistered name reaching here would mean
+/// `Environment::classes` was built from a different `HirModule` than the one
+/// the name itself came from, an internal-consistency bug this crate has no
+/// way to recover from meaningfully, matching `pycc_mir`'s own `lookup`
+/// panic-on-inconsistency convention (see that function's own doc comment).
 pub(super) fn expect_class<'e>(env: &'e Environment, class_name: &str) -> &'e HirClassDef {
     env.lookup_class(class_name).unwrap_or_else(|| {
         panic!(

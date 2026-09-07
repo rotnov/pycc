@@ -20,7 +20,10 @@ mod method_call;
 
 use crate::{Environment, infer_expr_in, is_assignable};
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{HirExpr, ProtocolMember, Ty, extract_class_names, is_builtin_type_name};
+use pycc_hir::{
+    HirExpr, ProtocolMember, Ty, declares_name_outside_class_attrs, extract_class_names,
+    is_builtin_type_name,
+};
 
 // A private import, not a re-export: it keeps this module's own unqualified
 // `expect_class` call sites compiling now that the function itself lives in
@@ -540,6 +543,64 @@ pub(crate) fn lookup_class_attr_through_mro(
         let mro_def = expect_class(env, mro_class);
         if let Some((_, ty, _)) = mro_def.class_attrs.iter().find(|(name, _, _)| name == attr) {
             return Some(ty.clone());
+        }
+    }
+    None
+}
+
+/// #974: looks a class-level attribute up through `class_name`'s MRO for a
+/// **class-name-qualified** read (`Derived.LIMIT`), most-derived first,
+/// returning its declared type.
+///
+/// This is deliberately *not* [`lookup_class_attr_through_mro`], and the two
+/// must not be merged. That function serves the instance read path and its
+/// four other callers, none of which want the rule below; it iterates
+/// `class_attrs` alone, so on
+///
+/// ```python
+/// class A:
+///     x: int = 2
+///
+///
+/// class B(A):
+///     @staticmethod
+///     def x() -> int:
+///         return 1
+/// ```
+///
+/// it would answer `int` for `B.x` and let `pycc_mir` fold the read to `2`,
+/// turning a program that compiles correctly today into a wrong-value
+/// mis-compile. CPython binds `B`'s own `x` and never reaches `A`'s.
+///
+/// The rule implemented here instead: walk `class_name`'s MRO most-derived
+/// first and return the class attribute's type only when the **first** class
+/// that declares `attr` at all declares it as a class attribute. When some
+/// other class-level namespace claims the name first, the read stays
+/// unresolved (`None`) and the caller reports `T0044` -- pycc does not model
+/// a bare, uncalled class-name-qualified method read.
+/// [`declares_name_outside_class_attrs`] is the shadowing predicate, shared
+/// verbatim with `pycc_mir`'s fold so the two cannot drift; its own doc
+/// comment records which namespaces are checked and why instance slots and
+/// protocol members are excluded.
+///
+/// Excluding instance slots is what makes this path differ from
+/// [`resolve_attr_get`]'s #960 precedence, on purpose: a class object has no
+/// instance `__dict__`. The divergence is CPython's own -- see
+/// `docs/TYPE_SYSTEM.md`'s "Class-level attributes" section for the measured
+/// `c.x` / `C.x` pair.
+pub(crate) fn lookup_class_attr_by_class_name(
+    env: &Environment,
+    class_name: &str,
+    attr: &str,
+) -> Option<Ty> {
+    let class_def = expect_class(env, class_name);
+    for mro_class in &class_def.mro {
+        let mro_def = expect_class(env, mro_class);
+        if let Some((_, ty, _)) = mro_def.class_attrs.iter().find(|(name, _, _)| name == attr) {
+            return Some(ty.clone());
+        }
+        if declares_name_outside_class_attrs(mro_def, attr) {
+            return None;
         }
     }
     None

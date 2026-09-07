@@ -10,7 +10,10 @@ use super::{
     HirClassDef, InstantiateExpr, MirExpr, MirFStringPart, binop_result_ty, lookup, mro_class_def,
     try_lower_enum_member_attr,
 };
-use pycc_hir::{BinOpKind, ClassAttrValue, FStringPart, HirExpr, Ty, UnaryOpKind};
+use pycc_hir::{
+    BinOpKind, ClassAttrValue, FStringPart, HirExpr, Ty, UnaryOpKind,
+    declares_name_outside_class_attrs,
+};
 use std::collections::HashMap;
 
 pub(super) fn lower_expr(
@@ -670,11 +673,40 @@ pub(super) fn lower_expr(
             // for the same reason the enum-member read above is: the base is
             // a class name, not a value binding, so lowering it as an
             // expression would fail.
+            //
+            // #974: the walk runs over `class_def.mro`, most-derived first,
+            // so an *inherited* class attribute (`Derived.LIMIT`) folds too.
+            // It stops at the first class that declares `attr` in any other
+            // class-level namespace, because CPython binds that declaration
+            // instead -- `declares_name_outside_class_attrs` is the shared
+            // predicate, and `pycc_types::class::lookup_class_attr_by_class_name`
+            // runs the identical walk over it so the type the checker
+            // reported and the constant folded here can never disagree (the
+            // #960 failure mode). This is deliberately *not* the instance
+            // arm's walk further below: that one consults instance slots
+            // first, and a class object has no instance `__dict__`.
             if let HirExpr::Name(class_name) = base.as_ref()
                 && let Some(class_def) = classes.get(class_name.as_str())
-                && let Some(folded) = fold_class_attr(class_def, attr)
             {
-                return folded;
+                for mro_class in &class_def.mro {
+                    let mro_def = mro_class_def(mro_class, classes);
+                    if let Some(folded) = fold_class_attr(mro_def, attr) {
+                        return folded;
+                    }
+                    if declares_name_outside_class_attrs(mro_def, attr) {
+                        break;
+                    }
+                }
+                // The base really is a class name -- `classes.get` succeeded
+                // -- so there is no value binding to fall back to and
+                // `lower_expr` below would fail on it. A name that is *not* a
+                // class (the ordinary `d.LIMIT` local or parameter) never
+                // reaches here and still falls through.
+                panic!(
+                    "pycc_mir: internal error: attribute `{attr}` is not a class attribute \
+                     reachable through class `{class_name}`'s MRO -- pycc_types::check should \
+                     have rejected this HIR with T0044 before it reached pycc_mir"
+                );
             }
             let base = lower_expr(base, scopes, classes, current_class);
             let class_def = class_def_of(&base, classes);
