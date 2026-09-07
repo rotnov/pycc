@@ -2843,6 +2843,33 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
 fi
 restore_fixtures
 
+# A degenerate row carrying no closing pipe yields no cells at all. The row
+# parser must reject it with a diagnostic rather than crash indexing cell zero.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+row = "| Codon | ✅ static language | ✅ | ⚠️ Python-like language with documented differences |"
+content = content.replace(row, "| stray", 1)
+path.write_text(content)
+PY
+
+stray_log="$(mktemp)"
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>"$stray_log"; then
+  echo "Validator accepted a README comparison row with no cells" >&2
+  exit 1
+fi
+restore_fixtures
+if ! grep -q "has no cells" "$stray_log"; then
+  echo "Validator crashed instead of diagnosing a README row with no cells" >&2
+  rm -f "$stray_log"
+  exit 1
+fi
+rm -f "$stray_log"
+
 # Dropping pyright from the combined row leaves the remaining entity bound and
 # pyright silently unprojected. This was the widest hole the old permissive
 # mypy/pyright branch left open.

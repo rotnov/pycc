@@ -2258,6 +2258,11 @@ for line in table_lines:
     if re.match(r"^\|[\s\-|]+\|$", line):
         continue
     cells = [c.strip() for c in line.split("|")[1:-1]]
+    if not cells:
+        raise SystemExit(
+            f"README comparison row {line.strip()!r} has no cells, "
+            f"expected {len(columns) + 1}"
+        )
     entity_name = cells[0].rstrip(".")
     # Remove markdown bold markers
     entity_name = entity_name.replace("**", "")
