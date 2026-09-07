@@ -114,6 +114,18 @@ and test count above is unaffected by it.
   region can move those two helpers down into the child module with the tests
   that use them.
 
+- Selection flagged [#355](https://github.com/rotnov/pycc/issues/355)
+  ("Ultra-review checkpoint — do not close") as an apparent D-192
+  milestone-at-filing gap. Verdict, recorded here rather than acted on: it is
+  not tracked work. Its body is an owner-authored, marker-delimited state record
+  (`<!-- ultra-review-checkpoint -->`) that the ultra-review tooling parses by
+  that marker, so D-192's filing rule has no purchase on it, and every
+  conformance-restoring mutation — assigning a milestone, retitling it into an
+  umbrella, folding it into #806 — would either state a fiction or break the
+  parser. #806 already holds the agent-tooling umbrella slot, so a second one is
+  not an option either. Nothing turns on the classification: 10 non-milestone
+  issues are open against D-192's ceiling of 20.
+
 ## Where to resume
 
 Read the most recent files under `docs/sessions/` in filename order, then
