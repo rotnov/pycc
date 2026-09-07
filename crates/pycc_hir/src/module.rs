@@ -599,6 +599,40 @@ fn lower_top_level_item<'a>(
                 def.range,
             ));
         }
+        // #974 (round 6, D-068 re-review): a class statement that follows a
+        // top-level *value* binding of the same name is rejected here, for
+        // the same reason the four checks above reject the other collisions
+        // -- `HirItem` has no `ClassDef` variant, so a class statement never
+        // appears in `items` and the type checker's sequential top-level
+        // pass can never re-bind the name back to the class after the value
+        // assignment. Every later read of the bare name therefore resolves
+        // through the stale value binding, which is a silently wrong answer
+        // rather than a diagnostic (CPython evaluates the class statement
+        // and rebinds the name). This walk is the one place that still sees
+        // the two in source order, so the rejection belongs here.
+        //
+        // The check is deliberately one-directional: only bindings from
+        // statements *already* lowered are considered, so the reverse order
+        // (`class A: ...` then `A = [1]`) stays accepted -- there the value
+        // assignment is itself a top-level statement the checker's
+        // sequential pass does observe, and reading `A` as a value after it
+        // is correct.
+        if state.items.iter().any(|item| {
+            matches!(item, HirItem::TopLevelStmt(stmt)
+                if killed_names(std::slice::from_ref(stmt)).contains(&class_def.name))
+        }) {
+            return Err(unsupported(
+                format!(
+                    "class `{}` collides with a value of the same name already \
+                     bound at module scope earlier in this module -- pycc has no \
+                     representation for a class statement rebinding a name that \
+                     already holds a value, so a later read of `{}` would resolve \
+                     through the stale value binding",
+                    class_def.name, class_def.name
+                ),
+                def.range,
+            ));
+        }
         state
             .definition_spans
             .push((class_def.name.clone(), statement_span(stmt)));

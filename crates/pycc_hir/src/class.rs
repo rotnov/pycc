@@ -2222,6 +2222,37 @@ mod tests {
     }
 
     #[test]
+    fn a_class_name_colliding_with_an_earlier_value_binding_is_unsupported() {
+        // #974 round 6: a class statement has no `HirItem` of its own, so
+        // the type checker's sequential top-level pass never re-binds the
+        // name back to the class -- a later read would resolve through the
+        // stale value. Reject the collision here instead.
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "Foo = 1\nclass Foo:\n    def __init__(self) -> None:\n        return\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("class `Foo` collides with a value of the same name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_value_binding_of_another_name_does_not_block_a_later_class() {
+        // The negative direction of the check above: the earlier top-level
+        // statement binds a *different* name, so the class lowers normally.
+        let module = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "Bar = 1\nclass Foo:\n    def __init__(self) -> None:\n        return\n",
+        ))
+        .expect("an unrelated value binding must not block a later class");
+        assert!(module.class_defs.iter().any(|(name, _)| name == "Foo"));
+    }
+
+    #[test]
     fn a_class_name_colliding_with_a_module_import_is_unsupported() {
         let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
             "import math\nclass math:\n    def __init__(self) -> None:\n        return\n",

@@ -988,3 +988,147 @@ print(f())
         "also bound to a value at module scope",
     );
 }
+
+/// Round 6 (D-068 re-review of this pull request): the reverse ordering --
+/// a top-level *value* binding followed by a `class` statement of the same
+/// name -- is rejected at HIR lowering. Before the check, `HirItem` had no
+/// `ClassDef` variant, so the checker's sequential top-level pass never
+/// re-bound the name back to the class and the read below silently resolved
+/// through the stale `D` instance, printing `1` where CPython prints `2`.
+#[test]
+fn a_class_statement_after_a_value_binding_of_the_same_name_is_rejected() {
+    assert_rejected(
+        "issue974_class_after_value",
+        "\
+class D:
+    def __init__(self) -> None:
+        self.X = 1
+
+
+A = D()
+
+
+class A:
+    X: int = 2
+
+
+print(A.X)
+",
+        "C0001",
+        "collides with a value of the same name already bound at module scope",
+    );
+}
+
+/// The same rejection through an annotated assignment: `killed_names` treats
+/// a *valued* `AnnAssign` as a binding exactly as it treats a plain one.
+#[test]
+fn a_class_statement_after_an_annotated_value_binding_is_rejected() {
+    assert_rejected(
+        "issue974_class_after_annotated_value",
+        "\
+class D:
+    def __init__(self) -> None:
+        self.X = 1
+
+
+A: D = D()
+
+
+class A:
+    X: int = 2
+
+
+print(A.X)
+",
+        "C0001",
+        "collides with a value of the same name already bound at module scope",
+    );
+}
+
+/// A *value-less* annotation binds nothing (CPython records only the
+/// annotation), so the class statement below is the name's first binding and
+/// the program is accepted -- `killed_names` deliberately excludes it.
+#[test]
+fn a_class_statement_after_a_value_less_annotation_is_accepted() {
+    assert_runs(
+        "issue974_class_after_value_less_annotation",
+        "\
+A: int
+
+
+class A:
+    X: int = 2
+
+
+print(A.X)
+",
+        "2\n",
+    );
+}
+
+/// The hard side-condition of the round-6 check: the *other* ordering --
+/// a class statement followed by a value binding of the same name -- stays
+/// accepted, because there the assignment is itself a top-level statement
+/// the checker's sequential pass does observe.
+#[test]
+fn a_value_binding_after_a_class_statement_of_the_same_name_still_runs() {
+    assert_runs(
+        "issue974_value_after_class",
+        "\
+class A:
+    X: int = 2
+
+
+A = [1]
+
+print(A[0])
+",
+        "1\n",
+    );
+}
+
+/// A top-level value binding of an *unrelated* name does not block a later
+/// class statement: the check compares the class's own name against the
+/// names earlier statements bind, not against the mere presence of one.
+#[test]
+fn a_class_statement_after_an_unrelated_value_binding_still_runs() {
+    assert_runs(
+        "issue974_class_after_unrelated_value",
+        "\
+A = [9]
+
+
+class B:
+    X: int = 2
+
+
+A = [1]
+
+print(A[0] + B.X)
+",
+        "3\n",
+    );
+}
+
+/// `killed_names` recurses into loop bodies and reports loop variables, so a
+/// top-level `for` whose variable matches a later class name is rejected on
+/// the same grounds as a plain assignment.
+#[test]
+fn a_class_statement_after_a_top_level_loop_variable_is_rejected() {
+    assert_rejected(
+        "issue974_class_after_loop_variable",
+        "\
+for A in range(3):
+    print(A)
+
+
+class A:
+    X: int = 2
+
+
+print(A.X)
+",
+        "C0001",
+        "collides with a value of the same name already bound at module scope",
+    );
+}
