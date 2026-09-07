@@ -124,9 +124,56 @@ covers both tables and they lower differently, so both shapes have their own tes
 enumerate the guard's reach were widened from three shapes to four. Commit `a66576ea`;
 the harden pile carries a matching third round-2 row with that `fix_commit`.
 
+## The fifth site: the monomorphizer's own walk (round 4)
+
+The Codex reviewer then raised a P2 on a different mechanism. `rewrite_generic_calls_in_expr`
+(`crates/pycc_types/src/monomorphize.rs`) walks every function body looking for generic calls to
+rewrite, and its `AttrGet` and `MethodCall` arms recursed into the base unconditionally — so a
+bare class name reached `infer_expr_in` as a value and failed with `T0021`. The pass runs only
+when the module declares a PEP 695 generic function, which is why nothing before this round saw
+it. Measured against the tree, with a declared-but-never-called `def ident[T](x: T) -> T`:
+
+| program | CPython | pycc (before) |
+| --- | --- | --- |
+| `class A: X: int = 2` / `class B(A): pass` / `print(B.X)` | `2` | ``error[T0021]: name `B` is not defined`` |
+| same with `print(A.X)` (own attribute) | `2` | ``error[T0021]: name `A` is not defined`` |
+| `class A:` with `@staticmethod def m()` / `print(A.m())` | `2` | ``error[T0021]: name `A` is not defined`` |
+
+The own-attribute probe is the one that settles provenance: it fails identically with no
+inherited read anywhere in the program, so the defect is **pre-existing** and was not introduced
+by #974's MRO walk. Codex's own framing — that the newly accepted inherited read still fails —
+is therefore narrower than the truth, and the reply on the thread says so with the measurement.
+
+**The D-127 fork was whether a pre-existing defect raised on this pull request belongs in it.**
+Put to the advisor, as the fourth site was. The call: fix it here. "Pre-existing" is a reason to
+defer only when deferring is available, and it is not — D-192's non-milestone open-issue ceiling
+stands at 67 against 20, so no new issue may be filed, and the thread blocks merge through
+required conversation resolution either way. Against that, the fix is one predicate already
+present thirty lines above the defect, and the round-2 `docs/TYPE_SYSTEM.md` sentence enumerates
+the sites the guard covers — leaving a fourth `pycc_types` site that dispatches on the same "is
+this a class name" question out of it repeats the exact doc-drift defect the previous two rounds
+were spent closing. Recorded here as the decision made.
+
+The predicate was extracted into a shared `is_class_name_base` helper rather than copied a third
+time, the same reasoning that produced `declares_name_outside_class_attrs` in round 2. The
+`Slice` arm was probed rather than assumed: `A[1:2]` on a class name is rejected with `T0021` by
+the checker itself, with or without a generic in the module, so no class-name base reaches that
+arm in a program that compiles and it provably needs no branch.
+
+Coverage needed one thing the CLI tests could not give. `rewrite_generic_calls_in_expr` has two
+instantiation records — the compiler binary the integration tests drive, and the crate's own
+unit-test build — and `llvm-cov` takes the per-function minimum across records, so the skip
+branch showed as two missed lines even with every merged view at 100%. Two crate-internal tests
+in `crates/pycc_types/src/tests.rs`, modelled on the existing
+`class_getitem_dispatch_survives_the_generic_rewrite_pass`, close it. This is the same
+per-instantiation trap the round-2 note above records, hit a second time in one task; the
+diagnosis path (`--show-instantiations`) was already known and cost minutes rather than a round.
+
+Commit `5b238d8c`; the harden pile carries a round-4 row with that `fix_commit`.
+
 ## Where to resume
 
-- PR [#992](https://github.com/rotnov/pycc/pull/992) is open and carries `Fixes #974` (confirmed with the `closingIssuesReferences` query: `totalCount: 1`). It has been through the D-068 round, the Codex round, and the round-3 fourth-site fix above; the full local gate set is green at the branch head, coverage 100.00% lines and regions (55863 lines, 2666 functions, 36983 regions, zero missed).
+- PR [#992](https://github.com/rotnov/pycc/pull/992) is open and carries `Fixes #974` (confirmed with the `closingIssuesReferences` query: `totalCount: 1`). It has been through the D-068 round, the Codex round, and the round-3 fourth-site fix above; the full local gate set is green at the branch head, coverage 100.00% lines and regions (55876 lines, 2667 functions, 36989 regions, zero missed) at the round-4 head `5b238d8c`.
 - The D-014 gate was red for one round on a single region in `crates/pycc_mir/src/expr.rs` that every merged coverage view reported as covered. `llvm-cov`'s file summary takes `min(NotCovered)` across a function's instantiation records rather than merging them, so a region needs to be covered within one *single* instantiation. `cargo llvm-cov report -p pycc_mir --show-instantiations --html` is the view that names such a miss; `docs/AGENT_RETROSPECTIVE.md`'s 2026-09-07 entry records the full diagnosis. The fix was the extra `pycc_mir` unit test `an_inherited_class_attribute_read_through_the_derived_class_name_folds`, which walks past a derived class declaring nothing and folds the base's constant.
 - `cargo test --workspace -- --include-ignored` fails 57 conformance tests **locally only**, all with the identical message ``conformance oracle must be exactly Python 3.14.7, found "Python 3.14.6"``. That is this machine's interpreter version, not the change: no other panic appears in the log. CI pins 3.14.7 and is the authority.
 - **The ROADMAP byte budget was raised in this pull request, as that same note recommended.** `docs/ROADMAP.md` had 45 bytes of headroom against a 168960-byte per-document ceiling and the Codex round needed a sentence there, so `budget_bytes` for that entry in `site/llms-txt-context-manifest.json` is now 172032. The aggregate ceiling is untouched and keeps roughly 15 KB spare, so this trades a per-document limit that had become the binding constraint on three consecutive merges for headroom that already existed. Trimming unrelated prose a fourth time was the alternative and was rejected.
