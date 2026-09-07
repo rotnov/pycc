@@ -172,6 +172,32 @@ status: accepted
     decision's own set or guard, which remain correct for the
     instantiation-protocol names.
 
+    **Amendment, 2026-09-07 — closed by
+    [#979](https://github.com/rotnov/pycc/issues/979), and one correction.**
+    The deferral above is discharged by
+    [D-238](./D-238-reject-enum-body-assignments-cpython-keeps-out-of-the.md),
+    which rejects the divergent shapes in an `Enum` body with `C0001`. It is a
+    third, route-gated set inside the same
+    `reject_reserved_class_attr_name` guard, checked *after* this decision's
+    names so that every message pinned here is unchanged on the `Enum` route.
+
+    The correction is to this bullet's own description of the deferred set.
+    "Its own name set (every dunder, not an enumeration)" is not what the
+    measurements found. CPython's rule is `enum._EnumDict.__setitem__`, whose
+    `_is_private`, `_is_sunder` and `_is_dunder` branches each keep a name out
+    of the member list, and all three diverged here — `class C(Enum): __x = 1`
+    beside `B = 2` gave one member under CPython 3.13.9 and two under pycc
+    while not being a dunder at all, and so did `_order_ = 'B'` beside
+    `B = 'b'`. D-238's set is therefore dunder-shaped **plus name-mangled
+    private plus sunder-shaped**, and `_is_private` needs two arms rather than
+    one: it matches the *raw* dict key against the literal `_<ClassName>__`
+    prefix, so `_C__x = 1` inside `class C(Enum)` is kept out of the member
+    list too, while the same spelling inside `class D(Enum)` is an ordinary
+    member. Per this project's append-only rule the sentence above is left
+    standing and corrected here rather than rewritten; D-238 carries the full
+    eleven-shape table and the three families its predicate deliberately
+    over-rejects.
+
 - Consequences:
   - Three names are now unusable as a class attribute anywhere. This is a
     behavior change for programs that previously compiled — all of which were

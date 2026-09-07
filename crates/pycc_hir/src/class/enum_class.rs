@@ -86,7 +86,16 @@ pub(super) fn lower_enum_class(
         // needs the same reserved-name guard as the two `class/attrs.rs`
         // routes -- `class C(Enum): __init__ = 1` compiles here today while
         // CPython raises `TypeError` at class creation.
-        reject_reserved_class_attr_name(&member_name, ClassBodyRoute::Enum, assign.range.into())?;
+        // #979: one of that guard's `Enum`-route checks is class-name-keyed,
+        // because CPython's `_EnumDict._is_private` matches the raw key
+        // against the literal `_<ClassName>__` prefix.
+        reject_reserved_class_attr_name(
+            &member_name,
+            ClassBodyRoute::Enum {
+                class_name: &class_name,
+            },
+            assign.range.into(),
+        )?;
         // Reject duplicate member names (matching CPython's
         // `TypeError: Attempted to reuse key`).
         if enum_members.iter().any(|(name, _)| name == &member_name) {
