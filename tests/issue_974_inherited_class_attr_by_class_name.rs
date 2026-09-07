@@ -708,3 +708,148 @@ main()
         "3\n",
     );
 }
+
+// The five cases below add one axis to the four class-name shapes above: a
+// module that declares a PEP 695 generic function. `monomorphize`'s own
+// expression walk recurses into every subexpression looking for generic calls
+// to rewrite, and its `AttrGet`/`MethodCall` arms used to recurse into a bare
+// class-name base -- inferring it as a value and failing with `T0021` before
+// the class-name arms ever ran. The declaration alone is enough to trigger the
+// walk; the generic function is never called in any of them, which is exactly
+// the shape the defect was reported in. This is not a #974 regression: the own
+// -attribute and static-method shapes failed identically before #974's MRO
+// walk existed. Values measured against CPython 3.13.
+
+#[test]
+fn a_generic_declaration_does_not_break_an_inherited_class_attr_read() {
+    assert_runs(
+        "issue974_generic_inherited_attr",
+        "\
+class A:
+    X: int = 2
+
+
+class B(A):
+    pass
+
+
+def ident[T](x: T) -> T:
+    return x
+
+
+def main() -> None:
+    print(B.X)
+
+
+main()
+",
+        "2\n",
+    );
+}
+
+#[test]
+fn a_generic_declaration_does_not_break_an_own_class_attr_read() {
+    assert_runs(
+        "issue974_generic_own_attr",
+        "\
+class A:
+    X: int = 2
+
+
+def ident[T](x: T) -> T:
+    return x
+
+
+def main() -> None:
+    print(A.X)
+
+
+main()
+",
+        "2\n",
+    );
+}
+
+#[test]
+fn a_generic_declaration_does_not_break_a_class_name_static_method_call() {
+    assert_runs(
+        "issue974_generic_static_method",
+        "\
+class A:
+    @staticmethod
+    def m() -> int:
+        return 2
+
+
+def ident[T](x: T) -> T:
+    return x
+
+
+def main() -> None:
+    print(A.m())
+
+
+main()
+",
+        "2\n",
+    );
+}
+
+#[test]
+fn a_generic_declaration_does_not_break_a_class_name_class_method_call() {
+    assert_runs(
+        "issue974_generic_class_method",
+        "\
+class A:
+    @classmethod
+    def m(cls) -> int:
+        return 2
+
+
+def ident[T](x: T) -> T:
+    return x
+
+
+def main() -> None:
+    print(A.m())
+
+
+main()
+",
+        "2\n",
+    );
+}
+
+#[test]
+fn a_binding_still_shadows_a_class_name_when_the_module_declares_a_generic() {
+    assert_runs(
+        "issue974_generic_shadowed_method",
+        "\
+class B:
+    @staticmethod
+    def m() -> int:
+        return 2
+
+
+class D:
+    def m(self) -> int:
+        return 3
+
+
+def ident[T](x: T) -> T:
+    return x
+
+
+def f(B: D) -> int:
+    return B.m()
+
+
+def main() -> None:
+    print(f(D()))
+
+
+main()
+",
+        "3\n",
+    );
+}

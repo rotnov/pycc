@@ -28153,6 +28153,51 @@ value: int = C[3]
 }
 
 #[test]
+fn a_class_name_attribute_read_survives_the_generic_rewrite_pass() {
+    // The `AttrGet` arm of `rewrite_generic_calls_in_expr` shares the
+    // `Subscript` arm's problem: `A.X` names the class in a position that is
+    // not a value expression, so recursing into the base infers a bare class
+    // name and fails with T0021. As above, the generic function is
+    // load-bearing -- without it `monomorphize` returns before the rewrite
+    // pass runs.
+    let src = "\
+class A:
+    X: int = 2
+
+
+def ident[T](x: T) -> T:
+    return x
+
+
+echoed: int = ident(1)
+value: int = A.X
+";
+    assert!(parse_check_resolve(src).is_ok());
+}
+
+#[test]
+fn a_class_name_static_method_call_survives_the_generic_rewrite_pass() {
+    // The `MethodCall` arm's own spelling of the same skip: `A.m()` calls a
+    // `@staticmethod` through the class name, so its base is not a value
+    // expression either.
+    let src = "\
+class A:
+    @staticmethod
+    def m() -> int:
+        return 2
+
+
+def ident[T](x: T) -> T:
+    return x
+
+
+echoed: int = ident(1)
+value: int = A.m()
+";
+    assert!(parse_check_resolve(src).is_ok());
+}
+
+#[test]
 fn class_getitem_index_error_propagates_through_the_generic_rewrite_pass() {
     // The rewrite pass still descends into the *index* of a class-name
     // subscript, so an instantiation error there must surface rather than
