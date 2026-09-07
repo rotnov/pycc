@@ -76,9 +76,9 @@ the JSON-LD `dateModified` and `PAGE_SPECS` dates. The finding was verified as
 real and fixed in the same branch: `scripts/check_site_pin_merge_currency.rb`
 now validates all four pins at the head revision for every touched canonical
 page source, reporting every stale pin for every affected page in one failure.
-Pins that are genuinely absent from an input (the landing page has no
-`PAGE_SPECS` entry, and `scripts/check-site.sh` or the performance manifest may
-not exist at a given revision) are recorded as skips in the success summary
+Pins that are genuinely absent from an input (`scripts/check-site.sh` or the
+performance manifest may not exist at a given revision, and a page may be
+absent from either) are recorded as skips in the success summary
 rather than turned into diagnostics that would compete with the checkers that
 own them. `docs/decisions/D-239-...` and `docs/WEBSITE.md` were updated in the
 same commit, and `scripts/test_check_site_pin_merge_currency.rb` gained cases
@@ -87,3 +87,21 @@ describes, and for each skip path — plus two tests that run the new
 `PAGE_SPECS` and JSON-LD parsers against the real repository files, so a
 reindented heredoc or a restructured `@graph` cannot silently degrade those
 pins into permanent skips.
+
+## Second Codex round: the landing page's own third pin
+
+The first round's fix carried a wrong judgment call: because `site/index.html`
+has no `PAGE_SPECS` entry, the checker recorded its third pin as a skip. A
+follow-up Codex finding showed that `scripts/check-site.sh` does pin the
+landing page's `dateModified` — through a hard-coded literal in its own
+landing-page block rather than through `PAGE_SPECS` — so a landing-page edit
+across a date boundary could rotate the sitemap `<lastmod>`, the JSON-LD
+`dateModified`, and the manifest digest, pass the required governance gate, and
+still leave the non-required `Pages` validation red on that literal. Verified
+against the script and fixed in `fc860bdc`: the checker reads the literal for
+`site/index.html` and compares it against the predicted merge date, keeping the
+skip only when no such comparison exists at the head revision. A
+`site/<slug>/index.html` page genuinely absent from `PAGE_SPECS` still skips,
+since nothing pins a date for it there; that path keeps its own test.
+`docs/WEBSITE.md`, D-239, and `AGENTS.md` now state the landing-page exception
+explicitly instead of implying pin 3 is always a `PAGE_SPECS` entry.
