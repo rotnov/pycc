@@ -136,9 +136,11 @@ pub(crate) fn reject_unrenderable_expr(
         && env.lookup_function(callee).is_none()
     {
         // `infer_expr_in` above already ran `check_cast`, which rejects any
-        // arity other than two before this point.
+        // arity other than two and re-infers this very value before this
+        // point, so the value's own inference cannot fail here.
         let value = &args[1];
-        let value_ty = infer_expr_in(env, local_names, value)?;
+        let value_ty = infer_expr_in(env, local_names, value)
+            .expect("check_cast already inferred the cast value successfully");
         reject_unrenderable(env, &value_ty, site)?;
         current = value;
     }
