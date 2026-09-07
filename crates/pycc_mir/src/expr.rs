@@ -884,7 +884,15 @@ pub(super) fn lower_expr(
             // to a registered class. `lower_expr` on a bare class name
             // would panic (class names are not in the scope), so intercept
             // here before lowering the base.
+            // A value binding of that name shadows the class, so
+            // `B.m()` calls the parameter's instance method rather than the
+            // class's static or class method -- `pycc_types`' own
+            // `MethodCall` class-name arm applies the matching
+            // binding/local guard, and this scope check is the MIR-side
+            // spelling of it, the same one the class-attribute fold and the
+            // enum-member interception already use.
             if let HirExpr::Name(class_name) = base.as_ref()
+                && !scopes.iter().any(|scope| scope.contains_key(class_name))
                 && classes.contains_key(class_name.as_str())
             {
                 let class_def = &classes[class_name.as_str()];

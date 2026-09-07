@@ -648,3 +648,63 @@ main()
         "3\n",
     );
 }
+
+#[test]
+fn an_active_binding_shadows_a_class_name_static_method_call() {
+    assert_runs(
+        "issue974_shadowed_static_method",
+        "\
+class B:
+    @staticmethod
+    def m() -> int:
+        return 2
+
+
+class D:
+    def m(self) -> int:
+        return 3
+
+
+def f(B: D) -> int:
+    return B.m()
+
+
+def main() -> None:
+    print(f(D()))
+
+
+main()
+",
+        "3\n",
+    );
+}
+
+#[test]
+fn an_active_binding_shadows_a_class_name_class_method_call() {
+    assert_runs(
+        "issue974_shadowed_class_method",
+        "\
+class B:
+    @classmethod
+    def m(cls) -> int:
+        return 2
+
+
+class D:
+    def m(self) -> int:
+        return 3
+
+
+def f(B: D) -> int:
+    return B.m()
+
+
+def main() -> None:
+    print(f(D()))
+
+
+main()
+",
+        "3\n",
+    );
+}

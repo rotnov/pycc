@@ -1166,7 +1166,16 @@ pub(crate) fn infer_expr_in(
             // class_methods tables before the regular instance-method
             // resolution (which requires a `Ty::Instance` base and would
             // reject a bare class name).
+            // An active value binding of that name shadows the class
+            // here exactly as it does for the class-name `AttrGet` arm
+            // above: in `def f(B: D) -> int: return B.m()`, `B` is the
+            // parameter, so the call must reach `D.m`, not `B`'s static or
+            // class method. The guard runs before the method-table walk so
+            // a shadowed name short-circuits straight to the ordinary
+            // instance path below.
             if let HirExpr::Name(class_name) = base.as_ref()
+                && env.binding_state(class_name).is_none()
+                && !is_local(local_names, class_name)
                 && env.lookup_class(class_name).is_some()
                 && class::has_static_or_class_method(env, class_name, method)
             {
