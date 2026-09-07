@@ -84,9 +84,49 @@ Two things the `issue-select` pass measured that are worth a future session's at
 - **The non-milestone open-issue count is 67 against D-192's ceiling of 20.** The ceiling is therefore permanently in force, and no new non-milestone issue may be opened. Triage cannot drain this structurally: the count only falls when non-milestone issues close, and the 4:1 merge quota caps how fast that can happen. Whoever revisits D-192 should decide whether the ceiling needs a one-time reconciliation pass rather than treating 67 as a transient overshoot.
 - **#663, #695 and #696 are per-oversized-file decomposition trackers carrying no milestone, but D-192's exemption enumerates only #544–#552.** They are the same kind of artefact as the enumerated set and were presumably meant to be covered. As written they are ordinary non-milestone issues consuming the ceiling. Fixing this means amending D-192's enumeration, which is an ADR edit rather than a drive-by write on the issues themselves.
 
+## The fourth site: a class-name method call (round 3)
+
+While cleaning up the throwaway worktree after the Codex round, the same defect class
+was probed at a fourth site — `crates/pycc_types/src/expr.rs`'s class-name `MethodCall`
+arm, guarded only by `lookup_class(...).is_some() && has_static_or_class_method(...)`,
+with no binding/local check. It misfires:
+
+| program | CPython 3.13.9 | pycc before | pycc after |
+| --- | --- | --- | --- |
+| `def f(B: D) -> int: return B.m()`, `B.m` a `@staticmethod` | `3` | `2` | `3` |
+| the same with `B.m` a `@classmethod` | `3` | `2` | `3` |
+
+**The decision, per D-127, taken with the advisor rather than deferred.** The fork was
+whether to extend this pull request's guard to the fourth site or to record it and leave
+it out, given that D-192's non-milestone open-issue ceiling stands at 67 against a
+ceiling of 20 and forbids filing a new non-milestone issue. The advisor's argument is
+what settled it, and it is not about scope: the round-2 documentation this pull request
+already carries states the general rule — a class name is a class name only when no
+active value binding claims it — as a spec sentence in `docs/TYPE_SYSTEM.md` and as a
+roadmap claim. Shipping that sentence with a known counterexample inside the same diff is
+a doc-drift defect, so the pull request either makes the documented invariant true or
+narrows the sentence to name the exception. Making it true costs one guard clause per
+crate plus two tests; narrowing it produces a worse artifact. Recorded here as the
+decision made.
+
+Both crates needed the mirror again, for the same reason the enum site did in round 2:
+`pycc_mir`'s class-name method-call interception at `crates/pycc_mir/src/expr.rs` runs
+before the base is lowered, so guarding `pycc_types` alone would leave MIR calling the
+class's static method against a checker that had inferred the instance method's type.
+The guard is placed *before* the method-table walk in `pycc_types`, matching the
+`Subscript` path's ordering, so a shadowed name short-circuits rather than walking and
+retracting.
+
+The classmethod carrier was probed separately rather than assumed: `has_static_or_class_method`
+covers both tables and they lower differently, so both shapes have their own test —
+`an_active_binding_shadows_a_class_name_static_method_call` and
+`an_active_binding_shadows_a_class_name_class_method_call`. Both doc statements that
+enumerate the guard's reach were widened from three shapes to four. Commit `a66576ea`;
+the harden pile carries a matching third round-2 row with that `fix_commit`.
+
 ## Where to resume
 
-- PR [#992](https://github.com/rotnov/pycc/pull/992) is open and carries `Fixes #974` (confirmed with the `closingIssuesReferences` query: `totalCount: 1`). It has been through the D-068 round and the Codex round above, and the full local gate set is green at the branch head, coverage 100.00% lines and regions.
+- PR [#992](https://github.com/rotnov/pycc/pull/992) is open and carries `Fixes #974` (confirmed with the `closingIssuesReferences` query: `totalCount: 1`). It has been through the D-068 round, the Codex round, and the round-3 fourth-site fix above; the full local gate set is green at the branch head, coverage 100.00% lines and regions (55863 lines, 2666 functions, 36983 regions, zero missed).
 - The D-014 gate was red for one round on a single region in `crates/pycc_mir/src/expr.rs` that every merged coverage view reported as covered. `llvm-cov`'s file summary takes `min(NotCovered)` across a function's instantiation records rather than merging them, so a region needs to be covered within one *single* instantiation. `cargo llvm-cov report -p pycc_mir --show-instantiations --html` is the view that names such a miss; `docs/AGENT_RETROSPECTIVE.md`'s 2026-09-07 entry records the full diagnosis. The fix was the extra `pycc_mir` unit test `an_inherited_class_attribute_read_through_the_derived_class_name_folds`, which walks past a derived class declaring nothing and folds the base's constant.
 - `cargo test --workspace -- --include-ignored` fails 57 conformance tests **locally only**, all with the identical message ``conformance oracle must be exactly Python 3.14.7, found "Python 3.14.6"``. That is this machine's interpreter version, not the change: no other panic appears in the log. CI pins 3.14.7 and is the authority.
 - **The ROADMAP byte budget was raised in this pull request, as that same note recommended.** `docs/ROADMAP.md` had 45 bytes of headroom against a 168960-byte per-document ceiling and the Codex round needed a sentence there, so `budget_bytes` for that entry in `site/llms-txt-context-manifest.json` is now 172032. The aggregate ceiling is untouched and keeps roughly 15 KB spare, so this trades a per-document limit that had become the binding constraint on three consecutive merges for headroom that already existed. Trimming unrelated prose a fourth time was the alternative and was rejected.
