@@ -171,9 +171,57 @@ diagnosis path (`--show-instantiations`) was already known and cost minutes rath
 
 Commit `5b238d8c`; the harden pile carries a round-4 row with that `fix_commit`.
 
+## The guard's own blind spot: module-scope rebinding (round 5)
+
+A second Codex review of PR #992 raised a P1 against the round-2/3 guard itself: it consults
+`binding_state`, and that answer means two different things depending on where it is asked.
+`check_and_resolve_all_keyed`'s pass 2 walks the module's top-level statements sequentially, so
+at module scope the answer is the binding active at that point in the source. Pass 3 then checks
+every function body against the environment as it stands after **all** top-level code has run
+(D-041 late binding), so inside a body the same answer is ordering-blind. `pycc_mir` lowers
+function bodies the same way, after collecting every top-level binding.
+
+The report was correct, and probing it produced a row the report did not have. Four programs,
+measured against CPython 3.13.9:
+
+| program | CPython | `origin/main` `7bc37e03` | branch before the fix | branch with the fix |
+| --- | --- | --- | --- | --- |
+| `A = D()` **after** `print(f())`, `f` returns `A.X` (own attribute) | `2` | exit 0, prints `2` | exit 101, no output | exit 1, `C0001` |
+| `B = D()` after, `f` returns `B.X` (inherited, `class B(A)`) | `2` | exit 1, `T0044` | exit 101, no output | exit 1, `C0001` |
+| `A = D()` **before** `print(f())` (own attribute) | `1` | exit 0, prints `2` | exit 0, prints `1` | exit 1, `C0001` |
+| `B = D()` before (inherited) | `1` | exit 1, `T0044` | exit 0, prints `1` | exit 1, `C0001` |
+
+The asymmetry is the finding. `main` answered `2` for both orderings and was wrong on the
+rebind-before rows; the round-2 guard answered `1` for both and is wrong on the rebind-after
+rows. One environment snapshot cannot serve two answers, so **no** resolution of the bare class
+name is correct here, and the read is rejected with `C0001` instead. Resolving it properly needs
+ordering-aware name resolution this compiler does not have, which is a new analysis and not this
+pull request's scope. Recorded here as the decision made, per D-127; the fork was put to this
+session's advisor and settled there.
+
+The first attempt at that rejection was wrong, and the tree said so. It rejected the *rebinding
+statement* in `module.rs` pass 2 — one module-walk check instead of edits at every dispatch site —
+and the existing test `a_value_binding_shadowing_a_class_name_indexes_as_a_value` failed. That
+test does not pin a bug: pass 2 resolves in source order, so **module scope is already sound**,
+and a rejection there removes a capability the suite proves works. The defect lives only in
+function bodies, and a fix aimed anywhere else is over-broad by construction.
+
+What landed is narrow. `Environment::in_function_body`, set only by `child_for_function`,
+distinguishes the two positions; the three `pycc_types` class-name dispatch sites (`Subscript`,
+`AttrGet`, `MethodCall`) route the whole decision through one shared `expr::class_name_dispatch`
+predicate that returns "the class", "a shadowing value", or the rejection — the same
+extract-then-change-one-place move round 4 used for `is_class_name_base`. Module scope keeps
+resolving in source order. A parameter or function-local shadow is untouched, because it is bound
+at the call rather than by top-level code; that is pinned by a dedicated test *and* by the two
+pre-existing subscript tests above, which stayed green without being edited and are the actual
+evidence the rejection did not widen. `pycc_mir` needed no matching branch: the checker rejects
+before MIR runs, confirmed by running all four programs through `pycc run`.
+
+Commit `663cbfd7`; the harden pile carries a round-5 row with that `fix_commit`.
+
 ## Where to resume
 
-- PR [#992](https://github.com/rotnov/pycc/pull/992) is open and carries `Fixes #974` (confirmed with the `closingIssuesReferences` query: `totalCount: 1`). It has been through the D-068 round, the Codex round, and the round-3 fourth-site fix above; the full local gate set is green at the branch head, coverage 100.00% lines and regions (55876 lines, 2667 functions, 36989 regions, zero missed) at the round-4 head `5b238d8c`.
+- PR [#992](https://github.com/rotnov/pycc/pull/992) is open and carries `Fixes #974` (confirmed with the `closingIssuesReferences` query: `totalCount: 1`). It has been through the D-068 round, the Codex round, and the round-3 fourth-site fix above; the full local gate set was re-run from scratch after round 5 and is green at the branch head, coverage 100.00% lines and regions with zero missed.
 - The D-014 gate was red for one round on a single region in `crates/pycc_mir/src/expr.rs` that every merged coverage view reported as covered. `llvm-cov`'s file summary takes `min(NotCovered)` across a function's instantiation records rather than merging them, so a region needs to be covered within one *single* instantiation. `cargo llvm-cov report -p pycc_mir --show-instantiations --html` is the view that names such a miss; `docs/AGENT_RETROSPECTIVE.md`'s 2026-09-07 entry records the full diagnosis. The fix was the extra `pycc_mir` unit test `an_inherited_class_attribute_read_through_the_derived_class_name_folds`, which walks past a derived class declaring nothing and folds the base's constant.
 - `cargo test --workspace -- --include-ignored` fails 57 conformance tests **locally only**, all with the identical message ``conformance oracle must be exactly Python 3.14.7, found "Python 3.14.6"``. That is this machine's interpreter version, not the change: no other panic appears in the log. CI pins 3.14.7 and is the authority.
 - **The ROADMAP byte budget was raised in this pull request, as that same note recommended.** `docs/ROADMAP.md` had 45 bytes of headroom against a 168960-byte per-document ceiling and the Codex round needed a sentence there, so `budget_bytes` for that entry in `site/llms-txt-context-manifest.json` is now 172032. The aggregate ceiling is untouched and keeps roughly 15 KB spare, so this trades a per-document limit that had become the binding constraint on three consecutive merges for headroom that already existed. Trimming unrelated prose a fourth time was the alternative and was rejected.
