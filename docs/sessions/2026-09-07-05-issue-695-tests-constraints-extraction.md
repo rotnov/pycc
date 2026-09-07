@@ -75,6 +75,19 @@ deliberately not invoked.
   obvious next cuts, by the same cohesion criterion, are the pattern-match
   cluster (~134 `fn`s matching `match_with` / `check_pattern` /
   `check_exhaustive`) and the monomorphization/generic-class cluster.
+- **The extracted child is itself over the threshold.** The new
+  `crates/pycc_types/src/tests/constraints.rs` is 2,988 lines, roughly three
+  times AGENTS.md's ~1,000-line decomposability threshold; the optional
+  `chatgpt-codex-connector` reviewer raised this on the pull request (P2) and
+  the observation is accurate. It was not split
+  further in this pull request because the whole reviewability of a pure
+  relocation rests on line-multiset identity of the moved range, which a second
+  cohesion cut in the same diff destroys. #695 tracks the `tests.rs` module
+  tree, children included, and the narrowing comment on #695 records this file
+  as a tracked next cut: its three name prefixes
+  (`constraint_collection_`, `collect_block_constraints_`,
+  `collect_expr_constraints_`) are the natural sub-cuts, so the file is not
+  left untracked.
 - **#677** (no gate detects an insertion that re-targets an existing
   doc-comment run) gained its **third** occurrence here; recorded in
   `.harden/incidents/insertion-retargets-a-doc-comment-run/2026-09-07.md`.
