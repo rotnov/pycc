@@ -219,6 +219,101 @@ before MIR runs, confirmed by running all four programs through `pycc run`.
 
 Commit `663cbfd7`; the harden pile carries a round-5 row with that `fix_commit`.
 
+## The mirror-image hole: a class statement after a value binding (round 6)
+
+Round 5's guard covered a *value* binding overwriting a class name. The
+D-068 re-review's next P1 found the reverse order still wrong, and it was a
+regression this pull request itself introduced (from the round-2/3 guard,
+not from round 5):
+
+```python
+class D:
+    def __init__(self) -> None:
+        self.X = 1
+
+
+A = D()
+
+
+class A:
+    X: int = 2
+
+
+print(A.X)
+```
+
+| revision | result |
+| --- | --- |
+| CPython 3.13 | `2` |
+| parent revision `7bc37e03` | `2` |
+| this branch before round 6 | `1`, rc `0` |
+
+The cause is structural: `HirItem` has exactly two variants, `Function` and
+`TopLevelStmt`, and `crates/pycc_hir/src/class.rs` records that a dedicated
+`ClassDef` variant was considered and rejected. A class statement therefore
+never appears in `HirModule::items`, so `check_and_resolve_all_keyed`'s
+sequential pass 2 never re-binds `A` back to the class after `A = D()`. At
+`print(A.X)` the module-scope arm of `expr::class_name_dispatch` sees
+`binding_state("A") == Some(Instance("D"))`, returns `Ok(false)`, and the
+read falls through to the instance path reading `D`'s slot.
+
+**The D-127 fork, and the one place it was settled against the advisor's
+first answer.** The advisor initially recommended recording the class's
+index into `items` at `lower_class` entry, having pass 2 drop the name from
+`bindings` when it walks past that index, and mirroring the removal in
+`pycc_mir`'s scope map (`crates/pycc_mir/src/lib.rs:848-873`) — since the
+observable symptom, `1` instead of `2`, is a wrong *value MIR* and MIR's
+predicate is independent of the checker's. It explicitly dropped the
+alternative of rejecting the collision at HIR lowering, on the stated
+grounds that detecting the value-then-class order needs the same ordering
+plumbing.
+
+Reading the primary source refuted that premise.
+`crates/pycc_hir/src/module.rs`'s `Stmt::ClassDef` arm already walks
+statements in source order with `state.items` in hand, and already runs four
+analogous rejections — class, function, type alias, import — each of the
+form ``class `{}` collides with … already defined in this module``. A fifth
+check against an earlier top-level value binding needs no new `HirModule`
+field, no parallel index vector, no pass-2 environment mutation and no MIR
+change, because a rejection at lowering fires before the type checker and
+before MIR. `pycc_hir::killed_names` (`hir_module.rs:49`) already answers
+"which bare names do these statements bind", recursing into nested bodies
+and covering loop variables, comprehension targets, `match` captures and
+`except … as` names.
+
+Per the advisor tool's own rule about contradicting primary-source evidence,
+that conflict went back for one reconcile round rather than being switched
+silently. The advisor reversed its recommendation — "(b) is cheap and (a) is
+not. Take (b)" — and noted that the reversal also retires its own MIR,
+`child_for_function` and pass-2/pass-3 points, since under a lowering-side
+rejection the program never compiles that far.
+
+**What landed.** One `if` in the `Stmt::ClassDef` arm, beside its four
+siblings, using their diagnostic shape and `def.range` span. Two costs are
+stated plainly in the diagnostic text, in `docs/TYPE_SYSTEM.md` and in the
+commit message, because they are the honest price of the choice:
+
+- it rejects a program CPython accepts, and
+- it is unconditional at lowering — it fires whether or not anything ever
+  reads the name afterward.
+
+Both are narrower-than-Python by construction and consistent with round 5's
+precedent. The hard side-condition holds: the check inspects only *earlier*
+items, so the class-then-value order (`class A:` then `A = [1]`) stays
+accepted, pinned by a new CLI test as well as by
+`a_value_binding_shadowing_a_class_name_indexes_as_a_value`, the same test
+that refuted round 5's first, wider attempt.
+
+Tests: six CLI cases in
+`tests/issue_974_inherited_class_attr_by_class_name.rs` (value-then-class,
+annotated value-then-class, value-less annotation accepted, class-then-value
+accepted, unrelated value binding accepted, top-level loop variable
+rejected) plus two `pycc_hir` unit tests beside the sibling collision tests
+exercising the new arm in both directions. The full workspace suite is green
+with no pre-existing program affected — the blast-radius question the
+advisor flagged (a loop variable or comprehension target colliding with a
+later class name in an existing fixture) measured as zero.
+
 ## Where to resume
 
 - PR [#992](https://github.com/rotnov/pycc/pull/992) is open and carries `Fixes #974` (confirmed with the `closingIssuesReferences` query: `totalCount: 1`). It has been through the D-068 round, the Codex round, and the round-3 fourth-site fix above; the full local gate set was re-run from scratch after round 5 and is green at the branch head, coverage 100.00% lines and regions with zero missed.
