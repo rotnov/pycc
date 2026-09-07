@@ -209,19 +209,28 @@ fn dunders_outside_the_instantiation_protocol_stay_accepted_in_a_plain_class() {
     }
 }
 
-/// #975 negative: an `Enum` member named after a dunder outside the set is
-/// still lowered as an ordinary member. This pins the current behavior, not
-/// agreement with CPython -- the #978 review round measured that CPython's
-/// `_EnumDict` keeps every dunder out of the member list, so this program has
-/// two members here and one there. That divergence is
-/// [#979](https://github.com/rotnov/pycc/issues/979), a separate name set from
-/// D-236's; this test inverts when it is fixed.
+/// The #975 pin, inverted by [#979](https://github.com/rotnov/pycc/issues/979)
+/// (D-238). Until then this test asserted that an `Enum` member named after a
+/// dunder outside D-236's set was still lowered as an ordinary member, and its
+/// own comment recorded that as a *divergence* rather than agreement: the #978
+/// review round measured that CPython 3.13.9's `_EnumDict` keeps every dunder
+/// out of the member list, so the program below had two members here and one
+/// there, and `C.__repr__.value` printed `1` here where CPython raises
+/// `AttributeError`.
+///
+/// #979 closes that divergence by rejecting the whole `_EnumDict` non-member
+/// family on the `Enum` route, so the program is now `C0001`. D-236's own set
+/// and messages are untouched -- the name is rejected by the third check in
+/// `reject_reserved_class_attr_name`, not by D-236's, which is what
+/// `an_enum_member_named_after_the_instantiation_protocol_is_rejected` and
+/// `the_enum_slots_message_describes_the_enum_route` still pin. The rest of
+/// the family lives in `super::enum_non_member_names`.
 #[test]
-fn an_enum_member_named_after_an_unreserved_dunder_stays_accepted() {
-    let module = pycc_parser_test_helper::parse(
+fn an_enum_member_named_after_an_unreserved_dunder_is_rejected() {
+    assert_capability_error_message(
         "from enum import Enum\n\n\nclass C(Enum):\n    __repr__ = 1\n    B = 2\n",
+        "a dunder-named assignment in an `Enum` body is not supported yet",
     );
-    lower_checked(&module).expect("`__repr__` must still lower as an enum member");
 }
 
 /// #910 regression pin: `__slots__` keeps its own message and is not absorbed

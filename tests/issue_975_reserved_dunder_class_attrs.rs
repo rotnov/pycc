@@ -16,10 +16,13 @@
 //! 1. **Three names, not one.** The issue named `__init__`/`__eq__`/`__repr__`;
 //!    the set that actually diverges is `__init__`/`__new__`/`__init_subclass__`.
 //!    `__eq__` and `__repr__` do *not* diverge in a plain class body, so they
-//!    are pinned here as still-accepted. (In an `Enum` body they do diverge,
+//!    are pinned here as still-accepted. In an `Enum` body they *did* diverge,
 //!    for a different reason -- CPython's `_EnumDict` keeps every dunder out of
-//!    the member list while pycc lowers it as a member -- which is a separate
-//!    defect, [#979](https://github.com/rotnov/pycc/issues/979).)
+//!    the member list while pycc lowered it as a member -- which was a separate
+//!    defect, [#979](https://github.com/rotnov/pycc/issues/979), closed by
+//!    D-238; the enum half of that pin below is inverted accordingly, and the
+//!    rest of #979's family lives in
+//!    `tests/issue_979_enum_non_member_names.rs`.
 //! 2. **Three spellings, not one.** `ClassVar[int] = 8`, `int = 8` and a bare
 //!    `= 8` all reach the same hazard, so the guard is not `ClassVar`-gated.
 //! 3. **Four class-body routes, not one.** A plain class, a `@dataclass`
@@ -391,20 +394,25 @@ fn dunders_outside_the_instantiation_protocol_stay_accepted_in_a_plain_class() {
     }
 }
 
-/// An `Enum` member named after a dunder outside the set is still accepted and
-/// still lowered as an ordinary member. This pins the *current* behavior, not
-/// agreement with CPython: the review round on #978 re-measured it and found
-/// that CPython's `_EnumDict` keeps every dunder out of the member list, so
-/// `for c in C` counts two members here and one there, and `C.__repr__.value`
-/// prints `1` here where CPython raises `AttributeError`. That is a separate
-/// defect with its own name set, tracked as
-/// [#979](https://github.com/rotnov/pycc/issues/979); this test inverts when it
-/// is fixed. D-236's own set and guard are unaffected -- the enum route still
-/// diverges on the instantiation-protocol names for the reasons D-236 records.
+/// The #975 end-to-end pin, inverted by
+/// [#979](https://github.com/rotnov/pycc/issues/979) (D-238). It used to
+/// assert that an `Enum` member named after a dunder outside D-236's set was
+/// accepted, and recorded that as a divergence rather than agreement: the
+/// review round on #978 re-measured it and found CPython 3.13.9's `_EnumDict`
+/// keeps every dunder out of the member list, so `for c in C` counted two
+/// members here and one there, and `C.__repr__.value` printed `1` here where
+/// CPython raises `AttributeError`.
+///
+/// #979 rejects the whole `_EnumDict` non-member family on the `Enum` route,
+/// so this program is now `C0001` with its own message. D-236's own set and
+/// guard are unaffected: the enum route still reports D-236's strings for the
+/// instantiation-protocol names, which `RESERVED`'s enum cases above still
+/// pin. The rest of the #979 family is covered end to end in
+/// `tests/issue_979_enum_non_member_names.rs`.
 #[test]
-fn an_enum_member_named_after_an_unreserved_dunder_stays_accepted() {
-    assert_accepted(
-        "975_enum_repr_accepted",
+fn an_enum_member_named_after_an_unreserved_dunder_is_rejected() {
+    assert_rejected(
+        "975_enum_repr_rejected",
         "from enum import Enum\n\
          \n\
          \n\
@@ -415,6 +423,8 @@ fn an_enum_member_named_after_an_unreserved_dunder_stays_accepted() {
          \n\
          def main() -> int:\n\
          \x20   return 0\n",
+        "C0001",
+        "a dunder-named assignment in an `Enum` body is not supported yet",
     );
 }
 
