@@ -23,19 +23,22 @@ than closed.
 |---|---|---|
 | `crates/pycc_types/src/tests/typing_cast.rs` | 526 | 31 |
 | `crates/pycc_types/src/tests/pattern_matching.rs` | 559 | 43 |
-| `crates/pycc_types/src/tests/exception_handling.rs` | 322 | 26 |
+| `crates/pycc_types/src/tests/exception_handling.rs` | 341 | 26 |
 | `crates/pycc_types/src/tests/optional_narrowing.rs` | 559 | 36 |
-| `crates/pycc_types/src/tests/type_checking_marker.rs` | 124 | 6 |
+| `crates/pycc_types/src/tests/type_checking_marker.rs` | 125 | 6 |
 | `crates/pycc_types/src/tests/enum_unrolling.rs` | 115 | 5 |
 
-`crates/pycc_types/src/tests.rs`: 26,906 → 24,783 lines. The first four
+`crates/pycc_types/src/tests.rs`: 26,906 → 24,765 lines. The first four
 extractions removed 2,168 lines, 2,164 of them reproduced verbatim in the new
 children (one trailing blank line was dropped at each of the four cut
 boundaries), against six lines added in the parent — four `mod` declarations,
 one net line in the child-module comment, and one net line in the reworded
 `#382` banner. The review round below then moved two strays back *into* the
 parent (+39 lines: 36 test lines, one blank line, and the two further `mod`
-declarations), leaving 24,783. Its own `#[test]` count went 1,192 → 1,045.
+declarations) and, in the last round, moved the two `expect_top_level_*`
+helpers out of it (-18 lines net, against one line added by widening the
+child-module orientation comment), leaving 24,765. Its own `#[test]` count went
+1,192 → 1,045.
 
 The child-module declaration block in `tests.rs` gained `enum_unrolling`,
 `exception_handling`, `optional_narrowing`, `pattern_matching`,
@@ -43,21 +46,20 @@ The child-module declaration block in `tests.rs` gained `enum_unrolling`,
 above it was updated so it still honestly describes which clusters now live in
 child files.
 
-## Deviation: the exception-handling helpers stay in the parent
+## Deviation: two of the four exception-handling helpers stay in the parent
 
-The `// -- #382 exception handling tests --` run opens with four non-test
+The `// -- #382 exception handling tests --` run opened with four non-test
 helpers — `parse_check_resolve`, `parse_check`, `expect_top_level_try` and
 `expect_top_level_raise`. `parse_check_resolve` and `parse_check` are called
 from roughly forty tests that remain in `tests.rs`, and a parent module cannot
 see a child module's private items, so relocating them verbatim would not
-compile. The helpers therefore stayed in `tests.rs` under a reworded banner
-that points at the new child module, and only the tests below them moved.
-`expect_top_level_try`/`expect_top_level_raise` are now used exclusively from
-the child; that is still a real use for dead-code analysis, which the clean
-`clippy -D warnings` run confirms. The fork was resolved with this session's
-advisor per D-127: shared helpers belong at the level that shares them, and
-pushing them into a child would invert the dependency and require widening
-visibility on relocated code.
+compile; they stayed, under a banner narrowed to say so. The other two are
+called only from the relocated tests, so they moved into
+`tests/exception_handling.rs` with them and their doc cross-references dropped
+the now-redundant `exception_handling::` qualifier. The rule the split follows,
+resolved with this session's advisor per D-127: a helper belongs at the level
+that shares it, and pushing a genuinely shared one into a child would invert
+the dependency and require widening visibility on relocated code.
 
 ## Verification
 
@@ -143,9 +145,24 @@ before the first merge, so no committed session entry was edited. That pass
 found nothing else actionable and confirmed every quantitative claim here
 against the tree.
 
+A final automated-reviewer round raised two more, both confirmed against the
+tree and fixed here. `expect_top_level_try` and `expect_top_level_raise` had no
+remaining call site in the parent at all — unlike `parse_check` and
+`parse_check_resolve`, nothing that stayed behind used them — so they moved
+into `tests/exception_handling.rs` with the tests that do, their doc
+cross-references dropped the now-redundant `exception_handling::` qualifier,
+and the parent's `#382` banner was narrowed to say only shared helpers remain.
+And this file's own line-count table had gone stale by one line in two rows,
+because the preceding comment-only fixes each added a line: the table and the
+extraction arithmetic are now recounted from the tree rather than carried
+forward. All five gates were re-run on the result: `fmt --check`, `build
+--workspace`, `test -p pycc_types` (1,625 passed), `clippy -D warnings` and the
+coverage gate after its three preparatory builds, each exiting 0, coverage at
+100.00% of 55,928 lines / 2,672 functions / 37,050 regions.
+
 ## Follow-ups
 
-- `crates/pycc_types/src/tests.rs` is still 24,783 lines. #695 remains open for
+- `crates/pycc_types/src/tests.rs` is still 24,765 lines. #695 remains open for
   further cohesion-driven extractions; the next obvious candidates are the
   remaining large banner runs in the 13k–20k region.
 - The `// -- ` prose false positive at what was line 23745 (`// -- an
@@ -153,11 +170,6 @@ against the tree.
   sentence, not a banner. A future extraction in that region must not treat it
   as a cut boundary — this is why the candidate cluster around it was dropped
   here.
-- `expect_top_level_try` and `expect_top_level_raise` now have no remaining
-  call site in `tests.rs` itself — only `parse_check` and `parse_check_resolve`
-  genuinely had to stay behind. A later exception-handling extraction in this
-  region can move those two helpers down into the child module with the tests
-  that use them.
 
 - Selection flagged [#355](https://github.com/rotnov/pycc/issues/355)
   ("Ultra-review checkpoint — do not close") as an apparent D-192

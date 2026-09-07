@@ -21589,8 +21589,9 @@ fn check_skips_abstract_method_body_checking() {
     );
 }
 
-// -- #382 exception handling test helpers; the tests themselves live in
-// the `exception_handling` and `enum_unrolling` child modules (#695) --
+// -- #382 exception handling test helpers shared with tests that stayed
+// here; the exception tests themselves live in the `exception_handling` and
+// `enum_unrolling` child modules (#695) --
 
 fn parse_check_resolve(src: &str) -> Result<HirModule, Diagnostic> {
     let module = pycc_parser::parse(src).expect("test fixture must parse");
@@ -21602,26 +21603,6 @@ fn parse_check(src: &str) -> Result<(), Diagnostic> {
     let module = pycc_parser::parse(src).expect("test fixture must parse");
     let hir = pycc_hir::lower_checked(&module).expect("lowering must succeed");
     check(&hir)
-}
-
-/// Test helper: assert a top-level HIR item is a `Try`, panicking
-/// otherwise.  The panic arm is covered by
-/// `exception_handling::expect_top_level_try_panics_on_non_try`.
-fn expect_top_level_try(item: &HirItem) {
-    match item {
-        HirItem::TopLevelStmt(HirStmt::Try { .. }) => {}
-        _ => panic!("expected Try"),
-    }
-}
-
-/// Test helper: assert a top-level HIR item is a `Raise`, panicking
-/// otherwise.  The panic arm is covered by
-/// `exception_handling::expect_top_level_raise_panics_on_non_raise`.
-fn expect_top_level_raise(item: &HirItem) {
-    match item {
-        HirItem::TopLevelStmt(HirStmt::Raise { .. }) => {}
-        _ => panic!("expected Raise"),
-    }
 }
 
 // -- #382 coverage tests --

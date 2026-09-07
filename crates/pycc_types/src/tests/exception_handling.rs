@@ -2,15 +2,34 @@
 //!
 //! Extracted verbatim from `tests.rs` under AGENTS.md's decomposability rule
 //! (part of #695, which tracks decomposing that oversized file). These are the
-//! tests that exercise the #382 exception-handling checks. Their shared
-//! helpers (`parse_check`, `parse_check_resolve`, `expect_top_level_try`,
-//! `expect_top_level_raise`) stay in the parent, because tests that remain
-//! there call them too and a parent cannot see a child's private items. As a
-//! child module this still sees the parent's private items directly through
-//! `use super::*`, so nothing needed widened visibility; only the tests'
-//! location changed.
+//! tests that exercise the #382 exception-handling checks, together with the
+//! two `expect_top_level_*` assertion helpers only they use. The `parse_check`
+//! and `parse_check_resolve` helpers stay in the parent, because tests that
+//! remain there call them too and a parent cannot see a child's private items.
+//! As a child module this still sees the parent's private items directly
+//! through `use super::*`, so nothing needed widened visibility.
 
 use super::*;
+
+/// Test helper: assert a top-level HIR item is a `Try`, panicking
+/// otherwise.  The panic arm is covered by
+/// `expect_top_level_try_panics_on_non_try`.
+fn expect_top_level_try(item: &HirItem) {
+    match item {
+        HirItem::TopLevelStmt(HirStmt::Try { .. }) => {}
+        _ => panic!("expected Try"),
+    }
+}
+
+/// Test helper: assert a top-level HIR item is a `Raise`, panicking
+/// otherwise.  The panic arm is covered by
+/// `expect_top_level_raise_panics_on_non_raise`.
+fn expect_top_level_raise(item: &HirItem) {
+    match item {
+        HirItem::TopLevelStmt(HirStmt::Raise { .. }) => {}
+        _ => panic!("expected Raise"),
+    }
+}
 
 #[test]
 #[should_panic(expected = "expected Try")]
