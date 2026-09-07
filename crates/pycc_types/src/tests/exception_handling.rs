@@ -158,8 +158,9 @@ fn try_with_return_in_finally_rejects_with_l0001() {
     // PEP 765 (#738, Part 1 of #543): a `return` that escapes a `finally`
     // block is rejected during HIR lowering, before the type checker ever
     // sees it -- so this goes through `pycc_hir::lower_checked` directly,
-    // not the `parse_check`/`parse_check_resolve` helpers above (both of
-    // which `.expect()` lowering to succeed and would panic on this input).
+    // not the parent module's `super::parse_check`/`super::parse_check_resolve`
+    // helpers (both of which `.expect()` lowering to succeed and would panic
+    // on this input).
     // The remaining PEP 765 edge cases (break/continue in finally, loops
     // defined inside finally, nested try/finally, nested def negative
     // control) live in `crates/pycc_hir/src/tests.rs` instead, alongside
