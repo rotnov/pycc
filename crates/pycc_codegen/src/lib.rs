@@ -1530,7 +1530,8 @@ fn to_str<'ctx>(
         }
         // A real, reachable feature gap, identical in kind to the `List`
         // arm directly above: `pycc_types` places no type restriction on
-        // `print`'s argument or an f-string interpolation, so `print(x)`/
+        // `print`'s argument or an f-string interpolation other than the
+        // instance/protocol gate (#977, D-237), so `print(x)`/
         // `f"{x}"` for a `dict[str, int]` local type-checks today and
         // lands here. v0.2 has no `str(dict)`/dict-printing semantics
         // (D-123), and there is no `pycc_rt_dict_to_str` to call -- so
@@ -1566,7 +1567,8 @@ fn to_str<'ctx>(
         // literal failed to lower at all and got a clean `C0001`
         // ("expression kind not supported yet") diagnostic instead of ever
         // reaching this function. `pycc_types` places no type restriction
-        // on `print`'s argument or an f-string interpolation, so
+        // on `print`'s argument or an f-string interpolation other than the
+        // instance/protocol gate (#977, D-237), so
         // `print(t)`/`f"{t}"` for a `tuple[...]` local type-checks today
         // and lands here. D-116 ships only construction and literal-index
         // reads, so v0.2 has no tuple string-conversion semantics -- and
@@ -1585,10 +1587,12 @@ fn to_str<'ctx>(
         // in `pycc_mir` rewrites instance-typed f-string interpolations and
         // `print` arguments to `__repr__` calls, so the codegen's `to_str`
         // receives a `str` scalar from the `__repr__` call, never an
-        // `Instance` scalar. A bare `to_str` call reaching here with an
-        // Instance scalar means the class has no `__repr__` (the MIR rewrite
-        // is a no-op for classes without `__repr__`) -- panic honestly,
-        // matching the pre-#378 behavior.
+        // `Instance` scalar. Since #977 (D-237) `pycc_types` rejects every
+        // `print` argument and f-string interpolation that neither that
+        // rewrite nor `rewrite_exception_to_message` renders with `C0001`,
+        // so no type-checked program reaches this arm; it stays as
+        // defence-in-depth for a hand-built MIR (see `tests.rs`) and
+        // panics honestly, matching the pre-#378 behavior.
         Scalar::Instance(_) => {
             panic!(
                 "pycc_codegen: string conversion of a class instance without `__repr__` is not supported yet"
@@ -1597,8 +1601,9 @@ fn to_str<'ctx>(
         // A real, reachable feature gap, identical in kind to the `List`/
         // `Dict`/`Set` arms above (D-197, #763, Part 1 of #747):
         // `pycc_types` places no type restriction on `print`'s argument or
-        // an f-string interpolation, so `print(x)`/`f"{x}"` for an
-        // `Optional[int]` local type-checks today and lands here. This PR
+        // an f-string interpolation other than the instance/protocol gate
+        // (#977, D-237), so `print(x)`/`f"{x}"` for an `Optional[int]`
+        // local type-checks today and lands here. This PR
         // ships no `str(Optional[int])`/`Optional`-printing semantics (CPython's
         // own `str(None)` is `"None"` and `str(5)` is `"5"`, which this
         // representation *could* support, but doing so is out of this PR's

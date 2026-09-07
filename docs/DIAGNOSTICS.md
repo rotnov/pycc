@@ -112,6 +112,22 @@ same gate with that same message ([#948](https://github.com/rotnov/pycc/issues/9
 the protocol's own name (`def clone(self) -> P: ...`, PEP 649/749) and `Self`
 (PEP 673). A self-referential parameter or attribute is not rejected -- a
 protocol type is supported in those positions.
+`pycc_types` also emits `C0001`, at that crate's conventional `1:1` span (it
+carries no expression spans), for a capability gap that depends on a value's
+*type* and so cannot be seen by HIR lowering: string conversion of a class
+instance that is neither a `@dataclass` instance nor a caught builtin
+exception, or of a protocol-typed value, as a `print()` argument or an
+f-string interpolation ([#977](https://github.com/rotnov/pycc/issues/977),
+[D-237](./decisions/D-237-reject-string-conversion-of-a-non-dataclass-non-exception.md)).
+The two message shapes are ``string conversion of a `C` instance as a `print()`
+argument is not supported yet; `print()` and f-string interpolation can render
+only a `@dataclass` instance or a caught builtin exception`` (with a help line
+naming the `@dataclass` alternative, and `an f-string interpolation` at the
+other site) and ``string conversion of a value typed as protocol `P` as an
+f-string interpolation is not supported yet; the concrete class is not known
+at the conversion site``. A user class declared under any of the 25 builtin
+exception names is rejected there whatever its shape, because the MIR
+rewrites resolve those names before the shape.
 An import failure
 CPython itself would raise on is `T0021`, not `C0001`. A `from __future__
 import ...` is a compiler directive, not a module (#919, D-229): its nine no-op

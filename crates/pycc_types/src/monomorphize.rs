@@ -1802,6 +1802,27 @@ pub(crate) fn instantiate_generic_class_methods(
         // annotation is rejected at lowering), so there is nothing to
         // substitute. Omitting the field here would silently drop every
         // class attribute from a monomorphized generic class.
+        // #977 (D-237): a `@dataclass` generic class keeps its dataclass
+        // identity in every specialization. `mangled_methods` above already
+        // carries the synthesized `__init__`/`__eq__`/`__repr__` under the
+        // mangled class name, so `pycc_mir::class::rewrite_instance_to_repr`
+        // can render the specialization exactly as it renders the origin --
+        // but only if `is_dataclass` says so. Dropping the flag here made
+        // `check` accept `print(Box[int](1))` (the origin `Box` is a
+        // dataclass) while `build` re-inferred the rewritten call against
+        // the specialization and rejected it with `C0001`. The field list
+        // is substituted the same way `attrs` is, so a `T`-typed field
+        // reports its concrete type on the specialization.
+        let substituted_dataclass_fields = class_def
+            .dataclass_fields
+            .iter()
+            .map(|(field_name, ty)| {
+                (
+                    field_name.clone(),
+                    substitute_ty(ty, type_param_name, type_arg),
+                )
+            })
+            .collect::<Vec<_>>();
         let new_class_def = HirClassDef {
             class_attrs: class_def.class_attrs.clone(),
             exception_type_tag: None,
@@ -1817,8 +1838,8 @@ pub(crate) fn instantiate_generic_class_methods(
             is_enum: false,
             implicit_object_init: false,
             enum_members: Vec::new(),
-            is_dataclass: false,
-            dataclass_fields: Vec::new(),
+            is_dataclass: class_def.is_dataclass,
+            dataclass_fields: substituted_dataclass_fields,
             is_protocol: false,
             runtime_checkable: false,
             protocol_members: Vec::new(),

@@ -289,25 +289,27 @@
               several bigint arithmetic operations and float formatting outside
               the accepted v0.1 range. Unary operators are rejected earlier by
               HIR lowering with a spanned <code>C0001</code> capability diagnostic,
-              including under <code>pycc check</code>. Unbound string
-              temporaries and function-scoped string values can still leak
-              until ownership analysis lands, and the same leak-only
-              policy currently covers <code>list</code>, <code>dict</code>,
-              and <code>set</code> containers and class instances
-              (D-107/D-124, extended by D-154) — none of them carries a
-              real reference count yet. <code>set[int]</code> has no
+              including under <code>pycc check</code>. Printing or
+              interpolating a class instance other than a
+              <code>@dataclass</code> instance or a caught builtin
+              exception, or a protocol-typed value, is <code>C0001</code>
+              (D-237). Unbound string temporaries and function-scoped
+              string values can still leak until ownership analysis lands;
+              the same leak-only policy covers <code>list</code>,
+              <code>dict</code>, and <code>set</code> containers and class
+              instances (D-107/D-124, D-154) — none carries a real
+              reference count yet. <code>set[int]</code> has no
               membership test; <code>in</code> and <code>not in</code>
               route through the generic <code>C0001</code> diagnostic.
-              <code>tuple[...]</code> slicing remains deferred (D-118)
-              until its result shape can be expressed without a
-              fixed-arity struct's fixed bounds. <code>Optional[T]</code>
+              <code>tuple[...]</code> slicing remains deferred (D-118).
+              <code>Optional[T]</code>
               parsing and <code>is</code>/<code>is not None</code>
               comparisons have landed (D-197), and a top-level
-              <code>is</code>/<code>is not None</code> test now narrows a
-              checked <code>Optional</code> binding back to its scalar type
-              for the branch its polarity implies presence in (D-199);
-              narrowing beyond that top-level shape remains open. Type
-              diagnostics still use the documented line-1/column-1
+              <code>is</code>/<code>is not None</code> test narrows a
+              checked <code>Optional</code> binding for the branch its
+              polarity implies presence in (D-199); deeper narrowing
+              remains open. Type
+              diagnostics still use the line-1/column-1
               placeholder span (D-043).
             </p>
             <div class="callout">

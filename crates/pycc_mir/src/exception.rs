@@ -155,6 +155,15 @@ pub(super) fn lower_exception_value(
 /// `HirClassDef` (Part 2 of #543, #739), or a user-defined class that HIR
 /// lowering assigned a tag to (Part 2 of #541, D-189) -- the class-table
 /// fallback below resolves both of the latter two identically.
+///
+/// Name-first resolution is also why the checker's string-conversion gate
+/// (#977, D-237, `pycc_types::string_conversion`) decides the 25 builtin
+/// exception names by *provenance* rather than by name or shape: a user
+/// class -- plain or `@dataclass` -- declared under one of the flat seven
+/// names resolves here by name whatever its shape, and a user exception
+/// class carrying a D-189 tag resolves through the class-table fallback,
+/// so either would be rewritten to `MirExpr::ExceptionMessage` although the
+/// value is a plain `PyInstanceObj`. The checker rejects both before lowering.
 pub(super) fn exception_type_tag(name: &str, classes: &HashMap<String, HirClassDef>) -> Option<u8> {
     resolve_exception_tag(name).or_else(|| classes.get(name).and_then(|def| def.exception_type_tag))
 }

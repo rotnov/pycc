@@ -46,11 +46,15 @@ pub(super) fn rewrite_instance_to_repr(
     // `(self) -> str`. A user-defined `__repr__` on a non-dataclass class
     // may have a different arity or return type, which would cause a
     // codegen panic if rewritten to a call here. Non-dataclass instances
-    // pass through unchanged (the type checker rejects a plain class
-    // without a `__repr__` or an explicit `__init__` with `C0001` before
-    // codegen -- a class with an `__init__` but no `__repr__` type-checks
-    // fine and still reaches `to_str`'s own `Scalar::Instance` panic, see
-    // that function's doc comment).
+    // pass through unchanged. The real gate is upstream (#977, D-237):
+    // `pycc_types::string_conversion` rejects with `C0001` every `print`
+    // argument and f-string interpolation that neither this rewrite nor
+    // `rewrite_exception_to_message` renders -- a conservative
+    // under-approximation, stricter than MIR's own resolution for a user
+    // class (plain or `@dataclass`) declared under any of the 25 builtin
+    // exception names and for a tagged user exception class instantiated
+    // as a value -- so a widening here must widen the checker first, or
+    // the widened shape can never reach this function.
     if !class_def.is_dataclass {
         return expr.clone();
     }
