@@ -2158,6 +2158,76 @@ if not column_sources or not labels or not row_order:
         "must be present and non-empty"
     )
 
+# The published column order. `column_sources` is bound to it below, so the
+# block can no longer carry a stale or renamed column key unnoticed.
+columns = ["type_enforcement", "native_executable", "standard_python"]
+
+# Verdict vocabulary and the glyph each verdict is published as. `⚠️` is
+# U+26A0 optionally followed by the U+FE0F variation selector; both spellings
+# are accepted and mean the same verdict.
+VERDICT_GLYPHS = {
+    "yes": "✅",
+    "no": "❌",
+    "partial": "⚠️",
+}
+GLYPH_PATTERN = re.compile("^(✅|❌|⚠️?)")
+ANY_GLYPH = re.compile("[✅❌⚠]")
+
+if set(column_sources) != set(columns):
+    raise SystemExit(
+        "readme_projection.column_sources keys "
+        f"{sorted(column_sources)} must be exactly {sorted(columns)}"
+    )
+for column in columns:
+    if column_sources[column] != column:
+        raise SystemExit(
+            f"readme_projection.column_sources[{column!r}] must name its own "
+            f"column {column!r}, found {column_sources[column]!r}"
+        )
+
+# Fail closed on the model before comparing anything against the README: a
+# labels entry that is missing, extra, malformed, or carries an unknown
+# verdict must be an error rather than a silently skipped row.
+if set(labels) != set(row_order):
+    missing = set(row_order) - set(labels)
+    extra = set(labels) - set(row_order)
+    detail = []
+    if missing:
+        detail.append(f"missing from labels: {sorted(missing)}")
+    if extra:
+        detail.append(f"absent from row_order: {sorted(extra)}")
+    raise SystemExit(
+        f"readme_projection.labels/row_order mismatch: {'; '.join(detail)}"
+    )
+if len(row_order) != len(set(row_order)):
+    raise SystemExit("readme_projection.row_order contains duplicate entities")
+
+for entity_name in row_order:
+    entry = labels[entity_name]
+    if not isinstance(entry, dict) or set(entry) != set(columns):
+        raise SystemExit(
+            f"readme_projection.labels[{entity_name!r}] must be an object with "
+            f"exactly the keys {sorted(columns)}"
+        )
+    for column in columns:
+        cell = entry[column]
+        if not isinstance(cell, dict) or set(cell) != {"verdict", "text"}:
+            raise SystemExit(
+                f"readme_projection.labels[{entity_name!r}][{column!r}] must be "
+                "an object with exactly the keys ['text', 'verdict']"
+            )
+        if cell["verdict"] not in VERDICT_GLYPHS:
+            raise SystemExit(
+                f"readme_projection.labels[{entity_name!r}][{column!r}].verdict "
+                f"is {cell['verdict']!r}, expected one of "
+                f"{sorted(VERDICT_GLYPHS)}"
+            )
+        if not isinstance(cell["text"], str):
+            raise SystemExit(
+                f"readme_projection.labels[{entity_name!r}][{column!r}].text "
+                "must be a string"
+            )
+
 readme_text = readme_path.read_text()
 
 # Find the comparison table. It starts with a header row containing
@@ -2178,92 +2248,95 @@ if not table_lines:
     raise SystemExit("README comparison table not found")
 
 # Parse the table. Skip header and separator rows.
-# Expected columns: empty first col (entity name), type_enforcement, native_executable, standard_python
+# Expected columns: entity name, type_enforcement, native_executable,
+# standard_python.
 readme_rows = {}
+readme_names = []
 for line in table_lines:
     if "Enforces types at compile time" in line:
         continue
     if re.match(r"^\|[\s\-|]+\|$", line):
         continue
-    cells = [c.strip() for c in line.split("|")]
-    # Remove empty leading/trailing cells from | ... | format
-    cells = [c for c in cells if c != ""]
-    if len(cells) < 4:
-        continue
+    cells = [c.strip() for c in line.split("|")[1:-1]]
     entity_name = cells[0].rstrip(".")
     # Remove markdown bold markers
     entity_name = entity_name.replace("**", "")
     # Handle "pycc (v1.0 design target)" -> "pycc"
     entity_name = entity_name.split("(")[0].strip()
+    if len(cells) != len(columns) + 1:
+        raise SystemExit(
+            f"README comparison row {entity_name!r} has {len(cells)} cells, "
+            f"expected {len(columns) + 1}"
+        )
     # Handle "mypy / pyright" -> split into two entities
     if "/" in entity_name and entity_name not in labels:
         parts = [p.strip() for p in entity_name.split("/")]
-        for part in parts:
-            readme_rows[part] = cells[1:]
     else:
-        readme_rows[entity_name] = cells[1:]
+        parts = [entity_name]
+    for part in parts:
+        readme_rows[part] = cells[1:]
+        readme_names.append(part)
 
-# Check row order matches
-readme_names = list(readme_rows.keys())
-expected_names = row_order
-
-# The README may combine mypy/pyright into one row; allow that
-if set(readme_names) != set(expected_names):
-    # Check if mypy and pyright are combined
-    if "mypy" in readme_names and "pyright" not in readme_names:
-        # The combined row covers both
-        if set(readme_names) | {"pyright"} == set(expected_names) or set(readme_names) == set(expected_names) - {"pyright"}:
-            pass  # Acceptable
-        else:
-            missing = set(expected_names) - set(readme_names)
-            extra = set(readme_names) - set(expected_names)
-            detail = []
-            if missing:
-                detail.append(f"missing from README: {sorted(missing)}")
-            if extra:
-                detail.append(f"extra in README: {sorted(extra)}")
-            raise SystemExit(
-                f"README comparison entity set mismatch: {'; '.join(detail)}"
-            )
-    else:
-        missing = set(expected_names) - set(readme_names)
-        extra = set(readme_names) - set(expected_names)
-        detail = []
-        if missing:
-            detail.append(f"missing from README: {sorted(missing)}")
-        if extra:
-            detail.append(f"extra in README: {sorted(extra)}")
-        raise SystemExit(
-            f"README comparison entity set mismatch: {'; '.join(detail)}"
+# The README must project exactly the model's entities, in the model's order,
+# each exactly once. A combined "mypy / pyright" row contributes both halves in
+# the order it spells them, so the combined row is still bound to both entities
+# rather than silently covering only the first.
+if readme_names != list(row_order):
+    missing = set(row_order) - set(readme_names)
+    extra = set(readme_names) - set(row_order)
+    duplicates = sorted({n for n in readme_names if readme_names.count(n) > 1})
+    detail = []
+    if missing:
+        detail.append(f"missing from README: {sorted(missing)}")
+    if extra:
+        detail.append(f"extra in README: {sorted(extra)}")
+    if duplicates:
+        detail.append(f"duplicated in README: {duplicates}")
+    if not detail:
+        detail.append(
+            f"order differs: README has {readme_names}, "
+            f"row_order has {list(row_order)}"
         )
+    raise SystemExit(
+        f"README comparison entity set mismatch: {'; '.join(detail)}"
+    )
 
-# Check each cell matches the projection labels
-columns = ["type_enforcement", "native_executable", "standard_python"]
-for entity_name in readme_names:
-    if entity_name not in labels:
-        # If this is a combined mypy/pyright row, check against mypy
-        if entity_name == "mypy":
-            continue
-        raise SystemExit(
-            f"README comparison row {entity_name!r} has no "
-            f"readme_projection.labels entry"
-        )
+# Check each cell's published verdict glyph and its trailing text against the
+# model. Both halves are bound: stripping the glyph out before comparing (the
+# defect this check replaces) left every verdict in the table unreviewed.
+for entity_name in row_order:
     expected_labels = labels[entity_name]
     actual_cells = readme_rows[entity_name]
     for i, column in enumerate(columns):
-        if i >= len(actual_cells):
-            raise SystemExit(
-                f"README comparison row {entity_name!r} has too few cells"
-            )
         expected = expected_labels[column]
         actual = actual_cells[i]
-        # Normalize: remove emoji indicators for comparison
-        actual_normalized = re.sub(r"[✅❌⚠️`]", "", actual).strip()
-        if actual_normalized != expected:
+        match = GLYPH_PATTERN.match(actual)
+        if match is None:
+            raise SystemExit(
+                f"README comparison cell for {entity_name} {column!r} must "
+                f"begin with one of {sorted(VERDICT_GLYPHS.values())}, "
+                f"found {actual!r}"
+            )
+        glyph = match.group(1)
+        rest = actual[match.end():]
+        if ANY_GLYPH.search(rest):
+            raise SystemExit(
+                f"README comparison cell for {entity_name} {column!r} carries "
+                f"more than one verdict glyph: {actual!r}"
+            )
+        expected_glyph = VERDICT_GLYPHS[expected["verdict"]]
+        if glyph.rstrip("️") != expected_glyph.rstrip("️"):
+            raise SystemExit(
+                f"README comparison verdict mismatch for {entity_name} "
+                f"{column!r}: expected {expected['verdict']!r} "
+                f"({expected_glyph}), found {glyph!r}"
+            )
+        actual_text = re.sub("`", "", rest).strip()
+        if actual_text != expected["text"]:
             raise SystemExit(
                 f"README comparison cell mismatch for {entity_name} "
-                f"{column!r}: expected {expected!r}, "
-                f"found {actual_normalized!r}"
+                f"{column!r}: expected {expected['text']!r}, "
+                f"found {actual_text!r}"
             )
 PY
 

@@ -2605,7 +2605,7 @@ import json
 path = Path(sys.argv[1])
 data = json.loads(path.read_text())
 # Corrupt the pycc native_executable label
-data["readme_projection"]["labels"]["pycc"]["native_executable"] = "CPython interpreter required"
+data["readme_projection"]["labels"]["pycc"]["native_executable"]["text"] = "CPython interpreter required"
 path.write_text(json.dumps(data, indent=2) + "\n")
 PY
 
@@ -2637,6 +2637,362 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   exit 1
 fi
 restore_fixtures
+
+# --- Issue #682: bind the published verdict glyph, not only the cell text ---
+# Until #682 the comparison cells were normalized by stripping every verdict
+# glyph before comparing, so all 24 verdicts were unbound and several
+# structural defects (a dropped entity, a reordered or duplicated row) were
+# accepted. Each block below is a mutation that the pre-#682 checker accepted.
+
+# Verdict-only mutation on a bare cell: the combined mypy / pyright row
+# publishes a glyph with no trailing text, so nothing but the glyph binds it.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "| mypy / pyright | ✅ | ❌ checker only | ✅ |",
+    "| mypy / pyright | ❌ | ❌ checker only | ✅ |",
+    1
+)
+path.write_text(content)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a flipped verdict glyph on the bare mypy / pyright cell" >&2
+  exit 1
+fi
+restore_fixtures
+
+# Verdict-only mutation on a labelled cell: the trailing text still matches the
+# model, so only the glyph binding can reject this.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "| Codon | ✅ static language |",
+    "| Codon | ❌ static language |",
+    1
+)
+path.write_text(content)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a flipped verdict glyph with matching cell text (Codon type_enforcement)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# Verdict-only mutation in a middle column, so the check is not bound to the
+# first column alone.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "| Codon | ✅ static language | ✅ |",
+    "| Codon | ✅ static language | ❌ |",
+    1
+)
+path.write_text(content)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a flipped verdict glyph (Codon native_executable)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# The partial verdict is published as U+26A0 plus the U+FE0F variation
+# selector; flipping it must be rejected like any other verdict.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "| Cython | ⚠️ optional |",
+    "| Cython | ✅ optional |",
+    1
+)
+path.write_text(content)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a flipped warning verdict glyph (Cython type_enforcement)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# A cell that publishes no verdict at all must be rejected rather than read as
+# an empty label.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "| Codon | ✅ static language |",
+    "| Codon | static language |",
+    1
+)
+path.write_text(content)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a README comparison cell with no verdict glyph" >&2
+  exit 1
+fi
+restore_fixtures
+
+# An emptied cell is also a missing verdict, not an empty label.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "| Codon | ✅ static language |",
+    "| Codon |  |",
+    1
+)
+path.write_text(content)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an emptied README comparison cell" >&2
+  exit 1
+fi
+restore_fixtures
+
+# A duplicated row used to be swallowed silently, because the parsed rows were
+# collected into a dict keyed by entity name.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+row = "| Codon | ✅ static language | ✅ | ⚠️ Python-like language with documented differences |"
+content = content.replace(row, row + "\n" + row, 1)
+path.write_text(content)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a duplicated README comparison row" >&2
+  exit 1
+fi
+restore_fixtures
+
+# Row order is part of the projection: the old check compared sets, so a
+# reordered table was accepted.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+codon = "| Codon | ✅ static language | ✅ | ⚠️ Python-like language with documented differences |"
+nuitka = "| Nuitka | ❌ | ❌ packages CPython runtime components | ✅ compatibility-focused |"
+content = content.replace(codon + "\n", "", 1)
+content = content.replace(nuitka, nuitka + "\n" + codon, 1)
+path.write_text(content)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a reordered README comparison table" >&2
+  exit 1
+fi
+restore_fixtures
+
+# An extra cell changes the column meaning of every cell after it, so the row
+# arity is checked exactly rather than as a lower bound.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+row = "| Codon | ✅ static language | ✅ | ⚠️ Python-like language with documented differences |"
+content = content.replace(row, row + " extra |", 1)
+path.write_text(content)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a README comparison row with an extra cell" >&2
+  exit 1
+fi
+restore_fixtures
+
+# Dropping pyright from the combined row leaves the remaining entity bound and
+# pyright silently unprojected. This was the widest hole the old permissive
+# mypy/pyright branch left open.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+python3 - "$fixture_root/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+content = content.replace(
+    "| mypy / pyright | ✅ | ❌ checker only | ✅ |",
+    "| mypy | ❌ | ❌ checker only | ❌ |",
+    1
+)
+path.write_text(content)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a README comparison table that drops pyright from the combined row" >&2
+  exit 1
+fi
+restore_fixtures
+
+# Model-side verdict mutation with the README untouched: only the verdict
+# binding can reject this, because every cell's text still matches.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+cp "$repo_root/site/python-aot-compilers/claims.json" "$fixture_root/site/python-aot-compilers/claims.json"
+python3 - "$fixture_root/site/python-aot-compilers/claims.json" <<'PY'
+from pathlib import Path
+import sys
+import json
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["readme_projection"]["labels"]["Codon"]["type_enforcement"]["verdict"] = "no"
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a claims.json verdict that contradicts the published README glyph" >&2
+  exit 1
+fi
+restore_fixtures
+
+# A missing labels entry used to be skipped for mypy specifically.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+cp "$repo_root/site/python-aot-compilers/claims.json" "$fixture_root/site/python-aot-compilers/claims.json"
+python3 - "$fixture_root/site/python-aot-compilers/claims.json" <<'PY'
+from pathlib import Path
+import sys
+import json
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+del data["readme_projection"]["labels"]["mypy"]
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a claims.json readme_projection with no labels entry for mypy" >&2
+  exit 1
+fi
+restore_fixtures
+
+# A labels entry that no row_order entry projects is unreviewable data.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+cp "$repo_root/site/python-aot-compilers/claims.json" "$fixture_root/site/python-aot-compilers/claims.json"
+python3 - "$fixture_root/site/python-aot-compilers/claims.json" <<'PY'
+from pathlib import Path
+import sys
+import json
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["readme_projection"]["labels"]["FakeCompiler"] = {
+    column: {"verdict": "yes", "text": ""}
+    for column in ("type_enforcement", "native_executable", "standard_python")
+}
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a readme_projection labels entry absent from row_order" >&2
+  exit 1
+fi
+restore_fixtures
+
+# column_sources used to be read, checked non-empty, and then ignored.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+cp "$repo_root/site/python-aot-compilers/claims.json" "$fixture_root/site/python-aot-compilers/claims.json"
+python3 - "$fixture_root/site/python-aot-compilers/claims.json" <<'PY'
+from pathlib import Path
+import sys
+import json
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["readme_projection"]["column_sources"]["standard_python"] = "renamed_source"
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a renamed readme_projection column_sources value" >&2
+  exit 1
+fi
+restore_fixtures
+
+# The pre-#682 bare-string cell shape must be rejected outright, so a partial
+# revert cannot quietly restore the unbound comparison.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+cp "$repo_root/site/python-aot-compilers/claims.json" "$fixture_root/site/python-aot-compilers/claims.json"
+python3 - "$fixture_root/site/python-aot-compilers/claims.json" <<'PY'
+from pathlib import Path
+import sys
+import json
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["readme_projection"]["labels"]["Codon"]["type_enforcement"] = "static language"
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a bare-string readme_projection comparison cell" >&2
+  exit 1
+fi
+restore_fixtures
+
+# A verdict outside the published vocabulary has no glyph, so it must be an
+# error rather than an unmatchable comparison.
+cp "$repo_root/README.md" "$fixture_root/README.md"
+cp "$repo_root/site/python-aot-compilers/claims.json" "$fixture_root/site/python-aot-compilers/claims.json"
+python3 - "$fixture_root/site/python-aot-compilers/claims.json" <<'PY'
+from pathlib import Path
+import sys
+import json
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["readme_projection"]["labels"]["Codon"]["type_enforcement"]["verdict"] = "maybe"
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an unknown readme_projection verdict value" >&2
+  exit 1
+fi
+restore_fixtures
+
 
 cp "$repo_root/README.md" "$fixture_root/README.md"
 cp "$repo_root/site/python-aot-compilers/claims.json" "$fixture_root/site/python-aot-compilers/claims.json"
