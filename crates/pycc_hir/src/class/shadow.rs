@@ -34,15 +34,16 @@
 //! shared: `pycc_types` needs a `Ty` and `pycc_mir` needs a folded
 //! literal, so each crate keeps its own MRO loop around this call.
 
-use super::HirClassDef;
+use super::{HirClassDef, ProtocolMember};
 
 /// #974: returns `true` when `class_def` declares `name` in one of the
 /// class-level namespaces that a class-name-qualified read must treat as
 /// *shadowing* an inherited class attribute.
 ///
 /// The namespaces checked are `methods`, `static_methods`, `class_methods`,
-/// `properties`, and `enum_members` -- everything a `ClassName.name` read
-/// could resolve to in CPython that is not a class attribute. Within one
+/// `properties`, `enum_members`, and the [`ProtocolMember::Method`] half of
+/// `protocol_members` -- everything a `ClassName.name` read could resolve
+/// to in CPython that is not a class attribute. Within one
 /// class these are disjoint from `class_attrs`:
 /// `class::attrs::reject_class_attr_collisions` rejects a class that
 /// declares the same name both ways with `C0001`, so the two checks a
@@ -61,14 +62,21 @@ use super::HirClassDef;
 ///   CPython agrees: for `class A` contributing an instance slot `x`,
 ///   `class B` declaring `x: int = 2`, and `class C(A, B)`, CPython prints
 ///   `1` for `c.x` and `2` for `C.x`.
-/// - [`HirClassDef::protocol_members`], for exactly the same reason as
-///   `attrs`: a protocol member is an interface *requirement*, not a
-///   binding on the class object, and a protocol class really can precede
-///   a class attribute's owner in a live MRO
+/// - [`ProtocolMember::Attribute`], for exactly the same reason as
+///   `attrs`: a bare `x: int` in a protocol body is an interface
+///   *requirement*, not a binding on the class object, and a protocol
+///   class really can precede a class attribute's owner in a live MRO
 ///   (`class P(Protocol): x: int`, `class A: x: int = 2`,
 ///   `class C(P, A)` compiles today, and CPython prints `2` for `C.x`).
-///   It is excluded because it is not a shadowing declaration, not because
-///   the code path is unreachable.
+///   It is excluded because it is not a shadowing declaration, not
+///   because the code path is unreachable. Its sibling
+///   [`ProtocolMember::Method`] is **not** excluded: a `Protocol` class
+///   executes its body like any other class, so `def x(self) -> int: ...`
+///   really does bind `x` in `P.__dict__`, and CPython resolves
+///   `C.x` to that function rather than continuing to a base's class
+///   attribute. Folding the base's constant there would be a
+///   mis-compile in both crates at once, which the shared predicate
+///   cannot catch precisely because they agree.
 /// - [`HirClassDef::abstract_methods`], which is redundant: an
 ///   `@abstractmethod` is also entered into `methods` by
 ///   `class::body::walk_class_body`, so it is already covered.
@@ -83,4 +91,7 @@ pub fn declares_name_outside_class_attrs(class_def: &HirClassDef, name: &str) ->
         || class_def.class_methods.iter().any(|(n, _)| n == name)
         || class_def.properties.iter().any(|p| p.name == name)
         || class_def.enum_members.iter().any(|(n, _)| n == name)
+        || class_def.protocol_members.iter().any(|member| {
+            matches!(member, ProtocolMember::Method { name: n, .. } if n == name)
+        })
 }

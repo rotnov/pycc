@@ -395,11 +395,11 @@ print(B.x)
 }
 
 /// A protocol class really can precede a class attribute's owner in a live
-/// MRO, and its `protocol_members` entry must not shadow: a protocol member
-/// is an interface requirement, not a binding on the class object. CPython
-/// prints `2` here too.
+/// MRO, and a bare `x: int` requirement -- the `ProtocolMember::Attribute`
+/// half -- must not shadow: it is an interface requirement, not a binding on
+/// the class object. CPython prints `2` here too.
 #[test]
-fn a_protocol_member_does_not_shadow_an_inherited_class_attribute() {
+fn a_protocol_attribute_member_does_not_shadow_an_inherited_class_attribute() {
     assert_runs(
         "issue974_protocol",
         "\
@@ -417,6 +417,37 @@ class C(P, A):
 print(C.x)
 ",
         "2\n",
+    );
+}
+
+/// The `ProtocolMember::Method` half is the opposite: a `Protocol` class
+/// executes its body like any other class, so `def x(self) -> int: ...`
+/// really does bind `x` in `P.__dict__`. CPython resolves `C.x` to that
+/// function object rather than continuing on to `A`'s class attribute, so
+/// folding `2` here would be a mis-compile -- and one the shared predicate
+/// could not catch by itself, because both crates would agree on the wrong
+/// answer. pycc does not model a bare, uncalled method read through a class
+/// name, so the read stays `T0044`.
+#[test]
+fn a_protocol_method_member_shadows_an_inherited_class_attribute() {
+    assert_rejected(
+        "issue974_protocol_method",
+        "\
+from typing import Protocol
+
+class P(Protocol):
+    def x(self) -> int: ...
+
+class A:
+    x: int = 2
+
+class C(P, A):
+    pass
+
+print(C.x)
+",
+        "T0044",
+        "class `C` has no attribute named `x`",
     );
 }
 
