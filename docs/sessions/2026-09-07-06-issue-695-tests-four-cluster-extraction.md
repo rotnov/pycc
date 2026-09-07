@@ -85,6 +85,19 @@ The coverage gate ran after the same preparatory builds CI performs:
 `cargo build --target x86_64-apple-darwin -p pycc_rt`, `cargo build --workspace`
 and `cargo build --release -p pycc_rt`.
 
+## Review
+
+The D-068 pinned local reviewer (iEvo `deep-reviewer`) reviewed the full
+committed range from the merge base through `d4c396a3` and returned a single
+`note`-severity finding: the retained `expect_top_level_try` /
+`expect_top_level_raise` doc comments still named their panic-arm coverage
+tests unqualified, even though those tests had moved into the child module.
+Commit `12304fbb` qualifies both cross-references with the
+`exception_handling::` path; it is the pull request's delivering head. No P0/P1
+and no other actionable finding was raised. `cargo fmt --check` exits 0 on that
+head, and the commit changes only two doc-comment lines in place, so every line
+and test count above is unaffected by it.
+
 ## Follow-ups
 
 - `crates/pycc_types/src/tests.rs` is still 24,744 lines. #695 remains open for
@@ -95,6 +108,11 @@ and `cargo build --release -p pycc_rt`.
   sentence, not a banner. A future extraction in that region must not treat it
   as a cut boundary — this is why the candidate cluster around it was dropped
   here.
+- `expect_top_level_try` and `expect_top_level_raise` now have no remaining
+  call site in `tests.rs` itself — only `parse_check` and `parse_check_resolve`
+  genuinely had to stay behind. A later exception-handling extraction in this
+  region can move those two helpers down into the child module with the tests
+  that use them.
 
 ## Where to resume
 
