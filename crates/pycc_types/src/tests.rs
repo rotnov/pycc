@@ -515,10 +515,6 @@ fn homogeneous_private_solver_scalar_list_element_accepts_a_single_scalar() {
     );
 }
 
-// -- PR-12 Task 10 (D-119): remaining container methods depth --------
-// `collect_expr_constraints` coverage, mirroring `ListAppend`'s own
-// direct-call test shape exactly.
-
 #[test]
 fn a_private_helper_can_use_an_annotated_assignment_during_signature_inference() {
     // End-to-end: an annotated assignment inside a private helper whose
@@ -18318,8 +18314,6 @@ fn instantiate_generic_class_methods_skips_nonexistent_class_method_function() {
     assert!(find_function(&resolved, "0gen_F__T_int.__init__").is_some());
     assert!(find_function(&resolved, "0gen_F__T_int.ghost.classmethod").is_none());
 }
-
-// -- collect_expr_constraints GCI ? path (line 1384) ------------------
 
 // -- is_assignable Ty::Param branch (line 3229) -----------------------
 

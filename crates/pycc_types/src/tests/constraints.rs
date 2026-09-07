@@ -1015,6 +1015,11 @@ fn constraint_collection_propagates_an_error_from_a_list_append_value() {
 
     assert_eq!(err.code, "T0021");
 }
+
+// -- PR-12 Task 10 (D-119): remaining container methods depth --------
+// `collect_expr_constraints` coverage, mirroring `ListAppend`'s own
+// direct-call test shape exactly.
+
 #[test]
 fn constraint_collection_treats_a_list_pop_as_unconstrained() {
     // `list` is a plain name, not a sub-expression -- unlike
@@ -2799,6 +2804,9 @@ fn constraint_collection_propagates_an_error_from_a_tuple_literal_element() {
 
     assert_eq!(err.code, "T0021");
 }
+
+// -- collect_expr_constraints GCI ? path (line 1384) ------------------
+
 #[test]
 fn collect_expr_constraints_propagates_error_from_generic_class_instantiate_arg() {
     // Exercises `collect_expr_constraints`'s GCI arm's `?` on the
