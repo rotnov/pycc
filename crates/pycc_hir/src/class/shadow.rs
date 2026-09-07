@@ -91,7 +91,8 @@ pub fn declares_name_outside_class_attrs(class_def: &HirClassDef, name: &str) ->
         || class_def.class_methods.iter().any(|(n, _)| n == name)
         || class_def.properties.iter().any(|p| p.name == name)
         || class_def.enum_members.iter().any(|(n, _)| n == name)
-        || class_def.protocol_members.iter().any(|member| {
-            matches!(member, ProtocolMember::Method { name: n, .. } if n == name)
-        })
+        || class_def
+            .protocol_members
+            .iter()
+            .any(|member| matches!(member, ProtocolMember::Method { name: n, .. } if n == name))
 }
