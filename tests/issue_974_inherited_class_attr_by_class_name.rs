@@ -549,3 +549,102 @@ print(Color.NOPE)
         "class `Color` has no attribute named `NOPE`",
     );
 }
+
+// Codex review round on PR #992: the `#436` class-name `AttrGet` arm fired
+// whenever `env.lookup_class(name)` succeeded, without first checking whether
+// an active value binding shadows that name. CPython resolves the binding, so
+// all three shapes below must read the parameter's instance slot. The
+// inherited shape was a regression this issue's own MRO walk introduced (base
+// `3ba4a027` rejected it with `T0044`); the own-declared and enum-member
+// shapes predate it and the one guard fixes them too.
+
+#[test]
+fn an_active_binding_shadows_an_inherited_class_attribute_read() {
+    assert_runs(
+        "issue974_shadowed_inherited",
+        "\
+class A:
+    X: int = 2
+
+
+class B(A):
+    pass
+
+
+class D:
+    def __init__(self) -> None:
+        self.X = 3
+
+
+def f(B: D) -> int:
+    return B.X
+
+
+def main() -> None:
+    print(f(D()))
+
+
+main()
+",
+        "3\n",
+    );
+}
+
+#[test]
+fn an_active_binding_shadows_an_own_class_attribute_read() {
+    assert_runs(
+        "issue974_shadowed_own",
+        "\
+class B:
+    X: int = 2
+
+
+class D:
+    def __init__(self) -> None:
+        self.X = 3
+
+
+def f(B: D) -> int:
+    return B.X
+
+
+def main() -> None:
+    print(f(D()))
+
+
+main()
+",
+        "3\n",
+    );
+}
+
+#[test]
+fn an_active_binding_shadows_an_enum_member_read() {
+    assert_runs(
+        "issue974_shadowed_enum",
+        "\
+from enum import Enum
+
+
+class Color(Enum):
+    RED = 1
+
+
+class D:
+    def __init__(self) -> None:
+        self.RED = 3
+
+
+def f(Color: D) -> int:
+    return Color.RED
+
+
+def main() -> None:
+    print(f(D()))
+
+
+main()
+",
+        "3\n",
+    );
+}

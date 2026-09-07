@@ -663,8 +663,15 @@ pub(super) fn lower_expr(
             // `.value`/`.name` read on this result is a separate
             // `AttrGet` that resolves to a slot via the enum class's
             // `attrs = [("value", Int), ("name", Str)]` table.
-            if let Some(enum_member_expr) =
-                try_lower_enum_member_attr(base.as_ref(), attr.as_str(), classes)
+            // A value binding of the enum class's own name shadows the
+            // class here exactly as it does for the class-attribute fold
+            // below, so this interception is guarded the same way -- without
+            // it `def f(Color: D) -> int: return Color.RED` would read the
+            // enum member's singleton instead of the parameter's slot.
+            if !matches!(base.as_ref(), HirExpr::Name(name)
+                if scopes.iter().any(|scope| scope.contains_key(name)))
+                && let Some(enum_member_expr) =
+                    try_lower_enum_member_attr(base.as_ref(), attr.as_str(), classes)
             {
                 return enum_member_expr;
             }
@@ -685,7 +692,15 @@ pub(super) fn lower_expr(
             // #960 failure mode). This is deliberately *not* the instance
             // arm's walk further below: that one consults instance slots
             // first, and a class object has no instance `__dict__`.
+            // An active value binding of that name shadows the class, so
+            // `B.X` reads the parameter's instance slot rather than the class
+            // attribute -- `pycc_types`' own class-name `AttrGet` arm applies
+            // the matching binding/local guard, and this scope check is the
+            // MIR-side spelling of it (the same one the `__class_getitem__`
+            // interception above already uses). Without it the shadowed name
+            // would reach the internal-error panic below.
             if let HirExpr::Name(class_name) = base.as_ref()
+                && !scopes.iter().any(|scope| scope.contains_key(class_name))
                 && let Some(class_def) = classes.get(class_name.as_str())
             {
                 for mro_class in &class_def.mro {
@@ -697,11 +712,12 @@ pub(super) fn lower_expr(
                         break;
                     }
                 }
-                // The base really is a class name -- `classes.get` succeeded
-                // -- so there is no value binding to fall back to and
+                // The base really is a class name -- `classes.get`
+                // succeeded and the scope guard above proved no value binding
+                // shadows it -- so there is nothing to fall back to and
                 // `lower_expr` below would fail on it. A name that is *not* a
-                // class (the ordinary `d.LIMIT` local or parameter) never
-                // reaches here and still falls through.
+                // class (the ordinary `d.LIMIT` local or parameter), and a
+                // class name shadowed by a binding, both fall through.
                 panic!(
                     "pycc_mir: internal error: attribute `{attr}` is not a class attribute \
                      reachable through class `{class_name}`'s MRO -- pycc_types::check should \

@@ -1065,7 +1065,16 @@ pub(crate) fn infer_expr_in(
             // compiler's static-dispatch model. Reject with a clear error
             // rather than letting `infer_expr_in` on the class name
             // produce a confusing "name not defined" diagnostic.
+            //
+            // An active value binding of that same name wins over the class:
+            // in `def f(B: D) -> int: return B.X`, `B` is the parameter, not
+            // the class `B`, exactly as CPython resolves it. Guard with the
+            // same binding/local pair the `Subscript` class-name path above
+            // already uses, so a shadowed name falls through to the ordinary
+            // instance path below.
             if let HirExpr::Name(class_name) = base.as_ref()
+                && env.binding_state(class_name).is_none()
+                && !is_local(local_names, class_name)
                 && let Some(class_def) = env.lookup_class(class_name)
             {
                 // #379 (PR-19): `Color.RED` — accessing an enum member by
