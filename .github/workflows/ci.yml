@@ -97,6 +97,36 @@ jobs:
           ruby scripts/test_check_roadmap_evidence.rb
           ruby scripts/check_roadmap_evidence.rb
 
+      - name: Check site pin merge-currency checker (issue #990)
+        run: ruby scripts/test_check_site_pin_merge_currency.rb
+
+      - name: Check canonical page pins against the predicted merge date (issue #990)
+        # Pull-request leg only, deliberately. The question this checker asks
+        # -- "will this branch's date pins still be correct once its squash
+        # commit lands?" -- is only meaningful before the merge. On a push to
+        # `main` the merge has already happened and the committed state is
+        # validated by scripts/check_sitemap_lastmod.rb in
+        # .github/workflows/pages.yml, so running a prediction here could only
+        # ever turn a required context red on the default branch.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "Not a pull_request event (or no usable base revision); skipping."
+            exit 0
+          fi
+          # This job checks out at the default fetch-depth of 1, so neither the
+          # base nor the head commit is present. Both SHAs are passed
+          # explicitly rather than relying on HEAD -- on a pull_request event
+          # the checkout resolves to refs/pull/N/merge, a synthetic merge
+          # commit that is neither of the revisions being compared -- and the
+          # checker's own ensure_revision_available shallow-fetches whichever
+          # of them is missing, exactly as
+          # .github/workflows/status-page-freshness.yml relies on.
+          ruby scripts/check_site_pin_merge_currency.rb "${BASE_SHA}" "${HEAD_SHA}" .
+
       - name: Check conformance breadth contract (issue #595)
         run: python3 -B scripts/check_conformance_breadth.py
 

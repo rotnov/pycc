@@ -56,6 +56,9 @@ on:
       - "scripts/test_check_markdown_landing.rb"
       - "scripts/check_sitemap_lastmod.rb"
       - "scripts/test_check_sitemap_lastmod.rb"
+      - "scripts/site_canonical_pages.rb"
+      - "scripts/check_site_pin_merge_currency.rb"
+      - "scripts/test_check_site_pin_merge_currency.rb"
       - "scripts/check_source_links_registry.rb"
       - "scripts/test_check_source_links_registry.rb"
       - "site/python-aot-compilers/source-link-registry.json"
@@ -114,6 +117,9 @@ on:
       - "scripts/test_check_markdown_landing.rb"
       - "scripts/check_sitemap_lastmod.rb"
       - "scripts/test_check_sitemap_lastmod.rb"
+      - "scripts/site_canonical_pages.rb"
+      - "scripts/check_site_pin_merge_currency.rb"
+      - "scripts/test_check_site_pin_merge_currency.rb"
       - "scripts/check_source_links_registry.rb"
       - "scripts/test_check_source_links_registry.rb"
       - "site/python-aot-compilers/source-link-registry.json"
@@ -159,6 +165,7 @@ jobs:
           ruby scripts/test_check_readme_coverage_badge.rb
           ruby scripts/check_sitemap_lastmod.rb
           ruby scripts/test_check_sitemap_lastmod.rb
+          ruby scripts/test_check_site_pin_merge_currency.rb
           ruby scripts/check_source_links_registry.rb
           ruby scripts/test_check_source_links_registry.rb
           ruby scripts/check_search_visibility.rb
@@ -179,6 +186,27 @@ jobs:
           ruby scripts/test_check_indexnow_test_binding.rb
           ruby scripts/check_markdown_landing.rb
           ruby scripts/test_check_markdown_landing.rb
+
+      - name: Check canonical page pins against the predicted merge date (issue #990)
+        # Defense in depth for the same check that .github/workflows/ci.yml's
+        # `governance` job runs; that job is the load-bearing one, since
+        # `ci-gate` (a required context) fails when it fails, while `Pages` is
+        # not a required context.
+        #
+        # Pull-request leg only, deliberately: on the push leg the merge has
+        # already happened, so there is no date left to predict and the
+        # committed state is validated by scripts/check_sitemap_lastmod.rb in
+        # the Validate website step above.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "Not a pull_request event (or no usable base revision); skipping."
+            exit 0
+          fi
+          ruby scripts/check_site_pin_merge_currency.rb "${BASE_SHA}" "${HEAD_SHA}" .
 
       - name: Upload website
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4

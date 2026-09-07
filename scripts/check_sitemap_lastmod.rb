@@ -19,22 +19,18 @@
 require "date"
 require "pathname"
 
+# The canonical-URL -> source-file map is shared with
+# scripts/check_site_pin_merge_currency.rb (issue #990); see that file for
+# why it lives in its own requirable file rather than here.
+require_relative "site_canonical_pages"
+
 class SitemapLastmodError < StandardError; end
 
-REPO_ROOT = Pathname(ARGV[0] || Pathname(__dir__).parent)
+# Only consult ARGV when this file is being run as a program. When it is
+# required by another script (or by its own future callers), ARGV belongs
+# to that program and must not be reinterpreted as a repository root.
+REPO_ROOT = Pathname(($PROGRAM_NAME == __FILE__ && ARGV[0]) || Pathname(__dir__).parent)
 SITEMAP_PATH = REPO_ROOT / "site" / "sitemap.xml"
-
-# Maps canonical URLs to their source HTML files relative to repo root.
-CANONICAL_TO_SOURCE = {
-  "https://rotnov.github.io/pycc/" => "site/index.html",
-  "https://rotnov.github.io/pycc/status/" => "site/status/index.html",
-  "https://rotnov.github.io/pycc/architecture/" => "site/architecture/index.html",
-  "https://rotnov.github.io/pycc/python-aot-compilers/" =>
-    "site/python-aot-compilers/index.html",
-  "https://rotnov.github.io/pycc/ai-native/" => "site/ai-native/index.html",
-  "https://rotnov.github.io/pycc/language-support/" => "site/language-support/index.html",
-  "https://rotnov.github.io/pycc/diagnostics/" => "site/diagnostics/index.html",
-}.freeze
 
 def git_last_commit_date(file_path)
   # Returns the date (YYYY-MM-DD) of the last non-merge commit that
@@ -109,4 +105,4 @@ rescue SitemapLastmodError => e
   exit 1
 end
 
-check!
+check! if $PROGRAM_NAME == __FILE__

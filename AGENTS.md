@@ -48,6 +48,18 @@
 - Every normative documentation claim should be enforceable where practical by a test, benchmark, or CI check, following the lifecycle rules in `docs/SPEC.md`.
 - If a code change genuinely has no documentation impact, explicitly verify that conclusion rather than skipping the docs review by default.
 
+## Rotate canonical page date pins before merging ([D-239](docs/decisions/D-239-check-canonical-page-date-pins-against-the-predicted.md))
+
+- A squash-merge commit's author date is the merge instant in the merging identity's timezone, not the branch's last commit time. A pull request that edits a canonical page under `site/` on day N and pins its dates to day N therefore lands on `main` with stale pins whenever the merge happens on day N+1 — turning the `Pages` workflow red on the default branch, because `scripts/check_sitemap_lastmod.rb` then compares the pins against the squash commit's own date.
+- Immediately before merging a pull request that touches any canonical page source, run:
+
+  ```
+  ruby scripts/check_site_pin_merge_currency.rb "$(git merge-base origin/main HEAD)" HEAD .
+  ```
+
+  Merge only if it exits 0. It exits 0 unchanged when the pull request touches no canonical page source, so it is safe to run on any branch.
+- When it fails, rotate all four pins for each page it names to the date it reports, then recompute the manifest digest: the `<lastmod>` for that page's `<loc>` in `site/sitemap.xml`, the JSON-LD `dateModified` in the page's own HTML, `PAGE_SPECS["<page>"]["date_modified"]` in `scripts/check-site.sh` (the landing page has no `PAGE_SPECS` entry — its date is the hard-coded `dateModified` literal in that script's landing-page block), and `source_artifact_sha256` for that page in `tests/fixtures/pages-performance-manifest.json` (recomputed last, since it digests the page HTML). Then re-run `ruby scripts/check_pages_performance_budget.rb --skip-lighthouse` and `bash scripts/check-site.sh`. `docs/WEBSITE.md` owns the full contract.
+
 ## Generated documentation
 
 - Markdown specifications and architectural explanations are human- and agent-authored source documents. Do not auto-generate or overwrite them from code.
