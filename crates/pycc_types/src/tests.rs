@@ -15,8 +15,9 @@ use crate::binop::numeric_result_type;
 // Cohesive test clusters live in their own child files so this
 // already-oversized module does not grow (AGENTS.md decomposability rule):
 // #934 for the protocol-return re-cover tests, and #695 for the
-// constraint-collection, exception-handling, `Optional[T]`-narrowing,
-// pattern-matching and `typing.cast` clusters.
+// constraint-collection, enum-loop-unrolling, exception-handling,
+// `Optional[T]`-narrowing, pattern-matching, `typing.TYPE_CHECKING`-marker
+// and `typing.cast` clusters.
 mod constraints;
 mod enum_unrolling;
 mod exception_handling;
