@@ -29,6 +29,11 @@ mod dataclass_class_vars;
 // (#975, D-236), same reason again.
 mod reserved_dunder_class_attrs;
 
+// `Enum`-body assignments CPython's `_EnumDict` keeps out of the member list
+// (#979, D-238) -- a different name set and a route-gated rule, so its own
+// module rather than more of the one above.
+mod enum_non_member_names;
+
 fn assert_capability_error(source: &str, expected_message: &str, expected_span: Span) {
     let module = pycc_parser_test_helper::parse(source);
     let diagnostic = lower_checked(&module).unwrap_err();

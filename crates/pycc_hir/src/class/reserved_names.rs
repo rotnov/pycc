@@ -1,11 +1,12 @@
 //! Class-attribute names the interpreter reserves for itself, rejected in
-//! every class body (#910, #975).
+//! every class body (#910, #975), plus the names CPython's `_EnumDict` keeps
+//! out of an enum's member list (#979).
 //!
 //! Extracted from [`super::attrs`] under `AGENTS.md`'s "keep source files
 //! decomposable" rule when #975 added the second name set below, because
 //! `attrs.rs` is already past the ~1000-line bar.
 //!
-//! Two independent sets live here:
+//! Three independent sets live here:
 //!
 //! * `__slots__` (#910), which Python reads as a declaration of the instance
 //!   layout. This compiler fixes that layout at compile time from `__init__`
@@ -40,6 +41,21 @@
 //!   subclassed -- whole-program information the class-body walk does not have
 //!   when the guard fires. It is rejected on both routes for uniformity of the
 //!   single rule, not because every binding was measured to fail.
+//! * The `_EnumDict` **non-member** shapes (#979, D-238), which unlike the
+//!   other two sets are a *shape* rather than an enumeration and are checked
+//!   only on the [`ClassBodyRoute::Enum`] route: dunder-shaped `__x__`,
+//!   name-mangled private `__x`, a name already spelled `_C__x` inside
+//!   `class C`, and sunder-shaped `_x_`. The generating rule
+//!   is CPython's `enum._EnumDict.__setitem__`, whose `_is_private`,
+//!   `_is_sunder` and `_is_dunder` branches each keep a name out of the
+//!   member list; all three were measured to diverge here, because
+//!   `lower_enum_class` lowers every assignment as a member and has no
+//!   non-member representation at all. `_x = 1` is not in the set and stays
+//!   an ordinary member, agreeing with CPython, and so does `_C__x` in any
+//!   class *not* called `C` -- one arm of this check is class-name-keyed
+//!   because `_is_private` is. See [`enum_non_member_message`] for the
+//!   measured table, the arm ordering, and the three families this predicate
+//!   deliberately over-rejects.
 //!
 //! Scope notes that are easy to get wrong. Each bullet was measured at
 //! `28a1b194` unless it names a different commit, or names #984 -- this
@@ -90,6 +106,20 @@
 //!   the two names `DATACLASS_IMPLICIT_DUNDERS` omits (`__new__`,
 //!   `__init_subclass__`) on the dataclass path, without disturbing the six
 //!   messages that set already owns: `super::body` runs its own check first.
+//! * The three checks inside [`reject_reserved_class_attr_name`] run in a
+//!   **fixed order**: `__slots__`, then the instantiation-protocol names,
+//!   then #979's `_EnumDict` shapes. `__slots__`, `__init__`, `__new__` and
+//!   `__init_subclass__` are all dunder-shaped, so putting the shape check
+//!   first would silently repoint every one of their pinned messages on the
+//!   `Enum` route -- including the one asserted by
+//!   `the_enum_slots_message_describes_the_enum_route`, which checks for the
+//!   *absence* of the plain-class string and would still pass while the wrong
+//!   message was emitted.
+//! * #979's set is the only one that is route-*gated* rather than merely
+//!   route-*worded*. `class C: __repr__ = 1` in a plain or `@dataclass` body
+//!   is still accepted, because there the name is an ordinary class attribute
+//!   under both engines; only an `Enum` body has a member list for it to fall
+//!   out of.
 //! * The `Enum`-body `__slots__` rejection is conservative too, but only in
 //!   the narrow sense. CPython 3.13.9 *accepts* `class C(Enum): __slots__ =
 //!   "x"` with `A = 1` (the `class` statement succeeds, `C.__slots__` is
@@ -126,17 +156,29 @@ use pycc_diag::Diagnostic;
 /// [`super::protocol`]'s calls [`reject_reserved_protocol_method_name`],
 /// because only part of this guard applies on a method route.
 ///
+/// The three checks run in a fixed order that is load-bearing rather than
+/// stylistic: `__slots__` first, the instantiation-protocol names second, and
+/// [`enum_non_member_message`] last (#979). Every name the first two own also
+/// matches the third's `__`-prefix shape, so any other order would silently
+/// repoint their pinned messages on the `Enum` route. The third also needs the
+/// enclosing class's name, which [`ClassBodyRoute::Enum`] carries.
+///
 /// Because it runs during the class-body walk, it sits at the *head* of
 /// D-235's pinned four-deep diagnostic precedence rather than reordering it.
 pub(super) fn reject_reserved_class_attr_name(
     attr_name: &str,
-    route: ClassBodyRoute,
+    route: ClassBodyRoute<'_>,
     range: std::ops::Range<u32>,
 ) -> Result<(), Diagnostic> {
     if attr_name == "__slots__" {
         return Err(unsupported(slots_message(route), range));
     }
     if let Some(message) = instantiation_protocol_message(attr_name) {
+        return Err(unsupported(message, range));
+    }
+    if let ClassBodyRoute::Enum { class_name } = route
+        && let Some(message) = enum_non_member_message(attr_name, class_name)
+    {
         return Err(unsupported(message, range));
     }
     Ok(())
@@ -384,10 +426,14 @@ const PROPERTY_SLOTS_MESSAGE: &str = "a `@property` getter named `__slots__` is 
 
 /// Which class-body route reached the guard.
 ///
-/// Only the `__slots__` message depends on it (see [`slots_message`]); the
-/// instantiation-protocol names share one string across all routes, because
-/// the reason they are reserved -- pycc resolves each protocol without
-/// consulting a class attribute of that name -- is the same everywhere.
+/// It does two different jobs. It selects the `__slots__` message (see
+/// [`slots_message`]), and -- since #979 -- it also decides whether the
+/// [`enum_non_member_message`] check runs *at all*, because CPython's
+/// `_EnumDict` non-member rule exists only in an `Enum` body. The
+/// instantiation-protocol names use it for neither: they share one string
+/// across all routes, because the reason they are reserved -- pycc resolves
+/// each protocol without consulting a class attribute of that name -- is the
+/// same everywhere.
 ///
 /// It covers the three *attribute* routes only. The method routes do not pass
 /// a `ClassBodyRoute` at all: `super::body`'s method loop is a single arm
@@ -398,11 +444,17 @@ const PROPERTY_SLOTS_MESSAGE: &str = "a `@property` getter named `__slots__` is 
 /// `Plain` covers both the ordinary and the `@dataclass` class body: they
 /// share `super::attrs`, and a dataclass instance layout is still fixed from
 /// `__init__`, so D-154's explanation is accurate for both.
-pub(super) enum ClassBodyRoute {
+pub(super) enum ClassBodyRoute<'a> {
     /// [`super::attrs`]: an ordinary or `@dataclass` class body.
     Plain,
     /// [`super::enum_class`]'s member loop.
-    Enum,
+    ///
+    /// It carries the enclosing class's name because one of
+    /// [`enum_non_member_message`]'s arms is class-name-keyed: CPython's
+    /// `enum._EnumDict._is_private` compares the raw key against the literal
+    /// `_<ClassName>__` prefix, so whether `_C__x = 1` is a member depends on
+    /// what the class is called.
+    Enum { class_name: &'a str },
 }
 
 /// The `C0001` message for a class-body `__slots__` binding, per route (#910,
@@ -426,7 +478,7 @@ pub(super) enum ClassBodyRoute {
 /// `Protocol` body (#984). Both stay outside this match because their routes
 /// have no [`ClassBodyRoute`] to dispatch on -- one arm of this enum could
 /// never be produced for them, and a dead arm fails D-014's region gate.
-fn slots_message(route: ClassBodyRoute) -> &'static str {
+fn slots_message(route: ClassBodyRoute<'_>) -> &'static str {
     match route {
         ClassBodyRoute::Plain => {
             "`__slots__` in a class body is not supported yet -- a class's instance layout is \
@@ -434,7 +486,7 @@ fn slots_message(route: ClassBodyRoute) -> &'static str {
              implicit), so a `__slots__` assignment would be silently ignored rather than \
              honored"
         }
-        ClassBodyRoute::Enum => {
+        ClassBodyRoute::Enum { .. } => {
             "`__slots__` in an `Enum` body is not supported yet -- CPython's `_EnumDict` keeps \
              a dunder out of the member list, so there `__slots__` is an ordinary class \
              attribute and the members are unaffected (measured on CPython 3.13.9: `class \
@@ -519,3 +571,206 @@ fn instantiation_protocol_message(attr_name: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// The `C0001` message for an `Enum`-body assignment CPython's
+/// `enum._EnumDict.__setitem__` keeps out of the member list, or `None` if the
+/// name is an ordinary member (#979, D-238).
+///
+/// Reached only from [`reject_reserved_class_attr_name`] and only for
+/// [`ClassBodyRoute::Enum`]: a plain, `@dataclass` or `Protocol` body has no
+/// `_EnumDict` and no member list, so `class C: __repr__ = 1` stays an
+/// ordinary class attribute there and is accepted.
+///
+/// The predicate is deliberately four shapes rather than one, because
+/// CPython's own rule is three sibling branches of one function --
+/// `_is_private`, `_is_sunder` and `_is_dunder` -- and all three were measured
+/// to diverge here at `edc454ba` against CPython 3.13.9 (`_is_private` in two
+/// separate source spellings, hence four arms for three branches):
+///
+/// | enum body in `class C(Enum)` | CPython 3.13.9 | pycc before #979 |
+/// |---|---|---|
+/// | `__repr__ = 1; B = 2` | 1 member | 2 members |
+/// | `__repr__ = "a"; B = "b"` | 1 | 2 |
+/// | `_order_ = 'B'; B = 'b'` | 1 | 2 |
+/// | `_foo_ = 1; B = 2` | `ValueError` at class creation | 2 |
+/// | `__x = 1; B = 2` | 1 | 2 |
+/// | `_C__x = 1; B = 2` | 1 | 2 |
+/// | `_D__x = 1; B = 2` | 2 | 2 (agrees -- stays accepted) |
+/// | `_x = 1; B = 2` | 2 | 2 (agrees -- stays accepted) |
+///
+/// The order of the arms matters. `__x__` matches the mangled-private prefix
+/// too, so the dunder shape is tested first; the class-name-keyed arm is
+/// tested before the sunder shape because `_C__x_` matches both and
+/// `_is_private` is the branch CPython actually takes for it; the sunder shape
+/// is tested last because it can only be reached by a name that does *not*
+/// start with two underscores. The whole function runs after the `__slots__`
+/// and instantiation-protocol checks for the same reason: those four names are
+/// dunder-shaped, and testing this predicate first would replace their pinned
+/// messages on the `Enum` route.
+///
+/// It matches on the *source* spelling, and that is why `_is_private` needs
+/// two arms rather than one. pycc has no name-mangling pass, while CPython's
+/// compiler mangles a class-body `__x` to `_C__x` *before* `_EnumDict` sees
+/// it, and `_is_private` then compares that raw key against the literal
+/// `_<ClassName>__` prefix. So the source names CPython keeps out under that
+/// one branch are two disjoint sets: `__x` (mangled on the way in -- the
+/// second arm's job, and class-name-independent) and a name already spelled
+/// `_C__x` in the source of `class C` (never mangled, matched only because the
+/// prefix happens to be literal -- the third arm's job, and
+/// class-name-*keyed*, since the same spelling inside `class D(Enum)` is an
+/// ordinary member).
+///
+/// **The predicate is a deliberate superset of CPython's non-member set.** It
+/// never under-rejects -- every name CPython keeps out of the member list
+/// matches one of the four shapes -- so no D-198 false acceptance survives in
+/// this family. It over-rejects in four measured ways, all recorded in
+/// D-238:
+///
+/// * Every sunder-shaped name, including the ones
+///   `_EnumDict.__setitem__` allowlists rather than raising on (`_order_`,
+///   `_generate_next_value_`, `_numeric_repr_`, `_missing_`, `_ignore_`,
+///   `_iter_member_`, `_iter_member_by_value_`, `_iter_member_by_def_`,
+///   `_add_alias_`, `_add_value_alias_`, and any `_repr_`-prefixed name).
+///   None of them is a member under either engine, but CPython *runs* those
+///   programs, and pycc models none of the behaviors they request. `_order_`
+///   is not even purely conservative: without a guard pycc lowers two members
+///   where CPython leaves one.
+/// * Names matching only the `__`-prefix-and-suffix *shape*. CPython's
+///   `_is_dunder` additionally requires `len > 4`, `name[2] != '_'` and
+///   `name[-3] != '_'`, so a name failing any of those stays an ordinary
+///   member there. Measured on CPython 3.13.9: `__`, `___`, `____` and
+///   `___x___` are all members of their class and are rejected here.
+/// * Names with *one* leading underscore and *two or more* trailing ones.
+///   CPython's `_is_sunder` also requires `name[-2] != '_'`, so it does not
+///   claim them, and neither does any sibling branch. Measured on CPython
+///   3.13.9 in `class C(Enum)`: `_x__ = 1` and `_foo___ = 1` are ordinary
+///   members (`list(C.__members__)` includes them), while the sunder arm here
+///   rejects both. `_C__x__` is the same family reached from the other side --
+///   the class-name-keyed arm skips it because it ends in `__`, and the sunder
+///   arm then claims it.
+/// * A `__x` assignment in a class whose *own* name begins with an underscore.
+///   CPython's mangling strips the class name's leading underscores while
+///   `_is_private` compares against the unstripped name, so the two disagree
+///   there: measured on CPython 3.13.9, `class _C(Enum): __x = 1` beside
+///   `B = 2` gives `list(_C.__members__) == ['_C__x', 'B']` -- two members,
+///   the first under its mangled name. Modelling that would need a mangling
+///   pass, since pycc would otherwise lower the member as `__x` and report
+///   the wrong `.name`, so the second arm stays class-name-independent and
+///   [`ENUM_PRIVATE_MESSAGE`] states both outcomes instead of claiming the
+///   first.
+///
+/// This is the same posture the `Enum` arm of [`slots_message`] already
+/// records, and it is forward-compatible in the direction that matters: a
+/// `C0001` "not supported yet" may later be narrowed without breaking a
+/// program that was accepted.
+fn enum_non_member_message(attr_name: &str, class_name: &str) -> Option<&'static str> {
+    if attr_name.starts_with("__") {
+        if attr_name.ends_with("__") {
+            return Some(ENUM_DUNDER_MESSAGE);
+        }
+        return Some(ENUM_PRIVATE_MESSAGE);
+    }
+    let mangled_prefix = format!("_{class_name}__");
+    if attr_name.len() > mangled_prefix.len()
+        && attr_name.starts_with(&mangled_prefix)
+        && !attr_name.ends_with("__")
+    {
+        return Some(ENUM_PRIVATE_SPELLING_MESSAGE);
+    }
+    if attr_name.len() > 2 && attr_name.starts_with('_') && attr_name.ends_with('_') {
+        return Some(ENUM_SUNDER_MESSAGE);
+    }
+    None
+}
+
+/// The `C0001` message for a dunder-shaped assignment in an `Enum` body
+/// (#979).
+///
+/// Like the other messages in this module it names no value-derived type: the
+/// guard runs on the attribute name alone, before any value extraction, so
+/// the divergence is stated as a member-count and `__members__` difference
+/// rather than as a `TypeError` about a concrete bound type (D-236's #984
+/// amendment).
+const ENUM_DUNDER_MESSAGE: &str = "a dunder-named assignment in an `Enum` body is not supported yet -- CPython's \
+     `enum._EnumDict.__setitem__` keeps a dunder out of the member list (measured on CPython \
+     3.13.9: `class C(Enum): __repr__ = 1` \
+     alongside `B = 2` gives `list(C.__members__) == [\'B\']`, and `C.__repr__` is the plain \
+     `int` `1`, so `C.__repr__.value` raises `AttributeError`; `__order__` is the one dunder \
+     that is not even left as a class attribute -- `_EnumDict` rewrites the key to `_order_` \
+     and `EnumType.__new__` then pops it out of the class dict entirely), while this compiler \
+     has no \
+     non-member class attribute on an enum at all -- `lower_enum_class` produces only a \
+     compile-time member table -- and would otherwise lower the name as a member, giving two \
+     members where CPython has one, so the program is rejected rather than compiled to a \
+     different member list";
+
+/// The `C0001` message for a name-mangled private assignment in an `Enum` body
+/// (#979).
+///
+/// A separate string from [`ENUM_DUNDER_MESSAGE`] because the mechanism is a
+/// different one and the name is not a dunder: CPython's *compiler* mangles it
+/// before `_EnumDict` ever sees it.
+///
+/// This arm is deliberately class-name-*independent* even though the branch it
+/// models is not, and the message says why rather than overclaiming. Mangling
+/// strips the class name's own leading underscores while `_is_private`
+/// compares against the unstripped name, so the two disagree exactly when the
+/// class name begins with an underscore: in `class _C(Enum)`, `__x` mangles to
+/// `_C__x`, `_is_private('_C', '_C__x')` tests the `__C__` prefix and says no,
+/// and CPython ends up with `list(_C.__members__) == ['_C__x', 'B']` (measured
+/// on 3.13.9). That is still not modellable here -- pycc has no mangling pass,
+/// so it would lower the member under the source name `__x` and report
+/// `.name` as `"__x"` where CPython reports `"_C__x"` -- so the rejection
+/// stands and is recorded as the fourth over-rejected family in
+/// [`enum_non_member_message`] and D-238.
+const ENUM_PRIVATE_MESSAGE: &str = "a name-mangled private assignment in an `Enum` body is not supported yet -- a class-body \
+     name with two leading underscores and at most one trailing underscore is rewritten by \
+     CPython\'s compiler before `enum._EnumDict` ever sees it (`__x` in `class C` becomes \
+     `_C__x`, the class name\'s own leading underscores being stripped first), while this \
+     compiler performs no name mangling at all and has no non-member class attribute on an \
+     enum, so neither of CPython\'s two outcomes is modellable here: when the mangled key still \
+     carries the class\'s `_<ClassName>__` prefix, `_EnumDict.__setitem__` keeps it out of the \
+     member list as an ordinary class attribute (measured on CPython 3.13.9: \
+     `class C(Enum): __x = 1` alongside `B = 2` gives `list(C.__members__) == [\'B\']`), and \
+     when it does not -- a class name that itself begins with an underscore -- CPython admits \
+     it as a member under the *mangled* name (`class _C(Enum): __x = 1` gives \
+     `list(_C.__members__) == [\'_C__x\', \'B\']`) where this compiler would lower it under the \
+     source name `__x`, so the assignment is rejected rather than compiled either way";
+
+/// The `C0001` message for an `Enum`-body assignment already spelled the way
+/// CPython's compiler would have mangled a private name (#979).
+///
+/// The one class-name-keyed message in this module. `_C__x` inside
+/// `class C(Enum)` is never mangled -- it has a single leading underscore --
+/// but `enum._EnumDict.__setitem__` matches the *raw* key against the literal
+/// `_<ClassName>__` prefix, so it lands in the same `_is_private` branch as a
+/// mangled `__x` and is kept out of the member list. The identical spelling in
+/// `class D(Enum)` is an ordinary member under both engines and stays
+/// accepted, which is why this cannot be folded into
+/// [`ENUM_PRIVATE_MESSAGE`]'s shape-only test.
+const ENUM_PRIVATE_SPELLING_MESSAGE: &str = "an `Enum`-body assignment whose name already carries the mangled-private prefix of its own \
+     class is not supported yet -- `enum._EnumDict.__setitem__` matches the raw key against the \
+     literal `_<ClassName>__` prefix, so `_C__x` inside `class C(Enum)` is kept out of the \
+     member list as an ordinary class attribute even though nothing mangled it (measured on \
+     CPython 3.13.9: `class C(Enum): _C__x = 1` alongside `B = 2` gives \
+     `list(C.__members__) == [\'B\']`, while the same `_C__x = 1` inside `class D(Enum)` is an \
+     ordinary member and stays accepted here), and this compiler has no non-member class \
+     attribute on an enum, so it would otherwise lower the name as a member, giving two members \
+     where CPython has one";
+
+/// The `C0001` message for a sunder-shaped assignment in an `Enum` body
+/// (#979).
+///
+/// This is the one arm that rejects programs CPython runs without any member
+/// divergence, and the message says so rather than claiming a measured
+/// divergence for every input; `enum_non_member_message`'s own docs and D-238
+/// carry the full allowlist.
+const ENUM_SUNDER_MESSAGE: &str = "a sunder-named assignment in an `Enum` body is not supported yet -- CPython's \
+     `enum._EnumDict.__setitem__` treats a `_sunder_` name as enum bookkeeping rather than a \
+     member: an unrecognized one raises `ValueError: _sunder_ names, such as \'_foo_\', are \
+     reserved for future Enum use` while the `class` statement itself executes (measured on \
+     CPython 3.13.9), and the recognized ones (`_order_`, `_ignore_`, `_missing_`, \
+     `_generate_next_value_` and their siblings) reorder, filter or generate the member list in \
+     ways this compiler does not model -- `class C(Enum): _order_ = \'B\'` alongside `B = \'b\'` \
+     leaves one member under CPython and would lower as two here -- so every sunder-shaped name \
+     is rejected rather than lowered as a member";
