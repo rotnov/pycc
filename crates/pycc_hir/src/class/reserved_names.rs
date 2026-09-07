@@ -13,12 +13,15 @@
 //!   route-dependent ([`slots_message`]): an `Enum` body has no `__init__` and
 //!   no instance layout at all, and CPython's `_EnumDict` turns the name into
 //!   an ordinary class attribute there, so D-154's explanation would be false
-//!   on that route. Since #980 the name has a *third* account, which
-//!   deliberately lives outside [`slots_message`]: on the `@property` getter
-//!   route the failure is not about the instance layout at all, so
-//!   [`reject_reserved_property_name`] carries [`PROPERTY_SLOTS_MESSAGE`]
-//!   instead. That route is not a [`ClassBodyRoute`] variant, because only
-//!   one class body can reach it -- see the scope note below.
+//!   on that route. Since #980 the name has a *third* account, and since
+//!   #984 a *fourth*; both deliberately live outside [`slots_message`],
+//!   because on a method route the failure is not about the instance layout
+//!   at all. `type.__new__` iterates `__slots__` while the `class` statement
+//!   itself executes, so CPython never creates the class: the `@property`
+//!   getter spelling carries [`PROPERTY_SLOTS_MESSAGE`] (#980) and every
+//!   other `def` spelling carries [`method_slots_message`] (#984), whose only
+//!   difference is the carrier type CPython names. Neither is a
+//!   [`ClassBodyRoute`] variant -- see the scope notes below.
 //! * The *instantiation and class-creation protocol* names (#975, D-236):
 //!   `__init__`, `__new__` and `__init_subclass__`. The generating rule is
 //!   "the names Python's object protocol calls implicitly rather than by
@@ -38,18 +41,39 @@
 //!   when the guard fires. It is rejected on both routes for uniformity of the
 //!   single rule, not because every binding was measured to fail.
 //!
-//! Scope notes that are easy to get wrong, all measured at `28a1b194`:
+//! Scope notes that are easy to get wrong. Each bullet was measured at
+//! `28a1b194` unless it names a different commit, or names #984 -- this
+//! change, whose own commit did not exist when the bullet was written:
 //!
-//! * The guard is reached from **four** class-body routes, not three: the
-//!   annotated and bare class-attribute paths, the `Enum` member loop, and
-//!   (since the #978 review round) `super::body`'s `@property` getter arm.
-//!   The fourth route goes through [`reject_reserved_property_name`], which
-//!   covers the protocol names *and*, since #980, `__slots__` under its own
-//!   message. It takes no [`ClassBodyRoute`]: a plain and a `@dataclass` body
-//!   share that one arm, and an `Enum` body rejects method definitions
-//!   outright before it (`C0001`, "an enum class body must contain only
-//!   member assignments"), so an enum arm there would be a dead match arm and
-//!   would fail D-014's 100% region gate.
+//! * The guard is reached from **five** class-body call sites, not three:
+//!   the annotated and bare class-attribute paths and the `Enum` member loop
+//!   (all three into [`reject_reserved_class_attr_name`]), `super::body`'s
+//!   method loop (one call to [`reject_reserved_method_name`], serving the
+//!   `@property` getter spelling and every non-getter spelling alike, since
+//!   #984), and `super::protocol`'s own method walk (since #984, into
+//!   [`reject_reserved_protocol_method_name`]). The last two are separate
+//!   call sites because `super::lower_class` returns through
+//!   `lower_protocol_class` *before* the method loop, so a `Protocol` body
+//!   never reaches `super::body` at all.
+//!
+//!   None of the method call sites takes a [`ClassBodyRoute`]: a plain and a
+//!   `@dataclass` body share the one method loop, and an `Enum` body rejects
+//!   method definitions outright before it (`C0001`, "an enum class body must
+//!   contain only member assignments"), so an enum arm there would be a dead
+//!   match arm and would fail D-014's 100% region gate.
+//! * A `@<name>.setter` named `__slots__` is **reachable** and is deliberately
+//!   short-circuited before the `__slots__` check in
+//!   [`reject_reserved_method_name`]. `super::classify_decorator` accepts
+//!   `@__slots__.setter def __slots__(self, v)` as a
+//!   [`MethodKind::PropertySetter`] without requiring a preceding getter --
+//!   that requirement is enforced *later*, in `super::body`'s post-lowering
+//!   accounting. Measured at `e77b4b13`, pycc already rejects that program
+//!   with "a `@__slots__.setter` decorator requires a preceding `@property`
+//!   getter", and CPython 3.13.9 raises `NameError: name '__slots__' is not
+//!   defined` while evaluating the decorator expression -- not a `TypeError`
+//!   about a non-iterable object. Emitting [`method_slots_message`] there
+//!   would be false in every clause, which is the defect #980 and #984 exist
+//!   to close.
 //! * The set is **not** `ClassVar`-gated. `super::body`'s non-dataclass branch
 //!   routes every `AnnAssign` to `lower_class_attr` regardless of the
 //!   `ClassVar` wrapper, and #910's `Stmt::Assign` arm routes to
@@ -85,20 +109,22 @@
 //!   rejected in both for uniformity of the single rule, not because a
 //!   divergence was measured at the declaration site.
 
+use super::MethodKind;
 use crate::unsupported;
 use pycc_diag::Diagnostic;
 
 /// Rejects a class-body binding of a name the interpreter gives its own
 /// meaning, in every spelling and every class body.
 ///
-/// Called first thing after name extraction from three of the four routes
+/// Called first thing after name extraction from three of the five routes
 /// into a class body: [`super::attrs::lower_class_attr`] (annotated),
 /// [`super::attrs::lower_unannotated_class_attr`] (#910's bare assignment),
 /// and [`super::enum_class`]'s member loop. `route` distinguishes the last of
 /// those, because only the `__slots__` explanation differs between them. The
-/// fourth route -- a `@property` getter in [`super::body`]'s method loop --
-/// calls [`reject_reserved_property_name`] instead, because only the
-/// protocol-name half of this guard applies there.
+/// remaining two call sites are method walks and do not come here:
+/// [`super::body`]'s method loop calls [`reject_reserved_method_name`] and
+/// [`super::protocol`]'s calls [`reject_reserved_protocol_method_name`],
+/// because only part of this guard applies on a method route.
 ///
 /// Because it runs during the class-body walk, it sits at the *head* of
 /// D-235's pinned four-deep diagnostic precedence rather than reordering it.
@@ -120,8 +146,10 @@ pub(super) fn reject_reserved_class_attr_name(
 /// class-creation protocol (#975, D-236; added in the #978 review round), or
 /// named `__slots__` (#980).
 ///
-/// The fourth route into a class-level binding of one of these names, and the
-/// only one that does not go through [`reject_reserved_class_attr_name`].
+/// The `@property` half of the class-body method route, and one of the two
+/// call sites that do not go through [`reject_reserved_class_attr_name`].
+/// Since #984 it is reached from [`reject_reserved_method_name`] rather than
+/// directly from `super::body`; the dispatch is unchanged, only relocated.
 /// `super::body`'s method loop routes `@property def __new__(self) -> int` to
 /// `MethodKind::PropertyGetter`, so none of the three attribute routes sees
 /// it; without this call `ensure_init` synthesizes a constructor from the
@@ -140,11 +168,14 @@ pub(super) fn reject_reserved_class_attr_name(
 /// class that is created. Emitting the attribute-route string here would be a
 /// false account, which is what #980 was opened to avoid.
 ///
-/// The new branch takes no [`ClassBodyRoute`]. Only one class body reaches
-/// this function: `super::body`'s method loop serves the plain and the
+/// The `__slots__` branch takes no [`ClassBodyRoute`]. Only one class body
+/// reaches this function: `super::body`'s method loop serves the plain and the
 /// `@dataclass` route alike, and `super::enum_class` rejects a method
 /// definition outright before any of this, so a route parameter would carry a
-/// permanently dead arm.
+/// permanently dead arm. Since #984 a `Protocol` body reaches
+/// [`reject_reserved_protocol_method_name`] instead, never this function --
+/// `super::protocol` rejects every decorator on a protocol method, so no
+/// getter can exist there.
 ///
 /// The three *protocol* messages are shared verbatim with the attribute
 /// routes and need no property-specific clause: each already says "binding
@@ -176,10 +207,155 @@ pub(super) fn reject_reserved_property_name(
     }
 }
 
+/// Rejects a class-body `def` whose name the interpreter reserves for itself
+/// ([#984](https://github.com/rotnov/pycc/issues/984)).
+///
+/// The single call from [`super::body`]'s method loop, replacing #980's
+/// getter-only call: it dispatches the `@property` getter spelling to
+/// [`reject_reserved_property_name`] unchanged, and adds `__slots__` on every
+/// remaining `def` spelling. Measured at `e77b4b13` against CPython 3.13.9,
+/// seven spellings diverged before this guard -- a plain `def`,
+/// `@staticmethod`, `@classmethod`, `@abstractmethod`, `@override`, and a
+/// plain `def` inside a `@dataclass` and inside a `Protocol` body -- each
+/// raising `TypeError: '<carrier>' object is not iterable` at class creation
+/// while pycc compiled and ran the program, the D-198 false acceptance D-224
+/// forbids. The divergence is value-independent: none of those carriers is
+/// ever iterable, whatever the method returns.
+///
+/// Two routing decisions carry the whole correctness argument.
+///
+/// The **instantiation-protocol** half of [`reject_reserved_property_name`]
+/// stays gated to [`MethodKind::PropertyGetter`]. Widening it to every kind
+/// would start rejecting a plain `def __new__`, which binds exactly the
+/// callable CPython's protocol expects and is therefore outside D-236's rule;
+/// it is tracked as [#981](https://github.com/rotnov/pycc/issues/981) and
+/// pinned by `a_plain_new_method_is_left_to_issue_981`.
+///
+/// A [`MethodKind::PropertySetter`] is **short-circuited** rather than
+/// checked. `@__slots__.setter def __slots__(self, v)` reaches here without a
+/// preceding getter, because `super::classify_decorator` only requires the
+/// setter's own `def` name to match the decorated property name; the
+/// "requires a preceding `@property` getter" rejection lives *after* this
+/// call. That program is already rejected today with that truthful message,
+/// and CPython 3.13.9 raises `NameError: name '__slots__' is not defined`
+/// while evaluating the decorator expression -- so [`method_slots_message`]'s
+/// account ("a `function` object is not iterable", "this compiler accepts the
+/// class body") would be false in every clause for it.
+pub(super) fn reject_reserved_method_name(
+    method_name: &str,
+    kind: &MethodKind,
+    range: std::ops::Range<u32>,
+) -> Result<(), Diagnostic> {
+    if let MethodKind::PropertyGetter { prop_name } = kind {
+        return reject_reserved_property_name(prop_name, range);
+    }
+    if matches!(kind, MethodKind::PropertySetter { .. }) {
+        return Ok(());
+    }
+    if method_name == "__slots__" {
+        return Err(unsupported(
+            method_slots_message(method_slots_carrier(kind)),
+            range,
+        ));
+    }
+    Ok(())
+}
+
+/// Rejects a `Protocol`-body `def` named `__slots__` (#984).
+///
+/// The fifth class-body call site, and a genuinely separate one:
+/// `super::lower_class` returns through `super::protocol::lower_protocol_class`
+/// *before* [`super::body`]'s method loop, so a `Protocol` body never reaches
+/// [`reject_reserved_method_name`] and a guard placed only there would leave
+/// `class P(Protocol): def __slots__(self) -> int: ...` falsely accepted
+/// (measured at `e77b4b13`: `pycc check` exit 0, CPython 3.13.9
+/// `TypeError: 'function' object is not iterable`).
+///
+/// The carrier is always `function`. `super::protocol` rejects any decorator
+/// on a protocol method outright and this call is placed *after* that
+/// rejection, after the generic-type-parameter rejection, and after the
+/// declaration-style-body rejection -- so the only input it newly rejects is
+/// the one that is falsely accepted today, and every other protocol spelling
+/// keeps the diagnostic it already had.
+pub(super) fn reject_reserved_protocol_method_name(
+    method_name: &str,
+    range: std::ops::Range<u32>,
+) -> Result<(), Diagnostic> {
+    if method_name == "__slots__" {
+        return Err(unsupported(method_slots_message("function"), range));
+    }
+    Ok(())
+}
+
+/// The type CPython names in `'<carrier>' object is not iterable` for a
+/// class-body `def __slots__`, per binding form (#984).
+///
+/// Exactly two named arms plus a wildcard, all three reachable and each
+/// pinned by a test, because a dead arm fails D-014's 100% region gate.
+/// Measured at `e77b4b13`: CPython 3.13.9 names only these three carriers
+/// across every diverging spelling.
+fn method_slots_carrier(kind: &MethodKind) -> &'static str {
+    match kind {
+        MethodKind::StaticMethod => "staticmethod",
+        MethodKind::ClassMethod => "classmethod",
+        // Every other kind binds a plain function object: a bare `def`,
+        // `@override`, `@abstractmethod`. `@property` and `@<name>.setter`
+        // never reach here -- both are routed out in
+        // `reject_reserved_method_name` above.
+        _ => "function",
+    }
+}
+
+/// The `C0001` message for a non-`@property` `def __slots__` in a class body
+/// (#984) -- the *fourth* account this name carries.
+///
+/// A sibling of [`PROPERTY_SLOTS_MESSAGE`] rather than a replacement for it.
+/// The two mechanisms are identical, but the getter's tail clause ("lowers the
+/// getter as an ordinary property and creates the class anyway") is a
+/// different clause rather than a substitution, so folding them into one
+/// template would degenerate into a lookup table; and D-236's #980 amendment
+/// note names `PROPERTY_SLOTS_MESSAGE` as a constant, so converting it into a
+/// function would force an unrelated edit to an accepted decision for zero
+/// behavioural gain.
+///
+/// Deliberately **interpolation-only**: the carrier is resolved once by
+/// [`method_slots_carrier`] and never re-branched on here, so this function
+/// cannot introduce a second, uncovered match arm.
+///
+/// Two wording constraints are load-bearing.
+///
+/// The tail says "accepts the class body", not "creates the class anyway" and
+/// not "lowers the definition as an ordinary method". This message is also
+/// emitted for a `Protocol` body, where pycc records a `ProtocolMember::Method`
+/// and creates no class at all, so either narrower phrasing would be false
+/// there.
+///
+/// It carries none of D-154's "instance layout is fixed at compile time from
+/// its `__init__`" language, which is the plain attribute route's reason
+/// ([`slots_message`]) and would be a false account here. Keeping the strings
+/// disjoint is what lets the tests pin the distinction from both sides.
+///
+/// Like [`PROPERTY_SLOTS_MESSAGE`], and unlike
+/// [`instantiation_protocol_message`]'s strings, it **names the bound type**.
+/// D-236's #980 amendment permitted that when a decorator fixes the type
+/// structurally; a plain `def __slots__` has no decorator, so #984's amendment
+/// generalizes the rule to *fixed structurally by the binding form* (`def`,
+/// `@staticmethod`, `@classmethod`, `@property`), never derived from a value.
+fn method_slots_message(carrier: &'static str) -> String {
+    format!(
+        "a `def __slots__` in a class body is not supported yet -- `type.__new__` iterates \
+         `__slots__` while the `class` statement itself executes, and a `{carrier}` object is \
+         not iterable, so CPython never creates the class at all (measured on CPython 3.13.9: \
+         `TypeError: '{carrier}' object is not iterable` at class creation), while this compiler \
+         accepts the class body, so the program would compile and run here instead of failing"
+    )
+}
+
 /// The `C0001` message for a `@property` getter named `__slots__` (#980).
 ///
-/// The *third* account this name carries, and the only one that is not a
-/// [`ClassBodyRoute`] arm of [`slots_message`] -- a constant rather than a
+/// The *third* account this name carries, and since #984 one of two that are
+/// not a [`ClassBodyRoute`] arm of [`slots_message`] (the other being
+/// [`method_slots_message`], the fourth account) -- a constant rather than a
 /// match, because the single route that reaches it cannot branch.
 ///
 /// It describes the mechanism CPython actually fails by: `type.__new__`
@@ -195,8 +371,10 @@ pub(super) fn reject_reserved_property_name(
 /// the type because the guard runs before value extraction and the type is
 /// whatever an initializer happens to evaluate to, while here the carrier type
 /// is fixed structurally by the `@property` decorator, whatever the getter
-/// returns. A message may name a type when it is structurally fixed, never
-/// when it would have to be derived from an initializer.
+/// returns. #984 generalized the rule from the decorator to the *binding
+/// form*: a message may name a type when the binding form (`def`,
+/// `@staticmethod`, `@classmethod`, `@property`) fixes it structurally, never
+/// when it would have to be derived from a value.
 const PROPERTY_SLOTS_MESSAGE: &str = "a `@property` getter named `__slots__` is not supported yet -- `type.__new__` iterates \
      `__slots__` while the `class` statement itself executes, and a `property` object is not \
      iterable, so CPython never creates the class at all (measured on CPython 3.13.9: \
@@ -211,10 +389,11 @@ const PROPERTY_SLOTS_MESSAGE: &str = "a `@property` getter named `__slots__` is 
 /// the reason they are reserved -- pycc resolves each protocol without
 /// consulting a class attribute of that name -- is the same everywhere.
 ///
-/// It covers the three *attribute* routes only. The `@property` getter route
-/// does not pass a `ClassBodyRoute` at all: it is a single arm serving both a
-/// plain and a `@dataclass` body, so it carries its own constant
-/// ([`PROPERTY_SLOTS_MESSAGE`]) instead of a variant here.
+/// It covers the three *attribute* routes only. The method routes do not pass
+/// a `ClassBodyRoute` at all: `super::body`'s method loop is a single arm
+/// serving both a plain and a `@dataclass` body, and a `Protocol` body has its
+/// own walk, so they carry [`PROPERTY_SLOTS_MESSAGE`] and
+/// [`method_slots_message`] instead of variants here.
 ///
 /// `Plain` covers both the ordinary and the `@dataclass` class body: they
 /// share `super::attrs`, and a dataclass instance layout is still fixed from
@@ -241,11 +420,12 @@ pub(super) enum ClassBodyRoute {
 ///   rejected there because CPython gives it a *third* meaning again -- an
 ///   ordinary class attribute -- that pycc does not model.
 ///
-/// A third `__slots__` account exists and is deliberately **not** an arm here:
-/// [`PROPERTY_SLOTS_MESSAGE`], for the `@property` getter route (#980). It
-/// stays outside this match because that route has no [`ClassBodyRoute`] to
-/// dispatch on -- one arm of this enum could never be produced for it, and a
-/// dead arm fails D-014's region gate.
+/// Two further `__slots__` accounts exist and are deliberately **not** arms
+/// here: [`PROPERTY_SLOTS_MESSAGE`] for the `@property` getter route (#980),
+/// and [`method_slots_message`] for every other `def` spelling and for a
+/// `Protocol` body (#984). Both stay outside this match because their routes
+/// have no [`ClassBodyRoute`] to dispatch on -- one arm of this enum could
+/// never be produced for them, and a dead arm fails D-014's region gate.
 fn slots_message(route: ClassBodyRoute) -> &'static str {
     match route {
         ClassBodyRoute::Plain => {
@@ -287,10 +467,13 @@ fn slots_message(route: ClassBodyRoute) -> &'static str {
 /// stay cheap and value-independent so that all four class-body routes can
 /// call it at the same early point. Naming one concrete type would make the
 /// message wrong for every other binding, so the type is omitted instead.
-/// [`PROPERTY_SLOTS_MESSAGE`] does name a type, and the difference is the
-/// rule: it may, because the `@property` decorator fixes the carrier type
+/// [`PROPERTY_SLOTS_MESSAGE`] and [`method_slots_message`] do name a type, and
+/// the difference is the rule: they may, because the *binding form* (`def`,
+/// `@staticmethod`, `@classmethod`, `@property`) fixes the carrier type
 /// structurally, while here the type would have to be derived from an
-/// initializer this guard has not read.
+/// initializer this guard has not read. #984 generalized that rule from
+/// "the decorator fixes it" to "the binding form fixes it", because a plain
+/// `def __slots__` has no decorator at all.
 ///
 /// Both messages name the `TypeError` *conditionally* in two axes. They say
 /// "binding that name ... makes CPython raise" rather than "CPython raises here",
