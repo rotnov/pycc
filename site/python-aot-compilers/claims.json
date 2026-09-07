@@ -156,44 +156,116 @@
     },
     "labels": {
       "pycc": {
-        "type_enforcement": "hard compile error",
-        "native_executable": "native/--pure; CPython bundled only for permitted interop",
-        "standard_python": "CPython 3.14 target"
+        "type_enforcement": {
+          "verdict": "yes",
+          "text": "hard compile error"
+        },
+        "native_executable": {
+          "verdict": "yes",
+          "text": "native/--pure; CPython bundled only for permitted interop"
+        },
+        "standard_python": {
+          "verdict": "yes",
+          "text": "CPython 3.14 target"
+        }
       },
       "LPython": {
-        "type_enforcement": "typed subset",
-        "native_executable": "AOT executable",
-        "standard_python": "CPython-compatible subset"
+        "type_enforcement": {
+          "verdict": "yes",
+          "text": "typed subset"
+        },
+        "native_executable": {
+          "verdict": "yes",
+          "text": "AOT executable"
+        },
+        "standard_python": {
+          "verdict": "partial",
+          "text": "CPython-compatible subset"
+        }
       },
       "Codon": {
-        "type_enforcement": "static language",
-        "native_executable": "",
-        "standard_python": "Python-like language with documented differences"
+        "type_enforcement": {
+          "verdict": "yes",
+          "text": "static language"
+        },
+        "native_executable": {
+          "verdict": "yes",
+          "text": ""
+        },
+        "standard_python": {
+          "verdict": "partial",
+          "text": "Python-like language with documented differences"
+        }
       },
       "Nuitka": {
-        "type_enforcement": "",
-        "native_executable": "packages CPython runtime components",
-        "standard_python": "compatibility-focused"
+        "type_enforcement": {
+          "verdict": "no",
+          "text": ""
+        },
+        "native_executable": {
+          "verdict": "no",
+          "text": "packages CPython runtime components"
+        },
+        "standard_python": {
+          "verdict": "yes",
+          "text": "compatibility-focused"
+        }
       },
       "mypyc": {
-        "type_enforcement": "strict compiled subset",
-        "native_executable": "CPython C extension",
-        "standard_python": "type-annotated Python subset"
+        "type_enforcement": {
+          "verdict": "yes",
+          "text": "strict compiled subset"
+        },
+        "native_executable": {
+          "verdict": "no",
+          "text": "CPython C extension"
+        },
+        "standard_python": {
+          "verdict": "yes",
+          "text": "type-annotated Python subset"
+        }
       },
       "Cython": {
-        "type_enforcement": "optional",
-        "native_executable": "extension or embedded CPython",
-        "standard_python": "Python superset"
+        "type_enforcement": {
+          "verdict": "partial",
+          "text": "optional"
+        },
+        "native_executable": {
+          "verdict": "no",
+          "text": "extension or embedded CPython"
+        },
+        "standard_python": {
+          "verdict": "partial",
+          "text": "Python superset"
+        }
       },
       "mypy": {
-        "type_enforcement": "",
-        "native_executable": "checker only",
-        "standard_python": ""
+        "type_enforcement": {
+          "verdict": "yes",
+          "text": ""
+        },
+        "native_executable": {
+          "verdict": "no",
+          "text": "checker only"
+        },
+        "standard_python": {
+          "verdict": "yes",
+          "text": ""
+        }
       },
       "pyright": {
-        "type_enforcement": "",
-        "native_executable": "checker only",
-        "standard_python": ""
+        "type_enforcement": {
+          "verdict": "yes",
+          "text": ""
+        },
+        "native_executable": {
+          "verdict": "no",
+          "text": "checker only"
+        },
+        "standard_python": {
+          "verdict": "yes",
+          "text": ""
+        }
       }
     },
     "row_order": [

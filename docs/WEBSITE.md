@@ -329,6 +329,47 @@ projection label that no longer matches), but a coordinated five-field edit
 can still evade it; full semantic contradiction detection remains #202's
 domain, the same structural-binding limitation Part 1 documents.
 
+`claims.json` carries two further blocks. `readme_projection` binds the root
+`README.md` compiler comparison table to the same claim/source model, and
+`readme_entities` is a parallel list of per-entity source records for that
+table that no checker currently reads — it is unenforced data, and
+`scripts/check_source_links_registry.rb` does not cover its URLs either.
+`readme_projection` has three sub-objects. `column_sources` maps each README
+column (`type_enforcement`, `native_executable`, `standard_python`) to the
+claim field it projects from; unlike `landing_projection.column_sources`, this
+one is an identity map, and the validator now enforces both that its key set
+equals the published column set and that each value names its own column.
+`row_order` lists the eight model entities in the order the README publishes
+them. `labels` holds one entry per entity, keyed by entity name then column.
+Note the shape difference between the two projections under the same key name:
+`landing_projection.labels` holds plain strings, while
+`readme_projection.labels` holds objects. Each `readme_projection.labels` cell
+is a `{verdict, text}` object: `verdict` is one of `yes`, `no`, or `partial`,
+published in the README as `✅`, `❌`, and `⚠️` respectively (the warning glyph
+is accepted both with and without its U+FE0F variation selector), and `text`
+is the exact trailing prose of the cell, which is the empty string for the
+cells the README publishes as a bare glyph.
+
+`scripts/check-site.sh` validates the model before comparing anything: the
+`labels` and `row_order` entity sets must match in both directions, `row_order`
+must not repeat an entity, every `labels` entry must carry exactly the three
+columns, and every cell must be a `{verdict, text}` object with a known verdict
+and a string text. It then parses the README table, requiring each row to have
+exactly four cells, and expands the combined `mypy / pyright` row into both
+entities in the order that row spells them. The parsed entity sequence must
+equal `row_order` exactly — same members, same order, no duplicates — so a
+dropped entity, a reordered table, or a duplicated row is rejected rather than
+absorbed. Finally it splits each cell into its leading verdict glyph and the
+remaining text, rejecting a cell with no leading glyph or with a second glyph
+after the first, and compares the glyph against `verdict` and the remaining
+text (with backticks stripped) against `text`.
+
+Binding the glyph is what issue #682 closed. The previous implementation
+stripped every verdict glyph out of the cell before comparing, so all 24
+published verdicts were unreviewed, and a permissive special case for the
+combined `mypy / pyright` row let an entity disappear from the table entirely.
+Both are now hard errors, each with a message naming the entity and the column.
+
 `scripts/check-site.sh` enforces these mechanical requirements locally and in
 the Pages workflow.
 `scripts/test-check-site.sh` proves that the validator accepts the complete
