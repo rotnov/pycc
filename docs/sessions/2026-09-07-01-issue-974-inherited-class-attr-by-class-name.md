@@ -59,6 +59,24 @@ The pinned local reviewer (`ievo:deep-reviewer`) ran against the full committed 
 - **Note, `docs/ROADMAP.md`.** Its #974 sentence listed four of the shadow namespaces and omitted `enum_members`; it now lists all of them plus the protocol `def`.
 - **Note, `docs/TYPE_SYSTEM.md`.** The read bullet described the MRO walk without disclosing that a PEP 695 generic class does not follow it (`Box.LIMIT` passes `pycc check` and fails `pycc build` with `T0021`). The divergence predates #974 and is item 3 of #989; the bullet now says so inline.
 
+## Codex review round on PR #992 (round 2)
+
+The optional `chatgpt-codex-connector` review raised one P1 on the `#436` class-name `AttrGet` arm: it fired whenever `env.lookup_class(class_name)` succeeded, without first asking whether an active value binding claims that name. Confirmed by measurement rather than by reading, against CPython 3.13.9 and against the pre-#974 base commit `3ba4a027`:
+
+| shape | CPython | branch before the fix | base `3ba4a027` |
+|---|---|---|---|
+| inherited class attribute | `3` | `2` | `T0044` |
+| own-declared class attribute | `3` | `2` | `2` |
+| enum member | `3` | `T0022` | `T0022` |
+
+Only the first row is a regression this issue introduced; the other two predate it.
+
+**Scope fork, resolved per [D-127](../decisions/D-127-autonomous-agent-operation-model.md) by consulting this session's advisor.** The fork was whether to fix only the regression row and leave the two pre-existing rows to a follow-up. The advisor's decisive argument is structural, not a preference: the shadowing question is answered *before* the walk knows whether the hit will be own, inherited or an enum member, so a guard that fixes only the inherited row does not exist at this seam — it would have to run the MRO walk and then retract, which is strictly worse code than the correct predicate. Fixing all three is therefore the cheaper option as well as the more honest one, and the widened diff is a consequence of the guard the regression needs anyway rather than scope creep. Recorded here as the decision made.
+
+The guard is the `binding_state(name).is_none() && !is_local(local_names, name)` pair the class-name `Subscript` (`__class_getitem__`) path in the same file already used, placed before the whole block. `pycc_mir` needed the mirror on **two** sites, not one: the class-attribute fold, and the enum-member interception that runs before it. That second site was not hypothetical — with only the fold guarded, the enum repro type-checked and then failed LLVM module verification (`ret ptr` from an `i64` function), because MIR still lowered `Color.RED` to the member singleton. Guarding `pycc_types` alone would also have routed a shadowed name into the fold's internal-error `panic!`.
+
+Three tests pin the shapes (`an_active_binding_shadows_an_{inherited,own,enum_member}_class_attribute_read`, all asserting stdout `3`, never merely exit 0). The whole workspace suite was re-run after the guard to check nothing depended on the class-name arm winning a shadow race; nothing did.
+
 ## Tracker observations (recorded here, not filed)
 
 Two things the `issue-select` pass measured that are worth a future session's attention. Neither is filed as an issue, because [D-192](../decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md)'s non-milestone ceiling forbids it.
@@ -68,7 +86,7 @@ Two things the `issue-select` pass measured that are worth a future session's at
 
 ## Where to resume
 
-- The branch is committed, gate-green locally, and has been through the D-068 review round above; the next step is the PR.
+- PR [#992](https://github.com/rotnov/pycc/pull/992) is open and carries `Fixes #974` (confirmed with the `closingIssuesReferences` query: `totalCount: 1`). It has been through the D-068 round and the Codex round above, and the full local gate set is green at the branch head, coverage 100.00% lines and regions.
 - The D-014 gate was red for one round on a single region in `crates/pycc_mir/src/expr.rs` that every merged coverage view reported as covered. `llvm-cov`'s file summary takes `min(NotCovered)` across a function's instantiation records rather than merging them, so a region needs to be covered within one *single* instantiation. `cargo llvm-cov report -p pycc_mir --show-instantiations --html` is the view that names such a miss; `docs/AGENT_RETROSPECTIVE.md`'s 2026-09-07 entry records the full diagnosis. The fix was the extra `pycc_mir` unit test `an_inherited_class_attribute_read_through_the_derived_class_name_folds`, which walks past a derived class declaring nothing and folds the base's constant.
 - `cargo test --workspace -- --include-ignored` fails 57 conformance tests **locally only**, all with the identical message ``conformance oracle must be exactly Python 3.14.7, found "Python 3.14.6"``. That is this machine's interpreter version, not the change: no other panic appears in the log. CI pins 3.14.7 and is the authority.
-- `wc -c docs/ROADMAP.md` is 168915 against `scripts/check-site.sh`'s 168960-byte ceiling — 45 bytes of headroom left. This has now been the binding constraint on three consecutive merges, and the review round's own ROADMAP correction had to be cut to a bare namespace list to fit. The next roadmap sentence will not fit at all; raising `budget_bytes` for that entry in `site/llms-txt-context-manifest.json` is the intended route (the aggregate ceiling has room), not trimming unrelated prose.
+- **The ROADMAP byte budget was raised in this pull request, as that same note recommended.** `docs/ROADMAP.md` had 45 bytes of headroom against a 168960-byte per-document ceiling and the Codex round needed a sentence there, so `budget_bytes` for that entry in `site/llms-txt-context-manifest.json` is now 172032. The aggregate ceiling is untouched and keeps roughly 15 KB spare, so this trades a per-document limit that had become the binding constraint on three consecutive merges for headroom that already existed. Trimming unrelated prose a fourth time was the alternative and was rejected.
